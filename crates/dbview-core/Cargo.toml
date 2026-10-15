@@ -1,0 +1,26 @@
+[package]
+name = "dbview-core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "dbview_core"
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+keyring = "4.2"
+rust-ini = "0.21"
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "default-rustls-ring"] }
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[dev-dependencies]
+tempfile = "3"

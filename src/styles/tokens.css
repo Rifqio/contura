@@ -1,0 +1,294 @@
+/*
+  Every DESIGN.md token as a CSS custom property (ADR 0008). Components use
+  only these properties, so a Theme is a different set of values here.
+  Naming: --color-*, --font-<scale>-*, --rounded-*, --spacing-*, then the
+  component tokens. Role tokens (--color-surface, ...) switch to the dark-*
+  values under prefers-color-scheme: dark.
+*/
+:root {
+  /* colors */
+  --color-primary: #0e7c86;
+  --color-primary-hover: #0b6971;
+  --color-primary-soft: #dff0f1;
+  --color-on-primary: #ffffff;
+  --color-on-primary-soft: #0a5960;
+  --color-surface: #ffffff;
+  --color-surface-chrome: #f2f4f5;
+  --color-surface-panel: #f8f9fa;
+  --color-line: #dfe3e7;
+  --color-line-soft: #eef1f3;
+  --color-ink: #1b1f23;
+  --color-ink-muted: #56616b;
+  --color-ink-faint: #6b7680;
+  --color-highlighter: #fff2a8;
+  --color-highlighter-edge: #b38f00;
+  --color-highlighter-ink: #6e5800;
+  --color-added-soft: #e3f4ea;
+  --color-added-ink: #1d6b3f;
+  --color-deleted-soft: #fbe4e2;
+  --color-deleted-ink: #a1322b;
+  --color-production: #b76e00;
+  --color-production-soft: #fcefd9;
+  --color-production-ink: #7a4500;
+  --color-danger: #b3362e;
+  --color-syntax-keyword: #2f5fc4;
+  --color-syntax-string: #1d7a45;
+  --color-syntax-number: #b4451f;
+  --color-syntax-comment: #6b7680;
+  --color-group-red: #d23a2e;
+  --color-group-orange: #b4510f;
+  --color-group-amber: #8f6700;
+  --color-group-green: #26804e;
+  --color-group-teal: #17808a;
+  --color-group-blue: #2f6fdb;
+  --color-group-violet: #7556cf;
+  --color-group-rose: #c2417a;
+  --color-group-slate: #5c6b7a;
+  --color-dark-surface: #14181b;
+  --color-dark-surface-chrome: #0f1215;
+  --color-dark-surface-panel: #171b1f;
+  --color-dark-line: #2a3036;
+  --color-dark-line-soft: #20252a;
+  --color-dark-ink: #e4e8eb;
+  --color-dark-ink-muted: #a0aab3;
+  --color-dark-ink-faint: #8a949d;
+  --color-dark-primary: #3fb8c2;
+  --color-dark-on-primary: #06272a;
+  --color-dark-primary-soft: #15363b;
+  --color-dark-highlighter: #3d3510;
+  --color-dark-highlighter-edge: #e0b400;
+  --color-dark-production: #e8a33a;
+  --color-dark-primary-hover: #5cc6cf;
+  --color-dark-on-primary-soft: #8fdde3;
+  --color-dark-highlighter-ink: #f0d466;
+  --color-dark-deleted-soft: #3a1d1b;
+  --color-dark-deleted-ink: #f28b83;
+  --color-dark-production-soft: #3a2a12;
+  --color-dark-production-ink: #f3c27a;
+  --color-dark-danger: #f28b83;
+  /* The Group initial is always white on the Group colour, in both variants. */
+  --color-on-group: #ffffff;
+
+  /* typography */
+  --font-display-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-display-size: 28px;
+  --font-display-weight: 600;
+  --font-display-line-height: 34px;
+  --font-display: var(--font-display-weight) var(--font-display-size) / var(--font-display-line-height)
+    var(--font-display-family);
+  --font-headline-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-headline-size: 20px;
+  --font-headline-weight: 600;
+  --font-headline-line-height: 28px;
+  --font-headline: var(--font-headline-weight) var(--font-headline-size) / var(--font-headline-line-height)
+    var(--font-headline-family);
+  --font-title-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-title-size: 16px;
+  --font-title-weight: 600;
+  --font-title-line-height: 22px;
+  --font-title: var(--font-title-weight) var(--font-title-size) / var(--font-title-line-height) var(--font-title-family);
+  --font-body-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-body-size: 14px;
+  --font-body-weight: 400;
+  --font-body-line-height: 20px;
+  --font-body: var(--font-body-weight) var(--font-body-size) / var(--font-body-line-height) var(--font-body-family);
+  --font-body-strong-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-body-strong-size: 14px;
+  --font-body-strong-weight: 600;
+  --font-body-strong-line-height: 20px;
+  --font-body-strong: var(--font-body-strong-weight) var(--font-body-strong-size) / var(--font-body-strong-line-height)
+    var(--font-body-strong-family);
+  --font-label-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-label-size: 12px;
+  --font-label-weight: 600;
+  --font-label-line-height: 16px;
+  --font-label: var(--font-label-weight) var(--font-label-size) / var(--font-label-line-height) var(--font-label-family);
+  --font-mono-family: "Cascadia Mono", Consolas, monospace;
+  --font-mono-size: 13px;
+  --font-mono-weight: 400;
+  --font-mono-line-height: 20px;
+  --font-mono: var(--font-mono-weight) var(--font-mono-size) / var(--font-mono-line-height) var(--font-mono-family);
+  --font-mono-small-family: "Cascadia Mono", Consolas, monospace;
+  --font-mono-small-size: 11px;
+  --font-mono-small-weight: 400;
+  --font-mono-small-line-height: 14px;
+  --font-mono-small: var(--font-mono-small-weight) var(--font-mono-small-size) / var(--font-mono-small-line-height)
+    var(--font-mono-small-family);
+  --font-code-editor-family: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+  --font-code-editor-size: 14px;
+  --font-code-editor-weight: 400;
+  --font-code-editor-line-height: 22px;
+  --font-code-editor-feature: "calt" 1, "liga" 1;
+  --font-code-editor: var(--font-code-editor-weight) var(--font-code-editor-size) / var(--font-code-editor-line-height)
+    var(--font-code-editor-family);
+
+  /* rounded */
+  --rounded-none: 0px;
+  --rounded-xs: 3px;
+  --rounded-sm: 4px;
+  --rounded-md: 6px;
+  --rounded-full: 999px;
+
+  /* spacing */
+  --spacing-2xs: 2px;
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+  --spacing-2xl: 32px;
+  --spacing-3xl: 48px;
+
+  /* components */
+  --button-primary-background: var(--color-primary);
+  --button-primary-text: var(--color-on-primary);
+  --button-primary-font: var(--font-body-strong);
+  --button-primary-rounded: var(--rounded-md);
+  --button-primary-padding: 6px 12px;
+  --button-primary-height: 32px;
+  --button-primary-hover-background: var(--color-primary-hover);
+  --button-primary-hover-text: var(--color-on-primary);
+  --button-secondary-background: var(--color-surface);
+  --button-secondary-text: var(--color-ink);
+  --button-secondary-font: var(--font-body);
+  --button-secondary-rounded: var(--rounded-md);
+  --button-secondary-padding: 6px 12px;
+  --button-secondary-height: 32px;
+  --input-background: var(--color-surface);
+  --input-text: var(--color-ink);
+  --input-font: var(--font-body);
+  --input-rounded: var(--rounded-md);
+  --input-padding: 0px 8px;
+  --input-height: 32px;
+  --title-bar-background: var(--color-surface-chrome);
+  --title-bar-text: var(--color-ink-muted);
+  --title-bar-height: 40px;
+  --tab-background: var(--color-surface-chrome);
+  --tab-text: var(--color-ink-muted);
+  --tab-font: var(--font-body);
+  --tab-rounded: var(--rounded-sm);
+  --tab-padding: 0px 10px;
+  --tab-height: 34px;
+  --tab-active-background: var(--color-surface);
+  --tab-active-text: var(--color-ink);
+  --group-badge-text: var(--color-on-group);
+  --group-badge-font: var(--font-label);
+  --group-badge-rounded: var(--rounded-sm);
+  --group-badge-size: 22px;
+  /* The badge inside menus: same label face, scaled to an 18 px square. */
+  --group-badge-small-size: 18px;
+  --group-badge-small-font: var(--font-label-weight) 10px / 1 var(--font-label-family);
+  --tree-row-background: var(--color-surface-panel);
+  --tree-row-text: var(--color-ink);
+  --tree-row-font: var(--font-body);
+  --tree-row-rounded: var(--rounded-sm);
+  --tree-row-padding: 0px 8px;
+  --tree-row-height: 28px;
+  --tree-row-selected-background: var(--color-primary-soft);
+  --tree-row-selected-text: var(--color-on-primary-soft);
+  --grid-header-background: var(--color-surface-panel);
+  --grid-header-text: var(--color-ink);
+  --grid-header-font: var(--font-body-strong);
+  --grid-header-padding: 0px 10px;
+  --grid-header-height: 44px;
+  --grid-cell-background: var(--color-surface);
+  --grid-cell-text: var(--color-ink);
+  --grid-cell-font: var(--font-body);
+  --grid-cell-padding: 0px 10px;
+  --grid-cell-height: 40px;
+  --grid-cell-edited-background: var(--color-highlighter);
+  --grid-cell-edited-text: var(--color-ink);
+  --grid-cell-null-text: var(--color-ink-faint);
+  --type-hint-text: var(--color-ink-muted);
+  --type-hint-font: var(--font-mono-small);
+  --kbd-background: var(--color-surface);
+  --kbd-text: var(--color-ink-muted);
+  --kbd-font: var(--font-mono-small);
+  --kbd-rounded: var(--rounded-xs);
+  --kbd-padding: 1px 5px;
+  --tag-production-background: var(--color-production-soft);
+  --tag-production-text: var(--color-production-ink);
+  --tag-production-font: var(--font-label);
+  --tag-production-rounded: var(--rounded-sm);
+  --tag-production-padding: 2px 6px;
+  --group-card-background: var(--color-surface);
+  --group-card-text: var(--color-ink);
+  --group-card-font: var(--font-title);
+  --group-card-rounded: var(--rounded-md);
+  --group-card-padding: 16px;
+  --status-bar-background: var(--color-surface);
+  --status-bar-text: var(--color-ink-muted);
+  --status-bar-font: var(--font-body);
+  --status-bar-height: 44px;
+
+  /* layout (DESIGN.md "Layout") */
+  --layout-rail-width: 48px;
+  --layout-tree-width: 240px;
+  --layout-toolbar-height: 44px;
+  --layout-row-number-width: 40px;
+  --layout-group-card-min: 240px;
+  --border-hairline: 1px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* elevation (DESIGN.md "Shadow Vocabulary") */
+  --shadow-menu: 0 8px 24px rgba(16, 24, 32, 0.12), 0 1px 2px rgba(16, 24, 32, 0.08);
+  --shadow-dialog: 0 24px 64px rgba(16, 24, 32, 0.24);
+  --shadow-toast: 0 6px 16px rgba(16, 24, 32, 0.14);
+  --color-scrim: rgba(16, 24, 32, 0.32);
+
+  /* motion (DESIGN.md "Motion") */
+  --motion-fast: 90ms;
+  --motion-base: 120ms;
+  --motion-slow: 150ms;
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  color-scheme: light;
+}
+
+/*
+  Dark variant of the default Theme. Roles with a dark-* token use it; the
+  roles DESIGN.md gives no dark value for take the Motion Lab reference's
+  dark values.
+*/
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-surface: var(--color-dark-surface);
+    --color-surface-chrome: var(--color-dark-surface-chrome);
+    --color-surface-panel: var(--color-dark-surface-panel);
+    --color-line: var(--color-dark-line);
+    --color-line-soft: var(--color-dark-line-soft);
+    --color-ink: var(--color-dark-ink);
+    --color-ink-muted: var(--color-dark-ink-muted);
+    --color-ink-faint: var(--color-dark-ink-faint);
+    --color-primary: var(--color-dark-primary);
+    --color-on-primary: var(--color-dark-on-primary);
+    --color-primary-soft: var(--color-dark-primary-soft);
+    --color-highlighter: var(--color-dark-highlighter);
+    --color-highlighter-edge: var(--color-dark-highlighter-edge);
+    --color-production: var(--color-dark-production);
+    --color-primary-hover: var(--color-dark-primary-hover);
+    --color-on-primary-soft: var(--color-dark-on-primary-soft);
+    --color-highlighter-ink: var(--color-dark-highlighter-ink);
+    --color-deleted-soft: var(--color-dark-deleted-soft);
+    --color-deleted-ink: var(--color-dark-deleted-ink);
+    --color-danger: var(--color-dark-danger);
+    --color-production-soft: var(--color-dark-production-soft);
+    --color-production-ink: var(--color-dark-production-ink);
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.5);
+    --shadow-dialog: 0 24px 64px rgba(0, 0, 0, 0.6);
+    --shadow-toast: 0 6px 16px rgba(0, 0, 0, 0.5);
+    --color-scrim: rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+
+/* Windows reduce-motion: everything is instant. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+}

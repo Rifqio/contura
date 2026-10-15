@@ -1,0 +1,3 @@
+# Portable app: all data lives beside the executable
+
+DB View ships as a portable app, not an installer, and keeps everything in a `data\` folder next to its `.exe`. That covers Connections, Query History, Saved Queries, Visual Queries, logs and the WebView2 cache. It writes nothing to `%APPDATA%` or `%LOCALAPPDATA%`. The user wants the C drive kept lean and runs DB View from E:. A Tauri installer would default to a per-user folder on C, and WebView2 would cache there unless redirected. Only Connection passwords (Windows Credential Manager) and the WebView2 runtime itself stay on C. This means DB View must be run from a folder the user can write to, not from `Program Files`.

@@ -1,0 +1,3 @@
+# CodeMirror 6 for the SQL editor, not Monaco
+
+The user wants SQL typing to feel like VS Code: ligatures, multi-cursor, VS Code keybindings, autocomplete as you type. Monaco is VS Code's own editor and would match exactly, but it is several MB of code and costs noticeably more memory per open editor, which strains the ~150 MB budget (ADR 0003) once several query tabs are open. We use CodeMirror 6 with a VS Code keymap, its SQL language package (MySQL, Postgres and SQLite dialects) and Cascadia Code with ligatures. It feels very close to VS Code for a fraction of the memory. If a specific VS Code behaviour turns out to be missing, the fix is to add it to CodeMirror, not to swap in Monaco.
