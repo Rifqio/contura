@@ -3,10 +3,9 @@ use mysql_async::{Conn, Pool, Row, Value};
 
 use super::query_err;
 use super::quote::quote_ident;
+use crate::common::{bytes_preview, hex_lower, order_columns, text_preview};
 use crate::error::{Error, Result};
-use crate::model::{
-    Cell, ColumnInfo, ObjectPath, PAGE_SIZE, PREVIEW_BYTES, PREVIEW_CHARS, Page, PageRequest,
-};
+use crate::model::{Cell, ColumnInfo, ObjectPath, PAGE_SIZE, PREVIEW_CHARS, Page, PageRequest};
 
 /// How a column's values are carried to the grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,16 +78,6 @@ fn value_u64(v: &Value) -> Option<u64> {
     std::str::from_utf8(value_bytes(v)?).ok()?.parse().ok()
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(DIGITS[(b >> 4) as usize] as char);
-        out.push(DIGITS[(b & 0xf) as usize] as char);
-    }
-    out
-}
-
 /// Primary keys and numbers are selected as-is; every other column is cut to
 /// `PREVIEW_CHARS + 1` in the SQL, plus its full byte length.
 fn is_plain(c: &ColumnMeta) -> bool {
@@ -151,26 +140,9 @@ fn plain_cell(kind: ColumnKind, b: &[u8]) -> Cell {
 
 fn preview_cell(kind: ColumnKind, b: &[u8], total_bytes: u64) -> Cell {
     if kind == ColumnKind::Bytes {
-        let truncated = b.len() > PREVIEW_BYTES;
-        return Cell::Bytes {
-            preview_hex: hex_lower(&b[..b.len().min(PREVIEW_BYTES)]),
-            truncated,
-            total_bytes,
-        };
+        return bytes_preview(b, total_bytes);
     }
-    let s = String::from_utf8_lossy(b);
-    match s.char_indices().nth(PREVIEW_CHARS) {
-        Some((cut, _)) => Cell::Text {
-            value: s[..cut].to_string(),
-            truncated: true,
-            total_bytes,
-        },
-        None => Cell::Text {
-            value: s.into_owned(),
-            truncated: false,
-            total_bytes,
-        },
-    }
+    text_preview(&String::from_utf8_lossy(b), total_bytes)
 }
 
 fn convert_row(row: &Row, cols: &[ColumnMeta]) -> Vec<Cell> {
@@ -195,25 +167,8 @@ fn convert_row(row: &Row, cols: &[ColumnMeta]) -> Vec<Cell> {
 pub(crate) async fn fetch_page(pool: &Pool, req: &PageRequest) -> Result<Page> {
     let mut conn = pool.get_conn().await.map_err(query_err)?;
     let cols = table_column_meta(&mut conn, &req.table).await?;
-    let pk: Vec<(String, bool)> = cols
-        .iter()
-        .filter(|c| c.info.is_primary_key)
-        .map(|c| (c.info.name.clone(), false))
-        .collect();
-    let order_by = match &req.sort {
-        Some(sort) => {
-            if !cols.iter().any(|c| c.info.name == sort.column) {
-                return Err(Error::InvalidInput(format!(
-                    "unknown column {}",
-                    sort.column
-                )));
-            }
-            let mut order = vec![(sort.column.clone(), sort.descending)];
-            order.extend(pk.into_iter().filter(|(n, _)| *n != sort.column));
-            order
-        }
-        None => pk,
-    };
+    let infos: Vec<ColumnInfo> = cols.iter().map(|c| c.info.clone()).collect();
+    let order_by = order_columns(&infos, req.sort.as_ref())?;
     let offset = u64::from(req.page) * u64::from(PAGE_SIZE);
     let sql = build_select(&req.table, &cols, &order_by, offset);
     let raw: Vec<Row> = conn.query(sql).await.map_err(query_err)?;

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { errorText, suggestedConnections } from "../api/client";
+import { connectionTarget, errorText, shortenPath, suggestedConnections } from "../api/client";
 import type { ConnectionConfig, Group, GroupId, SuggestedConnection } from "../api/types";
 import ConnectionForm from "./ConnectionForm";
+import DialectTag from "./DialectTag";
 import GroupBadge from "./GroupBadge";
 import GroupForm from "./GroupForm";
 import Icon from "./Icon";
@@ -120,8 +121,9 @@ export default function Home({ groups, connections, onOpenGroup, onOpenUngrouped
                   <li key={c.id} className="list-row">
                     <Icon name="database" className="muted" />
                     <span className="list-row-name">{c.name}</span>
-                    <span className="mono-small muted">
-                      {c.host}:{c.port}
+                    <DialectTag dialect={c.dialect} />
+                    <span className="list-row-target mono-small muted" title={connectionTarget(c)}>
+                      {shortenPath(connectionTarget(c))}
                     </span>
                     <button type="button" className="button button-small" onClick={() => onOpenUngrouped(c.id)}>
                       Open
@@ -144,10 +146,11 @@ export default function Home({ groups, connections, onOpenGroup, onOpenUngrouped
           ) : (
             <ul className="list-panel" aria-label="Suggested Connections">
               {suggestions.map((s) => (
-                <li key={`${s.host}:${s.port}`} className="list-row">
+                <li key={`${s.dialect}:${s.host}:${s.port}`} className="list-row">
                   <Icon name="database" className="muted" />
                   <span className="list-row-name">{s.name}</span>
-                  <span className="mono-small muted">
+                  <DialectTag dialect={s.dialect} />
+                  <span className="list-row-target mono-small muted">
                     {s.user}@{s.host}:{s.port}
                   </span>
                   <button

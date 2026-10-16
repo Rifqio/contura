@@ -183,6 +183,7 @@ mod tests {
             database: None,
             ssl: SslMode::Disable,
             group_id,
+            file: None,
         }
     }
 

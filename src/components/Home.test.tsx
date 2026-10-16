@@ -23,6 +23,7 @@ function conn(id: string, name: string, groupId: string | null): ConnectionConfi
     user: "root",
     database: null,
     ssl: { mode: "disable" },
+    file: null,
     groupId,
   };
 }
@@ -84,6 +85,63 @@ test("suggested connection add pre-fills form with port 3310 and no group", asyn
   expect((within(dialog).getByLabelText("Host") as HTMLInputElement).value).toBe("127.0.0.1");
   expect((within(dialog).getByLabelText("Name") as HTMLInputElement).value).toBe("Laragon MySQL");
   expect((within(dialog).getByLabelText("Group") as HTMLSelectElement).value).toBe("");
+});
+
+test("postgres_and_mysql_suggestions_on_one_host_both_show", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  // One host and port for both, so only the Dialect tells the two rows apart.
+  routeInvoke({
+    suggested_connections: () => [
+      { name: "Laragon MySQL", dialect: "mysql", host: "127.0.0.1", port: 5432, user: "root" },
+      { name: "Laragon PostgreSQL", dialect: "postgres", host: "127.0.0.1", port: 5432, user: "postgres" },
+    ],
+  });
+  renderHome();
+  expect(await screen.findByRole("button", { name: "Add Laragon MySQL" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Add Laragon PostgreSQL" })).toBeTruthy();
+  const keyWarnings = errors.mock.calls.filter((args) => String(args[0]).includes("same key"));
+  errors.mockRestore();
+  expect(keyWarnings).toEqual([]);
+});
+
+test("suggestion_row_keeps_user_at_host_port", async () => {
+  routeInvoke({
+    suggested_connections: () => [
+      { name: "Laragon PostgreSQL", dialect: "postgres", host: "127.0.0.1", port: 5432, user: "postgres" },
+    ],
+  });
+  renderHome();
+  const list = await screen.findByRole("list", { name: "Suggested Connections" });
+  expect(within(list).getByText("postgres@127.0.0.1:5432")).toBeTruthy();
+});
+
+test("sqlite_connection_shows_its_file", async () => {
+  routeInvoke({ suggested_connections: () => [] });
+  const short = { ...conn("s1", "Shop file", null), dialect: "sqlite" as const, host: "", port: 0, file: "C:\\data\\shop.db" };
+  const longPath = "C:\\Users\\Rifqi\\Documents\\Projects\\kfc\\exports\\2026\\october\\stores-2026-10-15.sqlite";
+  const long = { ...short, id: "s2", name: "Store exports", file: longPath };
+  renderHome({ connections: [short, long] });
+  const list = screen.getByRole("list", { name: "Ungrouped Connections" });
+  expect(within(list).getByText("C:\\data\\shop.db").getAttribute("title")).toBe("C:\\data\\shop.db");
+  const shortened = within(list).getByText("C:\\Users\\Rifqi\\…\\stores-2026-10-15.sqlite");
+  expect(shortened.getAttribute("title")).toBe(longPath);
+  expect(within(list).queryByText(":0")).toBeNull();
+});
+
+test("rows_show_dialect_tag", async () => {
+  routeInvoke({
+    suggested_connections: () => [
+      { name: "Laragon PostgreSQL", dialect: "postgres", host: "127.0.0.1", port: 5432, user: "postgres" },
+    ],
+  });
+  const sqlite = { ...conn("s1", "Shop file", null), dialect: "sqlite" as const, file: "C:\\data\\shop.db" };
+  renderHome({ connections: [conn("c", "laragon", null), sqlite] });
+  const ungrouped = screen.getByRole("list", { name: "Ungrouped Connections" });
+  const rows = within(ungrouped).getAllByRole("listitem");
+  expect(within(rows[0]).getByText("MySQL")).toBeTruthy();
+  expect(within(rows[1]).getByText("SQLite")).toBeTruthy();
+  const suggested = await screen.findByRole("list", { name: "Suggested Connections" });
+  expect(within(suggested).getByText("PostgreSQL")).toBeTruthy();
 });
 
 test("empty state offers New Group", async () => {

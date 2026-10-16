@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod pg;
+
 use dbview_core::model::{ConnectionConfig, DialectKind, SslMode};
 use mysql_async::prelude::Queryable;
 use mysql_async::{Opts, OptsBuilder, Pool};
@@ -29,6 +31,7 @@ pub fn base_config(user: &str, database: Option<String>) -> ConnectionConfig {
         database,
         ssl: SslMode::Disable,
         group_id: None,
+        file: None,
     }
 }
 

@@ -12,7 +12,7 @@ use crate::dialect::Dialect;
 use crate::error::{Error, Result};
 use crate::model::{
     ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
-    PageRequest, SslMode,
+    PageRequest, SchemaInfo, SslMode,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -107,7 +107,7 @@ impl Dialect for MySqlDialect {
         introspect::list_databases(&self.pool).await
     }
 
-    async fn list_schemas(&self, _database: &str) -> Result<Vec<String>> {
+    async fn list_schemas(&self, _database: &str) -> Result<Vec<SchemaInfo>> {
         Ok(Vec::new())
     }
 
@@ -148,6 +148,7 @@ mod tests {
             database: None,
             ssl,
             group_id: None,
+            file: None,
         }
     }
 
@@ -177,6 +178,7 @@ mod tests {
             database: None,
             ssl: SslMode::Disable,
             group_id: None,
+            file: None,
         };
         let pw = env("DBVIEW_TEST_MYSQL_PASSWORD", "dbview_test");
         let pool = Pool::new(build_opts(&config, Some(&pw)));

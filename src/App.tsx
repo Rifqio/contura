@@ -18,6 +18,7 @@ import GroupSwitcher, { type Place } from "./components/GroupSwitcher";
 import Home from "./components/Home";
 import Icon from "./components/Icon";
 import ObjectTree from "./components/ObjectTree";
+import { objectKey, objectPrefix } from "./objectPath";
 
 interface Selection {
   connectionId: ConnectionId;
@@ -61,7 +62,7 @@ function DefinitionView({
       <div className="toolbar">
         <Icon name={selection.kind === "trigger" ? "trigger" : "routine"} className="muted" />
         <h2 className="toolbar-title">
-          <span className="muted">{selection.path.database}.</span>
+          <span className="muted">{objectPrefix(selection.path)}</span>
           {selection.path.name}
         </h2>
         <span className="toolbar-meta">{selection.kind}</span>
@@ -169,7 +170,7 @@ export default function App() {
       await openConnection(id);
       setOpenIds((ids) => new Set(ids).add(id));
     } catch (e) {
-      setNotice(errorText(e));
+      setNotice(errorText(e, connections.find((c) => c.id === id)?.dialect));
     }
   }
 
@@ -332,7 +333,9 @@ export default function App() {
                   <ObjectTree
                     key={active.id}
                     connectionId={active.id}
-                    defaultDatabase={active.database}
+                    dialect={active.dialect}
+                    // A SQLite file holds one database, so its objects show at once.
+                    defaultDatabase={active.dialect === "sqlite" ? "main" : active.database}
                     selected={selection?.connectionId === active.id ? selection : null}
                     onSelect={(kind, path) => setSelection({ connectionId: active.id, kind, path })}
                     onNotOpen={() => lost(active.id)}
@@ -345,7 +348,7 @@ export default function App() {
               {selection ? (
                 selection.kind === "table" || selection.kind === "view" ? (
                   <DataGrid
-                    key={`${selection.connectionId}/${selection.path.database}/${selection.path.name}`}
+                    key={objectKey(selection.connectionId, selection.kind, selection.path)}
                     connectionId={selection.connectionId}
                     table={selection.path}
                     onClose={() => setSelection(null)}
@@ -353,7 +356,7 @@ export default function App() {
                   />
                 ) : (
                   <DefinitionView
-                    key={`${selection.connectionId}/${selection.kind}/${selection.path.database}/${selection.path.name}`}
+                    key={objectKey(selection.connectionId, selection.kind, selection.path)}
                     selection={selection}
                     onClose={() => setSelection(null)}
                     onNotOpen={() => lost(selection.connectionId)}

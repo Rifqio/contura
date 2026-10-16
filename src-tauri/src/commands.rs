@@ -2,9 +2,11 @@ use dbview_core::Error;
 use dbview_core::connections::{ConnectionInput, ConnectionService, GroupInput};
 use dbview_core::model::{
     ConnectionConfig, ConnectionId, DbObject, FullValue, FullValueRequest, Group, GroupId,
-    ObjectKind, ObjectPath, Page, PageRequest,
+    ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
 };
 use dbview_core::suggest::SuggestedConnection;
+use std::path::PathBuf;
+
 use tauri::State;
 
 type Service<'a> = State<'a, ConnectionService>;
@@ -60,7 +62,7 @@ pub async fn list_schemas(
     service: Service<'_>,
     id: ConnectionId,
     database: String,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<SchemaInfo>, Error> {
     service.session(id).await?.list_schemas(&database).await
 }
 
@@ -142,4 +144,9 @@ pub fn last_group(service: Service<'_>) -> Result<Option<GroupId>, Error> {
 #[tauri::command]
 pub fn set_last_group(service: Service<'_>, id: Option<GroupId>) -> Result<(), Error> {
     service.set_last_group(id)
+}
+
+#[tauri::command]
+pub fn create_sqlite_database(path: PathBuf) -> Result<(), Error> {
+    dbview_core::sqlite::create_database(&path)
 }

@@ -20,6 +20,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Tauri panics on a setup error, which aborts silently in release: report it, then exit.
             if let Err(e) = start(app) {
@@ -52,6 +53,7 @@ pub fn run() {
             commands::move_connection,
             commands::last_group,
             commands::set_last_group,
+            commands::create_sqlite_database,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

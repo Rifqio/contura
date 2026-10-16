@@ -6,8 +6,9 @@ use mysql_async::{Pool, Value};
 use super::page::{ColumnKind, ColumnMeta, table_column_meta};
 use super::query_err;
 use super::quote::quote_ident;
+use crate::common::{check_key, decode_hex};
 use crate::error::{Error, Result};
-use crate::model::{Cell, FULL_VALUE_LIMIT, FullValue, FullValueRequest};
+use crate::model::{Cell, ColumnInfo, FULL_VALUE_LIMIT, FullValue, FullValueRequest};
 
 fn key_param(cell: &Cell) -> Result<Value> {
     match cell {
@@ -27,20 +28,6 @@ fn key_param(cell: &Cell) -> Result<Value> {
         Cell::Bytes { preview_hex, .. } => Ok(Value::Bytes(decode_hex(preview_hex)?)),
         Cell::Null => Err(Error::InvalidInput("key values must not be NULL".into())),
     }
-}
-
-fn decode_hex(hex: &str) -> Result<Vec<u8>> {
-    let invalid = || Error::InvalidInput("a binary key value is not valid hex".into());
-    if !hex.len().is_multiple_of(2) {
-        return Err(invalid());
-    }
-    hex.as_bytes()
-        .chunks(2)
-        .map(|pair| {
-            let text = std::str::from_utf8(pair).map_err(|_| invalid())?;
-            u8::from_str_radix(text, 16).map_err(|_| invalid())
-        })
-        .collect()
 }
 
 /// The binary protocol sends numbers and dates as typed values, not bytes.
@@ -79,19 +66,9 @@ fn value_bytes(value: Value) -> Option<Vec<u8>> {
 
 /// `WHERE` clause over the primary key; BIT keys arrive as decimal text, so they compare as `col + 0`.
 fn key_clause(req: &FullValueRequest, cols: &[ColumnMeta]) -> Result<(String, Vec<Value>)> {
+    let infos: Vec<ColumnInfo> = cols.iter().map(|c| c.info.clone()).collect();
+    check_key(&infos, &req.key)?;
     let pk: Vec<&ColumnMeta> = cols.iter().filter(|c| c.info.is_primary_key).collect();
-    if pk.is_empty() {
-        return Err(Error::NoPrimaryKey);
-    }
-    let names_match = req.key.len() == pk.len()
-        && pk
-            .iter()
-            .all(|c| req.key.iter().filter(|k| k.column == c.info.name).count() == 1);
-    if !names_match {
-        return Err(Error::InvalidInput(
-            "key must name exactly the primary key columns".into(),
-        ));
-    }
     let mut parts = Vec::new();
     let mut params = Vec::new();
     for part in &req.key {

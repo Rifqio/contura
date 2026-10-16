@@ -14,11 +14,25 @@ pub struct SuggestedConnection {
     pub user: String,
 }
 
-const DEFAULT_MYSQL_PORT: u16 = 3306;
+/// What a Laragon section suggests: name, Dialect, default port and user.
+fn laragon_server(section: &str) -> Option<(&'static str, DialectKind, u16, &'static str)> {
+    if section.eq_ignore_ascii_case("mysql") {
+        Some(("Laragon MySQL", DialectKind::MySql, 3306, "root"))
+    } else if section.eq_ignore_ascii_case("postgresql") {
+        Some((
+            "Laragon PostgreSQL",
+            DialectKind::Postgres,
+            5432,
+            "postgres",
+        ))
+    } else {
+        None
+    }
+}
 
-/// Reads `laragon.ini` text. Only `[mysql]` yields a suggestion for now;
-/// `[postgresql]` waits for `DialectKind::Postgres`. A `Port` that is not a
-/// valid `u16` skips the section rather than suggesting a wrong port.
+/// Reads `laragon.ini` text. `[mysql]` and `[postgresql]` (any case) each
+/// yield a suggestion. A `Port` that is not a valid `u16` skips the section
+/// rather than suggesting a wrong port.
 pub fn parse_laragon_ini(ini: &str) -> Vec<SuggestedConnection> {
     // Laragon writes Windows paths such as `DocumentRoot=E:\laragon\www\`. Escapes
     // off keeps `\` literal, but rust-ini still reads a line-final `\` as a line
@@ -37,22 +51,22 @@ pub fn parse_laragon_ini(ini: &str) -> Vec<SuggestedConnection> {
     };
     let mut out = Vec::new();
     for (section, props) in ini.iter() {
-        if !section.is_some_and(|s| s.eq_ignore_ascii_case("mysql")) {
+        let Some((name, dialect, default_port, user)) = section.and_then(laragon_server) else {
             continue;
-        }
+        };
         let port = match props.iter().find(|(k, _)| k.eq_ignore_ascii_case("port")) {
             Some((_, v)) => match v.trim().parse::<u16>() {
                 Ok(p) => p,
                 Err(_) => continue,
             },
-            None => DEFAULT_MYSQL_PORT,
+            None => default_port,
         };
         out.push(SuggestedConnection {
-            name: "Laragon MySQL".into(),
-            dialect: DialectKind::MySql,
+            name: name.into(),
+            dialect,
             host: "127.0.0.1".into(),
             port,
-            user: "root".into(),
+            user: user.into(),
         });
     }
     out
@@ -152,14 +166,13 @@ mod tests {
             database: None,
             ssl: SslMode::Disable,
             group_id: None,
+            file: None,
         }
     }
 
     #[test]
     fn mysql_port_from_ini() {
-        let s = parse_laragon_ini(
-            "[mysql]\nVersion=mysql-8.0.30-winx64\nPort=3310\n[postgresql]\nVersion=pgsql\n",
-        );
+        let s = parse_laragon_ini("[mysql]\nVersion=mysql-8.0.30-winx64\nPort=3310\n");
         assert_eq!(s.len(), 1);
         assert_eq!(
             (
@@ -178,6 +191,51 @@ mod tests {
         );
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].port, 3307);
+    }
+    #[test]
+    fn postgresql_section_yields_suggestion() {
+        let s = parse_laragon_ini("[postgresql]\nUse=-1\nVersion=pgsql\n");
+        assert_eq!(
+            s,
+            vec![SuggestedConnection {
+                name: "Laragon PostgreSQL".into(),
+                dialect: DialectKind::Postgres,
+                host: "127.0.0.1".into(),
+                port: 5432,
+                user: "postgres".into(),
+            }]
+        );
+    }
+    #[test]
+    fn postgresql_port_is_read() {
+        let s = parse_laragon_ini("[PostgreSQL]\nPort=5433\n");
+        assert_eq!(s.len(), 1);
+        assert_eq!((s[0].dialect, s[0].port), (DialectKind::Postgres, 5433));
+        assert!(parse_laragon_ini("[postgresql]\nPort=99999\n").is_empty());
+    }
+    #[test]
+    fn mysql_and_postgresql_both_suggested() {
+        let s = parse_laragon_ini(
+            "[mysql]\nVersion=mysql-8.0.30-winx64\n[postgresql]\nUse=-1\nVersion=pgsql\n",
+        );
+        let found: Vec<(DialectKind, u16, &str)> = s
+            .iter()
+            .map(|x| (x.dialect, x.port, x.user.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                (DialectKind::MySql, 3306, "root"),
+                (DialectKind::Postgres, 5432, "postgres")
+            ]
+        );
+    }
+    #[test]
+    fn unsaved_keeps_postgres_when_only_mysql_saved_on_that_host() {
+        let s = parse_laragon_ini("[mysql]\nPort=5432\n[postgresql]\nPort=5432\n");
+        let left = unsaved(s, &[saved("localhost", 5432)]);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].dialect, DialectKind::Postgres);
     }
     #[test]
     fn mysql_default_port_when_missing() {

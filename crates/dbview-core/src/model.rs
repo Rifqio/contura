@@ -13,6 +13,8 @@ pub const FULL_VALUE_LIMIT: u64 = 16 * 1024 * 1024;
 #[serde(rename_all = "lowercase")]
 pub enum DialectKind {
     MySql,
+    Postgres,
+    Sqlite,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -41,6 +43,9 @@ pub struct ConnectionConfig {
     pub database: Option<String>,
     pub ssl: SslMode,
     pub group_id: Option<GroupId>,
+    /// The database file of a SQLite Connection; `None` for server Dialects.
+    #[serde(default)]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +86,13 @@ pub enum ObjectKind {
     Procedure,
     Function,
     Trigger,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaInfo {
+    pub name: String,
+    pub is_system: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -176,6 +188,13 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&c).unwrap(),
             r#"{"t":"number","value":"18446744073709551615"}"#
+        );
+    }
+    #[test]
+    fn postgres_dialect_serializes_as_postgres() {
+        assert_eq!(
+            serde_json::to_string(&DialectKind::Postgres).unwrap(),
+            r#""postgres""#
         );
     }
     #[test]

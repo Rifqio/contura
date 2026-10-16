@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
+use std::path::PathBuf;
+
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -37,6 +39,8 @@ pub struct ConnectionInput {
     pub ssl: SslMode,
     pub password: PasswordChange,
     pub group_id: Option<GroupId>,
+    #[serde(default)]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -114,13 +118,43 @@ impl ConnectionService {
         if name.is_empty() {
             return Err(Error::InvalidInput("name must not be empty".into()));
         }
-        if input.host.trim().is_empty() {
-            return Err(Error::InvalidInput("host must not be empty".into()));
+        match input.dialect {
+            DialectKind::Sqlite => {
+                let blank = input
+                    .file
+                    .as_ref()
+                    .is_none_or(|f| f.as_os_str().to_string_lossy().trim().is_empty());
+                if blank {
+                    return Err(Error::InvalidInput("choose a SQLite file".into()));
+                }
+            }
+            DialectKind::MySql | DialectKind::Postgres => {
+                if input.host.trim().is_empty() {
+                    return Err(Error::InvalidInput("host must not be empty".into()));
+                }
+                if input.port == 0 {
+                    return Err(Error::InvalidInput("port must be from 1 to 65535".into()));
+                }
+            }
         }
         Ok(name.to_string())
     }
 
     fn config_from(id: ConnectionId, name: String, input: &ConnectionInput) -> ConnectionConfig {
+        if input.dialect == DialectKind::Sqlite {
+            return ConnectionConfig {
+                id,
+                name,
+                dialect: input.dialect,
+                host: String::new(),
+                port: 0,
+                user: String::new(),
+                database: None,
+                ssl: SslMode::Disable,
+                group_id: input.group_id,
+                file: input.file.clone(),
+            };
+        }
         ConnectionConfig {
             id,
             name,
@@ -131,6 +165,7 @@ impl ConnectionService {
             database: input.database.clone().filter(|d| !d.is_empty()),
             ssl: input.ssl.clone(),
             group_id: input.group_id,
+            file: None,
         }
     }
 
@@ -154,7 +189,13 @@ impl ConnectionService {
         let id = input.id.unwrap_or_else(Uuid::new_v4);
         let config = Self::config_from(id, name, &input);
         self.store()?.save_connection(&config)?;
-        match &input.password {
+        // A SQLite file has no password, so nothing may be stored for it.
+        let change = if input.dialect == DialectKind::Sqlite {
+            &PasswordChange::Clear
+        } else {
+            &input.password
+        };
+        match change {
             PasswordChange::Keep => {
                 if input.id.is_none() {
                     self.secrets.delete(id)?;
@@ -181,6 +222,7 @@ impl ConnectionService {
         let id = input.id.unwrap_or_else(Uuid::new_v4);
         let config = Self::config_from(id, name, &input);
         let password = match &input.password {
+            _ if input.dialect == DialectKind::Sqlite => None,
             PasswordChange::Keep => match input.id {
                 Some(id) => self.secrets.get(id)?,
                 None => None,

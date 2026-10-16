@@ -5,6 +5,7 @@ import type {
   ConnectionId,
   ConnectionInput,
   DbObject,
+  DialectKind,
   FullValue,
   FullValueRequest,
   Group,
@@ -14,8 +15,42 @@ import type {
   ObjectPath,
   Page,
   PageRequest,
+  SchemaInfo,
   SuggestedConnection,
 } from "./types";
+
+export const DIALECT_LABEL: Record<DialectKind, string> = {
+  mysql: "MySQL",
+  postgres: "PostgreSQL",
+  sqlite: "SQLite",
+};
+
+export const DIALECT_DEFAULTS: Record<"mysql" | "postgres", { port: number; user: string }> = {
+  mysql: { port: 3306, user: "root" },
+  postgres: { port: 5432, user: "postgres" },
+};
+
+/** Where a Connection points: the file path for SQLite, `host:port` for a server. */
+export function connectionTarget(c: { dialect: DialectKind; host: string; port: number; file: string | null }): string {
+  return c.dialect === "sqlite" ? (c.file ?? "") : `${c.host}:${c.port}`;
+}
+
+/**
+ * Shortens a long file path in the middle, keeping its start and always the
+ * whole file name: `C:\Users\rifqi\…\shop.db`. A path within `max` is unchanged.
+ */
+export function shortenPath(path: string, max = 48): string {
+  if (path.length <= max) return path;
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  if (cut < 0) return path;
+  const tail = path.slice(cut);
+  const budget = max - tail.length - 1;
+  if (budget <= 0) return `…${tail}`;
+  let head = path.slice(0, budget);
+  const lastSep = Math.max(head.lastIndexOf("\\"), head.lastIndexOf("/"));
+  if (lastSep > 0) head = head.slice(0, lastSep + 1);
+  return `${head}…${tail}`;
+}
 
 export const listConnections = (): Promise<ConnectionConfig[]> => invoke("list_connections");
 
@@ -35,8 +70,11 @@ export const closeConnection = (id: ConnectionId): Promise<void> => invoke("clos
 
 export const listDatabases = (id: ConnectionId): Promise<string[]> => invoke("list_databases", { id });
 
-export const listSchemas = (id: ConnectionId, database: string): Promise<string[]> =>
+export const listSchemas = (id: ConnectionId, database: string): Promise<SchemaInfo[]> =>
   invoke("list_schemas", { id, database });
+
+/** Creates an empty SQLite database file. The Core refuses a path where a file already exists. */
+export const createSqliteDatabase = (path: string): Promise<void> => invoke("create_sqlite_database", { path });
 
 export const listObjects = (id: ConnectionId, database: string, schema: string | null): Promise<DbObject[]> =>
   invoke("list_objects", { id, database, schema });
@@ -77,13 +115,30 @@ function formatBytes(n: number): string {
   return `${n.toLocaleString("en-US")} bytes`;
 }
 
-/** Turns a command error into UI text that says what went wrong and what to do. */
-export function errorText(e: unknown): string {
+function sentence(message: string): string {
+  return `${message.charAt(0).toUpperCase()}${message.slice(1)}.`;
+}
+
+function sqliteConnectText(message: string): string {
+  if (message.includes("not a SQLite database")) return sentence(message);
+  if (message.includes("does not exist")) return `${sentence(message)} Check the path, or choose the file again.`;
+  return `${sentence(message)} Check that DB View can read the file.`;
+}
+
+/**
+ * Turns a command error into UI text that says what went wrong and what to do.
+ * `dialect` picks hints that fit the Connection, such as file hints for SQLite.
+ */
+export function errorText(e: unknown, dialect?: DialectKind): string {
   if (!isCommandError(e)) return e instanceof Error ? e.message : String(e);
   switch (e.kind) {
     case "connect":
+      if (dialect === "sqlite") return sqliteConnectText(e.message);
       return `Could not connect: ${e.message}. Check the host and port, and that the database server is running.`;
     case "auth":
+      if (dialect === "postgres") {
+        return `Sign-in failed: ${e.message}. Check the user name and password, or the server's access rules for this database.`;
+      }
       return `Sign-in failed: ${e.message}. Check the user name and password.`;
     case "query":
       return `The query failed: ${e.message}`;
@@ -96,7 +151,7 @@ export function errorText(e: unknown): string {
     case "valueTooLarge":
       return `This value is ${formatBytes(e.message)}, more than the 16 MiB DB View opens at once.`;
     case "invalidInput":
-      return `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}.`;
+      return sentence(e.message);
     case "store":
       return `Could not read or write saved settings: ${e.message}`;
     case "secret":

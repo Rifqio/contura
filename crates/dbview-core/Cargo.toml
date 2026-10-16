@@ -18,6 +18,9 @@ keyring = "4.2"
 rust-ini = "0.21"
 mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "default-rustls-ring"] }
 base64 = "0.22"
+tokio-postgres = "0.7"
+tokio-postgres-rustls = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

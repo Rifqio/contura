@@ -1,6 +1,15 @@
 import { useState } from "react";
-import { closeConnection, deleteConnection, errorText, moveConnection, openConnection } from "../api/client";
+import {
+  closeConnection,
+  connectionTarget,
+  deleteConnection,
+  errorText,
+  moveConnection,
+  openConnection,
+  shortenPath,
+} from "../api/client";
 import type { ConnectionConfig, ConnectionId, Group, GroupId } from "../api/types";
+import DialectTag from "./DialectTag";
 import GroupBadge from "./GroupBadge";
 import Icon from "./Icon";
 import Menu, { type MenuItem } from "./Menu";
@@ -38,7 +47,8 @@ export default function ConnectionList({
 
   const mine = connections.filter((c) => c.groupId === groupId);
 
-  async function run(id: ConnectionId, action: () => Promise<void>) {
+  async function run(c: ConnectionConfig, action: () => Promise<void>) {
+    const id = c.id;
     setBusy((ids) => new Set(ids).add(id));
     setErrors((all) => {
       const rest = { ...all };
@@ -48,7 +58,7 @@ export default function ConnectionList({
     try {
       await action();
     } catch (e) {
-      setErrors((all) => ({ ...all, [id]: errorText(e) }));
+      setErrors((all) => ({ ...all, [id]: errorText(e, c.dialect) }));
     } finally {
       setBusy((ids) => {
         const next = new Set(ids);
@@ -59,25 +69,25 @@ export default function ConnectionList({
   }
 
   const open = (c: ConnectionConfig) =>
-    run(c.id, async () => {
+    run(c, async () => {
       await openConnection(c.id);
       onOpened(c.id);
     });
 
   const close = (c: ConnectionConfig) =>
-    run(c.id, async () => {
+    run(c, async () => {
       await closeConnection(c.id);
       onClosed(c.id);
     });
 
   const move = (c: ConnectionConfig, to: GroupId | null) =>
-    run(c.id, async () => {
+    run(c, async () => {
       await moveConnection(c.id, to);
       onChanged();
     });
 
   const remove = (c: ConnectionConfig) =>
-    run(c.id, async () => {
+    run(c, async () => {
       await deleteConnection(c.id);
       setConfirmDelete(null);
       onClosed(c.id);
@@ -133,8 +143,11 @@ export default function ConnectionList({
                 <Icon name="database" />
                 <span className="connection-text">
                   <span className="connection-title">{c.name}</span>
-                  <span className="connection-sub">
-                    {busy.has(c.id) ? "Working…" : isOpen ? "Open" : `${c.host}:${c.port}`}
+                  <span className="connection-meta">
+                    <DialectTag dialect={c.dialect} />
+                    <span className="connection-sub" title={connectionTarget(c)}>
+                      {busy.has(c.id) ? "Working…" : isOpen ? "Open" : shortenPath(connectionTarget(c))}
+                    </span>
                   </span>
                 </span>
               </button>

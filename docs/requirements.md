@@ -28,6 +28,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 - SSL modes: disable, require, verify-CA with a CA file.
 - No SSH tunnels in v1.
 - Several Connections can be open at once.
+- A SQLite Connection opens an existing file or creates a new empty one. DB View never overwrites an existing file.
 - A Connection can be marked **Production**, which adds an extra confirmation to every write, including typed SQL. It can be marked **Read-only**, which blocks every write.
 - **Suggested Connections from Laragon:**
   - On each start, DB View looks for Laragon in the Windows installed-programs list, then reads `<install>\usr\laragon.ini`.
@@ -77,6 +78,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 ## Browsing
 
 - An object tree: Connection → databases (and schemas, for Postgres) → tables, views, routines, triggers.
+- Postgres system schemas are hidden unless the user shows them.
 - Views can be created, edited and dropped as SQL definitions. Routines and triggers are read-only (their definitions can be viewed).
 - A table data grid with paging, sort and filter. Edits are Pending Edits until the user saves, and then all of them are applied in one transaction or none are.
 
@@ -119,7 +121,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 
 ## Testing
 
-- Integration tests run against real servers on the author's Laragon: MySQL at `127.0.0.1:3306` and Postgres at `127.0.0.1:5432`, read from environment variables. MySQL tests sign in as a scoped `dbview_test` user (password `dbview_test`) that can only touch databases named `dbview_test_%`, never as `root`. SQLite tests use temporary files. Tests create and drop throwaway `dbview_test_*` databases.
+- Integration tests run against real servers on the author's Laragon: MySQL at `127.0.0.1:3306` and Postgres at `127.0.0.1:5432`, read from environment variables. MySQL tests sign in as a scoped `dbview_test` user (password `dbview_test`) that can only touch databases named `dbview_test_%`, never as `root`. Postgres tests sign in as a `dbview_test` role (password `dbview_test`) with `LOGIN CREATEDB`, never as `postgres`. SQLite tests use temporary files. Tests create and drop throwaway `dbview_test_*` databases.
 
 ## Build order
 

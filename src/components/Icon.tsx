@@ -6,6 +6,7 @@ const PATHS = {
   chevronDown: "m6 9 6 6 6-6",
   chevronRight: "m9 6 6 6-6 6",
   chevronLeft: "m15 6-6 6 6 6",
+  schema: "M12 4 3 8.5l9 4.5 9-4.5zM3 12.5l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5",
   table: "M4 5h16v14H4zM4 10h16M4 15h16M10 10v9",
   view: "M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
   routine:

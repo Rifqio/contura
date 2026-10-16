@@ -3,6 +3,7 @@ use mysql_async::{Pool, Row};
 
 use super::query_err;
 use super::quote::quote_ident;
+use crate::common::sort_objects;
 use crate::error::{Error, Result};
 use crate::model::{DbObject, ObjectKind, ObjectPath};
 
@@ -63,22 +64,8 @@ pub async fn list_objects(pool: &Pool, database: &str) -> Result<Vec<DbObject>> 
         kind: ObjectKind::Trigger,
         name,
     }));
-    objects.sort_by(|a, b| {
-        kind_rank(a.kind)
-            .cmp(&kind_rank(b.kind))
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    sort_objects(&mut objects);
     Ok(objects)
-}
-
-fn kind_rank(kind: ObjectKind) -> u8 {
-    match kind {
-        ObjectKind::Table => 0,
-        ObjectKind::View => 1,
-        ObjectKind::Procedure => 2,
-        ObjectKind::Function => 3,
-        ObjectKind::Trigger => 4,
-    }
 }
 
 pub async fn object_definition(pool: &Pool, kind: ObjectKind, path: &ObjectPath) -> Result<String> {

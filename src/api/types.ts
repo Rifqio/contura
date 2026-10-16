@@ -4,7 +4,7 @@
 export type ConnectionId = string;
 export type GroupId = string;
 
-export type DialectKind = "mysql";
+export type DialectKind = "mysql" | "postgres" | "sqlite";
 
 export type SslMode = { mode: "disable" } | { mode: "require" } | { mode: "verifyCa"; caPath: string };
 
@@ -17,6 +17,8 @@ export interface ConnectionConfig {
   user: string;
   database: string | null;
   ssl: SslMode;
+  /** The database file, for SQLite only. */
+  file: string | null;
   groupId: GroupId | null;
 }
 
@@ -44,6 +46,11 @@ export interface ObjectPath {
   database: string;
   schema: string | null;
   name: string;
+}
+
+export interface SchemaInfo {
+  name: string;
+  isSystem: boolean;
 }
 
 export type ObjectKind = "table" | "view" | "procedure" | "function" | "trigger";
@@ -107,6 +114,8 @@ export interface ConnectionInput {
   user: string;
   database: string | null;
   ssl: SslMode;
+  /** The database file, for SQLite only. */
+  file: string | null;
   password: PasswordChange;
   groupId: GroupId | null;
 }

@@ -1,5 +1,20 @@
 import { expect, test } from "vitest";
-import { errorText } from "./client";
+import { connectionTarget, errorText, shortenPath } from "./client";
+
+test("shortenPath_keeps_file_name", () => {
+  expect(shortenPath("C:\\data\\shop.db")).toBe("C:\\data\\shop.db");
+  const long = "C:\\Users\\rifqi\\Documents\\Projects\\kfc\\exports\\2026\\october\\shop.db";
+  expect(shortenPath(long)).toBe("C:\\Users\\rifqi\\Documents\\Projects\\kfc\\…\\shop.db");
+  expect(shortenPath(long, 24)).toBe("C:\\Users\\rifqi\\…\\shop.db");
+  expect(shortenPath(long).length).toBeLessThanOrEqual(48);
+  // The file name is never cut, even when it alone is longer than max.
+  const bigName = `C:\\data\\${"x".repeat(60)}.db`;
+  expect(shortenPath(bigName)).toBe(`…\\${"x".repeat(60)}.db`);
+  // Forward slashes work too.
+  expect(shortenPath("/home/rifqi/projects/kfc/exports/2026/october/archive/shop.db", 30)).toBe(
+    "/home/rifqi/projects/…/shop.db",
+  );
+});
 
 test("errorText handles an absent message, a numeric message and an unknown kind", () => {
   expect(errorText({ kind: "noPrimaryKey" })).toBe(
@@ -12,4 +27,40 @@ test("errorText handles an absent message, a numeric message and an unknown kind
   expect(errorText({ kind: "somethingNew", message: "disk full" })).toBe("Error (somethingNew): disk full");
   expect(errorText({ kind: "somethingNew" })).toBe("Error: somethingNew.");
   expect(errorText(new Error("network down"))).toBe("network down");
+});
+
+test("connectionTarget_by_dialect", () => {
+  expect(connectionTarget({ dialect: "mysql", host: "127.0.0.1", port: 3306, file: null })).toBe("127.0.0.1:3306");
+  expect(connectionTarget({ dialect: "postgres", host: "10.0.4.20", port: 5432, file: null })).toBe("10.0.4.20:5432");
+  expect(connectionTarget({ dialect: "sqlite", host: "", port: 0, file: "C:\\data\\shop.db" })).toBe(
+    "C:\\data\\shop.db",
+  );
+});
+
+test("sqlite_connect_error_hint_mentions_the_file", () => {
+  expect(
+    errorText({ kind: "connect", message: "cannot open C:\\data\\x.db: the file does not exist" }, "sqlite"),
+  ).toBe("Cannot open C:\\data\\x.db: the file does not exist. Check the path, or choose the file again.");
+  expect(errorText({ kind: "connect", message: "C:\\data\\notes.txt is not a SQLite database" }, "sqlite")).toBe(
+    "C:\\data\\notes.txt is not a SQLite database.",
+  );
+  expect(errorText({ kind: "connect", message: "cannot open C:\\data\\x.db: access is denied" }, "sqlite")).toBe(
+    "Cannot open C:\\data\\x.db: access is denied. Check that DB View can read the file.",
+  );
+  // Server Dialects keep the step 1 copy.
+  const server = errorText({ kind: "connect", message: "connection refused" }, "postgres");
+  expect(server).toBe(
+    "Could not connect: connection refused. Check the host and port, and that the database server is running.",
+  );
+  expect(errorText({ kind: "connect", message: "connection refused" })).toBe(server);
+});
+
+test("postgres_auth_hint_mentions_access_rules", () => {
+  const message = "the server requires a password, and none is saved for this Connection";
+  expect(errorText({ kind: "auth", message }, "postgres")).toBe(
+    `Sign-in failed: ${message}. Check the user name and password, or the server's access rules for this database.`,
+  );
+  expect(errorText({ kind: "auth", message: "Access denied" }, "mysql")).toBe(
+    "Sign-in failed: Access denied. Check the user name and password.",
+  );
 });

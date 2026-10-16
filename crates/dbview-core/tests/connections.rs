@@ -28,6 +28,7 @@ fn input(name: &str, password: PasswordChange) -> ConnectionInput {
         ssl: SslMode::Disable,
         password,
         group_id: None,
+        file: None,
     }
 }
 
@@ -302,4 +303,114 @@ async fn delete_group_ungroups_connections() {
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].id, saved.id);
     assert_eq!(all[0].group_id, None);
+}
+
+#[test]
+fn step1_connection_json_still_loads() {
+    let json = r#"{"id":"6f1c2f0e-8c7a-4a53-9d0e-0b6f5a1d2c34","name":"Local","dialect":"mysql","host":"127.0.0.1","port":3306,"user":"root","database":null,"ssl":{"mode":"disable"},"groupId":null}"#;
+    let config: dbview_core::model::ConnectionConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.file, None);
+    assert_eq!(config.dialect, DialectKind::MySql);
+}
+
+#[tokio::test]
+async fn sqlite_connection_requires_a_file() {
+    let (_dir, _secrets, svc) = service();
+    for file in [None, Some("  ".into())] {
+        let err = svc
+            .save(ConnectionInput {
+                dialect: DialectKind::Sqlite,
+                file,
+                ..input("lite", PasswordChange::Keep)
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(m) if m == "choose a SQLite file"));
+    }
+}
+
+#[tokio::test]
+async fn sqlite_save_drops_server_fields() {
+    let (_dir, _secrets, svc) = service();
+    let saved = svc
+        .save(ConnectionInput {
+            dialect: DialectKind::Sqlite,
+            host: "x".into(),
+            port: 3306,
+            user: "someone".into(),
+            database: Some("db".into()),
+            ssl: SslMode::Require,
+            file: Some("C:/data/shop.sqlite".into()),
+            ..input("lite", PasswordChange::Keep)
+        })
+        .await
+        .unwrap();
+    assert_eq!(saved.host, "");
+    assert_eq!(saved.port, 0);
+    assert_eq!(saved.user, "");
+    assert_eq!(saved.database, None);
+    assert_eq!(saved.ssl, SslMode::Disable);
+    assert_eq!(saved.file, Some("C:/data/shop.sqlite".into()));
+    assert_eq!(svc.list().unwrap(), vec![saved]);
+}
+
+#[tokio::test]
+async fn server_connection_rejects_port_zero() {
+    let (_dir, _secrets, svc) = service();
+    let err = svc
+        .save(ConnectionInput {
+            port: 0,
+            ..input("zero", PasswordChange::Keep)
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidInput(m) if m == "port must be from 1 to 65535"));
+}
+
+#[tokio::test]
+async fn postgres_connection_requires_a_host() {
+    let (_dir, _secrets, svc) = service();
+    let err = svc
+        .save(ConnectionInput {
+            dialect: DialectKind::Postgres,
+            host: "  ".into(),
+            port: 5432,
+            ..input("pg", PasswordChange::Keep)
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidInput(m) if m == "host must not be empty"));
+}
+
+#[tokio::test]
+async fn postgres_save_keeps_server_fields() {
+    let (_dir, _secrets, svc) = service();
+    let saved = svc
+        .save(ConnectionInput {
+            dialect: DialectKind::Postgres,
+            port: 5432,
+            database: Some("shop".into()),
+            file: Some("C:/ignored.sqlite".into()),
+            ..input("pg", PasswordChange::Keep)
+        })
+        .await
+        .unwrap();
+    assert_eq!(saved.dialect, DialectKind::Postgres);
+    assert_eq!((saved.host.as_str(), saved.port), ("127.0.0.1", 5432));
+    assert_eq!(saved.database.as_deref(), Some("shop"));
+    assert_eq!(saved.file, None);
+}
+
+#[tokio::test]
+async fn sqlite_save_never_stores_a_password() {
+    let (_dir, secrets, svc) = service();
+    let saved = svc
+        .save(ConnectionInput {
+            dialect: DialectKind::Sqlite,
+            file: Some("C:/data/shop.sqlite".into()),
+            ..input("lite", PasswordChange::Set { value: "x".into() })
+        })
+        .await
+        .unwrap();
+    assert_eq!(secrets.get(saved.id).unwrap(), None);
 }
