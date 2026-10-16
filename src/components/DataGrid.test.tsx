@@ -1,11 +1,19 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { currentCompletions } from "@codemirror/autocomplete";
+import { EditorView } from "@codemirror/view";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { Page } from "../api/types";
+import { LangClient } from "../lang/client";
+import { KFC_SCHEMA } from "../lang/sql/fixtures";
+import { SchemaCache } from "../lang/sql/schemaCache";
+import { mockEditorDom } from "../test/editor";
 import { callsTo, routeInvoke } from "../test/invoke";
+import { fakeWorker } from "../test/langWorker";
 import DataGrid from "./DataGrid";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+mockEditorDom();
 
 const table = { database: "shop", schema: null, name: "orders" };
 
@@ -36,7 +44,55 @@ test("requests page 0 then page 1 on next", async () => {
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
   const pages = callsTo("fetch_page").map((a) => (a.request as { page: number }).page);
   expect(pages).toEqual([0, 1]);
-  expect(callsTo("fetch_page")[0]).toEqual({ id: "c1", request: { table, page: 0, sort: null } });
+  expect(callsTo("fetch_page")[0]).toEqual({ id: "c1", request: { table, page: 0, sort: null, filter: null } });
+});
+
+const filterView = () => EditorView.findFromDOM(document.querySelector(".grid-filter .cm-editor") as HTMLElement)!;
+
+test("filter_box_applies_on_enter_and_clears_on_escape", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />);
+  await screen.findByText("first");
+  const v = filterView();
+  act(() => v.dispatch({ changes: { from: 0, insert: "id > 5" }, selection: { anchor: 6 } }));
+  fireEvent.keyDown(v.contentDOM, { key: "Enter" });
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  expect(callsTo("fetch_page")[1]).toMatchObject({ request: { page: 0, filter: "id > 5" } });
+  fireEvent.keyDown(v.contentDOM, { key: "Escape" });
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
+  expect(callsTo("fetch_page")[2]).toMatchObject({ request: { filter: null } });
+  expect(v.state.doc.toString()).toBe("");
+});
+
+test("a_filter_error_offers_clear_filter", async () => {
+  routeInvoke({
+    fetch_page: ({ request }) => {
+      if ((request as { filter: string | null }).filter) throw { kind: "query", message: "Unknown column 'nope'" };
+      return page(false);
+    },
+  });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />);
+  await screen.findByText("first");
+  const v = filterView();
+  act(() => v.dispatch({ changes: { from: 0, insert: "nope = 1" } }));
+  fireEvent.keyDown(v.contentDOM, { key: "Enter" });
+  await userEvent.click(await screen.findByRole("button", { name: "Clear filter" }));
+  expect(await screen.findByText("first")).toBeTruthy();
+});
+
+test("filter_completes_the_table_columns", async () => {
+  routeInvoke({ fetch_page: () => page(false), sql_schema: () => KFC_SCHEMA });
+  const client = new LangClient(() => fakeWorker());
+  const lang = { client, schemas: new SchemaCache(client) };
+  const orders = { database: "kfc", schema: "sales", name: "orders" };
+  render(<DataGrid connectionId="c1" table={orders} onClose={() => {}} dialect="postgres" lang={lang} />);
+  await waitFor(() => expect(lang.schemas.state("c1", "kfc")).toBe("loaded"));
+  const v = filterView();
+  act(() => {
+    v.dispatch({ changes: { from: 0, insert: "sta" }, selection: { anchor: 3 }, userEvent: "input.type" });
+  });
+  await waitFor(() => expect(currentCompletions(v.state).map((c) => c.label)).toContain("status"));
+  expect(currentCompletions(v.state).map((c) => c.label)).not.toContain("code");
 });
 
 test("next disabled when hasMore false", async () => {

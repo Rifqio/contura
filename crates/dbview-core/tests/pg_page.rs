@@ -63,7 +63,47 @@ fn req(db: &PgTestDb, name: &str, page: u32, sort: Option<SortSpec>) -> PageRequ
         table: table(db, "public", name),
         page,
         sort,
+        filter: None,
     }
+}
+
+fn filtered(db: &PgTestDb, name: &str, filter: &str) -> PageRequest {
+    PageRequest {
+        filter: Some(filter.into()),
+        ..req(db, name, 0, None)
+    }
+}
+
+#[tokio::test]
+async fn filter_narrows_the_page() {
+    let (db, dialect) = fixture().await;
+    let page = dialect
+        .fetch_page(&filtered(&db, "items", "id > 2490 -- the last ten"))
+        .await
+        .expect("page");
+    assert_eq!(page.rows.len(), 10);
+    assert!(!page.has_more);
+    finish(db, dialect).await;
+}
+
+#[tokio::test]
+async fn filter_runs_one_expression_only() {
+    let (db, dialect) = fixture().await;
+    let attempt = dialect
+        // The tail is a valid statement too, so without the guard all three would commit.
+        .fetch_page(&filtered(
+            &db,
+            "items",
+            "1=1); DROP TABLE public.nopk; SELECT t.id FROM public.items t WHERE (true",
+        ))
+        .await;
+    assert!(attempt.is_err(), "a second statement must be refused");
+    let still = dialect
+        .fetch_page(&req(&db, "nopk", 0, None))
+        .await
+        .expect("nopk is still there");
+    assert_eq!(still.rows.len(), 1000);
+    finish(db, dialect).await;
 }
 
 fn full(db: &PgTestDb, name: &str, column: &str, key: &str, value: Cell) -> FullValueRequest {
@@ -268,6 +308,7 @@ async fn same_table_name_in_two_schemas_pages_separately() {
             table: table(&db, "sales", "items"),
             page: 0,
             sort: None,
+            filter: None,
         })
         .await
         .expect("page");

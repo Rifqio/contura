@@ -22,6 +22,7 @@ import Home from "./components/Home";
 import Icon from "./components/Icon";
 import ObjectTree from "./components/ObjectTree";
 import TabStrip, { type Selection, type WorkTab } from "./components/TabStrip";
+import { appLang } from "./lang/appLang";
 import { nextQueryName, parseDrafts, placeKey, serializeDrafts } from "./query/drafts";
 import HistoryPanel from "./query/HistoryPanel";
 import QueryTab, { type QueryTabDoc } from "./query/QueryTab";
@@ -118,6 +119,15 @@ export default function App() {
     | null
   >(null);
   const editorRefs = useRef(new Map<string, MutableRefObject<SqlEditorApi | null>>());
+  // One language worker and one schema index for every query tab, for the app's lifetime.
+  const lang = appLang();
+  const [reveal, setReveal] = useState<{
+    connectionId: ConnectionId;
+    database: string;
+    schema: string | null;
+    name: string;
+    seq: number;
+  } | null>(null);
   /** The place whose drafts are loaded, so saving never overwrites drafts not yet read. */
   const draftsLoaded = useRef<string | null>(null);
 
@@ -310,6 +320,7 @@ export default function App() {
   }
 
   function markClosed(id: ConnectionId) {
+    lang.schemas.dropConnection(id);
     setOpenIds((ids) => {
       const next = new Set(ids);
       next.delete(id);
@@ -550,6 +561,9 @@ export default function App() {
                     onReverseEngineer={(database, s) =>
                       setSchema({ kind: "start", initial: { connectionId: active.id, database, schema: s } })
                     }
+                    reveal={reveal?.connectionId === active.id ? reveal : null}
+                    onRefresh={() => lang.schemas.invalidate(active.id)}
+                    onRevealed={() => setReveal(null)}
                   />
                 </div>
               )}
@@ -570,6 +584,8 @@ export default function App() {
                     table={selection.path}
                     onClose={() => closeTab(activeTab)}
                     onNotOpen={() => lost(selection.connectionId)}
+                    dialect={connections.find((c) => c.id === selection.connectionId)?.dialect}
+                    lang={lang}
                   />
                 ) : (
                   <DefinitionView
@@ -599,6 +615,11 @@ export default function App() {
                       onToggleHistory={() => setHistoryOpen((o) => !o)}
                       editorRef={editorRef(t.doc.id)}
                       onRan={() => setHistoryRefresh((n) => n + 1)}
+                      lang={lang}
+                      onShowInTree={(target) => {
+                        setActiveId(target.connectionId);
+                        setReveal((r) => ({ ...target, seq: (r?.seq ?? 0) + 1 }));
+                      }}
                     />
                   </div>
                 ) : null,

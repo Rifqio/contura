@@ -1,9 +1,14 @@
+import { forEachDiagnostic } from "@codemirror/lint";
 import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { Cell, ConnectionConfig, Execution } from "../api/types";
+import { LangClient, type WorkerLike } from "../lang/client";
+import { KFC_SCHEMA } from "../lang/sql/fixtures";
+import { SchemaCache } from "../lang/sql/schemaCache";
 import { callsTo, routeInvoke } from "../test/invoke";
+import { fakeWorker } from "../test/langWorker";
 import { mockEditorDom } from "../test/editor";
 import { mockReactFlowDom } from "../test/reactFlow";
 import QueryTab, { type QueryTabDoc } from "./QueryTab";
@@ -58,7 +63,7 @@ function routes(over: Record<string, (a: Record<string, unknown>) => unknown> = 
   });
 }
 
-function setup(d: QueryTabDoc, open = true) {
+function setup(d: QueryTabDoc, open = true, extra: Partial<Parameters<typeof QueryTab>[0]> = {}) {
   const onChange = vi.fn();
   const onSaved = vi.fn();
   const editorRef = { current: null as SqlEditorApi | null };
@@ -77,6 +82,7 @@ function setup(d: QueryTabDoc, open = true) {
       historyOpen={false}
       onToggleHistory={() => {}}
       editorRef={editorRef}
+      {...extra}
     />
   );
   const utils = render(ui(d));
@@ -262,4 +268,84 @@ test("closing_an_open_result_releases_it_on_the_server", async () => {
   await screen.findByText("First 1,000 rows");
   await userEvent.click(screen.getByRole("button", { name: "Close unpinned results" }));
   await waitFor(() => expect(callsTo("close_query_result")).toEqual([{ session: "s1" }]));
+});
+
+// The schema index (step 4b).
+
+function withLang() {
+  const client = new LangClient(() => fakeWorker());
+  return { client, schemas: new SchemaCache(client) };
+}
+const lintMessages = (v: EditorView) => {
+  const out: string[] = [];
+  forEachDiagnostic(v.state, (d) => out.push(d.message));
+  return out;
+};
+
+test("schema_arrival_refreshes_diagnostics", async () => {
+  let release: (s: unknown) => void = () => {};
+  routes({ sql_schema: () => new Promise((r) => (release = r)) });
+  const lang = withLang();
+  const { view } = setup(doc("SELECT * FROM order"), true, { lang });
+  await waitFor(() => expect(callsTo("sql_schema")).toEqual([{ id: "c1", database: "kfc_shop" }]));
+  expect(await screen.findByText("Loading schema")).toBeTruthy();
+  expect(lintMessages(view()).some((m) => m.startsWith("Unknown table"))).toBe(false);
+  act(() => release(KFC_SCHEMA));
+  await waitFor(() => expect(lintMessages(view())).toContain("Unknown table order. Did you mean orders?"));
+  expect(screen.queryByText("Loading schema")).toBeNull();
+});
+
+test("ddl_success_reloads_the_schema_for_the_tab", async () => {
+  routes({ sql_schema: () => KFC_SCHEMA, execute_sql: () => ({ outcome: { t: "affected", rows: 0 }, elapsedMs: 2 }) });
+  const { view } = setup(doc("CREATE TABLE t (id int)"), true, { lang: withLang() });
+  await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(1));
+  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(2));
+});
+
+test("ddl_after_a_comment_still_reloads_the_schema", async () => {
+  routes({ sql_schema: () => KFC_SCHEMA, execute_sql: () => ({ outcome: { t: "affected", rows: 0 }, elapsedMs: 2 }) });
+  const { view } = setup(doc("-- a new table\n/* for stock */ CREATE TABLE t (id int)"), true, { lang: withLang() });
+  await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(1));
+  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  key(view(), "Enter", { ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(2));
+});
+
+test("an_engine_restart_is_said_in_the_status_line", async () => {
+  routes({ sql_schema: () => KFC_SCHEMA });
+  const workers: WorkerLike[] = [];
+  const client = new LangClient(() => {
+    const w = fakeWorker();
+    workers.push(w);
+    return w;
+  });
+  setup(doc("SELECT 1"), true, { lang: { client, schemas: new SchemaCache(client) } });
+  act(() => workers[0].onerror?.());
+  expect(await screen.findByText("Language engine restarted. Typing works as plain text.")).toBeTruthy();
+});
+
+test("status_shows_schema_loading_and_not_connected", async () => {
+  routes({ sql_schema: () => new Promise(() => {}) });
+  const closed = setup(doc("SELECT 1"), false, { lang: withLang() });
+  expect(screen.getByText("Not connected")).toBeTruthy();
+  expect(callsTo("sql_schema")).toHaveLength(0);
+  closed.unmount();
+  setup(doc("SELECT 1"), true, { lang: withLang() });
+  expect(await screen.findByText("Loading schema")).toBeTruthy();
+});
+
+test("f12_on_a_table_reveals_it_in_the_tree", async () => {
+  routes({ sql_schema: () => KFC_SCHEMA });
+  const onShowInTree = vi.fn();
+  const text = "SELECT * FROM orders";
+  const { view } = setup(doc(text), true, { lang: withLang(), onShowInTree });
+  await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByText("Loading schema")).toBeNull());
+  act(() => view().dispatch({ selection: { anchor: text.indexOf("orders") + 1 } }));
+  key(view(), "F12");
+  await waitFor(() =>
+    expect(onShowInTree).toHaveBeenCalledWith({ connectionId: "c1", database: "kfc_shop", schema: "sales", name: "orders" }),
+  );
 });

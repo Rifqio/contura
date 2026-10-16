@@ -66,6 +66,7 @@ fn build_select(
     path: &ObjectPath,
     cols: &[ColumnInfo],
     order_by: &[(String, bool)],
+    where_sql: &str,
     offset: u64,
 ) -> String {
     let mut list = Vec::new();
@@ -87,6 +88,7 @@ fn build_select(
         quote_double(&path.database),
         quote_double(&path.name)
     );
+    sql.push_str(where_sql);
     if !order_by.is_empty() {
         let parts: Vec<String> = order_by
             .iter()
@@ -134,7 +136,8 @@ pub(crate) fn fetch_page(conn: &Connection, req: &PageRequest) -> Result<Page> {
         order_by.push((ROWID_KEY.to_string(), false));
     }
     let offset = u64::from(req.page) * u64::from(PAGE_SIZE);
-    let sql = build_select(&req.table, &cols, &order_by, offset);
+    let sql = build_select(&req.table, &cols, &order_by, &req.where_sql(), offset);
+    // `prepare` refuses text with a second statement after the first.
     let mut stmt = conn.prepare(&sql).map_err(query_err)?;
     let mut raw = stmt.query([]).map_err(query_err)?;
     let mut rows = Vec::new();

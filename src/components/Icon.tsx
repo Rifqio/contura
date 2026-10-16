@@ -31,6 +31,7 @@ const PATHS = {
   error: "M12 3.5a8.5 8.5 0 1 1 0 17 8.5 8.5 0 0 1 0-17zM12 8v5M12 16v.01",
   check: "M5 12.5l4.5 4.5L19 7.5",
   copy: "M8.5 8.5h11v11h-11zM15.5 8.5v-4h-11v11h4",
+  refresh: "M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4",
 } as const;
 
 export type IconName = keyof typeof PATHS;

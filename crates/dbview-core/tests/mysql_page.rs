@@ -46,7 +46,50 @@ fn req(db: &TestDb, table: &str, page: u32, sort: Option<SortSpec>) -> PageReque
         },
         page,
         sort,
+        filter: None,
     }
+}
+
+fn filtered(db: &TestDb, table: &str, filter: &str) -> PageRequest {
+    PageRequest {
+        filter: Some(filter.into()),
+        ..req(db, table, 0, None)
+    }
+}
+
+#[tokio::test]
+async fn filter_narrows_the_page() {
+    let db = TestDb::create().await;
+    seed(&db).await;
+    let dialect = open(&db).await;
+    let page = dialect
+        .fetch_page(&filtered(&db, "items", "id > 2490 -- the last ten"))
+        .await
+        .expect("page");
+    assert_eq!(page.rows.len(), 10);
+    assert!(!page.has_more);
+    db.drop_db().await;
+}
+
+#[tokio::test]
+async fn filter_runs_one_expression_only() {
+    let db = TestDb::create().await;
+    seed(&db).await;
+    let dialect = open(&db).await;
+    let attempt = dialect
+        .fetch_page(&filtered(
+            &db,
+            "items",
+            "1=1); DROP TABLE `we``ird name`; SELECT (1",
+        ))
+        .await;
+    assert!(attempt.is_err(), "a second statement must be refused");
+    let still = dialect
+        .fetch_page(&req(&db, "we`ird name", 0, None))
+        .await
+        .expect("the table is still there");
+    assert_eq!(still.rows.len(), 1);
+    db.drop_db().await;
 }
 
 async fn open(db: &TestDb) -> std::sync::Arc<dyn Dialect> {

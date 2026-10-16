@@ -11,6 +11,7 @@ pub mod postgres;
 pub mod query;
 pub mod schema_model;
 pub mod secrets;
+pub mod sql_schema;
 pub mod sqlite;
 pub mod store;
 pub mod suggest;

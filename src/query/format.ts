@@ -1,5 +1,5 @@
 import type { DialectKind } from "../api/types";
-import { type Token, tokenize } from "./sqlTokens";
+import { type Token, tokenize } from "../lang/sql/tokens";
 
 const KEYWORDS = new Set(
   `select from where and or not in is null as on join left right inner outer full cross group by order

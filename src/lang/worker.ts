@@ -1,37 +1,76 @@
-// The language worker: parses DBML off the UI thread, about 120 ms after the last edit.
+// The language worker: parses DBML about 120 ms after the last edit, checks
+// SQL about 150 ms after, and answers SQL completion and refactors at once,
+// all off the UI thread.
 import type { SchemaModel } from "../api/types";
 import { inspectDbml } from "./dbml/inspect";
 import { parseDbml } from "./dbml/parse";
 import type { FromWorker, ToWorker } from "./protocol";
+import { createSqlService } from "./sql/service";
 
-/** Handles messages from the client; `debounceMs` 0 runs synchronously (tests). */
-export function createHandler(post: (m: FromWorker) => void, debounceMs = 120): (m: ToWorker) => void {
+type Debounced = Extract<ToWorker, { type: "update" } | { type: "sqlAnalyze" }>;
+
+/** Handles messages from the client; `debounceMs` 0 runs everything synchronously (tests). */
+export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, sqlDebounceMs = debounceMs === 0 ? 0 : 150): (m: ToWorker) => void {
   const lastValid = new Map<string, SchemaModel>();
   const pending = new Map<string, { ids: number[]; timer: ReturnType<typeof setTimeout> | null }>();
+  const sql = createSqlService();
 
-  function run(m: ToWorker, ids: number[]) {
-    pending.delete(m.docId);
+  const fail = (ids: number[], e: unknown) => post({ type: "failed", ids, message: e instanceof Error ? e.message : String(e) });
+
+  function run(m: Debounced, ids: number[]) {
     try {
+      if (m.type === "sqlAnalyze") {
+        pending.delete(`sql:${m.docId}`);
+        const diagnostics = sql.analyze(m.docId, m.text, m.dialect, m.schemaKey, m.schemaState);
+        post({ type: "sqlDiagnostics", ids, docId: m.docId, diagnostics });
+        return;
+      }
+      pending.delete(m.docId);
       const out = parseDbml(m.text, m.dialect);
       if (out.model) lastValid.set(m.docId, out.model);
       const known = lastValid.get(m.docId) ?? null;
       const diagnostics = out.model ? out.diagnostics : inspectDbml(m.text, out.diagnostics, known);
       post({ type: "result", ids, docId: m.docId, result: { ...out, diagnostics, lastValid: known } });
     } catch (e) {
-      post({ type: "failed", ids, message: e instanceof Error ? e.message : String(e) });
+      fail(ids, e);
     }
   }
 
-  return (m) => {
-    const entry = pending.get(m.docId) ?? { ids: [], timer: null };
+  function debounce(m: Debounced, key: string, ms: number) {
+    const entry = pending.get(key) ?? { ids: [], timer: null };
     if (entry.timer) clearTimeout(entry.timer);
     entry.ids.push(m.id);
-    if (debounceMs === 0) {
+    if (ms === 0) {
       run(m, entry.ids);
       return;
     }
-    entry.timer = setTimeout(() => run(m, entry.ids), debounceMs);
-    pending.set(m.docId, entry);
+    entry.timer = setTimeout(() => run(m, entry.ids), ms);
+    pending.set(key, entry);
+  }
+
+  return (m) => {
+    switch (m.type) {
+      case "update":
+        return debounce(m, m.docId, debounceMs);
+      case "sqlAnalyze":
+        return debounce(m, `sql:${m.docId}`, sqlDebounceMs);
+      case "sqlSchema":
+        return sql.setSchema(m.key, m.schema);
+      case "sqlComplete":
+        try {
+          post({ type: "sqlCompletion", ids: [m.id], result: sql.complete(m) });
+        } catch (e) {
+          fail([m.id], e);
+        }
+        return;
+      case "sqlRefactor":
+        try {
+          post({ type: "sqlRefactor", ids: [m.id], result: sql.refactor(m) });
+        } catch (e) {
+          fail([m.id], e);
+        }
+        return;
+    }
   };
 }
 

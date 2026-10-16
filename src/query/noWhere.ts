@@ -1,4 +1,4 @@
-import { significant, tokenize } from "./sqlTokens";
+import { significant, tokenize } from "../lang/sql/tokens";
 
 /** Words that may sit between UPDATE or DELETE and the table name. */
 const MODIFIERS = new Set(["LOW_PRIORITY", "IGNORE", "QUICK", "ONLY", "FROM"]);

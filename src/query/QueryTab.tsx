@@ -1,4 +1,4 @@
-import { type MutableRefObject, useEffect, useReducer, useRef, useState } from "react";
+import { type MutableRefObject, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import {
   cancelQuery,
   closeQueryResult,
@@ -13,6 +13,8 @@ import {
 } from "../api/client";
 import type { ConnectionConfig, ConnectionId, QuerySessionId, SavedQuery } from "../api/types";
 import Icon from "../components/Icon";
+import type { LangClient } from "../lang/client";
+import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
 import { formatSql } from "./format";
 import { writeWithoutWhere } from "./noWhere";
 import ResultsPanel from "./ResultsPanel";
@@ -44,7 +46,18 @@ interface Props {
   editorRef: MutableRefObject<SqlEditorApi | null>;
   /** A statement finished, so Query History has a new entry. */
   onRan?(): void;
+  /** The language service and the schemas it knows; without them the editor is plain. */
+  lang?: { client: LangClient; schemas: SchemaCache };
+  /** Go to definition on a table: show it in the Database Tree. */
+  onShowInTree?(target: { connectionId: ConnectionId; database: string; schema: string | null; name: string }): void;
 }
+
+/** Statements that change what the schema holds, after any leading comments. */
+const DDL = /^(?:\s+|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(CREATE|ALTER|DROP|TRUNCATE|RENAME|COMMENT)\b/i;
+
+const RESTARTED_MS = 5000;
+
+const noSubscribe = () => () => {};
 
 const SPLIT_KEY = "dbview.queryEditorShare";
 
@@ -81,6 +94,8 @@ export default function QueryTab({
   onToggleHistory,
   editorRef,
   onRan,
+  lang,
+  onShowInTree,
 }: Props) {
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
   const isOpen = !!connection && openIds.has(connection.id);
@@ -100,6 +115,38 @@ export default function QueryTab({
   const latest = useRef(tab);
   latest.current = tab;
   const work = useRef<HTMLDivElement>(null);
+
+  // The schema index for this tab's Connection and database: SQLite has one database, `main`.
+  const schemaDb = connection ? (connection.dialect === "sqlite" ? "main" : tab.database) : null;
+  const schemaLoad = useSyncExternalStore(
+    lang ? (l) => lang.schemas.subscribe(l) : noSubscribe,
+    () => (lang && connection && schemaDb ? lang.schemas.state(connection.id, schemaDb) : null),
+  );
+  useEffect(() => {
+    if (lang && connection && isOpen && schemaDb) void lang.schemas.ensure(connection.id, schemaDb);
+  }, [lang, connection?.id, isOpen, schemaDb]);
+  // A crashed language worker restarts at once; say so for a moment.
+  const [restarted, setRestarted] = useState(false);
+  useEffect(() => {
+    if (!lang) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = lang.client.onRestart(() => {
+      setRestarted(true);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setRestarted(false), RESTARTED_MS);
+    });
+    return () => {
+      off();
+      if (timer) clearTimeout(timer);
+    };
+  }, [lang?.client]);
+  const live = !!connection && isOpen && !!schemaDb;
+  const editorLang = lang && {
+    client: lang.client,
+    docId: tab.id,
+    schemaKey: live ? schemaKey(connection.id, schemaDb) : null,
+    schemaState: !live ? ("none" as const) : schemaLoad === "loaded" ? ("loaded" as const) : schemaLoad === "loading" ? ("loading" as const) : ("none" as const),
+  };
 
   // One session per tab, opened on the tab's Connection and database.
   useEffect(() => {
@@ -158,6 +205,7 @@ export default function QueryTab({
     executeSql(session, stmt.text).then(
       (ex) => {
         dispatch({ type: "done", id, outcome: ex.outcome, ms: ex.elapsedMs });
+        if (DDL.test(stmt.text) && connection) lang?.schemas.invalidate(connection.id);
         onRan?.();
       },
       (error) => {
@@ -382,6 +430,17 @@ export default function QueryTab({
             onPosition={(line, column) => setPosition({ line, column })}
             markRunning={running ? { from: running.from, to: running.to } : null}
             markError={errorMark}
+            lang={editorLang || undefined}
+            onShowInTree={(t) => {
+              if (connection && schemaDb)
+                onShowInTree?.({
+                  connectionId: connection.id,
+                  database: schemaDb,
+                  // MySQL and SQLite report the database as the schema; their tree has no schema level.
+                  schema: connection.dialect === "postgres" ? t.schema : null,
+                  name: t.name,
+                });
+            }}
           />
           {state.confirm && (
             <div className="query-confirm" role="alertdialog" aria-label={`Confirm ${state.confirm.verb} without WHERE`}>
@@ -488,10 +547,14 @@ export default function QueryTab({
             {tab.database && connection.dialect !== "sqlite" && <span>{tab.database}</span>}
             <span>{DIALECT_LABEL[connection.dialect]}</span>
             {connection.queryTimeoutSecs && <span>Timeout {connection.queryTimeoutSecs} s</span>}
+            {!isOpen && <span>Not connected</span>}
+            {isOpen && schemaLoad === "loading" && <span>Loading schema</span>}
+            {isOpen && schemaLoad === "failed" && <span>Schema not loaded</span>}
           </>
         ) : (
           <span>Not connected</span>
         )}
+        {restarted && <span role="status">Language engine restarted. Typing works as plain text.</span>}
         {notice && (
           <span className="error-text" role="alert">
             {notice}

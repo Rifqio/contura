@@ -1,7 +1,7 @@
 // A small SQL tokenizer for splitting statements, formatting and the missing-WHERE
 // check. It only needs to know what is a comment, a string or a quoted name, so a
 // semicolon or keyword inside one is never mistaken for SQL.
-import type { DialectKind } from "../api/types";
+import type { DialectKind } from "../../api/types";
 
 export type TokenKind = "comment" | "string" | "quoted" | "word" | "number" | "punct" | "ws";
 

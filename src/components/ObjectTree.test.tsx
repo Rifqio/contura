@@ -41,6 +41,41 @@ test("expanding a database lists its objects grouped by kind", async () => {
   expect(onSelect).toHaveBeenCalledWith("table", { database: "shop", schema: null, name: "orders" });
 });
 
+test("reveal_expands_to_the_object_and_focuses_it", async () => {
+  routeInvoke({
+    list_databases: () => ["kfc", "other"],
+    list_schemas: () => [
+      { name: "public", isSystem: false },
+      { name: "sales", isSystem: false },
+    ],
+    list_objects: () => objects,
+  });
+  const props = { connectionId: "c1", dialect: "postgres" as const, defaultDatabase: null, selected: null, onSelect: () => {}, onNotOpen: () => {} };
+  const { rerender } = render(<ObjectTree {...props} reveal={null} />);
+  await screen.findByRole("button", { name: "kfc" });
+  const onRevealed = vi.fn();
+  rerender(<ObjectTree {...props} reveal={{ database: "kfc", schema: "sales", name: "orders", seq: 1 }} onRevealed={onRevealed} />);
+  const tables = await screen.findByRole("list", { name: "Tables in kfc.sales" });
+  const row = within(tables).getByRole("button", { name: "orders" });
+  await waitFor(() => expect(document.activeElement).toBe(row));
+  // The owner clears the request, so a later remount does not move focus again.
+  expect(onRevealed).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "sales" }).getAttribute("aria-expanded")).toBe("true");
+});
+
+test("refresh_reloads_the_tree_and_tells_the_owner", async () => {
+  routeInvoke({ list_databases: () => ["shop"], list_objects: () => objects });
+  const onRefresh = vi.fn();
+  render(
+    <ObjectTree connectionId="c1" dialect="mysql" defaultDatabase="shop" selected={null} onSelect={() => {}} onNotOpen={() => {}} onRefresh={onRefresh} />,
+  );
+  await screen.findByRole("list", { name: "Tables in shop" });
+  await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  expect(onRefresh).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(callsTo("list_databases")).toHaveLength(2));
+  expect(callsTo("list_objects").length).toBeGreaterThanOrEqual(2);
+});
+
 test("selecting a routine or trigger shows its definition", async () => {
   routeInvoke({
     list_groups: () => [{ id: "g1", name: "KFC", color: "red" }],

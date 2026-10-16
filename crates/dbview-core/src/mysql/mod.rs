@@ -4,6 +4,7 @@ pub(crate) mod page;
 pub mod quote;
 mod session;
 mod snapshot;
+mod sql_schema;
 
 use std::time::Duration;
 
@@ -138,6 +139,10 @@ impl Dialect for MySqlDialect {
         _schema: Option<&str>,
     ) -> Result<crate::schema_model::SchemaModel> {
         snapshot::schema_snapshot(&self.pool, database).await
+    }
+
+    async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
+        sql_schema::sql_schema(&self.pool, database).await
     }
 
     async fn open_query_session(

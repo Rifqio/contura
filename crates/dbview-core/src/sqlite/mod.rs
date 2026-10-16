@@ -2,6 +2,7 @@ mod introspect;
 mod page;
 mod session;
 mod snapshot;
+mod sql_schema;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -164,6 +165,12 @@ impl Dialect for SqliteDialect {
     ) -> Result<crate::schema_model::SchemaModel> {
         let database = database.to_string();
         self.run(move |c| snapshot::schema_snapshot(c, &database))
+            .await
+    }
+
+    async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
+        let database = database.to_string();
+        self.run(move |c| sql_schema::sql_schema(c, &database))
             .await
     }
 

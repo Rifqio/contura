@@ -524,6 +524,9 @@ ul {
 }
 
 .tree-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
   padding: var(--spacing-2xs) var(--spacing-sm) var(--spacing-sm);
 }
 
@@ -545,10 +548,26 @@ ul {
 
 .grid-view {
   display: grid;
-  grid-template-rows: var(--layout-toolbar-height) minmax(0, 1fr) auto;
+  grid-template-rows: var(--layout-toolbar-height) auto minmax(0, 1fr) auto;
   height: 100%;
   min-width: 0;
   animation: fade-in var(--motion-base) var(--ease-enter);
+}
+.grid-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 var(--spacing-sm);
+  border-bottom: 1px solid var(--color-line-soft);
+  background: var(--color-surface);
+}
+.grid-filter-label {
+  font: var(--font-mono-small);
+  color: var(--color-ink-faint);
+}
+.grid-filter .sql-editor {
+  flex: 1;
+  min-width: 0;
 }
 
 .toolbar {
@@ -1500,6 +1519,41 @@ ul {
 .sql-editor .cm-error-mark {
   text-decoration: underline wavy var(--color-danger);
   text-underline-offset: 4px;
+}
+.sql-editor .cm-lintRange-error {
+  background-image: none;
+  text-decoration: underline wavy var(--color-danger);
+}
+.sql-editor .cm-lintRange-warning {
+  background-image: none;
+  text-decoration: underline wavy var(--color-warning);
+}
+.sql-editor .cm-lintRange-hint,
+.sql-editor .cm-lintRange-info {
+  background-image: none;
+  text-decoration: underline dotted var(--color-ink-faint);
+}
+.sql-editor .cm-panel-lint {
+  font: var(--font-mono-small);
+}
+.sql-editor .cm-sql-notice,
+.sql-editor .cm-sql-params {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font: var(--font-mono-small);
+  color: var(--color-ink);
+}
+.sql-editor .cm-sql-param-active {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+.sql-editor .cm-sql-params-count {
+  color: var(--color-ink-faint);
+}
+.sql-editor-one-line .cm-editor {
+  height: auto;
+}
+.sql-editor-one-line .cm-content {
+  padding: var(--spacing-xs) 0;
 }
 
 .results {

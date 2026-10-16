@@ -147,6 +147,25 @@ pub struct PageRequest {
     pub table: ObjectPath,
     pub page: u32,
     pub sort: Option<SortSpec>,
+    /// A SQL expression over the table's columns, such as `status = 'paid'`.
+    #[serde(default)]
+    pub filter: Option<String>,
+}
+
+impl PageRequest {
+    /// ` WHERE (...)` for the filter, or nothing. The filter sits on lines of its
+    /// own, so a `--` comment in it cannot reach the ORDER BY and LIMIT after it.
+    /// Callers also check the whole query is one statement before running it.
+    pub fn where_sql(&self) -> String {
+        match self.filter.as_deref().map(str::trim) {
+            Some(f) if !f.is_empty() => format!(" WHERE (\n{f}\n)"),
+            _ => String::new(),
+        }
+    }
+
+    pub fn has_filter(&self) -> bool {
+        !self.where_sql().is_empty()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

@@ -74,7 +74,42 @@ fn req(name: &str, page: u32, sort: Option<SortSpec>) -> PageRequest {
         table: table(name),
         page,
         sort,
+        filter: None,
     }
+}
+
+fn filtered(name: &str, filter: &str) -> PageRequest {
+    PageRequest {
+        filter: Some(filter.into()),
+        ..req(name, 0, None)
+    }
+}
+
+#[tokio::test]
+async fn filter_narrows_the_page() {
+    let (_d, db) = fixture().await;
+    let page = db
+        .fetch_page(&filtered("items", "id > 2490 -- the last ten"))
+        .await
+        .expect("page");
+    assert_eq!(page.rows.len(), 10);
+    assert!(!page.has_more);
+    let blank = db.fetch_page(&filtered("items", "  ")).await.expect("page");
+    assert_eq!(blank.rows.len(), 1000);
+}
+
+#[tokio::test]
+async fn filter_runs_one_expression_only() {
+    let (_d, db) = fixture().await;
+    let attempt = db
+        .fetch_page(&filtered("items", "1=1); DROP TABLE nopk; SELECT (1"))
+        .await;
+    assert!(attempt.is_err(), "a second statement must be refused");
+    let still = db
+        .fetch_page(&req("nopk", 0, None))
+        .await
+        .expect("nopk is still there");
+    assert_eq!(still.rows.len(), 1000);
 }
 
 fn full(name: &str, column: &str, key: &str, value: Cell) -> FullValueRequest {

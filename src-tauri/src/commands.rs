@@ -9,6 +9,7 @@ use dbview_core::query::{
     SavedQueryInput,
 };
 use dbview_core::schema_model::SchemaModel;
+use dbview_core::sql_schema::SqlSchema;
 use dbview_core::suggest::SuggestedConnection;
 use std::path::PathBuf;
 
@@ -196,6 +197,15 @@ pub async fn schema_snapshot(
         .await?
         .schema_snapshot(&database, schema.as_deref())
         .await
+}
+
+#[tauri::command]
+pub async fn sql_schema(
+    service: Service<'_>,
+    id: ConnectionId,
+    database: String,
+) -> Result<SqlSchema, Error> {
+    service.session(id).await?.sql_schema(&database).await
 }
 
 #[tauri::command]

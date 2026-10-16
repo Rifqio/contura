@@ -88,6 +88,7 @@ fn build_select(
     table: &ObjectPath,
     cols: &[ColumnMeta],
     order_by: &[(String, bool)],
+    where_sql: &str,
     offset: u64,
 ) -> String {
     let mut list = Vec::new();
@@ -108,6 +109,7 @@ fn build_select(
         quote_ident(&table.database),
         quote_ident(&table.name)
     );
+    sql.push_str(where_sql);
     if !order_by.is_empty() {
         let parts: Vec<String> = order_by
             .iter()
@@ -170,7 +172,13 @@ pub(crate) async fn fetch_page(pool: &Pool, req: &PageRequest) -> Result<Page> {
     let infos: Vec<ColumnInfo> = cols.iter().map(|c| c.info.clone()).collect();
     let order_by = order_columns(&infos, req.sort.as_ref())?;
     let offset = u64::from(req.page) * u64::from(PAGE_SIZE);
-    let sql = build_select(&req.table, &cols, &order_by, offset);
+    let sql = build_select(&req.table, &cols, &order_by, &req.where_sql(), offset);
+    if req.has_filter() {
+        // The text protocol runs every statement it is given; preparing first
+        // refuses a filter that tries to add a second one.
+        let stmt = conn.prep(&sql).await.map_err(query_err)?;
+        conn.close(stmt).await.map_err(query_err)?;
+    }
     let raw: Vec<Row> = conn.query(sql).await.map_err(query_err)?;
     let has_more = raw.len() > PAGE_SIZE as usize;
     let rows = raw
@@ -221,7 +229,7 @@ mod tests {
     #[test]
     fn select_truncates_in_sql_and_orders() {
         let order = vec![("body".to_string(), true), ("id".to_string(), false)];
-        let sql = build_select(&table(), &cols(), &order, 2000);
+        let sql = build_select(&table(), &cols(), &order, "", 2000);
         assert_eq!(
             sql,
             "SELECT `id`, LEFT(`body`, 1025), OCTET_LENGTH(`body`), LEFT(`data`, 1025), OCTET_LENGTH(`data`), `n`, `flags` + 0 FROM `db`.`t` ORDER BY `body` DESC, `id` ASC LIMIT 1001 OFFSET 2000"
@@ -230,13 +238,13 @@ mod tests {
 
     #[test]
     fn select_without_order_has_no_order_by() {
-        let sql = build_select(&table(), &[col("n", false, ColumnKind::Number)], &[], 0);
+        let sql = build_select(&table(), &[col("n", false, ColumnKind::Number)], &[], "", 0);
         assert_eq!(sql, "SELECT `n` FROM `db`.`t` LIMIT 1001 OFFSET 0");
     }
 
     #[test]
     fn primary_key_text_is_never_truncated() {
-        let sql = build_select(&table(), &[col("k", true, ColumnKind::Text)], &[], 0);
+        let sql = build_select(&table(), &[col("k", true, ColumnKind::Text)], &[], "", 0);
         assert_eq!(sql, "SELECT `k` FROM `db`.`t` LIMIT 1001 OFFSET 0");
     }
 

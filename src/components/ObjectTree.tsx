@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { errorText, isNotOpen, listDatabases, listObjects, listSchemas } from "../api/client";
 import type { ConnectionId, DbObject, DialectKind, ObjectKind, ObjectPath, SchemaInfo } from "../api/types";
 import Icon, { type IconName } from "./Icon";
@@ -15,6 +15,12 @@ interface Props {
   onNotOpen: () => void;
   /** Starts a Schema Model from a database (or a Postgres schema); the button shows only when set. */
   onReverseEngineer?: (database: string, schema: string | null) => void;
+  /** Expands down to this object and focuses its row; `seq` tells one request from the next. */
+  reveal?: { database: string; schema: string | null; name: string; seq: number } | null;
+  /** The tree reloaded, so what depends on the schema should reload too. */
+  onRefresh?: () => void;
+  /** The `reveal` row was focused; the owner clears the request. */
+  onRevealed?: () => void;
 }
 
 type Load<T> = { s: "loading" } | { s: "loaded"; value: T } | { s: "failed"; message: string };
@@ -55,8 +61,13 @@ export default function ObjectTree({
   onSelect,
   onNotOpen,
   onReverseEngineer,
+  reveal,
+  onRefresh,
+  onRevealed,
 }: Props) {
   const hasSchemas = dialect === "postgres";
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [focusTarget, setFocusTarget] = useState<{ scope: string; name: string } | null>(null);
 
   function modelButton(label: string, database: string, schema: string | null) {
     if (!onReverseEngineer) return null;
@@ -115,7 +126,7 @@ export default function ObjectTree({
         if (!live) return;
         setDatabases({ s: "loaded", value });
         if (defaultDatabase && value.includes(defaultDatabase)) {
-          setOpenDatabases(new Set([defaultDatabase]));
+          setOpenDatabases((open) => new Set(open).add(defaultDatabase));
           if (hasSchemas) loadSchemas(defaultDatabase, true);
           else loadObjects(defaultDatabase, null);
         }
@@ -126,6 +137,57 @@ export default function ObjectTree({
     };
     // Reload only when the Connection changes or the user retries.
   }, [connectionId, attempt]);
+
+  // Reveal: open the database (and schema), load what is missing, then focus the row once it shows.
+  useEffect(() => {
+    if (!reveal) return;
+    const { database, schema, name } = reveal;
+    setOpenDatabases((open) => new Set(open).add(database));
+    if (hasSchemas && schema !== null) {
+      const s = schemas[database];
+      if (!s || s.s === "failed") loadSchemas(database);
+      setOpenSchemas((open) => new Set(open).add(scopeKey(database, schema)));
+    }
+    const scope = scopeKey(database, hasSchemas ? schema : null);
+    const load = objects[scope];
+    if (!load || load.s === "failed") loadObjects(database, hasSchemas ? schema : null);
+    setFocusTarget({ scope, name });
+  }, [reveal?.seq]);
+
+  useEffect(() => {
+    if (!focusTarget) return;
+    const row = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>("[data-object]") ?? [])].find(
+      (b) => b.dataset.object === `${focusTarget.scope}\u0000${focusTarget.name}`,
+    );
+    if (!row) return;
+    row.focus();
+    row.scrollIntoView?.({ block: "nearest" });
+    setFocusTarget(null);
+    onRevealed?.();
+  });
+
+  // A target whose list loaded without it (or failed) is dropped, so focus never jumps later.
+  useEffect(() => {
+    if (!focusTarget) return;
+    const load = objects[focusTarget.scope];
+    if (load?.s === "failed" || (load?.s === "loaded" && !load.value.some((o) => o.name === focusTarget.name))) {
+      setFocusTarget(null);
+      onRevealed?.();
+    }
+  }, [objects, focusTarget]);
+
+  function refresh() {
+    for (const db of openDatabases) {
+      if (hasSchemas) loadSchemas(db);
+      else loadObjects(db, null);
+    }
+    for (const key of openSchemas) {
+      const [db, schema] = key.split("\u0000");
+      loadObjects(db, schema);
+    }
+    setAttempt((n) => n + 1);
+    onRefresh?.();
+  }
 
   function toggleDatabase(database: string) {
     const next = new Set(openDatabases);
@@ -182,6 +244,7 @@ export default function ObjectTree({
                     className={isSelected ? "tree-row tree-row-selected" : "tree-row"}
                     aria-current={isSelected ? "true" : undefined}
                     title={o.name}
+                    data-object={`${scopeKey(database, schema)}\u0000${o.name}`}
                     onClick={() => onSelect(o.kind, path)}
                   >
                     <Icon name={section.icon} />
@@ -242,15 +305,19 @@ export default function ObjectTree({
     return <p className="tree-note">This user cannot see any databases on this server.</p>;
 
   return (
-    <>
-      {hasSchemas && (
-        <div className="tree-toggle">
+    <div ref={rootRef}>
+      <div className="tree-toggle">
+        {hasSchemas && (
           <label className="checkbox">
             <input type="checkbox" checked={showSystem} onChange={(e) => setShowSystem(e.target.checked)} />
             Show system schemas
           </label>
-        </div>
-      )}
+        )}
+        <span className="spacer" />
+        <button type="button" className="icon-button" aria-label="Refresh" title="Refresh" onClick={refresh}>
+          <Icon name="refresh" />
+        </button>
+      </div>
       <ul className="tree" aria-label="Databases">
         {databases.value.map((db) => {
           const isOpen = openDatabases.has(db);
@@ -271,6 +338,6 @@ export default function ObjectTree({
           );
         })}
       </ul>
-    </>
+    </div>
   );
 }

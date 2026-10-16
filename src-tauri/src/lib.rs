@@ -48,6 +48,7 @@ pub fn run() {
             commands::fetch_page,
             commands::fetch_full_value,
             commands::schema_snapshot,
+            commands::sql_schema,
             commands::reverse_engineer,
             commands::export_sql,
             commands::read_model_files,

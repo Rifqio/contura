@@ -17,6 +17,7 @@ mod introspect;
 mod page;
 mod session;
 mod snapshot;
+mod sql_schema;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_DATABASE: &str = "postgres";
@@ -385,6 +386,11 @@ impl Dialect for PostgresDialect {
         let schema = snapshot::require_schema(schema)?;
         let client = self.client(database).await?;
         snapshot::schema_snapshot(&client, schema).await
+    }
+
+    async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
+        let client = self.client(database).await?;
+        sql_schema::sql_schema(&client).await
     }
 
     async fn open_query_session(

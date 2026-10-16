@@ -19,6 +19,7 @@ import type {
   SuggestedConnection,
   ModelFiles,
   SchemaModel,
+  SqlSchema,
   Execution,
   HistoryEntry,
   HistoryFilter,
@@ -96,6 +97,10 @@ export const fetchPage = (id: ConnectionId, request: PageRequest): Promise<Page>
 
 export const schemaSnapshot = (id: ConnectionId, database: string, schema: string | null): Promise<SchemaModel> =>
   invoke("schema_snapshot", { id, database, schema });
+
+/** Names, kinds, column types and Foreign Keys of one database, for the SQL language service. */
+export const sqlSchema = (id: ConnectionId, database: string): Promise<SqlSchema> =>
+  invoke("sql_schema", { id, database });
 
 /** Reads a database (or Postgres schema) and returns it as DBML text. Read only. */
 export const reverseEngineer = (id: ConnectionId, database: string, schema: string | null): Promise<string> =>

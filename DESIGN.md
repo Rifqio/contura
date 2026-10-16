@@ -286,7 +286,7 @@ Nine fixed colours (`group-red` to `group-slate`), each picked to carry white te
 ### State colours
 `added-soft` / `added-ink` for new rows and `deleted-soft` / `deleted-ink` (with strikethrough) for deleted rows. `danger` is only for destructive buttons and errors.
 
-Editors: `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-comment` and `syntax-name` colour code, with their own dark values. `warning` (gold) underlines editor warnings and is never the Production amber. `changed` is the quiet gutter bar on lines changed since the last save.
+Editors: `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-comment` and `syntax-name` colour code, with their own dark values. `warning` (gold) underlines editor warnings and is never the Production amber. Hints, such as an unused alias, get a dotted `ink-faint` underline: present, but quieter than a warning. Errors get a wavy `danger` underline. `changed` is the quiet gutter bar on lines changed since the last save.
 
 ### Dark variants
 The `dark-*` tokens mirror the light roles one for one, for the dark variant of the default Theme. Teal lightens to `dark-primary` to keep contrast, and the highlighter becomes a deep olive with a bright edge, so a Pending Edit stays obvious without glaring.

@@ -84,6 +84,8 @@ export interface PageRequest {
   table: ObjectPath;
   page: number;
   sort: SortSpec | null;
+  /** A SQL expression over the table's columns; the Core wraps it as `WHERE (...)`. */
+  filter?: string | null;
 }
 
 export interface Page {
@@ -215,6 +217,31 @@ export interface SmEnum {
   schema: string | null;
   name: string;
   values: string[];
+}
+
+export interface SqlColumn {
+  name: string;
+  typeName: string;
+  pk: boolean;
+}
+
+export interface SqlTable {
+  schema: string | null;
+  name: string;
+  kind: "table" | "view";
+  columns: SqlColumn[];
+}
+
+export interface SqlFk {
+  from: SmEndpoint;
+  to: SmEndpoint;
+}
+
+/** Names, kinds, column types and Foreign Keys of one database; never row data. */
+export interface SqlSchema {
+  searchPath: string[];
+  tables: SqlTable[];
+  fks: SqlFk[];
 }
 
 export interface SchemaModel {

@@ -178,11 +178,17 @@ pub(super) async fn fetch_page(client: &Client, req: &PageRequest) -> Result<Pag
         select_list(&rel),
         qualified(schema, &req.table.name)
     );
+    sql.push_str(&req.where_sql());
     if !order.is_empty() {
         sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
     }
     let offset = u64::from(req.page) * u64::from(PAGE_SIZE);
     sql.push_str(&format!(" LIMIT {} OFFSET {offset}", PAGE_SIZE + 1));
+    if req.has_filter() {
+        // The simple protocol runs every statement it is given; preparing the
+        // same text first refuses a filter that tries to add a second one.
+        client.prepare(&sql).await.map_err(query_err)?;
+    }
 
     let messages = client.simple_query(&sql).await.map_err(query_err)?;
     let mut rows = Vec::new();

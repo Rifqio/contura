@@ -1,5 +1,5 @@
 import type { DialectKind } from "../api/types";
-import { type Token, tokenize } from "./sqlTokens";
+import { type Token, tokenize } from "../lang/sql/tokens";
 
 /** One statement: its trimmed text, without the closing `;`, and where it sits. */
 export interface Stmt {
