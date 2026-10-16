@@ -15,6 +15,7 @@ use crate::model::{
 
 mod introspect;
 mod page;
+mod session;
 mod snapshot;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -384,6 +385,15 @@ impl Dialect for PostgresDialect {
         let schema = snapshot::require_schema(schema)?;
         let client = self.client(database).await?;
         snapshot::schema_snapshot(&client, schema).await
+    }
+
+    async fn open_query_session(
+        &self,
+        database: Option<&str>,
+    ) -> Result<crate::query::SessionHandle> {
+        let database = database.unwrap_or(&self.default_database);
+        let client = open_client(&self.settings, database).await?;
+        Ok(session::spawn(client, self.settings.tls.clone()))
     }
 
     async fn disconnect(&self) -> Result<()> {

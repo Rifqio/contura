@@ -110,7 +110,7 @@ fn real_text(f: f64) -> String {
     format!("{f:?}")
 }
 
-fn cell_of(value: ValueRef<'_>, total: Option<i64>) -> Cell {
+pub(super) fn cell_of(value: ValueRef<'_>, total: Option<i64>) -> Cell {
     match value {
         ValueRef::Null => Cell::Null,
         ValueRef::Integer(n) => Cell::Number {

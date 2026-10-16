@@ -24,6 +24,21 @@ _Avoid_: Folder, workspace, project, tag
 Where Connections that belong to no Group appear.
 _Avoid_: Default group, misc, inbox
 
+**Query Tab**:
+A title-bar tab holding SQL typed for one Connection (and database), with its results below.
+_Avoid_: Console, worksheet, script
+
+**Query Session**:
+The database connection a Query Tab owns while it is open, separate from browsing, so a typed transaction and session settings last across its statements.
+_Avoid_: Console session, worker
+
+**Query History**:
+The last 1,000 statements run on a Connection, with when, how long and how they ended.
+_Avoid_: Log, journal
+
+**Saved Query**:
+SQL kept by name in DB View, shared by every Connection.
+_Avoid_: Snippet, favourite, bookmark
 **Theme**:
 A named set of visual tokens (colours, type, corners, icon style) that DB View can be switched to. Flat minimal is the default.
 _Avoid_: Skin, style, appearance

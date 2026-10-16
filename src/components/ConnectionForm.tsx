@@ -73,6 +73,8 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
   const [busy, setBusy] = useState<"test" | "save" | "create" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [portError, setPortError] = useState<string | null>(null);
+  const [timeout, setTimeoutText] = useState(connection?.queryTimeoutSecs ? String(connection.queryTimeoutSecs) : "");
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
 
   const sqlite = dialect === "sqlite";
 
@@ -95,10 +97,17 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
   }
 
   function input(): ConnectionInput | null {
+    const t = timeout.trim();
+    if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 1)) {
+      setTimeoutError("Enter a whole number of seconds, or leave it empty.");
+      return null;
+    }
+    setTimeoutError(null);
     const common = {
       id: connection?.id ?? null,
       name: name.trim(),
       groupId: groupId === "" ? null : groupId,
+      queryTimeoutSecs: t === "" ? null : Number(t),
     };
     if (dialect === "sqlite") {
       return {
@@ -344,6 +353,30 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
               )}
             </>
           )}
+          <div className="field">
+            <label htmlFor={f("timeout")}>
+              <span>Query timeout (seconds)</span>
+            </label>
+            <input
+              id={f("timeout")}
+              className={timeoutError ? "input input-error" : "input"}
+              inputMode="numeric"
+              value={timeout}
+              placeholder="No limit"
+              aria-invalid={timeoutError !== null}
+              aria-describedby={timeoutError ? f("timeout-error") : f("timeout-hint")}
+              onChange={(e) => setTimeoutText(e.target.value)}
+            />
+            {timeoutError ? (
+              <span id={f("timeout-error")} className="field-error">
+                {timeoutError}
+              </span>
+            ) : (
+              <span id={f("timeout-hint")} className="field-hint">
+                Queries typed in the editor are stopped on the server after this long.
+              </span>
+            )}
+          </div>
           <label className="field field-wide" htmlFor={f("group")}>
             <span>Group</span>
             <select id={f("group")} className="input" value={groupId} onChange={(e) => setGroupId(e.target.value)}>

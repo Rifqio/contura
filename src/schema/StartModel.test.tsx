@@ -20,6 +20,7 @@ const kfc: ConnectionConfig = {
   ssl: { mode: "disable" },
   groupId: null,
   file: null,
+  queryTimeoutSecs: null,
 };
 
 function setup(openIds: string[] = []) {

@@ -20,6 +20,8 @@ export interface ConnectionConfig {
   /** The database file, for SQLite only. */
   file: string | null;
   groupId: GroupId | null;
+  /** Typed queries past this many seconds are cancelled on the server; null means no limit. */
+  queryTimeoutSecs: number | null;
 }
 
 export type GroupColor = "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "rose" | "slate";
@@ -118,6 +120,7 @@ export interface ConnectionInput {
   file: string | null;
   password: PasswordChange;
   groupId: GroupId | null;
+  queryTimeoutSecs: number | null;
 }
 
 export interface GroupInput {
@@ -145,7 +148,10 @@ export type CommandError =
   | { kind: "invalidInput"; message: string }
   | { kind: "store"; message: string }
   | { kind: "secret"; message: string }
-  | { kind: "file"; message: string };
+  | { kind: "file"; message: string }
+  | { kind: "cancelled"; message?: undefined }
+  /** The Connection's timeout, in seconds. */
+  | { kind: "timedOut"; message: number };
 
 /** A Schema Model on disk: the DBML and, when it exists, its layout sidecar. */
 export interface ModelFiles {
@@ -217,4 +223,60 @@ export interface SchemaModel {
   refs: SmRef[];
   enums: SmEnum[];
   skipped: string[];
+}
+
+/** A query tab's own session on a Connection. */
+export type QuerySessionId = string;
+
+export interface ResultColumn {
+  name: string;
+  typeName: string;
+  numeric: boolean;
+}
+
+export type ExecOutcome =
+  | { t: "rows"; columns: ResultColumn[]; rows: Cell[][]; hasMore: boolean }
+  | { t: "affected"; rows: number };
+
+export interface Execution {
+  outcome: ExecOutcome;
+  elapsedMs: number;
+}
+
+export interface MoreRows {
+  rows: Cell[][];
+  hasMore: boolean;
+}
+
+export type Outcome = "ok" | "error" | "cancelled" | "timedOut";
+
+export interface HistoryEntry {
+  id: number;
+  connectionId: ConnectionId;
+  sql: string;
+  ranAtMs: number;
+  elapsedMs: number;
+  outcome: Outcome;
+  /** Rows returned (first page) or changed; null when the statement did not finish. */
+  rows: number | null;
+  changed: boolean;
+  error: string | null;
+}
+
+export interface HistoryFilter {
+  search: string | null;
+  only: "failed" | "changes" | null;
+}
+
+export interface SavedQuery {
+  id: string;
+  name: string;
+  sql: string;
+  updatedAtMs: number;
+}
+
+export interface SavedQueryInput {
+  id: string | null;
+  name: string;
+  sql: string;
 }

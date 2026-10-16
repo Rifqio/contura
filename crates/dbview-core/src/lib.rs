@@ -8,6 +8,7 @@ pub mod model;
 pub mod model_files;
 pub mod mysql;
 pub mod postgres;
+pub mod query;
 pub mod schema_model;
 pub mod secrets;
 pub mod sqlite;

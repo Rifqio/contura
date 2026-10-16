@@ -1,5 +1,6 @@
 mod introspect;
 mod page;
+mod session;
 mod snapshot;
 
 use std::path::Path;
@@ -19,6 +20,8 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct SqliteDialect {
     conn: Arc<Mutex<Connection>>,
+    /// Query sessions open their own connection to this file.
+    path: std::path::PathBuf,
 }
 
 pub(crate) fn query_err(e: rusqlite::Error) -> Error {
@@ -87,11 +90,13 @@ impl SqliteDialect {
             .file
             .clone()
             .ok_or_else(|| Error::InvalidInput("choose a SQLite file".into()))?;
-        let conn = tokio::task::spawn_blocking(move || open_existing(&path))
+        let opened = path.clone();
+        let conn = tokio::task::spawn_blocking(move || open_existing(&opened))
             .await
             .map_err(|e| Error::Connect(e.to_string()))??;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            path,
         })
     }
 
@@ -160,6 +165,16 @@ impl Dialect for SqliteDialect {
         let database = database.to_string();
         self.run(move |c| snapshot::schema_snapshot(c, &database))
             .await
+    }
+
+    async fn open_query_session(
+        &self,
+        _database: Option<&str>,
+    ) -> Result<crate::query::SessionHandle> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || session::spawn(path))
+            .await
+            .map_err(|e| Error::Connect(e.to_string()))?
     }
 
     async fn disconnect(&self) -> Result<()> {

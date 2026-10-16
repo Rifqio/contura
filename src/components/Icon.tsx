@@ -19,6 +19,18 @@ const PATHS = {
   arrowUp: "M12 19V5M6 11l6-6 6 6",
   arrowDown: "M12 5v14M6 13l6 6 6-6",
   edit: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4",
+  play: "M8 5.5v13l10-6.5z",
+  playAll: "M4 5.5v13l7.5-6.5zM12.5 5.5v13l7.5-6.5z",
+  stop: "M7 7h10v10H7z",
+  pin: "M9 3.5h6l-.8 6 3.8 3.5H6l3.8-3.5zM12 13v7.5",
+  history: "M3.8 12a8.2 8.2 0 1 0 2.4-5.8M3.8 3.8v3.8h3.8M12 7.5V12l3 2",
+  save: "M5 4h11l3 3v13H5zM8.5 4v4.5h7V4M8 20v-6h8v6",
+  format: "M4 6h16M4 12h10M4 18h13",
+  sparkle: "M12 3.5l1.8 4.7 4.7 1.8-4.7 1.8L12 16.5l-1.8-4.7L5.5 10l4.7-1.8zM18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z",
+  warning: "M12 4 21 19.5H3zM12 10v4.5M12 17v.01",
+  error: "M12 3.5a8.5 8.5 0 1 1 0 17 8.5 8.5 0 0 1 0-17zM12 8v5M12 16v.01",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  copy: "M8.5 8.5h11v11h-11zM15.5 8.5v-4h-11v11h4",
 } as const;
 
 export type IconName = keyof typeof PATHS;

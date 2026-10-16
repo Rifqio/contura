@@ -7,6 +7,7 @@ use crate::model::{
 };
 use crate::mysql::MySqlDialect;
 use crate::postgres::PostgresDialect;
+use crate::query::SessionHandle;
 use crate::schema_model::SchemaModel;
 use crate::sqlite::SqliteDialect;
 
@@ -22,6 +23,8 @@ pub trait Dialect: Send + Sync {
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue>;
     /// Reads one database (MySQL, SQLite) or one schema (Postgres) as a Schema Model. Read only.
     async fn schema_snapshot(&self, database: &str, schema: Option<&str>) -> Result<SchemaModel>;
+    /// A new connection of its own for one query tab (`database` is ignored by SQLite).
+    async fn open_query_session(&self, database: Option<&str>) -> Result<SessionHandle>;
     async fn disconnect(&self) -> Result<()>;
 }
 

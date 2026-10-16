@@ -19,6 +19,13 @@ import type {
   SuggestedConnection,
   ModelFiles,
   SchemaModel,
+  Execution,
+  HistoryEntry,
+  HistoryFilter,
+  MoreRows,
+  QuerySessionId,
+  SavedQuery,
+  SavedQueryInput,
 } from "./types";
 
 export const DIALECT_LABEL: Record<DialectKind, string> = {
@@ -124,6 +131,36 @@ export const lastGroup = (): Promise<GroupId | null> => invoke("last_group");
 
 export const setLastGroup = (id: GroupId | null): Promise<void> => invoke("set_last_group", { id });
 
+export const openQuerySession = (id: ConnectionId, database: string | null): Promise<QuerySessionId> =>
+  invoke("open_query_session", { id, database });
+
+export const executeSql = (session: QuerySessionId, sql: string): Promise<Execution> =>
+  invoke("execute_sql", { session, sql });
+
+export const fetchMoreRows = (session: QuerySessionId): Promise<MoreRows> => invoke("fetch_more_rows", { session });
+
+export const cancelQuery = (session: QuerySessionId): Promise<void> => invoke("cancel_query", { session });
+
+export const closeQueryResult = (session: QuerySessionId): Promise<void> => invoke("close_query_result", { session });
+
+export const closeQuerySession = (session: QuerySessionId): Promise<void> =>
+  invoke("close_query_session", { session });
+
+export const queryHistory = (id: ConnectionId, filter: HistoryFilter): Promise<HistoryEntry[]> =>
+  invoke("query_history", { id, filter });
+
+export const clearQueryHistory = (id: ConnectionId): Promise<void> => invoke("clear_query_history", { id });
+
+export const listSavedQueries = (): Promise<SavedQuery[]> => invoke("list_saved_queries");
+
+export const saveSavedQuery = (input: SavedQueryInput): Promise<SavedQuery> => invoke("save_saved_query", { input });
+
+export const deleteSavedQuery = (id: string): Promise<void> => invoke("delete_saved_query", { id });
+
+export const loadQueryTabs = (place: string): Promise<string | null> => invoke("load_query_tabs", { place });
+
+export const saveQueryTabs = (place: string, json: string): Promise<void> => invoke("save_query_tabs", { place, json });
+
 export function isCommandError(e: unknown): e is CommandError {
   return typeof e === "object" && e !== null && typeof (e as { kind?: unknown }).kind === "string";
 }
@@ -138,8 +175,10 @@ function formatBytes(n: number): string {
   return `${n.toLocaleString("en-US")} bytes`;
 }
 
+/** Capitalised, with a full stop unless the Core's message already ends with one. */
 function sentence(message: string): string {
-  return `${message.charAt(0).toUpperCase()}${message.slice(1)}.`;
+  const s = `${message.charAt(0).toUpperCase()}${message.slice(1)}`;
+  return /[.!?]$/.test(s) ? s : `${s}.`;
 }
 
 function sqliteConnectText(message: string): string {
@@ -166,9 +205,9 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
     case "query":
       return `The query failed: ${e.message}`;
     case "notFound":
-      return e.message === "connection not open"
-        ? "This Connection is not open. Open it again to continue."
-        : `Not found: ${e.message}. Refresh and try again.`;
+      if (e.message === "connection not open") return "This Connection is not open. Open it again to continue.";
+      if (e.message === "That query session is closed.") return "This tab lost its session. Run the query again.";
+      return `Not found: ${e.message}. Refresh and try again.`;
     case "noPrimaryKey":
       return "This table has no primary key, so DB View cannot pick out one row to open the full value.";
     case "valueTooLarge":
@@ -181,6 +220,10 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `Could not use Windows Credential Manager: ${e.message}`;
     case "file":
       return `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}. Check the folder exists and DB View can write to it.`;
+    case "cancelled":
+      return "The query was cancelled.";
+    case "timedOut":
+      return `Stopped after ${e.message} s, the Connection's timeout.`;
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

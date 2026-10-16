@@ -62,9 +62,9 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 - **Where time goes:** browsing table data and designing schemas. These two get polish first.
 - **Shortcuts:** VS Code conventions throughout. A command palette (Ctrl Shift P) can run every action. Ctrl K searches tables.
 - **SQL editor:**
-  - It types like VS Code: monospace, font ligatures on (Cascadia Code), multi-cursor, bracket matching, autocomplete as you type.
+  - It types like VS Code: monospace, font ligatures on (Cascadia Code), editing in several places at once, bracket matching, autocomplete as you type.
   - Format SQL makes keywords UPPERCASE.
-  - Ctrl Enter runs the statement under the cursor, or the selection if there is one.
+  - Ctrl Enter runs the current statement, or the selection if there is one. Ctrl Shift Enter runs every statement and stops at the first one that fails.
   - Running again replaces the last result. A result can be pinned to keep it.
   - No Vim mode.
 - **Safety:** an UPDATE or DELETE with no WHERE, typed in the editor, asks for confirmation before it runs. This comes on top of the Production and Read-only rules.
@@ -86,8 +86,14 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 ## Querying
 
 - SQL editor with autocomplete from the open Connection's tables and columns. Run selection runs the highlighted text. Run all runs every statement, and each result set gets its own tab.
-- Running queries can be cancelled. Each Connection has an optional timeout.
-- Query History keeps the last 1,000 statements per Connection. Saved Queries are stored by name.
+- Running queries can be cancelled with Esc or the Cancel button; the Core stops them on the server. Each Connection has an optional query timeout in seconds, past which the query is cancelled on the server.
+- Queries are tabs in the title bar (Ctrl T opens one). Each query tab has its own session on its Connection (ADR 0011), so a typed `BEGIN` ... `COMMIT`, `SET` or temporary table lasts across that tab's statements. Statements typed in the editor otherwise commit on success, one at a time. Closing the tab, changing its Connection or database, switching Group or editing the Connection ends the session and rolls back a transaction left open, without asking yet (a known gap).
+- Results sit below the editor in a resizable split. A result over 1,000 rows shows its first 1,000; Fetch next 1,000 (or scrolling to the end) reads the next page from the same open result. Running anything else in the tab, or closing the result, releases it. Query results show the 1 KB preview of long values; the full value opens from the table view.
+- An UPDATE or DELETE with no WHERE asks before it runs: Run it, Cancel, or Add WHERE.
+- Format SQL (Shift Alt F) makes keywords UPPERCASE and starts each clause on its own line. Strings, names and comments are left alone.
+- Query History keeps the last 1,000 statements per Connection, with the time, duration and outcome. It opens in a panel on the right, can be searched and filtered (failed, changes), and puts a statement into the editor or a new tab; it never runs anything itself. Clear Query History is on the Connection's menu.
+- Saved Queries are stored by name (unique, ignoring case) and are global: they list under Saved Queries for every Connection and run on the tab's Connection. Ctrl S saves a query tab; a Saved Query's tab shows a dot when it has unsaved changes.
+- Unsaved query tabs are kept per Group (and for Ungrouped) and come back after a restart.
 - Visual Query:
   - Tables from one Connection (any schema or database it can reach) on a canvas (ADR 0005).
   - Joins are pre-filled from Foreign Keys. Dragging a column onto another column adds or changes a Join without changing the database.
@@ -108,7 +114,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
   - a Ref to a missing table or column is flagged, with "Did you mean" quick-fixes (Ctrl+. or Alt+Enter)
   - templates for `Table`, `Ref` and `Enum` (type the name, press Tab)
   - F2 renames a table or column everywhere it is used
-  - an error at the caret waits 1.5 s before it shows; errors elsewhere show at once
+  - an error where you are typing waits 1.5 s before it shows; errors elsewhere show at once
   - lines changed since the last save get a quiet bar in the gutter
 - **The layout:** DBML on the left (about 42% of the width, collapsible with Ctrl+B), the canvas on the right.
 - **Foreign Keys by drag:** a column can be dropped onto any column. When the target is not a key, unique or indexed, DB View still adds the Ref and warns that the database may refuse it.

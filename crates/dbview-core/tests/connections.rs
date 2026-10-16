@@ -29,6 +29,7 @@ fn input(name: &str, password: PasswordChange) -> ConnectionInput {
         password,
         group_id: None,
         file: None,
+        query_timeout_secs: None,
     }
 }
 
@@ -341,6 +342,7 @@ async fn sqlite_save_drops_server_fields() {
             database: Some("db".into()),
             ssl: SslMode::Require,
             file: Some("C:/data/shop.sqlite".into()),
+            query_timeout_secs: None,
             ..input("lite", PasswordChange::Keep)
         })
         .await
@@ -391,6 +393,7 @@ async fn postgres_save_keeps_server_fields() {
             port: 5432,
             database: Some("shop".into()),
             file: Some("C:/ignored.sqlite".into()),
+            query_timeout_secs: None,
             ..input("pg", PasswordChange::Keep)
         })
         .await
@@ -408,6 +411,7 @@ async fn sqlite_save_never_stores_a_password() {
         .save(ConnectionInput {
             dialect: DialectKind::Sqlite,
             file: Some("C:/data/shop.sqlite".into()),
+            query_timeout_secs: None,
             ..input("lite", PasswordChange::Set { value: "x".into() })
         })
         .await

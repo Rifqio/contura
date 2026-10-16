@@ -7,7 +7,7 @@ use std::sync::Arc;
 use dbview_core::connections::ConnectionService;
 use dbview_core::secrets::KeyringSecretStore;
 use dbview_core::store::AppStore;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -61,16 +61,41 @@ pub fn run() {
             commands::last_group,
             commands::set_last_group,
             commands::create_sqlite_database,
+            commands::open_query_session,
+            commands::execute_sql,
+            commands::fetch_more_rows,
+            commands::cancel_query,
+            commands::close_query_result,
+            commands::close_query_session,
+            commands::query_history,
+            commands::clear_query_history,
+            commands::list_saved_queries,
+            commands::save_saved_query,
+            commands::delete_saved_query,
+            commands::load_query_tabs,
+            commands::save_query_tabs,
         ])
-        .run(tauri::generate_context!());
-    if let Err(e) = result {
-        fatal::show_error(&format!(
-            "DB View stopped with an error.
+        .build(tauri::generate_context!());
+    let app = match result {
+        Ok(app) => app,
+        Err(e) => {
+            fatal::show_error(&format!(
+                "DB View stopped with an error.
 
 {e}"
-        ));
-        std::process::exit(1);
-    }
+            ));
+            std::process::exit(1);
+        }
+    };
+    app.run(|handle, event| {
+        // Closing the app drops the query connections, but a server only notices
+        // when it next writes: stop running queries first so they do not commit.
+        if let RunEvent::ExitRequested { .. } = event
+            && let Some(service) = handle.try_state::<ConnectionService>()
+        {
+            tauri::async_runtime::block_on(service.cancel_all_queries());
+        }
+    });
 }
 
 fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {

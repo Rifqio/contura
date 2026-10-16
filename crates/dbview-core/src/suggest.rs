@@ -167,6 +167,7 @@ mod tests {
             ssl: SslMode::Disable,
             group_id: None,
             file: None,
+            query_timeout_secs: None,
         }
     }
 

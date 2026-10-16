@@ -4,6 +4,10 @@ use dbview_core::model::{
     ConnectionConfig, ConnectionId, DbObject, FullValue, FullValueRequest, Group, GroupId,
     ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
 };
+use dbview_core::query::{
+    Execution, HistoryEntry, HistoryFilter, MoreRows, QuerySessionId, SavedQuery, SavedQueryId,
+    SavedQueryInput,
+};
 use dbview_core::schema_model::SchemaModel;
 use dbview_core::suggest::SuggestedConnection;
 use std::path::PathBuf;
@@ -231,4 +235,90 @@ pub fn set_last_group(service: Service<'_>, id: Option<GroupId>) -> Result<(), E
 #[tauri::command]
 pub fn create_sqlite_database(path: PathBuf) -> Result<(), Error> {
     dbview_core::sqlite::create_database(&path)
+}
+
+#[tauri::command]
+pub async fn open_query_session(
+    service: Service<'_>,
+    id: ConnectionId,
+    database: Option<String>,
+) -> Result<QuerySessionId, Error> {
+    service.open_query_session(id, database).await
+}
+
+#[tauri::command]
+pub async fn execute_sql(
+    service: Service<'_>,
+    session: QuerySessionId,
+    sql: String,
+) -> Result<Execution, Error> {
+    service.execute_sql(session, sql).await
+}
+
+#[tauri::command]
+pub async fn fetch_more_rows(
+    service: Service<'_>,
+    session: QuerySessionId,
+) -> Result<MoreRows, Error> {
+    service.fetch_more_rows(session).await
+}
+
+#[tauri::command]
+pub async fn cancel_query(service: Service<'_>, session: QuerySessionId) -> Result<(), Error> {
+    service.cancel_query(session).await
+}
+
+#[tauri::command]
+pub async fn close_query_result(
+    service: Service<'_>,
+    session: QuerySessionId,
+) -> Result<(), Error> {
+    service.close_query_result(session).await
+}
+
+#[tauri::command]
+pub async fn close_query_session(
+    service: Service<'_>,
+    session: QuerySessionId,
+) -> Result<(), Error> {
+    service.close_query_session(session).await
+}
+
+#[tauri::command]
+pub fn query_history(
+    service: Service<'_>,
+    id: ConnectionId,
+    filter: HistoryFilter,
+) -> Result<Vec<HistoryEntry>, Error> {
+    service.query_history(id, filter)
+}
+
+#[tauri::command]
+pub fn clear_query_history(service: Service<'_>, id: ConnectionId) -> Result<(), Error> {
+    service.clear_query_history(id)
+}
+
+#[tauri::command]
+pub fn list_saved_queries(service: Service<'_>) -> Result<Vec<SavedQuery>, Error> {
+    service.list_saved_queries()
+}
+
+#[tauri::command]
+pub fn save_saved_query(service: Service<'_>, input: SavedQueryInput) -> Result<SavedQuery, Error> {
+    service.save_saved_query(input)
+}
+
+#[tauri::command]
+pub fn delete_saved_query(service: Service<'_>, id: SavedQueryId) -> Result<(), Error> {
+    service.delete_saved_query(id)
+}
+
+#[tauri::command]
+pub fn load_query_tabs(service: Service<'_>, place: String) -> Result<Option<String>, Error> {
+    service.load_query_tabs(place)
+}
+
+#[tauri::command]
+pub fn save_query_tabs(service: Service<'_>, place: String, json: String) -> Result<(), Error> {
+    service.save_query_tabs(place, json)
 }

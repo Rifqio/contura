@@ -204,6 +204,7 @@ async fn round_trip_sqlite() {
         ssl: SslMode::Disable,
         group_id: None,
         file: Some(path),
+        query_timeout_secs: None,
     };
     let dialect = connect(&config, None).await.unwrap();
     let back = dialect.schema_snapshot("main", None).await.unwrap();

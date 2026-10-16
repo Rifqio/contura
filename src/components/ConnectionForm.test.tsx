@@ -20,6 +20,7 @@ const existing: ConnectionConfig = {
   ssl: { mode: "disable" },
   groupId: "g1",
   file: null,
+  queryTimeoutSecs: null,
 };
 const groups = [{ id: "g1", name: "KFC", color: "red" as const }];
 
@@ -180,6 +181,7 @@ test("sqlite_hides_server_fields_and_saves_the_file", async () => {
     ssl: { mode: "disable" },
     password: { t: "clear" },
     groupId: null,
+    queryTimeoutSecs: null,
   });
 });
 
@@ -305,4 +307,36 @@ test("prefill_postgres_suggestion", () => {
   expect(portInput().value).toBe("5432");
   expect(userInput().value).toBe("postgres");
   expect(dialectSelect().disabled).toBe(false);
+});
+
+test("connection_form_saves_the_query_timeout", async () => {
+  routeInvoke({ save_connection: (a) => ({ ...existing, ...(a.input as object) }) });
+  const onSaved = vi.fn();
+  render(
+    <ConnectionForm connection={{ ...existing, queryTimeoutSecs: 30 }} groups={groups} defaultGroupId={null} onSaved={onSaved} onCancel={() => {}} />,
+  );
+  const timeout = screen.getByLabelText("Query timeout (seconds)") as HTMLInputElement;
+  expect(timeout.value).toBe("30");
+  await userEvent.clear(timeout);
+  await userEvent.type(timeout, "0");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(screen.getByText("Enter a whole number of seconds, or leave it empty.")).toBeTruthy();
+  expect(callsTo("save_connection")).toHaveLength(0);
+  await userEvent.clear(timeout);
+  await userEvent.type(timeout, "45");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect((callsTo("save_connection")[0].input as { queryTimeoutSecs: unknown }).queryTimeoutSecs).toBe(45);
+});
+
+test("an_empty_query_timeout_saves_as_no_limit", async () => {
+  routeInvoke({ save_connection: (a) => ({ ...existing, ...(a.input as object) }) });
+  const onSaved = vi.fn();
+  render(
+    <ConnectionForm connection={{ ...existing, queryTimeoutSecs: 30 }} groups={groups} defaultGroupId={null} onSaved={onSaved} onCancel={() => {}} />,
+  );
+  await userEvent.clear(screen.getByLabelText("Query timeout (seconds)"));
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect((callsTo("save_connection")[0].input as { queryTimeoutSecs: unknown }).queryTimeoutSecs).toBeNull();
 });

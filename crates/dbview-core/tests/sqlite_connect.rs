@@ -18,6 +18,7 @@ fn config(file: &Path) -> ConnectionConfig {
         ssl: SslMode::Disable,
         group_id: None,
         file: Some(file.to_path_buf()),
+        query_timeout_secs: None,
     }
 }
 

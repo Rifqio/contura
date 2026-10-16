@@ -1,17 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { errorText, fetchPage, isNotOpen } from "../api/client";
 import type { ColumnInfo, ConnectionId, KeyPart, ObjectPath, Page, SortSpec } from "../api/types";
-import CellValue from "./CellValue";
+import ResultGrid from "./ResultGrid";
 import Icon from "./Icon";
 import { objectPrefix } from "../objectPath";
 
 const PAGE_SIZE = 1000;
 const NUMERIC_TYPE = /^(tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real|bit|year)\b/i;
-/** Rows are one line high (app.css `.grid td`); measured once rendered. */
-const FALLBACK_ROW_HEIGHT = 40;
-/** Rows rendered above and below the visible ones. */
-const OVERSCAN = 20;
-
 interface Props {
   connectionId: ConnectionId;
   table: ObjectPath;
@@ -28,24 +23,9 @@ function nextSort(current: SortSpec | null, column: string): SortSpec {
   return { column, descending: false };
 }
 
-/** Holds the scroll height of rows that are not rendered. */
-function SpacerRow({ columns, height }: { columns: number; height: number }) {
-  return (
-    <tr className="grid-spacer" aria-hidden="true">
-      <td colSpan={columns + 1} style={{ height }} />
-    </tr>
-  );
-}
-
 function rowKey(columns: ColumnInfo[], row: Page["rows"][number]): KeyPart[] {
   return columns.flatMap((c, i) => (c.isPrimaryKey ? [{ column: c.name, value: row[i] }] : []));
 }
-
-/** The visible rows, by index into the page, before overscan and clamping. */
-type Visible = { first: number; last: number };
-
-/** Column widths fixed from the page's first render, so scrolling never reflows them. */
-type Widths = { page: Page; px: number[] };
 
 /**
  * The read-only grid for one table or view. Only the current page lives in
@@ -60,10 +40,6 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen }: Pr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const rowHeight = useRef(FALLBACK_ROW_HEIGHT);
-  const [visible, setVisible] = useState<Visible>({ first: 0, last: 0 });
-  const [widths, setWidths] = useState<Widths | null>(null);
 
   // `table` is fixed for this component's lifetime: the parent re-keys it per table.
   useEffect(() => {
@@ -74,7 +50,6 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen }: Pr
       .then((page) => {
         if (!live) return;
         setShown({ index: pageIndex, page });
-        setVisible({ first: 0, last: 0 });
       })
       .catch((e) => {
         if (!live) return;
@@ -101,40 +76,6 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen }: Pr
   const columns = page?.columns ?? [];
   const firstRow = (shown?.index ?? 0) * PAGE_SIZE + 1;
 
-  const measureViewport = useCallback(() => {
-    const box = scrollRef.current;
-    if (!box) return;
-    const h = rowHeight.current;
-    const first = Math.floor(box.scrollTop / h);
-    const last = Math.ceil((box.scrollTop + box.clientHeight) / h);
-    setVisible((v) => (v.first === first && v.last === last ? v : { first, last }));
-  }, []);
-
-  useEffect(() => {
-    const box = scrollRef.current;
-    if (!box || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measureViewport);
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, [measureViewport]);
-
-  // A new page starts at its top, with its row height and column widths taken
-  // from this first render, before the browser paints.
-  useLayoutEffect(() => {
-    const box = scrollRef.current;
-    if (!box || !page) return;
-    box.scrollTop = 0;
-    const firstRowEl = box.querySelector<HTMLElement>("tr[data-row]");
-    if (firstRowEl && firstRowEl.offsetHeight > 0) rowHeight.current = firstRowEl.offsetHeight;
-    const px = Array.from(box.querySelectorAll<HTMLElement>("thead th"), (th) => th.offsetWidth);
-    setWidths(px.length > 0 && px.every((w) => w > 0) ? { page, px } : null);
-    measureViewport();
-  }, [page, measureViewport]);
-
-  const rowCount = page?.rows.length ?? 0;
-  const start = Math.max(0, visible.first - OVERSCAN);
-  const end = Math.min(rowCount, visible.last + OVERSCAN);
-  const fixed = widths && widths.page === page ? widths.px : null;
   const rangeText =
     page && page.rows.length > 0
       ? `Rows ${firstRow.toLocaleString("en-US")} to ${(firstRow + page.rows.length - 1).toLocaleString("en-US")}`
@@ -160,8 +101,8 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen }: Pr
         </div>
       </div>
 
-      <div className="grid-scroll" ref={scrollRef} onScroll={measureViewport}>
-        {error ? (
+      {error ? (
+        <div className="grid-scroll">
           <div className="state-panel" role="alert">
             <p className="error-text">{error}</p>
             <button type="button" className="button" onClick={() => setAttempt((n) => n + 1)}>
@@ -173,82 +114,28 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen }: Pr
               </button>
             )}
           </div>
-        ) : (
-          columns.length > 0 && (
-            <table
-              className={loading ? "grid grid-stale" : "grid"}
-              aria-rowcount={rowCount + 1}
-              style={fixed ? { tableLayout: "fixed", width: fixed.reduce((a, b) => a + b, 0) } : undefined}
-            >
-              {fixed && (
-                <colgroup>
-                  {fixed.map((w, i) => (
-                    <col key={i} style={{ width: w }} />
-                  ))}
-                </colgroup>
-              )}
-              <thead>
-                <tr aria-rowindex={1}>
-                  <th className="row-number" scope="col">
-                    <span className="visually-hidden">Row</span>
-                  </th>
-                  {columns.map((c) => {
-                    const numeric = NUMERIC_TYPE.test(c.typeName);
-                    const sorted = sort?.column === c.name ? (sort.descending ? "descending" : "ascending") : "none";
-                    return (
-                      <th key={c.name} scope="col" aria-sort={sorted} className={numeric ? "align-end" : undefined}>
-                        <button
-                          type="button"
-                          className="header-button"
-                          aria-label={`Sort by ${c.name}`}
-                          onClick={() => chooseSort(c.name)}
-                        >
-                          <span className="header-name">
-                            {c.isPrimaryKey && <Icon name="key" className="key-icon" />}
-                            {c.name}
-                            {sorted !== "none" && (
-                              <Icon name={sorted === "ascending" ? "arrowUp" : "arrowDown"} className="sort-icon" />
-                            )}
-                          </span>
-                          <span className="type-hint">{c.typeName}</span>
-                        </button>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {start > 0 && <SpacerRow columns={columns.length} height={start * rowHeight.current} />}
-                {page?.rows.slice(start, end).map((row, i) => {
-                  const r = start + i;
-                  const key = rowKey(page.columns, row);
-                  return (
-                    <tr key={r} data-row={r} aria-rowindex={r + 2}>
-                      <td className="row-number">{(firstRow + r).toLocaleString("en-US")}</td>
-                      {row.map((cell, i) => (
-                        <td key={i} className={cell.t === "number" ? "align-end" : undefined}>
-                          <CellValue
-                            cell={cell}
-                            source={{ connectionId, table, column: page.columns[i].name, rowKey: key }}
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  );
-                })}
-                {end < rowCount && (
-                  <SpacerRow columns={columns.length} height={(rowCount - end) * rowHeight.current} />
-                )}
-              </tbody>
-            </table>
-          )
-        )}
-        {!error && page && page.rows.length === 0 && (
-          <p className="state-panel muted">
-            {shown?.index === 0 ? `${table.name} has no rows.` : "No more rows. Go back a page."}
-          </p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <ResultGrid
+          columns={columns.map((c) => ({ ...c, numeric: NUMERIC_TYPE.test(c.typeName) }))}
+          rows={page?.rows ?? []}
+          resetKey={page}
+          label={`Rows of ${table.name}`}
+          firstRow={firstRow}
+          stale={loading}
+          sort={sort}
+          onSort={chooseSort}
+          cellSource={(r, column) =>
+            page ? { connectionId, table, column, rowKey: rowKey(page.columns, page.rows[r]) } : undefined
+          }
+        >
+          {page && page.rows.length === 0 && (
+            <p className="state-panel muted">
+              {shown?.index === 0 ? `${table.name} has no rows.` : "No more rows. Go back a page."}
+            </p>
+          )}
+        </ResultGrid>
+      )}
 
       <div className="status-bar">
         <span className="pager">

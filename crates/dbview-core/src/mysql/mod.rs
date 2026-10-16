@@ -2,6 +2,7 @@ mod full_value;
 mod introspect;
 pub(crate) mod page;
 pub mod quote;
+mod session;
 mod snapshot;
 
 use std::time::Duration;
@@ -22,17 +23,20 @@ const MYSQL_ACCESS_DENIED: u16 = 1045;
 
 pub struct MySqlDialect {
     pool: Pool,
+    /// Query sessions open their own connection with these, outside the pool.
+    opts: OptsBuilder,
 }
 
 impl MySqlDialect {
     /// Builds the pool and checks out one connection, so a bad config fails right away.
     pub async fn connect(config: &ConnectionConfig, password: Option<&str>) -> Result<Self> {
-        let pool = Pool::new(build_opts(config, password));
+        let opts = build_opts(config, password);
+        let pool = Pool::new(opts.clone());
         let target = format!("{}:{}", config.host, config.port);
         match tokio::time::timeout(CONNECT_TIMEOUT, pool.get_conn()).await {
             Ok(Ok(conn)) => {
                 drop(conn);
-                Ok(Self { pool })
+                Ok(Self { pool, opts })
             }
             Ok(Err(e)) => {
                 let _ = pool.disconnect().await;
@@ -136,6 +140,13 @@ impl Dialect for MySqlDialect {
         snapshot::schema_snapshot(&self.pool, database).await
     }
 
+    async fn open_query_session(
+        &self,
+        database: Option<&str>,
+    ) -> Result<crate::query::SessionHandle> {
+        session::spawn(self.opts.clone(), database, self.pool.clone()).await
+    }
+
     async fn disconnect(&self) -> Result<()> {
         self.pool.clone().disconnect().await.map_err(query_err)
     }
@@ -158,6 +169,7 @@ mod tests {
             ssl,
             group_id: None,
             file: None,
+            query_timeout_secs: None,
         }
     }
 
@@ -188,6 +200,7 @@ mod tests {
             ssl: SslMode::Disable,
             group_id: None,
             file: None,
+            query_timeout_secs: None,
         };
         let pw = env("DBVIEW_TEST_MYSQL_PASSWORD", "dbview_test");
         let pool = Pool::new(build_opts(&config, Some(&pw)));

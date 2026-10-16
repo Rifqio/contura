@@ -32,6 +32,7 @@ pub fn base_config(user: &str, database: Option<String>) -> ConnectionConfig {
         ssl: SslMode::Disable,
         group_id: None,
         file: None,
+        query_timeout_secs: None,
     }
 }
 

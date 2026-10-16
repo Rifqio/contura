@@ -23,6 +23,7 @@ function conn(id: string, name: string, groupId: string | null): ConnectionConfi
     database: null,
     ssl: { mode: "disable" },
     file: null,
+    queryTimeoutSecs: null,
     groupId,
   };
 }
@@ -110,4 +111,31 @@ test("move to ungrouped calls move_connection with null", async () => {
   await userEvent.click(await screen.findByRole("menuitem", { name: "Move to Ungrouped" }));
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
   expect(callsTo("move_connection")).toEqual([{ id: "a", groupId: null }]);
+});
+
+test("clear_query_history_asks_first", async () => {
+  routeInvoke({ clear_query_history: () => null });
+  const onHistoryCleared = vi.fn();
+  render(
+    <ConnectionList
+      groupId="g1"
+      groups={groups}
+      connections={connections}
+      openIds={new Set()}
+      activeId={null}
+      onActivate={() => {}}
+      onOpened={() => {}}
+      onClosed={() => {}}
+      onEdit={() => {}}
+      onChanged={() => {}}
+      onHistoryCleared={onHistoryCleared}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "More actions for kfc-prod" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Clear Query History" }));
+  expect(screen.getByText("Clear the Query History of kfc-prod? Saved Queries are kept.")).toBeTruthy();
+  expect(callsTo("clear_query_history")).toHaveLength(0);
+  await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(callsTo("clear_query_history")).toEqual([{ id: "a" }]));
+  expect(onHistoryCleared).toHaveBeenCalledWith("a");
 });

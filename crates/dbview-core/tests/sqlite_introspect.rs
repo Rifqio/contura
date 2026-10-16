@@ -39,6 +39,7 @@ async fn open(path: &Path) -> Arc<dyn Dialect> {
         ssl: SslMode::Disable,
         group_id: None,
         file: Some(path.to_path_buf()),
+        query_timeout_secs: None,
     };
     connect(&config, None).await.unwrap()
 }

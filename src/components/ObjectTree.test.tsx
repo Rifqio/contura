@@ -314,6 +314,7 @@ function appConnection(over: Partial<ConnectionConfig>): ConnectionConfig {
     ssl: { mode: "disable" },
     file: null,
     groupId: null,
+    queryTimeoutSecs: null,
     ...over,
   };
 }

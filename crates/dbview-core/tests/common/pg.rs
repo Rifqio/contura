@@ -35,6 +35,7 @@ pub fn pg_base_config(user: &str, database: Option<String>) -> ConnectionConfig 
         ssl: SslMode::Disable,
         group_id: None,
         file: None,
+        query_timeout_secs: None,
     }
 }
 
@@ -138,12 +139,23 @@ async fn drop_database(
     name: &str,
 ) -> Result<(), tokio_postgres::Error> {
     let client = connect_as(config, password, "postgres").await?;
-    client
-        .batch_execute(&format!(
-            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-            quote(name)
-        ))
-        .await
+    let sql = format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", quote(name));
+    // An autovacuum worker (a superuser process) may be in the new database for a
+    // moment, and the test role may not end it: wait and try again.
+    let mut tries = 0;
+    loop {
+        match client.batch_execute(&sql).await {
+            Err(e)
+                if tries < 10
+                    && e.code()
+                        == Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE) =>
+            {
+                tries += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+            other => return other,
+        }
+    }
 }
 
 /// Whether a database with this exact name exists on the test server.

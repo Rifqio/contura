@@ -64,3 +64,13 @@ test("postgres_auth_hint_mentions_access_rules", () => {
     "Sign-in failed: Access denied. Check the user name and password.",
   );
 });
+
+test("error_text_for_query_sessions", () => {
+  expect(errorText({ kind: "cancelled" })).toBe("The query was cancelled.");
+  expect(errorText({ kind: "timedOut", message: 30 })).toBe("Stopped after 30 s, the Connection's timeout.");
+  expect(errorText({ kind: "invalidInput", message: "Give the query a name." })).toBe("Give the query a name.");
+  expect(errorText({ kind: "invalidInput", message: "name must not be empty" })).toBe("Name must not be empty.");
+  expect(errorText({ kind: "notFound", message: "That query session is closed." })).toBe(
+    "This tab lost its session. Run the query again.",
+  );
+});

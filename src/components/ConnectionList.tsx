@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  clearQueryHistory,
   closeConnection,
   connectionTarget,
   deleteConnection,
@@ -27,6 +28,9 @@ interface Props {
   onEdit: (connection: ConnectionConfig) => void;
   /** A Connection moved or was deleted; reload the list. */
   onChanged: () => void;
+  /** Opens a query tab on the Connection. */
+  onNewQuery?: (id: ConnectionId) => void;
+  onHistoryCleared?: (id: ConnectionId) => void;
 }
 
 export default function ConnectionList({
@@ -40,10 +44,13 @@ export default function ConnectionList({
   onClosed,
   onEdit,
   onChanged,
+  onNewQuery,
+  onHistoryCleared,
 }: Props) {
   const [busy, setBusy] = useState<ReadonlySet<ConnectionId>>(new Set());
   const [errors, setErrors] = useState<Record<ConnectionId, string>>({});
   const [confirmDelete, setConfirmDelete] = useState<ConnectionId | null>(null);
+  const [confirmClear, setConfirmClear] = useState<ConnectionId | null>(null);
 
   const mine = connections.filter((c) => c.groupId === groupId);
 
@@ -94,8 +101,18 @@ export default function ConnectionList({
       onChanged();
     });
 
+  const clearHistory = (c: ConnectionConfig) =>
+    run(c, async () => {
+      await clearQueryHistory(c.id);
+      setConfirmClear(null);
+      onHistoryCleared?.(c.id);
+    });
+
   function menuItems(c: ConnectionConfig): MenuItem[] {
-    const items: MenuItem[] = [{ key: "edit", label: "Edit", onSelect: () => onEdit(c) }];
+    const items: MenuItem[] = [
+      ...(onNewQuery ? [{ key: "new-query", label: "New query", onSelect: () => onNewQuery(c.id) }] : []),
+      { key: "edit", label: "Edit", onSelect: () => onEdit(c) },
+    ];
     const targets: { id: GroupId | null; label: string; group?: Group }[] = [
       ...(c.groupId !== null ? [{ id: null, label: "Ungrouped" }] : []),
       ...groups.filter((g) => g.id !== c.groupId).map((g) => ({ id: g.id, label: g.name, group: g })),
@@ -114,6 +131,12 @@ export default function ConnectionList({
         onSelect: () => move(c, t.id),
       }),
     );
+    items.push({
+      key: "clear-history",
+      label: "Clear Query History",
+      separatorBefore: true,
+      onSelect: () => setConfirmClear(c.id),
+    });
     items.push({
       key: "delete",
       label: "Delete",
@@ -176,8 +199,25 @@ export default function ConnectionList({
                 {errors[c.id]}
               </p>
             )}
-            {confirmDelete === c.id && (
+            {confirmClear === c.id && (
               <div className="confirm item-message" role="alert">
+                <p>Clear the Query History of {c.name}? Saved Queries are kept.</p>
+                <div className="confirm-actions">
+                  <button type="button" className="button button-small" autoFocus onClick={() => setConfirmClear(null)}>
+                    Keep it
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-small button-danger-fill"
+                    disabled={busy.has(c.id)}
+                    onClick={() => clearHistory(c)}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            )}
+            {confirmDelete === c.id && (              <div className="confirm item-message" role="alert">
                 <p>Delete {c.name}? Its saved password is removed too. This cannot be undone.</p>
                 <div className="confirm-actions">
                   <button

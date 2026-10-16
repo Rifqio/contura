@@ -46,6 +46,9 @@ pub struct ConnectionConfig {
     /// The database file of a SQLite Connection; `None` for server Dialects.
     #[serde(default)]
     pub file: Option<PathBuf>,
+    /// Typed queries past this are cancelled on the server. `None` means no limit.
+    #[serde(default)]
+    pub query_timeout_secs: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,6 +182,14 @@ pub enum FullValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_field_defaults_to_none_for_old_configs() {
+        let json = r#"{"id":"6f2c0b1e-7a7e-4c8e-9a4b-1f0d6e2a9c11","name":"old","dialect":"mysql",
+            "host":"h","port":3306,"user":"u","database":null,"ssl":{"mode":"disable"},"groupId":null}"#;
+        let c: ConnectionConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.query_timeout_secs, None);
+    }
 
     #[test]
     fn cell_number_serializes_as_string() {

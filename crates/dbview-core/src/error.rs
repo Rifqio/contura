@@ -24,6 +24,11 @@ pub enum Error {
     /// Reading or writing a file the user chose (Schema Models, exports).
     #[error("file error: {0}")]
     File(String),
+    #[error("the query was cancelled")]
+    Cancelled,
+    /// The Connection's timeout, in seconds.
+    #[error("stopped after {0} s")]
+    TimedOut(u32),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
