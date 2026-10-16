@@ -19,6 +19,7 @@ fn config(file: &Path) -> ConnectionConfig {
         group_id: None,
         file: Some(file.to_path_buf()),
         query_timeout_secs: None,
+        ai_access: Default::default(),
     }
 }
 

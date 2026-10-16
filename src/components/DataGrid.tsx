@@ -3,7 +3,9 @@ import { errorText, fetchPage, isNotOpen } from "../api/client";
 import type { ColumnInfo, ConnectionId, DialectKind, KeyPart, ObjectPath, Page, SortSpec } from "../api/types";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
-import SqlEditor, { type SqlEditorApi } from "../query/SqlEditor";
+import InlineAsk from "../assistant/InlineAsk";
+import type { AskContext, AskKit } from "../assistant/context";
+import SqlEditor, { type AskSelection, type SqlEditorApi } from "../query/SqlEditor";
 import ResultGrid from "./ResultGrid";
 import Icon from "./Icon";
 import { objectPrefix } from "../objectPath";
@@ -29,6 +31,8 @@ interface Props {
   dialect?: DialectKind;
   /** Completion and checks in the filter box. */
   lang?: { client: LangClient; schemas: SchemaCache };
+  /** Ctrl+I in the filter box asks AI; absent, it does nothing. */
+  ask?: AskKit & { connection: AskContext["connection"] };
 }
 
 /** The page on screen and its index. Replaced, never accumulated. */
@@ -49,13 +53,14 @@ function rowKey(columns: ColumnInfo[], row: Page["rows"][number]): KeyPart[] {
  * this component by table so opening another table starts fresh. Only the
  * rows near the viewport are in the DOM; spacer rows stand in for the rest.
  */
-export default function DataGrid({ connectionId, table, onClose, onNotOpen, dialect = "postgres", lang }: Props) {
+export default function DataGrid({ connectionId, table, onClose, onNotOpen, dialect = "postgres", lang, ask }: Props) {
   const [pageIndex, setPageIndex] = useState(0);
   const [sort, setSort] = useState<SortSpec | null>(null);
   /** The filter in use, and what is typed in the box. */
   const [filter, setFilter] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const filterRef = useRef<SqlEditorApi | null>(null);
+  const [askSel, setAskSel] = useState<AskSelection | null>(null);
   const schemaLoad = useSyncExternalStore(
     lang ? (l) => lang.schemas.subscribe(l) : noSubscribe,
     () => lang?.schemas.state(connectionId, table.database) ?? null,
@@ -114,6 +119,7 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen, dial
     setPageIndex(0);
   }
 
+  const askSchema = lang ? lang.client.sqlSchemaFor(schemaKey(connectionId, table.database)) : null;
   const page = shown?.page ?? null;
   const columns = page?.columns ?? [];
   const firstRow = (shown?.index ?? 0) * PAGE_SIZE + 1;
@@ -157,6 +163,7 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen, dial
           onFormat={() => {}}
           onSave={() => {}}
           onEscape={clearFilter}
+          onAsk={ask ? setAskSel : undefined}
           lang={
             lang && {
               client: lang.client,
@@ -167,6 +174,25 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen, dial
             }
           }
         />
+        {ask && askSel && (
+          <InlineAsk
+            context={{
+              kind: "filter",
+              connection: ask.connection,
+              sql: askSel.sql,
+              tables: [{ schema: table.schema, name: table.name }],
+              label: table.name,
+            }}
+            schema={askSchema}
+            groupId={ask.groupId}
+            onOpenInChat={ask.onOpenInChat}
+            onOpenSettings={ask.onOpenSettings}
+            onClose={() => {
+              setAskSel(null);
+              filterRef.current?.focus();
+            }}
+          />
+        )}
       </div>
 
       {error ? (

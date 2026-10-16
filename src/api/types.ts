@@ -22,6 +22,8 @@ export interface ConnectionConfig {
   groupId: GroupId | null;
   /** Typed queries past this many seconds are cancelled on the server; null means no limit. */
   queryTimeoutSecs: number | null;
+  /** What the AI assistant may see of this Connection. */
+  aiAccess: AiAccess;
 }
 
 export type GroupColor = "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "rose" | "slate";
@@ -123,6 +125,8 @@ export interface ConnectionInput {
   password: PasswordChange;
   groupId: GroupId | null;
   queryTimeoutSecs: number | null;
+  /** What the AI assistant may see of this Connection. */
+  aiAccess: AiAccess;
 }
 
 export interface GroupInput {
@@ -153,7 +157,8 @@ export type CommandError =
   | { kind: "file"; message: string }
   | { kind: "cancelled"; message?: undefined }
   /** The Connection's timeout, in seconds. */
-  | { kind: "timedOut"; message: number };
+  | { kind: "timedOut"; message: number }
+  | { kind: "ai"; message: AiError };
 
 /** A Schema Model on disk: the DBML and, when it exists, its layout sidecar. */
 export interface ModelFiles {
@@ -306,4 +311,67 @@ export interface SavedQueryInput {
   id: string | null;
   name: string;
   sql: string;
+}
+export type AiAccess = "never" | "schema" | "schemaQuery" | "schemaQueryRows";
+
+export type AiProviderKind = "openai" | "anthropic" | "groq" | "deepseek" | "custom";
+
+export interface AiSettings {
+  provider: AiProviderKind | null;
+  preset: string | null;
+  baseUrl: string;
+  model: string;
+  temperature: number | null;
+  maxTokens: number | null;
+  inlineAsk: boolean;
+  errorAsk: boolean;
+}
+
+/** The saved key never comes back: only whether one is saved and its last 4 characters. */
+export interface AiSettingsView {
+  settings: AiSettings;
+  groupOverride: boolean;
+  keySaved: boolean;
+  keyLast4: string | null;
+}
+
+export type KeyChange = { t: "keep" } | { t: "set"; value: string } | { t: "clear" };
+
+export type AiError =
+  | { kind: "notConfigured" }
+  | { kind: "notAvailable"; provider: AiProviderKind }
+  | { kind: "badKey" }
+  | { kind: "rateLimited"; retryAfterSecs: number | null }
+  | { kind: "network"; host: string };
+
+export interface AiRequest {
+  question: string;
+  payload: string;
+}
+
+export interface AiAnswer {
+  text: string;
+}
+
+export type AiRole = "user" | "assistant" | "notice";
+
+export interface AiMessage {
+  role: AiRole;
+  text: string;
+  context: string[];
+  at: number;
+}
+
+export interface AiThread {
+  id: string;
+  /** The drafts place key: "ungrouped" or "group:<id>". */
+  place: string;
+  title: string;
+  messages: AiMessage[];
+  updatedAt: number;
+}
+
+export interface AiTestOk {
+  model: string;
+  millis: number;
 }

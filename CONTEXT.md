@@ -81,6 +81,20 @@ _Avoid_: Snippet, favourite
 The automatic record of statements the user has run.
 _Avoid_: Log, recent queries
 
+### AI assistant
+
+**Ask**:
+A question put to the AI assistant, inline where the user is working or in the chat panel.
+_Avoid_: Prompt, query, chat message
+
+**Sends**:
+The line shown before an Ask, listing exactly what would leave the PC (question, schema, query text, sample rows). "Show exactly" opens the full text.
+_Avoid_: Payload, context, preview
+
+**AI access**:
+The per-Connection setting that decides what an Ask may send: nothing, schema only, schema and query text, or those plus sample rows.
+_Avoid_: AI permission, privacy mode, consent flag
+
 ### Changing databases
 
 **Pending Edit**:

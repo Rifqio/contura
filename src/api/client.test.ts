@@ -74,3 +74,12 @@ test("error_text_for_query_sessions", () => {
     "This tab lost its session. Run the query again.",
   );
 });
+
+test("error_text_for_ai_errors", () => {
+  expect(errorText({ kind: "ai", message: { kind: "notConfigured" } })).toBe("No AI provider is set up. Connect one in Settings.");
+  expect(errorText({ kind: "ai", message: { kind: "notAvailable", provider: "groq" } })).toBe(
+    "Answers from Groq arrive in a later DB View version. Nothing was sent.",
+  );
+  expect(errorText({ kind: "ai", message: { kind: "rateLimited", retryAfterSecs: 7 } })).toContain("7 s");
+  expect(errorText({ kind: "ai", message: { kind: "network", host: "api.groq.com" } })).toContain("api.groq.com");
+});

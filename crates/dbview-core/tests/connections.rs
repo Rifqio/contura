@@ -30,6 +30,7 @@ fn input(name: &str, password: PasswordChange) -> ConnectionInput {
         group_id: None,
         file: None,
         query_timeout_secs: None,
+        ai_access: Default::default(),
     }
 }
 
@@ -343,6 +344,7 @@ async fn sqlite_save_drops_server_fields() {
             ssl: SslMode::Require,
             file: Some("C:/data/shop.sqlite".into()),
             query_timeout_secs: None,
+            ai_access: Default::default(),
             ..input("lite", PasswordChange::Keep)
         })
         .await
@@ -394,6 +396,7 @@ async fn postgres_save_keeps_server_fields() {
             database: Some("shop".into()),
             file: Some("C:/ignored.sqlite".into()),
             query_timeout_secs: None,
+            ai_access: Default::default(),
             ..input("pg", PasswordChange::Keep)
         })
         .await
@@ -412,9 +415,23 @@ async fn sqlite_save_never_stores_a_password() {
             dialect: DialectKind::Sqlite,
             file: Some("C:/data/shop.sqlite".into()),
             query_timeout_secs: None,
+            ai_access: Default::default(),
             ..input("lite", PasswordChange::Set { value: "x".into() })
         })
         .await
         .unwrap();
     assert_eq!(secrets.get(saved.id).unwrap(), None);
+}
+
+#[tokio::test]
+async fn ai_access_is_saved_with_the_connection() {
+    let (_dir, _secrets, svc) = service();
+    let mut i = input("one", PasswordChange::Clear);
+    i.ai_access = dbview_core::ai::AiAccess::Never;
+    let saved = svc.save(i).await.unwrap();
+    assert_eq!(saved.ai_access, dbview_core::ai::AiAccess::Never);
+    assert_eq!(
+        svc.list().unwrap()[0].ai_access,
+        dbview_core::ai::AiAccess::Never
+    );
 }

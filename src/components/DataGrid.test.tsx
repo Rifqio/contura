@@ -248,3 +248,33 @@ test("a row rendered after scrolling opens its own full value", async () => {
     request: { table, column: "note", key: [{ column: "id", value: { t: "number", value: "1000" } }] },
   });
 });
+
+test("ctrl_i_in_the_filter_asks_about_the_filter_text", async () => {
+  routeInvoke({
+    fetch_page: () => page(false),
+    ai_settings: () => ({
+      settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
+      groupOverride: false,
+      keySaved: false,
+      keyLast4: null,
+    }),
+  });
+  const ask = {
+    groupId: null,
+    inlineAsk: true,
+    errorAsk: true,
+    onOpenSettings: () => {},
+    connection: { id: "c1", name: "Shop", dialect: "mysql" as const, database: "shop", access: "schemaQuery" as const },
+  };
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" ask={ask} />);
+  await screen.findByText("first");
+  const v = filterView();
+  act(() => v.dispatch({ changes: { from: 0, insert: "status = 'refunded'" }, selection: { anchor: 3 } }));
+  fireEvent.keyDown(v.contentDOM, { key: "i", ctrlKey: true });
+  expect(screen.getByRole("button", { name: "Write a WHERE for this filter" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show exactly" }));
+  expect(document.querySelector("pre.payload")!.textContent).toContain("Filter (orders): status = 'refunded'");
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Question" }), { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Ask AI" })).toBeNull();
+  expect(document.activeElement).toBe(v.contentDOM);
+});

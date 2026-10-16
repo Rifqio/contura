@@ -24,6 +24,7 @@ function conn(id: string, name: string, groupId: string | null): ConnectionConfi
     ssl: { mode: "disable" },
     file: null,
     queryTimeoutSecs: null,
+    aiAccess: "schema",
     groupId,
   };
 }

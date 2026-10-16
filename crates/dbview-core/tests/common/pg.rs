@@ -36,6 +36,7 @@ pub fn pg_base_config(user: &str, database: Option<String>) -> ConnectionConfig 
         group_id: None,
         file: None,
         query_timeout_secs: None,
+        ai_access: Default::default(),
     }
 }
 

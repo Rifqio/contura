@@ -33,6 +33,7 @@ const conn: ConnectionConfig = {
   file: null,
   groupId: null,
   queryTimeoutSecs: null,
+  aiAccess: "schema",
 };
 
 const doc = (text: string, over: Partial<QueryTabDoc> = {}): QueryTabDoc => ({

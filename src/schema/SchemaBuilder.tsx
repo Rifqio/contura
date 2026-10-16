@@ -1,7 +1,8 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { errorText, exportSql, writeBinaryFile, writeModelFiles, writeTextFile } from "../api/client";
 import type { DialectKind, SchemaModel } from "../api/types";
+import type { AskKit } from "../assistant/context";
 import Dialog from "../components/Dialog";
 import type { LangClient } from "../lang/client";
 import type { ParseResult, TextEdit } from "../lang/protocol";
@@ -38,9 +39,11 @@ interface Props {
   onClose: () => void;
   /** The language engine; the editor makes one when absent. */
   client?: LangClient;
+  /** Ask AI on a table card; the Builder has no assistant panel, so there is no Open in chat. */
+  ask?: AskKit;
 }
 
-export default function SchemaBuilder({ doc, onClose, client }: Props) {
+export default function SchemaBuilder({ doc, onClose, client, ask }: Props) {
   const [text, setText] = useState(doc.dbml);
   const [saved, setSaved] = useState(doc.savedDbml);
   const [path, setPath] = useState(doc.path);
@@ -62,6 +65,11 @@ export default function SchemaBuilder({ doc, onClose, client }: Props) {
   const blocked = !!result && result.r.model === null;
   const firstError = result?.r.diagnostics.find((d) => d.severity === "error");
   const dirty = text !== saved || layoutDirty;
+
+  const askForCards = useMemo(
+    () => (ask?.inlineAsk ? { getDbml: () => textRef.current, label: `${name}.dbml`, kit: { ...ask, onOpenInChat: undefined } } : undefined),
+    [ask, name],
+  );
 
   const onEdit = useCallback(
     (make: MakeEdits) => {
@@ -208,6 +216,7 @@ export default function SchemaBuilder({ doc, onClose, client }: Props) {
             <p className="state-panel muted">Fix the DBML to see the diagram: {firstError?.message ?? "it has an error"}.</p>
           ) : (
             <Canvas
+              ask={askForCards}
               model={model}
               layout={layout}
               blocked={blocked}

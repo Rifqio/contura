@@ -1,6 +1,8 @@
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import { useState } from "react";
 import type { DialectKind, SmColumn, SmTable } from "../api/types";
+import InlineAsk from "../assistant/InlineAsk";
+import type { AskKit } from "../assistant/context";
 import { DIALECT_TYPES } from "../lang/dialectTypes";
 import {
   addColumn,
@@ -22,6 +24,8 @@ export type TableCardData = {
   fkColumns: string[];
   blocked: boolean;
   onEdit: (make: MakeEdits) => void;
+  /** Ask AI about this card: the model's DBML and name; absent, the menu has no Ask AI. */
+  ask?: { getDbml(): string; label: string; kit: AskKit; tables: { schema: string | null; name: string }[] };
 };
 
 const SETTINGS: { setting: ColumnSetting; label: string; on: (c: SmColumn) => boolean }[] = [
@@ -85,7 +89,7 @@ function Editable({
 }
 
 export default function TableCard({ data }: NodeProps & { data: TableCardData }) {
-  const { table, tableKey: key, blocked, onEdit, fkColumns, dialect } = data;
+  const { table, tableKey: key, blocked, onEdit, fkColumns, dialect, ask: askData } = data;
   const [menu, setMenu] = useState(false);
   const [ask, setAsk] = useState(false);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
@@ -102,17 +106,19 @@ export default function TableCard({ data }: NodeProps & { data: TableCardData })
           onCommit={(v) => onEdit((t, r) => renameTable(t, r, key, v))}
         />
         {table.alias && <span className="table-card-alias">as {table.alias}</span>}
-        <button
-          type="button"
-          className="icon-button nodrag"
-          aria-label="Table actions"
-          aria-haspopup="menu"
-          aria-expanded={menu}
-          onClick={() => setMenu((m) => !m)}
-        >
-          ⋯
-        </button>
-        {menu && (
+        {askData && (
+          <button
+            type="button"
+            className="icon-button nodrag"
+            aria-label="Table actions"
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            onClick={() => setMenu((m) => !m)}
+          >
+            ⋯
+          </button>
+        )}
+        {menu && askData && (
           <div className="menu card-menu nodrag" role="menu" onKeyDown={(e) => e.key === "Escape" && setMenu(false)}>
             <button
               type="button"
@@ -127,15 +133,22 @@ export default function TableCard({ data }: NodeProps & { data: TableCardData })
             </button>
           </div>
         )}
-        {ask && (
-          <div className="card-popover nodrag" role="dialog" aria-label="Ask AI" onKeyDown={(e) => e.key === "Escape" && setAsk(false)}>
-            <p>Connect an AI provider in Settings.</p>
-            <button type="button" className="button button-small" disabled title="AI providers arrive in a later step">
-              Settings
-            </button>
-            <button type="button" className="button button-small" onClick={() => setAsk(false)}>
-              Close
-            </button>
+        {ask && askData && (
+          <div className="card-ask nodrag nowheel">
+            <InlineAsk
+              context={{
+                kind: "card",
+                connection: null,
+                dbml: askData.getDbml(),
+                tables: askData.tables,
+                label: askData.label,
+              }}
+              schema={null}
+              groupId={askData.kit.groupId}
+              onOpenInChat={askData.kit.onOpenInChat}
+              onOpenSettings={askData.kit.onOpenSettings}
+              onClose={() => setAsk(false)}
+            />
           </div>
         )}
       </div>

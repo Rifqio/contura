@@ -21,6 +21,7 @@ const kfc: ConnectionConfig = {
   groupId: null,
   file: null,
   queryTimeoutSecs: null,
+  aiAccess: "schema",
 };
 
 function setup(openIds: string[] = []) {

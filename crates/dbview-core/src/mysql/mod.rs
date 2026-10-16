@@ -175,6 +175,7 @@ mod tests {
             group_id: None,
             file: None,
             query_timeout_secs: None,
+            ai_access: Default::default(),
         }
     }
 
@@ -206,6 +207,7 @@ mod tests {
             group_id: None,
             file: None,
             query_timeout_secs: None,
+            ai_access: Default::default(),
         };
         let pw = env("DBVIEW_TEST_MYSQL_PASSWORD", "dbview_test");
         let pool = Pool::new(build_opts(&config, Some(&pw)));

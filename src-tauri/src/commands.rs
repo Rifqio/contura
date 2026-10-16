@@ -1,4 +1,8 @@
 use dbview_core::Error;
+use dbview_core::ai::{
+    AiAccess, AiAnswer, AiRequest, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread,
+    KeyChange, ThreadId,
+};
 use dbview_core::connections::{ConnectionInput, ConnectionService, GroupInput};
 use dbview_core::model::{
     ConnectionConfig, ConnectionId, DbObject, FullValue, FullValueRequest, Group, GroupId,
@@ -16,6 +20,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 type Service<'a> = State<'a, ConnectionService>;
+type Ai<'a> = State<'a, AiService>;
 
 #[tauri::command]
 pub fn list_connections(service: Service<'_>) -> Result<Vec<ConnectionConfig>, Error> {
@@ -28,6 +33,15 @@ pub async fn save_connection(
     input: ConnectionInput,
 ) -> Result<ConnectionConfig, Error> {
     service.save(input).await
+}
+
+#[tauri::command]
+pub async fn set_connection_ai_access(
+    service: Service<'_>,
+    id: ConnectionId,
+    access: AiAccess,
+) -> Result<ConnectionConfig, Error> {
+    service.set_ai_access(id, access).await
 }
 
 #[tauri::command]
@@ -331,4 +345,54 @@ pub fn load_query_tabs(service: Service<'_>, place: String) -> Result<Option<Str
 #[tauri::command]
 pub fn save_query_tabs(service: Service<'_>, place: String, json: String) -> Result<(), Error> {
     service.save_query_tabs(place, json)
+}
+
+#[tauri::command]
+pub fn ai_settings(ai: Ai<'_>, group_id: Option<GroupId>) -> Result<AiSettingsView, Error> {
+    ai.settings(group_id)
+}
+
+#[tauri::command]
+pub fn save_ai_settings(
+    ai: Ai<'_>,
+    group_id: Option<GroupId>,
+    settings: AiSettings,
+    override_group: bool,
+    key: KeyChange,
+) -> Result<(), Error> {
+    ai.save_settings(group_id, settings, override_group, key)
+}
+
+#[tauri::command]
+pub fn ai_test(ai: Ai<'_>, group_id: Option<GroupId>) -> Result<AiTestOk, Error> {
+    ai.test(group_id)
+}
+
+#[tauri::command]
+pub fn list_ai_threads(ai: Ai<'_>, place: String) -> Result<Vec<AiThread>, Error> {
+    ai.list_threads(&place)
+}
+
+#[tauri::command]
+pub fn save_ai_thread(ai: Ai<'_>, thread: AiThread) -> Result<(), Error> {
+    ai.save_thread(&thread)
+}
+
+#[tauri::command]
+pub fn delete_ai_thread(ai: Ai<'_>, id: ThreadId) -> Result<(), Error> {
+    ai.delete_thread(id)
+}
+
+#[tauri::command]
+pub fn clear_ai_threads(ai: Ai<'_>, place: String) -> Result<(), Error> {
+    ai.clear_threads(&place)
+}
+
+#[tauri::command]
+pub fn ai_ask(
+    ai: Ai<'_>,
+    group_id: Option<GroupId>,
+    request: AiRequest,
+) -> Result<AiAnswer, Error> {
+    ai.ask(group_id, &request)
 }

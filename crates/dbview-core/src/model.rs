@@ -1,3 +1,4 @@
+use crate::ai::AiAccess;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -49,6 +50,9 @@ pub struct ConnectionConfig {
     /// Typed queries past this are cancelled on the server. `None` means no limit.
     #[serde(default)]
     pub query_timeout_secs: Option<u32>,
+    /// What the AI assistant may see of this Connection.
+    #[serde(default)]
+    pub ai_access: AiAccess,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

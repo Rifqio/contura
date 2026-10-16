@@ -4,6 +4,7 @@ mod paths;
 
 use std::sync::Arc;
 
+use dbview_core::ai::AiService;
 use dbview_core::connections::ConnectionService;
 use dbview_core::secrets::KeyringSecretStore;
 use dbview_core::store::AppStore;
@@ -36,6 +37,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_connections,
             commands::save_connection,
+            commands::set_connection_ai_access,
             commands::delete_connection,
             commands::test_connection,
             commands::suggested_connections,
@@ -75,6 +77,14 @@ pub fn run() {
             commands::delete_saved_query,
             commands::load_query_tabs,
             commands::save_query_tabs,
+            commands::ai_settings,
+            commands::save_ai_settings,
+            commands::ai_test,
+            commands::ai_ask,
+            commands::list_ai_threads,
+            commands::save_ai_thread,
+            commands::delete_ai_thread,
+            commands::clear_ai_threads,
         ])
         .build(tauri::generate_context!());
     let app = match result {
@@ -103,6 +113,8 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = paths::data_dir()?;
     let store = AppStore::open(&data_dir.join("app.sqlite"))?;
     let secrets = Arc::new(KeyringSecretStore::new()?);
+    let ai_store = AppStore::open(&data_dir.join("app.sqlite"))?;
+    app.manage(AiService::new(ai_store, secrets.clone()));
     app.manage(ConnectionService::new(store, secrets));
     app.manage(commands::DataDir(data_dir.clone()));
     WebviewWindowBuilder::new(app, "main", WebviewUrl::default())

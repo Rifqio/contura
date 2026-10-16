@@ -61,6 +61,7 @@ const pg = {
   file: null,
   groupId: "g1",
   queryTimeoutSecs: null,
+  aiAccess: "schema",
 };
 
 function workspaceRoutes(over: Record<string, (a: Record<string, unknown>) => unknown> = {}) {
@@ -139,4 +140,35 @@ test("switching from a Group to Ungrouped forgets the last Group", async () => {
   await userEvent.click(screen.getByRole("menuitem", { name: "Ungrouped" }));
   expect(await screen.findByRole("button", { name: "Switch Group, current Ungrouped" })).toBeTruthy();
   expect(callsTo("set_last_group")).toEqual([{ id: null }]);
+});
+
+test("the rail's gear opens Settings with the AI section, and Connections leads back", async () => {
+  routeInvoke({
+    list_groups: () => [{ id: "g1", name: "KFC", color: "red" }],
+    list_connections: () => [],
+    last_group: () => "g1",
+    suggested_connections: () => [],
+    ai_settings: () => ({
+      settings: {
+        provider: null,
+        preset: null,
+        baseUrl: "",
+        model: "",
+        temperature: null,
+        maxTokens: null,
+        inlineAsk: true,
+        errorAsk: true,
+      },
+      groupOverride: false,
+      keySaved: false,
+      keyLast4: null,
+    }),
+  });
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+  expect(await screen.findByLabelText("Use different settings for KFC")).toBeTruthy();
+  expect(screen.getByText("AI assistant", { selector: "span" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Connections" }));
+  expect(screen.queryByLabelText("Use different settings for KFC")).toBeNull();
+  expect(screen.getByText("No Connections in KFC yet.")).toBeTruthy();
 });

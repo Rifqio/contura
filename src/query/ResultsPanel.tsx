@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import InlineAsk from "../assistant/InlineAsk";
+import { type AskContext, type AskSetup, tablesIn } from "../assistant/context";
 import Icon from "../components/Icon";
 import ResultGrid from "../components/ResultGrid";
 import type { ResultItem, RunnerState } from "./runner";
@@ -22,6 +24,8 @@ interface Props {
   onCancel(): void;
   onRunAgain(id: number): void;
   onGoTo(from: number, to: number): void;
+  /** Ask AI on a failed query; without it, or with `errorAsk` off, the button is absent. */
+  ask?: AskSetup;
 }
 
 function tabLabel(item: ResultItem): string {
@@ -63,6 +67,7 @@ export default function ResultsPanel({
   onCancel,
   onRunAgain,
   onGoTo,
+  ask,
 }: Props) {
   const [askOpen, setAskOpen] = useState(false);
   const item = state.items[state.active];
@@ -160,10 +165,12 @@ export default function ResultsPanel({
               <button type="button" className="button" onClick={() => onGoTo(st.at, st.at)}>
                 Go to line {line}
               </button>
-              <button type="button" className="button" aria-expanded={askOpen} onClick={() => setAskOpen((o) => !o)}>
-                <Icon name="sparkle" />
-                Ask AI
-              </button>
+              {ask?.errorAsk && (
+                <button type="button" className="button" aria-expanded={askOpen} onClick={() => setAskOpen((o) => !o)}>
+                  <Icon name="sparkle" />
+                  Ask AI
+                </button>
+              )}
               <button
                 type="button"
                 className="button button-ghost"
@@ -172,15 +179,26 @@ export default function ResultsPanel({
                 Copy error
               </button>
             </div>
-            {askOpen && (
-              <div className="card-popover result-ask" role="dialog" aria-label="Ask AI">
-                <p>Connect an AI provider in Settings.</p>
-                <button type="button" className="button button-small" disabled title="AI providers arrive in a later step">
-                  Settings
-                </button>
-                <button type="button" className="button button-small" onClick={() => setAskOpen(false)}>
-                  Close
-                </button>
+            {ask?.errorAsk && askOpen && (
+              <div className="ask-anchor">
+                <InlineAsk
+                  context={
+                    {
+                      kind: "error",
+                      connection: ask.connection,
+                      sql: item.sql,
+                      lines: [lineAt(item.from), lineAt(item.to)],
+                      error: st.message,
+                      tables: tablesIn(item.sql, ask.schema),
+                      label: "Failed query",
+                    } satisfies AskContext
+                  }
+                  schema={ask.schema}
+                  groupId={ask.groupId}
+                  onOpenInChat={ask.onOpenInChat}
+                  onOpenSettings={ask.onOpenSettings}
+                  onClose={() => setAskOpen(false)}
+                />
               </div>
             )}
           </div>

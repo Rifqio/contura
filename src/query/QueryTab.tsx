@@ -12,6 +12,8 @@ import {
   saveSavedQuery,
 } from "../api/client";
 import type { ConnectionConfig, ConnectionId, QuerySessionId, SavedQuery } from "../api/types";
+import InlineAsk from "../assistant/InlineAsk";
+import { type AskKit, type AskSetup, tablesIn } from "../assistant/context";
 import Icon from "../components/Icon";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
@@ -20,7 +22,7 @@ import { writeWithoutWhere } from "./noWhere";
 import ResultsPanel from "./ResultsPanel";
 import { EMPTY_RUNNER, runnerReducer } from "./runner";
 import SaveQueryDialog from "./SaveQueryDialog";
-import SqlEditor, { type SqlEditorApi } from "./SqlEditor";
+import SqlEditor, { type AskSelection, type SqlEditorApi } from "./SqlEditor";
 import { type Stmt, splitStatements } from "./statements";
 
 /** A query tab as the app keeps it, and as its draft is saved. */
@@ -43,6 +45,9 @@ interface Props {
   onSaved(q: SavedQuery): void;
   historyOpen: boolean;
   onToggleHistory(): void;
+  /** The assistant panel is showing, and the button that toggles it. */
+  assistantOpen?: boolean;
+  onToggleAssistant?(): void;
   editorRef: MutableRefObject<SqlEditorApi | null>;
   /** A statement finished, so Query History has a new entry. */
   onRan?(): void;
@@ -50,6 +55,8 @@ interface Props {
   lang?: { client: LangClient; schemas: SchemaCache };
   /** Go to definition on a table: show it in the Database Tree. */
   onShowInTree?(target: { connectionId: ConnectionId; database: string; schema: string | null; name: string }): void;
+  /** Inline Ask on a selection, with Ctrl+I, and on a failed query; absent, neither shows. */
+  ask?: AskKit;
 }
 
 /** Statements that change what the schema holds, after any leading comments. */
@@ -92,10 +99,13 @@ export default function QueryTab({
   onSaved,
   historyOpen,
   onToggleHistory,
+  assistantOpen = false,
+  onToggleAssistant,
   editorRef,
   onRan,
   lang,
   onShowInTree,
+  ask,
 }: Props) {
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
   const isOpen = !!connection && openIds.has(connection.id);
@@ -107,9 +117,9 @@ export default function QueryTab({
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [askOpen, setAskOpen] = useState(false);
   const [position, setPosition] = useState({ line: 1, column: 1 });
   const [share, setShare] = useState(loadShare);
+  const [askSel, setAskSel] = useState<AskSelection | null>(null);
   const confirmed = useRef<Stmt | null>(null);
   const fetching = useRef(false);
   const latest = useRef(tab);
@@ -244,10 +254,6 @@ export default function QueryTab({
       dispatch({ type: "declined" });
       return true;
     }
-    if (askOpen) {
-      setAskOpen(false);
-      return true;
-    }
     if (running) {
       cancel();
       return true;
@@ -302,6 +308,12 @@ export default function QueryTab({
     window.addEventListener("pointerup", up);
     e.preventDefault();
   }
+
+  const askSchema = lang && connection && schemaDb ? lang.client.sqlSchemaFor(schemaKey(connection.id, schemaDb)) : null;
+  const askConnection = connection
+    ? { id: connection.id, name: connection.name, dialect: connection.dialect, database: schemaDb, access: connection.aiAccess }
+    : null;
+  const askSetup: AskSetup | undefined = ask && { ...ask, connection: askConnection, schema: askSchema };
 
   const active = state.items[state.active];
   const errorMark = active?.state.s === "error" ? wordAt(tab.text, active.state.at) : null;
@@ -391,29 +403,16 @@ export default function QueryTab({
         >
           <Icon name="history" />
         </button>
-        <span className="menu-anchor">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Ask AI"
-            aria-expanded={askOpen}
-            title="Ask AI (Ctrl+I)"
-            onClick={() => setAskOpen((o) => !o)}
-          >
-            <Icon name="sparkle" />
-          </button>
-          {askOpen && (
-            <div className="card-popover query-ask" role="dialog" aria-label="Ask AI">
-              <p>Connect an AI provider in Settings.</p>
-              <button type="button" className="button button-small" disabled title="AI providers arrive in a later step">
-                Settings
-              </button>
-              <button type="button" className="button button-small" onClick={() => setAskOpen(false)}>
-                Close
-              </button>
-            </div>
-          )}
-        </span>
+        <button
+          type="button"
+          className={assistantOpen ? "icon-button icon-button-on" : "icon-button"}
+          aria-label="Ask AI"
+          aria-pressed={assistantOpen}
+          title="Ask AI (Ctrl+Alt+I)"
+          onClick={onToggleAssistant}
+        >
+          <Icon name="sparkle" />
+        </button>
       </div>
 
       <div className="query-work" ref={work} style={{ gridTemplateRows: `${share}fr 6px ${1 - share}fr` }}>
@@ -431,6 +430,8 @@ export default function QueryTab({
             markRunning={running ? { from: running.from, to: running.to } : null}
             markError={errorMark}
             lang={editorLang || undefined}
+            onAsk={ask ? setAskSel : undefined}
+            askButton={ask?.inlineAsk}
             onShowInTree={(t) => {
               if (connection && schemaDb)
                 onShowInTree?.({
@@ -442,6 +443,26 @@ export default function QueryTab({
                 });
             }}
           />
+          {ask && askSel && (
+            <InlineAsk
+              context={{
+                kind: "sql",
+                connection: askConnection,
+                sql: askSel.sql,
+                lines: askSel.lines,
+                tables: tablesIn(askSel.sql, askSchema),
+                label: tab.name,
+              }}
+              schema={askSchema}
+              groupId={ask.groupId}
+              onOpenInChat={ask.onOpenInChat}
+              onOpenSettings={ask.onOpenSettings}
+              onClose={() => {
+                setAskSel(null);
+                editorRef.current?.focus();
+              }}
+            />
+          )}
           {state.confirm && (
             <div className="query-confirm" role="alertdialog" aria-label={`Confirm ${state.confirm.verb} without WHERE`}>
               <Icon name="warning" />
@@ -536,6 +557,7 @@ export default function QueryTab({
               if (item) run([{ from: item.from, to: item.to, text: item.sql }]);
             }}
             onGoTo={(from, to) => editorRef.current?.select(from, to)}
+            ask={askSetup}
           />
         )}
       </div>

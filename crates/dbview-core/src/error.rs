@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::ai::AiError;
+
 #[derive(thiserror::Error, Debug, Serialize)]
 #[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum Error {
@@ -29,6 +31,8 @@ pub enum Error {
     /// The Connection's timeout, in seconds.
     #[error("stopped after {0} s")]
     TimedOut(u32),
+    #[error("{0}")]
+    Ai(AiError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -42,6 +46,36 @@ mod tests {
         assert_eq!(
             Error::ValueTooLarge(17_825_792).to_string(),
             "value is 17825792 bytes, over the 16 MiB limit"
+        );
+    }
+
+    #[test]
+    fn ai_error_shape() {
+        use crate::ai::AiProviderKind;
+        let json = |e: Error| serde_json::to_value(e).unwrap();
+        assert_eq!(
+            json(Error::Ai(AiError::NotConfigured)),
+            serde_json::json!({"kind":"ai","message":{"kind":"notConfigured"}})
+        );
+        assert_eq!(
+            json(Error::Ai(AiError::NotAvailable {
+                provider: AiProviderKind::Groq
+            })),
+            serde_json::json!({"kind":"ai","message":{"kind":"notAvailable","provider":"groq"}})
+        );
+        assert_eq!(
+            json(Error::Ai(AiError::RateLimited {
+                retry_after_secs: Some(7)
+            })),
+            serde_json::json!({"kind":"ai","message":{"kind":"rateLimited","retryAfterSecs":7}})
+        );
+        assert_eq!(
+            json(Error::Ai(AiError::Network { host: "h".into() })),
+            serde_json::json!({"kind":"ai","message":{"kind":"network","host":"h"}})
+        );
+        assert_eq!(
+            json(Error::Ai(AiError::BadKey)),
+            serde_json::json!({"kind":"ai","message":{"kind":"badKey"}})
         );
     }
 

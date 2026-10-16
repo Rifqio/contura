@@ -31,6 +31,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 - Several Connections can be open at once.
 - A SQLite Connection opens an existing file or creates a new empty one. DB View never overwrites an existing file.
 - A Connection can be marked **Production**, which adds an extra confirmation to every write, including typed SQL. It can be marked **Read-only**, which blocks every write.
+- Each Connection has an **AI access** level (`aiAccess`): "Never send anything", "Schema only" (the default), "Schema and query text", or "Schema, query text and sample rows". It decides what the AI assistant may send (see AI assistant).
 - **Suggested Connections from Laragon:**
   - On each start, DB View looks for Laragon in the Windows installed-programs list, then reads `<install>\usr\laragon.ini`.
   - Each database section (`[mysql]`, `[postgresql]`) yields a Suggested Connection on `127.0.0.1`, using the section's `Port` or the Dialect default (3306 / 5432), with user `root` (MySQL) or `postgres` (Postgres).
@@ -135,6 +136,28 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
   - while the DBML has an error, an export uses the last valid version and says so first
   - "Apply to Connection" is shown disabled with "Arrives with Schema Compare" until build step 10
   - apply to a Connection, which compares the model with the database and produces a Sync Script the user reviews and confirms before it runs
+
+## AI assistant
+
+The assistant UI is built; real providers come in a later step (ADR 0010).
+
+- **Placement**
+  - Inline Ask: a small "Ask" button at the end of a non-empty SQL selection, and Ctrl+I, offering actions that fit (Explain, Fix this error, Optimize, Suggest indexes). It also appears on a failed query ("Ask AI" in the error), the grid filter box (Write a WHERE for this filter) and a Schema Builder table card.
+  - Chat panel: docked on the right, toggled with Ctrl+Alt+I, with its context as removable chips (the open table, the selected SQL, the Schema Model). Esc closes the inline Ask.
+  - "Open in chat" carries an inline question and its context into the panel.
+- **Safety and privacy**
+  - AI-written SQL is never run automatically. Running it follows the normal rules (Production confirmation, Read-only, UPDATE or DELETE without WHERE).
+  - Before anything could be sent, the prompt shows a "Sends" line, and "Show exactly" opens the full text. The text is capped at 200 KB.
+  - Per Connection, **AI access** is one of four levels: "Never send anything", "Schema only", "Schema and query text", "Schema, query text and sample rows". With "Never send anything" only the question goes, and the panel says what it cannot see. When rows are allowed, each question has a switch to leave them out.
+  - Production Connections will default to "Never send anything" (step 5).
+- **Providers**
+  - One provider for everything, optionally overridden per Group. Settings has a provider picker (OpenAI-compatible, Anthropic Claude, Groq, DeepSeek, Custom), presets for the base URL and model, optional temperature and max tokens, and a Test button.
+  - The API key is stored in Windows Credential Manager (`AI/<provider id>`), never in `data\`. After saving, the form shows only its last 4 characters.
+  - Provider calls are made from the Core, not the WebView.
+- **Placeholder phase**
+  - No network calls. With no provider saved, asking shows "Connect an AI provider in Settings" with a button that opens Settings. With one saved, it says answers arrive in a later DB View version and that nothing was sent.
+- **Chat history**
+  - Threads are kept in `data\` per Group (and for Ungrouped), with a Clear action.
 
 ## Changing databases
 

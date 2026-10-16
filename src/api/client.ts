@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
+import { PROVIDERS } from "../settings/ai/providers";
 import type {
+  AiAccess,
+  AiAnswer,
+  AiError,
+  AiRequest,
+  AiSettings,
+  AiSettingsView,
+  AiThread,
+  AiTestOk,
   CommandError,
   ConnectionConfig,
   ConnectionId,
@@ -11,6 +20,7 @@ import type {
   Group,
   GroupId,
   GroupInput,
+  KeyChange,
   ObjectKind,
   ObjectPath,
   Page,
@@ -66,6 +76,10 @@ export const listConnections = (): Promise<ConnectionConfig[]> => invoke("list_c
 
 export const saveConnection = (input: ConnectionInput): Promise<ConnectionConfig> =>
   invoke("save_connection", { input });
+
+/** Changes only what AI can see in a Connection. Unlike saving, it keeps the Connection's sessions open. */
+export const setConnectionAiAccess = (id: ConnectionId, access: AiAccess): Promise<ConnectionConfig> =>
+  invoke("set_connection_ai_access", { id, access });
 
 export const deleteConnection = (id: ConnectionId): Promise<void> => invoke("delete_connection", { id });
 
@@ -166,6 +180,28 @@ export const loadQueryTabs = (place: string): Promise<string | null> => invoke("
 
 export const saveQueryTabs = (place: string, json: string): Promise<void> => invoke("save_query_tabs", { place, json });
 
+export const aiSettings = (groupId: GroupId | null): Promise<AiSettingsView> => invoke("ai_settings", { groupId });
+
+export const saveAiSettings = (
+  groupId: GroupId | null,
+  settings: AiSettings,
+  overrideGroup: boolean,
+  key: KeyChange,
+): Promise<void> => invoke("save_ai_settings", { groupId, settings, overrideGroup, key });
+
+export const aiTest = (groupId: GroupId | null): Promise<AiTestOk> => invoke("ai_test", { groupId });
+
+export const aiAsk = (groupId: GroupId | null, request: AiRequest): Promise<AiAnswer> =>
+  invoke("ai_ask", { groupId, request });
+
+export const listAiThreads = (place: string): Promise<AiThread[]> => invoke("list_ai_threads", { place });
+
+export const saveAiThread = (thread: AiThread): Promise<void> => invoke("save_ai_thread", { thread });
+
+export const deleteAiThread = (id: string): Promise<void> => invoke("delete_ai_thread", { id });
+
+export const clearAiThreads = (place: string): Promise<void> => invoke("clear_ai_threads", { place });
+
 export function isCommandError(e: unknown): e is CommandError {
   return typeof e === "object" && e !== null && typeof (e as { kind?: unknown }).kind === "string";
 }
@@ -190,6 +226,23 @@ function sqliteConnectText(message: string): string {
   if (message.includes("not a SQLite database")) return sentence(message);
   if (message.includes("does not exist")) return `${sentence(message)} Check the path, or choose the file again.`;
   return `${sentence(message)} Check that DB View can read the file.`;
+}
+
+function aiErrorText(e: AiError): string {
+  switch (e.kind) {
+    case "notConfigured":
+      return "No AI provider is set up. Connect one in Settings.";
+    case "notAvailable":
+      return `Answers from ${PROVIDERS[e.provider].name} arrive in a later DB View version. Nothing was sent.`;
+    case "badKey":
+      return "The provider did not accept the key. Check it in Settings.";
+    case "rateLimited":
+      return e.retryAfterSecs === null
+        ? "The provider is limiting requests. Try again in a moment."
+        : `The provider is limiting requests. Try again in ${e.retryAfterSecs} s.`;
+    case "network":
+      return `Could not reach ${e.host}. Check your connection and the base URL.`;
+  }
 }
 
 /**
@@ -229,6 +282,8 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return "The query was cancelled.";
     case "timedOut":
       return `Stopped after ${e.message} s, the Connection's timeout.`;
+    case "ai":
+      return aiErrorText(e.message);
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

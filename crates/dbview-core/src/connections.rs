@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::ai::AiAccess;
 use crate::dialect::{Dialect, connect};
 use crate::error::{Error, Result};
 use crate::model::{
@@ -49,6 +50,8 @@ pub struct ConnectionInput {
     pub file: Option<PathBuf>,
     #[serde(default)]
     pub query_timeout_secs: Option<u32>,
+    #[serde(default)]
+    pub ai_access: AiAccess,
 }
 
 #[derive(Deserialize)]
@@ -194,6 +197,7 @@ impl ConnectionService {
                 group_id: input.group_id,
                 file: input.file.clone(),
                 query_timeout_secs: input.query_timeout_secs.filter(|s| *s > 0),
+                ai_access: input.ai_access,
             };
         }
         ConnectionConfig {
@@ -208,6 +212,7 @@ impl ConnectionService {
             group_id: input.group_id,
             file: None,
             query_timeout_secs: input.query_timeout_secs.filter(|s| *s > 0),
+            ai_access: input.ai_access,
         }
     }
 
@@ -247,6 +252,24 @@ impl ConnectionService {
             PasswordChange::Clear => self.secrets.delete(id)?,
         }
         self.close_session(id).await?;
+        Ok(config)
+    }
+
+    /// Rewrites only the Connection's AI access. Sessions, open transactions and the
+    /// password are left alone, since the setting never reaches the database.
+    pub async fn set_ai_access(
+        &self,
+        id: ConnectionId,
+        access: AiAccess,
+    ) -> Result<ConnectionConfig> {
+        let store = self.store()?;
+        let mut config = store
+            .list_connections()?
+            .into_iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| Error::NotFound("connection not found".into()))?;
+        config.ai_access = access;
+        store.save_connection(&config)?;
         Ok(config)
     }
 

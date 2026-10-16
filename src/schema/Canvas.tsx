@@ -14,6 +14,7 @@ import type { SchemaModel, SmEndpoint } from "../api/types";
 import { addRef, addTable, fkTargetWarning } from "../lang/dbml/edits";
 import { tableKey } from "../lang/protocol";
 import { CARD_WIDTH, cardHeight, type Layout } from "./layout";
+import type { AskKit } from "../assistant/context";
 import TableCard, { type MakeEdits, type TableCardData } from "./TableCard";
 
 interface Props {
@@ -25,6 +26,8 @@ interface Props {
   onLayout: (l: Layout) => void;
   onEdit: (make: MakeEdits) => void;
   onGoToError: () => void;
+  /** The DBML text and name the table cards ask about; absent, the cards have no Ask AI. */
+  ask?: { getDbml(): string; label: string; kit: AskKit };
 }
 
 const nodeTypes = { table: TableCard };
@@ -51,7 +54,7 @@ export function refFromConnection(
 /** The schema a table without one parses to: Postgres models default to "public" (Ruling R4). */
 const newTableSchema = (model: SchemaModel) => (model.dialect === "postgres" ? "public" : null);
 
-export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEdit, onGoToError }: Props) {
+export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEdit, onGoToError, ask }: Props) {
   const [warning, setWarning] = useState<string | null>(null);
   const flow = useRef<ReactFlowInstance | null>(null);
   const flowRef = useRef<HTMLDivElement>(null);
@@ -71,6 +74,7 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
         fkColumns: fk.get(key) ?? [],
         blocked,
         onEdit,
+        ask: ask && { ...ask, tables: model.tables.map((x) => ({ schema: x.schema, name: x.name })) },
       };
       return {
         id: key,
@@ -82,7 +86,7 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
         data,
       };
     });
-  }, [model, layout, blocked, onEdit]);
+  }, [model, layout, blocked, onEdit, ask]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initial);
   useEffect(() => setNodes(initial), [initial, setNodes]);

@@ -1,6 +1,8 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, expect, test, vi } from "vitest";
+import { routeInvoke } from "../test/invoke";
+import type { AskKit } from "../assistant/context";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { applyEdits, renameColumn, renameTable } from "../lang/dbml/edits";
 import { KFC_MODEL, KFC_TEXT } from "../lang/dbml/fixtures";
@@ -9,11 +11,13 @@ import type { Ranges, TextEdit } from "../lang/protocol";
 import Canvas, { refFromConnection } from "./Canvas";
 import { autoLayout, followRenames, parseLayout, serializeLayout } from "./layout";
 
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
 beforeAll(mockReactFlowDom);
 
 type Make = (text: string, ranges: Ranges) => TextEdit[];
 
-function renderCanvas(blocked = false) {
+function renderCanvas(blocked = false, ask?: { getDbml(): string; label: string; kit: AskKit }) {
   const onEdit = vi.fn<(make: Make) => void>();
   const onLayout = vi.fn();
   const layout = { version: 1 as const, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } };
@@ -27,6 +31,7 @@ function renderCanvas(blocked = false) {
         onLayout={onLayout}
         onEdit={onEdit}
         onGoToError={() => {}}
+        ask={ask}
       />
     </div>,
   );
@@ -137,16 +142,37 @@ test("connecting_columns_adds_ref_and_warns_for_plain_target", () => {
   expect(plain?.warning).toBe("stores.kind is not a key, unique or indexed. The database may refuse this Foreign Key.");
 });
 
-test("ask_ai_shows_placeholder", async () => {
-  renderCanvas();
+test("ask_ai_opens_the_inline_ask_for_the_card", async () => {
+  routeInvoke({
+    ai_settings: () => ({
+      settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
+      groupOverride: false,
+      keySaved: false,
+      keyLast4: null,
+    }),
+    ai_ask: () => {
+      throw { kind: "ai", message: { kind: "notConfigured" } };
+    },
+  });
+  const onOpenSettings = vi.fn();
+  renderCanvas(false, { getDbml: () => KFC_TEXT, label: "shop.dbml", kit: { groupId: null, inlineAsk: true, errorAsk: true, onOpenSettings } });
   const stores = screen.getByRole("group", { name: "Table stores" });
   await userEvent.click(within(stores).getByRole("button", { name: "Table actions" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Ask AI" }));
-  expect(screen.getByText("Connect an AI provider in Settings.")).toBeTruthy();
-  const settings = screen.getByRole("button", { name: "Settings" }) as HTMLButtonElement;
-  expect(settings.disabled).toBe(true);
-  expect(settings.title).toBe("AI providers arrive in a later step");
-  act(() => {
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-  });
+  expect(screen.getByRole("button", { name: "Generate DBML for…" })).toBeTruthy();
+  // The whole model is sent, so the pill counts the model's tables, not the card's.
+  expect(screen.getByRole("button", { name: `DBML · ${KFC_MODEL.tables.length} tables` })).toBeTruthy();
+  expect(KFC_MODEL.tables.length).toBeGreaterThan(1);
+  await userEvent.click(screen.getByRole("button", { name: "Explain" }));
+  expect(await screen.findByText("Connect an AI provider in Settings")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Connect a provider" }));
+  expect(onOpenSettings).toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Ask AI" }), { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Ask AI" })).toBeNull();
+});
+
+test("a_card_has_no_ask_ai_without_the_setting", async () => {
+  renderCanvas();
+  const stores = screen.getByRole("group", { name: "Table stores" });
+  expect(within(stores).queryByRole("button", { name: "Table actions" })).toBeNull();
 });

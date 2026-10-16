@@ -168,6 +168,7 @@ mod tests {
             group_id: None,
             file: None,
             query_timeout_secs: None,
+            ai_access: Default::default(),
         }
     }
 

@@ -40,6 +40,7 @@ async fn open(path: &Path) -> Arc<dyn Dialect> {
         group_id: None,
         file: Some(path.to_path_buf()),
         query_timeout_secs: None,
+        ai_access: Default::default(),
     };
     connect(&config, None).await.unwrap()
 }

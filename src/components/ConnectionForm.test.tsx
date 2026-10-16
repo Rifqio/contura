@@ -21,6 +21,7 @@ const existing: ConnectionConfig = {
   groupId: "g1",
   file: null,
   queryTimeoutSecs: null,
+  aiAccess: "schema",
 };
 const groups = [{ id: "g1", name: "KFC", color: "red" as const }];
 
@@ -182,6 +183,7 @@ test("sqlite_hides_server_fields_and_saves_the_file", async () => {
     password: { t: "clear" },
     groupId: null,
     queryTimeoutSecs: null,
+    aiAccess: "schema",
   });
 });
 
@@ -339,4 +341,27 @@ test("an_empty_query_timeout_saves_as_no_limit", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
   expect((callsTo("save_connection")[0].input as { queryTimeoutSecs: unknown }).queryTimeoutSecs).toBeNull();
+});
+
+test("connection_form_has_ai_access", async () => {
+  routeInvoke({ save_connection: () => existing });
+  const onSaved = renderNew();
+  const select = screen.getByLabelText("AI can see") as HTMLSelectElement;
+  expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+    "Never send anything",
+    "Schema only",
+    "Schema and query text",
+    "Schema, query text and sample rows",
+  ]);
+  expect(select.value).toBe("schema");
+  await userEvent.type(screen.getByLabelText("Name"), "Laragon");
+  await userEvent.selectOptions(select, "Schema and query text");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(callsTo("save_connection")[0].input).toMatchObject({ aiAccess: "schemaQuery" });
+});
+
+test("editing shows the Connection's AI access in the select", () => {
+  renderEditing({ ...existing, aiAccess: "never" });
+  expect((screen.getByLabelText("AI can see") as HTMLSelectElement).value).toBe("never");
 });

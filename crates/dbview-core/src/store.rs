@@ -1,3 +1,4 @@
+use crate::ai::{AiThread, ThreadId};
 use crate::error::{Error, Result};
 use crate::model::{ConnectionConfig, ConnectionId, Group, GroupId};
 use crate::query::{HistoryEntry, HistoryFilter, HistoryOnly, NewHistory, Outcome, SavedQuery};
@@ -5,7 +6,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
 /// The `user_version` this build writes and understands.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+
+/// Chat threads returned per place.
+pub const THREAD_LIMIT: i64 = 50;
 
 /// Query History kept per Connection.
 pub const HISTORY_LIMIT: i64 = 1000;
@@ -65,7 +69,67 @@ impl AppStore {
             )
             .map_err(store_err)?;
         }
+        if version < 3 {
+            db.execute_batch(
+                "BEGIN;
+                 CREATE TABLE ai_threads (
+                   id TEXT PRIMARY KEY, place TEXT NOT NULL, json TEXT NOT NULL,
+                   updated_at INTEGER NOT NULL);
+                 CREATE INDEX ai_threads_by_place ON ai_threads (place, updated_at DESC);
+                 PRAGMA user_version = 3;
+                 COMMIT;",
+            )
+            .map_err(store_err)?;
+        }
         Ok(AppStore { db })
+    }
+
+    /// Newest first, at most `THREAD_LIMIT`; older threads stay stored.
+    pub fn list_ai_threads(&self, place: &str) -> Result<Vec<AiThread>> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT json FROM ai_threads WHERE place = ?1
+                 ORDER BY updated_at DESC LIMIT ?2",
+            )
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map(params![place, THREAD_LIMIT], |r| r.get::<_, String>(0))
+            .map_err(store_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(serde_json::from_str(&row.map_err(store_err)?).map_err(store_err)?);
+        }
+        Ok(out)
+    }
+
+    pub fn save_ai_thread(&self, t: &AiThread) -> Result<()> {
+        let json = serde_json::to_string(t).map_err(store_err)?;
+        self.db
+            .execute(
+                "INSERT OR REPLACE INTO ai_threads (id, place, json, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![t.id.to_string(), t.place, json, t.updated_at],
+            )
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    pub fn delete_ai_thread(&self, id: ThreadId) -> Result<()> {
+        self.db
+            .execute(
+                "DELETE FROM ai_threads WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    pub fn clear_ai_threads(&self, place: &str) -> Result<()> {
+        self.db
+            .execute("DELETE FROM ai_threads WHERE place = ?1", params![place])
+            .map_err(store_err)?;
+        Ok(())
     }
 
     /// Adds a Query History row and keeps only that Connection's newest `HISTORY_LIMIT`.
@@ -329,6 +393,13 @@ impl AppStore {
             .map_err(store_err)?;
         Ok(())
     }
+
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.db
+            .execute("DELETE FROM settings WHERE key = ?1", params![key])
+            .map_err(store_err)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -351,6 +422,7 @@ mod tests {
             group_id,
             file: None,
             query_timeout_secs: None,
+            ai_access: Default::default(),
         }
     }
 
@@ -517,8 +589,91 @@ mod tests {
         let v: i64 =
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 3);
         assert!(s.query_history(Uuid::new_v4(), &all()).unwrap().is_empty());
+    }
+
+    fn thread(place: &str, title: &str, updated_at: i64) -> crate::ai::AiThread {
+        crate::ai::AiThread {
+            id: Uuid::new_v4(),
+            place: place.into(),
+            title: title.into(),
+            messages: vec![crate::ai::AiMessage {
+                role: crate::ai::AiRole::User,
+                text: "how many users?".into(),
+                context: vec!["Schema".into()],
+                at: updated_at,
+            }],
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn threads_round_trip_per_place() {
+        let (_d, s) = open_tmp();
+        let a = thread("ungrouped", "a", 1);
+        let b = thread("group:g1", "b", 2);
+        s.save_ai_thread(&a).unwrap();
+        s.save_ai_thread(&b).unwrap();
+        assert_eq!(s.list_ai_threads("ungrouped").unwrap(), vec![a.clone()]);
+        assert_eq!(s.list_ai_threads("group:g1").unwrap(), vec![b.clone()]);
+        let mut a2 = a.clone();
+        a2.title = "renamed".into();
+        s.save_ai_thread(&a2).unwrap();
+        assert_eq!(s.list_ai_threads("ungrouped").unwrap(), vec![a2.clone()]);
+        s.delete_ai_thread(a2.id).unwrap();
+        assert!(s.list_ai_threads("ungrouped").unwrap().is_empty());
+        assert_eq!(s.list_ai_threads("group:g1").unwrap(), vec![b]);
+    }
+
+    #[test]
+    fn threads_list_newest_first_and_cap_50() {
+        let (_d, s) = open_tmp();
+        for i in 0..55 {
+            s.save_ai_thread(&thread("ungrouped", &format!("t{i}"), i))
+                .unwrap();
+        }
+        let list = s.list_ai_threads("ungrouped").unwrap();
+        assert_eq!(list.len(), 50);
+        assert_eq!(list[0].title, "t54");
+        assert_eq!(list[49].title, "t5");
+        let n: i64 =
+            s.db.query_row("SELECT COUNT(*) FROM ai_threads", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(n, 55);
+    }
+
+    #[test]
+    fn clear_threads_only_touches_its_place() {
+        let (_d, s) = open_tmp();
+        s.save_ai_thread(&thread("ungrouped", "a", 1)).unwrap();
+        s.save_ai_thread(&thread("group:g1", "b", 2)).unwrap();
+        s.clear_ai_threads("ungrouped").unwrap();
+        assert!(s.list_ai_threads("ungrouped").unwrap().is_empty());
+        assert_eq!(s.list_ai_threads("group:g1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn store_upgrades_v2_to_v3_keeping_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let c = Uuid::new_v4();
+        {
+            let s = AppStore::open(&path).unwrap();
+            s.add_history(&entry(c, "SELECT 1", Outcome::Ok, false))
+                .unwrap();
+            s.db.execute_batch("DROP TABLE ai_threads; PRAGMA user_version = 2;")
+                .unwrap();
+        }
+        let s = AppStore::open(&path).unwrap();
+        let v: i64 =
+            s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(v, 3);
+        let h = s.query_history(c, &all()).unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].sql, "SELECT 1");
+        assert!(s.list_ai_threads("ungrouped").unwrap().is_empty());
     }
 
     fn all() -> HistoryFilter {

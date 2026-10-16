@@ -139,8 +139,8 @@ test("panel_shows_affected_cancelled_timeout_and_error_states", async () => {
   expect(screen.getByText('relation "menu_itms" does not exist')).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Go to line 2" }));
   expect(p.onGoTo).toHaveBeenCalledWith(15, 15);
-  await userEvent.click(screen.getByRole("button", { name: "Ask AI" }));
-  expect(screen.getByText("Connect an AI provider in Settings.")).toBeTruthy();
+  // Ask AI on a failed query needs the app ask setup; the inline Ask itself is tested in InlineAsk.test.tsx.
+  expect(screen.queryByRole("button", { name: "Ask AI" })).toBeNull();
 });
 
 const noop = {

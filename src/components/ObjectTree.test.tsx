@@ -350,6 +350,7 @@ function appConnection(over: Partial<ConnectionConfig>): ConnectionConfig {
     file: null,
     groupId: null,
     queryTimeoutSecs: null,
+    aiAccess: "schema",
     ...over,
   };
 }

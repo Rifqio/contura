@@ -10,6 +10,7 @@ import {
   testConnection,
 } from "../api/client";
 import type {
+  AiAccess,
   ConnectionConfig,
   ConnectionInput,
   DialectKind,
@@ -19,6 +20,7 @@ import type {
   SslMode,
   SuggestedConnection,
 } from "../api/types";
+import { AI_ACCESS_OPTIONS } from "../settings/ai/providers";
 import Dialog from "./Dialog";
 
 interface Props {
@@ -70,6 +72,7 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
   const [caPath, setCaPath] = useState(connection?.ssl.mode === "verifyCa" ? connection.ssl.caPath : "");
   const [file, setFile] = useState(connection?.file ?? "");
   const [groupId, setGroupId] = useState<GroupId | "">((editing ? connection.groupId : defaultGroupId) ?? "");
+  const [aiAccess, setAiAccess] = useState<AiAccess>(connection?.aiAccess ?? "schema");
   const [busy, setBusy] = useState<"test" | "save" | "create" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [portError, setPortError] = useState<string | null>(null);
@@ -108,6 +111,7 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
       name: name.trim(),
       groupId: groupId === "" ? null : groupId,
       queryTimeoutSecs: t === "" ? null : Number(t),
+      aiAccess,
     };
     if (dialect === "sqlite") {
       return {
@@ -388,6 +392,25 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
               ))}
             </select>
           </label>
+          <label className="field field-wide" htmlFor={f("ai-access")}>
+            <span>AI can see</span>
+            <select
+              id={f("ai-access")}
+              className="input"
+              value={aiAccess}
+              aria-describedby={f("ai-access-help")}
+              onChange={(e) => setAiAccess(e.target.value as AiAccess)}
+            >
+              {AI_ACCESS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span id={f("ai-access-help")} className="field-hint field-wide">
+            What the AI assistant may send to your provider from this Connection.
+          </span>
           {result && (
             <p className={result.ok ? "form-result field-wide" : "form-result error-text field-wide"} role="status">
               {result.text}

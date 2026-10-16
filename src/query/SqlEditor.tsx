@@ -80,6 +80,18 @@ interface Props {
   onShowInTree?(table: { schema: string | null; name: string }): void;
   /** One line, no gutters, Enter runs: the grid filter. */
   oneLine?: boolean;
+  /** Ask AI about the selection, or the current statement: Ctrl+I, and the Ask button on a selection. */
+  onAsk?(ctx: AskSelection): void;
+  /** Show the Ask button at the end of a selection; Ctrl+I works either way. */
+  askButton?: boolean;
+}
+
+/** What Ask AI is about: the SQL, where it sits in the editor and its first and last line. */
+export interface AskSelection {
+  sql: string;
+  from: number;
+  to: number;
+  lines: [number, number];
 }
 
 const setMarks = StateEffect.define<{ running: Range | null; error: Range | null }>();
@@ -221,12 +233,14 @@ export default function SqlEditor({
   lang,
   onShowInTree,
   oneLine,
+  onAsk,
+  askButton,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const reanalyze = useRef<(() => void) | null>(null);
-  const latest = useRef({ onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree });
-  latest.current = { onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree };
+  const latest = useRef({ onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton });
+  latest.current = { onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton };
 
   useEffect(() => {
     let diagnostics: Diagnostic[] = [];
@@ -434,6 +448,57 @@ export default function SqlEditor({
       return true;
     };
 
+    /** The selection, else the current statement (the whole text in a one-line box), as what to ask about. */
+    const askTarget = (view: EditorView): AskSelection | null => {
+      const doc = view.state.doc;
+      const { from, to } = view.state.selection.main;
+      let range: { from: number; to: number } | null = from !== to ? { from, to } : null;
+      if (!range && oneLine) range = doc.length > 0 ? { from: 0, to: doc.length } : null;
+      if (!range) {
+        const st = statementAt(splitStatements(doc.toString(), latest.current.dialect), from);
+        range = st ? { from: st.from, to: st.to } : null;
+      }
+      if (!range) return null;
+      const sql = doc.sliceString(range.from, range.to);
+      if (sql.trim() === "") return null;
+      return { sql, from: range.from, to: range.to, lines: [doc.lineAt(range.from).number, doc.lineAt(range.to).number] };
+    };
+    const ask = (view: EditorView) => {
+      if (!latest.current.onAsk) return false;
+      const target = askTarget(view);
+      if (target) latest.current.onAsk(target);
+      return true;
+    };
+    /** The small Ask button at the end of a non-empty selection. */
+    const askTipView = (view: EditorView) => {
+      const dom = document.createElement("div");
+      dom.className = "cm-ask-tip";
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ask-btn";
+      b.append("Ask ");
+      const k = document.createElement("span");
+      k.className = "kbd";
+      k.textContent = "Ctrl I";
+      b.append(k);
+      // Keep the selection while the button is pressed.
+      b.addEventListener("mousedown", (e) => e.preventDefault());
+      b.addEventListener("click", () => ask(view));
+      dom.append(b);
+      return { dom };
+    };
+    const askTip = StateField.define<Tooltip | null>({
+      create: () => null,
+      update(tip, tr) {
+        if (!tr.docChanged && !tr.selection) return tip;
+        const { from, to } = tr.state.selection.main;
+        if (oneLine || from === to || !latest.current.askButton || !latest.current.onAsk) return null;
+        if (tr.state.doc.sliceString(from, to).trim() === "") return null;
+        return { pos: to, above: false, arrow: false, create: askTipView };
+      },
+      provide: (f) => showTooltip.from(f),
+    });
+
     const escape = (view: EditorView) => {
       if (view.state.field(paramsField)) {
         view.dispatch({ effects: setParams.of(null) });
@@ -464,6 +529,7 @@ export default function SqlEditor({
           marksField,
           noticeField,
           paramsField,
+          askTip,
           EditorState.allowMultipleSelections.of(true),
           autocompletion({ override: [completionSource] }),
           Prec.highest(keymap.of([{ key: "Tab", run: leaveInsField }])),
@@ -488,6 +554,7 @@ export default function SqlEditor({
               },
               { key: "Escape", run: escape },
               ...(oneLine ? [] : [{ key: "Tab", run: tabTemplate }]),
+              { key: "Ctrl-i", run: ask },
               { key: "Ctrl-.", run: openFixes },
               { key: "Alt-Enter", run: openFixes },
               { key: "F2", run: rename },

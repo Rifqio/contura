@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dbview_core::Error;
+use dbview_core::ai::AiAccess;
 use dbview_core::connections::{ConnectionInput, ConnectionService, PasswordChange};
-use dbview_core::model::{ConnectionId, DialectKind, SslMode};
+use dbview_core::model::{ConnectionConfig, ConnectionId, DialectKind, SslMode};
 use dbview_core::query::{ExecOutcome, HistoryFilter, Outcome, SavedQueryInput};
 use dbview_core::secrets::MemorySecretStore;
 use dbview_core::store::AppStore;
@@ -42,6 +43,7 @@ async fn fixture(timeout: Option<u32>) -> Fixture {
             group_id: None,
             file: Some(file),
             query_timeout_secs: timeout,
+            ai_access: Default::default(),
         })
         .await
         .unwrap();
@@ -123,6 +125,35 @@ async fn closing_connection_closes_its_query_sessions() {
         matches!(&err, Error::NotFound(m) if m == "That query session is closed."),
         "{err:?}"
     );
+}
+
+#[tokio::test]
+async fn changing_ai_access_keeps_sessions_and_changes_only_that_field() {
+    let f = fixture(None).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let before = f.svc.list().unwrap().remove(0);
+    let saved = f.svc.set_ai_access(f.id, AiAccess::Never).await.unwrap();
+    assert_eq!(
+        saved,
+        ConnectionConfig {
+            ai_access: AiAccess::Never,
+            ..before
+        }
+    );
+    assert_eq!(f.svc.list().unwrap(), vec![saved]);
+    assert!(f.svc.is_open(f.id));
+    f.svc.execute_sql(s, "SELECT 1".into()).await.unwrap();
+}
+
+#[tokio::test]
+async fn changing_ai_access_of_a_missing_connection_is_not_found() {
+    let f = fixture(None).await;
+    let err = f
+        .svc
+        .set_ai_access(uuid::Uuid::new_v4(), AiAccess::Never)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
 }
 
 #[tokio::test]

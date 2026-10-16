@@ -175,6 +175,7 @@ async fn sqlite_sql_schema_lists_tables_views_columns_and_fks() {
         group_id: None,
         file: Some(path),
         query_timeout_secs: None,
+        ai_access: Default::default(),
     };
     let dialect = connect(&config, None).await.unwrap();
     let s = dialect.sql_schema("main").await.unwrap();
