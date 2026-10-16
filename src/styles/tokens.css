@@ -35,6 +35,22 @@
   --color-syntax-string: #1d7a45;
   --color-syntax-number: #b4451f;
   --color-syntax-comment: #6b7680;
+  --color-syntax-name: #7b3fa0;
+  /* Editor warnings: gold, so a warning never reads as the Production amber. */
+  --color-warning: #a07c00;
+  --color-warning-soft: #fbf3cf;
+  /* The quiet gutter bar on lines changed since the last save. */
+  --color-changed: #8a96a3;
+  --color-dark-syntax-keyword: #82aaff;
+  --color-dark-syntax-string: #9ccc9c;
+  --color-dark-syntax-number: #f0a070;
+  --color-dark-syntax-comment: #8a949e;
+  --color-dark-syntax-name: #c792ea;
+  --color-dark-warning: #e0b938;
+  --color-dark-warning-soft: #3a3216;
+  --color-dark-changed: #5b6670;
+  --color-dark-added-soft: #183a28;
+  --color-dark-added-ink: #7fd6a1;
   --color-group-red: #d23a2e;
   --color-group-orange: #b4510f;
   --color-group-amber: #8f6700;
@@ -276,6 +292,16 @@
     --color-danger: var(--color-dark-danger);
     --color-production-soft: var(--color-dark-production-soft);
     --color-production-ink: var(--color-dark-production-ink);
+    --color-syntax-keyword: var(--color-dark-syntax-keyword);
+    --color-syntax-string: var(--color-dark-syntax-string);
+    --color-syntax-number: var(--color-dark-syntax-number);
+    --color-syntax-comment: var(--color-dark-syntax-comment);
+    --color-syntax-name: var(--color-dark-syntax-name);
+    --color-warning: var(--color-dark-warning);
+    --color-warning-soft: var(--color-dark-warning-soft);
+    --color-changed: var(--color-dark-changed);
+    --color-added-soft: var(--color-dark-added-soft);
+    --color-added-ink: var(--color-dark-added-ink);
     --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.5);
     --shadow-dialog: 0 24px 64px rgba(0, 0, 0, 0.6);
     --shadow-toast: 0 6px 16px rgba(0, 0, 0, 0.5);

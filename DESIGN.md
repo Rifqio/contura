@@ -31,6 +31,10 @@ colors:
   syntax-string: "#1D7A45"
   syntax-number: "#B4451F"
   syntax-comment: "#6B7680"
+  syntax-name: "#7B3FA0"
+  warning: "#A07C00"
+  warning-soft: "#FBF3CF"
+  changed: "#8A96A3"
   group-red: "#D23A2E"
   group-orange: "#B4510F"
   group-amber: "#8F6700"
@@ -62,6 +66,16 @@ colors:
   dark-production-soft: "#3A2A12"
   dark-production-ink: "#F3C27A"
   dark-danger: "#F28B83"
+  dark-syntax-keyword: "#82AAFF"
+  dark-syntax-string: "#9CCC9C"
+  dark-syntax-number: "#F0A070"
+  dark-syntax-comment: "#8A949E"
+  dark-syntax-name: "#C792EA"
+  dark-warning: "#E0B938"
+  dark-warning-soft: "#3A3216"
+  dark-changed: "#5B6670"
+  dark-added-soft: "#183A28"
+  dark-added-ink: "#7FD6A1"
 typography:
   display:
     fontFamily: "Segoe UI Variable Display, Segoe UI, system-ui, sans-serif"
@@ -271,6 +285,8 @@ Nine fixed colours (`group-red` to `group-slate`), each picked to carry white te
 
 ### State colours
 `added-soft` / `added-ink` for new rows and `deleted-soft` / `deleted-ink` (with strikethrough) for deleted rows. `danger` is only for destructive buttons and errors.
+
+Editors: `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-comment` and `syntax-name` colour code, with their own dark values. `warning` (gold) underlines editor warnings and is never the Production amber. `changed` is the quiet gutter bar on lines changed since the last save.
 
 ### Dark variants
 The `dark-*` tokens mirror the light roles one for one, for the dark variant of the default Theme. Teal lightens to `dark-primary` to keep contrast, and the highlighter becomes a deep olive with a bright edge, so a Pending Edit stays obvious without glaring.

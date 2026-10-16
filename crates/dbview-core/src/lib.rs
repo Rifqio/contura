@@ -1,10 +1,14 @@
 pub(crate) mod common;
 pub mod connections;
+pub mod dbml_writer;
+pub mod ddl;
 pub mod dialect;
 pub mod error;
 pub mod model;
+pub mod model_files;
 pub mod mysql;
 pub mod postgres;
+pub mod schema_model;
 pub mod secrets;
 pub mod sqlite;
 pub mod store;

@@ -21,6 +21,9 @@ pub enum Error {
     Store(String),
     #[error("secret store error: {0}")]
     Secret(String),
+    /// Reading or writing a file the user chose (Schema Models, exports).
+    #[error("file error: {0}")]
+    File(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

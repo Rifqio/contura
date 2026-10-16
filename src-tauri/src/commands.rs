@@ -4,6 +4,7 @@ use dbview_core::model::{
     ConnectionConfig, ConnectionId, DbObject, FullValue, FullValueRequest, Group, GroupId,
     ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
 };
+use dbview_core::schema_model::SchemaModel;
 use dbview_core::suggest::SuggestedConnection;
 use std::path::PathBuf;
 
@@ -110,6 +111,87 @@ pub async fn fetch_full_value(
     request: FullValueRequest,
 ) -> Result<FullValue, Error> {
     service.session(id).await?.fetch_full_value(&request).await
+}
+
+/// DB View's own data folder; Schema Models and exports are never written inside it.
+pub struct DataDir(pub PathBuf);
+
+#[tauri::command]
+pub fn read_model_files(path: PathBuf) -> Result<dbview_core::model_files::ModelFiles, Error> {
+    dbview_core::model_files::read_model_files(&path)
+}
+
+#[tauri::command]
+pub fn write_model_files(
+    data: State<'_, DataDir>,
+    path: PathBuf,
+    dbml: String,
+    layout: String,
+) -> Result<(), Error> {
+    dbview_core::model_files::write_model_files(&path, &dbml, &layout, &data.0)
+}
+
+#[tauri::command]
+pub fn write_text_file(data: State<'_, DataDir>, path: PathBuf, text: String) -> Result<(), Error> {
+    dbview_core::model_files::write_text_file(&path, &text, &data.0)
+}
+
+#[tauri::command]
+pub fn write_binary_file(
+    data: State<'_, DataDir>,
+    path: PathBuf,
+    base64: String,
+) -> Result<(), Error> {
+    dbview_core::model_files::write_base64_file(&path, &base64, &data.0)
+}
+
+/// A CREATE script for the model, in the model's own Dialect. Never executed.
+#[tauri::command]
+pub fn export_sql(model: SchemaModel) -> Result<String, Error> {
+    dbview_core::ddl::create_script(&model)
+}
+
+/// Reads a database (or Postgres schema) and writes it as DBML. Read only.
+#[tauri::command]
+pub async fn reverse_engineer(
+    service: Service<'_>,
+    id: ConnectionId,
+    database: String,
+    schema: Option<String>,
+) -> Result<String, Error> {
+    let model = service
+        .session(id)
+        .await?
+        .schema_snapshot(&database, schema.as_deref())
+        .await?;
+    let connection = service
+        .list()?
+        .into_iter()
+        .find(|c| c.id == id)
+        .map(|c| c.name)
+        .unwrap_or_default();
+    let place = match &schema {
+        Some(s) => format!("{database}.{s}"),
+        None => database,
+    };
+    Ok(dbview_core::dbml_writer::write_dbml(
+        &model,
+        &format!("{connection} / {place}"),
+    ))
+}
+
+#[tauri::command]
+pub async fn schema_snapshot(
+    service: Service<'_>,
+    id: ConnectionId,
+    database: String,
+    schema: Option<String>,
+) -> Result<SchemaModel, Error> {
+    service
+        .session(id)
+        .await?
+        .schema_snapshot(&database, schema.as_deref())
+        .await
 }
 
 #[tauri::command]

@@ -47,6 +47,13 @@ pub fn run() {
             commands::object_definition,
             commands::fetch_page,
             commands::fetch_full_value,
+            commands::schema_snapshot,
+            commands::reverse_engineer,
+            commands::export_sql,
+            commands::read_model_files,
+            commands::write_model_files,
+            commands::write_text_file,
+            commands::write_binary_file,
             commands::list_groups,
             commands::save_group,
             commands::delete_group,
@@ -71,6 +78,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let store = AppStore::open(&data_dir.join("app.sqlite"))?;
     let secrets = Arc::new(KeyringSecretStore::new()?);
     app.manage(ConnectionService::new(store, secrets));
+    app.manage(commands::DataDir(data_dir.clone()));
     WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
         .title("DB View")
         .data_directory(data_dir.join("webview"))

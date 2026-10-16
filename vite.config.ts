@@ -13,7 +13,8 @@ export default defineConfig(() => ({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    exclude: [...configDefaults.exclude, ".claude/**"],
+    // Timing tests run alone through `npm run test:perf` (vitest.perf.config.ts).
+    exclude: [...configDefaults.exclude, ".claude/**", "**/*.perf.test.ts"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

@@ -18,6 +18,8 @@ import GroupSwitcher, { type Place } from "./components/GroupSwitcher";
 import Home from "./components/Home";
 import Icon from "./components/Icon";
 import ObjectTree from "./components/ObjectTree";
+import SchemaBuilder, { type ModelDoc } from "./schema/SchemaBuilder";
+import StartModel from "./schema/StartModel";
 import { objectKey, objectPrefix } from "./objectPath";
 
 interface Selection {
@@ -95,6 +97,11 @@ export default function App() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [form, setForm] = useState<Form>({ kind: "none" });
   const [notice, setNotice] = useState<string | null>(null);
+  const [schema, setSchema] = useState<
+    | { kind: "start"; initial?: { connectionId: ConnectionId; database: string; schema: string | null } }
+    | { kind: "builder"; doc: ModelDoc }
+    | null
+  >(null);
 
   const start = useCallback(async () => {
     setStartup({ s: "loading" });
@@ -258,9 +265,14 @@ export default function App() {
           </button>
         </nav>
 
-        {place.kind === "home" ? (
+        {schema?.kind === "builder" ? (
+          <main className="schema-main">
+            <SchemaBuilder doc={schema.doc} onClose={() => setSchema(null)} />
+          </main>
+        ) : place.kind === "home" ? (
           <main className="home-main">
             <Home
+              onNewSchemaModel={() => setSchema({ kind: "start" })}
               groups={groups}
               connections={connections}
               onOpenGroup={openGroup}
@@ -339,6 +351,9 @@ export default function App() {
                     selected={selection?.connectionId === active.id ? selection : null}
                     onSelect={(kind, path) => setSelection({ connectionId: active.id, kind, path })}
                     onNotOpen={() => lost(active.id)}
+                    onReverseEngineer={(database, s) =>
+                      setSchema({ kind: "start", initial: { connectionId: active.id, database, schema: s } })
+                    }
                   />
                 </div>
               )}
@@ -406,6 +421,15 @@ export default function App() {
             reload();
           }}
           onCancel={() => setForm({ kind: "none" })}
+        />
+      )}
+      {schema?.kind === "start" && (
+        <StartModel
+          connections={connections}
+          openIds={openIds}
+          initial={schema.initial}
+          onStart={(doc) => setSchema({ kind: "builder", doc })}
+          onCancel={() => setSchema(null)}
         />
       )}
     </div>

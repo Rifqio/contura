@@ -144,4 +144,77 @@ export type CommandError =
   | { kind: "valueTooLarge"; message: number }
   | { kind: "invalidInput"; message: string }
   | { kind: "store"; message: string }
-  | { kind: "secret"; message: string };
+  | { kind: "secret"; message: string }
+  | { kind: "file"; message: string };
+
+/** A Schema Model on disk: the DBML and, when it exists, its layout sidecar. */
+export interface ModelFiles {
+  dbml: string;
+  layout: string | null;
+}
+
+// Schema Model: mirrors crates/dbview-core/src/schema_model.rs.
+
+export type SmDefault =
+  | { t: "string"; value: string }
+  | { t: "number"; value: string }
+  | { t: "bool"; value: boolean }
+  | { t: "null" }
+  | { t: "expression"; value: string };
+
+export interface SmColumn {
+  name: string;
+  typeName: string;
+  pk: boolean;
+  increment: boolean;
+  notNull: boolean;
+  unique: boolean;
+  default: SmDefault | null;
+  note: string | null;
+}
+
+/** A composite primary key is an index with `pk: true`. */
+export interface SmIndex {
+  name: string | null;
+  columns: string[];
+  unique: boolean;
+  pk: boolean;
+}
+
+export interface SmTable {
+  schema: string | null;
+  name: string;
+  alias: string | null;
+  note: string | null;
+  columns: SmColumn[];
+  indexes: SmIndex[];
+}
+
+export interface SmEndpoint {
+  schema: string | null;
+  table: string;
+  columns: string[];
+}
+
+/** `from` is the many side, `to` the one side. Actions are upper case. */
+export interface SmRef {
+  name: string | null;
+  from: SmEndpoint;
+  to: SmEndpoint;
+  onDelete: string | null;
+  onUpdate: string | null;
+}
+
+export interface SmEnum {
+  schema: string | null;
+  name: string;
+  values: string[];
+}
+
+export interface SchemaModel {
+  dialect: DialectKind;
+  tables: SmTable[];
+  refs: SmRef[];
+  enums: SmEnum[];
+  skipped: string[];
+}

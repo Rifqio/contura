@@ -2,6 +2,7 @@ mod full_value;
 mod introspect;
 pub(crate) mod page;
 pub mod quote;
+mod snapshot;
 
 use std::time::Duration;
 
@@ -125,6 +126,14 @@ impl Dialect for MySqlDialect {
 
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {
         full_value::fetch_full_value(&self.pool, req).await
+    }
+
+    async fn schema_snapshot(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<crate::schema_model::SchemaModel> {
+        snapshot::schema_snapshot(&self.pool, database).await
     }
 
     async fn disconnect(&self) -> Result<()> {

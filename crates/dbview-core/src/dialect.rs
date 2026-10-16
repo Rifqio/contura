@@ -7,6 +7,7 @@ use crate::model::{
 };
 use crate::mysql::MySqlDialect;
 use crate::postgres::PostgresDialect;
+use crate::schema_model::SchemaModel;
 use crate::sqlite::SqliteDialect;
 
 #[async_trait::async_trait]
@@ -19,6 +20,8 @@ pub trait Dialect: Send + Sync {
     async fn object_definition(&self, kind: ObjectKind, path: &ObjectPath) -> Result<String>;
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page>;
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue>;
+    /// Reads one database (MySQL, SQLite) or one schema (Postgres) as a Schema Model. Read only.
+    async fn schema_snapshot(&self, database: &str, schema: Option<&str>) -> Result<SchemaModel>;
     async fn disconnect(&self) -> Result<()>;
 }
 

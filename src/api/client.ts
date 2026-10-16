@@ -17,6 +17,8 @@ import type {
   PageRequest,
   SchemaInfo,
   SuggestedConnection,
+  ModelFiles,
+  SchemaModel,
 } from "./types";
 
 export const DIALECT_LABEL: Record<DialectKind, string> = {
@@ -84,6 +86,27 @@ export const objectDefinition = (id: ConnectionId, kind: ObjectKind, path: Objec
 
 export const fetchPage = (id: ConnectionId, request: PageRequest): Promise<Page> =>
   invoke("fetch_page", { id, request });
+
+export const schemaSnapshot = (id: ConnectionId, database: string, schema: string | null): Promise<SchemaModel> =>
+  invoke("schema_snapshot", { id, database, schema });
+
+/** Reads a database (or Postgres schema) and returns it as DBML text. Read only. */
+export const reverseEngineer = (id: ConnectionId, database: string, schema: string | null): Promise<string> =>
+  invoke("reverse_engineer", { id, database, schema });
+
+/** A CREATE script for the model in its own Dialect. It is only text; nothing runs. */
+export const exportSql = (model: SchemaModel): Promise<string> => invoke("export_sql", { model });
+
+export const readModelFiles = (path: string): Promise<ModelFiles> => invoke("read_model_files", { path });
+
+/** Saves `<path>` and `<path>.layout.json`; refused inside DB View's data folder. */
+export const writeModelFiles = (path: string, dbml: string, layout: string): Promise<void> =>
+  invoke("write_model_files", { path, dbml, layout });
+
+export const writeTextFile = (path: string, text: string): Promise<void> => invoke("write_text_file", { path, text });
+
+export const writeBinaryFile = (path: string, base64: string): Promise<void> =>
+  invoke("write_binary_file", { path, base64 });
 
 export const fetchFullValue = (id: ConnectionId, request: FullValueRequest): Promise<FullValue> =>
   invoke("fetch_full_value", { id, request });
@@ -156,6 +179,8 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `Could not read or write saved settings: ${e.message}`;
     case "secret":
       return `Could not use Windows Credential Manager: ${e.message}`;
+    case "file":
+      return `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}. Check the folder exists and DB View can write to it.`;
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

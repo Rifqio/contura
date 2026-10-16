@@ -1,5 +1,6 @@
 mod introspect;
 mod page;
+mod snapshot;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -149,6 +150,16 @@ impl Dialect for SqliteDialect {
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {
         let req = req.clone();
         self.run(move |c| page::fetch_full_value(c, &req)).await
+    }
+
+    async fn schema_snapshot(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<crate::schema_model::SchemaModel> {
+        let database = database.to_string();
+        self.run(move |c| snapshot::schema_snapshot(c, &database))
+            .await
     }
 
     async fn disconnect(&self) -> Result<()> {

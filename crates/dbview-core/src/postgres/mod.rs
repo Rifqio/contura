@@ -15,6 +15,7 @@ use crate::model::{
 
 mod introspect;
 mod page;
+mod snapshot;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_DATABASE: &str = "postgres";
@@ -373,6 +374,16 @@ impl Dialect for PostgresDialect {
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {
         let client = self.client(&req.table.database).await?;
         page::fetch_full_value(&client, req).await
+    }
+
+    async fn schema_snapshot(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<crate::schema_model::SchemaModel> {
+        let schema = snapshot::require_schema(schema)?;
+        let client = self.client(database).await?;
+        snapshot::schema_snapshot(&client, schema).await
     }
 
     async fn disconnect(&self) -> Result<()> {

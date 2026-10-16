@@ -13,6 +13,8 @@ interface Props {
   onSelect: (kind: ObjectKind, path: ObjectPath) => void;
   /** The session is gone (for example the Connection was saved while opening). */
   onNotOpen: () => void;
+  /** Starts a Schema Model from a database (or a Postgres schema); the button shows only when set. */
+  onReverseEngineer?: (database: string, schema: string | null) => void;
 }
 
 type Load<T> = { s: "loading" } | { s: "loaded"; value: T } | { s: "failed"; message: string };
@@ -45,8 +47,31 @@ function Failed({ message, onRetry }: { message: string; onRetry: () => void }) 
   );
 }
 
-export default function ObjectTree({ connectionId, dialect, defaultDatabase, selected, onSelect, onNotOpen }: Props) {
+export default function ObjectTree({
+  connectionId,
+  dialect,
+  defaultDatabase,
+  selected,
+  onSelect,
+  onNotOpen,
+  onReverseEngineer,
+}: Props) {
   const hasSchemas = dialect === "postgres";
+
+  function modelButton(label: string, database: string, schema: string | null) {
+    if (!onReverseEngineer) return null;
+    return (
+      <button
+        type="button"
+        className="icon-button tree-row-action"
+        aria-label={`Reverse-engineer ${label} into a Schema Model`}
+        title="Reverse-engineer into a Schema Model"
+        onClick={() => onReverseEngineer(database, schema)}
+      >
+        <Icon name="schema" />
+      </button>
+    );
+  }
   const [databases, setDatabases] = useState<Load<string[]>>({ s: "loading" });
   const [schemas, setSchemas] = useState<Record<string, Load<SchemaInfo[]>>>({});
   const [objects, setObjects] = useState<Record<string, Load<DbObject[]>>>({});
@@ -190,16 +215,19 @@ export default function ObjectTree({ connectionId, dialect, defaultDatabase, sel
           const isOpen = openSchemas.has(scopeKey(database, s.name));
           return (
             <li key={s.name}>
-              <button
-                type="button"
-                className="tree-row"
-                aria-expanded={isOpen}
-                onClick={() => toggleSchema(database, s.name)}
-              >
-                <Icon name={isOpen ? "chevronDown" : "chevronRight"} className="tree-chevron" />
-                <Icon name="schema" />
-                <span className="tree-name">{s.name}</span>
-              </button>
+              <div className="tree-row-wrap">
+                <button
+                  type="button"
+                  className="tree-row"
+                  aria-expanded={isOpen}
+                  onClick={() => toggleSchema(database, s.name)}
+                >
+                  <Icon name={isOpen ? "chevronDown" : "chevronRight"} className="tree-chevron" />
+                  <Icon name="schema" />
+                  <span className="tree-name">{s.name}</span>
+                </button>
+                {modelButton(s.name, database, s.name)}
+              </div>
               {isOpen && <div className="tree-children">{objectsView(database, s.name)}</div>}
             </li>
           );
@@ -228,11 +256,14 @@ export default function ObjectTree({ connectionId, dialect, defaultDatabase, sel
           const isOpen = openDatabases.has(db);
           return (
             <li key={db}>
-              <button type="button" className="tree-row" aria-expanded={isOpen} onClick={() => toggleDatabase(db)}>
-                <Icon name={isOpen ? "chevronDown" : "chevronRight"} className="tree-chevron" />
-                <Icon name="database" />
-                <span className="tree-name">{db}</span>
-              </button>
+              <div className="tree-row-wrap">
+                <button type="button" className="tree-row" aria-expanded={isOpen} onClick={() => toggleDatabase(db)}>
+                  <Icon name={isOpen ? "chevronDown" : "chevronRight"} className="tree-chevron" />
+                  <Icon name="database" />
+                  <span className="tree-name">{db}</span>
+                </button>
+                {!hasSchemas && modelButton(db, db, null)}
+              </div>
               {isOpen && (
                 <div className="tree-children">{hasSchemas ? schemasView(db) : objectsView(db, null)}</div>
               )}

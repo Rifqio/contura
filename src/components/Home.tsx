@@ -18,6 +18,8 @@ interface Props {
   onChanged: () => void;
   /** An app-level error to show, such as a failed reload. */
   notice?: string | null;
+  /** Opens the Schema Builder's starting points; the button shows only when set. */
+  onNewSchemaModel?: () => void;
 }
 
 export function connectionCountText(n: number): string {
@@ -27,7 +29,15 @@ export function connectionCountText(n: number): string {
 
 type Form = { kind: "none" } | { kind: "group" } | { kind: "connection"; prefill?: SuggestedConnection };
 
-export default function Home({ groups, connections, onOpenGroup, onOpenUngrouped, onChanged, notice }: Props) {
+export default function Home({
+  groups,
+  connections,
+  onOpenGroup,
+  onOpenUngrouped,
+  onChanged,
+  notice,
+  onNewSchemaModel,
+}: Props) {
   const [suggestions, setSuggestions] = useState<SuggestedConnection[]>([]);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const [form, setForm] = useState<Form>({ kind: "none" });
@@ -51,6 +61,11 @@ export default function Home({ groups, connections, onOpenGroup, onOpenUngrouped
         <h1>Home</h1>
         {!empty && (
           <div className="home-actions">
+            {onNewSchemaModel && (
+              <button type="button" className="button" onClick={onNewSchemaModel}>
+                New Schema Model
+              </button>
+            )}
             <button type="button" className="button" onClick={() => setForm({ kind: "connection" })}>
               <Icon name="plus" />
               New Connection
@@ -79,6 +94,11 @@ export default function Home({ groups, connections, onOpenGroup, onOpenUngrouped
               <Icon name="plus" />
               New Group
             </button>
+            {onNewSchemaModel && (
+              <button type="button" className="button" onClick={onNewSchemaModel}>
+                New Schema Model
+              </button>
+            )}
             <button type="button" className="button" onClick={() => setForm({ kind: "connection" })}>
               New Connection
             </button>

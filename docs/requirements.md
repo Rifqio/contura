@@ -15,6 +15,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 - Table data and query results are fetched a page at a time (1,000 rows), never whole.
 - Closing a tab releases its rows.
 - Large text/JSON/BLOB cells show a preview of about 1 KB. The full value loads only when the user opens that cell.
+- A large Schema Model with every card in view may go over the budget: a 300-table model measured about 200 MB (ADR 0003, accepted 2026-10-16).
 
 ## Storage and distribution (ADR 0006)
 
@@ -101,13 +102,25 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 - The user can edit it two ways, kept in step (ADR 0007):
   - **Text:** typing DBML updates the canvas as they type.
   - **Canvas:** adding tables, editing table names, column names, types and settings directly in the table cards, and dragging a column onto another column to create a Foreign Key. These changes rewrite only the affected DBML lines, keeping comments and formatting.
-  - While the DBML has a syntax error, the canvas keeps the last valid version and points at the error.
+  - While the DBML has a syntax error, the canvas keeps the last valid version and points at the error. Canvas editing is blocked until the error is fixed.
+- **Typing DBML** has DataGrip-level help with VS Code keys (see [the editor design](superpowers/specs/2026-10-16-editor-and-ai-design.md)):
+  - completion of the model's own tables and columns, and of the model Dialect's types (Ctrl+Space, and as you type)
+  - a Ref to a missing table or column is flagged, with "Did you mean" quick-fixes (Ctrl+. or Alt+Enter)
+  - templates for `Table`, `Ref` and `Enum` (type the name, press Tab)
+  - F2 renames a table or column everywhere it is used
+  - an error at the caret waits 1.5 s before it shows; errors elsewhere show at once
+  - lines changed since the last save get a quiet bar in the gutter
+- **The layout:** DBML on the left (about 42% of the width, collapsible with Ctrl+B), the canvas on the right.
+- **Foreign Keys by drag:** a column can be dropped onto any column. When the target is not a key, unique or indexed, DB View still adds the Ref and warns that the database may refuse it.
+- **Enums** live in the DBML only. They get no cards on the canvas.
 - On the canvas, dragging between columns creates a **Foreign Key in the model**. In a Visual Query the same gesture makes a Join.
 - Starting points: blank, reverse-engineered from an existing database through a Connection (read only), or an existing `.dbml` file.
-- Saved anywhere the user chooses, as `<name>.dbml` plus `<name>.dbml.layout.json` for canvas positions, not in `data\`.
+- Saved anywhere the user chooses, as `<name>.dbml` plus `<name>.dbml.layout.json` for canvas positions, not in `data\` (DB View refuses a path inside it). A model that was never saved, such as a reverse-engineered one, asks where to save on the first Save.
 - Outputs:
   - export a SQL script for the model's Dialect
   - export the diagram as PNG or SVG
+  - while the DBML has an error, an export uses the last valid version and says so first
+  - "Apply to Connection" is shown disabled with "Arrives with Schema Compare" until build step 10
   - apply to a Connection, which compares the model with the database and produces a Sync Script the user reviews and confirms before it runs
 
 ## Changing databases

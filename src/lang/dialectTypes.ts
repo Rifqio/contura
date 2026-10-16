@@ -1,0 +1,41 @@
+import type { DialectKind } from "../api/types";
+
+/** Column types offered by completion, per Dialect. */
+export const DIALECT_TYPES: Record<DialectKind, string[]> = {
+  mysql: [
+    "int",
+    "bigint",
+    "smallint",
+    "tinyint",
+    "varchar(255)",
+    "char(36)",
+    "text",
+    "datetime",
+    "timestamp",
+    "date",
+    "decimal(10,2)",
+    "double",
+    "boolean",
+    "json",
+    "blob",
+    "enum(...)",
+  ],
+  postgres: [
+    "integer",
+    "bigint",
+    "smallint",
+    "serial",
+    "text",
+    "varchar(255)",
+    "timestamptz",
+    "timestamp",
+    "date",
+    "numeric(10,2)",
+    "double precision",
+    "jsonb",
+    "uuid",
+    "boolean",
+    "bytea",
+  ],
+  sqlite: ["INTEGER", "TEXT", "REAL", "BLOB", "NUMERIC"],
+};
