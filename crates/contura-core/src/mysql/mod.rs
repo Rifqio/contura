@@ -12,7 +12,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 
 use crate::dialect::Dialect;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, browse_result};
 use crate::model::{
     ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
     PageRequest, SchemaInfo, SslMode,
@@ -21,11 +21,14 @@ use crate::model::{
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONN_TTL: Duration = Duration::from_secs(5 * 60);
 const MYSQL_ACCESS_DENIED: u16 = 1045;
+/// ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION.
+const MYSQL_READ_ONLY_TRANSACTION: u16 = 1792;
 
 pub struct MySqlDialect {
     pool: Pool,
     /// Query sessions open their own connection with these, outside the pool.
     opts: OptsBuilder,
+    read_only: bool,
 }
 
 impl MySqlDialect {
@@ -37,7 +40,11 @@ impl MySqlDialect {
         match tokio::time::timeout(CONNECT_TIMEOUT, pool.get_conn()).await {
             Ok(Ok(conn)) => {
                 drop(conn);
-                Ok(Self { pool, opts })
+                Ok(Self {
+                    pool,
+                    opts,
+                    read_only: config.read_only,
+                })
             }
             Ok(Err(e)) => {
                 let _ = pool.disconnect().await;
@@ -51,6 +58,15 @@ impl MySqlDialect {
                 )))
             }
         }
+    }
+
+    /// The first column of the first row of `sql`, from a pooled (browse) connection.
+    /// Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn browse_first_for_test(&self, sql: &str) -> Result<Option<String>> {
+        let mut conn = self.pool.get_conn().await.map_err(query_err)?;
+        conn.query_first(sql).await.map_err(query_err)
     }
 }
 
@@ -71,7 +87,16 @@ fn build_opts(config: &ConnectionConfig, password: Option<&str>) -> OptsBuilder 
                 .with_danger_skip_domain_validation(true),
         ),
     };
+    // `setup` runs at connect and again after every pool reset (COM_RESET_CONNECTION
+    // restores the server default), so pooled connections stay read-only on reuse.
+    // `init` would run only once per connection.
+    let setup: Vec<&str> = if config.read_only {
+        vec!["SET SESSION TRANSACTION READ ONLY"]
+    } else {
+        Vec::new()
+    };
     OptsBuilder::default()
+        .setup(setup)
         .ip_or_hostname(config.host.clone())
         .tcp_port(config.port)
         .user(Some(config.user.clone()))
@@ -94,8 +119,28 @@ fn map_connect_error(e: mysql_async::Error, target: &str) -> Error {
     }
 }
 
+fn is_read_only_refusal(e: &mysql_async::Error) -> bool {
+    matches!(e, mysql_async::Error::Server(s) if s.code == MYSQL_READ_ONLY_TRANSACTION)
+}
+
+/// Browse code uses this. The Dialect methods pass their result through
+/// `browse_result`, which turns a refusal into a plain error on a Connection that is
+/// not Read-only.
 pub(crate) fn query_err(e: mysql_async::Error) -> Error {
-    Error::Query(e.to_string())
+    if is_read_only_refusal(&e) {
+        Error::ReadOnlyRefused
+    } else {
+        Error::Query(e.to_string())
+    }
+}
+
+/// A read-only refusal reads as "this Connection is Read-only" only when the Connection is.
+pub(crate) fn session_err(e: mysql_async::Error, read_only: bool) -> Error {
+    if !read_only && is_read_only_refusal(&e) {
+        Error::Query(e.to_string())
+    } else {
+        query_err(e)
+    }
 }
 
 #[async_trait::async_trait]
@@ -110,7 +155,7 @@ impl Dialect for MySqlDialect {
     }
 
     async fn list_databases(&self) -> Result<Vec<String>> {
-        introspect::list_databases(&self.pool).await
+        browse_result(introspect::list_databases(&self.pool).await, self.read_only)
     }
 
     async fn list_schemas(&self, _database: &str) -> Result<Vec<SchemaInfo>> {
@@ -118,19 +163,28 @@ impl Dialect for MySqlDialect {
     }
 
     async fn list_objects(&self, database: &str, _schema: Option<&str>) -> Result<Vec<DbObject>> {
-        introspect::list_objects(&self.pool, database).await
+        browse_result(
+            introspect::list_objects(&self.pool, database).await,
+            self.read_only,
+        )
     }
 
     async fn object_definition(&self, kind: ObjectKind, path: &ObjectPath) -> Result<String> {
-        introspect::object_definition(&self.pool, kind, path).await
+        browse_result(
+            introspect::object_definition(&self.pool, kind, path).await,
+            self.read_only,
+        )
     }
 
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page> {
-        page::fetch_page(&self.pool, req).await
+        browse_result(page::fetch_page(&self.pool, req).await, self.read_only)
     }
 
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {
-        full_value::fetch_full_value(&self.pool, req).await
+        browse_result(
+            full_value::fetch_full_value(&self.pool, req).await,
+            self.read_only,
+        )
     }
 
     async fn schema_snapshot(
@@ -138,18 +192,30 @@ impl Dialect for MySqlDialect {
         database: &str,
         _schema: Option<&str>,
     ) -> Result<crate::schema_model::SchemaModel> {
-        snapshot::schema_snapshot(&self.pool, database).await
+        browse_result(
+            snapshot::schema_snapshot(&self.pool, database).await,
+            self.read_only,
+        )
     }
 
     async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
-        sql_schema::sql_schema(&self.pool, database).await
+        browse_result(
+            sql_schema::sql_schema(&self.pool, database).await,
+            self.read_only,
+        )
     }
 
     async fn open_query_session(
         &self,
         database: Option<&str>,
     ) -> Result<crate::query::SessionHandle> {
-        session::spawn(self.opts.clone(), database, self.pool.clone()).await
+        session::spawn(
+            self.opts.clone(),
+            database,
+            self.pool.clone(),
+            self.read_only,
+        )
+        .await
     }
 
     async fn disconnect(&self) -> Result<()> {
@@ -176,6 +242,8 @@ mod tests {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            production: false,
+            read_only: false,
         }
     }
 
@@ -190,6 +258,18 @@ mod tests {
             ssl.disable_built_in_roots(),
             "public CAs must not satisfy verify-CA"
         );
+    }
+
+    #[test]
+    fn read_only_is_a_setup_command_so_pool_resets_keep_it() {
+        let mut config = config_with(SslMode::Disable);
+        config.read_only = true;
+        let opts: mysql_async::Opts = build_opts(&config, None).into();
+        assert_eq!(opts.setup(), ["SET SESSION TRANSACTION READ ONLY"]);
+        assert!(opts.init().is_empty());
+        config.read_only = false;
+        let opts: mysql_async::Opts = build_opts(&config, None).into();
+        assert!(opts.setup().is_empty() && opts.init().is_empty());
     }
 
     #[tokio::test]
@@ -208,6 +288,8 @@ mod tests {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            production: false,
+            read_only: false,
         };
         let pw = env("DBVIEW_TEST_MYSQL_PASSWORD", "dbview_test");
         let pool = Pool::new(build_opts(&config, Some(&pw)));

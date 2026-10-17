@@ -1,22 +1,28 @@
 import { type MutableRefObject, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import {
   cancelQuery,
+  classifySql,
   closeQueryResult,
   closeQuerySession,
+  confirmRun,
   DIALECT_LABEL,
   errorText,
   executeSql,
   fetchMoreRows,
+  isCommandError,
   listDatabases,
   openQuerySession,
+  prepareRun,
   saveSavedQuery,
 } from "../api/client";
-import type { ConnectionConfig, ConnectionId, QuerySessionId, SavedQuery } from "../api/types";
+import type { ConnectionConfig, ConnectionId, QuerySessionId, SavedQuery, StatementClass } from "../api/types";
 import InlineAsk from "../assistant/InlineAsk";
 import { type AskKit, type AskSetup, tablesIn } from "../assistant/context";
 import Icon from "../components/Icon";
+import SafetyTag from "../components/SafetyTag";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
+import ConfirmRun from "./ConfirmRun";
 import { formatSql } from "./format";
 import { writeWithoutWhere } from "./noWhere";
 import ResultsPanel from "./ResultsPanel";
@@ -63,6 +69,16 @@ interface Props {
 const DDL = /^(?:\s+|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(CREATE|ALTER|DROP|TRUNCATE|RENAME|COMMENT)\b/i;
 
 const RESTARTED_MS = 5000;
+
+/** Edits settle this long before a Read-only Connection's statements are classified. */
+const CLASSIFY_DELAY_MS = 200;
+const CLASS_CACHE_MAX = 500;
+const WRITES_NOTE = "Read-only Connection: this statement writes";
+const READ_ONLY_TIP = "This Connection is Read-only";
+
+/** On a Read-only Connection: the current statement when it writes, and whether any statement does. */
+type Safety = { current: Stmt | null; anyWrite: boolean };
+const NO_WRITES: Safety = { current: null, anyWrite: false };
 
 const noSubscribe = () => () => {};
 
@@ -121,9 +137,14 @@ export default function QueryTab({
   const [share, setShare] = useState(loadShare);
   const [askSel, setAskSel] = useState<AskSelection | null>(null);
   const confirmed = useRef<Stmt | null>(null);
+  // Bumped by every new run and session, so a late answer from the Core is dropped.
+  const prepared = useRef(0);
+  const sessionNow = useRef<QuerySessionId | null>(null);
+  sessionNow.current = session;
   const fetching = useRef(false);
   const latest = useRef(tab);
   latest.current = tab;
+  const editorText = () => editorRef.current?.text() ?? latest.current.text;
   const work = useRef<HTMLDivElement>(null);
 
   // The schema index for this tab's Connection and database: SQLite has one database, `main`.
@@ -178,6 +199,7 @@ export default function QueryTab({
       live = false;
       setSession(null);
       // A run never carries on in another session, database or Connection.
+      prepared.current += 1;
       dispatch({ type: "sessionChanged" });
       if (opened) void closeQuerySession(opened).catch(() => {});
     };
@@ -197,28 +219,36 @@ export default function QueryTab({
     };
   }, [connection?.id, isOpen]);
 
-  // Runs the queue one statement at a time; a missing WHERE asks first.
+  // Runs the queue one statement at a time; a missing WHERE asks first, unless the
+  // Production dialog already showed the warning.
   useEffect(() => {
     if (!session) return;
     const running = state.items.some((i) => i.state.s === "running");
-    if (running || state.confirm || state.queue.length === 0) return;
+    if (running || state.confirm || state.ask || state.queue.length === 0) return;
     const stmt = state.queue[0];
     const missing = writeWithoutWhere(stmt.text);
-    if (missing && confirmed.current !== stmt) {
+    if (missing && state.pass === null && confirmed.current !== stmt) {
       dispatch({ type: "confirmNeeded", verb: missing.verb, table: missing.table });
       return;
     }
     confirmed.current = null;
     const id = state.nextId;
+    const left = state.queue;
     const started = performance.now();
     dispatch({ type: "begin", now: started });
-    executeSql(session, stmt.text).then(
+    executeSql(session, stmt.text, state.pass).then(
       (ex) => {
         dispatch({ type: "done", id, outcome: ex.outcome, ms: ex.elapsedMs });
         if (DDL.test(stmt.text) && connection) lang?.schemas.invalidate(connection.id);
         onRan?.();
       },
       (error) => {
+        if (isCommandError(error) && error.kind === "needsConfirmation") {
+          // The pass ran out: nothing of this statement ran, so ask again for the rest.
+          dispatch({ type: "passExpired", id });
+          void prepare(session, left, true);
+          return;
+        }
         dispatch({ type: "failed", id, error, ms: performance.now() - started });
         onRan?.();
       },
@@ -231,19 +261,118 @@ export default function QueryTab({
     return () => clearTimeout(t);
   }, [toast]);
 
+  // On a Read-only Connection, once edits settle, ask the Core which statements write.
+  const [safety, setSafety] = useState<Safety>(NO_WRITES);
+  const classes = useRef(new Map<string, StatementClass>());
+  const readOnly = !!connection?.readOnly;
+  useEffect(() => {
+    if (!readOnly) {
+      setSafety(NO_WRITES);
+      return;
+    }
+    let live = true;
+    const d = dialect;
+    const timer = setTimeout(() => {
+      const cache = classes.current;
+      const classOf = (sql: string): Promise<StatementClass> => {
+        const key = `${d}\n${sql}`;
+        const known = cache.get(key);
+        if (known) return Promise.resolve(known);
+        return classifySql(d, sql).then((c) => {
+          if (cache.size > CLASS_CACHE_MAX) cache.clear();
+          cache.set(key, c);
+          return c;
+        });
+      };
+      const target = editorRef.current?.runTarget() ?? null;
+      const all = splitStatements(editorText(), d);
+      Promise.all([target ? classOf(target.text) : Promise.resolve<StatementClass>("read"), ...all.map((s) => classOf(s.text))])
+        .then(([cur, ...rest]) => {
+          if (live) setSafety({ current: cur === "write" ? target : null, anyWrite: rest.includes("write") });
+        })
+        .catch(() => {
+          // The Core still blocks any write when the run is asked for.
+          if (live) setSafety(NO_WRITES);
+        });
+    }, CLASSIFY_DELAY_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [readOnly, dialect, tab.text, position.line, position.column]);
+  const blocked = readOnly && safety.current
+    ? { from: safety.current.from, to: safety.current.to, message: WRITES_NOTE, detail: `${connection!.name} blocks every write.` }
+    : null;
+  const runAllBlocked = readOnly && safety.anyWrite;
+
   const running = state.items.find((i) => i.state.s === "running");
   const canRun = !!session && !running;
 
   function run(stmts: (Stmt | null)[]) {
     const list = stmts.filter((s): s is Stmt => !!s && s.text.trim() !== "");
-    if (!canRun || list.length === 0) return;
+    if (!canRun || !session || list.length === 0) return;
     setNotice(null);
-    dispatch({ type: "start", stmts: list });
+    void prepare(session, list);
   }
 
+  /**
+   * Asks the Core whether the run may go ahead, needs the Production dialog, or is blocked.
+   * `cont` carries on a run whose pass ran out, keeping the results it already has.
+   */
+  async function prepare(s: QuerySessionId, list: Stmt[], cont = false) {
+    const token = ++prepared.current;
+    const current = () => token === prepared.current && sessionNow.current === s;
+    try {
+      const verdict = await prepareRun(
+        s,
+        list.map((x) => x.text),
+      );
+      if (!current()) return;
+      if (verdict.kind === "ok") dispatch({ type: "start", stmts: list, continue: cont });
+      else if (verdict.kind === "readOnly") setNotice(errorText({ kind: "readOnly", message: verdict.statement }));
+      else dispatch({ type: "ask", ask: { verdict, stmts: list, continue: cont } });
+    } catch (e) {
+      if (current()) setNotice(errorText(e, dialect));
+    }
+  }
+
+  /** Run on the Production dialog: get a pass for exactly these texts, then run them all with it. */
+  async function confirmAsk() {
+    const ask = state.ask;
+    if (!ask || !session) return;
+    dispatch({ type: "askClosed" });
+    const token = ++prepared.current;
+    try {
+      const pass = await confirmRun(
+        session,
+        ask.stmts.map((x) => x.text),
+      );
+      if (token !== prepared.current || sessionNow.current !== session) return;
+      dispatch({ type: "start", stmts: ask.stmts, pass, continue: ask.continue });
+    } catch (e) {
+      if (token === prepared.current) setNotice(errorText(e, dialect));
+    }
+  }
+
+  // The first UPDATE or DELETE without WHERE in the run waiting for the Production dialog.
+  const askNoWhere = (() => {
+    if (!state.ask) return null;
+    for (let i = 0; i < state.ask.stmts.length; i++) {
+      const missing = writeWithoutWhere(state.ask.stmts[i].text);
+      if (missing) return { index: i, ...missing };
+    }
+    return null;
+  })();
+
   const runCurrent = () => run([editorRef.current?.runTarget() ?? null]);
-  const editorText = () => editorRef.current?.text() ?? latest.current.text;
   const runAll = () => run(splitStatements(editorText(), dialect));
+
+  /** Adds WHERE after the statement, only if the editor still holds it where it was when the run was asked for. */
+  function addWhere(stmt: Stmt) {
+    if (editorText().slice(stmt.from, stmt.to) !== stmt.text) return;
+    editorRef.current?.select(stmt.to, stmt.to);
+    editorRef.current?.insert("\nWHERE ");
+  }
 
   function cancel() {
     if (session && running) void cancelQuery(session).catch((e) => setNotice(errorText(e)));
@@ -370,11 +499,23 @@ export default function QueryTab({
           </button>
         ) : (
           <>
-            <button type="button" className="button button-small button-primary" disabled={!canRun} onClick={runCurrent}>
+            <button
+              type="button"
+              className="button button-small button-primary"
+              disabled={!canRun || !!blocked}
+              title={blocked ? READ_ONLY_TIP : undefined}
+              onClick={runCurrent}
+            >
               <Icon name="play" />
               Run <kbd>Ctrl Enter</kbd>
             </button>
-            <button type="button" className="button button-small" disabled={!canRun} onClick={runAll}>
+            <button
+              type="button"
+              className="button button-small"
+              disabled={!canRun || runAllBlocked}
+              title={runAllBlocked ? READ_ONLY_TIP : undefined}
+              onClick={runAll}
+            >
               <Icon name="playAll" />
               Run all
             </button>
@@ -429,6 +570,7 @@ export default function QueryTab({
             onPosition={(line, column) => setPosition({ line, column })}
             markRunning={running ? { from: running.from, to: running.to } : null}
             markError={errorMark}
+            blocked={blocked}
             lang={editorLang || undefined}
             onAsk={ask ? setAskSel : undefined}
             askButton={ask?.inlineAsk}
@@ -478,8 +620,7 @@ export default function QueryTab({
                 onClick={() => {
                   const c = state.confirm!;
                   dispatch({ type: "declined" });
-                  editorRef.current?.select(c.stmt.to, c.stmt.to);
-                  editorRef.current?.insert("\nWHERE ");
+                  addWhere(c.stmt);
                 }}
               >
                 Add WHERE
@@ -566,6 +707,7 @@ export default function QueryTab({
         {connection ? (
           <>
             <span>{connection.name}</span>
+            <SafetyTag connection={connection} small />
             {tab.database && connection.dialect !== "sqlite" && <span>{tab.database}</span>}
             <span>{DIALECT_LABEL[connection.dialect]}</span>
             {connection.queryTimeoutSecs && <span>Timeout {connection.queryTimeoutSecs} s</span>}
@@ -588,6 +730,19 @@ export default function QueryTab({
         </span>
       </div>
 
+      {state.ask && (
+        <ConfirmRun
+          verdict={state.ask.verdict}
+          noWhere={askNoWhere}
+          onRun={() => void confirmAsk()}
+          onCancel={() => dispatch({ type: "askClosed" })}
+          onAddWhere={() => {
+            const stmt = state.ask!.stmts[askNoWhere!.index];
+            dispatch({ type: "askClosed" });
+            addWhere(stmt);
+          }}
+        />
+      )}
       {saving && (
         <SaveQueryDialog
           sql={tab.text}

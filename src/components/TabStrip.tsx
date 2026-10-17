@@ -1,6 +1,7 @@
-import type { ConnectionId, ObjectKind, ObjectPath } from "../api/types";
+import type { ConnectionConfig, ConnectionId, ObjectKind, ObjectPath } from "../api/types";
 import type { QueryTabDoc } from "../query/QueryTab";
 import Icon from "./Icon";
+import SafetyTag from "./SafetyTag";
 
 /** A table, view, routine or trigger chosen in the object tree. */
 export interface Selection {
@@ -32,29 +33,36 @@ interface Props {
   onSelect(index: number): void;
   onClose(index: number): void;
   onNew(): void;
+  /** Lets a query tab show the Production or Read-only mark of its Connection. */
+  connections?: ConnectionConfig[];
 }
 
 /** The open tables and queries, as tabs in the title bar. */
-export default function TabStrip({ tabs, active, onSelect, onClose, onNew }: Props) {
+export default function TabStrip({ tabs, active, onSelect, onClose, onNew, connections = [] }: Props) {
   return (
     <div className="tab-strip">
       <div role="tablist" aria-label="Open tabs" className="tab-list">
         {tabs.map((t, i) => {
           const name = tabName(t);
           const dirty = isDirty(t);
+          const cid = t.kind === "query" ? t.doc.connectionId : t.selection.connectionId;
+          const owner = connections.find((c) => c.id === cid);
+          const safety = owner?.readOnly ? "Read-only" : owner?.production ? "Production" : null;
+          const label = [name, dirty ? "unsaved changes" : null, safety].filter(Boolean).join(", ");
           return (
             <div key={t.kind === "object" ? t.key : t.doc.id} className={i === active ? "work-tab work-tab-on" : "work-tab"}>
               <button
                 type="button"
                 role="tab"
                 aria-selected={i === active}
-                aria-label={dirty ? `${name}, unsaved changes` : name}
+                aria-label={label}
                 className="work-tab-button"
                 title={name}
                 onClick={() => onSelect(i)}
               >
                 <Icon name={iconOf(t)} />
                 <span className="work-tab-name">{name}</span>
+                {owner && <SafetyTag connection={owner} small />}
                 {dirty && <span className="work-tab-dot" aria-hidden="true" />}
               </button>
               <button

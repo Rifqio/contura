@@ -13,6 +13,7 @@ import type { ConnectionConfig, ConnectionId, Group, GroupId } from "../api/type
 import DialectTag from "./DialectTag";
 import GroupBadge from "./GroupBadge";
 import Icon from "./Icon";
+import SafetyTag from "./SafetyTag";
 import Menu, { type MenuItem } from "./Menu";
 
 interface Props {
@@ -172,6 +173,7 @@ export default function ConnectionList({
                       {busy.has(c.id) ? "Working…" : isOpen ? "Open" : shortenPath(connectionTarget(c))}
                     </span>
                   </span>
+                  <SafetyTag connection={c} />
                 </span>
               </button>
               <button

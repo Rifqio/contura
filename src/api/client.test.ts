@@ -75,6 +75,12 @@ test("error_text_for_query_sessions", () => {
   );
 });
 
+test("error_text_for_safety_errors", () => {
+  expect(errorText({ kind: "readOnly", message: 2 })).toBe("Read-only Connection: this statement writes");
+  expect(errorText({ kind: "needsConfirmation" })).toBe("Confirm this write on a Production Connection");
+  expect(errorText({ kind: "readOnlyRefused" })).toBe("The server refused a write: this Connection is Read-only");
+});
+
 test("error_text_for_ai_errors", () => {
   expect(errorText({ kind: "ai", message: { kind: "notConfigured" } })).toBe("No AI provider is set up. Connect one in Settings.");
   expect(errorText({ kind: "ai", message: { kind: "notAvailable", provider: "groq" } })).toBe(

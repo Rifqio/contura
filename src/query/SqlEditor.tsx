@@ -8,18 +8,22 @@ import {
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { MySQL, PostgreSQL, SQLite, sql } from "@codemirror/lang-sql";
 import { type Diagnostic as CmDiagnostic, lintGutter, openLintPanel, setDiagnostics } from "@codemirror/lint";
-import { EditorSelection, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
+import { EditorSelection, EditorState, Prec, RangeSet, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
   EditorView,
+  GutterMarker,
   keymap,
+  lineNumberMarkers,
   lineNumbers,
   showTooltip,
   type Tooltip,
+  WidgetType,
 } from "@codemirror/view";
 import { type MutableRefObject, useEffect, useRef } from "react";
 import type { DialectKind } from "../api/types";
+import { iconElement } from "../components/Icon";
 import type { LangClient } from "../lang/client";
 import type { Diagnostic, TextEdit } from "../lang/protocol";
 import { findTable } from "../lang/sql/analyze";
@@ -72,6 +76,8 @@ interface Props {
   editorRef: MutableRefObject<SqlEditorApi | null>;
   markRunning?: Range | null;
   markError?: Range | null;
+  /** A statement that cannot run here: a lock in the gutter on its first line and the message under it. */
+  blocked?: Blocked | null;
   /** The line and column being typed at, for the status line. */
   onPosition?(line: number, column: number): void;
   /** Completion, checks and refactors; without it the editor is plain. */
@@ -120,6 +126,80 @@ const marksField = StateField.define<DecorationSet>({
     return next;
   },
   provide: (f) => EditorView.decorations.from(f),
+});
+
+/** A statement that cannot run, such as a write on a Read-only Connection; `detail` follows the message. */
+export type Blocked = { from: number; to: number; message: string; detail?: string };
+
+const setBlocked = StateEffect.define<Blocked | null>();
+
+class BlockedNote extends WidgetType {
+  constructor(readonly message: string, readonly detail: string | undefined) {
+    super();
+  }
+  eq(other: BlockedNote) {
+    return other.message === this.message && other.detail === this.detail;
+  }
+  toDOM() {
+    const dom = document.createElement("div");
+    dom.className = "cm-blocked-note";
+    dom.setAttribute("role", "status");
+    const note = document.createElement("span");
+    note.className = "cm-blocked-text";
+    note.append(iconElement("lock"));
+    const b = document.createElement("b");
+    b.textContent = this.message;
+    note.append(b);
+    if (this.detail) {
+      const d = document.createElement("span");
+      d.className = "muted";
+      d.textContent = this.detail;
+      note.append(d);
+    }
+    dom.append(note);
+    return dom;
+  }
+}
+
+/** The line number with a lock in front, on the blocked statement's first line. */
+class LockMarker extends GutterMarker {
+  constructor(readonly line: number) {
+    super();
+  }
+  eq(other: LockMarker) {
+    return other.line === this.line;
+  }
+  toDOM() {
+    const dom = document.createElement("span");
+    dom.className = "cm-blocked-lock";
+    dom.append(iconElement("lock"), String(this.line));
+    return dom;
+  }
+}
+
+const blockedField = StateField.define<Blocked | null>({
+  create: () => null,
+  update(v, tr) {
+    let next = v && tr.docChanged ? { ...v, from: tr.changes.mapPos(v.from), to: tr.changes.mapPos(v.to, 1) } : v;
+    for (const e of tr.effects) if (e.is(setBlocked)) next = e.value;
+    return next;
+  },
+  provide: (f) => [
+    EditorView.decorations.compute([f], (state) => {
+      const v = state.field(f);
+      if (!v) return Decoration.none;
+      const end = state.doc.lineAt(Math.min(v.to, state.doc.length)).to;
+      return Decoration.set([
+        Decoration.widget({ widget: new BlockedNote(v.message, v.detail), block: true, side: 1 }).range(end),
+      ]);
+    }),
+    lineNumberMarkers.compute([f], (state) => {
+      const v = state.field(f);
+      if (!v) return RangeSet.empty;
+      const line = state.doc.lineAt(Math.min(v.from, state.doc.length));
+      return RangeSet.of([new LockMarker(line.number).range(line.from)]);
+    }),
+  ],
 });
 
 /** A short message where you are typing, such as why a name cannot be renamed. */
@@ -229,6 +309,7 @@ export default function SqlEditor({
   editorRef,
   markRunning,
   markError,
+  blocked,
   onPosition,
   lang,
   onShowInTree,
@@ -527,6 +608,7 @@ export default function SqlEditor({
           sql({ dialect: SQL_DIALECT[dialect], upperCaseKeywords: true }),
           themeHighlight,
           marksField,
+          blockedField,
           noticeField,
           paramsField,
           askTip,
@@ -641,6 +723,10 @@ export default function SqlEditor({
   useEffect(() => {
     viewRef.current?.dispatch({ effects: setMarks.of({ running: markRunning ?? null, error: markError ?? null }) });
   }, [markRunning?.from, markRunning?.to, markError?.from, markError?.to]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: setBlocked.of(blocked ?? null) });
+  }, [blocked?.from, blocked?.to, blocked?.message, blocked?.detail]);
 
   // A restarted engine has no results for this document yet: ask it again.
   useEffect(() => {

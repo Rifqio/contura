@@ -159,7 +159,11 @@ export default function ResultsPanel({
               <Icon name="error" />
               {st.message}
             </h3>
-            <p className="muted">Statements after this one did not run.</p>
+            <p className="muted">
+              {st.refused
+                ? "This Connection opens every session read-only. The statement did not change anything, and statements after it did not run."
+                : "Statements after this one did not run."}
+            </p>
             <pre className="result-sql">{item.sql}</pre>
             <div className="result-actions">
               <button type="button" className="button" onClick={() => onGoTo(st.at, st.at)}>

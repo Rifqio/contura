@@ -53,6 +53,12 @@ pub struct ConnectionConfig {
     /// What the AI assistant may see of this Connection.
     #[serde(default)]
     pub ai_access: AiAccess,
+    /// Writes ask for confirmation first.
+    #[serde(default)]
+    pub production: bool,
+    /// Writes are blocked by the Core and refused by the server.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

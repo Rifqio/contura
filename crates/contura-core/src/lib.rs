@@ -10,6 +10,7 @@ pub mod model_files;
 pub mod mysql;
 pub mod postgres;
 pub mod query;
+pub mod safety;
 pub mod schema_model;
 pub mod secrets;
 pub mod sql_schema;

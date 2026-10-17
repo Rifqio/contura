@@ -33,7 +33,11 @@ interface Props {
   lang?: { client: LangClient; schemas: SchemaCache };
   /** Ctrl+I in the filter box asks AI; absent, it does nothing. */
   ask?: AskKit & { connection: AskContext["connection"] };
+  /** The Connection is Read-only: a lock in the header corner says cells can't be edited. */
+  readOnly?: boolean;
 }
+
+const READ_ONLY_TIP = "Read-only Connection: cells can't be edited";
 
 /** The page on screen and its index. Replaced, never accumulated. */
 type Shown = { index: number; page: Page };
@@ -53,7 +57,7 @@ function rowKey(columns: ColumnInfo[], row: Page["rows"][number]): KeyPart[] {
  * this component by table so opening another table starts fresh. Only the
  * rows near the viewport are in the DOM; spacer rows stand in for the rest.
  */
-export default function DataGrid({ connectionId, table, onClose, onNotOpen, dialect = "postgres", lang, ask }: Props) {
+export default function DataGrid({ connectionId, table, onClose, onNotOpen, dialect = "postgres", lang, ask, readOnly = false }: Props) {
   const [pageIndex, setPageIndex] = useState(0);
   const [sort, setSort] = useState<SortSpec | null>(null);
   /** The filter in use, and what is typed in the box. */
@@ -224,6 +228,13 @@ export default function DataGrid({ connectionId, table, onClose, onNotOpen, dial
           stale={loading}
           sort={sort}
           onSort={chooseSort}
+          corner={
+            readOnly && (
+              <span className="lock-corner" role="img" aria-label={READ_ONLY_TIP} title={READ_ONLY_TIP} tabIndex={0}>
+                <Icon name="lock" />
+              </span>
+            )
+          }
           cellSource={(r, column) =>
             page ? { connectionId, table, column, rowKey: rowKey(page.columns, page.rows[r]) } : undefined
           }

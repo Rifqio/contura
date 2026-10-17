@@ -26,5 +26,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 
+[features]
+# Helpers for tests outside this crate's unit tests, such as short pass lifetimes.
+test-util = []
+
 [dev-dependencies]
 tempfile = "3"
+contura-core = { path = ".", features = ["test-util"] }

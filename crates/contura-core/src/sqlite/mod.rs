@@ -11,7 +11,7 @@ use std::time::Duration;
 use rusqlite::{Connection, ErrorCode, OpenFlags};
 
 use crate::dialect::Dialect;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, browse_result};
 use crate::model::{
     ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
     PageRequest, SchemaInfo,
@@ -23,10 +23,31 @@ pub struct SqliteDialect {
     conn: Arc<Mutex<Connection>>,
     /// Query sessions open their own connection to this file.
     path: std::path::PathBuf,
+    read_only: bool,
 }
 
+fn is_read_only_refusal(e: &rusqlite::Error) -> bool {
+    matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == ErrorCode::ReadOnly)
+}
+
+/// Browse code uses this. `SqliteDialect::run` passes its result through
+/// `browse_result`, which turns a refusal into a plain error on a Connection that is
+/// not Read-only.
 pub(crate) fn query_err(e: rusqlite::Error) -> Error {
-    Error::Query(e.to_string())
+    if is_read_only_refusal(&e) {
+        Error::ReadOnlyRefused
+    } else {
+        Error::Query(e.to_string())
+    }
+}
+
+/// A read-only refusal reads as "this Connection is Read-only" only when the Connection is.
+pub(crate) fn session_err(e: rusqlite::Error, read_only: bool) -> Error {
+    if !read_only && is_read_only_refusal(&e) {
+        Error::Query(e.to_string())
+    } else {
+        query_err(e)
+    }
 }
 
 fn is_not_a_database(e: &rusqlite::Error) -> bool {
@@ -41,18 +62,21 @@ fn connect_err(path: &Path, e: rusqlite::Error) -> Error {
     }
 }
 
-fn open_existing(path: &Path) -> Result<Connection> {
+/// A read-only connection is opened without write access, so the file itself refuses writes.
+fn open_existing(path: &Path, read_only: bool) -> Result<Connection> {
     if !path.exists() {
         return Err(Error::Connect(format!(
             "cannot open {}: the file does not exist",
             path.display()
         )));
     }
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| connect_err(path, e))?;
+    let access = if read_only {
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+    } else {
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+    };
+    let conn = Connection::open_with_flags(path, access | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| connect_err(path, e))?;
     conn.busy_timeout(BUSY_TIMEOUT)
         .map_err(|e| connect_err(path, e))?;
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
@@ -92,13 +116,25 @@ impl SqliteDialect {
             .clone()
             .ok_or_else(|| Error::InvalidInput("choose a SQLite file".into()))?;
         let opened = path.clone();
-        let conn = tokio::task::spawn_blocking(move || open_existing(&opened))
+        let read_only = config.read_only;
+        let conn = tokio::task::spawn_blocking(move || open_existing(&opened, read_only))
             .await
             .map_err(|e| Error::Connect(e.to_string()))??;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             path,
+            read_only,
         })
+    }
+
+    /// Runs one statement on the browse connection. Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn browse_execute_for_test(&self, sql: &str) -> Result<()> {
+        let sql = sql.to_string();
+        let read_only = self.read_only;
+        self.run(move |c| c.execute_batch(&sql).map_err(|e| session_err(e, read_only)))
+            .await
     }
 
     async fn run<T, F>(&self, work: F) -> Result<T>
@@ -107,14 +143,15 @@ impl SqliteDialect {
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     {
         let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let guard = conn
                 .lock()
                 .map_err(|_| Error::Query("connection lock poisoned".into()))?;
             work(&guard)
         })
         .await
-        .map_err(|e| Error::Query(e.to_string()))?
+        .map_err(|e| Error::Query(e.to_string()))?;
+        browse_result(result, self.read_only)
     }
 }
 
@@ -179,12 +216,34 @@ impl Dialect for SqliteDialect {
         _database: Option<&str>,
     ) -> Result<crate::query::SessionHandle> {
         let path = self.path.clone();
-        tokio::task::spawn_blocking(move || session::spawn(path))
+        let read_only = self.read_only;
+        tokio::task::spawn_blocking(move || session::spawn(path, read_only))
             .await
             .map_err(|e| Error::Connect(e.to_string()))?
     }
 
     async fn disconnect(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn readonly_failure() -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(8), None)
+    }
+
+    #[test]
+    fn read_only_refusal_maps_only_on_a_read_only_connection() {
+        assert!(matches!(
+            session_err(readonly_failure(), true),
+            Error::ReadOnlyRefused
+        ));
+        assert!(matches!(
+            session_err(readonly_failure(), false),
+            Error::Query(_)
+        ));
     }
 }

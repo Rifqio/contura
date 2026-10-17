@@ -17,6 +17,7 @@ use crate::query::{
     ExecOutcome, Execution, HistoryEntry, HistoryFilter, MoreRows, NewHistory, Outcome,
     QuerySessionId, SavedQuery, SavedQueryInput, SessionHandle,
 };
+use crate::safety::{PassId, RunVerdict, StatementClass, classify, verdict};
 use crate::secrets::SecretStore;
 use crate::store::AppStore;
 use crate::suggest::{SuggestedConnection, laragon_suggestions};
@@ -52,6 +53,10 @@ pub struct ConnectionInput {
     pub query_timeout_secs: Option<u32>,
     #[serde(default)]
     pub ai_access: AiAccess,
+    #[serde(default)]
+    pub production: bool,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -72,7 +77,29 @@ pub struct ConnectionService {
     /// that was connecting meanwhile can tell its settings went stale.
     generations: Mutex<HashMap<ConnectionId, u64>>,
     /// One per query tab, each with its own database connection.
-    query_sessions: Mutex<HashMap<QuerySessionId, (ConnectionId, Arc<SessionHandle>)>>,
+    /// The third part is the database the session was opened on.
+    query_sessions: Mutex<HashMap<QuerySessionId, QuerySlot>>,
+    /// Confirm passes handed out by `confirm_run`, used up by `execute_sql`.
+    passes: Mutex<HashMap<PassId, Pass>>,
+    pass_ttl: Mutex<Duration>,
+}
+
+type QuerySlot = (ConnectionId, Arc<SessionHandle>, Option<String>);
+
+/// One confirmed run: the Production writes it covers, by hash of their exact text.
+struct Pass {
+    session: QuerySessionId,
+    remaining: Vec<u64>,
+    expires: Instant,
+}
+
+const PASS_TTL: Duration = Duration::from_secs(120);
+
+fn text_hash(sql: &str) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    sql.hash(&mut h);
+    h.finish()
 }
 
 fn poisoned() -> Error {
@@ -87,6 +114,16 @@ impl ConnectionService {
             sessions: RwLock::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
             query_sessions: Mutex::new(HashMap::new()),
+            passes: Mutex::new(HashMap::new()),
+            pass_ttl: Mutex::new(PASS_TTL),
+        }
+    }
+
+    /// Lets tests make passes expire at once.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_pass_ttl_for_test(&self, ttl: Duration) {
+        if let Ok(mut t) = self.pass_ttl.lock() {
+            *t = ttl;
         }
     }
 
@@ -126,11 +163,11 @@ impl ConnectionService {
             let mut qs = self.query_sessions.lock().map_err(|_| poisoned())?;
             let mine: Vec<QuerySessionId> = qs
                 .iter()
-                .filter(|(_, (conn, _))| *conn == id)
+                .filter(|(_, (conn, _, _))| *conn == id)
                 .map(|(s, _)| *s)
                 .collect();
             mine.iter()
-                .filter_map(|s| qs.remove(s).map(|(_, h)| h))
+                .filter_map(|s| qs.remove(s).map(|(_, h, _)| h))
                 .collect()
         };
         close_all(handles).await;
@@ -140,13 +177,99 @@ impl ConnectionService {
         Ok(())
     }
 
-    fn query_session(&self, s: QuerySessionId) -> Result<(ConnectionId, Arc<SessionHandle>)> {
+    fn query_slot(&self, s: QuerySessionId) -> Result<QuerySlot> {
         self.query_sessions
             .lock()
             .map_err(|_| poisoned())?
             .get(&s)
             .cloned()
             .ok_or_else(|| Error::NotFound("That query session is closed.".into()))
+    }
+
+    fn query_session(&self, s: QuerySessionId) -> Result<(ConnectionId, Arc<SessionHandle>)> {
+        let (conn, handle, _) = self.query_slot(s)?;
+        Ok((conn, handle))
+    }
+
+    /// Drops the session's passes, so a partly used one cannot cover a later run, and every
+    /// expired pass.
+    fn drop_passes(&self, s: QuerySessionId) -> Result<()> {
+        let now = Instant::now();
+        self.passes
+            .lock()
+            .map_err(|_| poisoned())?
+            .retain(|_, p| p.session != s && p.expires > now);
+        Ok(())
+    }
+
+    /// What running these statements on the session needs: nothing, a block or a confirmation.
+    /// A new run starts here, so the session's earlier passes end.
+    pub fn prepare_run(&self, s: QuerySessionId, statements: Vec<String>) -> Result<RunVerdict> {
+        let (conn, _, database) = self.query_slot(s)?;
+        self.drop_passes(s)?;
+        let config = self.config(conn)?;
+        let database = database.or_else(|| config.database.clone());
+        Ok(verdict(&config, database.as_deref(), &statements))
+    }
+
+    /// Records the user's confirmation of the writes among `statements`. The pass covers
+    /// each write once, by its exact text, for a limited time, and replaces the session's
+    /// earlier passes.
+    pub fn confirm_run(&self, s: QuerySessionId, statements: Vec<String>) -> Result<PassId> {
+        let (conn, _, _) = self.query_slot(s)?;
+        let dialect = self.config(conn)?.dialect;
+        let remaining = statements
+            .iter()
+            .filter(|t| classify(dialect, t) == StatementClass::Write)
+            .map(|t| text_hash(t))
+            .collect();
+        let ttl = *self.pass_ttl.lock().map_err(|_| poisoned())?;
+        let now = Instant::now();
+        let mut passes = self.passes.lock().map_err(|_| poisoned())?;
+        passes.retain(|_, p| p.session != s && p.expires > now);
+        let id = Uuid::new_v4();
+        passes.insert(
+            id,
+            Pass {
+                session: s,
+                remaining,
+                expires: now + ttl,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Applies Read-only and Production to one statement before it reaches the server.
+    fn authorize(
+        &self,
+        s: QuerySessionId,
+        config: &ConnectionConfig,
+        sql: &str,
+        pass: Option<PassId>,
+    ) -> Result<()> {
+        if !config.read_only && !config.production {
+            return Ok(());
+        }
+        if classify(config.dialect, sql) == StatementClass::Read {
+            return Ok(());
+        }
+        if config.read_only {
+            return Err(Error::ReadOnly(0));
+        }
+        let pass = pass.ok_or(Error::NeedsConfirmation)?;
+        let mut passes = self.passes.lock().map_err(|_| poisoned())?;
+        let p = passes.get_mut(&pass).ok_or(Error::NeedsConfirmation)?;
+        let hash = text_hash(sql);
+        let at = p.remaining.iter().position(|h| *h == hash);
+        if p.session != s || p.expires <= Instant::now() {
+            return Err(Error::NeedsConfirmation);
+        }
+        let at = at.ok_or(Error::NeedsConfirmation)?;
+        p.remaining.swap_remove(at);
+        if p.remaining.is_empty() {
+            passes.remove(&pass);
+        }
+        Ok(())
     }
 
     fn config(&self, id: ConnectionId) -> Result<ConnectionConfig> {
@@ -198,6 +321,8 @@ impl ConnectionService {
                 file: input.file.clone(),
                 query_timeout_secs: input.query_timeout_secs.filter(|s| *s > 0),
                 ai_access: input.ai_access,
+                production: input.production,
+                read_only: input.read_only,
             };
         }
         ConnectionConfig {
@@ -213,6 +338,8 @@ impl ConnectionService {
             file: None,
             query_timeout_secs: input.query_timeout_secs.filter(|s| *s > 0),
             ai_access: input.ai_access,
+            production: input.production,
+            read_only: input.read_only,
         }
     }
 
@@ -234,8 +361,18 @@ impl ConnectionService {
             self.require_group(group)?;
         }
         let id = input.id.unwrap_or_else(Uuid::new_v4);
-        let config = Self::config_from(id, name, &input);
-        self.store()?.save_connection(&config)?;
+        let mut config = Self::config_from(id, name, &input);
+        {
+            let store = self.store()?;
+            let was_production = store
+                .list_connections()?
+                .iter()
+                .any(|c| c.id == id && c.production);
+            if config.production && !was_production {
+                config.ai_access = AiAccess::Never;
+            }
+            store.save_connection(&config)?;
+        }
         // A SQLite file has no password, so nothing may be stored for it.
         let change = if input.dialect == DialectKind::Sqlite {
             &PasswordChange::Clear
@@ -456,20 +593,49 @@ impl ConnectionService {
         id: ConnectionId,
         database: Option<String>,
     ) -> Result<QuerySessionId> {
+        self.open_query_session_with_hook(id, database, async {})
+            .await
+    }
+
+    /// `open_query_session`, awaiting `after_open` between opening and registering the
+    /// session. Exists so tests can interleave a save deterministically.
+    #[doc(hidden)]
+    pub async fn open_query_session_with_hook(
+        &self,
+        id: ConnectionId,
+        database: Option<String>,
+        after_open: impl Future<Output = ()>,
+    ) -> Result<QuerySessionId> {
+        let generation = self.generation(id)?;
         let dialect = self.session(id).await?;
         let handle = dialect.open_query_session(database.as_deref()).await?;
+        after_open.await;
         let s = Uuid::new_v4();
-        self.query_sessions
-            .lock()
-            .map_err(|_| poisoned())?
-            .insert(s, (id, Arc::new(handle)));
-        Ok(s)
+        // A save, delete or close meanwhile already closed the Connection's sessions, and
+        // this one was opened with the old settings.
+        {
+            let mut qs = self.query_sessions.lock().map_err(|_| poisoned())?;
+            if self.generation(id)? == generation {
+                qs.insert(s, (id, Arc::new(handle), database));
+                return Ok(s);
+            }
+        }
+        close_handle(&handle).await;
+        Err(Error::NotFound("connection not open".into()))
     }
 
     /// Runs one statement, applying the Connection's timeout, and records it in Query History.
-    pub async fn execute_sql(&self, s: QuerySessionId, sql: String) -> Result<Execution> {
+    /// Read-only and Production are enforced first; a blocked statement is not recorded.
+    pub async fn execute_sql(
+        &self,
+        s: QuerySessionId,
+        sql: String,
+        pass: Option<PassId>,
+    ) -> Result<Execution> {
         let (conn, handle) = self.query_session(s)?;
-        let timeout = self.config(conn)?.query_timeout_secs;
+        let config = self.config(conn)?;
+        self.authorize(s, &config, &sql, pass)?;
+        let timeout = config.query_timeout_secs;
         let ran_at_ms = now_ms();
         let started = Instant::now();
         let result = {
@@ -536,7 +702,7 @@ impl ConnectionService {
         let busy: Vec<Arc<SessionHandle>> = match self.query_sessions.lock() {
             Ok(qs) => qs
                 .values()
-                .map(|(_, h)| h.clone())
+                .map(|(_, h, _)| h.clone())
                 .filter(|h| h.is_busy())
                 .collect(),
             Err(_) => return,
@@ -558,7 +724,7 @@ impl ConnectionService {
             .lock()
             .map_err(|_| poisoned())?
             .remove(&s);
-        if let Some((_, h)) = removed {
+        if let Some((_, h, _)) = removed {
             close_handle(&h).await;
         }
         Ok(())

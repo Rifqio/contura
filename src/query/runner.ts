@@ -1,15 +1,23 @@
 // The run state of one query tab: its result tabs, the statements still to run,
 // and a pending confirmation. Pure, so the rules are tested without a server.
-import { isCommandError } from "../api/client";
-import type { Cell, ExecOutcome, ResultColumn } from "../api/types";
+import { errorText, isCommandError } from "../api/client";
+import type { Cell, ExecOutcome, PassId, ResultColumn, RunVerdict } from "../api/types";
 import type { Stmt } from "./statements";
+
+/** A run on a Production Connection waiting for its confirmation dialog. */
+export interface RunAsk {
+  verdict: Extract<RunVerdict, { kind: "needsConfirmation" }>;
+  stmts: Stmt[];
+  /** The rest of a run whose pass ran out: its earlier results stay. */
+  continue?: boolean;
+}
 
 export type RunState =
   | { s: "running" }
   | { s: "rows"; columns: ResultColumn[]; rows: Cell[][]; hasMore: boolean; open: boolean; ms: number }
   | { s: "affected"; rows: number; ms: number }
   /** `at` is where the error points, as an offset into the editor text. */
-  | { s: "error"; message: string; at: number }
+  | { s: "error"; message: string; at: number; refused?: boolean }
   | { s: "cancelled"; ms: number }
   | { s: "timedOut"; secs: number };
 
@@ -28,13 +36,22 @@ export interface RunnerState {
   active: number;
   queue: Stmt[];
   confirm: { stmt: Stmt; verb: "UPDATE" | "DELETE"; table: string } | null;
+  /** The whole run waits here until the Production dialog is answered. */
+  ask: RunAsk | null;
+  /** The confirm pass every statement of the queue runs with, once confirmed. */
+  pass: PassId | null;
   nextId: number;
 }
 
-export const EMPTY_RUNNER: RunnerState = { items: [], active: 0, queue: [], confirm: null, nextId: 1 };
+export const EMPTY_RUNNER: RunnerState = { items: [], active: 0, queue: [], confirm: null, ask: null, pass: null, nextId: 1 };
 
 export type RunnerAction =
-  | { type: "start"; stmts: Stmt[] }
+  /** `continue` carries on the same run, keeping the results it already has. */
+  | { type: "start"; stmts: Stmt[]; pass?: PassId | null; continue?: boolean }
+  | { type: "ask"; ask: RunAsk }
+  | { type: "askClosed" }
+  /** The pass ran out before this statement ran: it is dropped and nothing more runs. */
+  | { type: "passExpired"; id: number }
   /** Takes the first queued statement and marks it running. */
   | { type: "begin"; now: number }
   | { type: "done"; id: number; outcome: ExecOutcome; ms: number }
@@ -57,6 +74,9 @@ function errorState(error: unknown, item: ResultItem): RunState {
   if (isCommandError(error)) {
     if (error.kind === "cancelled") return { s: "cancelled", ms: 0 };
     if (error.kind === "timedOut") return { s: "timedOut", secs: error.message };
+    // Safety errors are said in Contura's words; a refusal is the server's, from its read-only session.
+    if (error.kind === "readOnly" || error.kind === "needsConfirmation" || error.kind === "readOnlyRefused")
+      return { s: "error", message: errorText(error), at: item.from, refused: error.kind === "readOnlyRefused" };
     if (typeof error.message === "string") {
       const m = POSITION.exec(error.message);
       const at = m ? item.from + Number(m[1]) - 1 : item.from;
@@ -80,11 +100,21 @@ export function runnerReducer(state: RunnerState, action: RunnerAction): RunnerS
     case "start":
       return {
         ...state,
-        items: closeOpen(state.items.filter((i) => i.pinned)),
-        active: 0,
+        items: closeOpen(action.continue ? state.items : state.items.filter((i) => i.pinned)),
+        active: action.continue ? state.active : 0,
         queue: action.stmts,
         confirm: null,
+        ask: null,
+        pass: action.pass ?? null,
       };
+    case "ask":
+      return { ...state, ask: action.ask, queue: [], confirm: null };
+    case "askClosed":
+      return { ...state, ask: null };
+    case "passExpired": {
+      const items = state.items.filter((i) => i.id !== action.id);
+      return { ...state, items, active: Math.max(0, items.length - 1), queue: [], pass: null };
+    }
     case "begin": {
       const [stmt, ...rest] = state.queue;
       if (!stmt) return state;
@@ -147,7 +177,7 @@ export function runnerReducer(state: RunnerState, action: RunnerAction): RunnerS
     case "closeUnpinned":
       return { ...state, items: state.items.filter((i) => i.pinned || i.state.s === "running"), active: 0 };
     case "sessionChanged":
-      return { ...state, items: closeOpen(state.items), queue: [], confirm: null };
+      return { ...state, items: closeOpen(state.items), queue: [], confirm: null, ask: null, pass: null };
     case "closeItem": {
       const items = state.items.filter((i) => i.id !== action.id);
       return { ...state, items, active: Math.min(state.active, Math.max(0, items.length - 1)) };

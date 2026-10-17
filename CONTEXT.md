@@ -52,12 +52,16 @@ A Connection that Contura pre-fills from a database it found installed locally (
 _Avoid_: Auto-connection, detected connection, discovered server
 
 **Production Connection**:
-A Connection flagged as production, where every write needs an extra confirmation, including SQL typed by hand.
+A Connection flagged as production, where every write needs an extra confirmation, including SQL typed by hand. The Core classifies each statement as a read or a write and decides; the UI shows one dialog with the exact SQL before anything runs. Turning it on sets AI access to never.
 _Avoid_: Live, prod mode
 
 **Read-only Connection**:
-A Connection that Contura will not send any write to.
+A Connection that Contura will not send any write to. The Core blocks writes before the driver, and the server refuses them too. It wins over Production: no dialog, the write is blocked.
 _Avoid_: Safe mode, locked
+
+**Confirm pass**:
+The single-use permission the Core issues once the user confirms the dialog on a Production Connection. It is bound to the Query Session and to the exact text of each writing statement, and expires after 120 seconds. Editing the SQL means asking again.
+_Avoid_: Token, approval
 
 ### Querying
 

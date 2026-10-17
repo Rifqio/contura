@@ -2,7 +2,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { errorText, exportSql, writeBinaryFile, writeModelFiles, writeTextFile } from "../api/client";
 import type { DialectKind, SchemaModel } from "../api/types";
-import type { AskKit } from "../assistant/context";
+import type { AskContext, AskKit } from "../assistant/context";
 import Dialog from "../components/Dialog";
 import type { LangClient } from "../lang/client";
 import type { ParseResult, TextEdit } from "../lang/protocol";
@@ -22,6 +22,8 @@ export type ModelDoc = {
   layout: Layout;
   dialect: DialectKind;
   source: "blank" | "file" | "connection";
+  /** The Connection a model was read from; its AI access governs the card asks. */
+  connectionId: string | null;
 };
 
 type ExportKind = "sql" | "svg" | "png";
@@ -41,9 +43,11 @@ interface Props {
   client?: LangClient;
   /** Ask AI on a table card; the Builder has no assistant panel, so there is no Open in chat. */
   ask?: AskKit;
+  /** The live source Connection of the model, if it still exists; carries the AI access for card asks. */
+  sourceConnection?: AskContext["connection"];
 }
 
-export default function SchemaBuilder({ doc, onClose, client, ask }: Props) {
+export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnection }: Props) {
   const [text, setText] = useState(doc.dbml);
   const [saved, setSaved] = useState(doc.savedDbml);
   const [path, setPath] = useState(doc.path);
@@ -67,8 +71,8 @@ export default function SchemaBuilder({ doc, onClose, client, ask }: Props) {
   const dirty = text !== saved || layoutDirty;
 
   const askForCards = useMemo(
-    () => (ask?.inlineAsk ? { getDbml: () => textRef.current, label: `${name}.dbml`, kit: { ...ask, onOpenInChat: undefined } } : undefined),
-    [ask, name],
+    () => (ask?.inlineAsk ? { getDbml: () => textRef.current, label: `${name}.dbml`, connection: sourceConnection, kit: { ...ask, onOpenInChat: undefined } } : undefined),
+    [ask, name, sourceConnection],
   );
 
   const onEdit = useCallback(

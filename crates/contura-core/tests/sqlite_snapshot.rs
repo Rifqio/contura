@@ -28,6 +28,8 @@ async fn sqlite_snapshot_reads_tables_indexes_refs() {
         file: Some(path.clone()),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        production: false,
+        read_only: false,
     };
     let db = connect(&config, None).await.unwrap();
     let model = db.schema_snapshot("main", None).await.unwrap();

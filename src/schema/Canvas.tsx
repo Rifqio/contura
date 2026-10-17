@@ -14,7 +14,7 @@ import type { SchemaModel, SmEndpoint } from "../api/types";
 import { addRef, addTable, fkTargetWarning } from "../lang/dbml/edits";
 import { tableKey } from "../lang/protocol";
 import { CARD_WIDTH, cardHeight, type Layout } from "./layout";
-import type { AskKit } from "../assistant/context";
+import type { AskContext, AskKit } from "../assistant/context";
 import TableCard, { type MakeEdits, type TableCardData } from "./TableCard";
 
 interface Props {
@@ -27,7 +27,7 @@ interface Props {
   onEdit: (make: MakeEdits) => void;
   onGoToError: () => void;
   /** The DBML text and name the table cards ask about; absent, the cards have no Ask AI. */
-  ask?: { getDbml(): string; label: string; kit: AskKit };
+  ask?: { getDbml(): string; label: string; kit: AskKit; connection?: AskContext["connection"] };
 }
 
 const nodeTypes = { table: TableCard };

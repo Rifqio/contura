@@ -39,6 +39,40 @@ test("tabs_hold_tables_and_queries_and_close_with_their_x", async () => {
   expect(onNew).toHaveBeenCalled();
 });
 
+test("query_tab_strip_shows_tag", () => {
+  const prod = {
+    id: "c1",
+    name: "kfc-prod",
+    dialect: "mysql",
+    host: "h",
+    port: 3306,
+    user: "u",
+    database: null,
+    ssl: { mode: "disable" },
+    file: null,
+    queryTimeoutSecs: null,
+    aiAccess: "schema",
+    production: true,
+    readOnly: false,
+    groupId: null,
+  } as const;
+  render(
+    <TabStrip
+      tabs={[table, q("a", "Query 1")]}
+      active={1}
+      connections={[prod]}
+      onSelect={() => {}}
+      onClose={() => {}}
+      onNew={() => {}}
+    />,
+  );
+  expect(screen.getAllByText("Production")).toHaveLength(2);
+  expect(screen.getByRole("tab", { name: "Query 1, Production" })).toBeTruthy();
+  const objectTab = screen.getByRole("tab", { name: /^stores/ });
+  expect(objectTab.getAttribute("aria-label")?.endsWith(", Production")).toBe(true);
+  expect(objectTab.textContent).toContain("Production");
+});
+
 test("new_query_names_count_up", () => {
   expect(nextQueryName([])).toBe("Query 1");
   expect(nextQueryName(["Query 1", "Weekly sales", "Query 3"])).toBe("Query 4");

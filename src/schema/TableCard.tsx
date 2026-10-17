@@ -2,7 +2,7 @@ import { Handle, type NodeProps, Position } from "@xyflow/react";
 import { useState } from "react";
 import type { DialectKind, SmColumn, SmTable } from "../api/types";
 import InlineAsk from "../assistant/InlineAsk";
-import type { AskKit } from "../assistant/context";
+import type { AskContext, AskKit } from "../assistant/context";
 import { DIALECT_TYPES } from "../lang/dialectTypes";
 import {
   addColumn,
@@ -25,7 +25,7 @@ export type TableCardData = {
   blocked: boolean;
   onEdit: (make: MakeEdits) => void;
   /** Ask AI about this card: the model's DBML and name; absent, the menu has no Ask AI. */
-  ask?: { getDbml(): string; label: string; kit: AskKit; tables: { schema: string | null; name: string }[] };
+  ask?: { getDbml(): string; label: string; kit: AskKit; connection?: AskContext["connection"]; tables: { schema: string | null; name: string }[] };
 };
 
 const SETTINGS: { setting: ColumnSetting; label: string; on: (c: SmColumn) => boolean }[] = [
@@ -138,7 +138,7 @@ export default function TableCard({ data }: NodeProps & { data: TableCardData })
             <InlineAsk
               context={{
                 kind: "card",
-                connection: null,
+                connection: askData.connection ?? null,
                 dbml: askData.getDbml(),
                 tables: askData.tables,
                 label: askData.label,

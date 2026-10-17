@@ -38,8 +38,12 @@ impl Canceller for PgCancel {
 }
 
 /// The server's message, plus where in the statement it points when it says.
-fn session_err(e: tokio_postgres::Error) -> Error {
+/// A read-only refusal reads as "this Connection is Read-only" only when the Connection is.
+pub(super) fn session_err(e: tokio_postgres::Error, read_only: bool) -> Error {
     match e.as_db_error() {
+        Some(db) if read_only && *db.code() == SqlState::READ_ONLY_SQL_TRANSACTION => {
+            Error::ReadOnlyRefused
+        }
         Some(db) => match db.position() {
             Some(ErrorPosition::Original(p)) => {
                 Error::Query(format!("{} (position {p})", db.message()))
@@ -50,14 +54,24 @@ fn session_err(e: tokio_postgres::Error) -> Error {
     }
 }
 
-pub(super) fn spawn(client: Client, tls: Option<MakeRustlsConnect>) -> SessionHandle {
+pub(super) fn spawn(
+    client: Client,
+    tls: Option<MakeRustlsConnect>,
+    read_only: bool,
+) -> SessionHandle {
     let canceller: Arc<dyn Canceller> = Arc::new(PgCancel {
         token: client.cancel_token(),
         tls,
     });
     let flag = CancelFlag::default();
     let (tx, rx) = mpsc::channel(8);
-    tokio::spawn(actor(client, rx, flag.clone(), canceller.clone()));
+    tokio::spawn(actor(
+        client,
+        rx,
+        flag.clone(),
+        canceller.clone(),
+        read_only,
+    ));
     SessionHandle::new(tx, canceller, flag)
 }
 
@@ -75,6 +89,7 @@ async fn actor(
     mut rx: mpsc::Receiver<Command>,
     flag: CancelFlag,
     canceller: Arc<dyn Canceller>,
+    read_only: bool,
 ) {
     let mut open: Option<Open> = None;
     while let Some(cmd) = rx.recv().await {
@@ -85,13 +100,13 @@ async fn actor(
         }
         match cmd {
             Command::Execute { sql, reply } => {
-                let result = execute(&client, &sql, &mut open).await;
+                let result = execute(&client, &sql, &mut open, read_only).await;
                 let _ = reply.send(result.map_err(|e| or_cancelled(&flag, e)));
             }
             Command::FetchMore { reply } => {
                 let result = match open.as_mut() {
                     None => Err(no_more()),
-                    Some(o) => read_page(o)
+                    Some(o) => read_page(o, read_only)
                         .await
                         .map(|(rows, has_more)| MoreRows { rows, has_more }),
                 };
@@ -164,7 +179,13 @@ fn cell(value: Option<&str>, is_bytea: bool, is_numeric: bool) -> Cell {
     }
 }
 
-async fn execute(client: &Client, sql: &str, open: &mut Option<Open>) -> Result<ExecOutcome> {
+async fn execute(
+    client: &Client,
+    sql: &str,
+    open: &mut Option<Open>,
+    read_only: bool,
+) -> Result<ExecOutcome> {
+    let session_err = |e| session_err(e, read_only);
     // Types come from a prepare, which does not run anything. A cancel that lands
     // during it ends the run; other prepare failures leave the run to report.
     let types: Vec<String> = if several_statements(sql) {
@@ -210,7 +231,7 @@ async fn execute(client: &Client, sql: &str, open: &mut Option<Open>) -> Result<
         bytea: columns.iter().map(|c| c.type_name == "bytea").collect(),
         numeric: columns.iter().map(|c| c.numeric).collect(),
     };
-    let (rows, has_more) = read_page(&mut o).await?;
+    let (rows, has_more) = read_page(&mut o, read_only).await?;
     if has_more {
         *open = Some(o);
     }
@@ -222,10 +243,10 @@ async fn execute(client: &Client, sql: &str, open: &mut Option<Open>) -> Result<
 }
 
 /// Up to one page; reads one message ahead to know whether more rows follow.
-async fn read_page(o: &mut Open) -> Result<(Vec<Vec<Cell>>, bool)> {
+async fn read_page(o: &mut Open, read_only: bool) -> Result<(Vec<Vec<Cell>>, bool)> {
     let mut page: Vec<Vec<Cell>> = o.carry.take().into_iter().collect();
     while let Some(msg) = o.stream.next().await {
-        match msg.map_err(session_err)? {
+        match msg.map_err(|e| session_err(e, read_only))? {
             SimpleQueryMessage::Row(row) => {
                 let cells = (0..row.len())
                     .map(|i| {

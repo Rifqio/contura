@@ -62,6 +62,8 @@ const pg = {
   groupId: "g1",
   queryTimeoutSecs: null,
   aiAccess: "schema",
+  production: false,
+  readOnly: false,
 };
 
 function workspaceRoutes(over: Record<string, (a: Record<string, unknown>) => unknown> = {}) {

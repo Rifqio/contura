@@ -22,6 +22,8 @@ const kfc: ConnectionConfig = {
   file: null,
   queryTimeoutSecs: null,
   aiAccess: "schema",
+  production: false,
+  readOnly: false,
 };
 
 function setup(openIds: string[] = []) {
@@ -83,6 +85,19 @@ test("from_connection_reverse_engineers_and_lays_out", async () => {
   const doc = onStart.mock.calls[0][0];
   expect(doc).toMatchObject({ path: null, dialect: "mysql", source: "connection", savedDbml: "" });
   expect(doc.layout.tables[".stores"]).toBeDefined();
+});
+
+test("start_from_connection_records_connection_id", async () => {
+  routeInvoke({
+    list_databases: () => ["shop"],
+    reverse_engineer: () => "// Dialect: MySQL\nTable stores {\n  id int [pk]\n}\n",
+  });
+  const onStart = setup(["c1"]);
+  await userEvent.selectOptions(screen.getByLabelText("Connection"), "c1");
+  await userEvent.selectOptions(await screen.findByLabelText("Database"), "shop");
+  await userEvent.click(screen.getByRole("button", { name: "Read the database" }));
+  await waitFor(() => expect(onStart).toHaveBeenCalled());
+  expect(onStart.mock.calls[0][0]).toMatchObject({ connectionId: "c1" });
 });
 
 test("from_connection_needs_an_open_connection", () => {

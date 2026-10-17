@@ -20,6 +20,8 @@ fn config(file: &Path) -> ConnectionConfig {
         file: Some(file.to_path_buf()),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        production: false,
+        read_only: false,
     }
 }
 
@@ -76,4 +78,52 @@ async fn create_database_refuses_an_existing_path() {
     let err = create_database(&path).unwrap_err();
     assert!(matches!(&err, Error::InvalidInput(m) if m.contains("already exists")));
     assert_eq!(std::fs::read(&path).unwrap(), b"precious");
+}
+
+fn ro_config(file: &Path, read_only: bool) -> ConnectionConfig {
+    ConnectionConfig {
+        read_only,
+        ..config(file)
+    }
+}
+
+fn fixture_file() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1)")
+        .unwrap();
+    (dir, path)
+}
+
+#[tokio::test]
+async fn read_only_session_refuses_insert_at_the_server() {
+    let (_dir, path) = fixture_file();
+    let db = connect(&ro_config(&path, true), None).await.unwrap();
+    let s = db.open_query_session(None).await.unwrap();
+    let err = s.execute("INSERT INTO t VALUES (2)").await.unwrap_err();
+    assert!(matches!(err, Error::ReadOnlyRefused), "{err:?}");
+    s.execute("SELECT a FROM t").await.unwrap();
+}
+
+#[tokio::test]
+async fn read_only_browse_connection_refuses_writes() {
+    let (_dir, path) = fixture_file();
+    let db = contura_core::sqlite::SqliteDialect::connect(&ro_config(&path, true))
+        .await
+        .unwrap();
+    let err = db
+        .browse_execute_for_test("INSERT INTO t VALUES (2)")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ReadOnlyRefused), "{err:?}");
+}
+
+#[tokio::test]
+async fn plain_session_still_writes() {
+    let (_dir, path) = fixture_file();
+    let db = connect(&ro_config(&path, false), None).await.unwrap();
+    let s = db.open_query_session(None).await.unwrap();
+    s.execute("INSERT INTO t VALUES (2)").await.unwrap();
 }

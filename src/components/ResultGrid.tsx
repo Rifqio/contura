@@ -31,6 +31,8 @@ interface Props {
   onNearEnd?(): void;
   /** Shown after the table, such as an empty-state line. */
   children?: ReactNode;
+  /** In the header corner above the row numbers, such as the Read-only lock. */
+  corner?: ReactNode;
 }
 
 /** Holds the scroll height of rows that are not rendered. */
@@ -62,6 +64,7 @@ export default function ResultGrid({
   cellSource,
   onNearEnd,
   children,
+  corner,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = useRef(FALLBACK_ROW_HEIGHT);
@@ -128,6 +131,7 @@ export default function ResultGrid({
             <tr aria-rowindex={1}>
               <th className="row-number" scope="col">
                 <span className="visually-hidden">Row</span>
+                {corner}
               </th>
               {columns.map((c, ci) => {
                 const sorted = sort?.column === c.name ? (sort.descending ? "descending" : "ascending") : "none";

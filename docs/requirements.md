@@ -180,7 +180,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 2. Postgres and SQLite Dialects
 3. Schema Builder: DBML ↔ canvas, reverse-engineering, SQL and image export (moved up because designing schemas is one of the user's two main activities)
 4. SQL editor (CodeMirror 6, ADR 0009), Query History, Saved Queries
-5. Pending Edits, Table Designer, Production and Read-only Connections
+5. Pending Edits, Table Designer, Production and Read-only Connections (5a done: Production and Read-only Connections, ADR 0013; Pending Edits is 5b and the Table Designer 5c)
 6. Visual Query, plus the shared diagram engine and the query diagram and result shape
    - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams
 7. Import/export, plus Mermaid flowchart import

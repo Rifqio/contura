@@ -31,6 +31,8 @@ fn input(name: &str, password: PasswordChange) -> ConnectionInput {
         file: None,
         query_timeout_secs: None,
         ai_access: Default::default(),
+        production: false,
+        read_only: false,
     }
 }
 
@@ -345,6 +347,8 @@ async fn sqlite_save_drops_server_fields() {
             file: Some("C:/data/shop.sqlite".into()),
             query_timeout_secs: None,
             ai_access: Default::default(),
+            production: false,
+            read_only: false,
             ..input("lite", PasswordChange::Keep)
         })
         .await
@@ -397,6 +401,8 @@ async fn postgres_save_keeps_server_fields() {
             file: Some("C:/ignored.sqlite".into()),
             query_timeout_secs: None,
             ai_access: Default::default(),
+            production: false,
+            read_only: false,
             ..input("pg", PasswordChange::Keep)
         })
         .await
@@ -416,11 +422,86 @@ async fn sqlite_save_never_stores_a_password() {
             file: Some("C:/data/shop.sqlite".into()),
             query_timeout_secs: None,
             ai_access: Default::default(),
+            production: false,
+            read_only: false,
             ..input("lite", PasswordChange::Set { value: "x".into() })
         })
         .await
         .unwrap();
     assert_eq!(secrets.get(saved.id).unwrap(), None);
+}
+
+#[test]
+fn old_config_json_reads_safety_off() {
+    let json = r#"{"id":"6f1c2f0e-1b8e-4c53-9d0a-3a6a8f4b2c11","name":"old","dialect":"mysql","host":"h","port":3306,"user":"u","database":null,"ssl":{"mode":"disable"},"groupId":null}"#;
+    let c: contura_core::model::ConnectionConfig = serde_json::from_str(json).unwrap();
+    assert!(!c.production);
+    assert!(!c.read_only);
+}
+
+#[tokio::test]
+async fn turning_production_on_sets_ai_access_never() {
+    use contura_core::ai::AiAccess;
+    let (_dir, _secrets, svc) = service();
+    let mut i = input("one", PasswordChange::Clear);
+    i.ai_access = AiAccess::Schema;
+    let saved = svc.save(i).await.unwrap();
+    assert_eq!(saved.ai_access, AiAccess::Schema);
+    let mut again = input("one", PasswordChange::Keep);
+    again.id = Some(saved.id);
+    again.ai_access = AiAccess::Schema;
+    again.production = true;
+    let saved = svc.save(again).await.unwrap();
+    assert_eq!(saved.ai_access, AiAccess::Never);
+    assert_eq!(svc.list().unwrap()[0].ai_access, AiAccess::Never);
+}
+
+#[tokio::test]
+async fn production_already_on_keeps_raised_ai_access() {
+    use contura_core::ai::AiAccess;
+    let (_dir, _secrets, svc) = service();
+    let mut i = input("one", PasswordChange::Clear);
+    i.production = true;
+    i.ai_access = AiAccess::Never;
+    let saved = svc.save(i).await.unwrap();
+    let mut again = input("one", PasswordChange::Keep);
+    again.id = Some(saved.id);
+    again.production = true;
+    again.ai_access = AiAccess::Schema;
+    let saved = svc.save(again).await.unwrap();
+    assert_eq!(saved.ai_access, AiAccess::Schema);
+    assert_eq!(svc.list().unwrap()[0].ai_access, AiAccess::Schema);
+}
+
+#[tokio::test]
+async fn turning_production_off_keeps_ai_access() {
+    use contura_core::ai::AiAccess;
+    let (_dir, _secrets, svc) = service();
+    let mut i = input("one", PasswordChange::Clear);
+    i.production = true;
+    i.ai_access = AiAccess::Never;
+    let saved = svc.save(i).await.unwrap();
+    let mut again = input("one", PasswordChange::Keep);
+    again.id = Some(saved.id);
+    again.production = false;
+    again.ai_access = AiAccess::Never;
+    let saved = svc.save(again).await.unwrap();
+    assert_eq!(saved.ai_access, AiAccess::Never);
+    assert!(!svc.list().unwrap()[0].production);
+}
+
+#[tokio::test]
+async fn new_connection_marked_production_gets_never() {
+    use contura_core::ai::AiAccess;
+    let (_dir, _secrets, svc) = service();
+    let mut i = input("one", PasswordChange::Clear);
+    i.production = true;
+    i.read_only = true;
+    i.ai_access = AiAccess::Schema;
+    let saved = svc.save(i).await.unwrap();
+    assert_eq!(saved.ai_access, AiAccess::Never);
+    let stored = svc.list().unwrap().remove(0);
+    assert!(stored.production && stored.read_only);
 }
 
 #[tokio::test]

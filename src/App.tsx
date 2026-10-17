@@ -32,6 +32,7 @@ import HistoryPanel from "./query/HistoryPanel";
 import QueryTab, { type QueryTabDoc } from "./query/QueryTab";
 import SavedQueries from "./query/SavedQueries";
 import type { SqlEditorApi } from "./query/SqlEditor";
+import { sourceConnectionFor } from "./schema/sourceConnection";
 import SchemaBuilder, { type ModelDoc } from "./schema/SchemaBuilder";
 import StartModel from "./schema/StartModel";
 import SettingsView from "./settings/SettingsView";
@@ -363,6 +364,12 @@ export default function App() {
     }),
     [askGroupId, askSettings],
   );
+  const schemaConnectionId = schema?.kind === "builder" ? schema.doc.connectionId : null;
+  const schemaDialect = schema?.kind === "builder" ? schema.doc.dialect : "postgres";
+  const schemaSource = useMemo(
+    () => sourceConnectionFor(schemaConnectionId, schemaDialect, connections),
+    [connections, schemaConnectionId, schemaDialect],
+  );
 
   async function reload() {
     try {
@@ -531,6 +538,7 @@ export default function App() {
         {place.kind !== "home" && !schema && (
           <TabStrip
             tabs={tabs}
+            connections={connections}
             active={activeTab}
             onSelect={setActiveTab}
             onClose={closeTab}
@@ -599,7 +607,7 @@ export default function App() {
         <div className="place-wrap" hidden={settingsOpen}>
           {schema?.kind === "builder" ? (
             <main className="schema-main">
-              <SchemaBuilder doc={schema.doc} onClose={() => setSchema(null)} ask={askKit} />
+              <SchemaBuilder doc={schema.doc} onClose={() => setSchema(null)} ask={askKit} sourceConnection={schemaSource} />
             </main>
           ) : place.kind === "home" ? (
             <main className="home-main">
@@ -723,6 +731,7 @@ export default function App() {
                       onClose={() => closeTab(activeTab)}
                       onNotOpen={() => lost(selection.connectionId)}
                       dialect={connections.find((c) => c.id === selection.connectionId)?.dialect}
+                      readOnly={connections.find((c) => c.id === selection.connectionId)?.readOnly ?? false}
                       lang={lang}
                       ask={{
                         ...askKit,

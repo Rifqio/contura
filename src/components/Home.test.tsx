@@ -26,6 +26,8 @@ function conn(id: string, name: string, groupId: string | null): ConnectionConfi
     file: null,
     queryTimeoutSecs: null,
     aiAccess: "schema",
+    production: false,
+    readOnly: false,
     groupId,
   };
 }

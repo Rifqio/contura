@@ -65,7 +65,7 @@ export default function StartModel({ connections, openIds, initial, onStart, onC
   }, [connectionId, database]);
 
   function startFile(path: string, dbml: string, layout: string | null, d: DialectKind) {
-    onStart({ path, dbml, savedDbml: dbml, layout: layout ? parseLayout(layout) : EMPTY_LAYOUT, dialect: d, source: "file" });
+    onStart({ path, dbml, savedDbml: dbml, layout: layout ? parseLayout(layout) : EMPTY_LAYOUT, dialect: d, source: "file", connectionId: null });
   }
 
   async function openFile() {
@@ -91,7 +91,7 @@ export default function StartModel({ connections, openIds, initial, onStart, onC
       const dbml = await reverseEngineer(connection.id, database, s);
       const model = parseDbml(dbml, connection.dialect).model;
       const layout = model ? await autoLayout(model, EMPTY_LAYOUT) : EMPTY_LAYOUT;
-      onStart({ path: null, dbml, savedDbml: "", layout, dialect: connection.dialect, source: "connection" });
+      onStart({ path: null, dbml, savedDbml: "", layout, dialect: connection.dialect, source: "connection", connectionId: connection.id });
     } catch (e) {
       setError(errorText(e, connection.dialect));
     } finally {
@@ -122,7 +122,7 @@ export default function StartModel({ connections, openIds, initial, onStart, onC
             type="button"
             className="button button-primary"
             onClick={() =>
-              onStart({ path: null, dbml: blankModel(dialect), savedDbml: "", layout: EMPTY_LAYOUT, dialect, source: "blank" })
+              onStart({ path: null, dbml: blankModel(dialect), savedDbml: "", layout: EMPTY_LAYOUT, dialect, source: "blank", connectionId: null })
             }
           >
             Start blank

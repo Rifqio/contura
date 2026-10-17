@@ -94,9 +94,13 @@ export function providerDefaults(kind: AiProviderKind, preset: string | null): P
   return chosen ?? { url: p.url, models: p.models };
 }
 
-export const AI_ACCESS_OPTIONS: { value: AiAccess; label: string }[] = [
-  { value: "never", label: "Never send anything" },
-  { value: "schema", label: "Schema only" },
-  { value: "schemaQuery", label: "Schema and query text" },
-  { value: "schemaQueryRows", label: "Schema, query text and sample rows" },
+export const AI_ACCESS_OPTIONS: { value: AiAccess; label: string; description: string }[] = [
+  { value: "never", label: "Never send anything", description: "Nothing" },
+  { value: "schema", label: "Schema only", description: "Table and column names" },
+  { value: "schemaQuery", label: "Schema and query text", description: "Table and column names and the text of your queries" },
+  {
+    value: "schemaQueryRows",
+    label: "Schema, query text and sample rows",
+    description: "Table and column names, the text of your queries and sample rows of data",
+  },
 ];

@@ -95,6 +95,19 @@ test("filter_completes_the_table_columns", async () => {
   expect(currentCompletions(v.state).map((c) => c.label)).not.toContain("code");
 });
 
+test("grid_shows_read_only_lock", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  const { unmount } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} readOnly />);
+  await screen.findByText("first");
+  const lock = screen.getByRole("img", { name: "Read-only Connection: cells can't be edited" });
+  expect(lock.getAttribute("title")).toBe("Read-only Connection: cells can't be edited");
+  expect(lock.closest("th.row-number")).toBeTruthy();
+  unmount();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  expect(screen.queryByRole("img", { name: /Read-only/ })).toBeNull();
+});
+
 test("next disabled when hasMore false", async () => {
   routeInvoke({ fetch_page: () => page(false) });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);

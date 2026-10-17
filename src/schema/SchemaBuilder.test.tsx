@@ -25,6 +25,7 @@ const doc = (over: Partial<ModelDoc> = {}): ModelDoc => ({
   layout: { version: 1, tables: {} },
   dialect: "postgres",
   source: "file",
+  connectionId: null,
   ...over,
 });
 

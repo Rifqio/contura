@@ -7,7 +7,7 @@ use tokio_postgres::{Client, NoTls};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::dialect::Dialect;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, browse_result};
 use crate::model::{
     ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
     PageRequest, SchemaInfo, SslMode,
@@ -28,6 +28,7 @@ pub struct PostgresDialect {
     settings: Settings,
     default_database: String,
     clients: Mutex<HashMap<String, Arc<Client>>>,
+    read_only: bool,
 }
 
 #[derive(Clone)]
@@ -53,6 +54,7 @@ impl PostgresDialect {
             settings,
             default_database,
             clients: Mutex::new(clients),
+            read_only: config.read_only,
         })
     }
 
@@ -92,7 +94,12 @@ fn build_settings(config: &ConnectionConfig, password: Option<&str>) -> Result<S
         .user(&config.user)
         .connect_timeout(CONNECT_TIMEOUT)
         .application_name("Contura")
-        .options("-c TimeZone=UTC");
+        // Every client, browse or query session, starts read-only on a Read-only Connection.
+        .options(if config.read_only {
+            "-c TimeZone=UTC -c default_transaction_read_only=on"
+        } else {
+            "-c TimeZone=UTC"
+        });
     if let Some(password) = password {
         base.password(password);
     }
@@ -171,8 +178,12 @@ fn is_missing_password(e: &tokio_postgres::Error) -> bool {
             .is_some_and(|s| s.to_string().contains("password missing"))
 }
 
+/// Browse code uses this. The Dialect methods pass their result through
+/// `browse_result`, which turns a refusal into a plain error on a Connection that is
+/// not Read-only.
 pub(crate) fn query_err(e: tokio_postgres::Error) -> Error {
     match e.as_db_error() {
+        Some(db) if *db.code() == SqlState::READ_ONLY_SQL_TRANSACTION => Error::ReadOnlyRefused,
         Some(db) => Error::Query(db.message().to_string()),
         None => Error::Query(e.to_string()),
     }
@@ -350,32 +361,38 @@ impl Dialect for PostgresDialect {
 
     async fn list_databases(&self) -> Result<Vec<String>> {
         let client = self.client(&self.default_database).await?;
-        introspect::list_databases(&client).await
+        browse_result(introspect::list_databases(&client).await, self.read_only)
     }
 
     async fn list_schemas(&self, database: &str) -> Result<Vec<SchemaInfo>> {
         let client = self.client(database).await?;
-        introspect::list_schemas(&client).await
+        browse_result(introspect::list_schemas(&client).await, self.read_only)
     }
 
     async fn list_objects(&self, database: &str, schema: Option<&str>) -> Result<Vec<DbObject>> {
         let client = self.client(database).await?;
-        introspect::list_objects(&client, schema).await
+        browse_result(
+            introspect::list_objects(&client, schema).await,
+            self.read_only,
+        )
     }
 
     async fn object_definition(&self, kind: ObjectKind, path: &ObjectPath) -> Result<String> {
         let client = self.client(&path.database).await?;
-        introspect::definition(&client, kind, path).await
+        browse_result(
+            introspect::definition(&client, kind, path).await,
+            self.read_only,
+        )
     }
 
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page> {
         let client = self.client(&req.table.database).await?;
-        page::fetch_page(&client, req).await
+        browse_result(page::fetch_page(&client, req).await, self.read_only)
     }
 
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {
         let client = self.client(&req.table.database).await?;
-        page::fetch_full_value(&client, req).await
+        browse_result(page::fetch_full_value(&client, req).await, self.read_only)
     }
 
     async fn schema_snapshot(
@@ -385,12 +402,15 @@ impl Dialect for PostgresDialect {
     ) -> Result<crate::schema_model::SchemaModel> {
         let schema = snapshot::require_schema(schema)?;
         let client = self.client(database).await?;
-        snapshot::schema_snapshot(&client, schema).await
+        browse_result(
+            snapshot::schema_snapshot(&client, schema).await,
+            self.read_only,
+        )
     }
 
     async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
         let client = self.client(database).await?;
-        sql_schema::sql_schema(&client).await
+        browse_result(sql_schema::sql_schema(&client).await, self.read_only)
     }
 
     async fn open_query_session(
@@ -399,7 +419,11 @@ impl Dialect for PostgresDialect {
     ) -> Result<crate::query::SessionHandle> {
         let database = database.unwrap_or(&self.default_database);
         let client = open_client(&self.settings, database).await?;
-        Ok(session::spawn(client, self.settings.tls.clone()))
+        Ok(session::spawn(
+            client,
+            self.settings.tls.clone(),
+            self.read_only,
+        ))
     }
 
     async fn disconnect(&self) -> Result<()> {

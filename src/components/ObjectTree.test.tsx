@@ -351,6 +351,8 @@ function appConnection(over: Partial<ConnectionConfig>): ConnectionConfig {
     groupId: null,
     queryTimeoutSecs: null,
     aiAccess: "schema",
+    production: false,
+    readOnly: false,
     ...over,
   };
 }

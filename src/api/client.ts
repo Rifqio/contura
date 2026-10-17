@@ -34,7 +34,10 @@ import type {
   HistoryEntry,
   HistoryFilter,
   MoreRows,
+  PassId,
   QuerySessionId,
+  RunVerdict,
+  StatementClass,
   SavedQuery,
   SavedQueryInput,
 } from "./types";
@@ -153,8 +156,21 @@ export const setLastGroup = (id: GroupId | null): Promise<void> => invoke("set_l
 export const openQuerySession = (id: ConnectionId, database: string | null): Promise<QuerySessionId> =>
   invoke("open_query_session", { id, database });
 
-export const executeSql = (session: QuerySessionId, sql: string): Promise<Execution> =>
-  invoke("execute_sql", { session, sql });
+export const executeSql = (
+  session: QuerySessionId,
+  sql: string,
+  pass?: PassId | null,
+): Promise<Execution> => invoke("execute_sql", { session, sql, pass: pass ?? null });
+
+export const prepareRun = (session: QuerySessionId, statements: string[]): Promise<RunVerdict> =>
+  invoke("prepare_run", { session, statements });
+
+export const confirmRun = (session: QuerySessionId, statements: string[]): Promise<PassId> =>
+  invoke("confirm_run", { session, statements });
+
+/** Whether one statement reads or writes, as the Core decides it for the Dialect. */
+export const classifySql = (dialect: DialectKind, sql: string): Promise<StatementClass> =>
+  invoke("classify_sql", { dialect, sql });
 
 export const fetchMoreRows = (session: QuerySessionId): Promise<MoreRows> => invoke("fetch_more_rows", { session });
 
@@ -284,6 +300,12 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `Stopped after ${e.message} s, the Connection's timeout.`;
     case "ai":
       return aiErrorText(e.message);
+    case "readOnly":
+      return "Read-only Connection: this statement writes";
+    case "needsConfirmation":
+      return "Confirm this write on a Production Connection";
+    case "readOnlyRefused":
+      return "The server refused a write: this Connection is Read-only";
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

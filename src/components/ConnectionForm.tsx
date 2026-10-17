@@ -22,6 +22,8 @@ import type {
 } from "../api/types";
 import { AI_ACCESS_OPTIONS } from "../settings/ai/providers";
 import Dialog from "./Dialog";
+import Icon from "./Icon";
+import Switch from "./Switch";
 
 interface Props {
   /** The Connection being edited; absent for a new one. */
@@ -40,6 +42,10 @@ type ServerDialect = keyof typeof DIALECT_DEFAULTS;
 
 const SQLITE_FILTER = { name: "SQLite database", extensions: ["sqlite", "sqlite3", "db", "db3"] };
 const ALL_FILES_FILTER = { name: "All files", extensions: ["*"] };
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
@@ -73,6 +79,8 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
   const [file, setFile] = useState(connection?.file ?? "");
   const [groupId, setGroupId] = useState<GroupId | "">((editing ? connection.groupId : defaultGroupId) ?? "");
   const [aiAccess, setAiAccess] = useState<AiAccess>(connection?.aiAccess ?? "schema");
+  const [production, setProduction] = useState(connection?.production ?? false);
+  const [readOnly, setReadOnly] = useState(connection?.readOnly ?? false);
   const [busy, setBusy] = useState<"test" | "save" | "create" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [portError, setPortError] = useState<string | null>(null);
@@ -80,6 +88,16 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
   const [timeoutError, setTimeoutError] = useState<string | null>(null);
 
   const sqlite = dialect === "sqlite";
+  const accessDescription = AI_ACCESS_OPTIONS.find((o) => o.value === aiAccess)?.description ?? "";
+
+  // The Core forces AI access to never when Production is saved on, so it stays locked
+  // until the first save as Production.
+  const productionIsNew = production && !(connection?.production ?? false);
+
+  function changeProduction(next: boolean) {
+    setProduction(next);
+    if (next) setAiAccess("never");
+  }
 
   function changeDialect(next: DialectKind) {
     if (next !== "sqlite") {
@@ -111,7 +129,9 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
       name: name.trim(),
       groupId: groupId === "" ? null : groupId,
       queryTimeoutSecs: t === "" ? null : Number(t),
-      aiAccess,
+      aiAccess: productionIsNew ? "never" : aiAccess,
+      production,
+      readOnly,
     };
     if (dialect === "sqlite") {
       return {
@@ -392,12 +412,25 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
               ))}
             </select>
           </label>
+          <div className="safety field-wide" role="group" aria-label="Safety">
+            <span className="fl">Safety</span>
+            <Switch
+              checked={production}
+              onChange={changeProduction}
+              label="Production"
+              hint="Asks before every write. Functions called from a SELECT are not checked."
+              disabled={readOnly}
+              note={readOnly ? "Overridden by Read-only" : undefined}
+            />
+            <Switch checked={readOnly} onChange={setReadOnly} label="Read-only" hint="Blocks every write" />
+          </div>
           <label className="field field-wide" htmlFor={f("ai-access")}>
             <span>AI can see</span>
             <select
               id={f("ai-access")}
               className="input"
-              value={aiAccess}
+              value={productionIsNew ? "never" : aiAccess}
+              disabled={productionIsNew}
               aria-describedby={f("ai-access-help")}
               onChange={(e) => setAiAccess(e.target.value as AiAccess)}
             >
@@ -409,8 +442,20 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
             </select>
           </label>
           <span id={f("ai-access-help")} className="field-hint field-wide">
-            What the AI assistant may send to your provider from this Connection.
+            {productionIsNew
+              ? "Production Connections send nothing to the assistant. You can raise this after saving."
+              : production && aiAccess === "never"
+                ? "Production Connections send nothing to the assistant unless you change this"
+                : "What the AI assistant may send to your provider from this Connection."}
           </span>
+          {production && !productionIsNew && aiAccess !== "never" && (
+            <p className="ai-warn field-wide" role="status">
+              <Icon name="warning" />
+              <span>
+                {`This is a Production Connection: the assistant will see ${lowerFirst(accessDescription)}.`}
+              </span>
+            </p>
+          )}
           {result && (
             <p className={result.ok ? "form-result field-wide" : "form-result error-text field-wide"} role="status">
               {result.text}

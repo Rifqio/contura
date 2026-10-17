@@ -45,6 +45,8 @@ const conn = (id: string, name: string, over: Partial<ConnectionConfig> = {}): C
   file: null,
   queryTimeoutSecs: null,
   aiAccess: "schema",
+  production: false,
+  readOnly: false,
   ...over,
 });
 
@@ -252,6 +254,8 @@ test("access_per_connection_table_saves_each_connection", async () => {
   const b = conn("c2", "KFC stores", {
     dialect: "mysql",
     aiAccess: "never",
+    production: false,
+    readOnly: false,
     host: "h",
     user: "u",
   });

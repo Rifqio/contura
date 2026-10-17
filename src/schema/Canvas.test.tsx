@@ -1,14 +1,15 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, expect, test, vi } from "vitest";
 import { routeInvoke } from "../test/invoke";
-import type { AskKit } from "../assistant/context";
+import type { AskContext, AskKit } from "../assistant/context";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { applyEdits, renameColumn, renameTable } from "../lang/dbml/edits";
 import { KFC_MODEL, KFC_TEXT } from "../lang/dbml/fixtures";
 import { parseDbml } from "../lang/dbml/parse";
 import type { Ranges, TextEdit } from "../lang/protocol";
 import Canvas, { refFromConnection } from "./Canvas";
+import { sourceConnectionFor } from "./sourceConnection";
 import { autoLayout, followRenames, parseLayout, serializeLayout } from "./layout";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -17,7 +18,7 @@ beforeAll(mockReactFlowDom);
 
 type Make = (text: string, ranges: Ranges) => TextEdit[];
 
-function renderCanvas(blocked = false, ask?: { getDbml(): string; label: string; kit: AskKit }) {
+function renderCanvas(blocked = false, ask?: { getDbml(): string; label: string; kit: AskKit; connection?: AskContext["connection"] }) {
   const onEdit = vi.fn<(make: Make) => void>();
   const onLayout = vi.fn();
   const layout = { version: 1 as const, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } };
@@ -169,6 +170,93 @@ test("ask_ai_opens_the_inline_ask_for_the_card", async () => {
   expect(onOpenSettings).toHaveBeenCalled();
   fireEvent.keyDown(screen.getByRole("dialog", { name: "Ask AI" }), { key: "Escape" });
   expect(screen.queryByRole("dialog", { name: "Ask AI" })).toBeNull();
+});
+
+const KIT: AskKit = { groupId: null, inlineAsk: true, errorAsk: true, onOpenSettings: () => {} };
+
+const sent: string[] = [];
+
+async function openCardAsk(connection?: AskContext["connection"]) {
+  sent.length = 0;
+  routeInvoke({
+    ai_ask: (args: unknown) => {
+      sent.push(JSON.stringify(args));
+      throw { kind: "ai", message: { kind: "notConfigured" } };
+    },
+    ai_settings: () => ({
+      settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
+      groupOverride: false,
+      keySaved: false,
+      keyLast4: null,
+    }),
+  });
+  renderCanvas(false, { getDbml: () => KFC_TEXT, label: "shop.dbml", kit: KIT, connection });
+  const stores = screen.getByRole("group", { name: "Table stores" });
+  await userEvent.click(within(stores).getByRole("button", { name: "Table actions" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Ask AI" }));
+}
+
+test("card_ask_from_never_connection_sends_no_dbml", async () => {
+  await openCardAsk({ id: "c1", name: "KFC shop", dialect: "postgres", database: "shop", access: "never" });
+  expect(screen.queryByRole("button", { name: /^DBML/ })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Explain" }));
+  await screen.findByText("Connect an AI provider in Settings");
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).not.toContain("CREATE");
+  expect(sent[0]).not.toContain("stores");
+});
+
+test("card_ask_without_source_still_sends_dbml", async () => {
+  await openCardAsk(undefined);
+  expect(screen.getByRole("button", { name: `DBML · ${KFC_MODEL.tables.length} tables` }).getAttribute("aria-disabled")).toBeNull();
+});
+
+test("card_ask_with_deleted_source_connection_sends_no_dbml", async () => {
+  await openCardAsk(sourceConnectionFor("gone", "postgres", []));
+  expect(screen.queryByRole("button", { name: /^DBML/ })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Explain" }));
+  await screen.findByText("Connect an AI provider in Settings");
+  expect(sent[0]).not.toContain("stores");
+});
+
+test("card_ask_follows_live_access_changes", async () => {
+  routeInvoke({
+    ai_settings: () => ({
+      settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
+      groupOverride: false,
+      keySaved: false,
+      keyLast4: null,
+    }),
+  });
+  const layout = { version: 1 as const, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } };
+  const view = (access: NonNullable<AskContext["connection"]>["access"]) => (
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas
+        model={KFC_MODEL}
+        layout={layout}
+        blocked={false}
+        onLayout={() => {}}
+        onEdit={() => {}}
+        onGoToError={() => {}}
+        ask={{
+          getDbml: () => KFC_TEXT,
+          label: "shop.dbml",
+          kit: KIT,
+          connection: { id: "c1", name: "KFC shop", dialect: "postgres", database: null, access },
+        }}
+      />
+    </div>
+  );
+  const pill = { name: `DBML · ${KFC_MODEL.tables.length} tables` };
+  const { rerender } = render(view("never"));
+  const stores = () => screen.getByRole("group", { name: "Table stores" });
+  await userEvent.click(within(stores()).getByRole("button", { name: "Table actions" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Ask AI" }));
+  expect(screen.queryByRole("button", pill)).toBeNull();
+  rerender(view("schema"));
+  expect(await screen.findByRole("button", pill)).toBeTruthy();
+  rerender(view("never"));
+  await waitFor(() => expect(screen.queryByRole("button", pill)).toBeNull());
 });
 
 test("a_card_has_no_ask_ai_without_the_setting", async () => {

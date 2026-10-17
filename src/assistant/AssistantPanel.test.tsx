@@ -167,6 +167,8 @@ test("a_seeded_question_uses_the_connections_current_access", async () => {
     file: null,
     queryTimeoutSecs: null,
     aiAccess: "never",
+    production: false,
+    readOnly: false,
   } as never;
   renderPanel({
     context: null,

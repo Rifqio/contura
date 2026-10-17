@@ -22,6 +22,8 @@ const existing: ConnectionConfig = {
   file: null,
   queryTimeoutSecs: null,
   aiAccess: "schema",
+  production: false,
+  readOnly: false,
 };
 const groups = [{ id: "g1", name: "KFC", color: "red" as const }];
 
@@ -184,6 +186,8 @@ test("sqlite_hides_server_fields_and_saves_the_file", async () => {
     groupId: null,
     queryTimeoutSecs: null,
     aiAccess: "schema",
+    production: false,
+    readOnly: false,
   });
 });
 
@@ -364,4 +368,90 @@ test("connection_form_has_ai_access", async () => {
 test("editing shows the Connection's AI access in the select", () => {
   renderEditing({ ...existing, aiAccess: "never" });
   expect((screen.getByLabelText("AI can see") as HTMLSelectElement).value).toBe("never");
+});
+
+const aiSelect = () => screen.getByLabelText("AI can see") as HTMLSelectElement;
+
+test("production_on_sets_ai_access_never_and_shows_note", async () => {
+  renderNew();
+  expect(aiSelect().value).toBe("schema");
+  await userEvent.click(screen.getByRole("switch", { name: "Production" }));
+  expect(aiSelect().value).toBe("never");
+  expect(aiSelect().disabled).toBe(true);
+  expect(
+    screen.getByText("Production Connections send nothing to the assistant. You can raise this after saving."),
+  ).toBeTruthy();
+  expect(screen.queryByText(/the assistant will see/)).toBeNull();
+});
+
+test("production_switched_on_in_this_edit_locks_ai_access_until_saved", async () => {
+  renderEditing({ ...existing, production: false, aiAccess: "schemaQuery" });
+  expect(aiSelect().disabled).toBe(false);
+  await userEvent.click(screen.getByRole("switch", { name: "Production" }));
+  expect(aiSelect().value).toBe("never");
+  expect(aiSelect().disabled).toBe(true);
+  expect(
+    screen.getByText("Production Connections send nothing to the assistant. You can raise this after saving."),
+  ).toBeTruthy();
+  expect(screen.queryByText(/This is a Production Connection/)).toBeNull();
+  await userEvent.click(screen.getByRole("switch", { name: "Production" }));
+  expect(aiSelect().disabled).toBe(false);
+});
+
+test("raising_ai_access_on_saved_production_shows_warning", async () => {
+  renderEditing({ ...existing, production: true, aiAccess: "never" });
+  expect(aiSelect().disabled).toBe(false);
+  expect(screen.getByText("Production Connections send nothing to the assistant unless you change this")).toBeTruthy();
+  await userEvent.selectOptions(aiSelect(), "schemaQuery");
+  expect(
+    screen.getByText("This is a Production Connection: the assistant will see table and column names and the text of your queries."),
+  ).toBeTruthy();
+  expect(screen.queryByText(/send nothing to the assistant/)).toBeNull();
+});
+
+test("read_only_overrides_production", async () => {
+  renderEditing({ ...existing, production: true, aiAccess: "never" });
+  const production = screen.getByRole("switch", { name: /Production/ }) as HTMLButtonElement;
+  expect(production.disabled).toBe(false);
+  await userEvent.click(screen.getByRole("switch", { name: "Read-only" }));
+  expect(production.disabled).toBe(true);
+  expect(production.getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByText("Overridden by Read-only")).toBeTruthy();
+});
+
+test("production_off_leaves_ai_access_unchanged", async () => {
+  renderNew();
+  await userEvent.click(screen.getByRole("switch", { name: "Production" }));
+  expect(aiSelect().value).toBe("never");
+  await userEvent.click(screen.getByRole("switch", { name: "Production" }));
+  expect(aiSelect().value).toBe("never");
+});
+
+test("editing_production_with_raised_ai_access_shows_warning_on_open", () => {
+  renderEditing({ ...existing, production: true, aiAccess: "schema" });
+  expect(aiSelect().value).toBe("schema");
+  expect(screen.getByText(/This is a Production Connection: the assistant will see/)).toBeTruthy();
+});
+
+test("read_only_on_then_off_keeps_production_enabled_and_checked", async () => {
+  renderEditing({ ...existing, production: true, aiAccess: "never" });
+  const production = screen.getByRole("switch", { name: /Production/ }) as HTMLButtonElement;
+  await userEvent.click(screen.getByRole("switch", { name: "Read-only" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Read-only" }));
+  expect(production.disabled).toBe(false);
+  expect(production.getAttribute("aria-checked")).toBe("true");
+});
+
+test("save_sends_production_and_read_only", async () => {
+  routeInvoke({ save_connection: () => existing });
+  const onSaved = renderNew();
+  await userEvent.type(screen.getByLabelText("Name"), "Orders");
+  await userEvent.click(screen.getByRole("switch", { name: "Production" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Read-only" }));
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  const input = callsTo("save_connection")[0].input as Record<string, unknown>;
+  expect(input.production).toBe(true);
+  expect(input.readOnly).toBe(true);
+  expect(input.aiAccess).toBe("never");
 });

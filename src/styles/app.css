@@ -438,6 +438,45 @@ ul {
   background: var(--color-surface);
 }
 
+/* Production (Amber) and Read-only marks: a status, so they stand out from the Dialect label. */
+.safety-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--spacing-xs);
+  flex: none;
+  padding: var(--tag-production-padding);
+  border-radius: var(--tag-production-rounded);
+  background: var(--tag-production-background);
+  color: var(--tag-production-text);
+  font: var(--tag-production-font);
+  white-space: nowrap;
+}
+
+.safety-tag-readonly {
+  background: var(--color-line-soft);
+  color: var(--color-ink-muted);
+  padding: 2px 6px 2px 4px;
+}
+
+.connection-row-active .safety-tag-readonly {
+  background: var(--color-surface);
+}
+
+.connection-text > .safety-tag {
+  padding-block: 0;
+  margin-top: 3px;
+}
+
+.safety-tag-small {
+  padding: 0 var(--spacing-xs);
+}
+
+.safety-tag .icon {
+  width: 12px;
+  height: 12px;
+}
+
 .item-message {
   margin: var(--spacing-xs) var(--spacing-xs) var(--spacing-sm);
 }
@@ -1521,6 +1560,56 @@ ul {
   text-decoration: underline wavy var(--color-danger);
   text-underline-offset: 4px;
 }
+/* A statement that cannot run here: a lock before its line number, and a note under it. */
+.sql-editor .cm-blocked-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.sql-editor .cm-blocked-lock .icon {
+  width: 12px;
+  height: 12px;
+  color: var(--color-ink-muted);
+}
+.sql-editor .cm-blocked-note {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+.sql-editor .cm-blocked-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 4px 8px;
+  border-radius: var(--rounded-sm);
+  background: var(--color-line-soft);
+  color: var(--color-ink);
+  font: var(--font-mono-small);
+}
+.sql-editor .cm-blocked-text .icon {
+  width: 13px;
+  height: 13px;
+  color: var(--color-ink-muted);
+}
+.sql-editor .cm-blocked-text b {
+  font-weight: 600;
+}
+.sql-editor .cm-blocked-text .muted {
+  color: var(--color-ink-muted);
+}
+/* The Read-only lock in the grid header corner. */
+.lock-corner {
+  display: grid;
+  place-items: center;
+  min-height: 32px;
+  color: var(--color-ink-muted);
+  border-radius: var(--rounded-xs);
+}
+.lock-corner .icon {
+  width: 14px;
+  height: 14px;
+}
 .sql-editor .cm-lintRange-error {
   background-image: none;
   text-decoration: underline wavy var(--color-danger);
@@ -1801,6 +1890,116 @@ ul {
 }
 .query-confirm code {
   font: var(--font-mono-small);
+}
+
+/* The Production confirmation before a run that writes (step 5a). */
+.dialog-confirm {
+  width: min(680px, 100%);
+}
+.confirm-title {
+  font-weight: 400;
+}
+.confirm-title b {
+  font-weight: 600;
+}
+.confirm-stack {
+  display: grid;
+  gap: var(--spacing-md);
+}
+.confirm-count {
+  margin: 0;
+}
+.confirm-count strong {
+  font-variant-numeric: tabular-nums;
+}
+.confirm-nowhere {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) 10px;
+  border-radius: var(--rounded-md);
+  background: var(--color-warning-soft);
+  color: var(--color-production-ink);
+}
+.confirm-nowhere p {
+  flex: 1;
+  min-width: 260px;
+  margin: 0;
+}
+.confirm-nowhere code {
+  font: var(--font-mono-small);
+}
+.confirm-sql {
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px 0;
+  border: var(--border-hairline) solid var(--color-line);
+  border-radius: var(--rounded-md);
+  background: var(--color-surface-panel);
+  font: var(--font-mono);
+}
+.confirm-sql:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-primary);
+  outline-offset: var(--focus-ring-offset);
+}
+.confirm-stmt-write {
+  background: var(--color-surface);
+}
+.confirm-line {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-height: 20px;
+  padding-right: 10px;
+}
+.confirm-gutter {
+  align-self: stretch;
+  padding-right: var(--spacing-sm);
+  margin-right: 10px;
+  border-right: var(--border-hairline) solid var(--color-line-soft);
+  color: var(--color-ink-faint);
+  font: var(--font-mono-small);
+  line-height: 20px;
+  text-align: right;
+}
+.confirm-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: pre;
+}
+.confirm-tag,
+.confirm-tag-danger {
+  margin-left: var(--spacing-sm);
+  padding: 0 5px;
+  border-radius: var(--rounded-xs);
+  font: var(--font-label);
+  font-weight: 400;
+  color: var(--color-ink-faint);
+}
+.confirm-tag-write {
+  font-weight: 600;
+  color: var(--color-production-ink);
+  background: var(--color-production-soft);
+}
+.confirm-tag-danger {
+  grid-column: 3;
+  color: var(--color-danger);
+  border: var(--border-hairline) solid currentColor;
+}
+.confirm-hint {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2xs);
+  min-width: 0;
+  color: var(--color-ink-muted);
+  font: var(--font-label);
+  font-weight: 400;
+}
+.confirm-hint b {
+  font-weight: 600;
 }
 .query-status {
   display: flex;
@@ -2720,4 +2919,102 @@ button.send-pill {
 .query-editor .ask-pop {
   max-height: calc(100% - 2 * var(--spacing-sm));
   overflow: auto;
+}
+
+/* Safety row and switches (step 5a) */
+.safety {
+  display: grid;
+  gap: var(--spacing-sm);
+  padding: 10px var(--spacing-md);
+  border: 1px solid var(--color-line);
+  border-radius: var(--rounded-md);
+}
+.safety > .fl {
+  font: var(--font-label);
+  color: var(--color-ink-muted);
+}
+.sw-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--spacing-2xs) 10px;
+  padding: var(--spacing-xs) 0;
+}
+.sw {
+  position: relative;
+  box-sizing: border-box;
+  width: 32px;
+  height: 18px;
+  margin: 1px 0 0;
+  padding: 0;
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--color-ink-faint);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.sw::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--rounded-xs);
+  background: var(--color-ink-muted);
+}
+.sw.on {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.sw.on::after {
+  left: 17px;
+  background: var(--color-on-primary);
+}
+.sw:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.sw:disabled {
+  cursor: default;
+}
+.sw.overridden {
+  opacity: 0.45;
+}
+.sw-label {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font: var(--font-body-strong);
+}
+.sw-desc {
+  grid-column: 2;
+  color: var(--color-ink-muted);
+  font: var(--font-label);
+}
+.sw-row.dim .sw-label {
+  color: var(--color-ink-muted);
+}
+.over {
+  font: var(--font-label);
+  color: var(--color-ink-muted);
+  padding: 0 6px;
+  border: 1px dashed var(--color-line);
+  border-radius: var(--rounded-sm);
+}
+.ai-warn {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 6px var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  background: var(--color-production-soft);
+  color: var(--color-production-ink);
+  font: var(--font-label);
+}
+.ai-warn .icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  flex: none;
 }

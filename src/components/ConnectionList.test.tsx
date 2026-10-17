@@ -25,6 +25,8 @@ function conn(id: string, name: string, groupId: string | null): ConnectionConfi
     file: null,
     queryTimeoutSecs: null,
     aiAccess: "schema",
+    production: false,
+    readOnly: false,
     groupId,
   };
 }
@@ -90,6 +92,24 @@ test("rows_show_dialect_tag", () => {
   expect(within(rows[0]).getByText("10.0.4.20:5432", { exact: false })).toBeTruthy();
   expect(within(rows[1]).getByText("MySQL")).toBeTruthy();
   expect(within(rows[2]).getByText("SQLite")).toBeTruthy();
+});
+
+test("connection_list_shows_production_tag_on_its_own_line", () => {
+  routeInvoke({});
+  renderList(vi.fn(), [{ ...conn("a", "kfc-prod", "g1"), production: true }, conn("b", "kfc-staging", "g1")]);
+  const rows = within(screen.getByRole("list", { name: "Connections" })).getAllByRole("listitem");
+  const tag = within(rows[0]).getByText("Production");
+  expect(tag.closest(".connection-meta")).toBeNull();
+  expect(within(rows[1]).queryByText("Production")).toBeNull();
+});
+
+test("read_only_tag_shows_lock_and_wins_over_production", () => {
+  routeInvoke({});
+  renderList(vi.fn(), [{ ...conn("a", "kfc-prod", "g1"), production: true, readOnly: true }]);
+  const rows = within(screen.getByRole("list", { name: "Connections" })).getAllByRole("listitem");
+  const tag = within(rows[0]).getByText("Read-only");
+  expect(tag.querySelector("svg")).toBeTruthy();
+  expect(within(rows[0]).queryByText("Production")).toBeNull();
 });
 
 test("sqlite_open_error_gets_the_file_hint", async () => {

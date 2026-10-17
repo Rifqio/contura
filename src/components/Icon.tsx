@@ -42,6 +42,25 @@ const PATHS = {
 
 export type IconName = keyof typeof PATHS;
 
+/** The same icon as a DOM element, for widgets drawn outside React such as editor gutters. */
+export function iconElement(name: IconName): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.6");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", PATHS[name]);
+  svg.append(path);
+  return svg;
+}
+
 export default function Icon({ name, className }: { name: IconName; className?: string }) {
   return (
     <svg

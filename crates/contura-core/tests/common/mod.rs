@@ -34,6 +34,8 @@ pub fn base_config(user: &str, database: Option<String>) -> ConnectionConfig {
         file: None,
         query_timeout_secs: None,
         ai_access: Default::default(),
+        production: false,
+        read_only: false,
     }
 }
 

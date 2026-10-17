@@ -1,3 +1,5 @@
+mod common;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,6 +20,10 @@ struct Fixture {
 }
 
 async fn fixture(timeout: Option<u32>) -> Fixture {
+    fixture_with(timeout, false, false).await
+}
+
+async fn fixture_with(timeout: Option<u32>, production: bool, read_only: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("shop.db");
     rusqlite::Connection::open(&file)
@@ -44,6 +50,8 @@ async fn fixture(timeout: Option<u32>) -> Fixture {
             file: Some(file),
             query_timeout_secs: timeout,
             ai_access: Default::default(),
+            production,
+            read_only,
         })
         .await
         .unwrap();
@@ -66,18 +74,18 @@ fn all() -> HistoryFilter {
 async fn execute_records_history_for_every_outcome() {
     let f = fixture(None).await;
     let s = f.svc.open_query_session(f.id, None).await.unwrap();
-    let ok = f.svc.execute_sql(s, "SELECT 1".into()).await.unwrap();
+    let ok = f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
     assert!(matches!(ok.outcome, ExecOutcome::Rows { .. }));
     f.svc
-        .execute_sql(s, "UPDATE t SET a = 3".into())
+        .execute_sql(s, "UPDATE t SET a = 3".into(), None)
         .await
         .unwrap();
     f.svc
-        .execute_sql(s, "SELECT * FROM missing".into())
+        .execute_sql(s, "SELECT * FROM missing".into(), None)
         .await
         .unwrap_err();
     let svc = f.svc.clone();
-    let run = tokio::spawn(async move { svc.execute_sql(s, LONG.into()).await });
+    let run = tokio::spawn(async move { svc.execute_sql(s, LONG.into(), None).await });
     tokio::time::sleep(Duration::from_millis(200)).await;
     f.svc.cancel_query(s).await.unwrap();
     assert!(matches!(run.await.unwrap(), Err(Error::Cancelled)));
@@ -108,7 +116,7 @@ async fn timeout_cancels_and_reports_timed_out() {
     let f = fixture(Some(1)).await;
     let s = f.svc.open_query_session(f.id, None).await.unwrap();
     let start = Instant::now();
-    let err = f.svc.execute_sql(s, LONG.into()).await.unwrap_err();
+    let err = f.svc.execute_sql(s, LONG.into(), None).await.unwrap_err();
     assert!(matches!(err, Error::TimedOut(1)), "{err:?}");
     assert!(start.elapsed() < Duration::from_secs(3));
     let h = f.svc.query_history(f.id, all()).unwrap();
@@ -120,7 +128,11 @@ async fn closing_connection_closes_its_query_sessions() {
     let f = fixture(None).await;
     let s = f.svc.open_query_session(f.id, None).await.unwrap();
     f.svc.close(f.id).await.unwrap();
-    let err = f.svc.execute_sql(s, "SELECT 1".into()).await.unwrap_err();
+    let err = f
+        .svc
+        .execute_sql(s, "SELECT 1".into(), None)
+        .await
+        .unwrap_err();
     assert!(
         matches!(&err, Error::NotFound(m) if m == "That query session is closed."),
         "{err:?}"
@@ -142,7 +154,7 @@ async fn changing_ai_access_keeps_sessions_and_changes_only_that_field() {
     );
     assert_eq!(f.svc.list().unwrap(), vec![saved]);
     assert!(f.svc.is_open(f.id));
-    f.svc.execute_sql(s, "SELECT 1".into()).await.unwrap();
+    f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
 }
 
 #[tokio::test]
@@ -166,6 +178,7 @@ async fn fetch_more_and_close_result_go_through_the_registry() {
             s,
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1500) SELECT i FROM n"
                 .into(),
+            None,
         )
         .await
         .unwrap();
@@ -227,7 +240,7 @@ async fn saved_query_names_are_unique_ignoring_case() {
 async fn deleting_a_connection_deletes_its_history() {
     let f = fixture(None).await;
     let s = f.svc.open_query_session(f.id, None).await.unwrap();
-    f.svc.execute_sql(s, "SELECT 1".into()).await.unwrap();
+    f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
     f.svc.delete(f.id).await.unwrap();
     assert!(f.svc.query_history(f.id, all()).unwrap().is_empty());
 }
@@ -253,7 +266,7 @@ async fn closing_a_connection_with_a_running_query_is_quick() {
     let f = fixture(None).await;
     let s = f.svc.open_query_session(f.id, None).await.unwrap();
     let svc = f.svc.clone();
-    let run = tokio::spawn(async move { svc.execute_sql(s, LONG.into()).await });
+    let run = tokio::spawn(async move { svc.execute_sql(s, LONG.into(), None).await });
     tokio::time::sleep(Duration::from_millis(200)).await;
     let start = Instant::now();
     f.svc.close(f.id).await.unwrap();
@@ -270,10 +283,298 @@ async fn cancel_all_stops_every_running_query() {
     let f = fixture(None).await;
     let a = f.svc.open_query_session(f.id, None).await.unwrap();
     let svc = f.svc.clone();
-    let run = tokio::spawn(async move { svc.execute_sql(a, LONG.into()).await });
+    let run = tokio::spawn(async move { svc.execute_sql(a, LONG.into(), None).await });
     tokio::time::sleep(Duration::from_millis(200)).await;
     let start = Instant::now();
     f.svc.cancel_all_queries().await;
     assert!(matches!(run.await.unwrap(), Err(Error::Cancelled)));
     assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+fn count_rows(f: &Fixture) -> i64 {
+    rusqlite::Connection::open(f._dir.path().join("shop.db"))
+        .unwrap()
+        .query_row("SELECT count(*) FROM t WHERE a < 100", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn a_value(f: &Fixture) -> Vec<i64> {
+    let c = rusqlite::Connection::open(f._dir.path().join("shop.db")).unwrap();
+    let mut st = c.prepare("SELECT a FROM t ORDER BY a").unwrap();
+    st.query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+}
+
+const DELETE_ALL: &str = "DELETE FROM t";
+
+#[tokio::test]
+async fn production_write_without_pass_is_refused_and_not_run() {
+    let f = fixture_with(None, true, false).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let err = f
+        .svc
+        .execute_sql(s, DELETE_ALL.into(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
+    assert_eq!(count_rows(&f), 2);
+    assert!(f.svc.query_history(f.id, all()).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn production_write_with_pass_runs_once() {
+    let f = fixture_with(None, true, false).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let pass = f.svc.confirm_run(s, vec![DELETE_ALL.into()]).unwrap();
+    f.svc
+        .execute_sql(s, DELETE_ALL.into(), Some(pass))
+        .await
+        .unwrap();
+    assert_eq!(count_rows(&f), 0);
+    let err = f
+        .svc
+        .execute_sql(s, DELETE_ALL.into(), Some(pass))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
+}
+
+#[tokio::test]
+async fn pass_covers_every_write_of_a_script_once_each() {
+    let f = fixture_with(None, true, false).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let script = vec![
+        "UPDATE t SET a = 5 WHERE a = 1".to_string(),
+        "SELECT 1".to_string(),
+        "UPDATE t SET a = 6 WHERE a = 2".to_string(),
+    ];
+    let pass = f.svc.confirm_run(s, script.clone()).unwrap();
+    for sql in script {
+        f.svc.execute_sql(s, sql, Some(pass)).await.unwrap();
+    }
+    assert_eq!(a_value(&f), vec![5, 6]);
+}
+
+#[tokio::test]
+async fn pass_does_not_cover_changed_text() {
+    let f = fixture_with(None, true, false).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let pass = f
+        .svc
+        .confirm_run(s, vec!["UPDATE t SET a = 1".into()])
+        .unwrap();
+    let err = f
+        .svc
+        .execute_sql(s, "UPDATE t SET a = 2".into(), Some(pass))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
+    assert_eq!(a_value(&f), vec![1, 2]);
+}
+
+#[tokio::test]
+async fn pass_is_bound_to_its_session() {
+    let f = fixture_with(None, true, false).await;
+    let a = f.svc.open_query_session(f.id, None).await.unwrap();
+    let b = f.svc.open_query_session(f.id, None).await.unwrap();
+    let pass = f.svc.confirm_run(a, vec![DELETE_ALL.into()]).unwrap();
+    let err = f
+        .svc
+        .execute_sql(b, DELETE_ALL.into(), Some(pass))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
+    assert_eq!(count_rows(&f), 2);
+}
+
+#[tokio::test]
+async fn expired_pass_is_refused() {
+    let f = fixture_with(None, true, false).await;
+    f.svc.set_pass_ttl_for_test(Duration::from_secs(0));
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let pass = f.svc.confirm_run(s, vec![DELETE_ALL.into()]).unwrap();
+    let err = f
+        .svc
+        .execute_sql(s, DELETE_ALL.into(), Some(pass))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
+    assert_eq!(count_rows(&f), 2);
+}
+
+#[tokio::test]
+async fn a_new_run_ends_the_sessions_partly_used_pass() {
+    let f = fixture_with(None, true, false).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let first = "UPDATE t SET a = 5 WHERE a = 1".to_string();
+    let second = "UPDATE t SET a = 6 WHERE a = 2".to_string();
+    let pass = f
+        .svc
+        .confirm_run(s, vec![first.clone(), second.clone()])
+        .unwrap();
+    f.svc.execute_sql(s, first, Some(pass)).await.unwrap();
+    f.svc.prepare_run(s, vec!["SELECT 1".into()]).unwrap();
+    let err = f
+        .svc
+        .execute_sql(s, second.clone(), Some(pass))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
+
+    let again = f.svc.confirm_run(s, vec![second.clone()]).unwrap();
+    f.svc.confirm_run(s, vec![DELETE_ALL.into()]).unwrap();
+    let err = f.svc.execute_sql(s, second, Some(again)).await.unwrap_err();
+    assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
+    assert_eq!(a_value(&f), vec![2, 5]);
+}
+
+#[tokio::test]
+async fn query_session_opened_during_a_save_is_discarded() {
+    let f = fixture(None).await;
+    let err = f
+        .svc
+        .open_query_session_with_hook(f.id, None, resave(&f, true, false))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn read_only_write_is_refused_before_the_server() {
+    let f = fixture_with(None, false, true).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let err = f
+        .svc
+        .execute_sql(s, DELETE_ALL.into(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ReadOnly(0)), "{err:?}");
+    assert_eq!(count_rows(&f), 2);
+    assert!(f.svc.query_history(f.id, all()).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn reads_run_on_production_without_a_pass() {
+    let f = fixture_with(None, true, false).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    f.svc
+        .execute_sql(s, "SELECT * FROM t".into(), None)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn prepare_run_reports_the_verdict_for_the_session() {
+    use contura_core::safety::RunVerdict;
+    let f = fixture_with(None, true, false).await;
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    let v = f
+        .svc
+        .prepare_run(s, vec!["SELECT 1".into(), DELETE_ALL.into()])
+        .unwrap();
+    assert!(
+        matches!(v, RunVerdict::NeedsConfirmation { writes: 1, .. }),
+        "{v:?}"
+    );
+}
+
+async fn resave(f: &Fixture, production: bool, read_only: bool) {
+    let file = f._dir.path().join("shop.db");
+    f.svc
+        .save(ConnectionInput {
+            id: Some(f.id),
+            name: "shop".into(),
+            dialect: DialectKind::Sqlite,
+            host: String::new(),
+            port: 0,
+            user: String::new(),
+            database: None,
+            ssl: SslMode::Disable,
+            password: PasswordChange::Keep,
+            group_id: None,
+            file: Some(file),
+            query_timeout_secs: None,
+            ai_access: Default::default(),
+            production,
+            read_only,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn toggling_read_only_reopens_sessions_read_only() {
+    let f = fixture(None).await;
+    let old = f.svc.open_query_session(f.id, None).await.unwrap();
+    f.svc
+        .execute_sql(old, "INSERT INTO t VALUES (3)".into(), None)
+        .await
+        .unwrap();
+    resave(&f, false, true).await;
+    let err = f
+        .svc
+        .execute_sql(old, "SELECT 1".into(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::NotFound(_)), "{err:?}");
+    f.svc.open(f.id).await.unwrap();
+    let fresh = f.svc.open_query_session(f.id, None).await.unwrap();
+    f.svc
+        .execute_sql(fresh, "SELECT * FROM t".into(), None)
+        .await
+        .unwrap();
+    let err = f
+        .svc
+        .execute_sql(fresh, "INSERT INTO t VALUES (4)".into(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ReadOnly(0)), "{err:?}");
+    assert_eq!(count_rows(&f), 3);
+}
+
+#[tokio::test]
+async fn prepare_run_dialog_falls_back_to_the_configured_database() {
+    use contura_core::safety::RunVerdict;
+    // SQLite has no configured database name, so this one runs against MySQL.
+    let db = common::TestDb::create().await;
+    let dir = tempfile::tempdir().unwrap();
+    let svc = ConnectionService::new(
+        AppStore::open(&dir.path().join("app.sqlite")).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    let saved = svc
+        .save(ConnectionInput {
+            id: None,
+            name: "m".into(),
+            dialect: DialectKind::MySql,
+            host: db.config.host.clone(),
+            port: db.config.port,
+            user: db.config.user.clone(),
+            database: db.config.database.clone(),
+            ssl: SslMode::Disable,
+            password: PasswordChange::Set {
+                value: db.password.clone().unwrap(),
+            },
+            group_id: None,
+            file: None,
+            query_timeout_secs: None,
+            ai_access: Default::default(),
+            production: true,
+            read_only: false,
+        })
+        .await
+        .unwrap();
+    svc.open(saved.id).await.unwrap();
+    let s = svc.open_query_session(saved.id, None).await.unwrap();
+    let v = svc.prepare_run(s, vec!["DELETE FROM t".into()]).unwrap();
+    match v {
+        RunVerdict::NeedsConfirmation { database, .. } => {
+            assert_eq!(database.as_deref(), Some(db.name.as_str()));
+        }
+        other => panic!("{other:?}"),
+    }
+    svc.close(saved.id).await.unwrap();
+    db.drop_db().await;
 }

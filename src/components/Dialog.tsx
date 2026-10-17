@@ -3,14 +3,18 @@ import { createPortal } from "react-dom";
 import Icon from "./Icon";
 
 interface Props {
-  title: string;
+  title: ReactNode;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  /** An extra class on the panel, for a dialog with its own width. */
+  className?: string;
+  /** Shown after the title, before the close button, such as a Production tag. */
+  badge?: ReactNode;
 }
 
 /** A modal dialog: Escape closes it, focus moves in on open and back on close, Tab stays inside. */
-export default function Dialog({ title, onClose, children, wide }: Props) {
+export default function Dialog({ title, onClose, children, wide, className, badge }: Props) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
 
@@ -58,7 +62,7 @@ export default function Dialog({ title, onClose, children, wide }: Props) {
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={panel}
-        className={wide ? "dialog dialog-wide" : "dialog"}
+        className={["dialog", wide && "dialog-wide", className].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -67,6 +71,7 @@ export default function Dialog({ title, onClose, children, wide }: Props) {
       >
         <header className="dialog-header">
           <h2 id={titleId}>{title}</h2>
+          {badge}
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
             <Icon name="close" />
           </button>

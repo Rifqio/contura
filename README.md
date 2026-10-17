@@ -32,6 +32,7 @@ The AI assistant panel. No provider is set up here, and the "Sends" line shows w
 - SQL editor with completion, inspections, Query History (the last 1,000 statements per Connection) and Saved Queries.
 - Schema Builder. Edit a Schema Model as DBML text or on a diagram, and the two stay in step. Reverse engineer an existing database into a Schema Model. Export it as a CREATE script or as an image.
 - AI assistant, in the editor and in a side panel. Each Connection has an access level that decides what an Ask may send: nothing, schema only, schema and query text, or those plus sample rows. A "Sends" line shows exactly what would leave the PC before you ask.
+- Production and Read-only Connections. A Production Connection shows the exact SQL and asks before anything that writes. A Read-only Connection blocks every write, and the server session is opened read-only as a backstop.
 - Passwords are kept in Windows Credential Manager, not in files.
 
 ## How it works
@@ -42,7 +43,6 @@ Nothing leaves the PC except what you send to an AI provider that you set up you
 
 ## What's next
 
-- Production and Read-only Connections (in progress)
 - Pending Edits in the data grid
 - Table Designer
 - Visual Query

@@ -235,3 +235,90 @@ async fn several_statements_in_one_run_keep_a_typed_transaction() {
     s.close().await.unwrap();
     db.drop_db().await;
 }
+
+async fn ro_fixture(
+    read_only: bool,
+) -> (
+    PgTestDb,
+    Arc<dyn Dialect>,
+    contura_core::query::SessionHandle,
+) {
+    let db = PgTestDb::create().await;
+    let plain = connect(&db.config, db.password.as_deref()).await.unwrap();
+    let s = plain.open_query_session(Some(&db.name)).await.unwrap();
+    s.execute("CREATE TABLE t (a int)").await.unwrap();
+    s.close().await.unwrap();
+    let mut config = db.config.clone();
+    config.read_only = read_only;
+    let dialect = connect(&config, db.password.as_deref()).await.unwrap();
+    let s = dialect.open_query_session(Some(&db.name)).await.unwrap();
+    (db, dialect, s)
+}
+
+#[tokio::test]
+async fn read_only_session_refuses_insert_at_the_server() {
+    let (db, _d, s) = ro_fixture(true).await;
+    let err = s.execute("INSERT INTO t VALUES (1)").await.unwrap_err();
+    assert!(matches!(err, Error::ReadOnlyRefused), "{err:?}");
+    s.execute("SELECT * FROM t").await.unwrap();
+    db.drop_db().await;
+}
+
+#[tokio::test]
+async fn read_only_session_is_read_only_at_open() {
+    let (db, _d, s) = ro_fixture(true).await;
+    let (_, r, _) = rows(
+        s.execute("SHOW default_transaction_read_only")
+            .await
+            .unwrap(),
+    );
+    assert_eq!(text(&r[0][0]), "on");
+    db.drop_db().await;
+}
+
+#[tokio::test]
+async fn read_only_browse_connection_refuses_writes() {
+    use contura_core::model::{ObjectPath, PageRequest};
+    let (db, _d, _s) = ro_fixture(true).await;
+    // A sequence a grid filter can advance, which is a write the server refuses read-only.
+    let plain = connect(&db.config, db.password.as_deref()).await.unwrap();
+    let ps = plain.open_query_session(Some(&db.name)).await.unwrap();
+    ps.execute("INSERT INTO t VALUES (1)").await.unwrap();
+    ps.execute("CREATE SEQUENCE sq").await.unwrap();
+    let mut config = db.config.clone();
+    config.read_only = true;
+    let d = connect(&config, db.password.as_deref()).await.unwrap();
+    let req = PageRequest {
+        table: ObjectPath {
+            database: db.name.clone(),
+            schema: Some("public".into()),
+            name: "t".into(),
+        },
+        page: 0,
+        sort: None,
+        filter: Some("nextval('sq') > 0".into()),
+    };
+    let err = d.fetch_page(&req).await.unwrap_err();
+    assert!(matches!(err, Error::ReadOnlyRefused), "{err:?}");
+    let plain_page = plain.fetch_page(&req).await.unwrap();
+    assert_eq!(plain_page.rows.len(), 1);
+    db.drop_db().await;
+}
+#[tokio::test]
+async fn plain_connection_keeps_the_server_message_for_a_read_only_transaction() {
+    let (db, _d, s) = ro_fixture(false).await;
+    s.execute("BEGIN READ ONLY").await.unwrap();
+    let err = s.execute("INSERT INTO t VALUES (1)").await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Query(m) if m.contains("read-only transaction")),
+        "{err:?}"
+    );
+    db.drop_db().await;
+}
+
+#[tokio::test]
+async fn plain_session_still_writes() {
+    let (db, _d, s) = ro_fixture(false).await;
+    s.execute("INSERT INTO t VALUES (1)").await.unwrap();
+    db.drop_db().await;
+}

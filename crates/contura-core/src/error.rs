@@ -33,9 +33,28 @@ pub enum Error {
     TimedOut(u32),
     #[error("{0}")]
     Ai(AiError),
+    /// The index of the first statement that writes.
+    #[error("this Connection is Read-only")]
+    ReadOnly(usize),
+    #[error("confirm this write on a Production Connection")]
+    NeedsConfirmation,
+    #[error("the server refused a write: this Connection is Read-only")]
+    ReadOnlyRefused,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Browse code maps a server's read-only refusal to `ReadOnlyRefused` wherever it
+/// happens. A Connection that is not Read-only must not say it is, so there it
+/// becomes a plain query error (a hot standby, or a transaction the user made read-only).
+pub(crate) fn browse_result<T>(result: Result<T>, read_only: bool) -> Result<T> {
+    match result {
+        Err(Error::ReadOnlyRefused) if !read_only => Err(Error::Query(
+            "the server refused a write: the session is read-only".into(),
+        )),
+        other => other,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -76,6 +95,37 @@ mod tests {
         assert_eq!(
             json(Error::Ai(AiError::BadKey)),
             serde_json::json!({"kind":"ai","message":{"kind":"badKey"}})
+        );
+    }
+
+    #[test]
+    fn browse_refusal_is_read_only_only_on_a_read_only_connection() {
+        let refused = || -> Result<()> { Err(Error::ReadOnlyRefused) };
+        assert!(matches!(
+            browse_result(refused(), true),
+            Err(Error::ReadOnlyRefused)
+        ));
+        assert!(matches!(
+            browse_result(refused(), false),
+            Err(Error::Query(_))
+        ));
+        assert!(browse_result(Ok(1), false).is_ok());
+    }
+
+    #[test]
+    fn read_only_errors_shape() {
+        let json = |e: Error| serde_json::to_value(e).unwrap();
+        assert_eq!(
+            json(Error::ReadOnly(1)),
+            serde_json::json!({"kind":"readOnly","message":1})
+        );
+        assert_eq!(
+            json(Error::NeedsConfirmation),
+            serde_json::json!({"kind":"needsConfirmation"})
+        );
+        assert_eq!(
+            json(Error::ReadOnlyRefused),
+            serde_json::json!({"kind":"readOnlyRefused"})
         );
     }
 

@@ -24,6 +24,10 @@ export interface ConnectionConfig {
   queryTimeoutSecs: number | null;
   /** What the AI assistant may see of this Connection. */
   aiAccess: AiAccess;
+  /** Writes ask for confirmation first. */
+  production: boolean;
+  /** Writes are blocked by the Core and refused by the server. */
+  readOnly: boolean;
 }
 
 export type GroupColor = "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "rose" | "slate";
@@ -127,6 +131,8 @@ export interface ConnectionInput {
   queryTimeoutSecs: number | null;
   /** What the AI assistant may see of this Connection. */
   aiAccess: AiAccess;
+  production: boolean;
+  readOnly: boolean;
 }
 
 export interface GroupInput {
@@ -158,7 +164,11 @@ export type CommandError =
   | { kind: "cancelled"; message?: undefined }
   /** The Connection's timeout, in seconds. */
   | { kind: "timedOut"; message: number }
-  | { kind: "ai"; message: AiError };
+  | { kind: "ai"; message: AiError }
+  /** The index of the first statement that writes. */
+  | { kind: "readOnly"; message: number }
+  | { kind: "needsConfirmation"; message?: undefined }
+  | { kind: "readOnlyRefused"; message?: undefined };
 
 /** A Schema Model on disk: the DBML and, when it exists, its layout sidecar. */
 export interface ModelFiles {
@@ -259,6 +269,28 @@ export interface SchemaModel {
 
 /** A query tab's own session on a Connection. */
 export type QuerySessionId = string;
+
+/** A single-use confirmation for the writes of one run on a Production Connection. */
+export type PassId = string;
+
+export type StatementClass = "read" | "write";
+
+export interface PlannedStatement {
+  text: string;
+  class: StatementClass;
+}
+
+export type RunVerdict =
+  | { kind: "ok" }
+  /** `statement` is the index of the first statement that writes. */
+  | { kind: "readOnly"; statement: number }
+  | {
+      kind: "needsConfirmation";
+      connection: string;
+      database: string | null;
+      statements: PlannedStatement[];
+      writes: number;
+    };
 
 export interface ResultColumn {
   name: string;

@@ -9,8 +9,8 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{Column, Conn, OptsBuilder, Pool, QueryResult, TextProtocol, Value};
 use tokio::sync::{mpsc, oneshot};
 
-use super::query_err;
 use super::quote::quote_ident;
+use super::{query_err, session_err};
 use crate::common::{bytes_preview, text_preview};
 use crate::error::{Error, Result};
 use crate::model::{Cell, PAGE_SIZE};
@@ -41,6 +41,7 @@ pub(super) async fn spawn(
     opts: OptsBuilder,
     database: Option<&str>,
     pool: Pool,
+    read_only: bool,
 ) -> Result<SessionHandle> {
     let mut conn = Conn::new(opts)
         .await
@@ -56,7 +57,7 @@ pub(super) async fn spawn(
     });
     let flag = CancelFlag::default();
     let (tx, rx) = mpsc::channel(8);
-    tokio::spawn(actor(conn, rx, flag.clone(), canceller.clone()));
+    tokio::spawn(actor(conn, rx, flag.clone(), canceller.clone(), read_only));
     Ok(SessionHandle::new(tx, canceller, flag))
 }
 
@@ -65,6 +66,7 @@ async fn actor(
     mut rx: mpsc::Receiver<Command>,
     flag: CancelFlag,
     canceller: Arc<dyn Canceller>,
+    read_only: bool,
 ) {
     let mut pending: Option<Command> = None;
     loop {
@@ -77,7 +79,16 @@ async fn actor(
         };
         match cmd {
             Command::Execute { sql, reply } => {
-                pending = execute(&mut conn, &sql, reply, &mut rx, &flag, canceller.as_ref()).await;
+                pending = execute(
+                    &mut conn,
+                    &sql,
+                    reply,
+                    &mut rx,
+                    &flag,
+                    canceller.as_ref(),
+                    read_only,
+                )
+                .await;
             }
             Command::FetchMore { reply } => {
                 let _ = reply.send(Err(no_more()));
@@ -193,9 +204,10 @@ async fn read_page(
     result: &mut Result_<'_>,
     kinds: &[Kind],
     carry: &mut Option<Vec<Cell>>,
+    read_only: bool,
 ) -> Result<(Vec<Vec<Cell>>, bool)> {
     let mut page: Vec<Vec<Cell>> = carry.take().into_iter().collect();
-    while let Some(row) = result.next().await.map_err(query_err)? {
+    while let Some(row) = result.next().await.map_err(|e| session_err(e, read_only))? {
         let cells = kinds
             .iter()
             .enumerate()
@@ -219,19 +231,23 @@ async fn execute(
     rx: &mut mpsc::Receiver<Command>,
     flag: &CancelFlag,
     canceller: &dyn Canceller,
+    read_only: bool,
 ) -> Option<Command> {
     let fail = |e: Error| or_cancelled(flag, e);
     let mut result = match conn.query_iter(sql).await {
         Ok(r) => r,
         Err(e) => {
-            let _ = reply.send(Err(fail(query_err(e))));
+            let _ = reply.send(Err(fail(session_err(e, read_only))));
             return None;
         }
     };
     let columns = result.columns().filter(|c| !c.is_empty());
     let Some(columns) = columns else {
         let affected = result.affected_rows();
-        let done = result.drop_result().await.map_err(query_err);
+        let done = result
+            .drop_result()
+            .await
+            .map_err(|e| session_err(e, read_only));
         let _ = reply.send(
             done.map(|_| ExecOutcome::Affected { rows: affected })
                 .map_err(fail),
@@ -262,7 +278,7 @@ async fn execute(
         })
         .collect();
     let mut carry = None;
-    let (page, has_more) = match read_page(&mut result, &kinds, &mut carry).await {
+    let (page, has_more) = match read_page(&mut result, &kinds, &mut carry, read_only).await {
         Ok(p) => p,
         Err(e) => {
             let _ = result.drop_result().await;
@@ -289,7 +305,7 @@ async fn execute(
     loop {
         match rx.recv().await {
             Some(Command::FetchMore { reply }) => {
-                match read_page(&mut result, &kinds, &mut carry).await {
+                match read_page(&mut result, &kinds, &mut carry, read_only).await {
                     Ok((rows, more)) => {
                         let _ = reply.send(Ok(MoreRows {
                             rows,

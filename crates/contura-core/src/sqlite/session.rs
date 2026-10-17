@@ -7,7 +7,7 @@ use rusqlite::{Connection, Rows};
 use tokio::sync::mpsc;
 
 use super::page::cell_of;
-use super::{open_existing, query_err};
+use super::{open_existing, session_err};
 use crate::error::{Error, Result};
 use crate::model::{Cell, PAGE_SIZE};
 use crate::query::{
@@ -26,20 +26,20 @@ impl Canceller for Interrupt {
 }
 
 /// Opens a second connection to `path` and starts its session thread. Blocking.
-pub(crate) fn spawn(path: PathBuf) -> Result<SessionHandle> {
-    let conn = open_existing(&path)?;
+pub(crate) fn spawn(path: PathBuf, read_only: bool) -> Result<SessionHandle> {
+    let conn = open_existing(&path, read_only)?;
     let interrupt = Interrupt(conn.get_interrupt_handle());
     let flag = CancelFlag::default();
     let (tx, rx) = mpsc::channel(8);
     let actor_flag = flag.clone();
     std::thread::Builder::new()
         .name("contura-sqlite-session".into())
-        .spawn(move || actor(conn, rx, actor_flag))
+        .spawn(move || actor(conn, rx, actor_flag, read_only))
         .map_err(|e| Error::Connect(format!("cannot start the query session: {e}")))?;
     Ok(SessionHandle::new(tx, Arc::new(interrupt), flag))
 }
 
-fn actor(conn: Connection, mut rx: mpsc::Receiver<Command>, flag: CancelFlag) {
+fn actor(conn: Connection, mut rx: mpsc::Receiver<Command>, flag: CancelFlag, read_only: bool) {
     let mut pending: Option<Command> = None;
     loop {
         let Some(cmd) = pending.take().or_else(|| rx.blocking_recv()) else {
@@ -47,7 +47,7 @@ fn actor(conn: Connection, mut rx: mpsc::Receiver<Command>, flag: CancelFlag) {
         };
         match cmd {
             Command::Execute { sql, reply } => {
-                pending = execute(&conn, &sql, reply, &mut rx, &flag);
+                pending = execute(&conn, &sql, reply, &mut rx, &flag, read_only);
             }
             Command::FetchMore { reply } => {
                 let _ = reply.send(Err(no_more()));
@@ -104,8 +104,9 @@ fn execute(
     reply: tokio::sync::oneshot::Sender<Result<ExecOutcome>>,
     rx: &mut mpsc::Receiver<Command>,
     flag: &CancelFlag,
+    read_only: bool,
 ) -> Option<Command> {
-    let fail = |e: rusqlite::Error| or_cancelled(flag, query_err(e));
+    let fail = |e: rusqlite::Error| or_cancelled(flag, session_err(e, read_only));
     let mut stmt = match conn.prepare(sql) {
         Ok(s) => s,
         Err(e) => {
@@ -228,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn rows_come_a_page_at_a_time() {
         let (_d, path) = fixture();
-        let s = spawn(path).unwrap();
+        let s = spawn(path, false).unwrap();
         let (first, more) = rows(s.execute("SELECT id FROM t ORDER BY id").await.unwrap());
         assert_eq!((first.len(), more), (1000, true));
         assert_eq!(num(&first[0][0]), "1");
@@ -247,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn writes_report_affected_rows_and_commit() {
         let (_d, path) = fixture();
-        let s = spawn(path.clone()).unwrap();
+        let s = spawn(path.clone(), false).unwrap();
         let out = s
             .execute("UPDATE t SET name = 'x' WHERE id <= 12")
             .await
@@ -263,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn typed_transaction_spans_statements() {
         let (_d, path) = fixture();
-        let s = spawn(path.clone()).unwrap();
+        let s = spawn(path.clone(), false).unwrap();
         s.execute("BEGIN").await.unwrap();
         s.execute("INSERT INTO t(id) VALUES (9999)").await.unwrap();
         s.execute("ROLLBACK").await.unwrap();
@@ -277,7 +278,7 @@ mod tests {
     #[tokio::test]
     async fn errors_keep_the_session_usable() {
         let (_d, path) = fixture();
-        let s = spawn(path).unwrap();
+        let s = spawn(path, false).unwrap();
         let err = s.execute("SELECT * FROM missing").await.unwrap_err();
         assert!(
             matches!(&err, Error::Query(m) if m.contains("no such table: missing")),
@@ -289,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_interrupts_a_running_query() {
         let (_d, path) = fixture();
-        let s = std::sync::Arc::new(spawn(path).unwrap());
+        let s = std::sync::Arc::new(spawn(path, false).unwrap());
         let runner = s.clone();
         let started = Instant::now();
         let run = tokio::spawn(async move {
@@ -311,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn results_preview_large_and_binary_values() {
         let (_d, path) = fixture();
-        let s = spawn(path).unwrap();
+        let s = spawn(path, false).unwrap();
         let (r, _) = rows(
             s.execute("SELECT printf('%.*c', 5000000, 'x'), x'deadbeef', NULL, 1.5")
                 .await
@@ -344,7 +345,7 @@ mod tests {
     #[tokio::test]
     async fn new_execute_abandons_the_open_result() {
         let (_d, path) = fixture();
-        let s = spawn(path).unwrap();
+        let s = spawn(path, false).unwrap();
         let (_, more) = rows(s.execute("SELECT id FROM t").await.unwrap());
         assert!(more);
         rows(s.execute("SELECT 2").await.unwrap());

@@ -5,13 +5,14 @@ use contura_core::ai::{
 };
 use contura_core::connections::{ConnectionInput, ConnectionService, GroupInput};
 use contura_core::model::{
-    ConnectionConfig, ConnectionId, DbObject, FullValue, FullValueRequest, Group, GroupId,
-    ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
+    ConnectionConfig, ConnectionId, DbObject, DialectKind, FullValue, FullValueRequest, Group,
+    GroupId, ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
 };
 use contura_core::query::{
     Execution, HistoryEntry, HistoryFilter, MoreRows, QuerySessionId, SavedQuery, SavedQueryId,
     SavedQueryInput,
 };
+use contura_core::safety::{self, PassId, RunVerdict, StatementClass};
 use contura_core::schema_model::SchemaModel;
 use contura_core::sql_schema::SqlSchema;
 use contura_core::suggest::SuggestedConnection;
@@ -275,8 +276,32 @@ pub async fn execute_sql(
     service: Service<'_>,
     session: QuerySessionId,
     sql: String,
+    pass: Option<PassId>,
 ) -> Result<Execution, Error> {
-    service.execute_sql(session, sql).await
+    service.execute_sql(session, sql, pass).await
+}
+
+#[tauri::command]
+pub fn prepare_run(
+    service: Service<'_>,
+    session: QuerySessionId,
+    statements: Vec<String>,
+) -> Result<RunVerdict, Error> {
+    service.prepare_run(session, statements)
+}
+
+#[tauri::command]
+pub fn classify_sql(dialect: DialectKind, sql: String) -> StatementClass {
+    safety::classify(dialect, &sql)
+}
+
+#[tauri::command]
+pub fn confirm_run(
+    service: Service<'_>,
+    session: QuerySessionId,
+    statements: Vec<String>,
+) -> Result<PassId, Error> {
+    service.confirm_run(session, statements)
 }
 
 #[tauri::command]
