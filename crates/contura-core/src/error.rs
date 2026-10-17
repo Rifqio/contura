@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::ai::AiError;
+use crate::model::KeyPart;
 
 #[derive(thiserror::Error, Debug, Serialize)]
 #[serde(tag = "kind", content = "message", rename_all = "camelCase")]
@@ -40,6 +41,12 @@ pub enum Error {
     NeedsConfirmation,
     #[error("the server refused a write: this Connection is Read-only")]
     ReadOnlyRefused,
+    /// A save's UPDATE or DELETE (by plan index) found its row changed or gone.
+    #[error("a row changed since it was loaded")]
+    RowChanged { statement: usize, key: Vec<KeyPart> },
+    /// The server refused a save's statement (by plan index).
+    #[error("{message}")]
+    EditFailed { statement: usize, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -126,6 +133,30 @@ mod tests {
         assert_eq!(
             json(Error::ReadOnlyRefused),
             serde_json::json!({"kind":"readOnlyRefused"})
+        );
+    }
+
+    #[test]
+    fn edit_errors_shape() {
+        use crate::model::Cell;
+        let json = |e: Error| serde_json::to_value(e).unwrap();
+        assert_eq!(
+            json(Error::RowChanged {
+                statement: 1,
+                key: vec![KeyPart {
+                    column: "id".into(),
+                    value: Cell::Number { value: "42".into() },
+                }],
+            }),
+            serde_json::json!({"kind":"rowChanged","message":{"statement":1,
+                "key":[{"column":"id","value":{"t":"number","value":"42"}}]}})
+        );
+        assert_eq!(
+            json(Error::EditFailed {
+                statement: 2,
+                message: "bad value".into(),
+            }),
+            serde_json::json!({"kind":"editFailed","message":{"statement":2,"message":"bad value"}})
         );
     }
 

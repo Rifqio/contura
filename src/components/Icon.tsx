@@ -15,6 +15,8 @@ const PATHS = {
   key: "M14.5 4a5.5 5.5 0 1 1-5 7.8L4 17.3V20h3v-2h2v-2h2l1.2-1.2A5.5 5.5 0 0 1 14.5 4zM16 8.5h.01",
   more: "M12 6h.01M12 12h.01M12 18h.01",
   plus: "M12 5v14M5 12h14",
+  minus: "M5 12h14",
+  undo: "M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
   close: "M6 6l12 12M18 6 6 18",
   arrowUp: "M12 19V5M6 11l6-6 6 6",
   arrowDown: "M12 5v14M6 13l6 6 6-6",

@@ -13,6 +13,8 @@ interface Props {
   onRun(): void;
   onCancel(): void;
   onAddWhere(): void;
+  /** "Save" for Pending Edits: the title and button say Save instead of Run. */
+  verb?: "Run" | "Save";
 }
 
 /** "2 of 3 statements write.", "1 of 2 statements writes.", "1 of 1 statement writes." */
@@ -24,9 +26,10 @@ function countText(writes: number, total: number): string {
  * The one confirmation before a run that writes on a Production Connection. The SQL shown is
  * exactly what will run. Focus starts on the SQL, so Enter does nothing until Run has focus.
  */
-export default function ConfirmRun({ verdict, noWhere, onRun, onCancel, onAddWhere }: Props) {
+export default function ConfirmRun({ verdict, noWhere, onRun, onCancel, onAddWhere, verb = "Run" }: Props) {
   const [runFocused, setRunFocused] = useState(false);
-  const runLabel = `Run on ${verdict.connection}`;
+  const runLabel = `${verb} on ${verdict.connection}`;
+  const does = verb === "Save" ? "saves" : "runs";
   let line = 0;
 
   return (
@@ -34,7 +37,7 @@ export default function ConfirmRun({ verdict, noWhere, onRun, onCancel, onAddWhe
       className="dialog-confirm"
       title={
         <span className="confirm-title">
-          Run on <b>{verdict.connection}</b>
+          {verb} on <b>{verdict.connection}</b>
           {verdict.database !== null && ` · ${verdict.database}`}
         </span>
       }
@@ -93,11 +96,11 @@ export default function ConfirmRun({ verdict, noWhere, onRun, onCancel, onAddWhe
         <span className="confirm-hint">
           {runFocused ? (
             <>
-              <span className="kbd">Enter</span> runs now.
+              <span className="kbd">Enter</span> {does} now.
             </>
           ) : (
             <>
-              <span className="kbd">Enter</span> runs only when <b>{runLabel}</b> has focus. Press{" "}
+              <span className="kbd">Enter</span> {does} only when <b>{runLabel}</b> has focus. Press{" "}
               <span className="kbd">Tab</span> to reach it, or click it.
             </>
           )}

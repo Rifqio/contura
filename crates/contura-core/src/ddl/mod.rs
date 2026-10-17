@@ -1,8 +1,6 @@
 //! Writes a CREATE script for a Schema Model in its own Dialect.
 
 mod mysql;
-mod postgres;
-mod sqlite;
 
 use crate::error::{Error, Result};
 use crate::model::DialectKind;
@@ -22,18 +20,14 @@ impl Writer<'_> {
     }
 
     fn q(&self, name: &str) -> String {
-        match self.d() {
-            DialectKind::MySql => mysql::quote(name),
-            DialectKind::Postgres => postgres::quote(name),
-            DialectKind::Sqlite => sqlite::quote(name),
-        }
+        crate::common::sql_ident(self.d(), name)
     }
 
     fn lit(&self, s: &str) -> String {
         match self.d() {
+            // DDL keeps the backslash-doubling literal; the hex form is for edits.
             DialectKind::MySql => mysql::string_lit(s),
-            DialectKind::Postgres => postgres::string_lit(s),
-            DialectKind::Sqlite => sqlite::string_lit(s),
+            kind => crate::common::sql_string(kind, s),
         }
     }
 

@@ -93,3 +93,19 @@ test("no_where_warning_sits_at_the_top_with_add_where_and_a_red_button", async (
   expect(onAddWhere).toHaveBeenCalledTimes(1);
   expect(onRun).not.toHaveBeenCalled();
 });
+
+test("the Save variant says Save on the Connection", () => {
+  render(
+    <ConfirmRun
+      verb="Save"
+      verdict={{ kind: "needsConfirmation", connection: "freight-prod", database: "shop", statements: [{ text: "DELETE FROM t WHERE id = 1", class: "write" }], writes: 1 }}
+      noWhere={null}
+      onRun={() => {}}
+      onCancel={() => {}}
+      onAddWhere={() => {}}
+    />,
+  );
+  expect(screen.getByRole("dialog").textContent).toContain("Save on freight-prod · shop");
+  expect(screen.getByRole("button", { name: "Save on freight-prod" })).toBeTruthy();
+  expect(screen.getByRole("dialog").textContent).toContain("saves only when");
+});

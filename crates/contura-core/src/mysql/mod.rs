@@ -9,9 +9,10 @@ mod sql_schema;
 use std::time::Duration;
 
 use mysql_async::prelude::Queryable;
-use mysql_async::{OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
+use mysql_async::{Conn, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 
 use crate::dialect::Dialect;
+use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
     ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
@@ -143,6 +144,42 @@ pub(crate) fn session_err(e: mysql_async::Error, read_only: bool) -> Error {
     }
 }
 
+/// Runs a save on `conn`. A server error on a statement rolls back and is `Failed`,
+/// except a read-only refusal on a Read-only Connection, which is `ReadOnlyRefused`.
+async fn run_planned(conn: &mut Conn, edits: &[PlannedEdit], read_only: bool) -> Result<TxOutcome> {
+    conn.query_drop("START TRANSACTION")
+        .await
+        .map_err(query_err)?;
+    let mut rows = Vec::with_capacity(edits.len());
+    for (statement, edit) in edits.iter().enumerate() {
+        if let Err(e) = conn.query_drop(edit.sql.as_str()).await {
+            let refused = is_read_only_refusal(&e);
+            let mysql_async::Error::Server(server) = e else {
+                return Err(query_err(e));
+            };
+            conn.query_drop("ROLLBACK").await.map_err(query_err)?;
+            if read_only && refused {
+                return Err(Error::ReadOnlyRefused);
+            }
+            return Ok(TxOutcome::Failed {
+                statement,
+                message: server.message,
+            });
+        }
+        let affected = conn.affected_rows();
+        if edit.one_row && affected != 1 {
+            conn.query_drop("ROLLBACK").await.map_err(query_err)?;
+            return Ok(TxOutcome::RowCount {
+                statement,
+                rows: affected,
+            });
+        }
+        rows.push(affected);
+    }
+    conn.query_drop("COMMIT").await.map_err(query_err)?;
+    Ok(TxOutcome::Committed { rows })
+}
+
 #[async_trait::async_trait]
 impl Dialect for MySqlDialect {
     async fn server_version(&self) -> Result<String> {
@@ -216,6 +253,20 @@ impl Dialect for MySqlDialect {
             self.read_only,
         )
         .await
+    }
+
+    /// The planned statements name their database, so `database` is not used.
+    async fn apply_planned(&self, _database: &str, edits: &[PlannedEdit]) -> Result<TxOutcome> {
+        // Found rows, not changed rows: an UPDATE to a value equal after conversion
+        // (`1` into a DECIMAL holding `1.00`) still counts its row.
+        let opts = self.opts.clone().client_found_rows(true);
+        let mut conn = Conn::new(opts)
+            .await
+            .map_err(|e| Error::Connect(format!("cannot open a connection for the save: {e}")))?;
+        let outcome = run_planned(&mut conn, edits, self.read_only).await;
+        // Closing without COMMIT rolls back whatever is still open.
+        let _ = conn.disconnect().await;
+        browse_result(outcome, self.read_only)
     }
 
     async fn disconnect(&self) -> Result<()> {

@@ -2,7 +2,8 @@
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Cell, ColumnInfo, DbObject, KeyPart, ObjectKind, PREVIEW_BYTES, PREVIEW_CHARS, SortSpec,
+    Cell, ColumnInfo, DbObject, DialectKind, KeyPart, ObjectKind, ObjectPath, PREVIEW_BYTES,
+    PREVIEW_CHARS, SortSpec,
 };
 
 pub(crate) fn hex_lower(bytes: &[u8]) -> String {
@@ -119,6 +120,63 @@ pub(crate) fn sort_objects(objects: &mut [DbObject]) {
 /// Double-quoted identifier, as Postgres and SQLite expect.
 pub(crate) fn quote_double(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// An identifier quoted the way its Dialect expects.
+pub(crate) fn sql_ident(kind: DialectKind, name: &str) -> String {
+    match kind {
+        DialectKind::MySql => crate::mysql::quote::quote_ident(name),
+        DialectKind::Postgres | DialectKind::Sqlite => quote_double(name),
+    }
+}
+
+/// A text value as a SQL literal. MySQL reads `\` as an escape, so a value
+/// holding one is sent as a hex literal, which has no escapes to get wrong.
+pub(crate) fn sql_string(kind: DialectKind, s: &str) -> String {
+    if kind == DialectKind::MySql && s.contains('\\') {
+        return format!("_utf8mb4 X'{}'", hex_lower(s.as_bytes()));
+    }
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The qualified table name a page query puts after FROM.
+pub(crate) fn sql_table(kind: DialectKind, table: &ObjectPath) -> Result<String> {
+    let scope = match kind {
+        DialectKind::MySql | DialectKind::Sqlite => &table.database,
+        DialectKind::Postgres => table
+            .schema
+            .as_ref()
+            .ok_or_else(|| Error::InvalidInput("choose a schema".into()))?,
+    };
+    Ok(sql_scoped(kind, scope, &table.name))
+}
+
+/// `scope.name`, each part quoted: a MySQL database, a Postgres schema or a SQLite file.
+pub(crate) fn sql_scoped(kind: DialectKind, scope: &str, name: &str) -> String {
+    format!("{}.{}", sql_ident(kind, scope), sql_ident(kind, name))
+}
+
+#[cfg(test)]
+mod sql_text_tests {
+    use super::*;
+
+    #[test]
+    fn postgres_table_needs_a_schema() {
+        let mut path = ObjectPath {
+            database: "app".into(),
+            schema: None,
+            name: "t".into(),
+        };
+        assert!(matches!(
+            sql_table(DialectKind::Postgres, &path),
+            Err(Error::InvalidInput(m)) if m == "choose a schema"
+        ));
+        path.schema = Some("public".into());
+        assert_eq!(
+            sql_table(DialectKind::Postgres, &path).unwrap(),
+            r#""public"."t""#
+        );
+    }
 }
 
 #[cfg(test)]

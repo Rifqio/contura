@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::Result;
 use crate::model::{
     ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
@@ -28,6 +29,11 @@ pub trait Dialect: Send + Sync {
     async fn sql_schema(&self, database: &str) -> Result<SqlSchema>;
     /// A new connection of its own for one query tab (`database` is ignored by SQLite).
     async fn open_query_session(&self, database: Option<&str>) -> Result<SessionHandle>;
+    /// Runs a planned save in one transaction on a connection of its own (SQLite: the
+    /// browse connection, held for the whole save). A row count other than 1 after an
+    /// UPDATE or DELETE, or a server error, rolls back and is a `TxOutcome`; `Err` means
+    /// the connection failed, or the server refused the write on a Read-only Connection.
+    async fn apply_planned(&self, database: &str, edits: &[PlannedEdit]) -> Result<TxOutcome>;
     async fn disconnect(&self) -> Result<()>;
 }
 

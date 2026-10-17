@@ -3,7 +3,10 @@ use contura_core::ai::{
     AiAccess, AiAnswer, AiRequest, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread,
     KeyChange, ThreadId,
 };
-use contura_core::connections::{ConnectionInput, ConnectionService, GroupInput};
+use contura_core::connections::{
+    ConnectionInput, ConnectionService, EditOutcome, EditPlan, GroupInput,
+};
+use contura_core::edits::EditSet;
 use contura_core::model::{
     ConnectionConfig, ConnectionId, DbObject, DialectKind, FullValue, FullValueRequest, Group,
     GroupId, ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
@@ -302,6 +305,34 @@ pub fn confirm_run(
     statements: Vec<String>,
 ) -> Result<PassId, Error> {
     service.confirm_run(session, statements)
+}
+
+#[tauri::command]
+pub async fn plan_edits(
+    service: Service<'_>,
+    id: ConnectionId,
+    edits: EditSet,
+) -> Result<EditPlan, Error> {
+    service.plan_edits(id, edits).await
+}
+
+#[tauri::command]
+pub async fn confirm_edits(
+    service: Service<'_>,
+    id: ConnectionId,
+    edits: EditSet,
+) -> Result<PassId, Error> {
+    service.confirm_edits(id, edits).await
+}
+
+#[tauri::command]
+pub async fn apply_edits(
+    service: Service<'_>,
+    id: ConnectionId,
+    edits: EditSet,
+    pass: Option<PassId>,
+) -> Result<EditOutcome, Error> {
+    service.apply_edits(id, edits, pass).await
 }
 
 #[tauri::command]

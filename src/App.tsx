@@ -16,7 +16,8 @@ import {
 import type { ConnectionConfig, ConnectionId, Group, GroupId, SavedQuery } from "./api/types";
 import ConnectionForm from "./components/ConnectionForm";
 import ConnectionList from "./components/ConnectionList";
-import DataGrid from "./components/DataGrid";
+import DataGrid, { type GridControl } from "./components/DataGrid";
+import UnsavedEdits from "./components/UnsavedEdits";
 import GroupForm from "./components/GroupForm";
 import GroupSwitcher, { type Place } from "./components/GroupSwitcher";
 import Home from "./components/Home";
@@ -228,7 +229,118 @@ export default function App() {
     });
   }
 
-  function closeTab(i: number) {
+  // ---- Pending Edits in table tabs: ask before they are closed or left ----
+  const [dirtyGrids, setDirtyGrids] = useState<ReadonlySet<string>>(new Set());
+  const dirtyRef = useRef(dirtyGrids);
+  dirtyRef.current = dirtyGrids;
+  const gridControls = useRef(new Map<string, MutableRefObject<GridControl | null>>());
+  const [leaveAsk, setLeaveAsk] = useState<{ key: string; table: string; busy: boolean; resolve(ok: boolean): void } | null>(
+    null,
+  );
+
+  function gridControl(key: string): MutableRefObject<GridControl | null> {
+    let ref = gridControls.current.get(key);
+    if (!ref) {
+      ref = { current: null };
+      gridControls.current.set(key, ref);
+    }
+    return ref;
+  }
+
+  function markDirty(key: string, dirty: boolean) {
+    setDirtyGrids((s) => {
+      if (s.has(key) === dirty) return s;
+      const next = new Set(s);
+      if (dirty) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  // A removed tab, by any path, takes its dirty mark and its control with it.
+  useEffect(() => {
+    const live = new Set(tabs.flatMap((t) => (t.kind === "object" ? [t.key] : [])));
+    for (const key of [...gridControls.current.keys()]) if (!live.has(key)) gridControls.current.delete(key);
+    setDirtyGrids((s) => {
+      const kept = [...s].filter((key) => live.has(key));
+      return kept.length === s.size ? s : new Set(kept);
+    });
+  }, [tabs]);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const tableKeys = (only?: ConnectionId) =>
+    tabsRef.current.flatMap((t) =>
+      t.kind === "object" && (only === undefined || t.selection.connectionId === only) ? [t.key] : [],
+    );
+
+  /** Keeps a value still in a cell editor, then says whether the grid has Pending Edits. */
+  function isDirty(key: string): boolean {
+    const control = gridControls.current.get(key)?.current;
+    return control ? control.flush() : dirtyRef.current.has(key);
+  }
+
+  /** Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is cancelled. */
+  function confirmLeave(keys: string[]): Promise<boolean> {
+    // One ask at a time: a later request waits for the open one, then checks again.
+    const run = leaveQueue.current.then(() => askLeave(keys));
+    leaveQueue.current = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
+  const leaveQueue = useRef<Promise<void>>(Promise.resolve());
+
+  async function askLeave(keys: string[]): Promise<boolean> {
+    for (const key of keys) {
+      if (!isDirty(key)) continue;
+      const tabs = tabsRef.current;
+      const index = tabs.findIndex((t) => t.kind === "object" && t.key === key);
+      const tab = tabs[index];
+      if (index >= 0) setActiveTab(index);
+      const table = tab?.kind === "object" ? tab.selection.path.name : "this table";
+      const ok = await new Promise<boolean>((resolve) => setLeaveAsk({ key, table, busy: false, resolve }));
+      if (!ok) return false;
+      markDirty(key, false);
+    }
+    return true;
+  }
+  const confirmLeaveRef = useRef(confirmLeave);
+  confirmLeaveRef.current = confirmLeave;
+  const leaveAll = () => confirmLeave(tableKeys());
+
+  // Quitting with Pending Edits asks first.
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => {
+        const w = getCurrentWindow();
+        return w.onCloseRequested(async (event) => {
+          const keys = tableKeys();
+          if (!keys.some(isDirty)) return;
+          event.preventDefault();
+          if (await confirmLeaveRef.current(keys)) await w.destroy();
+        });
+      })
+      .then((stop) => {
+        if (alive) unlisten = stop;
+        else stop();
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  async function closeTab(i: number) {
+    const tab = tabs[i];
+    if (tab?.kind === "object" && !(await confirmLeave([tab.key]))) return;
+    dropTab(i);
+  }
+
+  function dropTab(i: number) {
     const tab = tabs[i];
     if (tab?.kind === "query") editorRefs.current.delete(tab.doc.id);
     setTabs((all) => all.filter((_, j) => j !== i));
@@ -418,6 +530,7 @@ export default function App() {
   }
 
   async function openGroup(id: GroupId) {
+    if (!(await leaveAll())) return;
     goTo({ kind: "group", groupId: id });
     try {
       await setLastGroup(id);
@@ -427,6 +540,7 @@ export default function App() {
   }
 
   async function openFromHome(id: ConnectionId) {
+    if (!(await leaveAll())) return;
     goTo({ kind: "ungrouped" });
     setActiveId(id);
     try {
@@ -438,6 +552,7 @@ export default function App() {
   }
 
   async function openUngrouped() {
+    if (!(await leaveAll())) return;
     goTo({ kind: "ungrouped" });
     try {
       await setLastGroup(null);
@@ -447,6 +562,7 @@ export default function App() {
   }
 
   async function goHome() {
+    if (!(await leaveAll())) return;
     goTo({ kind: "home" });
     try {
       await setLastGroup(null);
@@ -541,7 +657,8 @@ export default function App() {
             connections={connections}
             active={activeTab}
             onSelect={setActiveTab}
-            onClose={closeTab}
+            onClose={(i) => void closeTab(i)}
+            dirtyKeys={dirtyGrids}
             onNew={() => newQuery(activeId)}
           />
         )}
@@ -675,7 +792,12 @@ export default function App() {
                     setNotice(null);
                   }}
                   onClosed={markClosed}
-                  onEdit={(c) => setForm({ kind: "connection", connection: c })}
+                  // Closing, deleting or moving a Connection closes its table tabs: their edits are asked about first.
+                  onBeforeLeave={(id) => confirmLeave(tableKeys(id))}
+                  onEdit={async (c) => {
+                    // Saving the form closes the Connection's session, so its grids' edits are asked about first.
+                    if (await confirmLeave(tableKeys(c.id))) setForm({ kind: "connection", connection: c });
+                  }}
                   onChanged={reload}
                   onNewQuery={(id) => void newQueryOn(id)}
                   onHistoryCleared={() => setHistoryRefresh((n) => n + 1)}
@@ -722,35 +844,43 @@ export default function App() {
               </aside>
 
               <main className="work">
-                {selection &&
-                  (selection.kind === "table" || selection.kind === "view" ? (
-                    <DataGrid
-                      key={objectKey(selection.connectionId, selection.kind, selection.path)}
-                      connectionId={selection.connectionId}
-                      table={selection.path}
-                      onClose={() => closeTab(activeTab)}
-                      onNotOpen={() => lost(selection.connectionId)}
-                      dialect={connections.find((c) => c.id === selection.connectionId)?.dialect}
-                      readOnly={connections.find((c) => c.id === selection.connectionId)?.readOnly ?? false}
-                      lang={lang}
-                      ask={{
-                        ...askKit,
-                        connection: (() => {
-                          const c = connections.find((x) => x.id === selection.connectionId);
-                          return c
-                            ? { id: c.id, name: c.name, dialect: c.dialect, database: selection.path.database, access: c.aiAccess }
-                            : null;
-                        })(),
-                      }}
-                    />
-                  ) : (
-                    <DefinitionView
-                      key={objectKey(selection.connectionId, selection.kind, selection.path)}
-                      selection={selection}
-                      onClose={() => closeTab(activeTab)}
-                      onNotOpen={() => lost(selection.connectionId)}
-                    />
-                  ))}
+                {/* Table and view tabs stay mounted while hidden, so their Pending Edits survive a tab switch. */}
+                {tabs.map((t, i) => {
+                  if (t.kind !== "object" || (t.selection.kind !== "table" && t.selection.kind !== "view")) return null;
+                  const s = t.selection;
+                  const c = connections.find((x) => x.id === s.connectionId);
+                  return (
+                    <div key={t.key} className="work-pane" hidden={i !== activeTab}>
+                      <DataGrid
+                        connectionId={s.connectionId}
+                        table={s.path}
+                        onClose={() => void closeTab(i)}
+                        onNotOpen={() => lost(s.connectionId)}
+                        dialect={c?.dialect}
+                        readOnly={c?.readOnly ?? false}
+                        kind={s.kind === "view" ? "view" : "table"}
+                        production={c?.production ?? false}
+                        onDirtyChange={(dirty) => markDirty(t.key, dirty)}
+                        controlRef={gridControl(t.key)}
+                        lang={lang}
+                        ask={{
+                          ...askKit,
+                          connection: c
+                            ? { id: c.id, name: c.name, dialect: c.dialect, database: s.path.database, access: c.aiAccess }
+                            : null,
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+                {selection && selection.kind !== "table" && selection.kind !== "view" && (
+                  <DefinitionView
+                    key={objectKey(selection.connectionId, selection.kind, selection.path)}
+                    selection={selection}
+                    onClose={() => void closeTab(activeTab)}
+                    onNotOpen={() => lost(selection.connectionId)}
+                  />
+                )}
                 {/* Query tabs stay mounted while hidden, so their sessions and results survive a tab switch. */}
                 {tabs.map((t, i) =>
                   t.kind === "query" ? (
@@ -834,6 +964,13 @@ export default function App() {
             setForm({ kind: "none" });
             reload();
           }}
+          onBeforeDelete={() => {
+            const ids = new Set(connections.filter((c) => c.groupId === group.id).map((c) => c.id));
+            const keys = tabsRef.current.flatMap((t) =>
+              t.kind === "object" && ids.has(t.selection.connectionId) ? [t.key] : [],
+            );
+            return confirmLeave(keys);
+          }}
           onDeleted={() => {
             setForm({ kind: "none" });
             reload();
@@ -854,6 +991,28 @@ export default function App() {
             reload();
           }}
           onCancel={() => setForm({ kind: "none" })}
+        />
+      )}
+      {leaveAsk && !leaveAsk.busy && (
+        <UnsavedEdits
+          table={leaveAsk.table}
+          busy={leaveAsk.busy}
+          onSave={async () => {
+            const ask = leaveAsk;
+            setLeaveAsk({ ...ask, busy: true });
+            const ok = (await gridControl(ask.key).current?.save()) ?? true;
+            setLeaveAsk(null);
+            ask.resolve(ok);
+          }}
+          onDiscard={() => {
+            gridControl(leaveAsk.key).current?.discard();
+            setLeaveAsk(null);
+            leaveAsk.resolve(true);
+          }}
+          onCancel={() => {
+            setLeaveAsk(null);
+            leaveAsk.resolve(false);
+          }}
         />
       )}
       {schema?.kind === "start" && (

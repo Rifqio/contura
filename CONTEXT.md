@@ -102,7 +102,7 @@ _Avoid_: AI permission, privacy mode, consent flag
 ### Changing databases
 
 **Pending Edit**:
-A change to row data in the grid that has not been saved yet. All Pending Edits are saved together in one transaction, or none are.
+A change to row data in the grid that has not been saved yet: an edited cell, a new row or a deleted row. Pending Edits are kept by primary key across paging, sort and filter. The Core writes the SQL and saves all of them together in one transaction, or none are; a row that changed since it was loaded rolls the whole save back. Tables without a primary key only take new rows.
 _Avoid_: Draft, unsaved change, dirty row
 
 **Table Designer**:

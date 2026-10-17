@@ -13,8 +13,13 @@ import type {
   ConnectionConfig,
   ConnectionId,
   ConnectionInput,
+  Cell,
   DbObject,
   DialectKind,
+  EditOutcome,
+  EditPlan,
+  EditSet,
+  KeyPart,
   FullValue,
   FullValueRequest,
   Group,
@@ -168,6 +173,16 @@ export const prepareRun = (session: QuerySessionId, statements: string[]): Promi
 export const confirmRun = (session: QuerySessionId, statements: string[]): Promise<PassId> =>
   invoke("confirm_run", { session, statements });
 
+/** The SQL a save would run and whether it may run, needs a confirmation or is blocked. */
+export const planEdits = (id: ConnectionId, edits: EditSet): Promise<EditPlan> => invoke("plan_edits", { id, edits });
+
+/** A single-use pass for saving exactly these edits on a Production Connection. */
+export const confirmEdits = (id: ConnectionId, edits: EditSet): Promise<PassId> =>
+  invoke("confirm_edits", { id, edits });
+
+export const applyEdits = (id: ConnectionId, edits: EditSet, pass: PassId | null): Promise<EditOutcome> =>
+  invoke("apply_edits", { id, edits, pass });
+
 /** Whether one statement reads or writes, as the Core decides it for the Dialect. */
 export const classifySql = (dialect: DialectKind, sql: string): Promise<StatementClass> =>
   invoke("classify_sql", { dialect, sql });
@@ -261,6 +276,23 @@ function aiErrorText(e: AiError): string {
   }
 }
 
+function cellText(c: Cell): string {
+  switch (c.t) {
+    case "null":
+      return "NULL";
+    case "number":
+    case "text":
+      return c.value;
+    case "bytes":
+      return `0x${c.previewHex}`;
+  }
+}
+
+/** `id 42`, or `id 42, line 3` for a composite key. */
+function keyText(key: KeyPart[]): string {
+  return key.map((k) => `${k.column} ${cellText(k.value)}`).join(", ");
+}
+
 /**
  * Turns a command error into UI text that says what went wrong and what to do.
  * `dialect` picks hints that fit the Connection, such as file hints for SQLite.
@@ -306,6 +338,10 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return "Confirm this write on a Production Connection";
     case "readOnlyRefused":
       return "The server refused a write: this Connection is Read-only";
+    case "rowChanged":
+      return `Row ${keyText(e.message.key)} changed since you loaded it. Revert the row, then Reload to see the current values.`;
+    case "editFailed":
+      return `Save failed at statement ${e.message.statement + 1}: ${e.message.message}`;
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

@@ -168,7 +168,55 @@ export type CommandError =
   /** The index of the first statement that writes. */
   | { kind: "readOnly"; message: number }
   | { kind: "needsConfirmation"; message?: undefined }
-  | { kind: "readOnlyRefused"; message?: undefined };
+  | { kind: "readOnlyRefused"; message?: undefined }
+  /** A save's UPDATE or DELETE (`statement` is its index in the plan) found its row changed or gone. */
+  | { kind: "rowChanged"; message: { statement: number; key: KeyPart[] } }
+  /** The server refused a save's statement (by index in the plan). */
+  | { kind: "editFailed"; message: { statement: number; message: string } };
+
+/** A value typed into a cell; numbers and dates are sent as text too. */
+export type NewValue = { t: "text"; value: string } | { t: "null" };
+
+export interface CellChange {
+  column: string;
+  /** The value as loaded, to check the row did not change meanwhile. */
+  old: Cell;
+  new: NewValue;
+}
+
+export interface RowUpdate {
+  key: KeyPart[];
+  changes: CellChange[];
+}
+
+export interface RowInsert {
+  /** Column name and value; columns left out take their default. */
+  values: [string, NewValue][];
+}
+
+export interface RowDelete {
+  key: KeyPart[];
+}
+
+/** Pending edits to one table, saved together. */
+export interface EditSet {
+  table: ObjectPath;
+  updates: RowUpdate[];
+  inserts: RowInsert[];
+  deletes: RowDelete[];
+}
+
+/** The exact SQL a save runs, and what running it needs. */
+export interface EditPlan {
+  statements: string[];
+  verdict: RunVerdict;
+}
+
+export interface EditOutcome {
+  updated: number;
+  inserted: number;
+  deleted: number;
+}
 
 /** A Schema Model on disk: the DBML and, when it exists, its layout sidecar. */
 export interface ModelFiles {

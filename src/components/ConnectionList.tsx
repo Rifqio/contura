@@ -26,6 +26,8 @@ interface Props {
   onActivate: (id: ConnectionId) => void;
   onOpened: (id: ConnectionId) => void;
   onClosed: (id: ConnectionId) => void;
+  /** Asked before Close, Delete and Move to another Group; false stops the action. */
+  onBeforeLeave?: (id: ConnectionId) => Promise<boolean>;
   onEdit: (connection: ConnectionConfig) => void;
   /** A Connection moved or was deleted; reload the list. */
   onChanged: () => void;
@@ -43,6 +45,7 @@ export default function ConnectionList({
   onActivate,
   onOpened,
   onClosed,
+  onBeforeLeave,
   onEdit,
   onChanged,
   onNewQuery,
@@ -82,25 +85,33 @@ export default function ConnectionList({
       onOpened(c.id);
     });
 
-  const close = (c: ConnectionConfig) =>
-    run(c, async () => {
+  const mayLeave = async (c: ConnectionConfig) => !onBeforeLeave || (await onBeforeLeave(c.id));
+
+  const close = async (c: ConnectionConfig) => {
+    if (!(await mayLeave(c))) return;
+    await run(c, async () => {
       await closeConnection(c.id);
       onClosed(c.id);
     });
+  };
 
-  const move = (c: ConnectionConfig, to: GroupId | null) =>
-    run(c, async () => {
+  const move = async (c: ConnectionConfig, to: GroupId | null) => {
+    if (!(await mayLeave(c))) return;
+    await run(c, async () => {
       await moveConnection(c.id, to);
       onChanged();
     });
+  };
 
-  const remove = (c: ConnectionConfig) =>
-    run(c, async () => {
+  const remove = async (c: ConnectionConfig) => {
+    if (!(await mayLeave(c))) return;
+    await run(c, async () => {
       await deleteConnection(c.id);
       setConfirmDelete(null);
       onClosed(c.id);
       onChanged();
     });
+  };
 
   const clearHistory = (c: ConnectionConfig) =>
     run(c, async () => {

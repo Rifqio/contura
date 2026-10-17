@@ -35,16 +35,18 @@ interface Props {
   onNew(): void;
   /** Lets a query tab show the Production or Read-only mark of its Connection. */
   connections?: ConnectionConfig[];
+  /** Table tabs (by key) whose grid has Pending Edits. */
+  dirtyKeys?: ReadonlySet<string>;
 }
 
 /** The open tables and queries, as tabs in the title bar. */
-export default function TabStrip({ tabs, active, onSelect, onClose, onNew, connections = [] }: Props) {
+export default function TabStrip({ tabs, active, onSelect, onClose, onNew, connections = [], dirtyKeys }: Props) {
   return (
     <div className="tab-strip">
       <div role="tablist" aria-label="Open tabs" className="tab-list">
         {tabs.map((t, i) => {
           const name = tabName(t);
-          const dirty = isDirty(t);
+          const dirty = isDirty(t) || (t.kind === "object" && !!dirtyKeys?.has(t.key));
           const cid = t.kind === "query" ? t.doc.connectionId : t.selection.connectionId;
           const owner = connections.find((c) => c.id === cid);
           const safety = owner?.readOnly ? "Read-only" : owner?.production ? "Production" : null;

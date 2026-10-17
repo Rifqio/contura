@@ -5,12 +5,12 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::query_err;
 use crate::common::{
-    bytes_preview, check_key, decode_hex, order_columns, quote_double, text_preview,
+    bytes_preview, check_key, decode_hex, order_columns, quote_double, sql_scoped, text_preview,
 };
 use crate::error::{Error, Result};
 use crate::model::{
-    Cell, ColumnInfo, FULL_VALUE_LIMIT, FullValue, FullValueRequest, ObjectPath, PAGE_SIZE,
-    PREVIEW_CHARS, Page, PageRequest,
+    Cell, ColumnInfo, DialectKind, FULL_VALUE_LIMIT, FullValue, FullValueRequest, ObjectPath,
+    PAGE_SIZE, PREVIEW_CHARS, Page, PageRequest,
 };
 
 /// Stands for the implicit `rowid` sort key. It starts with NUL, so it can
@@ -83,10 +83,9 @@ fn build_select(
         }
     }
     let mut sql = format!(
-        "SELECT {} FROM {}.{}",
+        "SELECT {} FROM {}",
         list.join(", "),
-        quote_double(&path.database),
-        quote_double(&path.name)
+        sql_scoped(DialectKind::Sqlite, &path.database, &path.name)
     );
     sql.push_str(where_sql);
     if !order_by.is_empty() {
@@ -212,11 +211,7 @@ pub(crate) fn fetch_full_value(conn: &Connection, req: &FullValueRequest) -> Res
         parts.push(format!("{} = ?", quote_double(&part.column)));
         params.push(key_param(&part.value)?);
     }
-    let from = format!(
-        "{}.{}",
-        quote_double(&req.table.database),
-        quote_double(&req.table.name)
-    );
+    let from = sql_scoped(DialectKind::Sqlite, &req.table.database, &req.table.name);
     let col = quote_double(&target.name);
     let where_sql = parts.join(" AND ");
 

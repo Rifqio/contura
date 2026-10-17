@@ -4,6 +4,7 @@ pub mod connections;
 pub mod dbml_writer;
 pub mod ddl;
 pub mod dialect;
+pub mod edits;
 pub mod error;
 pub mod model;
 pub mod model_files;

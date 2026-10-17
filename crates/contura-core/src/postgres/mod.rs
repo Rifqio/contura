@@ -7,6 +7,7 @@ use tokio_postgres::{Client, NoTls};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::dialect::Dialect;
+use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
     ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
@@ -187,6 +188,40 @@ pub(crate) fn query_err(e: tokio_postgres::Error) -> Error {
         Some(db) => Error::Query(db.message().to_string()),
         None => Error::Query(e.to_string()),
     }
+}
+
+/// Runs a save on `client`. A server error on a statement rolls back and is `Failed`,
+/// except a read-only refusal on a Read-only Connection, which is `ReadOnlyRefused`.
+async fn run_planned(client: &Client, edits: &[PlannedEdit], read_only: bool) -> Result<TxOutcome> {
+    client.batch_execute("BEGIN").await.map_err(query_err)?;
+    let mut rows = Vec::with_capacity(edits.len());
+    for (statement, edit) in edits.iter().enumerate() {
+        let affected = match client.execute(edit.sql.as_str(), &[]).await {
+            Ok(n) => n,
+            Err(e) => {
+                let Some(db) = e.as_db_error() else {
+                    return Err(query_err(e));
+                };
+                let refused = *db.code() == SqlState::READ_ONLY_SQL_TRANSACTION;
+                let message = db.message().to_string();
+                client.batch_execute("ROLLBACK").await.map_err(query_err)?;
+                if read_only && refused {
+                    return Err(Error::ReadOnlyRefused);
+                }
+                return Ok(TxOutcome::Failed { statement, message });
+            }
+        };
+        if edit.one_row && affected != 1 {
+            client.batch_execute("ROLLBACK").await.map_err(query_err)?;
+            return Ok(TxOutcome::RowCount {
+                statement,
+                rows: affected,
+            });
+        }
+        rows.push(affected);
+    }
+    client.batch_execute("COMMIT").await.map_err(query_err)?;
+    Ok(TxOutcome::Committed { rows })
 }
 
 /// `SHOW server_version` can carry a build note, as in `16.4 (Debian 16.4-1)`.
@@ -424,6 +459,15 @@ impl Dialect for PostgresDialect {
             self.settings.tls.clone(),
             self.read_only,
         ))
+    }
+
+    async fn apply_planned(&self, database: &str, edits: &[PlannedEdit]) -> Result<TxOutcome> {
+        // A client of its own, so a page fetch from another tab never joins the transaction.
+        let client = open_client(&self.settings, database).await?;
+        browse_result(
+            run_planned(&client, edits, self.read_only).await,
+            self.read_only,
+        )
     }
 
     async fn disconnect(&self) -> Result<()> {

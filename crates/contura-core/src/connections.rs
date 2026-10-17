@@ -4,14 +4,16 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::ai::AiAccess;
 use crate::dialect::{Dialect, connect};
-use crate::error::{Error, Result};
+use crate::edits::{self, EditSet, PlannedEdit, TxOutcome};
+use crate::error::{Error, Result, browse_result};
 use crate::model::{
-    ConnectionConfig, ConnectionId, DialectKind, Group, GroupColor, GroupId, SslMode,
+    ConnectionConfig, ConnectionId, DialectKind, Group, GroupColor, GroupId, ObjectPath,
+    PageRequest, SslMode,
 };
 use crate::query::{
     ExecOutcome, Execution, HistoryEntry, HistoryFilter, MoreRows, NewHistory, Outcome,
@@ -88,9 +90,35 @@ type QuerySlot = (ConnectionId, Arc<SessionHandle>, Option<String>);
 
 /// One confirmed run: the Production writes it covers, by hash of their exact text.
 struct Pass {
-    session: QuerySessionId,
+    scope: PassScope,
     remaining: Vec<u64>,
     expires: Instant,
+}
+
+/// What a pass was issued for. A pass never covers anything outside its scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PassScope {
+    /// A run in one query tab.
+    Query(QuerySessionId),
+    /// A save of pending edits to one table.
+    Edits(ConnectionId, ObjectPath),
+}
+
+/// The statements a save would run and what running them needs.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditPlan {
+    pub statements: Vec<String>,
+    pub verdict: RunVerdict,
+}
+
+/// Rows a committed save changed.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditOutcome {
+    pub updated: u64,
+    pub inserted: u64,
+    pub deleted: u64,
 }
 
 const PASS_TTL: Duration = Duration::from_secs(120);
@@ -193,20 +221,39 @@ impl ConnectionService {
 
     /// Drops the session's passes, so a partly used one cannot cover a later run, and every
     /// expired pass.
-    fn drop_passes(&self, s: QuerySessionId) -> Result<()> {
+    fn drop_passes(&self, scope: &PassScope) -> Result<()> {
         let now = Instant::now();
         self.passes
             .lock()
             .map_err(|_| poisoned())?
-            .retain(|_, p| p.session != s && p.expires > now);
+            .retain(|_, p| p.scope != *scope && p.expires > now);
         Ok(())
+    }
+
+    /// A pass for `scope` covering each of `writes` once; it replaces the scope's earlier passes.
+    fn issue_pass(&self, scope: PassScope, writes: &[String]) -> Result<PassId> {
+        let remaining = writes.iter().map(|t| text_hash(t)).collect();
+        let ttl = *self.pass_ttl.lock().map_err(|_| poisoned())?;
+        let now = Instant::now();
+        let mut passes = self.passes.lock().map_err(|_| poisoned())?;
+        passes.retain(|_, p| p.scope != scope && p.expires > now);
+        let id = Uuid::new_v4();
+        passes.insert(
+            id,
+            Pass {
+                scope,
+                remaining,
+                expires: now + ttl,
+            },
+        );
+        Ok(id)
     }
 
     /// What running these statements on the session needs: nothing, a block or a confirmation.
     /// A new run starts here, so the session's earlier passes end.
     pub fn prepare_run(&self, s: QuerySessionId, statements: Vec<String>) -> Result<RunVerdict> {
         let (conn, _, database) = self.query_slot(s)?;
-        self.drop_passes(s)?;
+        self.drop_passes(&PassScope::Query(s))?;
         let config = self.config(conn)?;
         let database = database.or_else(|| config.database.clone());
         Ok(verdict(&config, database.as_deref(), &statements))
@@ -218,58 +265,176 @@ impl ConnectionService {
     pub fn confirm_run(&self, s: QuerySessionId, statements: Vec<String>) -> Result<PassId> {
         let (conn, _, _) = self.query_slot(s)?;
         let dialect = self.config(conn)?.dialect;
-        let remaining = statements
-            .iter()
+        let writes: Vec<String> = statements
+            .into_iter()
             .filter(|t| classify(dialect, t) == StatementClass::Write)
-            .map(|t| text_hash(t))
             .collect();
-        let ttl = *self.pass_ttl.lock().map_err(|_| poisoned())?;
-        let now = Instant::now();
-        let mut passes = self.passes.lock().map_err(|_| poisoned())?;
-        passes.retain(|_, p| p.session != s && p.expires > now);
-        let id = Uuid::new_v4();
-        passes.insert(
-            id,
-            Pass {
-                session: s,
-                remaining,
-                expires: now + ttl,
-            },
-        );
-        Ok(id)
+        self.issue_pass(PassScope::Query(s), &writes)
     }
 
-    /// Applies Read-only and Production to one statement before it reaches the server.
+    /// Applies Read-only and Production to statements before any reaches the server.
+    /// Either the pass covers every write and gives them up, or nothing runs and the pass
+    /// stays as it was. A save's pass must cover exactly the save's statements.
     fn authorize(
         &self,
-        s: QuerySessionId,
+        scope: &PassScope,
         config: &ConnectionConfig,
-        sql: &str,
+        statements: &[String],
         pass: Option<PassId>,
     ) -> Result<()> {
         if !config.read_only && !config.production {
             return Ok(());
         }
-        if classify(config.dialect, sql) == StatementClass::Read {
+        let writes: Vec<(usize, &String)> = statements
+            .iter()
+            .enumerate()
+            .filter(|(_, sql)| classify(config.dialect, sql) == StatementClass::Write)
+            .collect();
+        let Some((first, _)) = writes.first() else {
             return Ok(());
-        }
+        };
         if config.read_only {
-            return Err(Error::ReadOnly(0));
+            return Err(Error::ReadOnly(*first));
         }
         let pass = pass.ok_or(Error::NeedsConfirmation)?;
         let mut passes = self.passes.lock().map_err(|_| poisoned())?;
         let p = passes.get_mut(&pass).ok_or(Error::NeedsConfirmation)?;
-        let hash = text_hash(sql);
-        let at = p.remaining.iter().position(|h| *h == hash);
-        if p.session != s || p.expires <= Instant::now() {
+        if p.scope != *scope || p.expires <= Instant::now() {
             return Err(Error::NeedsConfirmation);
         }
-        let at = at.ok_or(Error::NeedsConfirmation)?;
-        p.remaining.swap_remove(at);
-        if p.remaining.is_empty() {
+        let mut remaining = p.remaining.clone();
+        for (_, sql) in &writes {
+            let hash = text_hash(sql);
+            let at = remaining
+                .iter()
+                .position(|h| *h == hash)
+                .ok_or(Error::NeedsConfirmation)?;
+            remaining.swap_remove(at);
+        }
+        if matches!(scope, PassScope::Edits(..)) && !remaining.is_empty() {
+            return Err(Error::NeedsConfirmation);
+        }
+        if remaining.is_empty() {
             passes.remove(&pass);
+        } else {
+            p.remaining = remaining;
         }
         Ok(())
+    }
+
+    /// The statements a save of `edits` runs, built from the table's current columns.
+    async fn planned(
+        &self,
+        id: ConnectionId,
+        config: &ConnectionConfig,
+        edits: &EditSet,
+    ) -> Result<Vec<PlannedEdit>> {
+        let columns = self
+            .session(id)
+            .await?
+            .fetch_page(&PageRequest {
+                table: edits.table.clone(),
+                page: 0,
+                sort: None,
+                filter: None,
+            })
+            .await?
+            .columns;
+        edits::plan_edits(config.dialect, &columns, edits)
+    }
+
+    /// The SQL a save would run, and whether it may run, needs a confirmation or is blocked.
+    pub async fn plan_edits(&self, id: ConnectionId, edits: EditSet) -> Result<EditPlan> {
+        let config = self.config(id)?;
+        let statements: Vec<String> = self
+            .planned(id, &config, &edits)
+            .await?
+            .into_iter()
+            .map(|p| p.sql)
+            .collect();
+        let verdict = verdict(&config, Some(&edits.table.database), &statements);
+        Ok(EditPlan {
+            statements,
+            verdict,
+        })
+    }
+
+    /// Records the user's confirmation of a save on a Production Connection. The pass covers
+    /// exactly these statements once, for a limited time, and replaces the table's earlier pass.
+    pub async fn confirm_edits(&self, id: ConnectionId, edits: EditSet) -> Result<PassId> {
+        let config = self.config(id)?;
+        let writes: Vec<String> = self
+            .planned(id, &config, &edits)
+            .await?
+            .into_iter()
+            .map(|p| p.sql)
+            .filter(|t| classify(config.dialect, t) == StatementClass::Write)
+            .collect();
+        self.issue_pass(PassScope::Edits(id, edits.table), &writes)
+    }
+
+    /// Runs a save in one transaction after the Read-only and Production checks, and records
+    /// it in Query History. A row that changed since it was loaded rolls the whole save back.
+    pub async fn apply_edits(
+        &self,
+        id: ConnectionId,
+        edits: EditSet,
+        pass: Option<PassId>,
+    ) -> Result<EditOutcome> {
+        let config = self.config(id)?;
+        let plan = self.planned(id, &config, &edits).await?;
+        let statements: Vec<String> = plan.iter().map(|p| p.sql.clone()).collect();
+        let scope = PassScope::Edits(id, edits.table.clone());
+        self.authorize(&scope, &config, &statements, pass)?;
+        let session = self.session(id).await?;
+        let ran_at_ms = now_ms();
+        let started = Instant::now();
+        let result = browse_result(
+            session.apply_planned(&edits.table.database, &plan).await,
+            config.read_only,
+        )?;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let rows = match result {
+            TxOutcome::Committed { rows } => rows,
+            TxOutcome::RowCount { statement, .. } => {
+                return Err(Error::RowChanged {
+                    statement,
+                    key: plan
+                        .get(statement)
+                        .map(|p| p.key.clone())
+                        .unwrap_or_default(),
+                });
+            }
+            TxOutcome::Failed { statement, message } => {
+                return Err(Error::EditFailed { statement, message });
+            }
+        };
+        // `plan_edits` orders the statements: deletes, then updates, then inserts.
+        let sum = |from: usize, to: usize| -> u64 {
+            rows.get(from.min(rows.len())..to.min(rows.len()))
+                .map(|r| r.iter().sum())
+                .unwrap_or(0)
+        };
+        let (d, u) = (edits.deletes.len(), edits.updates.len());
+        let outcome = EditOutcome {
+            deleted: sum(0, d),
+            updated: sum(d, d + u),
+            inserted: sum(d + u, rows.len()),
+        };
+        // History is a record, not part of the save: a store failure must not hide the result.
+        if let Ok(store) = self.store() {
+            let _ = store.add_history(&NewHistory {
+                connection_id: id,
+                sql: statements.join(";\n"),
+                ran_at_ms,
+                elapsed_ms,
+                outcome: Outcome::Ok,
+                rows: Some(rows.iter().sum()),
+                changed: true,
+                error: None,
+            });
+        }
+        Ok(outcome)
     }
 
     fn config(&self, id: ConnectionId) -> Result<ConnectionConfig> {
@@ -634,7 +799,12 @@ impl ConnectionService {
     ) -> Result<Execution> {
         let (conn, handle) = self.query_session(s)?;
         let config = self.config(conn)?;
-        self.authorize(s, &config, &sql, pass)?;
+        self.authorize(
+            &PassScope::Query(s),
+            &config,
+            std::slice::from_ref(&sql),
+            pass,
+        )?;
         let timeout = config.query_timeout_secs;
         let ran_at_ms = now_ms();
         let started = Instant::now();

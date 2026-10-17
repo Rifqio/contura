@@ -1,4 +1,13 @@
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { Cell, SortSpec } from "../api/types";
 import CellValue, { type CellSource } from "./CellValue";
 import Icon from "./Icon";
@@ -33,6 +42,22 @@ interface Props {
   children?: ReactNode;
   /** In the header corner above the row numbers, such as the Read-only lock. */
   corner?: ReactNode;
+  /** The row with an open cell editor; when it leaves the rendered rows, `onEditorLost` runs. */
+  editingRow?: number | null;
+  onEditorLost?(): void;
+  /** Editing hooks for the table grid; query results pass none of them. */
+  selected?: { row: number; column: number } | null;
+  onSelect?(row: number, column: number): void;
+  onOpen?(row: number, column: number): void;
+  onGridKey?(e: KeyboardEvent<HTMLDivElement>): void;
+  onCellMenu?(row: number, column: number, x: number, y: number): void;
+  onPaste?(e: ClipboardEvent<HTMLDivElement>): void;
+  cellClass?(row: number, column: number): string | undefined;
+  cellTitle?(row: number, column: number): string | undefined;
+  rowClass?(row: number): string | undefined;
+  rowLabel?(row: number): ReactNode | undefined;
+  /** Replaces the cell's content, such as the open editor. */
+  renderCell?(row: number, column: number): ReactNode | undefined;
 }
 
 /** Holds the scroll height of rows that are not rendered. */
@@ -65,6 +90,19 @@ export default function ResultGrid({
   onNearEnd,
   children,
   corner,
+  editingRow = null,
+  onEditorLost,
+  selected = null,
+  onSelect,
+  onOpen,
+  onGridKey,
+  onCellMenu,
+  onPaste,
+  cellClass,
+  cellTitle,
+  rowClass,
+  rowLabel,
+  renderCell,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = useRef(FALLBACK_ROW_HEIGHT);
@@ -111,8 +149,32 @@ export default function ResultGrid({
     if (onNearEnd && rowCount > 0 && visible.last >= rowCount - OVERSCAN) onNearEnd();
   }, [visible.last, rowCount]);
 
+  // An editor whose row is no longer rendered is gone from the page: keep what was typed.
+  const editorLost = useRef(onEditorLost);
+  editorLost.current = onEditorLost;
+  useEffect(() => {
+    if (editingRow !== null && (editingRow < start || editingRow >= end)) editorLost.current?.();
+  }, [editingRow, start, end]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const td = scrollRef.current?.querySelector<HTMLElement>(
+      `tr[data-row="${selected.row}"] td[data-col="${selected.column}"]`,
+    );
+    td?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [selected?.row, selected?.column]);
+
+  const editable = !!onSelect;
+
   return (
-    <div className="grid-scroll" ref={scrollRef} onScroll={measureViewport}>
+    <div
+      className="grid-scroll"
+      ref={scrollRef}
+      onScroll={measureViewport}
+      tabIndex={editable ? 0 : undefined}
+      onKeyDown={onGridKey}
+      onPaste={onPaste}
+    >
       {columns.length > 0 && (
         <table
           className={stale ? "grid grid-stale" : "grid"}
@@ -176,13 +238,39 @@ export default function ResultGrid({
             {rows.slice(start, end).map((row, i) => {
               const r = start + i;
               return (
-                <tr key={r} data-row={r} aria-rowindex={r + 2}>
-                  <td className="row-number">{(firstRow + r).toLocaleString("en-US")}</td>
-                  {row.map((cell, i) => (
-                    <td key={i} className={cell.t === "number" ? "align-end" : undefined}>
-                      <CellValue cell={cell} source={cellSource?.(r, columns[i].name)} />
-                    </td>
-                  ))}
+                <tr key={r} data-row={r} aria-rowindex={r + 2} className={rowClass?.(r)}>
+                  <td className="row-number">{rowLabel?.(r) ?? (firstRow + r).toLocaleString("en-US")}</td>
+                  {row.map((cell, i) => {
+                    const isSelected = selected?.row === r && selected.column === i;
+                    const classes = [
+                      cell.t === "number" ? "align-end" : "",
+                      cellClass?.(r, i) ?? "",
+                      isSelected ? "cell-selected" : "",
+                    ].filter(Boolean);
+                    const custom = renderCell?.(r, i);
+                    return (
+                      <td
+                        key={i}
+                        data-col={i}
+                        className={classes.length ? classes.join(" ") : undefined}
+                        title={cellTitle?.(r, i)}
+                        aria-selected={editable ? isSelected : undefined}
+                        onMouseDown={editable ? () => onSelect?.(r, i) : undefined}
+                        onDoubleClick={onOpen ? () => onOpen(r, i) : undefined}
+                        onContextMenu={
+                          onCellMenu
+                            ? (e) => {
+                                e.preventDefault();
+                                onSelect?.(r, i);
+                                onCellMenu(r, i, e.clientX, e.clientY);
+                              }
+                            : undefined
+                        }
+                      >
+                        {custom ?? <CellValue cell={cell} source={cellSource?.(r, columns[i].name)} />}
+                      </td>
+                    );
+                  })}
                 </tr>
               );
             })}

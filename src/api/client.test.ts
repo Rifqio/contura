@@ -29,6 +29,26 @@ test("errorText handles an absent message, a numeric message and an unknown kind
   expect(errorText(new Error("network down"))).toBe("network down");
 });
 
+test("errorText names the changed row and the failed statement of a save", () => {
+  const single = { statement: 0, key: [{ column: "id", value: { t: "number", value: "42" } }] };
+  expect(errorText({ kind: "rowChanged", message: single })).toBe(
+    "Row id 42 changed since you loaded it. Revert the row, then Reload to see the current values.",
+  );
+  const composite = {
+    statement: 1,
+    key: [
+      { column: "id", value: { t: "number", value: "42" } },
+      { column: "line", value: { t: "text", value: "3", truncated: false, totalBytes: 1 } },
+    ],
+  };
+  expect(errorText({ kind: "rowChanged", message: composite })).toBe(
+    "Row id 42, line 3 changed since you loaded it. Revert the row, then Reload to see the current values.",
+  );
+  expect(errorText({ kind: "editFailed", message: { statement: 2, message: "Data too long for column 'name'" } })).toBe(
+    "Save failed at statement 3: Data too long for column 'name'",
+  );
+});
+
 test("connectionTarget_by_dialect", () => {
   expect(connectionTarget({ dialect: "mysql", host: "127.0.0.1", port: 3306, file: null })).toBe("127.0.0.1:3306");
   expect(connectionTarget({ dialect: "postgres", host: "10.0.4.20", port: 5432, file: null })).toBe("10.0.4.20:5432");

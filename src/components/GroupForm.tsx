@@ -10,6 +10,8 @@ interface Props {
   connectionCount: number;
   onSaved: (group: Group) => void;
   onDeleted: () => void;
+  /** Runs before the delete; resolving false stops it, so nothing is deleted. */
+  onBeforeDelete?: () => Promise<boolean>;
   onCancel: () => void;
 }
 
@@ -31,7 +33,7 @@ function movesText(count: number): string {
   return `Its ${count} Connections will move to Ungrouped. No Connections are deleted.`;
 }
 
-export default function GroupForm({ group, connectionCount, onSaved, onDeleted, onCancel }: Props) {
+export default function GroupForm({ group, connectionCount, onSaved, onDeleted, onBeforeDelete, onCancel }: Props) {
   const id = useId();
   const [name, setName] = useState(group?.name ?? "");
   const [color, setColor] = useState<GroupColor>(group?.color ?? "teal");
@@ -60,6 +62,10 @@ export default function GroupForm({ group, connectionCount, onSaved, onDeleted, 
     setBusy(true);
     setError(null);
     try {
+      if (onBeforeDelete && !(await onBeforeDelete())) {
+        setBusy(false);
+        return;
+      }
       await deleteGroup(group.id);
       onDeleted();
     } catch (err) {

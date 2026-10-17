@@ -3,9 +3,11 @@ use mysql_async::{Conn, Pool, Row, Value};
 
 use super::query_err;
 use super::quote::quote_ident;
-use crate::common::{bytes_preview, hex_lower, order_columns, text_preview};
+use crate::common::{bytes_preview, hex_lower, order_columns, sql_scoped, text_preview};
 use crate::error::{Error, Result};
-use crate::model::{Cell, ColumnInfo, ObjectPath, PAGE_SIZE, PREVIEW_CHARS, Page, PageRequest};
+use crate::model::{
+    Cell, ColumnInfo, DialectKind, ObjectPath, PAGE_SIZE, PREVIEW_CHARS, Page, PageRequest,
+};
 
 /// How a column's values are carried to the grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,10 +106,9 @@ fn build_select(
         }
     }
     let mut sql = format!(
-        "SELECT {} FROM {}.{}",
+        "SELECT {} FROM {}",
         list.join(", "),
-        quote_ident(&table.database),
-        quote_ident(&table.name)
+        sql_scoped(DialectKind::MySql, &table.database, &table.name)
     );
     sql.push_str(where_sql);
     if !order_by.is_empty() {

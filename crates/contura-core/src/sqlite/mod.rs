@@ -11,6 +11,7 @@ use std::time::Duration;
 use rusqlite::{Connection, ErrorCode, OpenFlags};
 
 use crate::dialect::Dialect;
+use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
     ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
@@ -155,6 +156,62 @@ impl SqliteDialect {
     }
 }
 
+/// Runs a save on `conn`. An error on a statement rolls back and is `Failed`, except a
+/// read-only refusal on a Read-only Connection, which is `ReadOnlyRefused`.
+fn run_planned(conn: &Connection, edits: &[PlannedEdit], read_only: bool) -> Result<TxOutcome> {
+    // IMMEDIATE takes the write lock up front, so no other writer gets in between statements.
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(query_err)?;
+    let result = run_in_transaction(conn, edits, read_only);
+    // This is the shared browse connection: whatever happened (a busy COMMIT, a failed
+    // ROLLBACK), no transaction may stay open on it.
+    if !conn.is_autocommit() {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+    result
+}
+
+/// Rolls back unless SQLite already did (it does on some errors, such as
+/// `ON CONFLICT ROLLBACK`, SQLITE_FULL or an I/O error).
+fn rollback(conn: &Connection) -> Result<()> {
+    if conn.is_autocommit() {
+        return Ok(());
+    }
+    conn.execute_batch("ROLLBACK").map_err(query_err)
+}
+
+fn run_in_transaction(
+    conn: &Connection,
+    edits: &[PlannedEdit],
+    read_only: bool,
+) -> Result<TxOutcome> {
+    let mut rows = Vec::with_capacity(edits.len());
+    for (statement, edit) in edits.iter().enumerate() {
+        let affected = match conn.execute(&edit.sql, []) {
+            Ok(n) => n as u64,
+            Err(e) => {
+                rollback(conn)?;
+                if read_only && is_read_only_refusal(&e) {
+                    return Err(Error::ReadOnlyRefused);
+                }
+                return Ok(TxOutcome::Failed {
+                    statement,
+                    message: e.to_string(),
+                });
+            }
+        };
+        if edit.one_row && affected != 1 {
+            rollback(conn)?;
+            return Ok(TxOutcome::RowCount {
+                statement,
+                rows: affected,
+            });
+        }
+        rows.push(affected);
+    }
+    conn.execute_batch("COMMIT").map_err(query_err)?;
+    Ok(TxOutcome::Committed { rows })
+}
+
 #[async_trait::async_trait]
 impl Dialect for SqliteDialect {
     async fn server_version(&self) -> Result<String> {
@@ -220,6 +277,14 @@ impl Dialect for SqliteDialect {
         tokio::task::spawn_blocking(move || session::spawn(path, read_only))
             .await
             .map_err(|e| Error::Connect(e.to_string()))?
+    }
+
+    /// SQLite has one database per file, so `database` is not used.
+    async fn apply_planned(&self, _database: &str, edits: &[PlannedEdit]) -> Result<TxOutcome> {
+        let edits = edits.to_vec();
+        let read_only = self.read_only;
+        // One `run`: the connection lock is held from BEGIN to COMMIT or ROLLBACK.
+        self.run(move |c| run_planned(c, &edits, read_only)).await
     }
 
     async fn disconnect(&self) -> Result<()> {
