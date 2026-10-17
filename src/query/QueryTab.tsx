@@ -1,32 +1,51 @@
-import { type MutableRefObject, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { useToast } from "../components/Toast";
+import { type MutableRefObject, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import {
   cancelQuery,
   classifySql,
+  closeConnection,
   closeQueryResult,
   closeQuerySession,
   confirmRun,
   DIALECT_LABEL,
   errorText,
   executeSql,
+  explainStatement,
   fetchMoreRows,
   isCommandError,
   listDatabases,
+  openConnection,
   openQuerySession,
+  opensInFlight,
   prepareRun,
   saveSavedQuery,
 } from "../api/client";
-import type { ConnectionConfig, ConnectionId, QuerySessionId, SavedQuery, StatementClass } from "../api/types";
+import type {
+  ConnectionConfig,
+  ConnectionId,
+  DialectKind,
+  Group,
+  ObjectPath,
+  QuerySessionId,
+  SavedQuery,
+  StatementClass,
+} from "../api/types";
 import InlineAsk from "../assistant/InlineAsk";
 import { type AskKit, type AskSetup, tablesIn } from "../assistant/context";
 import Icon from "../components/Icon";
 import SafetyTag from "../components/SafetyTag";
+import { durationText } from "../format/units";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
 import ConfirmRun from "./ConfirmRun";
+import ClosedConnection, { type OpenFailure } from "./ClosedConnection";
+import EditorHeader from "./EditorHeader";
 import { formatSql } from "./format";
 import { writeWithoutWhere } from "./noWhere";
+import type { ConnectionOpenStatus } from "../sidebar/OneTree";
 import ResultsPanel from "./ResultsPanel";
-import { EMPTY_RUNNER, runnerReducer } from "./runner";
+import { EMPTY_RUNNER, type Rerun, runnerReducer } from "./runner";
 import SaveQueryDialog from "./SaveQueryDialog";
 import SqlEditor, { type AskSelection, type SqlEditorApi } from "./SqlEditor";
 import { type Stmt, splitStatements } from "./statements";
@@ -55,28 +74,82 @@ interface Props {
   assistantOpen?: boolean;
   onToggleAssistant?(): void;
   editorRef: MutableRefObject<SqlEditorApi | null>;
+  /** Filled with this tab's runner for a statement from outside the editor (Query History's Run); the Production and Read-only checks apply as for any run. */
+  runRef?: MutableRefObject<((sql: string) => Promise<RunOutcome>) | null>;
   /** A statement finished, so Query History has a new entry. */
   onRan?(): void;
   /** The language service and the schemas it knows; without them the editor is plain. */
   lang?: { client: LangClient; schemas: SchemaCache };
+  /** Reveals a Saved Query in the sidebar (the toast's Show). */
+  onShowSaved?(id: string): void;
   /** Go to definition on a table: show it in the Database Tree. */
   onShowInTree?(target: { connectionId: ConnectionId; database: string; schema: string | null; name: string }): void;
   /** Inline Ask on a selection, with Ctrl+I, and on a failed query; absent, neither shows. */
   ask?: AskKit;
+  /** The tab is on screen: its status then shows in the window status bar (`#app-status-slot`) when there is one. */
+  visible?: boolean;
+  /** A dropped Connection was opened again from the error screen. */
+  onConnectionOpened?(id: ConnectionId): void;
+  /** This tab's open is in flight, failed, or over (null), so the tree row can say so. */
+  onOpenStatus?(id: ConnectionId, status: ConnectionOpenStatus | null): void;
+  /** Edit Connection... from a failed open: the app shows the Connection's form. */
+  onEditConnection?(id: ConnectionId): void;
+  /** The Groups, so the confirm dialog shows the Connection's Group square. */
+  groups?: Group[];
+  /** The server's row estimate of a table, when the tree has it: the no-WHERE warning says "about N rows". */
+  rowEstimate?(connectionId: ConnectionId, path: ObjectPath): number | null;
+}
+
+/**
+ * The table a statement names (`orders`, `sales.orders`, `"Sales"."Orders"`) as a path in `database`:
+ * on MySQL a qualifier is the database, elsewhere the schema (PostgreSQL's default is `public`).
+ */
+export function tablePath(name: string, dialect: DialectKind, database: string): ObjectPath | null {
+  const parts = name.match(/"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|[^.]+/g)?.map((p) =>
+    /^["`[]/.test(p) ? p.slice(1, -1).replace(/""/g, '"').replace(/``/g, "`") : p,
+  );
+  if (!parts || parts.length === 0 || parts.length > 2) return null;
+  const [qualifier, table] = parts.length === 2 ? parts : [null, parts[0]];
+  if (dialect === "mysql") return { database: qualifier ?? database, schema: null, name: table };
+  if (dialect === "postgres") return { database, schema: qualifier ?? "public", name: table };
+  return { database: qualifier ?? database, schema: null, name: table };
 }
 
 /** Statements that change what the schema holds, after any leading comments. */
 const DDL = /^(?:\s+|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(CREATE|ALTER|DROP|TRUNCATE|RENAME|COMMENT)\b/i;
 
+/** How a run asked for from outside the editor ended: `ran` is false when it was declined, blocked, failed or never started. */
+export interface RunOutcome {
+  ran: boolean;
+  /** Rows returned, or rows changed, by the last statement. */
+  rows?: number;
+  /** Only the first page of rows loaded: there are more than `rows` (R26). */
+  more?: boolean;
+}
+
 const RESTARTED_MS = 5000;
 
-/** Edits settle this long before a Read-only Connection's statements are classified. */
+/** Edits settle this long before a Read-only or Production Connection's statements are classified. */
 const CLASSIFY_DELAY_MS = 200;
 const CLASS_CACHE_MAX = 500;
 const WRITES_NOTE = "Read-only Connection: this statement writes";
+/** What an open that failed says: a sentence, and the server's own words. */
+function openFailure(e: unknown, dialect: DialectKind): OpenFailure {
+  if (!isCommandError(e)) return { reason: "The Connection did not open.", server: e instanceof Error ? e.message : String(e) };
+  const reason =
+    e.kind === "auth"
+      ? "The server refused the sign-in."
+      : e.kind === "connect"
+        ? dialect === "sqlite"
+          ? "Contura could not open the database file."
+          : "Contura could not reach the server."
+        : "The Connection did not open.";
+  return { reason, server: typeof e.message === "string" ? e.message : null };
+}
+
 const READ_ONLY_TIP = "This Connection is Read-only";
 
-/** On a Read-only Connection: the current statement when it writes, and whether any statement does. */
+/** On a Read-only or Production Connection: the current statement when it writes, and whether any statement does. */
 type Safety = { current: Stmt | null; anyWrite: boolean };
 const NO_WRITES: Safety = { current: null, anyWrite: false };
 
@@ -118,10 +191,18 @@ export default function QueryTab({
   assistantOpen = false,
   onToggleAssistant,
   editorRef,
+  runRef,
   onRan,
   lang,
   onShowInTree,
+  onShowSaved,
   ask,
+  visible = false,
+  groups = [],
+  onConnectionOpened,
+  onOpenStatus,
+  onEditConnection,
+  rowEstimate,
 }: Props) {
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
   const isOpen = !!connection && openIds.has(connection.id);
@@ -131,16 +212,61 @@ export default function QueryTab({
   const [state, dispatch] = useReducer(runnerReducer, EMPTY_RUNNER);
   const [databases, setDatabases] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const { show } = useToast();
+  const savedToast = (q: SavedQuery) =>
+    show({
+      kind: "success",
+      text: (
+        <>
+          Saved <b>{q.name}</b>.
+        </>
+      ),
+      action: onShowSaved ? { label: "Show", run: () => onShowSaved(q.id) } : undefined,
+    });
   const [notice, setNotice] = useState<string | null>(null);
+  // Opening the Connection from the result area, while it is closed (frame 10).
+  const [opening, setOpening] = useState<{ s: "idle" } | { s: "connecting"; startedAt: number } | { s: "failed"; error: OpenFailure }>({ s: "idle" });
+  const [openNow, setOpenNow] = useState(() => Date.now());
+  const openToken = useRef(0);
+  const inFlight = useRef<{ cancelled: boolean } | null>(null);
+  /** A cancelled open has not settled yet: Open waits for it. */
+  const [stopping, setStopping] = useState(false);
   const [position, setPosition] = useState({ line: 1, column: 1 });
   const [share, setShare] = useState(loadShare);
   const [askSel, setAskSel] = useState<AskSelection | null>(null);
+  // Bumped to open the tab's session again after a dropped Connection was reopened.
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+  /**
+   * "Reconnect and run statement N", armed for the session open that the reconnect starts (`run`
+   * counts the session effect's runs) on this Connection and database. Any other open drops it.
+   */
+  const rerun = useRef<{ run: number; connectionId: ConnectionId; database: string | null; stmt: Stmt; rerun: Rerun } | null>(null);
+  const sessionRun = useRef(0);
+  // Counts opened sessions: a reopened one can carry the same id as the one it replaces.
+  const [sessionOpened, setSessionOpened] = useState(0);
   const confirmed = useRef<Stmt | null>(null);
   // Bumped by every new run and session, so a late answer from the Core is dropped.
   const prepared = useRef(0);
   const sessionNow = useRef<QuerySessionId | null>(null);
   sessionNow.current = session;
+  // The run asked for from outside the editor that has not ended yet, its statements, and how far it got.
+  const external = useRef<{
+    stmts: Stmt[];
+    resolve(o: RunOutcome): void;
+    phase: "preparing" | "asking" | "confirming" | "running";
+  } | null>(null);
+  const settleExternal = (o: RunOutcome) => {
+    const w = external.current;
+    external.current = null;
+    w?.resolve(o);
+  };
+  /** The outside run, when `list` holds its statements. */
+  const externalIn = (list: Stmt[]) => {
+    const w = external.current;
+    return w && list.some((x) => w.stmts.includes(x)) ? w : null;
+  };
+  const openIdsNow = useRef(openIds);
+  openIdsNow.current = openIds;
   const fetching = useRef(false);
   const latest = useRef(tab);
   latest.current = tab;
@@ -182,28 +308,41 @@ export default function QueryTab({
   // One session per tab, opened on the tab's Connection and database.
   useEffect(() => {
     if (!connection || !isOpen) {
+      // No open follows from here, so a later open must not run the reconnect's statement.
+      rerun.current = null;
       setSession(null);
       return;
     }
     let live = true;
     let opened: QuerySessionId | null = null;
+    const runNo = ++sessionRun.current;
+    // A re-run is only for the open its reconnect started.
+    if (rerun.current && rerun.current.run !== runNo) rerun.current = null;
     setSessionError(null);
     openQuerySession(connection.id, connection.dialect === "sqlite" ? null : tab.database)
       .then((s) => {
         opened = s;
-        if (live) setSession(s);
+        if (live) {
+          setSession(s);
+          setSessionOpened((n) => n + 1);
+        }
         else void closeQuerySession(s).catch(() => {});
       })
-      .catch((e) => live && setSessionError(errorText(e, connection.dialect)));
+      .catch((e) => {
+        // The open the re-run waited for failed: nothing runs later without Run being pressed.
+        if (rerun.current?.run === runNo) rerun.current = null;
+        if (live) setSessionError(errorText(e, connection.dialect));
+      });
     return () => {
       live = false;
       setSession(null);
       // A run never carries on in another session, database or Connection.
       prepared.current += 1;
+      settleExternal({ ran: false });
       dispatch({ type: "sessionChanged" });
       if (opened) void closeQuerySession(opened).catch(() => {});
     };
-  }, [connection?.id, isOpen, tab.database]);
+  }, [connection?.id, isOpen, tab.database, sessionEpoch]);
 
   useEffect(() => {
     if (!connection || !isOpen || connection.dialect === "sqlite") {
@@ -238,6 +377,12 @@ export default function QueryTab({
     dispatch({ type: "begin", now: started });
     executeSql(session, stmt.text, state.pass).then(
       (ex) => {
+        const w = externalIn([stmt]);
+        // An outside run has run when its last statement has; the count is that statement's.
+        if (w && w.stmts[w.stmts.length - 1] === stmt) {
+          const o = ex.outcome;
+          settleExternal(o.t === "rows" ? { ran: true, rows: o.rows.length, ...(o.hasMore ? { more: true } : {}) } : { ran: true, rows: o.rows });
+        }
         dispatch({ type: "done", id, outcome: ex.outcome, ms: ex.elapsedMs });
         if (DDL.test(stmt.text) && connection) lang?.schemas.invalidate(connection.id);
         onRan?.();
@@ -245,28 +390,34 @@ export default function QueryTab({
       (error) => {
         if (isCommandError(error) && error.kind === "needsConfirmation") {
           // The pass ran out: nothing of this statement ran, so ask again for the rest.
+          const w = externalIn([stmt]);
+          if (w) w.phase = "preparing";
           dispatch({ type: "passExpired", id });
           void prepare(session, left, true);
           return;
         }
+        if (externalIn([stmt])) settleExternal({ ran: false });
         dispatch({ type: "failed", id, error, ms: performance.now() - started });
         onRan?.();
       },
     );
   }, [state, session]);
 
+  // A run from outside that waited for a dialog and was declined ends without having run.
   useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2600);
-    return () => clearTimeout(t);
-  }, [toast]);
+    const w = external.current;
+    if (!w) return;
+    const idle = !state.confirm && state.queue.length === 0 && !state.items.some((i) => i.state.s === "running");
+    if ((w.phase === "asking" && !state.ask) || (w.phase === "running" && !state.ask && idle)) settleExternal({ ran: false });
+  }, [state]);
 
-  // On a Read-only Connection, once edits settle, ask the Core which statements write.
+  // On a Read-only or Production Connection, once edits settle, ask the Core which statements write.
   const [safety, setSafety] = useState<Safety>(NO_WRITES);
   const classes = useRef(new Map<string, StatementClass>());
   const readOnly = !!connection?.readOnly;
+  const production = !!connection?.production;
   useEffect(() => {
-    if (!readOnly) {
+    if (!readOnly && !production) {
       setSafety(NO_WRITES);
       return;
     }
@@ -299,27 +450,35 @@ export default function QueryTab({
       live = false;
       clearTimeout(timer);
     };
-  }, [readOnly, dialect, tab.text, position.line, position.column]);
+  }, [readOnly, production, dialect, tab.text, position.line, position.column]);
   const blocked = readOnly && safety.current
-    ? { from: safety.current.from, to: safety.current.to, message: WRITES_NOTE, detail: `${connection!.name} blocks every write.` }
+    ? { from: safety.current.from, to: safety.current.to, message: WRITES_NOTE }
     : null;
   const runAllBlocked = readOnly && safety.anyWrite;
+  // Read-only blocks the write outright, so the Production hazard only shows where the write can run.
+  const writeHazard = production && !readOnly && safety.current
+    ? { from: safety.current.from, to: safety.current.to, note: `Writes on ${connection!.name} (Production)` }
+    : null;
+  const group = connection?.groupId ? groups.find((g) => g.id === connection.groupId) ?? null : null;
 
+  // Run stays in sight while the Connection is closed, and says why it waits.
+  const closedTip = connection && !isOpen ? `Open ${connection.name} to run this query.` : null;
   const running = state.items.find((i) => i.state.s === "running");
   const canRun = !!session && !running;
 
-  function run(stmts: (Stmt | null)[]) {
+  function run(stmts: (Stmt | null)[]): boolean {
     const list = stmts.filter((s): s is Stmt => !!s && s.text.trim() !== "");
-    if (!canRun || !session || list.length === 0) return;
+    if (!canRun || !session || list.length === 0) return false;
     setNotice(null);
     void prepare(session, list);
+    return true;
   }
 
   /**
    * Asks the Core whether the run may go ahead, needs the Production dialog, or is blocked.
    * `cont` carries on a run whose pass ran out, keeping the results it already has.
    */
-  async function prepare(s: QuerySessionId, list: Stmt[], cont = false) {
+  async function prepare(s: QuerySessionId, list: Stmt[], cont = false, rerunOf?: Rerun) {
     const token = ++prepared.current;
     const current = () => token === prepared.current && sessionNow.current === s;
     try {
@@ -327,11 +486,23 @@ export default function QueryTab({
         s,
         list.map((x) => x.text),
       );
-      if (!current()) return;
-      if (verdict.kind === "ok") dispatch({ type: "start", stmts: list, continue: cont });
-      else if (verdict.kind === "readOnly") setNotice(errorText({ kind: "readOnly", message: verdict.statement }));
-      else dispatch({ type: "ask", ask: { verdict, stmts: list, continue: cont } });
+      const w = externalIn(list);
+      if (!current()) {
+        if (w) settleExternal({ ran: false });
+        return;
+      }
+      if (verdict.kind === "ok") {
+        if (w) w.phase = "running";
+        dispatch({ type: "start", stmts: list, continue: cont, rerun: rerunOf });
+      } else if (verdict.kind === "readOnly") {
+        if (w) settleExternal({ ran: false });
+        setNotice(errorText({ kind: "readOnly", message: verdict.statement }));
+      } else {
+        if (w) w.phase = "asking";
+        dispatch({ type: "ask", ask: { verdict, stmts: list, continue: cont, rerun: rerunOf } });
+      }
     } catch (e) {
+      if (externalIn(list)) settleExternal({ ran: false });
       if (current()) setNotice(errorText(e, dialect));
     }
   }
@@ -340,6 +511,8 @@ export default function QueryTab({
   async function confirmAsk() {
     const ask = state.ask;
     if (!ask || !session) return;
+    const w = externalIn(ask.stmts);
+    if (w) w.phase = "confirming";
     dispatch({ type: "askClosed" });
     const token = ++prepared.current;
     try {
@@ -347,9 +520,15 @@ export default function QueryTab({
         session,
         ask.stmts.map((x) => x.text),
       );
-      if (token !== prepared.current || sessionNow.current !== session) return;
-      dispatch({ type: "start", stmts: ask.stmts, pass, continue: ask.continue });
+      if (token !== prepared.current || sessionNow.current !== session) {
+        if (externalIn(ask.stmts)) settleExternal({ ran: false });
+        return;
+      }
+      const running = externalIn(ask.stmts);
+      if (running) running.phase = "running";
+      dispatch({ type: "start", stmts: ask.stmts, pass, continue: ask.continue, rerun: ask.rerun });
     } catch (e) {
+      if (externalIn(ask.stmts)) settleExternal({ ran: false });
       if (token === prepared.current) setNotice(errorText(e, dialect));
     }
   }
@@ -364,7 +543,119 @@ export default function QueryTab({
     return null;
   })();
 
+  /** Explain: the server's plan for the current statement. It is never run, so nothing asks or confirms. */
+  function explain() {
+    const target = editorRef.current?.runTarget() ?? null;
+    if (!canRun || !session || !target || target.text.trim() === "") return;
+    setNotice(null);
+    const id = state.nextId;
+    const started = performance.now();
+    dispatch({ type: "explain", stmt: target, now: started });
+    // An open result keeps rows, and on SQLite a read lock, on the server: let go of it first.
+    const open = state.items.some((i) => i.state.s === "rows" && i.state.open);
+    const ready = open ? closeQueryResult(session).catch(() => {}) : Promise.resolve();
+    ready.then(() => explainStatement(session, target.text)).then(
+      (plan) => dispatch({ type: "planned", id, plan, ms: performance.now() - started }),
+      (error) => dispatch({ type: "failed", id, error, ms: performance.now() - started }),
+    );
+  }
+
+  /**
+   * The Connection dropped: open it again, then run exactly the failed statement N (R43). It keeps
+   * its number, and the statements after it stay not run, with theirs.
+   */
+  async function reconnect() {
+    const item = state.items[state.active];
+    if (!connection || !item || item.state.s !== "error") return;
+    const id = connection.id;
+    const database = latest.current.database;
+    const stmt = { from: item.from, to: item.to, text: item.sql };
+    const plan: Rerun = { ran: (item.state.index ?? 1) - 1, after: item.state.notRun ?? [], drop: item.id };
+    try {
+      await openConnection(id);
+      onConnectionOpened?.(id);
+    } catch (e) {
+      setNotice(errorText(e, dialect));
+      return;
+    }
+    // Moved to another Connection or database meanwhile: the statement was for the old one.
+    if (latest.current.connectionId !== id || latest.current.database !== database) return;
+    rerun.current = { run: sessionRun.current + 1, connectionId: id, database, stmt, rerun: plan };
+    setSessionEpoch((n) => n + 1);
+  }
+  useEffect(() => {
+    const r = rerun.current;
+    if (!session || !r) return;
+    rerun.current = null;
+    if (r.run !== sessionRun.current || r.connectionId !== latest.current.connectionId || r.database !== latest.current.database) return;
+    if (!canRun) return;
+    setNotice(null);
+    void prepare(session, [r.stmt], false, r.rerun);
+  }, [sessionOpened]);
+
+  useEffect(() => {
+    if (opening.s !== "connecting") return;
+    const timer = window.setInterval(() => setOpenNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [opening.s]);
+  // Another Connection, or this one open, ends whatever the result area said about opening.
+  useEffect(() => {
+    openToken.current += 1;
+    setOpening({ s: "idle" });
+  }, [connection?.id, isOpen]);
+
+  async function beginOpen() {
+    if (!connection || inFlight.current) return;
+    const id = connection.id;
+    const dialect = connection.dialect;
+    const attempt = { cancelled: false };
+    inFlight.current = attempt;
+    const token = ++openToken.current;
+    setOpenNow(Date.now());
+    setOpening({ s: "connecting", startedAt: Date.now() });
+    onOpenStatus?.(id, { s: "connecting" });
+    try {
+      await openConnection(id);
+      if (attempt.cancelled) {
+        // The person chose to stop: do not leave the Connection open behind their back. But when
+        // another tab or the tree opened it meanwhile, or is opening it now, it is theirs: leave it.
+        if (!openIdsNow.current.has(id) && opensInFlight(id) === 0) {
+          await closeConnection(id).catch(() => {});
+          onOpenStatus?.(id, null);
+        }
+        return;
+      }
+      onConnectionOpened?.(id);
+      onOpenStatus?.(id, null);
+      if (token === openToken.current) setOpening({ s: "idle" });
+    } catch (e) {
+      onOpenStatus?.(id, attempt.cancelled ? null : { s: "failed", error: errorText(e, dialect) });
+      if (!attempt.cancelled && token === openToken.current) setOpening({ s: "failed", error: openFailure(e, dialect) });
+    } finally {
+      inFlight.current = null;
+      setStopping(false);
+    }
+  }
+  function cancelOpen() {
+    openToken.current += 1;
+    if (inFlight.current) {
+      inFlight.current.cancelled = true;
+      setStopping(true);
+    }
+    setOpening({ s: "idle" });
+  }
+
   const runCurrent = () => run([editorRef.current?.runTarget() ?? null]);
+  // Not in the editor, so it has no place in the text: Add WHERE and Go to find nothing to act on.
+  // Split as Run all splits, so each statement gets its own no-WHERE check and result (an AI answer can hold several).
+  if (runRef)
+    runRef.current = (sql) =>
+      new Promise<RunOutcome>((resolve) => {
+        settleExternal({ ran: false });
+        const stmts = splitStatements(sql, dialect).map((x) => ({ from: 0, to: 0, text: x.text }));
+        external.current = { stmts, resolve, phase: "preparing" };
+        if (!run(stmts)) settleExternal({ ran: false });
+      });
   const runAll = () => run(splitStatements(editorText(), dialect));
 
   /** Adds WHERE after the statement, only if the editor still holds it where it was when the run was asked for. */
@@ -381,6 +672,10 @@ export default function QueryTab({
   function escape(): boolean {
     if (state.confirm) {
       dispatch({ type: "declined" });
+      return true;
+    }
+    if (opening.s === "connecting") {
+      cancelOpen();
       return true;
     }
     if (running) {
@@ -413,7 +708,7 @@ export default function QueryTab({
       const q = await saveSavedQuery({ id: t.savedId, name: t.name, sql: t.text });
       onChange({ ...latest.current, savedText: q.sql });
       onSaved(q);
-      setToast(`Saved "${q.name}"`);
+      savedToast(q);
     } catch (e) {
       setNotice(errorText(e));
     }
@@ -447,117 +742,99 @@ export default function QueryTab({
   const active = state.items[state.active];
   const errorMark = active?.state.s === "error" ? wordAt(tab.text, active.state.at) : null;
   const lineAt = (offset: number) => tab.text.slice(0, offset).split("\n").length;
+  const columnAt = (offset: number) => offset - tab.text.lastIndexOf("\n", offset - 1);
+  // Table and column names in the loaded tree, for the error's "Did you mean".
+  const tableNames = askSchema
+    ? [...new Set(askSchema.tables.flatMap((t) => [t.name, ...t.columns.map((c) => c.name)]))]
+    : [];
+
+  // R2: on screen, the status goes to the window status bar, which already names the Connection.
+  const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setStatusSlot(visible ? document.getElementById("app-status-slot") : null);
+  }, [visible]);
+  const shown = active?.state;
+  const ranText =
+    shown && (shown.s === "rows" || shown.s === "affected")
+      ? {
+          rows:
+            shown.s === "rows"
+              ? `${shown.rows.length.toLocaleString("en-US")}${shown.hasMore ? "+" : ""} ${shown.rows.length === 1 && !shown.hasMore ? "row" : "rows"}`
+              : `${shown.rows.toLocaleString("en-US")} ${shown.rows === 1 ? "row" : "rows"} affected`,
+          time: durationText(shown.ms),
+        }
+      : null;
+  const status = (
+    <div className="query-status">
+      {connection ? (
+        <>
+          {!statusSlot && (
+            <>
+              <span>{connection.name}</span>
+              <SafetyTag connection={connection} small />
+            </>
+          )}
+          {tab.database && connection.dialect !== "sqlite" && <span>{tab.database}</span>}
+          {!statusSlot && <span>{DIALECT_LABEL[connection.dialect]}</span>}
+          {connection.queryTimeoutSecs && <span>Timeout {connection.queryTimeoutSecs}s</span>}
+          {/* On screen the window status bar already says Closed. */}
+          {!isOpen && !statusSlot && <span>Closed</span>}
+          {isOpen && schemaLoad === "loading" && <span>Loading schema</span>}
+          {isOpen && schemaLoad === "failed" && <span>Schema not loaded</span>}
+        </>
+      ) : (
+        <span>Not connected</span>
+      )}
+      {restarted && <span role="status">Language engine restarted. Typing works as plain text.</span>}
+      {notice && (
+        <span className="error-text" role="alert">
+          {notice}
+        </span>
+      )}
+      {statusSlot && ranText && <span>{ranText.rows}</span>}
+      {statusSlot && ranText && <span>{ranText.time}</span>}
+      <span className="query-position">
+        Ln {position.line}, Col {position.column}
+      </span>
+    </div>
+  );
 
   return (
     <section className="query-tab" aria-label={tab.name}>
-      <div className="toolbar query-toolbar">
-        <h2 className="toolbar-title">
-          {tab.name}
-          {tab.savedId && <span className="muted"> Saved Query</span>}
-        </h2>
-        <label className="query-pick">
-          <span className="visually-hidden">Connection</span>
-          <select
-            className="input input-small"
-            disabled={!!running}
-            value={tab.connectionId ?? ""}
-            onChange={(e) => {
-              const c = connections.find((x) => x.id === e.target.value);
-              onChange({ ...latest.current, connectionId: c?.id ?? null, database: c?.database ?? null });
-            }}
-          >
-            <option value="">Choose a Connection</option>
-            {connections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {openIds.has(c.id) ? "" : " (not open)"}
-              </option>
-            ))}
-          </select>
-        </label>
-        {databases && (
-          <label className="query-pick">
-            <span className="visually-hidden">Database</span>
-            <select
-              className="input input-small"
-              disabled={!!running}
-              value={tab.database ?? ""}
-              onChange={(e) => onChange({ ...latest.current, database: e.target.value || null })}
-            >
-              {databases.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {running ? (
-          <button type="button" className="button button-small button-danger-fill" onClick={cancel}>
-            <Icon name="stop" />
-            Cancel
-          </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="button button-small button-primary"
-              disabled={!canRun || !!blocked}
-              title={blocked ? READ_ONLY_TIP : undefined}
-              onClick={runCurrent}
-            >
-              <Icon name="play" />
-              Run <kbd>Ctrl Enter</kbd>
-            </button>
-            <button
-              type="button"
-              className="button button-small"
-              disabled={!canRun || runAllBlocked}
-              title={runAllBlocked ? READ_ONLY_TIP : undefined}
-              onClick={runAll}
-            >
-              <Icon name="playAll" />
-              Run all
-            </button>
-          </>
-        )}
-        <span className="spacer" />
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Format SQL"
-          title="Format SQL (Shift+Alt+F)"
-          onClick={() => editorRef.current?.replaceAll(formatSql(editorText(), dialect))}
-        >
-          <Icon name="format" />
-        </button>
-        <button type="button" className="icon-button" aria-label="Save query" title="Save query (Ctrl+S)" onClick={() => void save()}>
-          <Icon name="save" />
-        </button>
-        <button
-          type="button"
-          className={historyOpen ? "icon-button icon-button-on" : "icon-button"}
-          aria-label="Query History"
-          aria-pressed={historyOpen}
-          title="Query History"
-          onClick={onToggleHistory}
-        >
-          <Icon name="history" />
-        </button>
-        <button
-          type="button"
-          className={assistantOpen ? "icon-button icon-button-on" : "icon-button"}
-          aria-label="Ask AI"
-          aria-pressed={assistantOpen}
-          title="Ask AI (Ctrl+Alt+I)"
-          onClick={onToggleAssistant}
-        >
-          <Icon name="sparkle" />
-        </button>
-      </div>
+      <EditorHeader
+        connection={connection}
+        connections={connections}
+        openIds={openIds}
+        databases={databases}
+        database={tab.database}
+        production={production}
+        running={!!running}
+        writeHazard={!!writeHazard}
+        canRun={canRun}
+        blockedTip={blocked ? READ_ONLY_TIP : closedTip}
+        runAllBlockedTip={runAllBlocked ? READ_ONLY_TIP : closedTip}
+        stateWord={!connection || isOpen ? null : opening.s === "connecting" ? "connecting..." : opening.s === "failed" ? "failed" : "closed"}
+        compact={assistantOpen}
+        aiAccess={connection?.aiAccess ?? null}
+        historyOpen={historyOpen}
+        assistantOpen={assistantOpen}
+        onPickConnection={(id) => {
+          const c = connections.find((x) => x.id === id);
+          onChange({ ...latest.current, connectionId: c?.id ?? null, database: c?.database ?? null });
+        }}
+        onPickDatabase={(d) => onChange({ ...latest.current, database: d || null })}
+        onRun={runCurrent}
+        onRunAll={runAll}
+        onExplain={explain}
+        onFormat={() => editorRef.current?.replaceAll(formatSql(editorText(), dialect))}
+        onSave={() => void save()}
+        onToggleHistory={onToggleHistory}
+        onToggleAssistant={onToggleAssistant}
+        onCancel={cancel}
+      />
 
       <div className="query-work" ref={work} style={{ gridTemplateRows: `${share}fr 6px ${1 - share}fr` }}>
-        <div className="query-editor">
+        <div className={production ? "query-editor prod-wash" : "query-editor"}>
           <SqlEditor
             value={tab.text}
             dialect={dialect}
@@ -571,6 +848,7 @@ export default function QueryTab({
             markRunning={running ? { from: running.from, to: running.to } : null}
             markError={errorMark}
             blocked={blocked}
+            writeHazard={writeHazard}
             lang={editorLang || undefined}
             onAsk={ask ? setAskSel : undefined}
             askButton={ask?.inlineAsk}
@@ -667,12 +945,19 @@ export default function QueryTab({
             </p>
           </div>
         ) : !isOpen ? (
-          <div className="result-state">
-            <h3>Open the Connection to run this query.</h3>
-            <p className="muted">{connection.name} is not open. Open it in the Connections list.</p>
-          </div>
+          <ClosedConnection
+            state={opening.s === "idle" ? "closed" : opening.s}
+            connection={connection}
+            elapsedMs={opening.s === "connecting" ? Math.max(0, openNow - opening.startedAt) : 0}
+            error={opening.s === "failed" ? opening.error : null}
+            production={production}
+            stopping={stopping}
+            onOpen={() => void beginOpen()}
+            onCancel={cancelOpen}
+            onEdit={() => onEditConnection?.(connection.id)}
+          />
         ) : sessionError ? (
-          <div className="result-state result-state-error" role="alert">
+          <div className={production ? "result-state result-state-error prod-wash" : "result-state result-state-error"} role="alert">
             <h3>
               <Icon name="error" />
               {sessionError}
@@ -681,10 +966,29 @@ export default function QueryTab({
         ) : (
           <ResultsPanel
             state={state}
+            production={production}
             timeoutSecs={connection.queryTimeoutSecs}
             lineAt={lineAt}
+            columnAt={columnAt}
+            dialect={dialect}
+            connectionName={connection.name}
+            names={tableNames}
+            tableNames={askSchema ? [...new Set(askSchema.tables.map((t) => t.name))] : undefined}
+            scope={
+              dialect === "postgres" && tab.database && askSchema?.searchPath[0]
+                ? `${tab.database}.${askSchema.searchPath[0]}`
+                : dialect === "mysql"
+                  ? tab.database
+                  : null
+            }
+            onReconnect={() => void reconnect()}
             onSelect={(index) => dispatch({ type: "select", index })}
             onPin={(id) => dispatch({ type: "pin", id })}
+            onClose={(id) => {
+              const it = state.items.find((i) => i.id === id);
+              if (it?.state.s === "rows" && it.state.open && session) void closeQueryResult(session).catch(() => {});
+              dispatch({ type: "closeItem", id });
+            }}
             onCloseUnpinned={() => {
               // An open result keeps rows, and on SQLite a read lock, on the server.
               const open = state.items.some((i) => !i.pinned && i.state.s === "rows" && i.state.open);
@@ -703,37 +1007,20 @@ export default function QueryTab({
         )}
       </div>
 
-      <div className="query-status">
-        {connection ? (
-          <>
-            <span>{connection.name}</span>
-            <SafetyTag connection={connection} small />
-            {tab.database && connection.dialect !== "sqlite" && <span>{tab.database}</span>}
-            <span>{DIALECT_LABEL[connection.dialect]}</span>
-            {connection.queryTimeoutSecs && <span>Timeout {connection.queryTimeoutSecs} s</span>}
-            {!isOpen && <span>Not connected</span>}
-            {isOpen && schemaLoad === "loading" && <span>Loading schema</span>}
-            {isOpen && schemaLoad === "failed" && <span>Schema not loaded</span>}
-          </>
-        ) : (
-          <span>Not connected</span>
-        )}
-        {restarted && <span role="status">Language engine restarted. Typing works as plain text.</span>}
-        {notice && (
-          <span className="error-text" role="alert">
-            {notice}
-          </span>
-        )}
-        <span className="spacer" />
-        <span className="query-position">
-          Ln {position.line}, Col {position.column}
-        </span>
-      </div>
+      {statusSlot ? createPortal(status, statusSlot) : status}
 
       {state.ask && (
         <ConfirmRun
           verdict={state.ask.verdict}
+          dialect={dialect}
+          group={group}
           noWhere={askNoWhere}
+          rowEstimate={(() => {
+            if (!askNoWhere || !connection || !rowEstimate) return null;
+            const db = state.ask.verdict.database ?? tab.database ?? connection.database;
+            const path = db ? tablePath(askNoWhere.table, dialect, db) : null;
+            return path ? rowEstimate(connection.id, path) : null;
+          })()}
           onRun={() => void confirmAsk()}
           onCancel={() => dispatch({ type: "askClosed" })}
           onAddWhere={() => {
@@ -746,19 +1033,16 @@ export default function QueryTab({
       {saving && (
         <SaveQueryDialog
           sql={tab.text}
+          connections={connections}
+          connectionId={tab.connectionId}
           onCancel={() => setSaving(false)}
           onSaved={(q) => {
             setSaving(false);
             onChange({ ...latest.current, name: q.name, savedId: q.id, savedText: q.sql });
             onSaved(q);
-            setToast(`Saved "${q.name}"`);
+            savedToast(q);
           }}
         />
-      )}
-      {toast && (
-        <p className="toast" role="status">
-          {toast}
-        </p>
       )}
     </section>
   );

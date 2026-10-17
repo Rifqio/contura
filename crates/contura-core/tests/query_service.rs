@@ -90,7 +90,7 @@ async fn execute_records_history_for_every_outcome() {
     f.svc.cancel_query(s).await.unwrap();
     assert!(matches!(run.await.unwrap(), Err(Error::Cancelled)));
 
-    let h = f.svc.query_history(f.id, all()).unwrap();
+    let h = f.svc.query_history(Some(f.id), all()).unwrap();
     let shape: Vec<(Outcome, bool, Option<u64>)> =
         h.iter().map(|e| (e.outcome, e.changed, e.rows)).collect();
     assert_eq!(
@@ -119,7 +119,7 @@ async fn timeout_cancels_and_reports_timed_out() {
     let err = f.svc.execute_sql(s, LONG.into(), None).await.unwrap_err();
     assert!(matches!(err, Error::TimedOut(1)), "{err:?}");
     assert!(start.elapsed() < Duration::from_secs(3));
-    let h = f.svc.query_history(f.id, all()).unwrap();
+    let h = f.svc.query_history(Some(f.id), all()).unwrap();
     assert_eq!(h[0].outcome, Outcome::TimedOut);
 }
 
@@ -200,6 +200,7 @@ async fn saved_query_names_are_unique_ignoring_case() {
             id: None,
             name: "Weekly sales".into(),
             sql: "SELECT 1".into(),
+            connection_id: None,
         })
         .unwrap();
     let err = f
@@ -208,6 +209,7 @@ async fn saved_query_names_are_unique_ignoring_case() {
             id: None,
             name: "weekly SALES".into(),
             sql: "SELECT 2".into(),
+            connection_id: None,
         })
         .unwrap_err();
     assert!(
@@ -220,6 +222,7 @@ async fn saved_query_names_are_unique_ignoring_case() {
             id: Some(q.id),
             name: "Weekly sales".into(),
             sql: "SELECT 3".into(),
+            connection_id: None,
         })
         .unwrap();
     assert_eq!(again.id, q.id);
@@ -227,6 +230,7 @@ async fn saved_query_names_are_unique_ignoring_case() {
         id: None,
         name: "  ".into(),
         sql: String::new(),
+        connection_id: None,
     });
     assert!(matches!(empty, Err(Error::InvalidInput(m)) if m == "Give the query a name."));
     let list = f.svc.list_saved_queries().unwrap();
@@ -242,7 +246,7 @@ async fn deleting_a_connection_deletes_its_history() {
     let s = f.svc.open_query_session(f.id, None).await.unwrap();
     f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
     f.svc.delete(f.id).await.unwrap();
-    assert!(f.svc.query_history(f.id, all()).unwrap().is_empty());
+    assert!(f.svc.query_history(Some(f.id), all()).unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -320,7 +324,7 @@ async fn production_write_without_pass_is_refused_and_not_run() {
         .unwrap_err();
     assert!(matches!(err, Error::NeedsConfirmation), "{err:?}");
     assert_eq!(count_rows(&f), 2);
-    assert!(f.svc.query_history(f.id, all()).unwrap().is_empty());
+    assert!(f.svc.query_history(Some(f.id), all()).unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -452,7 +456,7 @@ async fn read_only_write_is_refused_before_the_server() {
         .unwrap_err();
     assert!(matches!(err, Error::ReadOnly(0)), "{err:?}");
     assert_eq!(count_rows(&f), 2);
-    assert!(f.svc.query_history(f.id, all()).unwrap().is_empty());
+    assert!(f.svc.query_history(Some(f.id), all()).unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -577,4 +581,156 @@ async fn prepare_run_dialog_falls_back_to_the_configured_database() {
     }
     svc.close(saved.id).await.unwrap();
     db.drop_db().await;
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+fn app_db(f: &Fixture) -> rusqlite::Connection {
+    rusqlite::Connection::open(f._dir.path().join("app.sqlite")).unwrap()
+}
+
+fn seed(db: &rusqlite::Connection, conn: ConnectionId, sql: &str, ran_at_ms: i64) {
+    db.execute(
+        "INSERT INTO query_history
+           (connection_id, sql, ran_at_ms, elapsed_ms, outcome, rows, changed, error)
+         VALUES (?1, ?2, ?3, 1, 'ok', NULL, 0, NULL)",
+        rusqlite::params![conn.to_string(), sql, ran_at_ms],
+    )
+    .unwrap();
+}
+
+fn keep(days: Option<u32>) -> contura_core::model::UiPrefs {
+    contura_core::model::UiPrefs {
+        history_keep_days: days,
+        ..Default::default()
+    }
+}
+
+fn sqls(f: &Fixture) -> Vec<String> {
+    f.svc
+        .query_history(Some(f.id), all())
+        .unwrap()
+        .into_iter()
+        .map(|e| e.sql)
+        .collect()
+}
+
+#[tokio::test]
+async fn history_older_than_keep_days_is_pruned_when_a_row_is_added() {
+    let f = fixture(None).await;
+    f.svc.save_ui_prefs(keep(Some(30))).unwrap();
+    let db = app_db(&f);
+    seed(&db, f.id, "old 1", now_ms() - 40 * DAY_MS);
+    seed(&db, f.id, "old 2", now_ms() - 41 * DAY_MS);
+    seed(&db, f.id, "recent", now_ms() - 2 * DAY_MS);
+    assert_eq!(sqls(&f).len(), 3);
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
+    assert_eq!(sqls(&f), vec!["SELECT 1", "recent"]);
+}
+
+#[tokio::test]
+async fn history_is_pruned_when_the_service_starts() {
+    let f = fixture(None).await;
+    f.svc.save_ui_prefs(keep(Some(30))).unwrap();
+    let db = app_db(&f);
+    seed(&db, f.id, "old", now_ms() - 40 * DAY_MS);
+    seed(&db, f.id, "recent", now_ms() - DAY_MS);
+    let svc = ConnectionService::new(
+        AppStore::open(&f._dir.path().join("app.sqlite")).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    let left: Vec<String> = svc
+        .query_history(Some(f.id), all())
+        .unwrap()
+        .into_iter()
+        .map(|e| e.sql)
+        .collect();
+    assert_eq!(left, vec!["recent"]);
+}
+
+#[tokio::test]
+async fn changing_the_keep_days_prunes_at_once() {
+    let f = fixture(None).await;
+    let db = app_db(&f);
+    seed(&db, f.id, "old", now_ms() - 40 * DAY_MS);
+    seed(&db, f.id, "recent", now_ms() - DAY_MS);
+    f.svc.save_ui_prefs(keep(None)).unwrap();
+    assert_eq!(sqls(&f).len(), 2);
+    f.svc.save_ui_prefs(keep(Some(30))).unwrap();
+    assert_eq!(sqls(&f), vec!["recent"]);
+}
+
+#[tokio::test]
+async fn keep_days_of_zero_keeps_the_last_day() {
+    let f = fixture(None).await;
+    let db = app_db(&f);
+    seed(&db, f.id, "old", now_ms() - 2 * DAY_MS);
+    seed(&db, f.id, "an hour ago", now_ms() - DAY_MS / 24);
+    f.svc.save_ui_prefs(keep(Some(0))).unwrap();
+    assert_eq!(sqls(&f), vec!["an hour ago"]);
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
+    assert_eq!(sqls(&f), vec!["SELECT 1", "an hour ago"]);
+}
+
+#[tokio::test]
+async fn forever_keeps_old_rows_and_the_1000_cap_still_holds() {
+    let f = fixture(None).await;
+    f.svc.save_ui_prefs(keep(None)).unwrap();
+    seed(&app_db(&f), f.id, "ancient", now_ms() - 400 * DAY_MS);
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    for _ in 0..5 {
+        f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
+    }
+    assert!(sqls(&f).contains(&"ancient".to_string()));
+    for _ in 0..1000 {
+        f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
+    }
+    let left = sqls(&f);
+    assert_eq!(left.len(), 1000);
+    assert!(!left.contains(&"ancient".to_string()));
+}
+
+#[tokio::test]
+async fn clear_history_for_all_connections() {
+    let f = fixture(None).await;
+    let other = uuid::Uuid::new_v4();
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
+    seed(&app_db(&f), other, "other", now_ms());
+    f.svc.clear_query_history(None).unwrap();
+    assert!(f.svc.query_history(Some(f.id), all()).unwrap().is_empty());
+    assert!(f.svc.query_history(Some(other), all()).unwrap().is_empty());
+    assert!(f.svc.query_history(None, all()).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn query_history_without_a_connection_lists_every_connection_newest_first() {
+    let f = fixture(None).await;
+    let other = uuid::Uuid::new_v4();
+    seed(&app_db(&f), other, "first", now_ms() - 1000);
+    let s = f.svc.open_query_session(f.id, None).await.unwrap();
+    f.svc.execute_sql(s, "SELECT 1".into(), None).await.unwrap();
+    seed(&app_db(&f), other, "last", now_ms());
+    let all_rows = f.svc.query_history(None, all()).unwrap();
+    let shape: Vec<(String, ConnectionId)> = all_rows
+        .into_iter()
+        .map(|e| (e.sql, e.connection_id))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            ("last".to_string(), other),
+            ("SELECT 1".to_string(), f.id),
+            ("first".to_string(), other)
+        ]
+    );
 }

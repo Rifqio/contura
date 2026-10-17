@@ -1,6 +1,6 @@
 [package]
 name = "contura"
-version = "0.1.0"
+version = "0.7.0"
 description = "Contura: a portable database client"
 edition = "2024"
 
@@ -25,7 +25,7 @@ serde_json = "1"
 contura-core = { path = "../crates/contura-core" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3"

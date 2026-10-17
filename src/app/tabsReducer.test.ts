@@ -1,0 +1,152 @@
+import { describe, expect, it } from "vitest";
+import type { QueryTabDoc } from "../query/QueryTab";
+import type { ModelDoc } from "../schema/SchemaBuilder";
+import { type Selection, type WorkTab, tabKey } from "../shell/tabs";
+import { type SchemaTab, type TabsAction, type TabsState, tabsReducer } from "./tabsReducer";
+
+const doc = (id: string, savedId: string | null = null): QueryTabDoc => ({
+  id,
+  name: `Query ${id}`,
+  text: "SELECT 1",
+  connectionId: null,
+  database: null,
+  savedId,
+  savedText: savedId ? "SELECT 1" : null,
+});
+const query = (id: string, savedId: string | null = null): WorkTab => ({ kind: "query", doc: doc(id, savedId) });
+const object = (key: string): WorkTab => ({
+  kind: "object",
+  key,
+  selection: { connectionId: "c1", kind: "table", path: { database: "d", schema: null, name: key } } as Selection,
+});
+const model = (path: string | null): ModelDoc =>
+  ({ path, dbml: "", savedDbml: "", layout: {}, dialect: "postgres", source: "blank", connectionId: null }) as unknown as ModelDoc;
+const schema = (id: string, path: string | null): SchemaTab => ({ kind: "schema", id, doc: model(path) });
+const state = (over: Partial<TabsState> = {}): TabsState => ({ tabs: [], windowTabs: [], activeKey: null, ...over });
+
+function deepFreeze<T>(v: T): T {
+  if (v && typeof v === "object" && !Object.isFrozen(v)) {
+    Object.freeze(v);
+    for (const x of Object.values(v)) deepFreeze(x);
+  }
+  return v;
+}
+
+describe("tabsReducer", () => {
+  it("remove_keeps_the_active_tab_when_it_stays", () => {
+    const s = state({ tabs: [object("a"), object("b"), query("q")], activeKey: "query:q" });
+    const next = tabsReducer(s, { type: "remove", drop: (t) => t.kind === "object", order: ["a", "b", "query:q"] });
+    expect(next.tabs).toEqual([query("q")]);
+    expect(next.activeKey).toBe("query:q");
+  });
+
+  it("remove_moves_to_the_nearest_kept_neighbour_in_strip_order", () => {
+    const s = state({ tabs: [query("x"), object("a"), object("b"), query("y")], activeKey: "a" });
+    const next = tabsReducer(s, {
+      type: "remove",
+      drop: (t) => t.kind === "object",
+      order: ["home", "query:x", "a", "b", "query:y"],
+    });
+    expect(next.tabs).toEqual([query("x"), query("y")]);
+    expect(next.activeKey).toBe("query:y");
+    const last = tabsReducer(state({ tabs: [query("x"), object("a")], activeKey: "a" }), {
+      type: "remove",
+      drop: (t) => t.kind === "object",
+      order: ["query:x", "a"],
+    });
+    expect(last.activeKey).toBe("query:x");
+  });
+
+  it("remove_with_nothing_to_drop_returns_the_same_state", () => {
+    const s = state({ tabs: [query("q")], activeKey: "query:q" });
+    expect(tabsReducer(s, { type: "remove", drop: (t) => t.kind === "object", order: ["query:q"] })).toBe(s);
+  });
+
+  it("open_saved_reuses_a_tab_of_the_same_saved_query", () => {
+    const s = state({ tabs: [query("old", "s1"), query("other")], activeKey: "query:other" });
+    const next = tabsReducer(s, { type: "openSaved", doc: doc("new", "s1") });
+    expect(next.tabs).toBe(s.tabs);
+    expect(next.activeKey).toBe("query:old");
+  });
+
+  it("open_saved_adds_and_activates_a_new_tab", () => {
+    const s = state({ tabs: [query("q", "s2")], activeKey: null });
+    const next = tabsReducer(s, { type: "openSaved", doc: doc("new", "s1") });
+    expect(next.tabs).toEqual([query("q", "s2"), query("new", "s1")]);
+    expect(next.activeKey).toBe("query:new");
+  });
+
+  it("open_saved_without_a_saved_id_never_reuses_a_plain_query_tab", () => {
+    const s = state({ tabs: [query("plain")], activeKey: null });
+    const next = tabsReducer(s, { type: "openSaved", doc: doc("new", null) });
+    expect(next.tabs).toEqual([query("plain"), query("new", null)]);
+    expect(next.activeKey).toBe("query:new");
+  });
+
+  it("open_schema_reuses_the_tab_of_an_open_file", () => {
+    const s = state({ windowTabs: [{ kind: "home" }, schema("m1", "a.dbml")], activeKey: "home" });
+    const next = tabsReducer(s, { type: "openSchema", tab: schema("m2", "a.dbml") });
+    expect(next.windowTabs).toBe(s.windowTabs);
+    expect(next.activeKey).toBe("schema:m1");
+  });
+
+  it("open_schema_without_a_path_always_adds", () => {
+    const s = state({ windowTabs: [schema("m1", null)], activeKey: "schema:m1" });
+    const next = tabsReducer(s, { type: "openSchema", tab: schema("m2", null) });
+    expect(next.windowTabs).toEqual([schema("m1", null), schema("m2", null)]);
+    expect(next.activeKey).toBe("schema:m2");
+  });
+
+  it("set_actions_take_values_or_updaters_and_keep_the_state_when_unchanged", () => {
+    const s = state();
+    const tabs = [query("q")];
+    const a = tabsReducer(s, { type: "tabs", next: tabs });
+    expect(a.tabs).toBe(tabs);
+    const b = tabsReducer(a, { type: "tabs", next: (t) => [...t, query("r")] });
+    expect(b.tabs.map(tabKey)).toEqual(["query:q", "query:r"]);
+    const c = tabsReducer(b, { type: "windowTabs", next: (w) => [...w, { kind: "home" }] });
+    expect(c.windowTabs).toEqual([{ kind: "home" }]);
+    const d = tabsReducer(c, { type: "active", next: "home" });
+    expect(d.activeKey).toBe("home");
+    const e = tabsReducer(d, { type: "active", next: (k) => (k === "home" ? "query:q" : k) });
+    expect(e.activeKey).toBe("query:q");
+    expect(tabsReducer(e, { type: "tabs", next: (t) => t })).toBe(e);
+    expect(tabsReducer(e, { type: "windowTabs", next: e.windowTabs })).toBe(e);
+    expect(tabsReducer(e, { type: "active", next: (k) => k })).toBe(e);
+  });
+
+  it("the_reducer_is_pure", () => {
+    const s = deepFreeze(
+      state({ tabs: [query("a", "s1"), object("t")], windowTabs: [{ kind: "home" }, schema("m1", "a.dbml")], activeKey: "t" }),
+    );
+    const copy = structuredClone({ tabs: s.tabs, windowTabs: s.windowTabs, activeKey: s.activeKey });
+    const actions: TabsAction[] = [
+      { type: "remove", drop: (t: WorkTab) => t.kind === "object", order: ["home", "query:a", "t", "schema:m1"] },
+      { type: "openSaved", doc: doc("n", "s1") },
+      { type: "openSaved", doc: doc("n", "s9") },
+      { type: "openSchema", tab: schema("m2", "a.dbml") },
+      { type: "openSchema", tab: schema("m3", null) },
+      { type: "tabs", next: (t: WorkTab[]) => [...t, query("z")] },
+      { type: "active", next: "home" },
+    ];
+    for (const action of actions) {
+      const once = tabsReducer(s, action);
+      const twice = tabsReducer(s, action);
+      expect(twice).toEqual(once);
+    }
+    expect({ tabs: s.tabs, windowTabs: s.windowTabs, activeKey: s.activeKey }).toEqual(copy);
+  });
+
+  it("restore_then_open_saved_in_one_batch_reuses_the_restored_draft", () => {
+    // The drafts restore prepends its tabs, then a Recent open of the same Saved Query runs before that commits.
+    const restored = [query("draft", "s1")];
+    const queue: TabsAction[] = [
+      { type: "tabs", next: (t: WorkTab[]) => [...restored, ...t] },
+      { type: "active", next: (k: string | null) => k ?? tabKey(restored[0]) },
+      { type: "openSaved", doc: doc("fresh", "s1") },
+    ];
+    const next = queue.reduce(tabsReducer, state());
+    expect(next.tabs).toEqual(restored);
+    expect(next.activeKey).toBe("query:draft");
+  });
+});

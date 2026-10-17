@@ -307,6 +307,7 @@ mod tests {
         let obj = |kind, name: &str| DbObject {
             kind,
             name: name.into(),
+            rows: None,
         };
         let mut v = vec![
             obj(ObjectKind::Trigger, "a"),

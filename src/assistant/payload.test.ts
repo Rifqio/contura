@@ -97,6 +97,14 @@ describe("buildSends", () => {
   });
 });
 
+describe("sample rows", () => {
+  it("no_sample_rows_line_is_sent_at_any_access_level", () => {
+    for (const access of ["never", "schema", "schemaQuery", "schemaQueryRows"] as const) {
+      expect(payloadText(buildSends(sqlCtx(access), KFC_SCHEMA, false))).not.toMatch(/sample rows/i);
+    }
+  });
+});
+
 describe("actionsFor", () => {
   it("puts Fix this error first for errors", () => {
     expect(actionsFor("error")[0].label).toBe("Fix this error");

@@ -1,7 +1,7 @@
 import type { ConnectionConfig } from "../api/types";
 import Icon from "./Icon";
 
-/** The Production or Read-only mark of a Connection; Read-only wins when both are set. */
+/** The Production and Read-only marks of a Connection; both show when both are set, `PROD` first. */
 export default function SafetyTag({
   connection,
   small,
@@ -10,14 +10,22 @@ export default function SafetyTag({
   small?: boolean;
 }) {
   const size = small ? " safety-tag-small" : "";
-  if (connection.readOnly) {
-    return (
-      <span className={`safety-tag safety-tag-readonly${size}`}>
-        <Icon name="lock" />
-        Read-only
-      </span>
-    );
-  }
-  if (connection.production) return <span className={`safety-tag safety-tag-production${size}`}>Production</span>;
-  return null;
+  if (!connection.production && !connection.readOnly) return null;
+  return (
+    <>
+      {/* R8: the chip shows PROD; the spoken name keeps the word. */}
+      {connection.production && (
+        <span className={`safety-tag safety-tag-production${size}`}>
+          <span aria-hidden="true">PROD</span>
+          <span className="visually-hidden">Production</span>
+        </span>
+      )}
+      {connection.readOnly && (
+        <span className={`safety-tag safety-tag-readonly${size}`}>
+          <Icon name="lock" size={14} />
+          Read-only
+        </span>
+      )}
+    </>
+  );
 }

@@ -106,3 +106,23 @@ test("f2_renames_column_and_refs", async () => {
   expect(view.state.doc.toString()).toContain("  shop_id integer");
   expect(view.state.doc.toString()).toContain("Ref: orders.shop_id > stores.id");
 });
+
+test("gutter_and_content_mount_side_by_side", () => {
+  const { container } = setup(BASE);
+  const scroller = container.querySelector(".cm-scroller") as HTMLElement;
+  const kids = Array.from(scroller.children).map((c) => c.className.split(" ")[0]);
+  expect(kids.slice(0, 2)).toEqual(["cm-gutters", "cm-content"]);
+});
+
+test("selecting_a_card_bands_its_block", async () => {
+  const client = new LangClient(() => fakeWorker());
+  const props = { value: BASE, savedValue: BASE, dialect: "mysql" as const, onChange: vi.fn(), onResult: vi.fn(), editsRef: { current: null }, client };
+  const { container, rerender } = render(<DbmlEditor {...props} />);
+  const banded = () => [...container.querySelectorAll(".cm-line.cm-block-band")].map((e) => e.textContent);
+  expect(banded()).toEqual([]);
+  const from = BASE.indexOf("Table orders");
+  rerender(<DbmlEditor {...props} band={[{ from, to: BASE.length - 1 }]} />);
+  await waitFor(() => expect(banded()).toEqual(["Table orders {", "  store_id integer", "}"]));
+  rerender(<DbmlEditor {...props} band={[]} />);
+  await waitFor(() => expect(banded()).toEqual([]));
+});

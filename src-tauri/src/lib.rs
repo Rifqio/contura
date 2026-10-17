@@ -1,6 +1,7 @@
 mod commands;
 mod fatal;
 mod paths;
+mod window_size;
 
 use std::sync::Arc;
 
@@ -8,7 +9,7 @@ use contura_core::ai::{AiProviderKind, AiService};
 use contura_core::connections::ConnectionService;
 use contura_core::secrets::{self, KeyringSecretStore};
 use contura_core::store::AppStore;
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, RunEvent, WebviewWindowBuilder, window::Color};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,9 +61,18 @@ pub fn run() {
             commands::list_groups,
             commands::save_group,
             commands::delete_group,
+            commands::set_group_image,
+            commands::clear_group_image,
+            commands::group_image,
             commands::move_connection,
             commands::last_group,
             commands::set_last_group,
+            commands::ui_prefs,
+            commands::save_ui_prefs,
+            commands::keymap,
+            commands::save_keymap,
+            commands::recent_items,
+            commands::record_recent,
             commands::create_sqlite_database,
             commands::open_query_session,
             commands::execute_sql,
@@ -72,12 +82,19 @@ pub fn run() {
             commands::confirm_edits,
             commands::apply_edits,
             commands::classify_sql,
+            commands::explain_statement,
             commands::fetch_more_rows,
             commands::cancel_query,
             commands::close_query_result,
             commands::close_query_session,
             commands::query_history,
             commands::clear_query_history,
+            commands::saved_query_runs,
+            commands::data_folder_info,
+            commands::open_data_folder,
+            commands::clear_recent,
+            commands::restore_recent,
+            commands::connection_opened_times,
             commands::list_saved_queries,
             commands::save_saved_query,
             commands::delete_saved_query,
@@ -136,11 +153,35 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     migrate_legacy_secrets(&store, &secrets);
     let ai_store = AppStore::open(&data_dir.join("app.sqlite"))?;
     app.manage(AiService::new(ai_store, secrets.clone()));
-    app.manage(ConnectionService::new(store, secrets));
+    app.manage(ConnectionService::new(store, secrets).with_data_dir(data_dir.clone()));
     app.manage(commands::DataDir(data_dir.clone()));
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-        .title("Contura")
-        .data_directory(data_dir.join("webview"))
-        .build()?;
+    // tauri.conf.json's "main" entry (create: false) holds the title, the size and its
+    // minimum, and decorations off: the app draws its own title bar (TitleBar.tsx).
+    let main = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .ok_or("tauri.conf.json has no main window")?
+        .clone();
+    let mut builder = WebviewWindowBuilder::from_config(app, &main)?
+        // Dracula's --c-bg-app, so the window is not white before the page paints.
+        .background_color(Color(25, 26, 33, 255))
+        .data_directory(data_dir.join("webview"));
+    // 1280 x 800 CSS pixels at any display scaling and Text size, shrunk to the work area
+    // of the primary monitor, where the window opens. Set on the builder, not with
+    // set_size after build: tao measures the frame of a hidden undecorated window wrongly
+    // and the client area came out 30 px taller.
+    if let Some(monitor) = app.primary_monitor().ok().flatten() {
+        let area = monitor.work_area().size;
+        let scale = monitor.scale_factor();
+        let (width, height) =
+            window_size::start_size(area.width, area.height, scale, window_size::text_scale());
+        builder = builder
+            .inner_size(f64::from(width) / scale, f64::from(height) / scale)
+            .center();
+    }
+    builder.build()?;
     Ok(())
 }

@@ -8,12 +8,14 @@ import {
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { MySQL, PostgreSQL, SQLite, sql } from "@codemirror/lang-sql";
 import { type Diagnostic as CmDiagnostic, lintGutter, openLintPanel, setDiagnostics } from "@codemirror/lint";
-import { EditorSelection, EditorState, Prec, RangeSet, StateEffect, StateField } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Prec, RangeSet, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
   EditorView,
   GutterMarker,
+  gutterLineClass,
+  highlightActiveLineGutter,
   keymap,
   lineNumberMarkers,
   lineNumbers,
@@ -23,6 +25,11 @@ import {
 } from "@codemirror/view";
 import { type MutableRefObject, useEffect, useRef } from "react";
 import type { DialectKind } from "../api/types";
+import { type EditorCommands, editorCommandKeymap } from "../commands/editorKeymap";
+import type { CommandId } from "../commands/registry";
+import { hintFor } from "../commands/keymap";
+import { kbdElement } from "../components/Kbd";
+import { useKeymap } from "../commands/useCommandKeys";
 import { iconElement } from "../components/Icon";
 import type { LangClient } from "../lang/client";
 import type { Diagnostic, TextEdit } from "../lang/protocol";
@@ -33,6 +40,7 @@ import type { ParameterHints } from "../lang/sql/refactor";
 import { insertColumnsTemplate, SQL_TEMPLATES, type SqlTemplate } from "../lang/sql/templates";
 // The same Theme-token syntax colours as the DBML editor.
 import { dbmlHighlight as themeHighlight } from "../schema/dbmlLanguage";
+import { functionCallMarks } from "./functionCalls";
 import { type Stmt, splitStatements, statementAt } from "./statements";
 
 const SQL_DIALECT = { mysql: MySQL, postgres: PostgreSQL, sqlite: SQLite } as const;
@@ -78,6 +86,8 @@ interface Props {
   markError?: Range | null;
   /** A statement that cannot run here: a lock in the gutter on its first line and the message under it. */
   blocked?: Blocked | null;
+  /** A statement that writes on a Production Connection: a band, a gutter bar and a note under it. */
+  writeHazard?: WriteHazard | null;
   /** The line and column being typed at, for the status line. */
   onPosition?(line: number, column: number): void;
   /** Completion, checks and refactors; without it the editor is plain. */
@@ -90,6 +100,8 @@ interface Props {
   onAsk?(ctx: AskSelection): void;
   /** Show the Ask button at the end of a selection; Ctrl+I works either way. */
   askButton?: boolean;
+  /** The command keys and how to run app commands; the app's keymap when absent. */
+  commands?: EditorCommands;
 }
 
 /** What Ask AI is about: the SQL, where it sits in the editor and its first and last line. */
@@ -128,6 +140,38 @@ const marksField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+const currentStmtLine = Decoration.line({ class: "cm-current-stmt" });
+const currentStmtGutter = new (class extends GutterMarker {
+  elementClass = "cm-current-stmt-gutter";
+})();
+
+/**
+ * The statement where you are typing: a band on each of its lines and a 2 px accent bar
+ * in the gutter beside them. `dialect` is read when the text or the selection changes.
+ */
+function currentStatement(dialect: () => DialectKind) {
+  /** The first character of each line the statement covers. */
+  const linesOf = (state: EditorState): number[] => {
+    const doc = state.doc;
+    const st = statementAt(splitStatements(doc.toString(), dialect()), state.selection.main.head);
+    if (!st || st.from >= st.to) return [];
+    const lines: number[] = [];
+    for (let n = doc.lineAt(st.from).number; n <= doc.lineAt(st.to).number; n++) lines.push(doc.line(n).from);
+    return lines;
+  };
+  return StateField.define<number[]>({
+    create: linesOf,
+    update: (lines, tr) => (tr.docChanged || tr.selection ? linesOf(tr.state) : lines),
+    compare: (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
+    provide: (f) => [
+      EditorView.decorations.compute([f], (state) =>
+        Decoration.set(state.field(f).map((at) => currentStmtLine.range(at))),
+      ),
+      gutterLineClass.compute([f], (state) => RangeSet.of(state.field(f).map((at) => currentStmtGutter.range(at)))),
+    ],
+  });
+}
+
 /** A statement that cannot run, such as a write on a Read-only Connection; `detail` follows the message. */
 export type Blocked = { from: number; to: number; message: string; detail?: string };
 
@@ -146,10 +190,8 @@ class BlockedNote extends WidgetType {
     dom.setAttribute("role", "status");
     const note = document.createElement("span");
     note.className = "cm-blocked-text";
-    note.append(iconElement("lock"));
-    const b = document.createElement("b");
-    b.textContent = this.message;
-    note.append(b);
+    note.append(this.message);
+    dom.append(iconElement("lock", 14));
     if (this.detail) {
       const d = document.createElement("span");
       d.className = "muted";
@@ -200,6 +242,66 @@ const blockedField = StateField.define<Blocked | null>({
       return RangeSet.of([new LockMarker(line.number).range(line.from)]);
     }),
   ],
+});
+
+/** A statement that writes on a Production Connection: it still runs, after the confirm dialog. */
+export type WriteHazard = { from: number; to: number; note: string };
+
+const setWriteHazard = StateEffect.define<WriteHazard | null>();
+const prodWriteLine = Decoration.line({ class: "cm-prod-write" });
+const prodWriteGutter = new (class extends GutterMarker {
+  elementClass = "cm-prod-write-bar";
+})();
+
+class ProdWriteNote extends WidgetType {
+  constructor(readonly note: string) {
+    super();
+  }
+  eq(other: ProdWriteNote) {
+    return other.note === this.note;
+  }
+  toDOM() {
+    const dom = document.createElement("div");
+    dom.className = "cm-prod-write-note";
+    dom.append(iconElement("warning", 14), this.note);
+    return dom;
+  }
+}
+
+/** The Production band on each line of a writing statement, a 3 px bar beside them, and a note under the last. */
+const writeHazardField = StateField.define<WriteHazard | null>({
+  create: () => null,
+  update(v, tr) {
+    let next = v && tr.docChanged ? { ...v, from: tr.changes.mapPos(v.from), to: tr.changes.mapPos(v.to, 1) } : v;
+    for (const e of tr.effects) if (e.is(setWriteHazard)) next = e.value;
+    return next;
+  },
+  provide: (f) => {
+    const lines = (state: EditorState): number[] => {
+      const v = state.field(f);
+      if (!v) return [];
+      const doc = state.doc;
+      const out: number[] = [];
+      const last = doc.lineAt(Math.min(v.to, doc.length)).number;
+      for (let n = doc.lineAt(Math.min(v.from, doc.length)).number; n <= last; n++) out.push(doc.line(n).from);
+      return out;
+    };
+    return [
+      EditorView.decorations.compute([f], (state) => {
+        const v = state.field(f);
+        if (!v) return Decoration.none;
+        const end = state.doc.lineAt(Math.min(v.to, state.doc.length)).to;
+        return Decoration.set(
+          [
+            ...lines(state).map((at) => prodWriteLine.range(at)),
+            Decoration.widget({ widget: new ProdWriteNote(v.note), block: true, side: 1 }).range(end),
+          ],
+          true,
+        );
+      }),
+      gutterLineClass.compute([f], (state) => RangeSet.of(lines(state).map((at) => prodWriteGutter.range(at)))),
+    ];
+  },
 });
 
 /** A short message where you are typing, such as why a name cannot be renamed. */
@@ -310,18 +412,25 @@ export default function SqlEditor({
   markRunning,
   markError,
   blocked,
+  writeHazard,
   onPosition,
   lang,
   onShowInTree,
   oneLine,
   onAsk,
   askButton,
+  commands,
 }: Props) {
+  const appKeys = useKeymap();
+  const cmds = commands ?? appKeys;
   const host = useRef<HTMLDivElement>(null);
+  const commandKeys = useRef(new Compartment());
+  /** Runs a command id: the editor's own, else the owner's. Set once the view exists. */
+  const runCommand = useRef<(id: CommandId) => boolean>(() => false);
   const viewRef = useRef<EditorView | null>(null);
   const reanalyze = useRef<(() => void) | null>(null);
-  const latest = useRef({ onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton });
-  latest.current = { onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton };
+  const latest = useRef({ onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask") });
+  latest.current = { onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask") };
 
   useEffect(() => {
     let diagnostics: Diagnostic[] = [];
@@ -558,10 +667,10 @@ export default function SqlEditor({
       b.type = "button";
       b.className = "ask-btn";
       b.append("Ask ");
-      const k = document.createElement("span");
-      k.className = "kbd";
-      k.textContent = "Ctrl I";
-      b.append(k);
+      const askKey = latest.current.askKey;
+      if (askKey) {
+        b.append(kbdElement(askKey));
+      }
       // Keep the selection while the button is pressed.
       b.addEventListener("mousedown", (e) => e.preventDefault());
       b.addEventListener("click", () => ask(view));
@@ -588,12 +697,37 @@ export default function SqlEditor({
       return latest.current.onEscape();
     };
 
+    /** The commands that act on this editor; any other id goes to the owner. */
+    const own: Partial<Record<CommandId, (view: EditorView) => boolean>> = {
+      "query.run": run("current"),
+      "query.runAll": run("all"),
+      "query.format": () => {
+        latest.current.onFormat();
+        return true;
+      },
+      "query.save": () => {
+        latest.current.onSave();
+        return true;
+      },
+      "editor.ask": ask,
+      "editor.quickFix": openFixes,
+      "editor.rename": rename,
+      "editor.definition": definition,
+      "editor.parameterHints": (v) => params(v, true),
+    };
+    runCommand.current = (id) => {
+      const v = viewRef.current;
+      if (!v) return false;
+      const mine = own[id];
+      return mine ? mine(v) : latest.current.cmds.run(id);
+    };
+
     const view = new EditorView({
       parent: host.current!,
       state: EditorState.create({
         doc: value,
         extensions: [
-          oneLine ? [] : [lineNumbers(), lintGutter()],
+          oneLine ? [] : [lineNumbers(), lintGutter(), highlightActiveLineGutter()],
           oneLine
             ? EditorState.transactionFilter.of((tr) => {
                 if (!tr.docChanged || tr.newDoc.lines === 1) return tr;
@@ -607,8 +741,11 @@ export default function SqlEditor({
           history(),
           sql({ dialect: SQL_DIALECT[dialect], upperCaseKeywords: true }),
           themeHighlight,
+          functionCallMarks,
+          oneLine ? [] : currentStatement(() => latest.current.dialect),
           marksField,
           blockedField,
+          writeHazardField,
           noticeField,
           paramsField,
           askTip,
@@ -618,32 +755,12 @@ export default function SqlEditor({
           Prec.high(
             keymap.of([
               ...(oneLine ? [{ key: "Enter", run: run("current") }] : [{ key: "Enter", run: endRename }]),
-              { key: "Ctrl-Enter", run: run("current") },
-              { key: "Shift-Ctrl-Enter", run: run("all") },
-              {
-                key: "Shift-Alt-f",
-                run: () => {
-                  latest.current.onFormat();
-                  return true;
-                },
-              },
-              {
-                key: "Ctrl-s",
-                run: () => {
-                  latest.current.onSave();
-                  return true;
-                },
-              },
               { key: "Escape", run: escape },
               ...(oneLine ? [] : [{ key: "Tab", run: tabTemplate }]),
-              { key: "Ctrl-i", run: ask },
-              { key: "Ctrl-.", run: openFixes },
-              { key: "Alt-Enter", run: openFixes },
-              { key: "F2", run: rename },
-              { key: "F12", run: definition },
-              { key: "Shift-Ctrl-Space", run: (v) => params(v, true) },
             ]),
           ),
+          // Every command key, above the editor's defaults, so a confirmed override wins (PR11).
+          commandKeys.current.of(editorCommandKeymap(latest.current.cmds.map, (id) => runCommand.current(id))),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.contentAttributes.of({ "aria-label": oneLine ? "Filter" : "SQL" }),
           EditorView.updateListener.of((u) => {
@@ -713,6 +830,13 @@ export default function SqlEditor({
     // The view is created once; later prop changes are pushed in below.
   }, []);
 
+  // A changed keymap rebinds the keys in place.
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: commandKeys.current.reconfigure(editorCommandKeymap(cmds.map, (id) => runCommand.current(id))),
+    });
+  }, [cmds.map]);
+
   useEffect(() => {
     const view = viewRef.current;
     if (view && view.state.doc.toString() !== value) {
@@ -727,6 +851,10 @@ export default function SqlEditor({
   useEffect(() => {
     viewRef.current?.dispatch({ effects: setBlocked.of(blocked ?? null) });
   }, [blocked?.from, blocked?.to, blocked?.message, blocked?.detail]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: setWriteHazard.of(writeHazard ?? null) });
+  }, [writeHazard?.from, writeHazard?.to, writeHazard?.note]);
 
   // A restarted engine has no results for this document yet: ask it again.
   useEffect(() => {

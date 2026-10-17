@@ -30,6 +30,7 @@ const base: AiSettings = {
   maxTokens: null,
   inlineAsk: true,
   errorAsk: true,
+  newConnectionAccess: "schema",
 };
 const view = (s: AiSettings): AiSettingsView => ({ settings: s, groupOverride: false, keySaved: false, keyLast4: null });
 

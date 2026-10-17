@@ -1,146 +1,124 @@
-import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  aiSettings,
-  errorText,
-  isNotOpen,
-  lastGroup,
-  listConnections,
-  listGroups,
-  listSavedQueries,
-  loadQueryTabs,
-  objectDefinition,
-  openConnection,
-  saveQueryTabs,
-  setLastGroup,
-} from "./api/client";
-import type { ConnectionConfig, ConnectionId, Group, GroupId, SavedQuery } from "./api/types";
-import ConnectionForm from "./components/ConnectionForm";
-import ConnectionList from "./components/ConnectionList";
-import DataGrid, { type GridControl } from "./components/DataGrid";
-import UnsavedEdits from "./components/UnsavedEdits";
-import GroupForm from "./components/GroupForm";
-import GroupSwitcher, { type Place } from "./components/GroupSwitcher";
-import Home from "./components/Home";
-import Icon from "./components/Icon";
-import ObjectTree from "./components/ObjectTree";
-import TabStrip, { type Selection, type WorkTab } from "./components/TabStrip";
-import AssistantPanel, { useAssistantHotkey } from "./assistant/AssistantPanel";
-import type { AskContext, AskKit } from "./assistant/context";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { errorText, listConnections, listGroups, setLastGroup } from "./api/client";
+import type { ConnectionConfig, ConnectionId, Group, GroupId, RecentItem, SavedQuery } from "./api/types";
+import DataGrid from "./components/DataGrid";
+import { GroupImagesProvider, useGroupImageCache } from "./components/GroupBadge";
+import GroupSwitcher, { menuPlaces } from "./components/GroupSwitcher";
+import { ToastProvider } from "./components/Toast";
+import StatusBar from "./components/StatusBar";
+import { version } from "../package.json";
+import { assistantContextFor, assistantTargetFor } from "./app/assistantContext";
+import { statusScreenFor } from "./app/statusScreen";
+import { useConnectionLifecycle } from "./app/useConnectionLifecycle";
+import { connectionActions } from "./app/connectionActions";
+import { usePendingEditsGuard } from "./app/usePendingEditsGuard";
+import StartupFailed from "./app/StartupFailed";
+import DefinitionView from "./app/DefinitionView";
+import { newId } from "./app/ids";
+import PlaceSidebar from "./app/PlaceSidebar";
+import WindowPanes from "./app/WindowPanes";
+import { FormDialogs, StartModelDialog, type Form, type ModelStart } from "./app/WorkspaceDialogs";
+import { usePlaceDrafts } from "./app/usePlaceDrafts";
+import { answerText, useQueryTabRefs } from "./app/queryTabRefs";
+import { useAskKit } from "./app/useAskKit";
+import { useDataFolder } from "./app/useDataFolder";
+import { useSavedQueries } from "./app/useSavedQueries";
+import { useStartup } from "./app/useStartup";
+import { openRecentItem } from "./app/openRecent";
+import { placeOf } from "./app/places";
+import { useRecentList } from "./app/useRecentList";
+import { useWorkspaceTabs } from "./app/useWorkspaceTabs";
+import LaunchScreen from "./components/LaunchScreen";
+import TabStrip from "./components/TabStrip";
+import TitleBar from "./components/TitleBar";
+import WorkEmpty from "./components/WorkEmpty";
+import AssistantPanel from "./assistant/AssistantPanel";
 import { appLang } from "./lang/appLang";
 import { schemaKey } from "./lang/sql/schemaCache";
-import { nextQueryName, parseDrafts, placeKey, serializeDrafts } from "./query/drafts";
+import { nextQueryName, placeKey } from "./query/drafts";
 import HistoryPanel from "./query/HistoryPanel";
 import QueryTab, { type QueryTabDoc } from "./query/QueryTab";
-import SavedQueries from "./query/SavedQueries";
-import type { SqlEditorApi } from "./query/SqlEditor";
+import SavedQueriesList from "./query/SavedQueriesList";
 import { sourceConnectionFor } from "./schema/sourceConnection";
-import SchemaBuilder, { type ModelDoc } from "./schema/SchemaBuilder";
-import StartModel from "./schema/StartModel";
-import SettingsView from "./settings/SettingsView";
-import { objectKey, objectPrefix } from "./objectPath";
+import type { ModelDoc } from "./schema/SchemaBuilder";
+import {
+  type Place,
+  type Selection,
+  type SettingsSection,
+  type WindowTab,
+  type WorkTab,
+  tabKey,
+} from "./shell/tabs";
+import { useTheme } from "./theme/useTheme";
+import { KeymapProvider, useCommandKeys } from "./commands/useCommandKeys";
+import { PrefsProvider } from "./prefs/usePrefs";
+import { objectKey } from "./objectPath";
+import OneTree from "./sidebar/OneTree";
+import { useTreeData } from "./sidebar/useTreeData";
 
-type Form = { kind: "none" } | { kind: "group" } | { kind: "connection"; connection?: ConnectionConfig };
-
-type Startup = { s: "loading" } | { s: "ready" } | { s: "failed"; message: string };
-
-/** How long typing pauses before the query tab drafts are saved. */
-const DRAFT_SAVE_MS = 500;
-
-function DefinitionView({
-  selection,
-  onClose,
-  onNotOpen,
-}: {
-  selection: Selection;
-  onClose: () => void;
-  onNotOpen: () => void;
-}) {
-  const [text, setText] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    objectDefinition(selection.connectionId, selection.kind, selection.path)
-      .then((t) => live && setText(t))
-      .catch((e) => {
-        if (!live) return;
-        if (isNotOpen(e)) onNotOpen();
-        setError(errorText(e));
-      });
-    return () => {
-      live = false;
-    };
-    // The parent re-keys this view per object.
-  }, []);
-
+/** The one prefs holder and the one command registry, around the whole app. */
+export default function App() {
   return (
-    <section className="grid-view" aria-label={`Definition of ${selection.path.name}`}>
-      <div className="toolbar">
-        <Icon name={selection.kind === "trigger" ? "trigger" : "routine"} className="muted" />
-        <h2 className="toolbar-title">
-          <span className="muted">{objectPrefix(selection.path)}</span>
-          {selection.path.name}
-        </h2>
-        <span className="toolbar-meta">{selection.kind}</span>
-        <button type="button" className="icon-button" aria-label={`Close ${selection.path.name}`} onClick={onClose}>
-          <Icon name="close" />
-        </button>
-      </div>
-      <div className="grid-scroll">
-        {error ? (
-          <p className="state-panel error-text" role="alert">
-            {error}
-          </p>
-        ) : text === null ? (
-          <p className="state-panel muted">Loading the definition…</p>
-        ) : (
-          <pre className="definition">{text}</pre>
-        )}
-      </div>
-    </section>
+    <PrefsProvider>
+      <KeymapProvider>
+        <ToastProvider>
+          <Workspace />
+        </ToastProvider>
+      </KeymapProvider>
+    </PrefsProvider>
   );
 }
 
-const newId = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `q${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-
-export default function App() {
-  const [startup, setStartup] = useState<Startup>({ s: "loading" });
+function Workspace() {
   const [groups, setGroups] = useState<Group[]>([]);
+  const groupImages = useGroupImageCache(groups);
   const [connections, setConnections] = useState<ConnectionConfig[]>([]);
-  const [place, setPlace] = useState<Place>({ kind: "home" });
-  const [openIds, setOpenIds] = useState<ReadonlySet<ConnectionId>>(new Set());
+  const [place, setPlace] = useState<Place>({ kind: "ungrouped" });
+  // One language worker and one schema index for every query tab, for the app's lifetime.
+  const lang = appLang();
+  const { openIds, versions, openStatus, setStatus, openTracked, markOpened, markClosed, lost } = useConnectionLifecycle({
+    connections,
+    onClosed: (id) => {
+      lang.schemas.dropConnection(id);
+      removeTabs((t) => t.kind === "object" && t.selection.connectionId === id);
+    },
+    onLost: () => setNotice("That Connection is not open any more. Open it again to continue."),
+  });
   const [activeId, setActiveId] = useState<ConnectionId | null>(null);
-  const [tabs, setTabs] = useState<WorkTab[]>([]);
-  const [activeTab, setActiveTab] = useState(-1);
+  /** The branch of the focused tree row while the tree has focus; the status bar follows it (D16). */
+  const [treeBranch, setTreeBranch] = useState<ConnectionId | null>(null);
+  const {
+    tabs,
+    windowTabs,
+    activeKey,
+    allTabs,
+    setTabs,
+    setWindowTabs,
+    setActiveKey,
+    tabsRef,
+    lastPlaceKey,
+    removeTabs,
+    closeKey,
+    showHome,
+    showPlace,
+    openSavedDoc,
+    openSchemaTab,
+    schemaClose,
+    schemaCloseFor,
+  } = useWorkspaceTabs();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
-  /** A question carried into the panel by "Open in chat"; it ends when you move to another tab or place. */
-  const [chatSeed, setChatSeed] = useState<{ question: string; context: AskContext } | undefined>(undefined);
-  const [askSettings, setAskSettings] = useState({ inlineAsk: true, errorAsk: true });
-  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
+  const { recent, openedTimes, load: loadRecent, record } = useRecentList();
+  /** Query History shows every Connection instead of the tab's (from Home's Show all history). */
+  const [historyAll, setHistoryAll] = useState(false);
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [form, setForm] = useState<Form>({ kind: "none" });
   const [notice, setNotice] = useState<string | null>(null);
-  /** Settings sits over the current place, which stays mounted underneath so open query tabs keep their results. */
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [schema, setSchema] = useState<
-    | {
-        kind: "start";
-        initial?: {
-          connectionId: ConnectionId;
-          database: string;
-          schema: string | null;
-        };
-      }
-    | { kind: "builder"; doc: ModelDoc }
-    | null
-  >(null);
-  const editorRefs = useRef(new Map<string, MutableRefObject<SqlEditorApi | null>>());
-  // One language worker and one schema index for every query tab, for the app's lifetime.
-  const lang = appLang();
+  const { savedQueries, load: loadSaved, reloadSaved, savedOne } = useSavedQueries({ setTabs, onError: setNotice });
+  const [modelStart, setModelStart] = useState<ModelStart | null>(null);
+  /** Set at startup in the last Group: Home opens if the Group restores no tabs (PR6). */
+  const homeIfEmpty = useRef(false);
+  const refs = useQueryTabRefs();
   const [reveal, setReveal] = useState<{
     connectionId: ConnectionId;
     database: string;
@@ -148,66 +126,50 @@ export default function App() {
     name: string;
     seq: number;
   } | null>(null);
-  /** The place whose drafts are loaded, so saving never overwrites drafts not yet read. */
-  const draftsLoaded = useRef<string | null>(null);
-
-  const start = useCallback(async () => {
-    setStartup({ s: "loading" });
-    try {
-      const [g, c, last] = await Promise.all([listGroups(), listConnections(), lastGroup()]);
+  // The one tree's load state, kept here so table tabs can read row estimates from it.
+  const tree = useTreeData({ connections, openIds, onNotOpen: (id) => lost(id), onRevealed: () => setReveal(null) });
+  useEffect(() => {
+    if (reveal) tree.reveal(reveal);
+    // Once per request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.seq]);
+  const { startup, step, startedAt, retry } = useStartup({
+    loaded: ({ groups: g, connections: c, first }) => {
       setGroups(g);
       setConnections(c);
-      setPlace(last && g.some((x) => x.id === last) ? { kind: "group", groupId: last } : { kind: "home" });
-      setStartup({ s: "ready" });
-    } catch (e) {
-      setStartup({ s: "failed", message: errorText(e) });
-    }
-    // Saved Queries are a convenience at startup: without them the app still works.
-    listSavedQueries()
-      .then(setSavedQueries)
-      .catch(() => setSavedQueries([]));
-  }, []);
+      placeNow.current = first;
+      setPlace(first);
+      homeIfEmpty.current = first.kind === "group";
+      setWindowTabs(first.kind === "group" ? [] : [{ kind: "home" }]);
+      setActiveKey(first.kind === "group" ? null : "home");
+    },
+    always: () => {
+      loadSaved();
+      loadRecent();
+    },
+  });
 
-  useEffect(() => {
-    start();
-  }, [start]);
-
-  const draftKey = place.kind === "home" ? null : placeKey(place);
-  const queryDocs = tabs.flatMap((t) => (t.kind === "query" ? [t.doc] : []));
-  const draftsJson = serializeDrafts(queryDocs);
-
-  // Entering a place brings back its query tabs.
-  useEffect(() => {
-    if (!draftKey || startup.s !== "ready") return;
-    let live = true;
-    draftsLoaded.current = null;
-    loadQueryTabs(draftKey)
-      .then((json) => {
-        if (!live) return;
-        const docs = json ? parseDrafts(json) : [];
-        if (docs.length > 0) {
-          setTabs((t) => [...docs.map((doc): WorkTab => ({ kind: "query", doc })), ...t]);
-          setActiveTab((a) => (a < 0 ? 0 : a + docs.length));
-        }
-        draftsLoaded.current = draftKey;
-      })
-      .catch(() => {
-        if (live) draftsLoaded.current = draftKey;
-      });
-    return () => {
-      live = false;
-    };
-  }, [draftKey, startup.s]);
-
-  useEffect(() => {
-    if (!draftKey || draftsLoaded.current !== draftKey) return;
-    const t = setTimeout(() => void saveQueryTabs(draftKey, draftsJson).catch(() => {}), DRAFT_SAVE_MS);
-    return () => clearTimeout(t);
-  }, [draftsJson, draftKey]);
+  const drafts = usePlaceDrafts({
+    place,
+    tabs,
+    ready: startup.s === "ready",
+    onRestored: (docs) => {
+      if (docs.length > 0) {
+        const restored = docs.map((doc): WorkTab => ({ kind: "query", doc }));
+        setTabs((t) => [...restored, ...t]);
+        setActiveKey((k) => k ?? tabKey(restored[0]));
+      }
+      if (homeIfEmpty.current) {
+        homeIfEmpty.current = false;
+        // A tab you opened meanwhile stays active.
+        if (docs.length === 0) showHome(true);
+      }
+    },
+  });
+  const { placeNow, visit, whenDraftsLoaded } = drafts;
 
   // A Connection moved to another Group leaves this place: drop it as the active one and close its tables.
   useEffect(() => {
-    if (place.kind === "home") return;
     const here = place.kind === "group" ? place.groupId : null;
     const isHere = (id: ConnectionId) => connections.some((c) => c.id === id && c.groupId === here);
     if (activeId !== null && !isHere(activeId)) setActiveId(null);
@@ -216,176 +178,90 @@ export default function App() {
     }
   }, [connections, place, activeId, tabs]);
 
-  /** Removes matching tabs, keeping the active tab when it stays. */
-  function removeTabs(drop: (t: WorkTab) => boolean) {
-    setTabs((all) => {
-      const kept = all.filter((t) => !drop(t));
-      setActiveTab((a) => {
-        const current = all[a];
-        if (current && !drop(current)) return kept.indexOf(current);
-        return kept.length === 0 ? -1 : Math.min(Math.max(a, 0), kept.length - 1);
-      });
-      return kept;
-    });
+  const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseSaved, dialog: leaveDialog } =
+    usePendingEditsGuard({ tabs, connections, savedQueries, activate: setActiveKey, onSavedQuerySaved: reloadSaved, onError: setNotice });
+  /** Home's ask about Pending Edits: each table shows while it is asked about, then Home comes back. */
+  async function askFromHome(keys: string[]): Promise<boolean> {
+    if (!keys.some(isDirty)) return true;
+    const ok = await confirmLeave(keys);
+    showHome();
+    return ok;
   }
 
-  // ---- Pending Edits in table tabs: ask before they are closed or left ----
-  const [dirtyGrids, setDirtyGrids] = useState<ReadonlySet<string>>(new Set());
-  const dirtyRef = useRef(dirtyGrids);
-  dirtyRef.current = dirtyGrids;
-  const gridControls = useRef(new Map<string, MutableRefObject<GridControl | null>>());
-  const [leaveAsk, setLeaveAsk] = useState<{ key: string; table: string; busy: boolean; resolve(ok: boolean): void } | null>(
-    null,
-  );
+  /** Edit Connection from any path: saving the form closes the Connection's session, so its grids' edits are asked about first. */
+  async function editConnection(c: ConnectionConfig) {
+    if (await confirmLeave(tableKeys(c.id))) setForm({ kind: "connection", connection: c });
+  }
 
-  function gridControl(key: string): MutableRefObject<GridControl | null> {
-    let ref = gridControls.current.get(key);
-    if (!ref) {
-      ref = { current: null };
-      gridControls.current.set(key, ref);
+  /** Closes a tab: a table with Pending Edits asks first, a Schema Model through its own Close. */
+  async function closeTab(key: string) {
+    const tab = [...tabs, ...windowTabs].find((t) => tabKey(t) === key);
+    if (!tab) return;
+    if (tab.kind === "object" && !(await confirmLeave([tab.key]))) return;
+    if (tab.kind === "query" && !(await confirmCloseSaved(tab.doc))) return;
+    const builderClose = tab.kind === "schema" ? schemaCloseFor(tab.id) : null;
+    if (builderClose) builderClose();
+    else dropTab(key);
+  }
+
+  /** Removes a tab at once; the right neighbour, else the left, becomes active when it was. */
+  function dropTab(key: string) {
+    const doc = tabs.find((t) => t.kind === "query" && tabKey(t) === key);
+    if (doc?.kind === "query") {
+      refs.forget(doc.doc.id);
     }
-    return ref;
+    closeKey(key);
   }
 
-  function markDirty(key: string, dirty: boolean) {
-    setDirtyGrids((s) => {
-      if (s.has(key) === dirty) return s;
-      const next = new Set(s);
-      if (dirty) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  }
-
-  // A removed tab, by any path, takes its dirty mark and its control with it.
-  useEffect(() => {
-    const live = new Set(tabs.flatMap((t) => (t.kind === "object" ? [t.key] : [])));
-    for (const key of [...gridControls.current.keys()]) if (!live.has(key)) gridControls.current.delete(key);
-    setDirtyGrids((s) => {
-      const kept = [...s].filter((key) => live.has(key));
-      return kept.length === s.size ? s : new Set(kept);
-    });
-  }, [tabs]);
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
-  const tableKeys = (only?: ConnectionId) =>
-    tabsRef.current.flatMap((t) =>
-      t.kind === "object" && (only === undefined || t.selection.connectionId === only) ? [t.key] : [],
-    );
-
-  /** Keeps a value still in a cell editor, then says whether the grid has Pending Edits. */
-  function isDirty(key: string): boolean {
-    const control = gridControls.current.get(key)?.current;
-    return control ? control.flush() : dirtyRef.current.has(key);
-  }
-
-  /** Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is cancelled. */
-  function confirmLeave(keys: string[]): Promise<boolean> {
-    // One ask at a time: a later request waits for the open one, then checks again.
-    const run = leaveQueue.current.then(() => askLeave(keys));
-    leaveQueue.current = run.then(
-      () => {},
-      () => {},
-    );
-    return run;
-  }
-  const leaveQueue = useRef<Promise<void>>(Promise.resolve());
-
-  async function askLeave(keys: string[]): Promise<boolean> {
-    for (const key of keys) {
-      if (!isDirty(key)) continue;
-      const tabs = tabsRef.current;
-      const index = tabs.findIndex((t) => t.kind === "object" && t.key === key);
-      const tab = tabs[index];
-      if (index >= 0) setActiveTab(index);
-      const table = tab?.kind === "object" ? tab.selection.path.name : "this table";
-      const ok = await new Promise<boolean>((resolve) => setLeaveAsk({ key, table, busy: false, resolve }));
-      if (!ok) return false;
-      markDirty(key, false);
-    }
-    return true;
-  }
-  const confirmLeaveRef = useRef(confirmLeave);
-  confirmLeaveRef.current = confirmLeave;
-  const leaveAll = () => confirmLeave(tableKeys());
-
-  // Quitting with Pending Edits asks first.
-  useEffect(() => {
-    let alive = true;
-    let unlisten: (() => void) | undefined;
-    import("@tauri-apps/api/window")
-      .then(({ getCurrentWindow }) => {
-        const w = getCurrentWindow();
-        return w.onCloseRequested(async (event) => {
-          const keys = tableKeys();
-          if (!keys.some(isDirty)) return;
-          event.preventDefault();
-          if (await confirmLeaveRef.current(keys)) await w.destroy();
-        });
-      })
-      .then((stop) => {
-        if (alive) unlisten = stop;
-        else stop();
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
-  }, []);
-
-  async function closeTab(i: number) {
-    const tab = tabs[i];
-    if (tab?.kind === "object" && !(await confirmLeave([tab.key]))) return;
-    dropTab(i);
-  }
-
-  function dropTab(i: number) {
-    const tab = tabs[i];
-    if (tab?.kind === "query") editorRefs.current.delete(tab.doc.id);
-    setTabs((all) => all.filter((_, j) => j !== i));
-    setActiveTab((a) => {
-      const left = tabs.length - 1;
-      if (left === 0) return -1;
-      if (i < a) return a - 1;
-      if (i === a) return Math.min(i, left - 1);
-      return a;
-    });
+  /** Home from the switcher or Ctrl+Shift+H: an open still on its way to the place is dropped (R23). */
+  function goHome() {
+    drafts.dropQueued();
+    showHome();
   }
 
   function openObject(selection: Selection) {
-    const key = objectKey(selection.connectionId, selection.kind, selection.path);
-    const found = tabs.findIndex((t) => t.kind === "object" && t.key === key);
-    if (found >= 0) {
-      setActiveTab(found);
-      return;
+    if (selection.kind === "table" || selection.kind === "view") {
+      record({ kind: "table", path: selection.path, object: selection.kind }, selection.connectionId);
     }
-    setTabs((all) => [...all, { kind: "object", key, selection }]);
-    setActiveTab(tabs.length);
+    const key = objectKey(selection.connectionId, selection.kind, selection.path);
+    // Worked out on the latest tabs: a Recent open runs after drafts were restored into them.
+    setTabs((all) => (all.some((t) => t.kind === "object" && t.key === key) ? all : [...all, { kind: "object", key, selection }]));
+    setActiveKey(key);
   }
 
-  function newQuery(connectionId: ConnectionId | null, text = "") {
+  function newQuery(connectionId: ConnectionId | null, text = "", database?: string) {
     const c = connections.find((x) => x.id === connectionId) ?? null;
     const doc: QueryTabDoc = {
       id: newId(),
       name: nextQueryName(tabs.map((t) => (t.kind === "query" ? t.doc.name : ""))),
       text,
       connectionId: c?.id ?? null,
-      database: c?.database ?? null,
+      database: database ?? c?.database ?? null,
       savedId: null,
       savedText: null,
     };
     setTabs((all) => [...all, { kind: "query", doc }]);
-    setActiveTab(tabs.length);
+    setActiveKey(tabKey({ kind: "query", doc }));
   }
 
-  function openSaved(q: SavedQuery) {
-    const found = tabs.findIndex((t) => t.kind === "query" && t.doc.savedId === q.id);
-    if (found >= 0) {
-      setActiveTab(found);
-      return;
-    }
-    const c = connections.find((x) => x.id === activeId) ?? null;
+  /** Home's Show all history: Query History with every Connection, beside the place's query tab (a new one when it has none). */
+  function showAllHistory() {
+    const last = tabs.find((t) => tabKey(t) === lastPlaceKey.current);
+    const query = last?.kind === "query" ? last : [...tabs].reverse().find((t) => t.kind === "query");
+    if (query) setActiveKey(tabKey(query));
+    else newQuery(activeId);
+    setHistoryAll(true);
+    setHistoryOpen(true);
+  }
+
+  /** Opens a Saved Query from this place (the tree or the Saved Queries list): on its "opens on" Connection when that is here, else the active one (PR1). */
+  const openSavedHere = (q: SavedQuery) =>
+    openSaved(q, connections.some((c) => c.id === q.connectionId && c.groupId === (place.kind === "group" ? place.groupId : null)) ? q.connectionId : activeId);
+
+  /** Opens a Saved Query in a tab on `on`: from this place through openSavedHere, from Recent on the Connection it was recorded with. */
+  function openSaved(q: SavedQuery, on: ConnectionId | null) {
+    record({ kind: "query", savedId: q.id, name: q.name }, on);
+    const c = connections.find((x) => x.id === on) ?? null;
     const doc: QueryTabDoc = {
       id: newId(),
       name: q.name,
@@ -395,92 +271,71 @@ export default function App() {
       savedId: q.id,
       savedText: q.sql,
     };
-    setTabs((all) => [...all, { kind: "query", doc }]);
-    setActiveTab(tabs.length);
+    // Worked out on the latest tabs, so a draft of this Saved Query restored just now is reused.
+    openSavedDoc(doc);
   }
 
-  function reloadSaved() {
-    listSavedQueries()
-      .then((all) => {
-        setSavedQueries(all);
-        // A renamed Saved Query renames its open tab; a deleted one leaves the tab as a plain query.
-        setTabs((ts) =>
-          ts.map((t) => {
-            if (t.kind !== "query" || !t.doc.savedId) return t;
-            const q = all.find((x) => x.id === t.doc.savedId);
-            return {
-              kind: "query",
-              doc: q ? { ...t.doc, name: q.name } : { ...t.doc, savedId: null, savedText: null },
-            };
-          }),
-        );
-      })
-      .catch((e) => setNotice(errorText(e)));
+  /** Opens the Saved Queries list as a tab of the place (one at most) and shows it. */
+  function openSavedList() {
+    setTabs((all) => (all.some((t) => t.kind === "savedQueries") ? all : [...all, { kind: "savedQueries" }]));
+    setActiveKey("savedQueries");
   }
 
   function updateDoc(doc: QueryTabDoc) {
     setTabs((all) => all.map((t) => (t.kind === "query" && t.doc.id === doc.id ? { kind: "query", doc } : t)));
   }
 
-  function editorRef(id: string): MutableRefObject<SqlEditorApi | null> {
-    let r = editorRefs.current.get(id);
-    if (!r) {
-      r = { current: null };
-      editorRefs.current.set(id, r);
-    }
-    return r;
-  }
+  // Reconciles the painted theme with the Core setting; the status bar's theme switch chooses through it.
+  const theme = useTheme();
 
-  // Ctrl+T opens a new query tab, on the active Connection.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "t" && place.kind !== "home") {
-        e.preventDefault();
-        newQuery(activeId);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
-
-  useAssistantHotkey(() => {
-    if (place.kind !== "home" && !settingsOpen && schema?.kind !== "builder") setAssistantOpen((o) => !o);
+  /** Ctrl+1 to Ctrl+9: the places in the switcher's order (PR7). */
+  const openPlaceAt = (n: number) => {
+    const p = menuPlaces(groups)[n - 1];
+    if (p) void enterPlace(p);
+  };
+  const activeWindow = windowTabs.find((t) => tabKey(t) === activeKey);
+  const settingsActive = activeWindow?.kind === "settings";
+  const dataFolder = useDataFolder(settingsActive);
+  // The app's command keys; the rest of the registry is wired as each command arrives.
+  useCommandKeys({
+    // A new query tab, on the active Connection.
+    "query.new": () => newQuery(activeId),
+    "assistant.toggle": () => {
+      if (!activeWindow) setAssistantOpen((o) => !o);
+    },
+    "settings.open": () => openSettings(),
+    "home.open": () => goHome(),
+    "connection.new": () => setForm({ kind: "connection" }),
+    "group.open.1": () => openPlaceAt(1),
+    "group.open.2": () => openPlaceAt(2),
+    "group.open.3": () => openPlaceAt(3),
+    "group.open.4": () => openPlaceAt(4),
+    "group.open.5": () => openPlaceAt(5),
+    "group.open.6": () => openPlaceAt(6),
+    "group.open.7": () => openPlaceAt(7),
+    "group.open.8": () => openPlaceAt(8),
+    "group.open.9": () => openPlaceAt(9),
   });
 
   const askGroupId = place.kind === "group" ? place.groupId : null;
-  useEffect(() => {
-    if (settingsOpen) return;
-    let live = true;
-    aiSettings(askGroupId)
-      .then((v) => live && setAskSettings({ inlineAsk: v.settings.inlineAsk, errorAsk: v.settings.errorAsk }))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [askGroupId, settingsOpen]);
-  useEffect(() => setChatSeed(undefined), [activeTab, place]);
-  // A question kept from before an access change must not outlive it.
-  useEffect(() => setChatSeed(undefined), [settingsOpen, connections]);
-  const askActions = useRef({ settings: () => {} });
-  askActions.current.settings = () => openSettings();
-  const askKit = useMemo<AskKit>(
-    () => ({
-      groupId: askGroupId,
-      inlineAsk: askSettings.inlineAsk,
-      errorAsk: askSettings.errorAsk,
-      onOpenInChat: (seed) => {
-        setChatSeed({ ...seed });
-        setAssistantOpen(true);
-      },
-      onOpenSettings: () => askActions.current.settings(),
-    }),
-    [askGroupId, askSettings],
-  );
-  const schemaConnectionId = schema?.kind === "builder" ? schema.doc.connectionId : null;
-  const schemaDialect = schema?.kind === "builder" ? schema.doc.dialect : "postgres";
-  const schemaSource = useMemo(
-    () => sourceConnectionFor(schemaConnectionId, schemaDialect, connections),
-    [connections, schemaConnectionId, schemaDialect],
+  const { askKit, chatSeed } = useAskKit({
+    groupId: askGroupId,
+    settingsActive,
+    activeKey,
+    place,
+    connections,
+    openPanel: () => setAssistantOpen(true),
+    openAiSettings: () => openSettings("ai"),
+  });
+  // Each Schema Model's live source Connection, kept by tab so a card ask sees the same object between draws.
+  const schemaSources = useMemo(
+    () =>
+      new Map(
+        windowTabs.flatMap((t) =>
+          t.kind === "schema" ? [[t.id, sourceConnectionFor(t.doc.connectionId, t.doc.dialect, connections)] as const] : [],
+        ),
+      ),
+    [connections, windowTabs],
   );
 
   async function reload() {
@@ -493,537 +348,455 @@ export default function App() {
     }
   }
 
-  function markClosed(id: ConnectionId) {
-    lang.schemas.dropConnection(id);
-    setOpenIds((ids) => {
-      const next = new Set(ids);
-      next.delete(id);
-      return next;
-    });
-    removeTabs((t) => t.kind === "object" && t.selection.connectionId === id);
-  }
-
-  function lost(id: ConnectionId) {
-    markClosed(id);
-    setNotice("That Connection is not open any more. Open it again to continue.");
-  }
-
+  /** Moves the window to another place: its tabs go, the window's tabs stay (PR5), and the place shows. */
   function goTo(next: Place) {
-    // Save this place's drafts now: the debounced save would be cancelled by the switch.
-    if (draftKey && draftsLoaded.current === draftKey) void saveQueryTabs(draftKey, draftsJson).catch(() => {});
-    draftsLoaded.current = null;
+    drafts.leaveFor(next);
+    lastPlaceKey.current = null;
     setPlace(next);
     setActiveId(null);
+    setTreeBranch(null);
     setTabs([]);
-    setActiveTab(-1);
-    editorRefs.current.clear();
+    setActiveKey(null);
+    refs.clear();
     setNotice(null);
     setForm({ kind: "none" });
-    setSettingsOpen(false);
   }
 
-  /** Opens Settings. Only the AI section exists for now. */
-  function openSettings(section: "ai" = "ai") {
-    void section;
+  /**
+   * Shows a place: the current one at once; another after its Pending Edits are asked about,
+   * remembered as the last Group unless `remember` is false. False when leaving was cancelled.
+   */
+  async function enterPlace(next: Place, remember = true): Promise<boolean> {
+    if (placeKey(next) === placeKey(placeNow.current)) {
+      showPlace();
+      return true;
+    }
+    if (!(await leaveAll())) return false;
+    goTo(next);
+    if (remember) {
+      try {
+        await setLastGroup(next.kind === "group" ? next.groupId : null);
+      } catch (e) {
+        setNotice(errorText(e));
+      }
+    }
+    return true;
+  }
+
+  /** Opens the Settings tab (one at most), scrolled to a section: the top unless asked otherwise. */
+  function openSettings(section: SettingsSection = "appearance") {
     setForm({ kind: "none" });
-    setSettingsOpen(true);
+    setWindowTabs((w) =>
+      w.some((t) => t.kind === "settings")
+        ? w.map((t): WindowTab => (t.kind === "settings" ? { kind: "settings", section, seq: (t.seq ?? 0) + 1 } : t))
+        : [...w, { kind: "settings", section, seq: 0 }],
+    );
+    setActiveKey("settings");
   }
 
   async function openGroup(id: GroupId) {
-    if (!(await leaveAll())) return;
-    goTo({ kind: "group", groupId: id });
-    try {
-      await setLastGroup(id);
-    } catch (e) {
-      setNotice(errorText(e));
-    }
+    await enterPlace({ kind: "group", groupId: id });
   }
 
-  async function openFromHome(id: ConnectionId) {
-    if (!(await leaveAll())) return;
-    goTo({ kind: "ungrouped" });
-    setActiveId(id);
-    try {
-      await openConnection(id);
-      setOpenIds((ids) => new Set(ids).add(id));
-    } catch (e) {
-      setNotice(errorText(e, connections.find((c) => c.id === id)?.dialect));
+  /**
+   * Goes to the Connection's Group (or Ungrouped) with it active, and opens it.
+   * "stayed" when leaving was cancelled or the Connection is gone; "failed" when it did not open (the notice says why).
+   */
+  async function openConnectionAt(id: ConnectionId): Promise<"open" | "failed" | "stayed"> {
+    const c = connections.find((x) => x.id === id);
+    if (!c) return "stayed";
+    const target = placeOf(c);
+    if (placeKey(target) === placeKey(placeNow.current)) showPlace();
+    else {
+      if (!(await leaveAll())) return "stayed";
+      goTo(target);
     }
+    setActiveId(id);
+    if (openIds.has(id)) return "open";
+    const here = visit.current;
+    try {
+      await openTracked(id);
+    } catch {
+      // The row says Failed, with the reason (frame 10c); no notice above the tree.
+      return visit.current === here ? "failed" : "stayed";
+    }
+    // You went elsewhere while it opened: the Connection stays open, but nothing more opens (ruling R23).
+    return visit.current === here ? "open" : "stayed";
+  }
+
+  /** Opens a model in a Schema Model tab (the open one when its file is open already), recording it in Recent when it has a file. */
+  function openBuilder(doc: ModelDoc) {
+    if (doc.path) record({ kind: "schemaModel", file: doc.path }, doc.connectionId);
+    setModelStart(null);
+    const id = newId();
+    openSchemaTab({ kind: "schema", id, doc });
+  }
+
+  /** A model saved to a file for the first time, or saved as another: its tab takes the file's name. */
+  function modelSavedAs(id: string, path: string) {
+    setWindowTabs((w) => w.map((t) => (t.kind === "schema" && t.id === id ? { ...t, doc: { ...t.doc, path } } : t)));
+  }
+
+  function openRecent(item: RecentItem) {
+    return openRecentItem(item, {
+      connections,
+      savedQueries,
+      openConnectionAt,
+      enterPlace,
+      whenDraftsLoaded,
+      openSaved,
+      openObject,
+      openBuilder,
+      askDialect: (file) => setModelStart({ file }),
+      notice: setNotice,
+    });
   }
 
   async function openUngrouped() {
-    if (!(await leaveAll())) return;
-    goTo({ kind: "ungrouped" });
-    try {
-      await setLastGroup(null);
-    } catch (e) {
-      setNotice(errorText(e));
-    }
+    await enterPlace({ kind: "ungrouped" });
   }
 
-  async function goHome() {
-    if (!(await leaveAll())) return;
-    goTo({ kind: "home" });
-    try {
-      await setLastGroup(null);
-    } catch (e) {
-      setNotice(errorText(e));
-    }
-  }
+  const actions = connectionActions({
+    openIds,
+    confirmLeave,
+    tableKeys,
+    openTracked,
+    markClosed,
+    reload,
+    setActiveId,
+    newQuery: (id) => newQuery(id),
+    setNotice,
+    historyCleared: () => setHistoryRefresh((n) => n + 1),
+  });
 
-  async function newQueryOn(id: ConnectionId) {
-    setActiveId(id);
-    newQuery(id);
-    if (openIds.has(id)) return;
-    try {
-      await openConnection(id);
-      setOpenIds((ids) => new Set(ids).add(id));
-    } catch (e) {
-      setNotice(errorText(e, connections.find((c) => c.id === id)?.dialect));
-    }
-  }
-
-  if (startup.s === "loading") {
-    return (
-      <div className="app-message">
-        <p className="muted">Loading your Groups and Connections…</p>
-      </div>
-    );
-  }
-  if (startup.s === "failed") {
-    return (
-      <div className="app-message" role="alert">
-        <p className="error-text">{startup.message}</p>
-        <button type="button" className="button" onClick={start}>
-          Try again
-        </button>
-      </div>
-    );
-  }
+  if (startup.s === "loading") return <LaunchScreen step={step} startedAt={startedAt} />;
+  if (startup.s === "failed") return <StartupFailed message={startup.message} onRetry={retry} />;
 
   const group = place.kind === "group" ? groups.find((g) => g.id === place.groupId) : undefined;
   const workspaceGroupId = place.kind === "group" ? place.groupId : null;
   const placeName = group?.name ?? "Ungrouped";
   const inPlace = connections.filter((c) => c.groupId === workspaceGroupId);
-  const active = connections.find((c) => c.id === activeId && openIds.has(c.id));
-  const current = tabs[activeTab];
+  /** The Connection of the place used last: the active one, else the one opened most recently. */
+  const lastUsed =
+    inPlace.find((c) => c.id === activeId) ??
+    [...inPlace].sort((a, b) => (openedTimes[b.id] ?? 0) - (openedTimes[a.id] ?? 0))[0] ??
+    null;
+  /** The active place tab; undefined while a window tab (or none) is active. */
+  const current = tabs.find((t) => tabKey(t) === activeKey);
   const selection = current?.kind === "object" ? current.selection : null;
+  const statusScreen = statusScreenFor({ activeWindow, current, treeBranch, activeId, connections, openIds, versions, dataFolder, version });
   const historyFor =
     historyOpen && current?.kind === "query" ? (inPlace.find((c) => c.id === current.doc.connectionId) ?? null) : null;
+  const historyAllShown = historyOpen && historyAll && current?.kind === "query";
 
-  const assistantShown = assistantOpen && place.kind !== "home" && !settingsOpen && schema?.kind !== "builder";
-  const assistantConn =
-    current?.kind === "query" ? (inPlace.find((c) => c.id === current.doc.connectionId) ?? null) : null;
-  const assistantDb = assistantConn ? (assistantConn.dialect === "sqlite" ? "main" : current?.kind === "query" ? current.doc.database : null) : null;
-  const assistantSchema =
-    assistantConn && assistantDb ? lang.client.sqlSchemaFor(schemaKey(assistantConn.id, assistantDb)) : null;
-  let assistantContext: AskContext | null = null;
-  if (assistantShown && assistantConn && current?.kind === "query") {
-    const stmt = editorRefs.current.get(current.doc.id)?.current?.runTarget() ?? null;
-    const sql = (stmt?.text ?? current.doc.text).trim();
-    const before = stmt ? current.doc.text.slice(0, stmt.from).split("\n").length : 1;
-    const words = new Set(sql.toLowerCase().match(/[a-z_][\w$]*/g) ?? []);
-    assistantContext = {
-      kind: sql ? "sql" : "none",
-      connection: {
-        id: assistantConn.id,
-        name: assistantConn.name,
-        dialect: assistantConn.dialect,
-        database: assistantDb,
-        access: assistantConn.aiAccess,
-      },
-      sql: sql || undefined,
-      lines: [before, before + sql.split("\n").length - 1],
-      tables: (assistantSchema?.tables ?? [])
-        .filter((t) => words.has(t.name.toLowerCase()))
-        .map((t) => ({ schema: t.schema, name: t.name })),
-      label: current.doc.name,
-    };
-  }
+  const assistantShown = assistantOpen && !activeWindow;
+  const answerTab = current?.kind === "query" ? current.doc.id : null;
+  const assistantTarget = assistantTargetFor(current, inPlace);
+  const assistantSchema = assistantTarget?.database
+    ? lang.client.sqlSchemaFor(schemaKey(assistantTarget.connection.id, assistantTarget.database))
+    : null;
+  // Read from the editor on each draw, so the Ask context follows the statement where you are typing (see the note below).
+  const stmt = assistantShown && assistantTarget ? (refs.editor(assistantTarget.doc.id)?.runTarget() ?? null) : null;
+  const assistantContext = assistantShown && assistantTarget ? assistantContextFor(assistantTarget, assistantSchema, stmt) : null;
 
-  return (
+  const app = (
     <div className="app">
-      <header className="title-bar">
+      <TitleBar>
         <GroupSwitcher
           groups={groups}
           place={place}
+          connectionCount={connections.length}
           onHome={goHome}
-          onOpenGroup={openGroup}
-          onOpenUngrouped={openUngrouped}
+          onOpenGroup={(id) => void openGroup(id)}
+          onOpenUngrouped={() => void openUngrouped()}
+          onNewGroup={() => setForm({ kind: "newGroup" })}
+          onSettings={() => openSettings()}
         />
-        {place.kind !== "home" && !schema && (
-          <TabStrip
-            tabs={tabs}
-            connections={connections}
-            active={activeTab}
-            onSelect={setActiveTab}
-            onClose={(i) => void closeTab(i)}
-            dirtyKeys={dirtyGrids}
-            onNew={() => newQuery(activeId)}
-          />
-        )}
-      </header>
+        {/* C1: the strip is always there, with its "+", on every tab. */}
+        <TabStrip
+          tabs={allTabs}
+          connections={connections}
+          groups={groups}
+          active={activeKey}
+          onSelect={setActiveKey}
+          onClose={(key) => void closeTab(key)}
+          dirtyKeys={dirtyKeys}
+          onNew={() => newQuery(activeId)}
+        />
+      </TitleBar>
 
       <div
-        className={
-          place.kind === "home" || settingsOpen
-            ? "body body-home"
-            : `body${historyFor ? " body-history" : ""}${assistantShown ? " body-ai" : ""}`
-        }
+        className={activeWindow ? "body body-home" : `body${historyFor || historyAllShown ? " body-history" : ""}${assistantShown ? " body-ai" : ""}`}
       >
-        <nav className="rail" aria-label="Sections">
-          <button
-            type="button"
-            className={place.kind === "home" && !settingsOpen ? "rail-button rail-button-on" : "rail-button"}
-            aria-label="Home"
-            title="Home"
-            aria-current={place.kind === "home" && !settingsOpen ? "page" : undefined}
-            onClick={goHome}
+        <div className="place-wrap">
+          {/* The place's sidebar stays mounted under a window tab, so its tree keeps where you were. */}
+          <PlaceSidebar
+            group={group}
+            placeName={placeName}
+            hidden={!!activeWindow}
+            empty={inPlace.length === 0}
+            notice={notice}
+            onEditGroup={() => setForm({ kind: "group" })}
+            onNewConnection={() => setForm({ kind: "connection" })}
           >
-            <Icon name="home" />
-          </button>
-          <button
-            type="button"
-            className={place.kind !== "home" && !settingsOpen ? "rail-button rail-button-on" : "rail-button"}
-            aria-label="Connections"
-            title="Connections"
-            aria-current={place.kind !== "home" && !settingsOpen ? "page" : undefined}
-            onClick={() => {
-              if (settingsOpen) setSettingsOpen(false);
-              else if (place.kind === "home") goTo({ kind: "ungrouped" });
-            }}
-          >
-            <Icon name="database" />
-          </button>
-          <button
-            type="button"
-            className={settingsOpen ? "rail-button rail-button-on rail-button-end" : "rail-button rail-button-end"}
-            aria-label="Settings"
-            title="Settings"
-            aria-current={settingsOpen ? "page" : undefined}
-            onClick={() => openSettings()}
-          >
-            <Icon name="settings" />
-          </button>
-        </nav>
-
-        {settingsOpen && (
-          <main className="settings-main">
-            <SettingsView
-              groupId={workspaceGroupId}
-              groupName={group?.name ?? null}
-              connections={connections}
-              onConnectionSaved={() => {
-                // Only the AI access changed, so open sessions and their transactions stay as they are.
-                void reload();
+            <OneTree
+              connections={inPlace}
+              groups={groups}
+              openIds={openIds}
+              saved={savedQueries}
+              activeSavedId={current?.kind === "query" ? current.doc.savedId : null}
+              selected={selection}
+              tree={tree}
+              keysActive={!activeWindow}
+              onSelectObject={openObject}
+              onOpenConnection={actions.openFromTree}
+              onCloseConnection={(id) => void actions.closeFromTree(id)}
+              onEditConnection={(c) => void editConnection(c)}
+              onDuplicateConnection={(c) => setForm({ kind: "connection", duplicateOf: c })}
+              onNewQuery={(id) => void actions.newQueryOn(id)}
+              onNewSchemaModel={(connectionId, database, schema) => setModelStart({ initial: { connectionId, database, schema } })}
+              onMoveConnection={(id, to) => void actions.moveFromTree(id, to)}
+              onNewGroup={() => setForm({ kind: "newGroup" })}
+              onClearHistory={(id) => void actions.clearHistoryFromTree(id)}
+              onDeleteConnection={(id) => void actions.deleteFromTree(id)}
+              onRefresh={(id) => lang.schemas.invalidate(id)}
+              onOpenSaved={openSavedHere}
+              onOpenSavedList={openSavedList}
+              onSavedChanged={reloadSaved}
+              openStatus={openStatus}
+              onFocusBranch={(id) => {
+                setTreeBranch(id);
+                if (id !== null) setActiveId(id);
               }}
-              onClose={() => setSettingsOpen(false)}
             />
-          </main>
-        )}
-        <div className="place-wrap" hidden={settingsOpen}>
-          {schema?.kind === "builder" ? (
-            <main className="schema-main">
-              <SchemaBuilder doc={schema.doc} onClose={() => setSchema(null)} ask={askKit} sourceConnection={schemaSource} />
-            </main>
-          ) : place.kind === "home" ? (
-            <main className="home-main">
-              <Home
-                onNewSchemaModel={() => setSchema({ kind: "start" })}
-                groups={groups}
-                connections={connections}
-                onOpenGroup={openGroup}
-                notice={notice}
-                onOpenUngrouped={openFromHome}
-                onChanged={reload}
-              />
-            </main>
-          ) : (
-            <>
-              <aside className="side" aria-label={`${placeName} Connections`}>
-                <div className="side-header">
-                  <h2 className="side-title">{placeName}</h2>
-                  {group && (
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={`Edit ${group.name}`}
-                      title="Edit Group"
-                      onClick={() => setForm({ kind: "group" })}
-                    >
-                      <Icon name="edit" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label="New Connection"
-                    title="New Connection"
-                    onClick={() => setForm({ kind: "connection" })}
-                  >
-                    <Icon name="plus" />
-                  </button>
-                </div>
-                {inPlace.length === 0 && (
-                  <div className="side-empty">
-                    <p className="muted">No Connections in {placeName} yet.</p>
-                    <button
-                      type="button"
-                      className="button button-small"
-                      onClick={() => setForm({ kind: "connection" })}
-                    >
-                      New Connection
-                    </button>
-                  </div>
-                )}
-                <ConnectionList
-                  groupId={workspaceGroupId}
-                  groups={groups}
-                  connections={connections}
-                  openIds={openIds}
-                  activeId={activeId}
-                  onActivate={(id) => {
-                    setActiveId(id);
-                    setNotice(null);
-                  }}
-                  onOpened={(id) => {
-                    setOpenIds((ids) => new Set(ids).add(id));
-                    setActiveId(id);
-                    setNotice(null);
-                  }}
-                  onClosed={markClosed}
-                  // Closing, deleting or moving a Connection closes its table tabs: their edits are asked about first.
-                  onBeforeLeave={(id) => confirmLeave(tableKeys(id))}
-                  onEdit={async (c) => {
-                    // Saving the form closes the Connection's session, so its grids' edits are asked about first.
-                    if (await confirmLeave(tableKeys(c.id))) setForm({ kind: "connection", connection: c });
-                  }}
-                  onChanged={reload}
-                  onNewQuery={(id) => void newQueryOn(id)}
-                  onHistoryCleared={() => setHistoryRefresh((n) => n + 1)}
-                />
-                {notice && (
-                  <p className="error-text side-notice" role="alert">
-                    {notice}
-                  </p>
-                )}
-                {active && (
-                  <div className="side-tree">
-                    <h3 className="tree-section-label">{active.name}</h3>
-                    <ObjectTree
-                      key={active.id}
-                      connectionId={active.id}
-                      dialect={active.dialect}
-                      // A SQLite file holds one database, so its objects show at once.
-                      defaultDatabase={active.dialect === "sqlite" ? "main" : active.database}
-                      selected={selection?.connectionId === active.id ? selection : null}
-                      onSelect={(kind, path) => openObject({ connectionId: active.id, kind, path })}
-                      onNotOpen={() => lost(active.id)}
-                      onReverseEngineer={(database, s) =>
-                        setSchema({
-                          kind: "start",
-                          initial: {
-                            connectionId: active.id,
-                            database,
-                            schema: s,
-                          },
-                        })
-                      }
-                      reveal={reveal?.connectionId === active.id ? reveal : null}
-                      onRefresh={() => lang.schemas.invalidate(active.id)}
-                      onRevealed={() => setReveal(null)}
-                    />
-                  </div>
-                )}
-                <SavedQueries
-                  items={savedQueries}
-                  activeId={current?.kind === "query" ? current.doc.savedId : null}
-                  onOpen={openSaved}
-                  onChanged={reloadSaved}
-                />
-              </aside>
+          </PlaceSidebar>
 
-              <main className="work">
-                {/* Table and view tabs stay mounted while hidden, so their Pending Edits survive a tab switch. */}
-                {tabs.map((t, i) => {
-                  if (t.kind !== "object" || (t.selection.kind !== "table" && t.selection.kind !== "view")) return null;
-                  const s = t.selection;
-                  const c = connections.find((x) => x.id === s.connectionId);
-                  return (
-                    <div key={t.key} className="work-pane" hidden={i !== activeTab}>
-                      <DataGrid
-                        connectionId={s.connectionId}
-                        table={s.path}
-                        onClose={() => void closeTab(i)}
-                        onNotOpen={() => lost(s.connectionId)}
-                        dialect={c?.dialect}
-                        readOnly={c?.readOnly ?? false}
-                        kind={s.kind === "view" ? "view" : "table"}
-                        production={c?.production ?? false}
-                        onDirtyChange={(dirty) => markDirty(t.key, dirty)}
-                        controlRef={gridControl(t.key)}
-                        lang={lang}
-                        ask={{
-                          ...askKit,
-                          connection: c
-                            ? { id: c.id, name: c.name, dialect: c.dialect, database: s.path.database, access: c.aiAccess }
-                            : null,
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-                {selection && selection.kind !== "table" && selection.kind !== "view" && (
-                  <DefinitionView
-                    key={objectKey(selection.connectionId, selection.kind, selection.path)}
-                    selection={selection}
-                    onClose={() => void closeTab(activeTab)}
-                    onNotOpen={() => lost(selection.connectionId)}
+          <main className="work">
+            {/* Window tabs are panes of the work area like any tab; each stays mounted while hidden. */}
+            <WindowPanes
+              windowTabs={windowTabs}
+              activeKey={activeKey}
+              home={{
+                groups,
+                connections,
+                openIds,
+                onOpenGroup: openGroup,
+                notice,
+                recent,
+                onOpenConnection: (id) => void openConnectionAt(id),
+                onOpenUngrouped: () => void openUngrouped(),
+                onOpenRecent: (item) => void openRecent(item),
+                openedTimes,
+                onRecentChanged: loadRecent,
+                onShowAllHistory: showAllHistory,
+                onChanged: reload,
+                onBeforeMove: (id) => askFromHome(tableKeys(id)),
+                onBeforeDeleteGroup: (id) => askFromHome(groupTableKeys(id)),
+                onGroupDeleted: (id) => {
+                  // The place's Group is gone: the window moves to Ungrouped, Home still showing.
+                  if (placeNow.current.kind === "group" && placeNow.current.groupId === id) {
+                    void enterPlace({ kind: "ungrouped" }).then((moved) => moved && showHome());
+                  }
+                },
+              }}
+              settings={{
+                groupId: workspaceGroupId,
+                groupName: group?.name ?? null,
+                connections,
+                onSection: (section) =>
+                  setWindowTabs((w) => w.map((x): WindowTab => (x.kind === "settings" ? { ...x, section } : x))),
+                onConnectionSaved: () => {
+                  // Only the AI access changed, so open sessions and their transactions stay as they are.
+                  void reload();
+                },
+              }}
+              schema={{
+                onClose: (key) => dropTab(key),
+                closeRef: (id) => schemaClose(id),
+                onPathChange: (id, path) => modelSavedAs(id, path),
+                ask: askKit,
+                sourceConnection: (id) => schemaSources.get(id),
+              }}
+            />
+            {/* Table and view tabs stay mounted while hidden, so their Pending Edits survive a tab switch. */}
+            {tabs.map((t) => {
+              if (t.kind !== "object" || (t.selection.kind !== "table" && t.selection.kind !== "view")) return null;
+              const s = t.selection;
+              const c = connections.find((x) => x.id === s.connectionId);
+              return (
+                <div key={t.key} className="work-pane" hidden={t.key !== activeKey}>
+                  <DataGrid
+                    connectionId={s.connectionId}
+                    table={s.path}
+                    onClose={() => void closeTab(t.key)}
+                    onNotOpen={() => lost(s.connectionId)}
+                    dialect={c?.dialect}
+                    readOnly={c?.readOnly ?? false}
+                    kind={s.kind === "view" ? "view" : "table"}
+                    production={c?.production ?? false}
+                    group={c?.groupId ? groups.find((g) => g.id === c.groupId) ?? null : null}
+                    onDirtyChange={(dirty) => markDirty(t.key, dirty)}
+                    controlRef={gridControl(t.key)}
+                    visible={t.key === activeKey}
+                    connectionName={c?.name}
+                    rowEstimate={s.kind === "table" ? tree.estimate(s.connectionId, s.path) : null}
+                    onOpenQuery={(sql) => newQuery(s.connectionId, sql, s.path.database)}
+                    lang={lang}
+                    ask={{
+                      ...askKit,
+                      connection: c
+                        ? { id: c.id, name: c.name, dialect: c.dialect, database: s.path.database, access: c.aiAccess }
+                        : null,
+                    }}
                   />
-                )}
-                {/* Query tabs stay mounted while hidden, so their sessions and results survive a tab switch. */}
-                {tabs.map((t, i) =>
-                  t.kind === "query" ? (
-                    <div key={t.doc.id} className="work-pane" hidden={i !== activeTab}>
-                      <QueryTab
-                        tab={t.doc}
-                        connections={inPlace}
-                        openIds={openIds}
-                        onChange={updateDoc}
-                        onSaved={(q) =>
-                          setSavedQueries((all) =>
-                            [...all.filter((x) => x.id !== q.id), q].sort((a, b) =>
-                              a.name.localeCompare(b.name, undefined, {
-                                sensitivity: "base",
-                              }),
-                            ),
-                          )
-                        }
-                        historyOpen={historyOpen}
-                        onToggleHistory={() => setHistoryOpen((o) => !o)}
-                        assistantOpen={assistantShown}
-                        onToggleAssistant={() => setAssistantOpen((o) => !o)}
-                        editorRef={editorRef(t.doc.id)}
-                        onRan={() => setHistoryRefresh((n) => n + 1)}
-                        lang={lang}
-                        ask={askKit}
-                        onShowInTree={(target) => {
-                          setActiveId(target.connectionId);
-                          setReveal((r) => ({
-                            ...target,
-                            seq: (r?.seq ?? 0) + 1,
-                          }));
-                        }}
-                      />
-                    </div>
-                  ) : null,
-                )}
-                {!current && (
-                  <div className="work-empty">
-                    <p className="muted">
-                      {active
-                        ? "Choose a table or view to see its rows, or press Ctrl+T for a new query."
-                        : inPlace.length > 0
-                          ? "Open a Connection to browse its databases."
-                          : "Add a Connection to start browsing."}
-                    </p>
-                  </div>
-                )}
-              </main>
-              {historyFor && current?.kind === "query" && (
-                <HistoryPanel
-                  connectionId={historyFor.id}
-                  connectionName={historyFor.name}
-                  refreshKey={historyRefresh}
-                  onInsert={(sql) => editorRefs.current.get(current.doc.id)?.current?.insert(sql)}
-                  onOpenInNewTab={(sql) => newQuery(historyFor.id, sql)}
-                  onClose={() => setHistoryOpen(false)}
-                />
-              )}
-              {assistantShown && (
-                <AssistantPanel
-                  place={placeKey(place)}
-                  groupId={workspaceGroupId}
-                  context={assistantContext}
-                  schema={assistantSchema}
-                  onOpenSettings={() => openSettings()}
-                  seed={chatSeed}
+                </div>
+              );
+            })}
+            {selection && selection.kind !== "table" && selection.kind !== "view" && (
+              <DefinitionView
+                key={objectKey(selection.connectionId, selection.kind, selection.path)}
+                selection={selection}
+                onClose={() => void closeTab(objectKey(selection.connectionId, selection.kind, selection.path))}
+                onNotOpen={() => lost(selection.connectionId)}
+              />
+            )}
+            {/* The Saved Queries list stays mounted while hidden, so its filter and selection survive a tab switch. */}
+            {tabs.some((t) => t.kind === "savedQueries") && (
+              <div className="work-pane" hidden={activeKey !== "savedQueries"}>
+                <SavedQueriesList
+                  queries={savedQueries}
                   connections={connections}
+                  onOpen={openSavedHere}
+                  onChanged={reloadSaved}
+                  visible={activeKey === "savedQueries"}
                 />
-              )}
-            </>
+              </div>
+            )}
+            {/* Query tabs stay mounted while hidden, so their sessions and results survive a tab switch. */}
+            {tabs.map((t) =>
+              t.kind === "query" ? (
+                <div key={t.doc.id} className="work-pane" hidden={tabKey(t) !== activeKey}>
+                  <QueryTab
+                    tab={t.doc}
+                    connections={inPlace}
+                    groups={groups}
+                    openIds={openIds}
+                    onConnectionOpened={(id) => markOpened(id, null)}
+                    onOpenStatus={setStatus}
+                    onEditConnection={(id) => {
+                      const c = connections.find((x) => x.id === id);
+                      if (c) void editConnection(c);
+                    }}
+                    rowEstimate={tree.estimate}
+                    onChange={updateDoc}
+                    onSaved={savedOne}
+                    historyOpen={historyOpen}
+                    onToggleHistory={() => {
+                      setHistoryAll(false);
+                      setHistoryOpen((o) => !o);
+                    }}
+                    assistantOpen={assistantShown}
+                    onToggleAssistant={() => setAssistantOpen((o) => !o)}
+                    editorRef={refs.editorRef(t.doc.id)}
+                    runRef={refs.runRef(t.doc.id)}
+                    visible={tabKey(t) === activeKey}
+                    onRan={() => setHistoryRefresh((n) => n + 1)}
+                    lang={lang}
+                    ask={askKit}
+                    onShowSaved={(id) => {
+                      const doc = tabsRef.current.find((x) => x.kind === "query" && x.doc.savedId === id);
+                      if (doc) setActiveKey(tabKey(doc));
+                    }}
+                    onShowInTree={(target) => {
+                      setActiveId(target.connectionId);
+                      setReveal((r) => ({
+                        ...target,
+                        seq: (r?.seq ?? 0) + 1,
+                      }));
+                    }}
+                  />
+                </div>
+              ) : null,
+            )}
+            {!current && !activeWindow && (
+              <WorkEmpty
+                lastConnection={lastUsed}
+                anyOpen={inPlace.some((c) => openIds.has(c.id))}
+                onNewQuery={() => newQuery(lastUsed?.id ?? activeId)}
+                onOpen={(c) => void actions.openFromTree(c.id)}
+              />
+            )}
+          </main>
+          {(historyAllShown || historyFor) && current?.kind === "query" && (
+            <HistoryPanel
+              key={historyAllShown ? "all" : "connection"}
+              connections={connections}
+              scopeConnection={historyFor ?? inPlace.find((c) => c.id === current.doc.connectionId) ?? null}
+              initialScope={historyAllShown ? "all" : "connection"}
+              refreshKey={historyRefresh}
+              onInsert={(sql) => refs.editor(current.doc.id)?.insert(sql)}
+              onRun={(sql) => void refs.runner(current.doc.id)?.(sql)}
+              onClose={() => {
+                setHistoryAll(false);
+                setHistoryOpen(false);
+              }}
+            />
+          )}
+          {assistantShown && (
+            <AssistantPanel
+              place={placeKey(place)}
+              groupId={workspaceGroupId}
+              context={assistantContext}
+              schema={assistantSchema}
+              onOpenSettings={() => openSettings("ai")}
+              seed={chatSeed}
+              connections={connections}
+              onClose={() => setAssistantOpen(false)}
+              onInsert={answerTab ? (sql) => refs.editor(answerTab)?.insert(answerText(sql)) : undefined}
+              onRun={
+                answerTab
+                  ? async (sql) => {
+                      // The answer goes into the editor first, then runs through the tab's runner (the Production and Read-only checks).
+                      refs.editor(answerTab)?.insert(answerText(sql));
+                      return (await refs.runner(answerTab)?.(sql)) ?? { ran: false };
+                    }
+                  : undefined
+              }
+            />
           )}
         </div>
       </div>
 
-      {form.kind === "group" && group && (
-        <GroupForm
-          group={group}
-          connectionCount={inPlace.length}
-          onSaved={() => {
-            setForm({ kind: "none" });
-            reload();
-          }}
-          onBeforeDelete={() => {
-            const ids = new Set(connections.filter((c) => c.groupId === group.id).map((c) => c.id));
-            const keys = tabsRef.current.flatMap((t) =>
-              t.kind === "object" && ids.has(t.selection.connectionId) ? [t.key] : [],
-            );
-            return confirmLeave(keys);
-          }}
-          onDeleted={() => {
-            setForm({ kind: "none" });
-            reload();
-            goHome();
-          }}
-          onCancel={() => setForm({ kind: "none" })}
-        />
-      )}
-      {form.kind === "connection" && (
-        <ConnectionForm
-          connection={form.connection}
-          groups={groups}
-          defaultGroupId={workspaceGroupId}
-          onSaved={(saved) => {
-            // Saving closes the Connection's session, so it must be opened again.
-            if (form.connection) markClosed(saved.id);
-            setForm({ kind: "none" });
-            reload();
-          }}
-          onCancel={() => setForm({ kind: "none" })}
-        />
-      )}
-      {leaveAsk && !leaveAsk.busy && (
-        <UnsavedEdits
-          table={leaveAsk.table}
-          busy={leaveAsk.busy}
-          onSave={async () => {
-            const ask = leaveAsk;
-            setLeaveAsk({ ...ask, busy: true });
-            const ok = (await gridControl(ask.key).current?.save()) ?? true;
-            setLeaveAsk(null);
-            ask.resolve(ok);
-          }}
-          onDiscard={() => {
-            gridControl(leaveAsk.key).current?.discard();
-            setLeaveAsk(null);
-            leaveAsk.resolve(true);
-          }}
-          onCancel={() => {
-            setLeaveAsk(null);
-            leaveAsk.resolve(false);
-          }}
-        />
-      )}
-      {schema?.kind === "start" && (
-        <StartModel
-          connections={connections}
-          openIds={openIds}
-          initial={schema.initial}
-          onStart={(doc) => setSchema({ kind: "builder", doc })}
-          onCancel={() => setSchema(null)}
-        />
-      )}
+      <StatusBar screen={statusScreen} theme={theme.choice} onTheme={theme.choose} />
+
+      <FormDialogs
+        form={form}
+        group={group}
+        groups={groups}
+        connections={connections}
+        openIds={openIds}
+        workspaceGroupId={workspaceGroupId}
+        onCloseForm={() => setForm({ kind: "none" })}
+        reload={reload}
+        confirmGroupLeave={(id) => confirmLeave(groupTableKeys(id))}
+        onGroupDeleted={() => {
+          // The Group is gone: the window moves to Ungrouped and shows Home.
+          void enterPlace({ kind: "ungrouped" }).then((moved) => moved && showHome());
+        }}
+        onConnectionSaved={(saved, edited) => {
+          // Saving closes the Connection's session, so it must be opened again.
+          if (edited) markClosed(saved.id);
+        }}
+      />
+      {leaveDialog}
+      <StartModelDialog
+        modelStart={modelStart}
+        connections={connections}
+        openIds={openIds}
+        onStartModel={openBuilder}
+        onCancelModel={() => setModelStart(null)}
+      />
     </div>
   );
+  return <GroupImagesProvider value={groupImages}>{app}</GroupImagesProvider>;
 }

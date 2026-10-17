@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { EMPTY_RUNNER, runnerReducer } from "./runner";
 import { formatSql } from "./format";
 import { writeWithoutWhere } from "./noWhere";
 import { splitStatements, statementAt } from "./statements";
@@ -70,4 +71,28 @@ test("split_keeps_trigger_and_routine_bodies_whole", () => {
     "BEGIN",
     "SELECT 2",
   ]);
+});
+
+test("explain_adds_a_plan_item_without_asking", () => {
+  const stmt = { from: 0, to: 8, text: "SELECT 1" };
+  let s = runnerReducer(EMPTY_RUNNER, { type: "explain", stmt, now: 5 });
+  expect(s.ask).toBeNull();
+  expect(s.queue).toEqual([]);
+  expect(s.items).toHaveLength(1);
+  expect(s.items[0]).toMatchObject({ sql: "SELECT 1", state: { s: "running" } });
+  const plan = { nodes: [], raw: "x", totalCost: null };
+  s = runnerReducer(s, { type: "planned", id: s.items[0].id, plan, ms: 7 });
+  expect(s.items[0].state).toEqual({ s: "plan", plan, ms: 7 });
+  expect(s.active).toBe(0);
+});
+
+test("explain_keeps_earlier_results_and_numbers_statements_per_run", () => {
+  let s = runnerReducer(EMPTY_RUNNER, { type: "start", stmts: [{ from: 0, to: 1, text: "a" }, { from: 2, to: 3, text: "b" }] });
+  s = runnerReducer(s, { type: "begin", now: 0 });
+  s = runnerReducer(s, { type: "done", id: s.items[0].id, outcome: { t: "affected", rows: 1 }, ms: 1 });
+  s = runnerReducer(s, { type: "begin", now: 0 });
+  s = runnerReducer(s, { type: "failed", id: s.items[1].id, error: { kind: "connect", message: "gone" } });
+  expect(s.items[1].state).toMatchObject({ s: "error", index: 2, lost: true, notRun: [] });
+  s = runnerReducer(s, { type: "explain", stmt: { from: 0, to: 1, text: "a" }, now: 0 });
+  expect(s.items).toHaveLength(3);
 });

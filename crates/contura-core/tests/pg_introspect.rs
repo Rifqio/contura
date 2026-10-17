@@ -212,3 +212,33 @@ async fn unknown_object_is_not_found() {
     dialect.disconnect().await.ok();
     db.drop_db().await;
 }
+
+#[tokio::test]
+async fn tables_carry_a_row_estimate() {
+    let db = PgTestDb::create().await;
+    let admin = pg_admin_client(&db.name).await;
+    admin
+        .batch_execute(
+            "CREATE TABLE public.counted (id int);
+             INSERT INTO public.counted VALUES (1), (2), (3);
+             ANALYZE public.counted;
+             CREATE TABLE public.fresh (id int);
+             CREATE VIEW public.v_counted AS SELECT id FROM public.counted;",
+        )
+        .await
+        .expect("seed");
+    drop(admin);
+    let dialect = connect(&db.config, db.password.as_deref())
+        .await
+        .expect("connect");
+    let objects = dialect
+        .list_objects(&db.name, Some("public"))
+        .await
+        .unwrap();
+    let rows = |name: &str| objects.iter().find(|o| o.name == name).unwrap().rows;
+    assert_eq!(rows("counted"), Some(3));
+    assert_eq!(rows("fresh"), None);
+    assert_eq!(rows("v_counted"), None);
+    dialect.disconnect().await.ok();
+    db.drop_db().await;
+}

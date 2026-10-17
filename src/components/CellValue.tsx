@@ -42,7 +42,19 @@ function FullValueView({ value }: { value: FullValue }) {
   );
 }
 
-export default function CellValue({ cell, source }: { cell: Cell; source?: CellSource }) {
+/** A boolean column's values as the drivers print them. */
+const BOOL_TEXT = /^(true|false|t|f)$/i;
+
+export default function CellValue({
+  cell,
+  source,
+  boolean = false,
+}: {
+  cell: Cell;
+  source?: CellSource;
+  /** The cell's column is a boolean type: its true and false take the keyword colour. */
+  boolean?: boolean;
+}) {
   const [state, setState] = useState<
     { s: "closed" } | { s: "loading" } | { s: "loaded"; value: FullValue } | { s: "failed"; message: string }
   >({ s: "closed" });
@@ -69,6 +81,9 @@ export default function CellValue({ cell, source }: { cell: Cell; source?: CellS
     case "number":
       return <span className="cell-number">{cell.value}</span>;
     case "text":
+      if (boolean && !cell.truncated && BOOL_TEXT.test(cell.value)) {
+        return <span className="cell-bool">{cell.value}</span>;
+      }
       body = <span className="cell-text">{cell.value}</span>;
       break;
     case "bytes":

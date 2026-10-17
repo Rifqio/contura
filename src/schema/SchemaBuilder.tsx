@@ -1,9 +1,11 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { useCallback, useMemo, useRef, useState } from "react";
-import { errorText, exportSql, writeBinaryFile, writeModelFiles, writeTextFile } from "../api/client";
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DIALECT_LABEL, errorText, exportSql, writeBinaryFile, writeModelFiles, writeTextFile } from "../api/client";
 import type { DialectKind, SchemaModel } from "../api/types";
 import type { AskContext, AskKit } from "../assistant/context";
 import Dialog from "../components/Dialog";
+import Icon from "../components/Icon";
+import Menu, { type MenuItem } from "../components/Menu";
 import type { LangClient } from "../lang/client";
 import type { ParseResult, TextEdit } from "../lang/protocol";
 import Canvas from "./Canvas";
@@ -34,6 +36,8 @@ const EXPORTS: { kind: ExportKind; label: string; filter: { name: string; extens
   { kind: "png", label: "PNG image", filter: { name: "PNG image", extensions: ["png"] } },
 ];
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 const basename = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
 interface Props {
@@ -45,9 +49,13 @@ interface Props {
   ask?: AskKit;
   /** The live source Connection of the model, if it still exists; carries the AI access for card asks. */
   sourceConnection?: AskContext["connection"];
+  /** Set to the builder's own Close, so its tab's close asks about unsaved changes the same way. */
+  closeRef?: MutableRefObject<(() => void) | null>;
+  /** The file the model was saved to, once a Save picks one; its tab is named after it. */
+  onPathChange?: (path: string) => void;
 }
 
-export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnection }: Props) {
+export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnection, closeRef, onPathChange }: Props) {
   const [text, setText] = useState(doc.dbml);
   const [saved, setSaved] = useState(doc.savedDbml);
   const [path, setPath] = useState(doc.path);
@@ -55,20 +63,41 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
   const [layoutDirty, setLayoutDirty] = useState(false);
   const [result, setResult] = useState<{ r: ParseResult; text: string } | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const [status, setStatus] = useState<string | null>(null);
-  const [exportMenu, setExportMenu] = useState(false);
   const [pendingExport, setPendingExport] = useState<ExportKind | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const editsRef = useRef<((edits: TextEdit[]) => void) | null>(null);
   const focusRef = useRef<((offset: number) => void) | null>(null);
+  const revealRef = useRef<((offset: number) => void) | null>(null);
   const textRef = useRef(text);
   textRef.current = text;
 
+  const bandRef = useRef<{ from: number; to: number }[]>([]);
   const name = path ? basename(path).replace(/\.dbml$/i, "") : "schema";
   const model: SchemaModel | null = result ? (result.r.model ?? result.r.lastValid) : null;
   const blocked = !!result && result.r.model === null;
   const firstError = result?.r.diagnostics.find((d) => d.severity === "error");
   const dirty = text !== saved || layoutDirty;
+  const requestClose = () => (dirty ? setConfirmClose(true) : onClose());
+  if (closeRef) closeRef.current = requestClose;
+
+  // The blocks of the selected cards. While a newer parse is pending the old ranges would be off, so the band waits.
+  const band = useMemo(() => {
+    if (result && result.text === text) {
+      bandRef.current = selected.flatMap((k) => {
+        const r = result.r.ranges[`table:${k}`];
+        return r ? [{ from: r.from, to: r.to }] : [];
+      });
+    }
+    return bandRef.current;
+  }, [selected, result, text]);
+
+  // Picking a card brings its block into view; typing later does not pull the text back.
+  useEffect(() => {
+    const first = bandRef.current[0];
+    if (first) revealRef.current?.(first.from);
+  }, [selected]);
 
   const askForCards = useMemo(
     () => (ask?.inlineAsk ? { getDbml: () => textRef.current, label: `${name}.dbml`, connection: sourceConnection, kit: { ...ask, onOpenInChat: undefined } } : undefined),
@@ -92,6 +121,7 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
     try {
       await writeModelFiles(target, textRef.current, serializeLayout(layout));
       setPath(target);
+      if (target !== path) onPathChange?.(target);
       setSaved(textRef.current);
       setLayoutDirty(false);
       setStatus(`Saved ${basename(target)}`);
@@ -121,10 +151,23 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
   }
 
   function chooseExport(kind: ExportKind) {
-    setExportMenu(false);
     if (blocked) setPendingExport(kind);
     else void runExport(kind);
   }
+
+  const problems = result ? result.r.diagnostics.filter((d) => d.severity !== "hint").length : 0;
+  const counts = model ? `${plural(model.tables.length, "table")}, ${plural(model.refs.length, "ref")}` : "";
+
+  const optionItems: MenuItem[] = [
+    { key: "save", label: "Save", shortcut: "Ctrl+S", onSelect: () => void saveModel() },
+    { key: "save-as", label: "Save as...", onSelect: () => void saveModel(true) },
+    {
+      key: "export",
+      label: "Export",
+      submenu: EXPORTS.map((x) => ({ key: x.kind, label: x.label, onSelect: () => chooseExport(x.kind) })),
+    },
+    { key: "hide", label: "Hide DBML", shortcut: "Ctrl+B", separatorBefore: true, onSelect: () => setCollapsed(true) },
+  ];
 
   return (
     <section
@@ -140,84 +183,77 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
         }
       }}
     >
-      <div className="toolbar schema-toolbar">
-        <h2 className="toolbar-title">
-          {path ? basename(path) : "Untitled model"}
-          {dirty && <span className="muted"> (unsaved)</span>}
-        </h2>
-        <button type="button" className="button button-small" onClick={() => setCollapsed((c) => !c)} aria-pressed={collapsed}>
-          {collapsed ? "Show DBML" : "Hide DBML"}
-        </button>
-        <span className="spacer" />
-        <button type="button" className="button button-small" onClick={() => void saveModel()}>
-          Save
-        </button>
-        <button type="button" className="button button-small" onClick={() => void saveModel(true)}>
-          Save as
-        </button>
-        <div className="menu-anchor">
-          <button
-            type="button"
-            className="button button-small"
-            aria-haspopup="menu"
-            aria-expanded={exportMenu}
-            onClick={() => setExportMenu((m) => !m)}
-          >
-            Export
-          </button>
-          {exportMenu && (
-            <div className="menu" role="menu" onKeyDown={(e) => e.key === "Escape" && setExportMenu(false)}>
-              {EXPORTS.map((x) => (
-                <button key={x.kind} type="button" role="menuitem" className="menu-item" onClick={() => chooseExport(x.kind)}>
-                  {x.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <button type="button" className="button button-small" disabled aria-describedby="apply-hint">
-          Apply to Connection
-        </button>
-        <span id="apply-hint" className="muted toolbar-meta">
-          Arrives with Schema Compare
-        </span>
-        <button type="button" className="button button-small" onClick={() => (dirty ? setConfirmClose(true) : onClose())}>
-          Close
-        </button>
-      </div>
       {status && (
         <p className="schema-status" role="status">
           {status}
         </p>
       )}
-      <div className={collapsed ? "schema-panes schema-panes-collapsed" : "schema-panes"}>
-        <div className="schema-text" hidden={collapsed}>
-          <DbmlEditor
-            value={text}
-            savedValue={saved}
-            dialect={doc.dialect}
-            onChange={setText}
-            onResult={(r, t) => {
-              const before = result?.r.model;
-              if (before && r.model) {
-                const next = followRenames(layout, before, r.model);
-                if (next !== layout) {
-                  setLayout(next);
-                  setLayoutDirty(true);
+      <div className="schema-panes">
+        <div className="schema-island schema-text-island" hidden={collapsed}>
+          <div className="schema-pane-head">
+            <h2 className="schema-pane-title">DBML</h2>
+            <span className="chip">{DIALECT_LABEL[doc.dialect]}</span>
+            <span className="spacer" />
+            <span className="schema-pane-saved">{dirty ? "Unsaved" : "Saved"}</span>
+            <Menu
+              label="DBML options"
+              align="end"
+              compact
+              items={optionItems}
+              trigger={(p) => (
+                <button type="button" {...p} className="icon-button" aria-label="DBML options" title="DBML options">
+                  <Icon name="more" size={14} />
+                </button>
+              )}
+            />
+          </div>
+          <div className="schema-text">
+            <DbmlEditor
+              value={text}
+              savedValue={saved}
+              dialect={doc.dialect}
+              onChange={setText}
+              onResult={(r, t) => {
+                const before = result?.r.model;
+                if (before && r.model) {
+                  const next = followRenames(layout, before, r.model);
+                  if (next !== layout) {
+                    setLayout(next);
+                    setLayoutDirty(true);
+                  }
                 }
-              }
-              setResult({ r, text: t });
-            }}
-            editsRef={editsRef}
-            focusRef={focusRef}
-            client={client}
-          />
+                setResult({ r, text: t });
+              }}
+              editsRef={editsRef}
+              focusRef={focusRef}
+              revealRef={revealRef}
+              band={band}
+              client={client}
+            />
+          </div>
+          <div className={problems > 0 ? "schema-pane-foot schema-pane-foot-problems" : "schema-pane-foot"}>
+            {result && (
+              <span className="schema-problems">
+                {problems === 0 ? <Icon name="check" size={14} /> : <Icon name="warning" size={14} />}
+                {problems === 0 ? "No problems" : plural(problems, "problem")}
+              </span>
+            )}
+            <span className="spacer" />
+            <span className="schema-counts">{counts}</span>
+          </div>
         </div>
-        <div className="schema-diagram">
+        <div className="schema-island schema-diagram">
           {!result ? (
             <p className="state-panel muted">Parsing the DBML…</p>
           ) : !model ? (
-            <p className="state-panel muted">Fix the DBML to see the diagram: {firstError?.message ?? "it has an error"}.</p>
+            <div className="state-panel">
+              <p className="muted">Fix the DBML to see the diagram: {firstError?.message ?? "it has an error"}.</p>
+              {collapsed && (
+                <button type="button" className="button button-small" onClick={() => setCollapsed(false)}>
+                  Show DBML
+                </button>
+              )}
+            </div>
           ) : (
             <Canvas
               ask={askForCards}
@@ -230,6 +266,8 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
                 setLayoutDirty(true);
               }}
               onEdit={onEdit}
+              onSelectionChange={setSelected}
+              onShowText={collapsed ? () => setCollapsed(false) : undefined}
               onGoToError={() => {
                 setCollapsed(false);
                 if (firstError) focusRef.current?.(firstError.from);
@@ -239,7 +277,7 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
         </div>
       </div>
       {pendingExport && (
-        <Dialog title="Export" onClose={() => setPendingExport(null)}>
+        <Dialog title="Export" size="confirm" onClose={() => setPendingExport(null)}>
           <div className="dialog-body">
             <p>The DBML has an error, so this export uses the last valid version.</p>
           </div>
@@ -263,7 +301,7 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
         </Dialog>
       )}
       {confirmClose && (
-        <Dialog title="Unsaved changes" onClose={() => setConfirmClose(false)}>
+        <Dialog title="Unsaved changes" size="confirm" onClose={() => setConfirmClose(false)}>
           <div className="dialog-body">
             <p>Save changes to {name}?</p>
           </div>

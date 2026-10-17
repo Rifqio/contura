@@ -1,0 +1,89 @@
+import { DIALECT_LABEL } from "../api/client";
+import type { ConnectionConfig, ThemeChoice } from "../api/types";
+import DbMark from "./DbMark";
+import Icon from "./Icon";
+import { ThemeMenu } from "./ThemeSwitch";
+
+/** What the left side says: each screen of the window has its own status. */
+export type StatusScreen =
+  | { kind: "home"; connections: number; open: number }
+  | { kind: "settings"; dataFolder: string; version: string }
+  | { kind: "schema"; fileName: string; appliedTo: string | null }
+  | { kind: "workspace"; connection: ConnectionConfig | null; open: boolean; serverVersion: string | null };
+
+interface Props {
+  screen: StatusScreen;
+  theme: ThemeChoice;
+  onTheme(c: ThemeChoice): void;
+}
+
+function Left({ screen }: { screen: StatusScreen }) {
+  switch (screen.kind) {
+    case "home":
+      return (
+        <>
+          <span>{screen.connections === 0 ? "No Connections" : `${screen.connections} ${screen.connections === 1 ? "Connection" : "Connections"}`}</span>
+          {screen.connections > 0 && <span>{screen.open} open</span>}
+        </>
+      );
+    case "settings":
+      return (
+        <>
+          <span>{screen.dataFolder}</span>
+          <span>Contura {screen.version}</span>
+        </>
+      );
+    case "schema":
+      return (
+        <>
+          <span>Schema Model</span>
+          <span className="app-status-name">{screen.fileName}</span>
+          <span>{screen.appliedTo ? `Applied to ${screen.appliedTo}` : "Not applied to a Connection"}</span>
+          <span>Layout saved beside the file</span>
+        </>
+      );
+    case "workspace": {
+      const { connection, open, serverVersion } = screen;
+      if (!connection) return <span>No Connection open</span>;
+      const who = (
+        <>
+          <DbMark dialect={connection.dialect} open={open} size={14} label={null} />
+          <span className="app-status-name">{connection.name}</span>
+          {connection.readOnly && (
+            <span className="app-status-readonly">
+              <Icon name="lock" size={14} />
+              Read-only
+            </span>
+          )}
+          {/* Frames 10a to 10c: a closed, connecting or failed Connection says Closed in the version's place. */}
+          {!open ? <span>Closed</span> : serverVersion && <span>{`${DIALECT_LABEL[connection.dialect]} ${serverVersion}`}</span>}
+        </>
+      );
+      return connection.production ? (
+        <span className="app-status-prod">
+          <span className="app-status-prod-label">PRODUCTION</span>
+          {who}
+        </span>
+      ) : (
+        <span className="app-status-conn">{who}</span>
+      );
+    }
+  }
+}
+
+/**
+ * The window's status bar. A visible query or table tab renders its own status (rows, time, position or
+ * Pending Edits) into `#app-status-slot`.
+ */
+export default function StatusBar({ screen, theme, onTheme }: Props) {
+  return (
+    <footer className="app-status" role="status">
+      <Left screen={screen} />
+      {/* The query status (Ln, Col changes on every key) is not announced; the left segment is. */}
+      <span id="app-status-slot" className="app-status-slot" aria-live="off" />
+      <span className="spacer" />
+      <span>UTF-8</span>
+      <ThemeMenu value={theme} onChange={onTheme} />
+    </footer>
+  );
+}

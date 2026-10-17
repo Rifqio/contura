@@ -40,12 +40,16 @@ _Avoid_: Log, journal
 SQL kept by name in Contura, shared by every Connection.
 _Avoid_: Snippet, favourite, bookmark
 **Theme**:
-A named set of visual tokens (colours, type, corners, icon style) that Contura can be switched to. Flat minimal is the default.
+A named set of visual tokens (colours, type, corners, icon style) that Contura can be switched to. Two ship today: Alucard (light) and Dracula (dark, the default), or System to follow Windows. The design source for both is DESIGN-NEXT.md (ADR 0015).
 _Avoid_: Skin, style, appearance
 
 **Home**:
-The starting place of Contura, listing every Group and the Ungrouped Connections.
+The starting place of Contura, listing every Group and the Ungrouped Connections, with Recent beside them.
 _Avoid_: Dashboard, start page, launcher
+
+**Recent**:
+The last opened queries, tables and Schema Models, newest first, each with its Connection and time. Shown on Home; selecting one opens it again.
+_Avoid_: History (that is Query History), recents, MRU
 
 **Suggested Connection**:
 A Connection that Contura pre-fills from a database it found installed locally (currently Laragon). It isn't saved until the user accepts it.

@@ -36,7 +36,11 @@ pub fn list_objects(conn: &Connection, database: &str) -> Result<Vec<DbObject>> 
                 "trigger" => ObjectKind::Trigger,
                 _ => return None,
             };
-            Some(DbObject { kind, name })
+            Some(DbObject {
+                kind,
+                name,
+                rows: None,
+            })
         })
         .collect();
     sort_objects(&mut objects);

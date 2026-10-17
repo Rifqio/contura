@@ -63,6 +63,8 @@ pub struct AiSettings {
     pub max_tokens: Option<u32>,
     pub inline_ask: bool,
     pub error_ask: bool,
+    #[serde(default)]
+    pub new_connection_access: AiAccess,
 }
 
 impl Default for AiSettings {
@@ -76,6 +78,7 @@ impl Default for AiSettings {
             max_tokens: None,
             inline_ask: true,
             error_ask: true,
+            new_connection_access: AiAccess::default(),
         }
     }
 }

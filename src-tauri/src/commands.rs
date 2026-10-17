@@ -4,17 +4,19 @@ use contura_core::ai::{
     KeyChange, ThreadId,
 };
 use contura_core::connections::{
-    ConnectionInput, ConnectionService, EditOutcome, EditPlan, GroupInput,
+    ConnectionInput, ConnectionService, DataFolderInfo, EditOutcome, EditPlan, GroupInput,
 };
 use contura_core::edits::EditSet;
+use contura_core::explain::Plan;
 use contura_core::model::{
     ConnectionConfig, ConnectionId, DbObject, DialectKind, FullValue, FullValueRequest, Group,
-    GroupId, ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
+    GroupId, KeymapOverrides, ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo, UiPrefs,
 };
 use contura_core::query::{
     Execution, HistoryEntry, HistoryFilter, MoreRows, QuerySessionId, SavedQuery, SavedQueryId,
-    SavedQueryInput,
+    SavedQueryInput, SavedQueryRun,
 };
+use contura_core::recent::{RecentItem, RecentTarget};
 use contura_core::safety::{self, PassId, RunVerdict, StatementClass};
 use contura_core::schema_model::SchemaModel;
 use contura_core::sql_schema::SqlSchema;
@@ -67,7 +69,7 @@ pub fn suggested_connections(service: Service<'_>) -> Result<Vec<SuggestedConnec
 }
 
 #[tauri::command]
-pub async fn open_connection(service: Service<'_>, id: ConnectionId) -> Result<(), Error> {
+pub async fn open_connection(service: Service<'_>, id: ConnectionId) -> Result<String, Error> {
     service.open(id).await
 }
 
@@ -237,6 +239,24 @@ pub fn save_group(service: Service<'_>, input: GroupInput) -> Result<Group, Erro
 }
 
 #[tauri::command]
+pub fn set_group_image(service: Service<'_>, id: GroupId, png: String) -> Result<Group, Error> {
+    let bytes = contura_core::connections::decode_group_image(&png)?;
+    service.set_group_image(id, &bytes)
+}
+
+#[tauri::command]
+pub fn clear_group_image(service: Service<'_>, id: GroupId) -> Result<Group, Error> {
+    service.clear_group_image(id)
+}
+
+#[tauri::command]
+pub fn group_image(service: Service<'_>, id: GroupId) -> Result<Option<String>, Error> {
+    Ok(service
+        .group_image(id)?
+        .map(|b| contura_core::model_files::encode_base64(&b)))
+}
+
+#[tauri::command]
 pub fn delete_group(service: Service<'_>, id: GroupId) -> Result<(), Error> {
     service.delete_group(id)
 }
@@ -258,6 +278,40 @@ pub fn last_group(service: Service<'_>) -> Result<Option<GroupId>, Error> {
 #[tauri::command]
 pub fn set_last_group(service: Service<'_>, id: Option<GroupId>) -> Result<(), Error> {
     service.set_last_group(id)
+}
+
+#[tauri::command]
+pub fn ui_prefs(service: Service<'_>) -> Result<UiPrefs, Error> {
+    service.ui_prefs()
+}
+
+#[tauri::command]
+pub fn recent_items(service: Service<'_>) -> Result<Vec<RecentItem>, Error> {
+    service.recent_items()
+}
+
+#[tauri::command]
+pub fn record_recent(
+    service: Service<'_>,
+    target: RecentTarget,
+    connection_id: Option<ConnectionId>,
+) -> Result<(), Error> {
+    service.record_recent(target, connection_id)
+}
+
+#[tauri::command]
+pub fn save_ui_prefs(service: Service<'_>, prefs: UiPrefs) -> Result<(), Error> {
+    service.save_ui_prefs(prefs)
+}
+
+#[tauri::command]
+pub fn keymap(service: Service<'_>) -> Result<KeymapOverrides, Error> {
+    service.keymap()
+}
+
+#[tauri::command]
+pub fn save_keymap(service: Service<'_>, overrides: KeymapOverrides) -> Result<(), Error> {
+    service.save_keymap(overrides)
 }
 
 #[tauri::command]
@@ -336,6 +390,15 @@ pub async fn apply_edits(
 }
 
 #[tauri::command]
+pub async fn explain_statement(
+    service: Service<'_>,
+    session: QuerySessionId,
+    statement: String,
+) -> Result<Plan, Error> {
+    service.explain(session, statement).await
+}
+
+#[tauri::command]
 pub async fn fetch_more_rows(
     service: Service<'_>,
     session: QuerySessionId,
@@ -367,15 +430,52 @@ pub async fn close_query_session(
 #[tauri::command]
 pub fn query_history(
     service: Service<'_>,
-    id: ConnectionId,
+    id: Option<ConnectionId>,
     filter: HistoryFilter,
 ) -> Result<Vec<HistoryEntry>, Error> {
     service.query_history(id, filter)
 }
 
 #[tauri::command]
-pub fn clear_query_history(service: Service<'_>, id: ConnectionId) -> Result<(), Error> {
+pub fn clear_query_history(service: Service<'_>, id: Option<ConnectionId>) -> Result<(), Error> {
     service.clear_query_history(id)
+}
+
+#[tauri::command]
+pub fn saved_query_runs(service: Service<'_>) -> Result<Vec<SavedQueryRun>, Error> {
+    service.saved_query_runs()
+}
+
+#[tauri::command]
+pub fn data_folder_info(service: Service<'_>) -> Result<DataFolderInfo, Error> {
+    service.data_folder_info()
+}
+
+/// Shows the data folder in Explorer.
+#[tauri::command]
+pub fn open_data_folder(data: State<'_, DataDir>) -> Result<(), Error> {
+    std::process::Command::new("explorer.exe")
+        .arg(&data.0)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| Error::File(e.to_string()))
+}
+
+#[tauri::command]
+pub fn clear_recent(service: Service<'_>) -> Result<Vec<RecentItem>, Error> {
+    service.clear_recent()
+}
+
+#[tauri::command]
+pub fn restore_recent(service: Service<'_>, items: Vec<RecentItem>) -> Result<(), Error> {
+    service.restore_recent(items)
+}
+
+#[tauri::command]
+pub fn connection_opened_times(
+    service: Service<'_>,
+) -> Result<std::collections::HashMap<ConnectionId, i64>, Error> {
+    service.connection_opened_times()
 }
 
 #[tauri::command]

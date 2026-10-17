@@ -91,8 +91,8 @@ export function buildSends(ctx: AskContext, schema: SqlSchema | null, rowsOff: b
     items.push(item("schema", `Schema · ${tablesLabel(ctx)}`, schema ? schemaText(ctx, schema) : "", locked));
   }
 
-  const names = ctx.tables.map((t) => t.name).join(", ");
-  const rowsText = `Sample rows (5)${names ? ` from ${names}` : ""}`;
+  // No rows are fetched yet, so the item carries no text: nothing about rows goes into the payload.
+  const rowsText = "";
   if (ctx.kind === "card") {
     items.push(item("rows", "Sample rows", rowsText, rank === 0 ? lockFor(1) : "A Schema Model has no rows"));
   } else {

@@ -1,6 +1,7 @@
 import {
   type ClipboardEvent,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -10,10 +11,14 @@ import {
 } from "react";
 import type { Cell, SortSpec } from "../api/types";
 import CellValue, { type CellSource } from "./CellValue";
+import { fitColumns, headerFloor, headerPadding, headerWidth } from "./columnWidths";
 import Icon from "./Icon";
 
 /** Rows are one line high (app.css `.grid td`); measured once rendered. */
-const FALLBACK_ROW_HEIGHT = 40;
+const FALLBACK_ROW_HEIGHT = 28;
+/** The header button's side padding (app.css `--grid-header-padding`), both sides. */
+const HEADER_PADDING = 16;
+const BOOL_TYPE = /^bool(ean)?$/i;
 /** Rows rendered above and below the visible ones. */
 const OVERSCAN = 20;
 
@@ -22,6 +27,8 @@ export interface GridColumn {
   typeName: string;
   numeric: boolean;
   isPrimaryKey?: boolean;
+  /** A Foreign Key column: a link icon before its name (T5). */
+  isForeignKey?: boolean;
 }
 
 interface Props {
@@ -38,6 +45,8 @@ interface Props {
   cellSource?(row: number, column: string): CellSource | undefined;
   /** Called when the last rows come into view, to fetch more. */
   onNearEnd?(): void;
+  /** The rows in view, as 1-based numbers, once the grid has a height. */
+  onRange?(first: number, last: number): void;
   /** Shown after the table, such as an empty-state line. */
   children?: ReactNode;
   /** In the header corner above the row numbers, such as the Read-only lock. */
@@ -70,8 +79,14 @@ function SpacerRow({ columns, height }: { columns: number; height: number }) {
 }
 
 type Visible = { first: number; last: number };
-/** Column widths fixed from the first render after a reset, so scrolling never reflows them. */
-type Widths = { key: unknown; px: number[] };
+/**
+ * Widths taken from the first render after a reset (or a new set of columns),
+ * so scrolling never reflows them: each column's content and header label, and
+ * the row-number gutter.
+ */
+type Measure = { key: unknown; cols: string; gutter: number; natural: number[]; header: number[]; floor: number[] };
+/** Widths the user dragged, per reset. */
+type Pins = { key: unknown; cols: string; px: (number | null)[] };
 
 /**
  * A read-only, virtualized grid: only the rows near the viewport are in the DOM,
@@ -88,6 +103,7 @@ export default function ResultGrid({
   onSort,
   cellSource,
   onNearEnd,
+  onRange,
   children,
   corner,
   editingRow = null,
@@ -107,7 +123,20 @@ export default function ResultGrid({
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = useRef(FALLBACK_ROW_HEIGHT);
   const [visible, setVisible] = useState<Visible>({ first: 0, last: 0 });
-  const [widths, setWidths] = useState<Widths | null>(null);
+  const [measure, setMeasure] = useState<Measure | null>(null);
+  const [pins, setPins] = useState<Pins | null>(null);
+  const [available, setAvailable] = useState(0);
+  /** Bumped to measure the widths again (fonts loaded, or a hidden grid shown). */
+  const [epoch, setEpoch] = useState(0);
+  const measured = useRef(false);
+  const cols = columns.map((c) => c.name).join("\u0000");
+
+  // Clearing the measure renders the table without fixed widths, which the measuring
+  // effect below then reads.
+  const remeasure = useCallback(() => {
+    setMeasure(null);
+    setEpoch((e) => e + 1);
+  }, []);
 
   const measureViewport = useCallback(() => {
     const box = scrollRef.current;
@@ -116,34 +145,130 @@ export default function ResultGrid({
     const first = Math.floor(box.scrollTop / h);
     const last = Math.ceil((box.scrollTop + box.clientHeight) / h);
     setVisible((v) => (v.first === first && v.last === last ? v : { first, last }));
+    setAvailable(box.clientWidth);
   }, []);
 
   useEffect(() => {
     const box = scrollRef.current;
     if (!box || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measureViewport);
+    // A grid first rendered while hidden measured nothing: measure once it has a width.
+    const observer = new ResizeObserver(() => {
+      measureViewport();
+      if (!measured.current && box.clientWidth > 0) remeasure();
+    });
     observer.observe(box);
     return () => observer.disconnect();
-  }, [measureViewport]);
+  }, [measureViewport, remeasure]);
 
-  // A reset starts at the top, with the row height and column widths taken
-  // from this first render, before the browser paints.
+  // Widths taken before the bundled code font loaded are too narrow for it: measure again
+  // once it has. Pinned (dragged) widths stay.
+  useEffect(() => {
+    const fonts = typeof document === "undefined" ? undefined : document.fonts;
+    if (!fonts) return;
+    let alive = true;
+    const again = () => {
+      if (alive) remeasure();
+    };
+    if (fonts.status !== "loaded") void fonts.ready.then(again);
+    fonts.addEventListener?.("loadingdone", again);
+    return () => {
+      alive = false;
+      fonts.removeEventListener?.("loadingdone", again);
+    };
+  }, [remeasure]);
+
+  // A reset starts at the top, with the row height taken from this first
+  // render, before the browser paints.
   useLayoutEffect(() => {
     const box = scrollRef.current;
     if (!box) return;
     box.scrollTop = 0;
     const firstRowEl = box.querySelector<HTMLElement>("tr[data-row]");
     if (firstRowEl && firstRowEl.offsetHeight > 0) rowHeight.current = firstRowEl.offsetHeight;
-    const px = Array.from(box.querySelectorAll<HTMLElement>("thead th"), (th) => th.offsetWidth);
-    setWidths(px.length > 0 && px.every((w) => w > 0) ? { key: resetKey, px } : null);
     setVisible({ first: 0, last: 0 });
     measureViewport();
   }, [resetKey, measureViewport]);
 
+  // Column widths come from the first render of a reset or of new columns,
+  // which is laid out by the browser because no widths are fixed for it yet.
+  useLayoutEffect(() => {
+    const box = scrollRef.current;
+    if (!box) return;
+    const gutter = box.querySelector<HTMLElement>("thead th.row-number")?.offsetWidth ?? 0;
+    const heads = Array.from(box.querySelectorAll<HTMLElement>("thead th:not(.row-number)"));
+    const natural = heads.map((th) => th.offsetWidth);
+    // The header cell's own side borders take room from the label too.
+    const measureHeads = (f: (label: HTMLElement, padding: number) => number) =>
+      heads.map((th) => {
+        const label = th.querySelector<HTMLElement>(".header-label");
+        return label ? f(label, headerPadding(th, HEADER_PADDING)) : HEADER_PADDING;
+      });
+    const header = measureHeads(headerWidth);
+    const floor = measureHeads(headerFloor);
+    const ok = gutter > 0 && natural.length > 0 && natural.every((w) => w > 0);
+    measured.current = ok;
+    setMeasure(ok ? { key: resetKey, cols, gutter, natural, header, floor } : null);
+    setAvailable(box.clientWidth);
+  }, [resetKey, cols, epoch]);
+
   const rowCount = rows.length;
   const start = Math.max(0, visible.first - OVERSCAN);
   const end = Math.min(rowCount, visible.last + OVERSCAN);
-  const fixed = widths && widths.key === resetKey ? widths.px : null;
+  const current = measure && measure.key === resetKey && measure.cols === cols ? measure : null;
+  const pinned = pins && current && pins.key === resetKey && pins.cols === cols ? pins.px : null;
+  const fixed = current
+    ? [
+        current.gutter,
+        ...fitColumns({
+          natural: current.natural,
+          header: current.header,
+          // One px less: the collapsed outer border adds a fraction of a px past the set width,
+          // which would otherwise show a horizontal scrollbar on a pane the grid exactly fills.
+          available: available - current.gutter - 1,
+          pinned: pinned ?? current.natural.map(() => null),
+        }),
+      ]
+    : null;
+
+  // Dragging a header's right edge pins that column's width, never under its header label.
+  const stopDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopDrag.current?.(), []);
+  function startResize(e: ReactMouseEvent, ci: number) {
+    if (e.button !== 0 || !current || !fixed) return;
+    e.preventDefault();
+    e.stopPropagation();
+    stopDrag.current?.();
+    const startX = e.clientX;
+    const startWidth = fixed[ci + 1];
+    const min = current.floor[ci] ?? current.header[ci];
+    const { key, cols: sig } = current;
+    const count = current.natural.length;
+    const move = (ev: MouseEvent) => {
+      const w = Math.max(min, Math.round(startWidth + ev.clientX - startX));
+      setPins((p) => {
+        const px = p && p.key === key && p.cols === sig ? [...p.px] : Array<number | null>(count).fill(null);
+        px[ci] = w;
+        return { key, cols: sig, px };
+      });
+    };
+    const stop = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", stop);
+      document.body.classList.remove("col-resizing");
+      stopDrag.current = null;
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop);
+    document.body.classList.add("col-resizing");
+    stopDrag.current = stop;
+  }
+
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (onRange && box && box.clientHeight > 0 && rowCount > 0) {
+      onRange(Math.min(rowCount, visible.first + 1), Math.min(rowCount, Math.max(visible.first + 1, visible.last)));
+    }
+  }, [visible.first, visible.last, rowCount]);
 
   useEffect(() => {
     if (onNearEnd && rowCount > 0 && visible.last >= rowCount - OVERSCAN) onNearEnd();
@@ -197,17 +322,22 @@ export default function ResultGrid({
               </th>
               {columns.map((c, ci) => {
                 const sorted = sort?.column === c.name ? (sort.descending ? "descending" : "ascending") : "none";
+                // One line: name, type hint, then a slot that keeps room for the sort icon,
+                // so sorting never widens the label past its column.
                 const name = (
-                  <>
-                    <span className="header-name">
-                      {c.isPrimaryKey && <Icon name="key" className="key-icon" />}
-                      {c.name}
-                      {sorted !== "none" && (
-                        <Icon name={sorted === "ascending" ? "arrowUp" : "arrowDown"} className="sort-icon" />
-                      )}
-                    </span>
+                  <span className="header-label">
+                    {c.isPrimaryKey && <Icon name="key" className="key-icon" size={14} />}
+                    {c.isForeignKey && !c.isPrimaryKey && <Icon name="link" className="fk-icon" size={14} />}
+                    <span className="header-name">{c.name}</span>
                     <span className="type-hint">{c.typeName}</span>
-                  </>
+                    {onSort && (
+                      <span className="sort-slot">
+                        {sorted !== "none" && (
+                          <Icon name={sorted === "ascending" ? "arrowUp" : "arrowDown"} className="sort-icon" />
+                        )}
+                      </span>
+                    )}
+                  </span>
                 );
                 return (
                   <th
@@ -227,6 +357,13 @@ export default function ResultGrid({
                       </button>
                     ) : (
                       <span className="header-static">{name}</span>
+                    )}
+                    {fixed && (
+                      <span
+                        className="col-resize"
+                        aria-hidden="true"
+                        onMouseDown={(e) => startResize(e, ci)}
+                      />
                     )}
                   </th>
                 );
@@ -267,7 +404,13 @@ export default function ResultGrid({
                             : undefined
                         }
                       >
-                        {custom ?? <CellValue cell={cell} source={cellSource?.(r, columns[i].name)} />}
+                        {custom ?? (
+                          <CellValue
+                            cell={cell}
+                            source={cellSource?.(r, columns[i].name)}
+                            boolean={BOOL_TYPE.test(columns[i].typeName)}
+                          />
+                        )}
                       </td>
                     );
                   })}

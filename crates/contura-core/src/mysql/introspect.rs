@@ -19,9 +19,9 @@ pub async fn list_databases(pool: &Pool) -> Result<Vec<String>> {
 
 pub async fn list_objects(pool: &Pool, database: &str) -> Result<Vec<DbObject>> {
     let mut conn = pool.get_conn().await.map_err(query_err)?;
-    let tables: Vec<(String, String)> = conn
+    let tables: Vec<(String, String, Option<u64>)> = conn
         .exec(
-            "SELECT CAST(TABLE_NAME AS CHAR), CAST(TABLE_TYPE AS CHAR) \
+            "SELECT CAST(TABLE_NAME AS CHAR), CAST(TABLE_TYPE AS CHAR), TABLE_ROWS \
              FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?",
             (database,),
         )
@@ -44,13 +44,13 @@ pub async fn list_objects(pool: &Pool, database: &str) -> Result<Vec<DbObject>> 
         .map_err(query_err)?;
 
     let mut objects = Vec::new();
-    for (name, table_type) in tables {
-        let kind = match table_type.as_str() {
-            "BASE TABLE" => ObjectKind::Table,
-            "VIEW" | "SYSTEM VIEW" => ObjectKind::View,
+    for (name, table_type, table_rows) in tables {
+        let (kind, rows) = match table_type.as_str() {
+            "BASE TABLE" => (ObjectKind::Table, table_rows),
+            "VIEW" | "SYSTEM VIEW" => (ObjectKind::View, None),
             _ => continue,
         };
-        objects.push(DbObject { kind, name });
+        objects.push(DbObject { kind, name, rows });
     }
     for (name, routine_type) in routines {
         let kind = match routine_type.as_str() {
@@ -58,11 +58,16 @@ pub async fn list_objects(pool: &Pool, database: &str) -> Result<Vec<DbObject>> 
             "FUNCTION" => ObjectKind::Function,
             _ => continue,
         };
-        objects.push(DbObject { kind, name });
+        objects.push(DbObject {
+            kind,
+            name,
+            rows: None,
+        });
     }
     objects.extend(triggers.into_iter().map(|name| DbObject {
         kind: ObjectKind::Trigger,
         name,
+        rows: None,
     }));
     sort_objects(&mut objects);
     Ok(objects)

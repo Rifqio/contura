@@ -247,8 +247,20 @@ function prepare(raw: Token[], kws: Set<string>, fns: Map<string, SqlFunction>):
       out[i].fn = true;
       out[i].kw = false;
     }
+  // NF5: a typed literal (`TIMESTAMP '2026-10-01'`, `DATE '...'`, `TIME '...'`, `INTERVAL '7 days'`,
+  // `TIMESTAMP WITH TIME ZONE '...'`) is a keyword and its string, never a column name.
+  for (let i = 0; i < out.length - 1; i++) {
+    const u = out[i].t === "w" && !(out[i - 1]?.t === "p" && out[i - 1].v === ".") ? out[i].v.toUpperCase() : "";
+    if (!TYPED_LITERAL.has(u)) continue;
+    const zone = (u === "TIMESTAMP" || u === "TIME") && /^WITH(OUT)?$/i.test(out[i + 1].v) && /^TIME$/i.test(out[i + 2]?.v ?? "") && /^ZONE$/i.test(out[i + 3]?.v ?? "");
+    const lit = out[i + (zone ? 4 : 1)];
+    if (lit?.t !== "s") continue;
+    for (let j = i; j < i + (zone ? 4 : 1); j++) out[j].kw = true;
+  }
   return out;
 }
+
+const TYPED_LITERAL = new Set(["DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ", "TIMETZ", "INTERVAL"]);
 
 let nextRefId = 0;
 

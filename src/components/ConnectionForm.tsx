@@ -1,9 +1,10 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   createSqliteDatabase,
   DIALECT_DEFAULTS,
   DIALECT_LABEL,
+  aiSettings,
   errorText,
   isCommandError,
   saveConnection,
@@ -21,8 +22,16 @@ import type {
   SuggestedConnection,
 } from "../api/types";
 import { AI_ACCESS_OPTIONS } from "../settings/ai/providers";
+import { keysFor } from "../commands/keymap";
+import { keysFromEvent } from "../commands/keys";
+import { useKeymap } from "../commands/useCommandKeys";
+import DbMark from "./DbMark";
 import Dialog from "./Dialog";
+import GroupBadge from "./GroupBadge";
 import Icon from "./Icon";
+import Kbd from "./Kbd";
+import Segmented from "./Segmented";
+import Select from "./Select";
 import Switch from "./Switch";
 
 interface Props {
@@ -30,6 +39,8 @@ interface Props {
   connection?: ConnectionConfig;
   /** Values for a new Connection, such as a SuggestedConnection. */
   prefill?: SuggestedConnection;
+  /** A new Connection starting from another one's settings, named "<name> copy", without its password (PR23). */
+  duplicateOf?: ConnectionConfig;
   groups: Group[];
   /** The Group a new Connection goes into; null is Ungrouped. */
   defaultGroupId: GroupId | null;
@@ -55,10 +66,12 @@ function isExistingFileRefusal(e: unknown): boolean {
   return isCommandError(e) && e.kind === "invalidInput" && e.message.startsWith("a file already exists");
 }
 
-export default function ConnectionForm({ connection, prefill, groups, defaultGroupId, onSaved, onCancel }: Props) {
+export default function ConnectionForm({ connection, prefill, duplicateOf, groups, defaultGroupId, onSaved, onCancel }: Props) {
   const id = useId();
   const editing = connection !== undefined;
-  const source = connection ?? prefill;
+  /** Where the stored settings come from: the Connection being edited, or the one duplicated. */
+  const base = connection ?? duplicateOf;
+  const source = connection ?? (duplicateOf ? { ...duplicateOf, name: `${duplicateOf.name} copy` } : prefill);
   const initialDialect: DialectKind = source?.dialect ?? "mysql";
   const fromServer = source && source.dialect !== "sqlite" ? source : undefined;
   const initialServer: ServerDialect = initialDialect === "sqlite" ? "mysql" : initialDialect;
@@ -73,19 +86,40 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
   const [password, setPassword] = useState("");
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [removePassword, setRemovePassword] = useState(false);
-  const [database, setDatabase] = useState(connection?.database ?? "");
-  const [ssl, setSsl] = useState<SslChoice>(connection?.ssl.mode ?? "disable");
-  const [caPath, setCaPath] = useState(connection?.ssl.mode === "verifyCa" ? connection.ssl.caPath : "");
-  const [file, setFile] = useState(connection?.file ?? "");
-  const [groupId, setGroupId] = useState<GroupId | "">((editing ? connection.groupId : defaultGroupId) ?? "");
-  const [aiAccess, setAiAccess] = useState<AiAccess>(connection?.aiAccess ?? "schema");
-  const [production, setProduction] = useState(connection?.production ?? false);
-  const [readOnly, setReadOnly] = useState(connection?.readOnly ?? false);
+  const [database, setDatabase] = useState(base?.database ?? "");
+  const [ssl, setSsl] = useState<SslChoice>(base?.ssl.mode ?? "disable");
+  const [caPath, setCaPath] = useState(base?.ssl.mode === "verifyCa" ? base.ssl.caPath : "");
+  const [file, setFile] = useState(base?.file ?? "");
+  const [groupId, setGroupId] = useState<GroupId | "">((base ? base.groupId : defaultGroupId) ?? "");
+  const [aiAccess, setAiAccess] = useState<AiAccess>(base?.aiAccess ?? "schema");
+  const [production, setProduction] = useState(base?.production ?? false);
+  const [readOnly, setReadOnly] = useState(base?.readOnly ?? false);
   const [busy, setBusy] = useState<"test" | "save" | "create" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [portError, setPortError] = useState<string | null>(null);
-  const [timeout, setTimeoutText] = useState(connection?.queryTimeoutSecs ? String(connection.queryTimeoutSecs) : "");
+  const [timeout, setTimeoutText] = useState(base?.queryTimeoutSecs ? String(base.queryTimeoutSecs) : "");
   const [timeoutError, setTimeoutError] = useState<string | null>(null);
+
+  const [showPassword, setShowPassword] = useState(false);
+  const saveKeys = keysFor(useKeymap().map, "query.save");
+  // A new Connection starts at the access the AI settings name, unless you chose one first.
+  const aiChosen = useRef(base !== undefined);
+  useEffect(() => {
+    if (editing) return;
+    let live = true;
+    Promise.resolve()
+      .then(() => aiSettings(defaultGroupId))
+      .then((v) => {
+        const next = v?.settings?.newConnectionAccess;
+        if (live && next && !aiChosen.current) setAiAccess(next);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // Read once, when the form opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const sqlite = dialect === "sqlite";
   const accessDescription = AI_ACCESS_OPTIONS.find((o) => o.value === aiAccess)?.description ?? "";
@@ -95,6 +129,7 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
   const productionIsNew = production && !(connection?.production ?? false);
 
   function changeProduction(next: boolean) {
+    aiChosen.current = true;
     setProduction(next);
     if (next) setAiAccess("never");
   }
@@ -222,8 +257,8 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
     }
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit() {
+    if (busy !== null) return;
     const value = input();
     if (!value) return;
     setBusy("save");
@@ -236,45 +271,78 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
     }
   }
 
+  function onFormKeyDown(e: React.KeyboardEvent) {
+    const keys = keysFromEvent(e.nativeEvent);
+    if (keys && saveKeys.includes(keys)) {
+      e.preventDefault();
+      void submit();
+    }
+  }
+
   const f = (field: string) => `${id}-${field}`;
+  const access = productionIsNew ? "never" : aiAccess;
+  const groupOptions = [
+    { value: "", label: "Ungrouped", lead: <GroupBadge name="" color={null} /> },
+    ...groups.map((g) => ({ value: g.id as string, label: g.name, lead: <GroupBadge id={g.id} name={g.name} color={g.color} /> })),
+  ];
+  const dialectOptions = (["mysql", "postgres", "sqlite"] as const).map((d) => ({
+    value: d,
+    label: DIALECT_LABEL[d],
+    lead: <DbMark dialect={d} open label={null} size={14} />,
+  }));
+  const productionHint =
+    production && readOnly
+      ? "Read-only is on, so every write is blocked and Production never needs to ask."
+      : "Asks before every write";
 
   return (
-    <Dialog title={editing ? `Edit ${connection.name}` : "New Connection"} onClose={onCancel}>
-      <form className="form" onSubmit={onSubmit} noValidate>
+    <Dialog
+      title={editing ? "Edit Connection" : "New Connection"}
+      icon="plug"
+      subtitle={editing ? connection.name : undefined}
+      className="connection-dialog"
+      onClose={onCancel}
+    >
+      <form
+        className="form connection-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+        onKeyDown={onFormKeyDown}
+        noValidate
+      >
         <div className="dialog-body form-grid">
-          <label className="field" htmlFor={f("name")}>
-            <span>Name</span>
-            <input id={f("name")} className="input" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          {/* Not a <label>: its text would swallow the help line into the select's name. */}
-          <div className="field">
-            <span id={f("dialect-label")}>Dialect</span>
-            <select
-              id={f("dialect")}
-              className="input"
-              aria-labelledby={f("dialect-label")}
-              value={dialect}
-              disabled={editing}
-              aria-describedby={editing ? f("dialect-help") : undefined}
-              onChange={(e) => changeDialect(e.target.value as DialectKind)}
-            >
-              <option value="mysql">{DIALECT_LABEL.mysql}</option>
-              <option value="postgres">{DIALECT_LABEL.postgres}</option>
-              <option value="sqlite">{DIALECT_LABEL.sqlite}</option>
-            </select>
+          <div className="field field-wide">
+            <span className="fl">Database</span>
+            <fieldset className="field-reset" disabled={editing} aria-describedby={editing ? f("dialect-help") : undefined}>
+              <Segmented value={dialect} options={dialectOptions} onChange={changeDialect} label="Database" />
+            </fieldset>
             {editing && (
               <span id={f("dialect-help")} className="field-help">
                 The Dialect can't change after saving.
               </span>
             )}
           </div>
+          <div className="field">
+            <label className="fl" htmlFor={f("name")}>
+              Name
+            </label>
+            <input id={f("name")} className="input" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="field">
+            <span className="fl">Group</span>
+            <Select value={groupId} options={groupOptions} onChange={setGroupId} label="Group" />
+          </div>
           {sqlite ? (
             <div className="field field-wide">
-              <span id={f("file-label")}>File</span>
+              <span className="fl" id={f("file-label")}>
+                File
+              </span>
               <div className="file-row">
                 <input
                   id={f("file")}
-                  className="input mono"
+                  className="input input-mono"
                   aria-labelledby={f("file-label")}
                   value={file}
                   placeholder="C:\data\shop.db"
@@ -290,45 +358,65 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
             </div>
           ) : (
             <>
-              <label className="field" htmlFor={f("host")}>
-                <span>Host</span>
-                <input id={f("host")} className="input" value={host} onChange={(e) => setHost(e.target.value)} />
-              </label>
-              <label className="field" htmlFor={f("port")}>
-                <span>Port</span>
-                <input
-                  id={f("port")}
-                  className={portError ? "input input-error" : "input"}
-                  inputMode="numeric"
-                  value={port}
-                  aria-invalid={portError !== null}
-                  aria-describedby={portError ? f("port-error") : undefined}
-                  onChange={(e) => setPort(e.target.value)}
-                />
+              <div className="form-hostport field-wide">
+                <div className="field">
+                  <label className="fl" htmlFor={f("host")}>
+                    Host
+                  </label>
+                  <input id={f("host")} className="input input-mono" value={host} onChange={(e) => setHost(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label className="fl" htmlFor={f("port")}>
+                    Port
+                  </label>
+                  <input
+                    id={f("port")}
+                    className={portError ? "input input-mono input-error" : "input input-mono"}
+                    inputMode="numeric"
+                    value={port}
+                    aria-invalid={portError !== null}
+                    aria-describedby={portError ? f("port-error") : undefined}
+                    onChange={(e) => setPort(e.target.value)}
+                  />
+                </div>
                 {portError && (
-                  <span id={f("port-error")} className="field-error">
+                  <span id={f("port-error")} className="field-error form-hostport-error">
                     {portError}
                   </span>
                 )}
-              </label>
-              <label className="field" htmlFor={f("user")}>
-                <span>User</span>
-                <input id={f("user")} className="input" value={user} onChange={(e) => setUser(e.target.value)} />
-              </label>
-              <label className="field" htmlFor={f("password")}>
-                <span>Password</span>
-                <input
-                  id={f("password")}
-                  className="input"
-                  type="password"
-                  value={password}
-                  placeholder={editing ? "Saved password unchanged" : ""}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    setPasswordTouched(true);
-                  }}
-                />
-              </label>
+              </div>
+              <div className="field">
+                <label className="fl" htmlFor={f("user")}>
+                  User
+                </label>
+                <input id={f("user")} className="input input-mono" value={user} onChange={(e) => setUser(e.target.value)} />
+              </div>
+              <div className="field">
+                <label className="fl" htmlFor={f("password")}>
+                  Password
+                </label>
+                <div className="input-affix">
+                  <input
+                    id={f("password")}
+                    className="input input-affixed"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    placeholder={editing ? "Saved password unchanged" : ""}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setPasswordTouched(true);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="icon-button input-affix-button"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    onClick={() => setShowPassword((v) => !v)}
+                  >
+                    <Icon name="eye" />
+                  </button>
+                </div>
+              </div>
               {editing && (
                 <label className="checkbox field-wide">
                   <input
@@ -340,107 +428,84 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
                   Remove the saved password
                 </label>
               )}
-              <label className="field" htmlFor={f("database")}>
-                <span>Default database</span>
+              <div className="field">
+                <label className="fl" htmlFor={f("database")}>
+                  Database name
+                </label>
                 <input
                   id={f("database")}
-                  className="input"
+                  className="input input-mono"
                   value={database}
                   placeholder="Optional"
                   onChange={(e) => setDatabase(e.target.value)}
                 />
-              </label>
-              <label className="field" htmlFor={f("ssl")}>
-                <span>SSL</span>
-                <select
-                  id={f("ssl")}
-                  className="input"
+              </div>
+              <div className="field">
+                <span className="fl">SSL</span>
+                <Select
                   value={ssl}
-                  onChange={(e) => setSsl(e.target.value as SslChoice)}
-                >
-                  <option value="disable">Off</option>
-                  <option value="require">Required</option>
-                  <option value="verifyCa">Required, verify the CA</option>
-                </select>
-              </label>
+                  label="SSL"
+                  onChange={setSsl}
+                  options={[
+                    { value: "disable", label: "Off" },
+                    { value: "require", label: "Required" },
+                    { value: "verifyCa", label: "Required, verify the CA" },
+                  ]}
+                />
+              </div>
               {ssl === "verifyCa" && (
-                <label className="field field-wide" htmlFor={f("ca")}>
-                  <span>CA certificate file</span>
+                <div className="field field-wide">
+                  <label className="fl" htmlFor={f("ca")}>
+                    CA certificate file
+                  </label>
                   <input
                     id={f("ca")}
-                    className="input"
+                    className="input input-mono"
                     value={caPath}
                     placeholder="C:\certs\ca.pem"
                     onChange={(e) => setCaPath(e.target.value)}
                   />
-                </label>
+                </div>
               )}
             </>
           )}
           <div className="field">
-            <label htmlFor={f("timeout")}>
-              <span>Query timeout (seconds)</span>
+            <label className="fl" htmlFor={f("timeout")}>
+              Query timeout
             </label>
-            <input
-              id={f("timeout")}
-              className={timeoutError ? "input input-error" : "input"}
-              inputMode="numeric"
-              value={timeout}
-              placeholder="No limit"
-              aria-invalid={timeoutError !== null}
-              aria-describedby={timeoutError ? f("timeout-error") : f("timeout-hint")}
-              onChange={(e) => setTimeoutText(e.target.value)}
-            />
-            {timeoutError ? (
+            <div className="input-affix">
+              <input
+                id={f("timeout")}
+                className={timeoutError ? "input input-affixed input-error" : "input input-affixed"}
+                inputMode="numeric"
+                value={timeout}
+                placeholder="No limit"
+                aria-invalid={timeoutError !== null}
+                aria-describedby={timeoutError ? f("timeout-error") : undefined}
+                onChange={(e) => setTimeoutText(e.target.value)}
+              />
+              <span className="input-suffix">seconds</span>
+            </div>
+            {timeoutError && (
               <span id={f("timeout-error")} className="field-error">
                 {timeoutError}
               </span>
-            ) : (
-              <span id={f("timeout-hint")} className="field-hint">
-                Queries typed in the editor are stopped on the server after this long.
-              </span>
             )}
           </div>
-          <label className="field field-wide" htmlFor={f("group")}>
-            <span>Group</span>
-            <select id={f("group")} className="input" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
-              <option value="">Ungrouped</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="safety field-wide" role="group" aria-label="Safety">
-            <span className="fl">Safety</span>
-            <Switch
-              checked={production}
-              onChange={changeProduction}
-              label="Production"
-              hint="Asks before every write. Functions called from a SELECT are not checked."
-              disabled={readOnly}
-              note={readOnly ? "Overridden by Read-only" : undefined}
-            />
-            <Switch checked={readOnly} onChange={setReadOnly} label="Read-only" hint="Blocks every write" />
-          </div>
-          <label className="field field-wide" htmlFor={f("ai-access")}>
-            <span>AI can see</span>
-            <select
-              id={f("ai-access")}
-              className="input"
-              value={productionIsNew ? "never" : aiAccess}
+          <div className="field">
+            <span className="fl">AI access</span>
+            <Select
+              value={access}
+              label="AI access"
+              describedBy={f("ai-access-help")}
               disabled={productionIsNew}
-              aria-describedby={f("ai-access-help")}
-              onChange={(e) => setAiAccess(e.target.value as AiAccess)}
-            >
-              {AI_ACCESS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              onChange={(v) => {
+                aiChosen.current = true;
+                setAiAccess(v);
+              }}
+              options={AI_ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+          </div>
           <span id={f("ai-access-help")} className="field-hint field-wide">
             {productionIsNew
               ? "Production Connections send nothing to the assistant. You can raise this after saving."
@@ -451,11 +516,21 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
           {production && !productionIsNew && aiAccess !== "never" && (
             <p className="ai-warn field-wide" role="status">
               <Icon name="warning" />
-              <span>
-                {`This is a Production Connection: the assistant will see ${lowerFirst(accessDescription)}.`}
-              </span>
+              <span>{`This is a Production Connection: the assistant will see ${lowerFirst(accessDescription)}.`}</span>
             </p>
           )}
+          <div className="safety field-wide" role="group" aria-label="Safety">
+            <span className="fl">Safety</span>
+            <Switch
+              checked={production}
+              onChange={changeProduction}
+              label="Production"
+              hint={productionHint}
+              disabled={readOnly}
+              note={readOnly ? "Overridden by Read-only" : undefined}
+            />
+            <Switch checked={readOnly} onChange={setReadOnly} label="Read-only" hint="Blocks every write" />
+          </div>
           {result && (
             <p className={result.ok ? "form-result field-wide" : "form-result error-text field-wide"} role="status">
               {result.text}
@@ -464,14 +539,16 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
         </div>
         <footer className="dialog-footer">
           <button type="button" className="button" onClick={onTest} disabled={busy !== null}>
-            {busy === "test" ? "Testing…" : "Test"}
+            <Icon name="plug" />
+            {busy === "test" ? "Testing…" : "Test connection"}
           </button>
           <span className="spacer" />
           <button type="button" className="button" onClick={onCancel}>
             Cancel
           </button>
-          <button type="submit" className="button button-primary" disabled={busy !== null}>
+          <button type="submit" className="button button-primary" aria-label="Save" disabled={busy !== null}>
             {busy === "save" ? "Saving…" : "Save"}
+            {saveKeys[0] && busy !== "save" && <Kbd keys={saveKeys[0]} />}
           </button>
         </footer>
       </form>

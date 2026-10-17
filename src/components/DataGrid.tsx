@@ -4,11 +4,14 @@ import {
   type MutableRefObject,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
+import { durationText } from "../format/units";
 import { applyEdits, confirmEdits, errorText, fetchFullValue, fetchPage, isNotOpen, planEdits } from "../api/client";
 import type {
   Cell,
@@ -16,6 +19,7 @@ import type {
   ConnectionId,
   DialectKind,
   EditSet,
+  Group,
   KeyPart,
   NewValue,
   ObjectPath,
@@ -56,6 +60,10 @@ import type { AskContext, AskKit } from "../assistant/context";
 import SqlEditor, { type AskSelection, type SqlEditorApi } from "../query/SqlEditor";
 import ResultGrid from "./ResultGrid";
 import Icon from "./Icon";
+import DbMark from "./DbMark";
+import MenuButton, { MenuList, type MenuItem } from "./Menu";
+import { useToast } from "./Toast";
+import ResultTools, { cellText as plainText } from "../query/ResultTools";
 import { objectPrefix } from "../objectPath";
 
 /** The table as SQL names it, so the filter is checked as `SELECT * FROM <it> WHERE <filter>`. */
@@ -72,6 +80,7 @@ const NUMERIC_TYPE = /^(tinyint|smallint|mediumint|int|integer|bigint|decimal|nu
 interface Props {
   connectionId: ConnectionId;
   table: ObjectPath;
+  /** Unused since T1: the header strip has no close button; the tab strip closes the tab. */
   onClose: () => void;
   /** The session is gone; the Connection must be opened again. */
   onNotOpen?: () => void;
@@ -85,12 +94,22 @@ interface Props {
   readOnly?: boolean;
   /** Views are shown but never edited. */
   kind?: "table" | "view";
-  /** A Production Connection: Save asks first, and a grid with edits gets the amber outline. */
+  /** A Production Connection: the grid carries the wash, and Save reads "Save on PROD" and asks first. */
   production?: boolean;
+  /** The Connection's Group, for the square in the confirm dialog. */
+  group?: Group | null;
   /** Told when the grid gains or loses Pending Edits. */
   onDirtyChange?(dirty: boolean): void;
   /** Lets the parent save before closing; resolves false when the save failed or was cancelled. */
   controlRef?: MutableRefObject<GridControl | null>;
+  /** The tab is on screen: its status (rows, time, Pending Edits) then shows in the window status bar. */
+  visible?: boolean;
+  /** The Connection's name, for the header's Connection button, Preview SQL and the Read-only toast. */
+  connectionName?: string;
+  /** The server's row estimate of the table, when the tree has it: the footer reads "1 to 200 of 1,284" (PR29). */
+  rowEstimate?: number | null;
+  /** Opens a new, unsaved query tab on this Connection with this SQL, without running it. */
+  onOpenQuery?(sql: string): void;
 }
 
 export interface GridControl {
@@ -98,6 +117,8 @@ export interface GridControl {
   discard(): void;
   /** Keeps the value in an open cell editor; true when the grid then has Pending Edits. */
   flush(): boolean;
+  /** How many Pending Edits the grid holds, for the unsaved changes dialog. */
+  pendingCount(): number;
 }
 
 type Ask = Extract<RunVerdict, { kind: "needsConfirmation" }>;
@@ -108,6 +129,38 @@ const KEY_NOTE = "Key columns can't be changed here";
 const BINARY_NOTE = "Binary values can only be set to NULL here";
 const PASTE_KEY_NOTE = "Pasting can't change key columns.";
 const PASTE_DELETED_NOTE = "Deleted rows can't be edited. Revert the row first.";
+const PROD_SAVE_NOTE = "Saving runs on Production and asks you to confirm the SQL first.";
+const READ_ONLY_FOOT = "Read-only Connection: cells cannot be edited";
+const ORDER_NOTE = "Sort by one column, such as total DESC.";
+
+/** "Saving runs the 3 statements in one transaction.": Save writes one statement per changed row. */
+function savingText(n: number): string {
+  return n === 1 ? "Saving runs 1 statement in one transaction." : `Saving runs the ${n.toLocaleString("en-US")} statements in one transaction.`;
+}
+
+/** The ORDER BY field's text for a sort: `total` or `total DESC`. */
+function sortText(s: SortSpec | null): string {
+  return s ? `${s.column}${s.descending ? " DESC" : ""}` : "";
+}
+
+/** PR30: one column with an optional ASC or DESC; null when the text is anything else. */
+export function parseOrderBy(text: string, columns: ColumnInfo[]): { sort: SortSpec | null } | null {
+  const t = text.trim();
+  if (t === "") return { sort: null };
+  const m = /^("(?:[^"]|"")+"|`(?:[^`]|``)+`|[\p{L}_][\p{L}\p{N}_$]*)(?:\s+(asc|desc))?$/iu.exec(t);
+  if (!m) return null;
+  const raw = m[1];
+  const quoted = raw[0] === '"' || raw[0] === "`";
+  const name = quoted ? raw.slice(1, -1).replace(raw[0] === '"' ? /""/g : /``/g, raw[0]) : raw;
+  // A bare name matches its column whatever its case; a quoted one is taken as written.
+  const column = quoted ? name : (columns.find((c) => c.name.toLowerCase() === name.toLowerCase())?.name ?? name);
+  return { sort: { column, descending: m[2]?.toLowerCase() === "desc" } };
+}
+
+/** The table as the header names it: `public.orders` with a schema, else `shop.orders`. */
+function shortName(t: ObjectPath): string {
+  return `${t.schema ?? t.database}.${t.name}`;
+}
 
 type Spot = { row: number; column: number };
 /** `old` is the full old value of a cut-short cell, loaded before the editor opened. */
@@ -142,7 +195,6 @@ function rowKey(columns: ColumnInfo[], row: Page["rows"][number]): KeyPart[] {
 export default function DataGrid({
   connectionId,
   table,
-  onClose,
   onNotOpen,
   dialect = "postgres",
   lang,
@@ -150,11 +202,22 @@ export default function DataGrid({
   readOnly = false,
   kind = "table",
   production = false,
+  group = null,
   onDirtyChange,
   controlRef,
+  visible = true,
+  connectionName,
+  rowEstimate = null,
+  onOpenQuery,
 }: Props) {
+  const { show: showToast } = useToast();
   const [pageIndex, setPageIndex] = useState(0);
   const [sort, setSort] = useState<SortSpec | null>(null);
+  /** What is typed in the ORDER BY field. */
+  const [orderDraft, setOrderDraft] = useState("");
+  /** The client-side filter and the hidden columns of the header's filter and columns menus (PR28). */
+  const [rowFilter, setRowFilter] = useState("");
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   /** The filter in use, and what is typed in the box. */
   const [filter, setFilter] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -171,20 +234,29 @@ export default function DataGrid({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [fetchMs, setFetchMs] = useState<number | null>(null);
+  const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setStatusSlot(visible ? document.getElementById("app-status-slot") : null);
+  }, [visible]);
 
   // `table` is fixed for this component's lifetime: the parent re-keys it per table.
   useEffect(() => {
     let live = true;
     setLoading(true);
     setError(null);
+    const started = performance.now();
     fetchPage(connectionId, { table, page: pageIndex, sort, filter })
       .then((page) => {
         if (!live) return;
+        setFetchMs(performance.now() - started);
         setShown({ index: pageIndex, page });
       })
       .catch((e) => {
         if (!live) return;
         if (isNotOpen(e)) onNotOpen?.();
+        // The status bar no longer stands for the page on screen: its rows and time go.
+        setFetchMs(null);
         setError(errorText(e));
       })
       .finally(() => live && setLoading(false));
@@ -211,12 +283,27 @@ export default function DataGrid({
 
   function chooseSort(column: string) {
     flushEditor();
-    setSort((s) => nextSort(s, column));
+    const next = nextSort(sort, column);
+    setSort(next);
+    setOrderDraft(sortText(next));
     setPageIndex(0);
   }
 
   function clearSort() {
     setSort(null);
+    setOrderDraft("");
+    setPageIndex(0);
+  }
+
+  /** Enter in the ORDER BY field: one column with an optional ASC or DESC, else it says what it takes. */
+  function applyOrderBy() {
+    const parsed = parseOrderBy(orderDraft, columns);
+    if (!parsed) return setNote(ORDER_NOTE);
+    if (note === ORDER_NOTE) setNote(null);
+    const next = parsed.sort;
+    if (sortText(next) === sortText(sort)) return;
+    flushEditor();
+    setSort(next);
     setPageIndex(0);
   }
 
@@ -265,7 +352,40 @@ export default function DataGrid({
   const viewRef = useRef(view);
   viewRef.current = view;
   const keyed = hasKey(columns);
-  const addedCount = view.findIndex((d) => d.kind === "loaded") < 0 ? view.length : view.findIndex((d) => d.kind === "loaded");
+
+  // The rows and columns on screen, as indexes into `view` and `columns`: the header's filter keeps
+  // the rows whose loaded or edited text matches, and every new row; the columns menu hides columns.
+  // Selection, editing and Pending Edits stay in `view` and `columns` indexes; only the grid maps.
+  const needle = rowFilter.trim().toLowerCase();
+  const shownCols = useMemo(() => columns.flatMap((c, i) => (hidden.has(c.name) ? [] : [i])), [columns, hidden]);
+  const shownRows = useMemo(() => {
+    const hit = (cells: Cell[]) => cells.some((c) => plainText(c).toLowerCase().includes(needle));
+    return view.flatMap((d, i) => (!needle || d.kind === "new" || hit(d.cells) || hit(d.source) ? [i] : []));
+  }, [view, needle]);
+  const rowPos = (row: number) => shownRows.indexOf(row);
+  const colPos = (column: number) => shownCols.indexOf(column);
+  /** The selected cell is on screen: the header's filter or columns menu has not hidden it. */
+  const selShown = !!sel && rowPos(sel.row) >= 0 && colPos(sel.column) >= 0;
+  // A selection the filter or columns menu hides is dropped, so nothing acts on a cell off screen.
+  // The cell menu follows the same rule: it closes when its row or column leaves the screen.
+  useEffect(() => {
+    if (sel && (!shownRows.includes(sel.row) || !shownCols.includes(sel.column))) setSel(null);
+    if (menu && (!shownRows.includes(menu.row) || !shownCols.includes(menu.column))) setMenu(null);
+  }, [sel, menu, shownRows, shownCols]);
+  // A press outside the cell menu, or a scroll anywhere outside it, closes it.
+  const menuBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const outside = (e: Event) => {
+      if (!menuBox.current?.contains(e.target as Node)) setMenu(null);
+    };
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("scroll", outside, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("scroll", outside, true);
+    };
+  }, [menu]);
 
   /** Changes the Pending Edits; does nothing while a save runs. */
   const update = (f: (p: Pending) => Pending) => {
@@ -333,12 +453,11 @@ export default function DataGrid({
     setValue(at.row, at.column, { t: "text", value }, at.old);
     setEditing(null);
     if (blurred) return;
-    const next =
-      move === "down"
-        ? { row: Math.min(at.row + 1, view.length - 1), column: at.column }
-        : move === "right"
-          ? { row: at.row, column: Math.min(at.column + 1, columns.length - 1) }
-          : { row: at.row, column: at.column };
+    const next = { row: at.row, column: at.column };
+    const r = rowPos(at.row);
+    const c = colPos(at.column);
+    if (move === "down" && r >= 0) next.row = shownRows[Math.min(r + 1, shownRows.length - 1)];
+    if (move === "right" && c >= 0) next.column = shownCols[Math.min(c + 1, shownCols.length - 1)];
     setSel(next);
     focusGrid();
   }
@@ -362,12 +481,13 @@ export default function DataGrid({
   function addNewRow(values?: Map<string, NewValue>) {
     if (!editable || !pendingRef.current || inflight.current) return;
     update((p) => addRow(p, values)[0]);
-    setSel({ row: 0, column: 0 });
+    // New rows go at the bottom (T3): the row just added is the last one.
+    setSel({ row: view.length, column: shownCols[0] ?? 0 });
     focusGrid();
   }
 
-  async function duplicateRow() {
-    const d = sel && view[sel.row];
+  async function duplicateRow(row: number) {
+    const d = view[row];
     if (!d || !editable || !pendingRef.current || inflight.current) return;
     const at = pageRef.current;
     const values = new Map<string, NewValue>();
@@ -406,7 +526,7 @@ export default function DataGrid({
   }
 
   function deleteSelected() {
-    if (sel) deleteAt(sel.row);
+    if (sel && selShown) deleteAt(sel.row);
   }
 
   function onPaste(e: ClipboardEvent<HTMLDivElement>) {
@@ -414,23 +534,30 @@ export default function DataGrid({
     const text = e.clipboardData.getData("text/plain");
     if (!text) return;
     e.preventDefault();
-    const at = sel ?? { row: 0, column: 0 };
+    // The block lands on the rows and columns on screen, from the selected cell; lines past the
+    // last row become new rows.
+    const at = sel ?? { row: shownRows[0] ?? 0, column: shownCols[0] ?? 0 };
+    const r0 = sel ? rowPos(at.row) : 0;
+    const c0 = colPos(at.column);
+    if (r0 < 0 || c0 < 0) return;
     const lines = parsePaste(text);
-    const span = (line: string[]) => line.slice(0, columns.length - at.column);
+    const span = (line: string[]) => line.slice(0, shownCols.length - c0);
+    const column = (j: number) => columns[shownCols[c0 + j]];
+    const target = (i: number) => (r0 + i < shownRows.length ? view[shownRows[r0 + i]] : undefined);
     for (const [i, line] of lines.entries()) {
-      const d = view[at.row + i];
+      const d = target(i);
       if (d?.kind !== "loaded") continue;
       if (!d.key) return setNote(NO_KEY);
       if (d.deleted) return setNote(PASTE_DELETED_NOTE);
-      if (span(line).some((_, j) => columns[at.column + j].isPrimaryKey)) return setNote(PASTE_KEY_NOTE);
+      if (span(line).some((_, j) => column(j).isPrimaryKey)) return setNote(PASTE_KEY_NOTE);
     }
     setNote(null);
     update((p0) =>
       batch(p0, (p) => {
         let out = p;
         lines.forEach((line, i) => {
-          const d = view[at.row + i];
-          const cells = span(line).map((value, j) => [columns[at.column + j].name, { t: "text", value }] as const);
+          const d = target(i);
+          const cells = span(line).map((value, j) => [column(j).name, { t: "text", value }] as const);
           if (!d) {
             out = addRow(out, new Map<string, NewValue>(cells))[0];
           } else if (d.kind === "new") {
@@ -449,21 +576,35 @@ export default function DataGrid({
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     if (e.key === "Escape" && menu) return setMenu(null);
+    // The context menu key (or Shift+F10) opens the cell menu on the selected cell.
+    if ((e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) && sel && selShown) {
+      e.preventDefault();
+      const cell = sectionRef.current?.querySelector(`tr[data-row="${rowPos(sel.row)}"] td[data-col="${colPos(sel.column)}"]`);
+      const box = (cell ?? e.currentTarget).getBoundingClientRect();
+      setMenu({ row: sel.row, column: sel.column, x: box.left, y: box.bottom });
+      return;
+    }
     if (mod && k === "s") return e.preventDefault(), void save();
     if (mod && k === "z" && !e.shiftKey) return e.preventDefault(), update(undo);
     if (mod && (k === "y" || (k === "z" && e.shiftKey))) return e.preventDefault(), update(redo);
     if (mod && k === "n") return e.preventDefault(), addNewRow();
-    if (view.length === 0 || columns.length === 0) return;
-    const at = sel ?? { row: 0, column: 0 };
+    if (shownRows.length === 0 || shownCols.length === 0) return;
+    // Arrow keys move over the rows and columns on screen.
+    const r = Math.max(0, sel ? rowPos(sel.row) : 0);
+    const c = Math.max(0, sel ? colPos(sel.column) : 0);
+    const at = { row: shownRows[r], column: shownCols[c] };
     const moves: Record<string, Spot> = {
-      ArrowDown: { row: Math.min(at.row + 1, view.length - 1), column: at.column },
-      ArrowUp: { row: Math.max(at.row - 1, 0), column: at.column },
-      ArrowRight: { row: at.row, column: Math.min(at.column + 1, columns.length - 1) },
-      ArrowLeft: { row: at.row, column: Math.max(at.column - 1, 0) },
+      ArrowDown: { row: shownRows[Math.min(r + 1, shownRows.length - 1)], column: at.column },
+      ArrowUp: { row: shownRows[Math.max(r - 1, 0)], column: at.column },
+      ArrowRight: { row: at.row, column: shownCols[Math.min(c + 1, shownCols.length - 1)] },
+      ArrowLeft: { row: at.row, column: shownCols[Math.max(c - 1, 0)] },
     };
     if (moves[e.key]) {
       e.preventDefault();
-      setSel(sel ? moves[e.key] : at);
+      setSel(selShown ? moves[e.key] : at);
+    } else if (sel && !selShown) {
+      // The selected cell is hidden: only the arrow keys act, selecting a cell on screen.
+      return;
     } else if (e.key === "Enter" || e.key === "F2") {
       e.preventDefault();
       openEditor(at.row, at.column);
@@ -622,6 +763,7 @@ export default function DataGrid({
         flushEditor();
         return !!pendingRef.current && count(pendingRef.current) > 0;
       },
+      pendingCount: () => (pendingRef.current ? count(pendingRef.current) : 0),
     };
   }
 
@@ -629,9 +771,12 @@ export default function DataGrid({
     const d = view[r];
     if (!d) return undefined;
     if (d.kind === "new") return "+";
-    const n = (firstRow + r - addedCount).toLocaleString("en-US");
-    if (d.deleted) return <span className="row-number-deleted">{n}</span>;
+    // The loaded page comes first, so a loaded row's place in `view` is its place on the page.
+    const n = (firstRow + r).toLocaleString("en-US");
+    // A deleted row reads "-" in the gutter, as a new row reads "+"; its number stays in the tooltip.
+    if (d.deleted) return <span className="row-number-deleted" title={`Row ${n}, deleted`}>-</span>;
     const edited = d.key && pending && columns.some((c) => pendingValue(pending, d.key!, c.name));
+    // T6: an edited row's number stays faint; the class is kept for its hooks only.
     return edited ? <span className="row-number-edited">{n}</span> : n;
   }
 
@@ -640,11 +785,35 @@ export default function DataGrid({
     return !!(d?.kind === "loaded" && d.key && pending && pendingValue(pending, d.key, columns[c].name));
   }
 
+  function closeMenu() {
+    setMenu(null);
+    focusGrid();
+  }
+
+  /** The cell menu's rows; each acts only while its row and column are still on screen. */
+  function cellMenuItems(m: Menu): MenuItem[] {
+    const shown = () => shownRows.includes(m.row) && shownCols.includes(m.column);
+    const items: MenuItem[] = menuItems(m).map((item) => ({
+      key: item.label,
+      label: item.label,
+      onSelect: () => {
+        if (shown()) item.run();
+      },
+    }));
+    if (view[m.row]?.kind === "loaded" && columns[m.column]?.isPrimaryKey) {
+      items.push({ key: "key-note", label: KEY_NOTE, heading: KEY_NOTE, separatorBefore: items.length > 0 });
+    }
+    return items;
+  }
+
   function menuItems(m: Menu): { label: string; run: () => void }[] {
     const d = view[m.row];
     if (!d) return [];
     const items: { label: string; run: () => void }[] = [];
-    if (d.kind === "new" || !d.deleted) items.push({ label: "Delete row", run: () => deleteAt(m.row) });
+    if (d.kind === "new" || !d.deleted) {
+      items.push({ label: "Delete row", run: () => deleteAt(m.row) });
+      items.push({ label: "Duplicate row", run: () => void duplicateRow(m.row) });
+    }
     if (blocked(d, m.column, true) === null) items.push({ label: "Set NULL", run: () => setNull(m.row, m.column) });
     if (d.kind === "loaded" && d.key && editedAt(m.row, m.column)) {
       const name = columns[m.column].name;
@@ -657,71 +826,167 @@ export default function DataGrid({
     return items;
   }
 
+  // PR31: Foreign Key columns from the language schema the filter already loads; none until it loads.
+  const fkColumns = useMemo(() => {
+    const out = new Set<string>();
+    if (!lang || schemaLoad !== "loaded") return out;
+    const schema = lang.client.sqlSchemaFor(schemaKey(connectionId, table.database));
+    for (const fk of schema?.fks ?? []) {
+      if (fk.from.table !== table.name) continue;
+      if (table.schema !== null && fk.from.schema !== null && fk.from.schema !== table.schema) continue;
+      for (const c of fk.from.columns) out.add(c);
+    }
+    return out;
+  }, [lang, schemaLoad, connectionId, table]);
+
+  // PR29: the page's rows, "of" the server's estimate when the tree has one.
+  const loadedRows = page?.rows.length ?? 0;
+  const lastRow = firstRow + loadedRows - 1;
   const rangeText =
-    page && page.rows.length > 0
-      ? `Rows ${firstRow.toLocaleString("en-US")} to ${(firstRow + page.rows.length - 1).toLocaleString("en-US")}`
+    loadedRows > 0
+      ? `${firstRow.toLocaleString("en-US")} to ${lastRow.toLocaleString("en-US")}${
+          rowEstimate !== null && rowEstimate >= lastRow ? ` of ${rowEstimate.toLocaleString("en-US")}` : ""
+        }`
       : "";
+  const contextText =
+    readOnly && kind === "table"
+      ? READ_ONLY_FOOT
+      : editable && production
+        ? PROD_SAVE_NOTE
+        : editable && changes > 0
+          ? savingText(changes)
+          : "";
+  const noteText = note ?? (editable && page && !keyed ? NO_KEY : null);
+
+  /** R3: a Read-only Connection never opens the cell editor; one toast says why. */
+  function readOnlyEdit() {
+    showToast({ kind: "readOnly", text: `${connectionName ?? "This Connection"} is Read-only. Changes are not allowed.` });
+  }
+
+  const gridColumns = shownCols.map((i) => ({
+    ...columns[i],
+    numeric: NUMERIC_TYPE.test(columns[i].typeName),
+    isForeignKey: fkColumns.has(columns[i].name),
+  }));
+  const allColumns = shownCols.length === columns.length;
+  const gridRows = shownRows.map((i) => (allColumns ? view[i].cells : shownCols.map((c) => view[i].cells[c])));
+  const selected = sel && rowPos(sel.row) >= 0 && colPos(sel.column) >= 0 ? { row: rowPos(sel.row), column: colPos(sel.column) } : null;
+  const editingAt = editing ? rowPos(editing.row) : -1;
 
   return (
     <section
-      className={production && changes > 0 ? "grid-view grid-production-edits" : "grid-view"}
+      className={["grid-view", production && "prod-wash", production && changes > 0 && "grid-production-edits"]
+        .filter(Boolean)
+        .join(" ")}
       aria-label={`Data of ${table.name}`}
       ref={sectionRef}
     >
-      <div className="toolbar">
-        <Icon name="table" className="muted" />
-        <h2 className="toolbar-title">
-          <span className="muted">{objectPrefix(table)}</span>
-          {table.name}
+      {/* T1: one 36 px strip: Connection, PRODUCTION, the table, WHERE and ORDER BY, then the tools. */}
+      <div className="table-header" role="toolbar" aria-label="Table">
+        {connectionName &&
+          (onOpenQuery ? (
+            <MenuButton
+              label="Connection"
+              compact
+              trigger={(p) => (
+                <button type="button" {...p} className="button button-small button-quiet table-header-connection">
+                  <DbMark dialect={dialect} open size={14} label={null} />
+                  <span className="editor-header-name">{connectionName}</span>
+                  <Icon name="chevronDown" size={14} />
+                </button>
+              )}
+              items={[
+                {
+                  key: "query",
+                  label: `New query on ${connectionName}`,
+                  icon: <Icon name="fileQuery" size={14} />,
+                  onSelect: () => onOpenQuery(""),
+                },
+              ]}
+            />
+          ) : (
+            <span className="table-header-connection">
+              <DbMark dialect={dialect} open size={14} label={null} />
+              <span className="editor-header-name">{connectionName}</span>
+            </span>
+          ))}
+        {production && <span className="production-label">PRODUCTION</span>}
+        {(connectionName || production) && <span className="editor-header-divider" aria-hidden="true" />}
+        <Icon name={kind === "view" ? "view" : "table"} size={14} className="muted" />
+        <h2 className="table-header-name" title={`${objectPrefix(table)}${table.name}`}>
+          {shortName(table)}
         </h2>
-        <span className="toolbar-meta">
-          {loading && <span>Loading rows…</span>}
-          {rangeText && <span>{rangeText}</span>}
-        </span>
-        {editable && page && (
-          <span className="toolbar-group">
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Add row"
-              title="Add row (Ctrl+N)"
-              disabled={busy}
-              onClick={() => addNewRow()}
-            >
-              <Icon name="plus" />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Duplicate row"
-              title="Duplicate row"
-              disabled={!sel || busy}
-              onClick={duplicateRow}
-            >
-              <Icon name="copy" />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Delete row"
-              title="Delete row (Delete)"
-              disabled={!sel || !keyed || busy}
-              onClick={deleteSelected}
-            >
-              <Icon name="minus" />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Undo"
-              title="Undo (Ctrl+Z)"
-              disabled={!pending?.past.length || busy}
-              onClick={() => update(undo)}
-            >
-              <Icon name="undo" />
-            </button>
+        <div className="grid-filter">
+          <span className="grid-filter-label" aria-hidden="true">
+            WHERE
           </span>
-        )}
+          <SqlEditor
+            oneLine
+            value={draft}
+            dialect={dialect}
+            editorRef={filterRef}
+            onChange={setDraft}
+            onRun={applyFilter}
+            onFormat={() => {}}
+            onSave={() => void save()}
+            onEscape={clearFilter}
+            onAsk={ask ? setAskSel : undefined}
+            lang={
+              lang && {
+                client: lang.client,
+                docId: `filter:${connectionId}:${objectPrefix(table)}${table.name}`,
+                schemaKey: schemaKey(connectionId, table.database),
+                schemaState: schemaLoad === "loaded" ? "loaded" : schemaLoad === "loading" ? "loading" : "none",
+                prefix: `SELECT * FROM ${sqlName(dialect, table)} WHERE `,
+              }
+            }
+          />
+          {ask && askSel && (
+            <InlineAsk
+              context={{
+                kind: "filter",
+                connection: ask.connection,
+                sql: askSel.sql,
+                tables: [{ schema: table.schema, name: table.name }],
+                label: table.name,
+              }}
+              schema={askSchema}
+              groupId={ask.groupId}
+              onOpenInChat={ask.onOpenInChat}
+              onOpenSettings={ask.onOpenSettings}
+              onClose={() => {
+                setAskSel(null);
+                filterRef.current?.focus();
+              }}
+            />
+          )}
+        </div>
+        <div className="order-by">
+          <span className="order-by-label" aria-hidden="true">
+            ORDER BY
+          </span>
+          <input
+            className="order-by-input"
+            type="text"
+            aria-label="Order by"
+            title={ORDER_NOTE}
+            spellCheck={false}
+            value={orderDraft}
+            onChange={(e) => setOrderDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                applyOrderBy();
+              } else if (e.key === "Escape" && (orderDraft || sort)) {
+                e.preventDefault();
+                if (note === ORDER_NOTE) setNote(null);
+                if (sort) clearSort();
+                else setOrderDraft("");
+              }
+            }}
+          />
+        </div>
+        <span className="editor-header-divider" aria-hidden="true" />
         <button
           type="button"
           className="icon-button"
@@ -730,65 +995,63 @@ export default function DataGrid({
           disabled={loading}
           onClick={reloadRows}
         >
-          <Icon name="refresh" />
+          <Icon name="refresh" size={14} />
         </button>
-        <button type="button" className="icon-button" aria-label={`Close ${table.name}`} onClick={onClose}>
-          <Icon name="close" />
-        </button>
+        {editable && page && (
+          <>
+            {/* R20: the grid handles these keys itself (no registry command), so the hints stay literal. */}
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Add row"
+              title="Add row (Ctrl+N)"
+              disabled={busy}
+              onClick={() => addNewRow()}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Delete row"
+              title="Delete row (Delete)"
+              disabled={!selShown || !keyed || busy}
+              onClick={deleteSelected}
+            >
+              <Icon name="minus" size={14} />
+            </button>
+          </>
+        )}
+        <ResultTools
+          columns={columns.map((c) => ({ name: c.name, typeName: c.typeName, numeric: NUMERIC_TYPE.test(c.typeName) }))}
+          rows={shownRows.map((i) => view[i].cells)}
+          filter={rowFilter}
+          onFilter={setRowFilter}
+          hidden={hidden}
+          onToggleColumn={(name) =>
+            setHidden((h) => {
+              const next = new Set(h);
+              if (!next.delete(name)) next.add(name);
+              return next;
+            })
+          }
+          connectionName={connectionName ? `${connectionName}_${table.name}` : table.name}
+        />
         <div className={loading ? "progress progress-on" : "progress"} aria-hidden="true">
           <i />
         </div>
       </div>
 
-      <div className="grid-filter">
-        <span className="grid-filter-label" aria-hidden="true">
-          WHERE
-        </span>
-        <SqlEditor
-          oneLine
-          value={draft}
-          dialect={dialect}
-          editorRef={filterRef}
-          onChange={setDraft}
-          onRun={applyFilter}
-          onFormat={() => {}}
-          onSave={() => void save()}
-          onEscape={clearFilter}
-          onAsk={ask ? setAskSel : undefined}
-          lang={
-            lang && {
-              client: lang.client,
-              docId: `filter:${connectionId}:${objectPrefix(table)}${table.name}`,
-              schemaKey: schemaKey(connectionId, table.database),
-              schemaState: schemaLoad === "loaded" ? "loaded" : schemaLoad === "loading" ? "loading" : "none",
-              prefix: `SELECT * FROM ${sqlName(dialect, table)} WHERE `,
-            }
-          }
-        />
-        {ask && askSel && (
-          <InlineAsk
-            context={{
-              kind: "filter",
-              connection: ask.connection,
-              sql: askSel.sql,
-              tables: [{ schema: table.schema, name: table.name }],
-              label: table.name,
-            }}
-            schema={askSchema}
-            groupId={ask.groupId}
-            onOpenInChat={ask.onOpenInChat}
-            onOpenSettings={ask.onOpenSettings}
-            onClose={() => {
-              setAskSel(null);
-              filterRef.current?.focus();
-            }}
-          />
-        )}
-      </div>
-
-      {editable && page && (!keyed || note) && (
+      {page && noteText && (
         <p className="grid-note" role="status">
-          {!keyed ? NO_KEY : note}
+          {noteText}
+        </p>
+      )}
+
+      {/* A save error gets its own line under the header, so the whole message can be read. */}
+      {saveError && changes > 0 && (
+        <p className="edits-error" role="alert" title={saveError}>
+          {saveError}
         </p>
       )}
 
@@ -813,42 +1076,48 @@ export default function DataGrid({
         </div>
       ) : (
         <ResultGrid
-          columns={columns.map((c) => ({ ...c, numeric: NUMERIC_TYPE.test(c.typeName) }))}
-          rows={view.map((d) => d.cells)}
+          columns={gridColumns}
+          rows={gridRows}
           resetKey={page}
           label={`Rows of ${table.name}`}
           firstRow={firstRow}
           stale={loading}
           sort={sort}
           onSort={chooseSort}
+          rowLabel={(r) => rowLabel(shownRows[r])}
+          {...(readOnly && kind === "table" && { onOpen: readOnlyEdit })}
           {...(editable && {
-            editingRow: editing?.row ?? null,
-          onEditorLost: flushEditor,
-          selected: sel,
+            editingRow: editingAt < 0 ? null : editingAt,
+            onEditorLost: flushEditor,
+            selected,
             onSelect: (row: number, column: number) => {
-              setSel({ row, column });
+              setSel({ row: shownRows[row], column: shownCols[column] });
               setMenu(null);
             },
-            onOpen: openEditor,
+            onOpen: (row: number, column: number) => openEditor(shownRows[row], shownCols[column]),
             onGridKey,
             onPaste,
-            onCellMenu: (row: number, column: number, x: number, y: number) => setMenu({ row, column, x, y }),
-            cellClass: (r: number, c: number) => (editedAt(r, c) ? "cell-edited" : undefined),
+            onCellMenu: (row: number, column: number, x: number, y: number) =>
+              setMenu({ row: shownRows[row], column: shownCols[column], x, y }),
+            cellClass: (r: number, c: number) => (editedAt(shownRows[r], shownCols[c]) ? "cell-edited" : undefined),
             cellTitle: (r: number, c: number) => {
-              const d = view[r];
-              return d?.kind === "loaded" && editedAt(r, c)
-                ? `Was ${cellText(d.source[c])}. Edited, not saved yet.`
+              const row = shownRows[r];
+              const column = shownCols[c];
+              const d = view[row];
+              return d?.kind === "loaded" && editedAt(row, column)
+                ? `Was ${cellText(d.source[column])}. Edited, not saved yet.`
                 : undefined;
             },
             rowClass: (r: number) => {
-              const d = view[r];
+              const d = view[shownRows[r]];
               if (d?.kind === "new") return "row-added";
               if (d?.deleted) return "row-deleted";
               return d && conflict !== null && d.key === conflict ? "row-conflict" : undefined;
             },
-            rowLabel,
             renderCell: (r: number, c: number) => {
-              if (editing && editing.row === r && editing.column === c) {
+              const row = shownRows[r];
+              const column = shownCols[c];
+              if (editing && editing.row === row && editing.column === column) {
                 return (
                   <CellEditor
                     initial={editing.initial}
@@ -866,8 +1135,10 @@ export default function DataGrid({
                   />
                 );
               }
-              const d = view[r];
-              return d?.kind === "new" && !d.set[c] ? <span className="cell-default">default</span> : undefined;
+              const d = view[row];
+              // T3: an unset key column shows `default`; other unset cells of a new row stay empty.
+              if (d?.kind === "new" && !d.set[column]) return d.defaults[column] ? <span className="cell-default">default</span> : "";
+              return undefined;
             },
           })}
           corner={
@@ -878,7 +1149,7 @@ export default function DataGrid({
             )
           }
           cellSource={(r, column) => {
-            const d = view[r];
+            const d = view[shownRows[r]];
             return page && d?.kind === "loaded" ? { connectionId, table, column, rowKey: rowKey(page.columns, d.source) } : undefined;
           }}
         >
@@ -887,19 +1158,17 @@ export default function DataGrid({
               {shown?.index === 0 ? `${table.name} has no rows.` : "No more rows. Go back a page."}
             </p>
           )}
+          {page && view.length > 0 && shownRows.length === 0 && <p className="state-panel muted">No loaded row matches the filter.</p>}
         </ResultGrid>
       )}
 
-      {pending && previewOpen && changes > 0 && (
-        <PreviewSql connectionId={connectionId} edits={toEditSet(pending, table)} onClose={() => setPreviewOpen(false)} />
-      )}
-
+      {/* T2: Pending Edits get their own bar, above the footer. */}
       {pending && changes > 0 && (
         <EditsBar
           summary={summary(pending)}
           changes={changes}
           busy={saving}
-          error={saveError}
+          production={production}
           previewOpen={previewOpen}
           onPreview={() => setPreviewOpen((o) => !o)}
           onDiscard={discardAll}
@@ -907,56 +1176,80 @@ export default function DataGrid({
         />
       )}
 
-      {confirm && (
-        <ConfirmRun verb="Save" verdict={confirm.verdict} noWhere={null} onRun={() => void confirmSave()} onCancel={cancelSave} onAddWhere={() => {}} />
-      )}
-
-      {menu && (
-        <div className="cell-menu" role="menu" style={{ left: menu.x, top: menu.y }} onKeyDown={(e) => e.key === "Escape" && setMenu(null)}>
-          {menuItems(menu).map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                item.run();
-                setMenu(null);
-                focusGrid();
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-          {view[menu.row]?.kind === "loaded" && columns[menu.column]?.isPrimaryKey && (
-            <p className="menu-note">{KEY_NOTE}</p>
-          )}
-        </div>
-      )}
-
-      <div className="status-bar">
+      {/* T4, PR29: the row range and the pager on the left, what saving does on the right. */}
+      <div className="table-foot">
+        <span className="table-range">{rangeText}</span>
         <span className="pager">
           <button
             type="button"
             className="icon-button"
             aria-label="Previous page"
+            title="Previous page"
             disabled={pageIndex === 0 || loading}
             onClick={() => goToPage(pageIndex - 1)}
           >
-            <Icon name="chevronLeft" />
+            <Icon name="chevronLeft" size={14} />
           </button>
-          <span>Page {(pageIndex + 1).toLocaleString("en-US")}</span>
           <button
             type="button"
             className="icon-button"
             aria-label="Next page"
+            title="Next page"
             disabled={loading || !page?.hasMore}
             onClick={() => goToPage(pageIndex + 1)}
           >
-            <Icon name="chevronRight" />
+            <Icon name="chevronRight" size={14} />
           </button>
         </span>
+        <span className="spacer" />
+        {contextText && <span className="table-context">{contextText}</span>}
       </div>
+
+      {pending && previewOpen && changes > 0 && (
+        <PreviewSql
+          connectionId={connectionId}
+          edits={toEditSet(pending, table)}
+          onClose={() => setPreviewOpen(false)}
+          connectionName={connectionName}
+          database={table.database}
+          dialect={dialect}
+          production={production}
+          onOpenQuery={onOpenQuery}
+        />
+      )}
+
+      {confirm && (
+        <ConfirmRun
+          verb="Save"
+          verdict={confirm.verdict}
+          noWhere={null}
+          dialect={dialect}
+          group={group}
+          rowEstimate={rowEstimate}
+          onRun={() => void confirmSave()}
+          onCancel={cancelSave}
+          onAddWhere={() => {}}
+        />
+      )}
+
+      {menu && (
+        <div ref={menuBox} className="tree-menu" style={{ left: menu.x, top: menu.y }}>
+          <MenuList items={cellMenuItems(menu)} label="Cell" onClose={closeMenu} compact />
+        </div>
+      )}
+
+      {statusSlot &&
+        page &&
+        createPortal(
+          <div className="query-status">
+            {!error && (
+              <span>{`${page.rows.length.toLocaleString("en-US")}${page.hasMore ? "+" : ""} ${page.rows.length === 1 && !page.hasMore ? "row" : "rows"}`}</span>
+            )}
+            {fetchMs !== null && <span>{durationText(fetchMs)}</span>}
+            {changes > 0 && <span>{`${changes.toLocaleString("en-US")} Pending ${changes === 1 ? "Edit" : "Edits"}`}</span>}
+          </div>,
+          statusSlot,
+        )}
     </section>
   );
 }

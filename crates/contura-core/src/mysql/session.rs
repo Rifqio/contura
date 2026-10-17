@@ -93,6 +93,10 @@ async fn actor(
             Command::FetchMore { reply } => {
                 let _ = reply.send(Err(no_more()));
             }
+            Command::Explain { sql, reply } => {
+                let result = explain(&mut conn, &sql, read_only).await;
+                let _ = reply.send(result.map_err(|e| or_cancelled(&flag, e)));
+            }
             Command::CloseResult { reply } => {
                 let _ = reply.send(());
             }
@@ -195,6 +199,26 @@ fn cell(value: Option<&Value>, kind: Kind) -> Cell {
         // The text protocol sends bytes; anything else is formatted as SQL would show it.
         Some(other) => text_preview(&other.as_sql(true), 0),
     }
+}
+
+/// Every cell of every row as full text.
+async fn explain(conn: &mut Conn, sql: &str, read_only: bool) -> Result<Vec<Vec<String>>> {
+    let rows: Vec<mysql_async::Row> = conn
+        .query(sql)
+        .await
+        .map_err(|e| session_err(e, read_only))?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            (0..row.len())
+                .map(|i| match row.as_ref(i) {
+                    None | Some(Value::NULL) => String::new(),
+                    Some(Value::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
+                    Some(other) => other.as_sql(true),
+                })
+                .collect()
+        })
+        .collect())
 }
 
 type Result_<'a> = QueryResult<'a, 'static, TextProtocol>;

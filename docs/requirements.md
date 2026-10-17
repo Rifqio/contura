@@ -24,6 +24,7 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 - Portable app. All Contura data (Connections, Query History, Saved Queries, Visual Queries, logs, WebView2 cache) lives in `data\` next to the `.exe`. Nothing is written to `%APPDATA%` or `%LOCALAPPDATA%`.
 - Passwords live in Windows Credential Manager, never in the data folder.
 - No installer, auto-update or code signing.
+- The release folder carries `OFL.txt`, the licence of the bundled JetBrains Mono font. The font files are inside the `.exe`; the app never loads a font from the network.
 
 ## Connections
 
@@ -48,17 +49,18 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 - Deleting a Group moves its Connections to Ungrouped. It never deletes Connections.
 - **Home** lists every Group (with its colour and number of Connections) and the Ungrouped Connections.
 - Opening a Group shows only that Group's Connections, and everything opened from them, until the user leaves the Group. While inside it, the Group's coloured initial square and name stay visible beside the title-bar tabs.
-- Home shows Groups as a grid of equal cards, one per Group.
+- Home shows Groups as cards in two columns (Ungrouped is a card too), and a Recent column of the last opened queries, tables and Schema Models, grouped by day.
 - Suggested Connections are offered on Home and are created Ungrouped unless the user picks a Group.
 
 ## Look and feel
 
-- The visual system is in [DESIGN.md](../DESIGN.md). The default Theme is **Flat minimal**, with Paper-notebook highlighting for Pending Edits.
-- Each Theme has light and dark variants, following the Windows setting, with a manual override. Comfortable density (about 40 px data-grid rows).
-- **Theme selector:** in Settings, the user can switch to any other Theme (ADR 0008): Fluent 2, Material 3, Precision dark, IBM Carbon, macOS, Nord, Gruvbox, Paper notebook, High contrast, Glassmorphism, Neo-brutalism, Skeuomorphism, Claymorphism, Terminal CRT, Editorial, Retro Windows, Frutiger Aero, Cyberpunk. Blueprint, Neumorphism, Raw brutalism and Aurora gradient are excluded.
+- The visual system is in [DESIGN-NEXT.md](../DESIGN-NEXT.md) (ADR 0015); the earlier DESIGN.md is archived in `docs/archive/`. The look is **Alucard** (light) and **Dracula** (dark), JetBrains Mono for code and data, Segoe UI for the interface.
+- Settings, Appearance and the status bar switch between System (follow Windows), Alucard and Dracula; Dracula is the default. The choice is saved in the `data` folder. Density is 28 px for grid rows, tree rows, buttons and inputs.
+- Settings, Appearance lists the licences of what Contura bundles: JetBrains Mono (SIL Open Font License 1.1), Lucide icons (ISC), Simple Icons (CC0 1.0).
+- **Theme selector (later):** in Settings, the user can switch to any other Theme, each one more token block (ADR 0008, ADR 0015): Fluent 2, Material 3, Precision dark, IBM Carbon, macOS, Nord, Gruvbox, Paper notebook, High contrast, Glassmorphism, Neo-brutalism, Skeuomorphism, Claymorphism, Terminal CRT, Editorial, Retro Windows, Frutiger Aero, Cyberpunk. Blueprint, Neumorphism, Raw brutalism and Aurora gradient are excluded.
 - Open tables and queries are tabs inside the window's title bar.
-- A Production Connection shows a Production tag. While a grid on it has Pending Edits, the grid also gets an amber outline.
-- Motion is subtle: fades and slides of 150 ms or less, and none when Windows' reduce-motion setting is on.
+- A Production Connection shows a `PROD` tag, and its editor and result panes get a quiet Production wash. A statement that writes on it gets a Production band and the note "Writes on <name> (Production)", and Run and Save become "Run on PROD" and "Save on PROD".
+- Motion is subtle: 80 to 240 ms, and none when Windows' reduce-motion setting is on.
 
 ## Working style (developer-experience survey, 2026-10-15)
 
@@ -181,12 +183,14 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 3. Schema Builder: DBML ↔ canvas, reverse-engineering, SQL and image export (moved up because designing schemas is one of the user's two main activities)
 4. SQL editor (CodeMirror 6, ADR 0009), Query History, Saved Queries
 5. Pending Edits, Table Designer, Production and Read-only Connections (5a done: Production and Read-only Connections, ADR 0013; 5b done: Pending Edits, ADR 0014; the Table Designer is 5c)
+   - Restyle to DESIGN-NEXT (done before 5c, ADR 0015): Alucard and Dracula, JetBrains Mono, 28 px density, Home with Recent
 6. Visual Query, plus the shared diagram engine and the query diagram and result shape
    - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams
 7. Import/export, plus Mermaid flowchart import
 8. Data Transfer
 9. Backup/Restore
 10. Schema Compare, plus applying a Schema Model to a Connection
+11. AI answers: real provider calls (Anthropic and OpenAI-compatible, incl. local Ollama), access levels enforced in the Core, rule-based guardrails, schema context with an on-disk index and sync, chat memory. All in the Rust Core, no Python (research in docs/research/2026-10-17-ai-*.md)
    - then sequence diagrams; cloud sharing later
 
 The diagram work and its memory budget are in `docs/superpowers/specs/2026-10-16-contura-direction-design.md`.

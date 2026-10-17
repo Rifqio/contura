@@ -8,7 +8,7 @@ import { applyEdits, renameColumn, renameTable } from "../lang/dbml/edits";
 import { KFC_MODEL, KFC_TEXT } from "../lang/dbml/fixtures";
 import { parseDbml } from "../lang/dbml/parse";
 import type { Ranges, TextEdit } from "../lang/protocol";
-import Canvas, { refFromConnection } from "./Canvas";
+import Canvas, { edgeSides, edgesFor, refFromConnection } from "./Canvas";
 import { sourceConnectionFor } from "./sourceConnection";
 import { autoLayout, followRenames, parseLayout, serializeLayout } from "./layout";
 
@@ -86,13 +86,116 @@ test("a_card_drags_by_its_name_but_not_by_its_edit_box", async () => {
   expect(within(stores).getByRole("textbox", { name: "Table name stores" }).classList.contains("nodrag")).toBe(true);
 });
 
-test("cards_render_columns_and_badges", () => {
+test("cards_show_key_link_and_nullable_marks_without_text_badges", () => {
   renderCanvas();
   const stores = screen.getByRole("group", { name: "Table stores" });
   expect(within(stores).getByText("varchar(80)")).toBeTruthy();
-  expect(within(stores).getAllByText("PK")).toHaveLength(1);
+  // The header: name, schema and column count.
+  expect(within(stores).getByText("public")).toBeTruthy();
+  expect(within(stores).getByText("4")).toBeTruthy();
+  // One key icon on the primary key, no PK / FK / NN / UQ text.
+  expect(stores.querySelectorAll(".table-card-key .icon")).toHaveLength(1);
+  for (const t of ["PK", "FK", "NN", "UQ"]) expect(within(stores).queryByText(t)).toBeNull();
+  expect(stores.querySelector(".badge")).toBeNull();
+  // kind and opened_at are nullable.
+  expect(stores.querySelectorAll(".table-card-nullable")).toHaveLength(2);
+  expect(within(stores).getAllByText("?")).toHaveLength(2);
   const orders = screen.getByRole("group", { name: "Table orders" });
-  expect(within(orders).getByText("FK")).toBeTruthy();
+  // store_id is a Foreign Key: a link icon in its row.
+  const row = within(orders).getByRole("button", { name: "Column store_id" }).closest("li")!;
+  expect(row.querySelector(".table-card-key .icon")).not.toBeNull();
+  expect(within(orders).queryByText("FK")).toBeNull();
+});
+
+test("edges_use_crows_foot_markers", () => {
+  const { container } = render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas
+        model={KFC_MODEL}
+        layout={{ version: 1, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } }}
+        blocked={false}
+        onLayout={() => {}}
+        onEdit={() => {}}
+        onGoToError={() => {}}
+      />
+    </div>,
+  );
+  expect(container.querySelector("marker#crow-many")).not.toBeNull();
+  expect(container.querySelector("marker#bar-one")).not.toBeNull();
+  // React Flow draws an edge only once it has measured both cards' handles, which jsdom cannot; check what it is given.
+  const [edge] = edgesFor(KFC_MODEL);
+  expect(edge).toMatchObject({ type: "smoothstep", pathOptions: { borderRadius: 8 }, markerStart: "crow-many", markerEnd: "bar-one", source: "public.orders", target: "public.stores" });
+});
+
+test("edge_sides_face_the_other_card", () => {
+  // Source left of target: out on the right, in on the left.
+  expect(edgeSides(0, 300, 216)).toEqual({ source: "right", target: "left" });
+  // Source right of target (orders.customer_id to customers on its left): out on the left, in on the right.
+  expect(edgeSides(300, 0, 216)).toEqual({ source: "left", target: "right" });
+  // One above the other: both on the right.
+  expect(edgeSides(0, 100, 216)).toEqual({ source: "right", target: "right" });
+});
+
+test("edges_use_the_handles_on_the_facing_sides", () => {
+  // KFC_MODEL's first Ref: public.orders (many) to public.stores (one).
+  const at = (pos: Record<string, number>) => edgesFor(KFC_MODEL, (k) => pos[k])[0];
+  expect(at({ "public.orders": 320, "public.stores": 0 })).toMatchObject({ sourceHandle: expect.stringMatching(/:sl$/), targetHandle: expect.stringMatching(/:tr$/) });
+  expect(at({ "public.orders": 0, "public.stores": 320 })).toMatchObject({ sourceHandle: expect.stringMatching(/:s$/), targetHandle: expect.stringMatching(/:t$/) });
+});
+
+test("cards_have_no_add_column_row_and_the_menu_adds_one", async () => {
+  const { onEdit } = renderCanvas();
+  const stores = screen.getByRole("group", { name: "Table stores" });
+  expect(within(stores).queryByRole("button", { name: "Add column" })).toBeNull();
+  await userEvent.click(within(stores).getByRole("button", { name: "Table actions" }));
+  expect(screen.queryByRole("menuitem", { name: "Ask AI" })).toBeNull();
+  await userEvent.click(screen.getByRole("menuitem", { name: "Add column" }));
+  expect(onEdit).toHaveBeenCalledTimes(1);
+});
+
+test("zoom_shows_percent_and_a_minimap_without_attribution", async () => {
+  const { container } = render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas
+        model={KFC_MODEL}
+        layout={{ version: 1, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } }}
+        blocked={false}
+        onLayout={() => {}}
+        onEdit={() => {}}
+        onGoToError={() => {}}
+      />
+    </div>,
+  );
+  const zoom = screen.getByRole("group", { name: "Zoom" });
+  expect(within(zoom).getByRole("button", { name: "Zoom out" })).toBeTruthy();
+  expect(within(zoom).getByRole("button", { name: "Zoom in" })).toBeTruthy();
+  expect(within(zoom).getByRole("button", { name: "Fit to view" })).toBeTruthy();
+  expect(within(zoom).getByText(/^\d+%$/)).toBeTruthy();
+  expect(container.querySelector(".react-flow__minimap")).not.toBeNull();
+  expect(container.querySelector(".react-flow__attribution")).toBeNull();
+  expect(container.querySelector(".react-flow__controls")).toBeNull();
+});
+
+test("selected_card_has_the_outline_and_four_handles", async () => {
+  const { container } = render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas
+        model={KFC_MODEL}
+        layout={{ version: 1, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } }}
+        blocked={false}
+        onLayout={() => {}}
+        onEdit={() => {}}
+        onGoToError={() => {}}
+      />
+    </div>,
+  );
+  expect(container.querySelector(".selbox")).toBeNull();
+  const node = container.querySelector('.react-flow__node[data-id="public.orders"]') as HTMLElement;
+  fireEvent.keyDown(node, { key: "Enter" });
+  await waitFor(() => expect(container.querySelectorAll(".selbox")).toHaveLength(1));
+  expect(container.querySelectorAll(".selbox i")).toHaveLength(4);
+  expect(node.contains(container.querySelector(".selbox"))).toBe(true);
+  expect(screen.getByText("orders selected")).toBeTruthy();
 });
 
 test("renaming_column_on_card_calls_onEdit", async () => {
@@ -262,5 +365,6 @@ test("card_ask_follows_live_access_changes", async () => {
 test("a_card_has_no_ask_ai_without_the_setting", async () => {
   renderCanvas();
   const stores = screen.getByRole("group", { name: "Table stores" });
-  expect(within(stores).queryByRole("button", { name: "Table actions" })).toBeNull();
+  await userEvent.click(within(stores).getByRole("button", { name: "Table actions" }));
+  expect(screen.queryByRole("menuitem", { name: "Ask AI" })).toBeNull();
 });

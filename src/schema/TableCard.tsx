@@ -1,5 +1,6 @@
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import { useState } from "react";
+import Icon from "../components/Icon";
 import type { DialectKind, SmColumn, SmTable } from "../api/types";
 import InlineAsk from "../assistant/InlineAsk";
 import type { AskContext, AskKit } from "../assistant/context";
@@ -88,7 +89,7 @@ function Editable({
   );
 }
 
-export default function TableCard({ data }: NodeProps & { data: TableCardData }) {
+export default function TableCard({ data, selected }: NodeProps & { data: TableCardData }) {
   const { table, tableKey: key, blocked, onEdit, fkColumns, dialect, ask: askData } = data;
   const [menu, setMenu] = useState(false);
   const [ask, setAsk] = useState(false);
@@ -98,6 +99,7 @@ export default function TableCard({ data }: NodeProps & { data: TableCardData })
   return (
     <div className="table-card" role="group" aria-label={`Table ${table.name}`}>
       <div className="table-card-header">
+        <Icon name="table" className="table-card-icon" />
         <Editable
           value={table.name}
           label={`Table name ${table.name}`}
@@ -106,31 +108,49 @@ export default function TableCard({ data }: NodeProps & { data: TableCardData })
           onCommit={(v) => onEdit((t, r) => renameTable(t, r, key, v))}
         />
         {table.alias && <span className="table-card-alias">as {table.alias}</span>}
-        {askData && (
-          <button
-            type="button"
-            className="icon-button nodrag"
-            aria-label="Table actions"
-            aria-haspopup="menu"
-            aria-expanded={menu}
-            onClick={() => setMenu((m) => !m)}
-          >
-            ⋯
-          </button>
-        )}
-        {menu && askData && (
+        {table.schema && <span className="table-card-schema">{table.schema}</span>}
+        <span className="table-card-spacer" />
+        <span className="table-card-count">{table.columns.length}</span>
+        <button
+          type="button"
+          className="icon-button nodrag"
+          aria-label="Table actions"
+          aria-haspopup="menu"
+          aria-expanded={menu}
+          onClick={() => setMenu((m) => !m)}
+        >
+          ⋯
+        </button>
+        {menu && (
           <div className="menu card-menu nodrag" role="menu" onKeyDown={(e) => e.key === "Escape" && setMenu(false)}>
             <button
               type="button"
               role="menuitem"
               className="menu-item"
+              disabled={blocked}
               onClick={() => {
                 setMenu(false);
-                setAsk(true);
+                const used = new Set(table.columns.map((c) => c.name));
+                let name = "new_column";
+                for (let n = 2; used.has(name); n++) name = `new_column_${n}`;
+                onEdit((t, r) => addColumn(t, r, key, name, DIALECT_TYPES[dialect][0]));
               }}
             >
-              Ask AI
+              Add column
             </button>
+            {askData && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenu(false);
+                  setAsk(true);
+                }}
+              >
+                Ask AI
+              </button>
+            )}
           </div>
         )}
         {ask && askData && (
@@ -158,35 +178,40 @@ export default function TableCard({ data }: NodeProps & { data: TableCardData })
           return (
             <li key={c.name} className="table-card-column">
               <Handle type="target" id={`${c.name}:t`} position={Position.Left} isConnectable={!blocked} />
-              <Editable
-                value={c.name}
-                label={`Column ${c.name}`}
-                className="table-card-col-name"
-                disabled={blocked}
-                onCommit={(v) => onEdit((t, r) => renameColumn(t, r, key, c.name, v))}
-              />
-              <Editable
-                value={c.typeName}
-                label={`Type of ${c.name}`}
-                className="table-card-col-type"
-                disabled={blocked}
-                onCommit={(v) => onEdit((t, r) => setColumnType(t, r, key, c.name, v))}
-              />
-              <span className="table-card-badges">
-                {pk && <span className="badge">PK</span>}
-                {fkColumns.includes(c.name) && <span className="badge">FK</span>}
-                {c.unique && <span className="badge">UQ</span>}
-                {c.notNull && !pk && <span className="badge">NN</span>}
+              {/* Edge ends only: an edge leaves or enters on the side facing the other card (edgeSides). */}
+              <Handle type="source" id={`${c.name}:sl`} position={Position.Left} isConnectable={false} className="edge-anchor" />
+              <span className={pk ? "table-card-key table-card-pk" : "table-card-key"}>
+                {pk ? <Icon name="key" size={14} /> : fkColumns.includes(c.name) ? <Icon name="link" size={14} /> : null}
               </span>
-              <button
-                type="button"
-                className="icon-button nodrag"
-                aria-label={`Settings of ${c.name}`}
-                disabled={blocked}
-                onClick={() => setSettingsFor((s) => (s === c.name ? null : c.name))}
-              >
-                ⚙
-              </button>
+              <span className="table-card-col-main">
+                <Editable
+                  value={c.name}
+                  label={`Column ${c.name}`}
+                  className="table-card-col-name"
+                  disabled={blocked}
+                  onCommit={(v) => onEdit((t, r) => renameColumn(t, r, key, c.name, v))}
+                />
+              </span>
+              <span className="table-card-col-end">
+                <Editable
+                  value={c.typeName}
+                  label={`Type of ${c.name}`}
+                  className="table-card-col-type"
+                  disabled={blocked}
+                  onCommit={(v) => onEdit((t, r) => setColumnType(t, r, key, c.name, v))}
+                />
+                {!c.notNull && !pk && <span className="table-card-nullable">?</span>}
+                <button
+                  type="button"
+                  className="icon-button nodrag table-card-settings"
+                  aria-label={`Settings of ${c.name}`}
+                  disabled={blocked}
+                  onClick={() => setSettingsFor((s) => (s === c.name ? null : c.name))}
+                >
+                  ⚙
+                </button>
+              </span>
+              <span aria-hidden="true" />
               {settingsFor === c.name && (
                 <div className="card-popover nodrag" role="dialog" aria-label={`Settings of ${c.name}`}>
                   {SETTINGS.map((s) => (
@@ -204,23 +229,19 @@ export default function TableCard({ data }: NodeProps & { data: TableCardData })
                 </div>
               )}
               <Handle type="source" id={`${c.name}:s`} position={Position.Right} isConnectable={!blocked} />
+              <Handle type="target" id={`${c.name}:tr`} position={Position.Right} isConnectable={false} className="edge-anchor" />
             </li>
           );
         })}
       </ul>
-      <button
-        type="button"
-        className="button button-small table-card-add nodrag"
-        disabled={blocked}
-        onClick={() => {
-          const used = new Set(table.columns.map((c) => c.name));
-          let name = "new_column";
-          for (let n = 2; used.has(name); n++) name = `new_column_${n}`;
-          onEdit((t, r) => addColumn(t, r, key, name, DIALECT_TYPES[dialect][0]));
-        }}
-      >
-        Add column
-      </button>
+      {selected && (
+        <div className="selbox" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+          <i />
+        </div>
+      )}
     </div>
   );
 }

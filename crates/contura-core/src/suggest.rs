@@ -12,6 +12,17 @@ pub struct SuggestedConnection {
     pub host: String,
     pub port: u16,
     pub user: String,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// The number inside a Laragon `Version=` value: `mysql-8.0.30-winx64` gives `8.0.30`.
+pub fn laragon_version(value: &str) -> Option<String> {
+    value
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map(|p| p.trim_matches('.'))
+        .find(|p| p.chars().next().is_some_and(|c| c.is_ascii_digit()) && p.contains('.'))
+        .map(str::to_owned)
 }
 
 /// What a Laragon section suggests: name, Dialect, default port and user.
@@ -61,12 +72,17 @@ pub fn parse_laragon_ini(ini: &str) -> Vec<SuggestedConnection> {
             },
             None => default_port,
         };
+        let version = props
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("version"))
+            .and_then(|(_, v)| laragon_version(v));
         out.push(SuggestedConnection {
             name: name.into(),
             dialect,
             host: "127.0.0.1".into(),
             port,
             user: user.into(),
+            version,
         });
     }
     out
@@ -175,6 +191,24 @@ mod tests {
     }
 
     #[test]
+    fn laragon_version_comes_from_the_ini() {
+        assert_eq!(
+            laragon_version("mysql-8.0.30-winx64"),
+            Some("8.0.30".to_string())
+        );
+        assert_eq!(laragon_version("pgsql"), None);
+        let s = parse_laragon_ini(
+            "[mysql]
+Version=mysql-8.0.30-winx64
+[postgresql]
+Version=pgsql
+",
+        );
+        assert_eq!(s[0].version.as_deref(), Some("8.0.30"));
+        assert_eq!(s[1].version, None);
+    }
+
+    #[test]
     fn mysql_port_from_ini() {
         let s = parse_laragon_ini("[mysql]\nVersion=mysql-8.0.30-winx64\nPort=3310\n");
         assert_eq!(s.len(), 1);
@@ -207,6 +241,7 @@ mod tests {
                 host: "127.0.0.1".into(),
                 port: 5432,
                 user: "postgres".into(),
+                version: None,
             }]
         );
     }

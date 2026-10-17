@@ -7,6 +7,8 @@ import { LangClient, type WorkerLike } from "../lang/client";
 import { KFC_SCHEMA } from "../lang/sql/fixtures";
 import { mockEditorDom } from "../test/editor";
 import { fakeWorker } from "../test/langWorker";
+import { resolveKeymap } from "../commands/keymap";
+import type { CommandId } from "../commands/registry";
 
 mockEditorDom();
 import SqlEditor, { type SqlEditorApi } from "./SqlEditor";
@@ -79,6 +81,55 @@ test("running_and_error_marks_render", () => {
   );
   expect(container.querySelector(".cm-run-mark")?.textContent).toBe("SELECT 1");
   expect(container.querySelector(".cm-error-mark")?.textContent).toBe("SELEC");
+});
+
+test("function_calls_are_marked_but_not_names_strings_or_keywords", () => {
+  const { container } = setup("SELECT count(id) FROM orders");
+  const fns = [...container.querySelectorAll(".cm-fn")].map((e) => e.textContent);
+  expect(fns).toEqual(["count"]);
+  const quoted = setup("SELECT 'count(' AS x -- sum(\nWHERE id IN (1) AND EXISTS (SELECT 1)");
+  expect(quoted.container.querySelector(".cm-fn")).toBeNull();
+});
+
+test("table_names_before_a_column_list_are_not_function_calls", () => {
+  const cases = [
+    "INSERT INTO orders (id) VALUES (now())",
+    "INSERT INTO public.orders (id) VALUES (now())",
+    "CREATE INDEX i ON orders (id); SELECT now()",
+    "CREATE VIEW v (a) AS SELECT now()",
+    "CREATE UNIQUE INDEX i ON public.orders (id); SELECT now()",
+  ];
+  for (const text of cases) {
+    const { container, unmount } = setup(text);
+    expect([...container.querySelectorAll(".cm-fn")].map((e) => e.textContent)).toEqual(["now"]);
+    unmount();
+  }
+});
+
+test("functions_in_a_join_condition_are_marked", () => {
+  const { container } = setup("SELECT 1 FROM a JOIN t ON lower(a.x) = t.y");
+  expect([...container.querySelectorAll(".cm-fn")].map((e) => e.textContent)).toEqual(["lower"]);
+});
+
+const bandLines =(container: HTMLElement) =>
+  [...container.querySelectorAll(".cm-line.cm-current-stmt")].map((e) => e.textContent);
+const barLines = (container: HTMLElement) =>
+  [...container.querySelectorAll(".cm-lineNumbers .cm-current-stmt-gutter")].map((e) => e.textContent);
+
+test("the_current_statement_band_covers_every_line_and_follows_the_selection", () => {
+  const text = "SELECT 1,\n  2;\nSELECT 3\nFROM t;";
+  const { container, view } = setup(text);
+  expect(bandLines(container)).toEqual(["SELECT 1,", "  2;"]);
+  expect(barLines(container)).toEqual(["1", "2"]);
+  act(() => view.dispatch({ selection: { anchor: text.indexOf("FROM") } }));
+  expect(bandLines(container)).toEqual(["SELECT 3", "FROM t;"]);
+  expect(barLines(container)).toEqual(["3", "4"]);
+});
+
+test("an_empty_editor_has_no_current_statement_band", () => {
+  const { container } = setup("");
+  expect(container.querySelector(".cm-current-stmt")).toBeNull();
+  expect(container.querySelector(".cm-current-stmt-gutter")).toBeNull();
 });
 
 test("api_inserts_replaces_and_selects", () => {
@@ -264,4 +315,38 @@ test("one_line_mode_has_no_gutters_and_enter_runs", () => {
   expect(onRun).toHaveBeenLastCalledWith("current");
   act(() => view.dispatch({ changes: { from: 0, insert: "a\nb " } }));
   expect(view.state.doc.lines).toBe(1);
+});
+
+test("a_confirmed_override_beats_the_editor_default", () => {
+  const typeX = (view: EditorView) => {
+    // A typed character, as its own undo step.
+    act(() => view.dispatch({ changes: { from: 0, insert: "x" }, selection: { anchor: 1 }, userEvent: "input.type" }));
+  };
+  const run = vi.fn((id: CommandId) => id === "query.new");
+  const over = setup("", { commands: { map: resolveKeymap({ "query.new": ["Ctrl+Z"] }), run } });
+  typeX(over.view);
+  key(over.view, "z", { ctrlKey: true, code: "KeyZ" });
+  expect(run).toHaveBeenCalledWith("query.new");
+  expect(over.view.state.doc.toString()).toBe("x");
+  over.unmount();
+
+  const plain = setup("", { commands: { map: resolveKeymap({}), run } });
+  typeX(plain.view);
+  key(plain.view, "z", { ctrlKey: true, code: "KeyZ" });
+  expect(plain.view.state.doc.toString()).toBe("");
+});
+
+test("a_rebound_editor_command_moves_off_its_default_key", () => {
+  const { view, onRun } = setup("SELECT 1;", { commands: { map: resolveKeymap({ "query.run": ["F9"] }), run: () => false } });
+  key(view, "Enter", { ctrlKey: true });
+  expect(onRun).not.toHaveBeenCalled();
+  key(view, "F9");
+  expect(onRun).toHaveBeenLastCalledWith("current");
+});
+
+test("gutter_and_content_mount_side_by_side", () => {
+  const { container } = setup("SELECT 1");
+  const scroller = container.querySelector(".cm-scroller") as HTMLElement;
+  const kids = Array.from(scroller.children).map((c) => c.className.split(" ")[0]);
+  expect(kids.slice(0, 2)).toEqual(["cm-gutters", "cm-content"]);
 });

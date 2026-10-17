@@ -56,7 +56,7 @@ fn check_outside_data(path: &Path, data_dir: &Path) -> Result<()> {
 }
 
 /// Writes through a temporary file in the same folder, then renames it over the target.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp-{}", std::process::id()));
     let tmp = PathBuf::from(tmp);
@@ -88,12 +88,21 @@ pub fn write_binary_file(path: &Path, bytes: &[u8], data_dir: &Path) -> Result<(
     write_atomic(path, bytes)
 }
 
+pub fn decode_base64(text: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .map_err(|e| Error::InvalidInput(format!("the file data is not valid base64: {e}")))
+}
+
+pub fn encode_base64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
 /// For a PNG from the UI, which arrives as base64 over IPC.
 pub fn write_base64_file(path: &Path, base64: &str, data_dir: &Path) -> Result<()> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(base64)
-        .map_err(|e| Error::InvalidInput(format!("the file data is not valid base64: {e}")))?;
+    let bytes = decode_base64(base64)?;
     write_binary_file(path, &bytes, data_dir)
 }
 

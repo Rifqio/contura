@@ -83,7 +83,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
         <Card
           title={`${who} is rate limiting this key`}
           body={`Too many requests (429). ${
-            ai.retryAfterSecs === null ? "Try again in a moment" : `Try again in ${ai.retryAfterSecs} s`
+            ai.retryAfterSecs === null ? "Try again in a moment" : `Try again in ${ai.retryAfterSecs}s`
           }, or switch provider.`}
         >
           {settingsButton("Switch provider", false)}

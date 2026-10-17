@@ -11,22 +11,44 @@ use crate::ai::AiAccess;
 use crate::dialect::{Dialect, connect};
 use crate::edits::{self, EditSet, PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
+use crate::explain::{Plan, explain_sql, plan_from_rows};
 use crate::model::{
-    ConnectionConfig, ConnectionId, DialectKind, Group, GroupColor, GroupId, ObjectPath,
-    PageRequest, SslMode,
+    ConnectionConfig, ConnectionId, DialectKind, EditorPrefs, GROUP_IMAGE_MAX, Group, GroupColor,
+    GroupId, KeymapOverrides, ObjectPath, PageRequest, RowHeight, SslMode, UiPrefs,
 };
 use crate::query::{
     ExecOutcome, Execution, HistoryEntry, HistoryFilter, MoreRows, NewHistory, Outcome,
-    QuerySessionId, SavedQuery, SavedQueryInput, SessionHandle,
+    QuerySessionId, SavedQuery, SavedQueryInput, SavedQueryRun, SessionHandle,
 };
-use crate::safety::{PassId, RunVerdict, StatementClass, classify, verdict};
+use crate::recent::{RecentItem, RecentTarget, merge_restored, push_recent};
+use crate::safety::{
+    PassId, RunVerdict, StatementClass, classify, leading_word, statement_count, verdict,
+};
 use crate::secrets::SecretStore;
 use crate::store::AppStore;
 use crate::suggest::{SuggestedConnection, laragon_suggestions};
 use std::time::{Duration, Instant};
 
 const LAST_GROUP_KEY: &str = "last_group";
+const UI_PREFS_KEY: &str = "ui_prefs";
+const KEYMAP_KEY: &str = "keymap";
+const KNOWN_EDITOR_FAMILIES: [&str; 3] = ["JetBrains Mono", "Cascadia Mono", "Consolas"];
+const RECENT_ITEMS_KEY: &str = "recent_items";
 const QUERY_TABS_KEY: &str = "query_tabs:";
+const SAVED_QUERY_CONNECTIONS_KEY: &str = "saved_query_connections";
+const CONNECTION_OPENED_KEY: &str = "connection_opened";
+const DAY_MS: i64 = 86_400_000;
+
+/// What the data folder holds, for Settings.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataFolderInfo {
+    pub path: Option<PathBuf>,
+    pub connections: u32,
+    pub groups: u32,
+    pub saved_queries: u32,
+    pub history_bytes: u64,
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase")]
@@ -69,6 +91,28 @@ pub struct GroupInput {
     pub color: GroupColor,
 }
 
+const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+
+fn too_large() -> Error {
+    Error::InvalidInput("the image is larger than 256 KB".into())
+}
+
+/// Decodes a Group image sent as base64, refusing oversize text before decoding.
+pub fn decode_group_image(text: &str) -> Result<Vec<u8>> {
+    if text.len() > GROUP_IMAGE_MAX / 3 * 4 + 4 {
+        return Err(too_large());
+    }
+    crate::model_files::decode_base64(text)
+}
+
+fn remove_if_present(path: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Store(e.to_string())),
+    }
+}
+
 /// Owns the saved Connections, Groups and the open sessions. The store lock is
 /// never held across an `.await`.
 pub struct ConnectionService {
@@ -84,6 +128,7 @@ pub struct ConnectionService {
     /// Confirm passes handed out by `confirm_run`, used up by `execute_sql`.
     passes: Mutex<HashMap<PassId, Pass>>,
     pass_ttl: Mutex<Duration>,
+    data_dir: Option<PathBuf>,
 }
 
 type QuerySlot = (ConnectionId, Arc<SessionHandle>, Option<String>);
@@ -136,7 +181,7 @@ fn poisoned() -> Error {
 
 impl ConnectionService {
     pub fn new(store: AppStore, secrets: Arc<dyn SecretStore>) -> Self {
-        Self {
+        let svc = Self {
             store: Mutex::new(store),
             secrets,
             sessions: RwLock::new(HashMap::new()),
@@ -144,7 +189,49 @@ impl ConnectionService {
             query_sessions: Mutex::new(HashMap::new()),
             passes: Mutex::new(HashMap::new()),
             pass_ttl: Mutex::new(PASS_TTL),
+            data_dir: None,
+        };
+        let _ = svc.prune_history_by_prefs();
+        svc
+    }
+
+    /// Records where the data folder is, for Settings.
+    pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        self.data_dir = Some(dir);
+        self
+    }
+
+    /// Drops history older than the kept days; Forever keeps everything.
+    fn prune_history_by_prefs(&self) -> Result<()> {
+        if let Some(days) = self.ui_prefs()?.history_keep_days {
+            self.store()?
+                .prune_history(now_ms() - i64::from(days) * DAY_MS)?;
         }
+        Ok(())
+    }
+
+    fn setting_map<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<HashMap<String, T>> {
+        Ok(self
+            .store()?
+            .get_setting(key)?
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default())
+    }
+
+    fn save_setting_map<T: Serialize>(&self, key: &str, map: &HashMap<String, T>) -> Result<()> {
+        let json = serde_json::to_string(map).map_err(|e| Error::Store(e.to_string()))?;
+        self.store()?.set_setting(key, &json)
+    }
+
+    pub fn data_folder_info(&self) -> Result<DataFolderInfo> {
+        let store = self.store()?;
+        Ok(DataFolderInfo {
+            path: self.data_dir.clone(),
+            connections: store.list_connections()?.len() as u32,
+            groups: store.list_groups()?.len() as u32,
+            saved_queries: store.list_saved_queries()?.len() as u32,
+            history_bytes: store.history_bytes()?,
+        })
     }
 
     /// Lets tests make passes expire at once.
@@ -580,6 +667,7 @@ impl ConnectionService {
         self.secrets.delete(id)?;
         self.store()?.delete_connection(id)?;
         self.store()?.clear_history(id)?;
+        let _ = self.forget_connection(id);
         // An open that started during the delete must not outlive it.
         self.bump_generation(id)
     }
@@ -609,7 +697,8 @@ impl ConnectionService {
         Ok(laragon_suggestions(&saved))
     }
 
-    pub async fn open(&self, id: ConnectionId) -> Result<()> {
+    /// Opens the Connection's session and returns the server version.
+    pub async fn open(&self, id: ConnectionId) -> Result<String> {
         self.open_with_hook(id, async {}).await
     }
 
@@ -620,9 +709,11 @@ impl ConnectionService {
         &self,
         id: ConnectionId,
         after_connect: impl Future<Output = ()>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         if self.is_open(id) {
-            return Ok(());
+            let version = self.session(id).await?.server_version().await?;
+            self.record_opened(id);
+            return Ok(version);
         }
         let generation = self.generation(id)?;
         let config = self
@@ -632,6 +723,13 @@ impl ConnectionService {
             .ok_or_else(|| Error::NotFound("connection not found".into()))?;
         let password = self.secrets.get(id)?;
         let session = connect(&config, password.as_deref()).await?;
+        let version = match session.server_version().await {
+            Ok(v) => v,
+            Err(e) => {
+                session.disconnect().await.ok();
+                return Err(e);
+            }
+        };
         after_connect.await;
         // Keep the first session if a concurrent open won, and drop ours if the
         // Connection was saved, deleted or closed while we were connecting.
@@ -655,7 +753,48 @@ impl ConnectionService {
         if stale && !self.list()?.iter().any(|c| c.id == id) {
             return Err(Error::NotFound("connection not found".into()));
         }
+        self.record_opened(id);
+        Ok(version)
+    }
+
+    /// Best effort: a failed write must not fail the open.
+    fn record_opened(&self, id: ConnectionId) {
+        let _ = (|| -> Result<()> {
+            let mut map = self.setting_map::<i64>(CONNECTION_OPENED_KEY)?;
+            map.insert(id.to_string(), now_ms());
+            self.save_setting_map(CONNECTION_OPENED_KEY, &map)
+        })();
+    }
+
+    /// Best effort: drops a deleted Connection from the opened-time and opens-on maps.
+    fn forget_connection(&self, id: ConnectionId) -> Result<()> {
+        let mut opened = self.setting_map::<i64>(CONNECTION_OPENED_KEY)?;
+        if opened.remove(&id.to_string()).is_some() {
+            self.save_setting_map(CONNECTION_OPENED_KEY, &opened)?;
+        }
+        let mut opens_on = self.setting_map::<ConnectionId>(SAVED_QUERY_CONNECTIONS_KEY)?;
+        let before = opens_on.len();
+        opens_on.retain(|_, c| *c != id);
+        if opens_on.len() != before {
+            self.save_setting_map(SAVED_QUERY_CONNECTIONS_KEY, &opens_on)?;
+        }
         Ok(())
+    }
+
+    /// When each Connection last opened successfully.
+    pub fn connection_opened_times(&self) -> Result<HashMap<ConnectionId, i64>> {
+        let live: Vec<ConnectionId> = self
+            .store()?
+            .list_connections()?
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        Ok(self
+            .setting_map::<i64>(CONNECTION_OPENED_KEY)?
+            .into_iter()
+            .filter_map(|(k, v)| Some((k.parse::<ConnectionId>().ok()?, v)))
+            .filter(|(k, _)| live.contains(k))
+            .collect())
     }
 
     pub async fn close(&self, id: ConnectionId) -> Result<()> {
@@ -679,7 +818,61 @@ impl ConnectionService {
     }
 
     pub fn list_groups(&self) -> Result<Vec<Group>> {
-        self.store()?.list_groups()
+        let mut groups = self.store()?.list_groups()?;
+        for g in &mut groups {
+            g.has_image = self.group_image_path(g.id).is_some_and(|p| p.is_file());
+        }
+        Ok(groups)
+    }
+
+    fn group_image_path(&self, id: GroupId) -> Option<PathBuf> {
+        self.data_dir
+            .as_ref()
+            .map(|d| d.join("group-images").join(format!("{id}.png")))
+    }
+
+    fn require_group_image_path(&self, id: GroupId) -> Result<PathBuf> {
+        self.group_image_path(id)
+            .ok_or_else(|| Error::InvalidInput("no data folder".into()))
+    }
+
+    fn find_group(&self, id: GroupId) -> Result<Group> {
+        self.list_groups()?
+            .into_iter()
+            .find(|g| g.id == id)
+            .ok_or_else(|| Error::NotFound("group not found".into()))
+    }
+
+    pub fn set_group_image(&self, id: GroupId, png: &[u8]) -> Result<Group> {
+        let path = self.require_group_image_path(id)?;
+        self.require_group(id)?;
+        if !png.starts_with(PNG_SIGNATURE) {
+            return Err(Error::InvalidInput("the image is not a PNG".into()));
+        }
+        if png.len() > GROUP_IMAGE_MAX {
+            return Err(too_large());
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| Error::Store(e.to_string()))?;
+        }
+        crate::model_files::write_atomic(&path, png)?;
+        self.find_group(id)
+    }
+
+    pub fn clear_group_image(&self, id: GroupId) -> Result<Group> {
+        let path = self.require_group_image_path(id)?;
+        self.require_group(id)?;
+        remove_if_present(&path)?;
+        self.find_group(id)
+    }
+
+    pub fn group_image(&self, id: GroupId) -> Result<Option<Vec<u8>>> {
+        let path = self.require_group_image_path(id)?;
+        match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Error::Store(e.to_string())),
+        }
     }
 
     pub fn save_group(&self, input: GroupInput) -> Result<Group> {
@@ -702,13 +895,19 @@ impl ConnectionService {
             id,
             name,
             color: input.color,
+            has_image: false,
         };
         store.save_group(&group)?;
-        Ok(group)
+        drop(store);
+        self.find_group(id)
     }
 
     pub fn delete_group(&self, id: GroupId) -> Result<()> {
-        self.store()?.delete_group(id)
+        self.store()?.delete_group(id)?;
+        if let Some(path) = self.group_image_path(id) {
+            remove_if_present(&path)?;
+        }
+        Ok(())
     }
 
     pub fn move_connection(
@@ -750,6 +949,147 @@ impl ConnectionService {
             LAST_GROUP_KEY,
             &id.map(|g| g.to_string()).unwrap_or_default(),
         )
+    }
+
+    /// Reads each field on its own, so one bad value keeps the others, then clamps.
+    pub fn ui_prefs(&self) -> Result<UiPrefs> {
+        let raw = self.store()?.get_setting(UI_PREFS_KEY)?;
+        let value: serde_json::Value = raw
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default();
+        fn field<T: serde::de::DeserializeOwned>(v: &serde_json::Value, key: &str) -> Option<T> {
+            v.get(key)
+                .and_then(|x| serde_json::from_value(x.clone()).ok())
+        }
+        let mut p = UiPrefs::default();
+        if let Some(t) = field(&value, "theme") {
+            p.theme = t;
+        }
+        if let Some(r) = field::<RowHeight>(&value, "rowHeight") {
+            p.row_height = r;
+        }
+        if let Some(e) = value.get("editor") {
+            if let Some(f) = field::<String>(e, "family") {
+                p.editor.family = f;
+            }
+            if let Some(s) = field(e, "size") {
+                p.editor.size = s;
+            }
+            if let Some(l) = field(e, "lineHeight") {
+                p.editor.line_height = l;
+            }
+            if let Some(l) = field(e, "ligatures") {
+                p.editor.ligatures = l;
+            }
+        }
+        if let Some(b) = field(&value, "brighterComments") {
+            p.brighter_comments = b;
+        }
+        if let Some(b) = field(&value, "inlineSuggestions") {
+            p.inline_suggestions = b;
+        }
+        if let Some(d) = field(&value, "historyKeepDays") {
+            p.history_keep_days = d;
+        }
+        if p.row_height.0 != 24 {
+            p.row_height = RowHeight(28);
+        }
+        // Retention deletes history, so 0 days must never mean "delete everything after each run".
+        p.history_keep_days = p.history_keep_days.map(|d| d.max(1));
+        p.editor.size = p.editor.size.clamp(11, 20);
+        p.editor.line_height = p.editor.line_height.clamp(16, 28);
+        if !KNOWN_EDITOR_FAMILIES.contains(&p.editor.family.as_str()) {
+            p.editor.family = EditorPrefs::default().family;
+        }
+        Ok(p)
+    }
+
+    pub fn keymap(&self) -> Result<KeymapOverrides> {
+        let raw = self.store()?.get_setting(KEYMAP_KEY)?;
+        Ok(raw
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default())
+    }
+
+    pub fn save_keymap(&self, overrides: KeymapOverrides) -> Result<()> {
+        let json = serde_json::to_string(&overrides).map_err(|e| Error::Store(e.to_string()))?;
+        self.store()?.set_setting(KEYMAP_KEY, &json)
+    }
+
+    pub fn save_ui_prefs(&self, prefs: UiPrefs) -> Result<()> {
+        let json = serde_json::to_string(&prefs).map_err(|e| Error::Store(e.to_string()))?;
+        let days_before = self.ui_prefs()?.history_keep_days;
+        self.store()?.set_setting(UI_PREFS_KEY, &json)?;
+        if days_before != self.ui_prefs()?.history_keep_days {
+            // Retention is housekeeping: the prefs are saved either way.
+            let _ = self.prune_history_by_prefs();
+        }
+        Ok(())
+    }
+
+    /// The last opened items, newest first. Items whose Connection or Saved Query is
+    /// gone are left out; an unreadable value lists empty.
+    pub fn recent_items(&self) -> Result<Vec<RecentItem>> {
+        let store = self.store()?;
+        let list: Vec<RecentItem> = store
+            .get_setting(RECENT_ITEMS_KEY)?
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default();
+        let connections: Vec<ConnectionId> =
+            store.list_connections()?.iter().map(|c| c.id).collect();
+        let queries = store.list_saved_queries()?;
+        Ok(list
+            .into_iter()
+            .filter(|i| i.connection_id.is_none_or(|c| connections.contains(&c)))
+            .filter_map(|mut i| {
+                if let RecentTarget::Query { saved_id, name } = &mut i.target {
+                    // The Saved Query's current name, so a rename shows.
+                    *name = queries.iter().find(|q| q.id == *saved_id)?.name.clone();
+                }
+                Some(i)
+            })
+            .collect())
+    }
+
+    /// Empties Recent and returns what it held, so the caller can offer an undo.
+    pub fn clear_recent(&self) -> Result<Vec<RecentItem>> {
+        let items = self.recent_items()?;
+        self.store()?.set_setting(RECENT_ITEMS_KEY, "[]")?;
+        Ok(items)
+    }
+
+    /// Puts cleared items back under whatever was opened since.
+    pub fn restore_recent(&self, items: Vec<RecentItem>) -> Result<()> {
+        let store = self.store()?;
+        let current: Vec<RecentItem> = store
+            .get_setting(RECENT_ITEMS_KEY)?
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default();
+        let json = serde_json::to_string(&merge_restored(current, items))
+            .map_err(|e| Error::Store(e.to_string()))?;
+        store.set_setting(RECENT_ITEMS_KEY, &json)
+    }
+
+    pub fn record_recent(
+        &self,
+        target: RecentTarget,
+        connection_id: Option<ConnectionId>,
+    ) -> Result<()> {
+        let store = self.store()?;
+        let list: Vec<RecentItem> = store
+            .get_setting(RECENT_ITEMS_KEY)?
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default();
+        let list = push_recent(
+            list,
+            RecentItem {
+                target,
+                connection_id,
+                opened_at_ms: now_ms(),
+            },
+        );
+        let json = serde_json::to_string(&list).map_err(|e| Error::Store(e.to_string()))?;
+        store.set_setting(RECENT_ITEMS_KEY, &json)
     }
 
     /// A query tab's own session on an open Connection.
@@ -849,10 +1189,76 @@ impl ConnectionService {
                 error,
             });
         }
+        let _ = self.prune_history_by_prefs();
         result.map(|outcome| Execution {
             outcome,
             elapsed_ms,
         })
+    }
+
+    /// The plan of one statement, from an EXPLAIN that never runs it: no ANALYZE and no
+    /// Query History row. The wrapped text goes through the same check as a run and must
+    /// classify as a read, so Read-only and Production never treat it as a write.
+    pub async fn explain(&self, s: QuerySessionId, statement: String) -> Result<Plan> {
+        let (conn, handle) = self.query_session(s)?;
+        let config = self.config(conn)?;
+        let dialect = config.dialect;
+        // Leading `;` and whitespace are not part of the statement.
+        let statement = statement
+            .trim_start_matches(|c: char| c == ';' || c.is_whitespace())
+            .to_string();
+        if statement_count(dialect, &statement) != 1 {
+            return Err(Error::InvalidInput(
+                "Explain one statement at a time.".into(),
+            ));
+        }
+        let refuse = || {
+            Error::InvalidInput(
+                "Contura explains only statements it can plan without running them.".into(),
+            )
+        };
+        // The user's own EXPLAIN (or DESC, its MySQL synonym) is never wrapped or run.
+        match leading_word(dialect, &statement).as_deref() {
+            Some("EXPLAIN" | "DESC" | "DESCRIBE") => {
+                return Err(Error::InvalidInput(
+                    "Explain the statement itself, without EXPLAIN.".into(),
+                ));
+            }
+            // Only these can be planned; anything else (a PRAGMA, say) may act at prepare time.
+            Some(
+                "SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "REPLACE" | "VALUES" | "TABLE"
+                | "MERGE",
+            ) => {}
+            _ => return Err(refuse()),
+        }
+        let wrapped = explain_sql(dialect, statement.trim());
+        self.authorize(
+            &PassScope::Query(s),
+            &config,
+            std::slice::from_ref(&wrapped),
+            None,
+        )?;
+        if classify(dialect, &wrapped) != StatementClass::Read {
+            return Err(refuse());
+        }
+        let rows = {
+            let run = handle.explain_rows(&wrapped);
+            tokio::pin!(run);
+            match config.query_timeout_secs {
+                None => run.await?,
+                Some(secs) => {
+                    match tokio::time::timeout(Duration::from_secs(secs.into()), &mut run).await {
+                        Ok(r) => r?,
+                        Err(_) => {
+                            handle.cancel().await.ok();
+                            let _ = tokio::time::timeout(CLOSE_WAIT, &mut run).await;
+                            return Err(Error::TimedOut(secs));
+                        }
+                    }
+                }
+            }
+        };
+        plan_from_rows(dialect, &rows)
     }
 
     pub async fn fetch_more_rows(&self, s: QuerySessionId) -> Result<MoreRows> {
@@ -902,18 +1308,41 @@ impl ConnectionService {
 
     pub fn query_history(
         &self,
-        id: ConnectionId,
+        id: Option<ConnectionId>,
         filter: HistoryFilter,
     ) -> Result<Vec<HistoryEntry>> {
         self.store()?.query_history(id, &filter)
     }
 
-    pub fn clear_query_history(&self, id: ConnectionId) -> Result<()> {
-        self.store()?.clear_history(id)
+    /// `None` clears every Connection's history.
+    pub fn clear_query_history(&self, id: Option<ConnectionId>) -> Result<()> {
+        match id {
+            Some(id) => self.store()?.clear_history(id),
+            None => self.store()?.clear_all_history(),
+        }
     }
 
+    /// With the Connection each opens on; one whose Connection is gone lists `None`.
     pub fn list_saved_queries(&self) -> Result<Vec<SavedQuery>> {
-        self.store()?.list_saved_queries()
+        let mut list = self.store()?.list_saved_queries()?;
+        let opens_on = self.setting_map::<ConnectionId>(SAVED_QUERY_CONNECTIONS_KEY)?;
+        let live: Vec<ConnectionId> = self
+            .store()?
+            .list_connections()?
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        for q in &mut list {
+            q.connection_id = opens_on
+                .get(&q.id.to_string())
+                .copied()
+                .filter(|c| live.contains(c));
+        }
+        Ok(list)
+    }
+
+    pub fn saved_query_runs(&self) -> Result<Vec<SavedQueryRun>> {
+        self.store()?.saved_query_runs()
     }
 
     pub fn save_saved_query(&self, input: SavedQueryInput) -> Result<SavedQuery> {
@@ -921,18 +1350,33 @@ impl ConnectionService {
         if name.is_empty() {
             return Err(Error::InvalidInput("Give the query a name.".into()));
         }
-        let q = SavedQuery {
+        let mut q = SavedQuery {
             id: input.id.unwrap_or_else(Uuid::new_v4),
             name,
             sql: input.sql,
             updated_at_ms: now_ms(),
+            connection_id: input.connection_id,
         };
         self.store()?.save_saved_query(&q)?;
+        let mut opens_on = self.setting_map::<ConnectionId>(SAVED_QUERY_CONNECTIONS_KEY)?;
+        // None keeps what is stored; only Some(id) changes it.
+        match q.connection_id {
+            Some(c) => {
+                opens_on.insert(q.id.to_string(), c);
+                self.save_setting_map(SAVED_QUERY_CONNECTIONS_KEY, &opens_on)?;
+            }
+            None => q.connection_id = opens_on.get(&q.id.to_string()).copied(),
+        }
         Ok(q)
     }
 
     pub fn delete_saved_query(&self, id: Uuid) -> Result<()> {
-        self.store()?.delete_saved_query(id)
+        self.store()?.delete_saved_query(id)?;
+        let mut opens_on = self.setting_map::<ConnectionId>(SAVED_QUERY_CONNECTIONS_KEY)?;
+        if opens_on.remove(&id.to_string()).is_some() {
+            self.save_setting_map(SAVED_QUERY_CONNECTIONS_KEY, &opens_on)?;
+        }
+        Ok(())
     }
 
     /// The query tab drafts of a place (`group:<id>` or `ungrouped`), as the UI wrote them.

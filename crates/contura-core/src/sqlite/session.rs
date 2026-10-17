@@ -52,6 +52,11 @@ fn actor(conn: Connection, mut rx: mpsc::Receiver<Command>, flag: CancelFlag, re
             Command::FetchMore { reply } => {
                 let _ = reply.send(Err(no_more()));
             }
+            Command::Explain { sql, reply } => {
+                let result = explain(&conn, &sql)
+                    .map_err(|e| or_cancelled(&flag, session_err(e, read_only)));
+                let _ = reply.send(result);
+            }
             Command::CloseResult { reply } => {
                 let _ = reply.send(());
             }
@@ -87,6 +92,31 @@ fn read_page(
         page.push(cells);
     }
     Ok((page, false))
+}
+
+/// Every cell of every row as full text.
+fn explain(conn: &Connection, sql: &str) -> rusqlite::Result<Vec<Vec<String>>> {
+    use rusqlite::types::ValueRef;
+    let mut stmt = conn.prepare(sql)?;
+    let width = stmt.column_count();
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let cells = (0..width)
+            .map(|i| {
+                row.get_ref(i).map(|v| match v {
+                    ValueRef::Null => String::new(),
+                    ValueRef::Integer(n) => n.to_string(),
+                    ValueRef::Real(f) => f.to_string(),
+                    ValueRef::Text(t) | ValueRef::Blob(t) => {
+                        String::from_utf8_lossy(t).into_owned()
+                    }
+                })
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        out.push(cells);
+    }
+    Ok(out)
 }
 
 fn is_numeric_decl(decl: &str) -> bool {

@@ -3,7 +3,9 @@ mod common;
 use common::TestDb;
 use contura_core::Error;
 use contura_core::connections::{ConnectionInput, ConnectionService, GroupInput, PasswordChange};
-use contura_core::model::{DialectKind, GroupColor, SslMode};
+use contura_core::model::{
+    DialectKind, EditorPrefs, GroupColor, KeymapOverrides, RowHeight, SslMode, ThemeChoice, UiPrefs,
+};
 use contura_core::secrets::{MemorySecretStore, SecretStore};
 use contura_core::store::AppStore;
 use std::sync::Arc;
@@ -55,8 +57,58 @@ fn group(name: &str) -> GroupInput {
     GroupInput {
         id: None,
         name: name.into(),
-        color: GroupColor::Red,
+        color: GroupColor::Indigo,
     }
+}
+
+#[test]
+fn store_lists_groups_with_all_nine_old_colours() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    drop(AppStore::open(&path).unwrap());
+    let old = [
+        "red", "orange", "amber", "green", "teal", "blue", "violet", "rose", "slate",
+    ];
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    let mut ids = Vec::new();
+    for (i, colour) in old.iter().enumerate() {
+        let id = uuid::Uuid::new_v4();
+        ids.push(id);
+        raw.execute(
+            "INSERT INTO groups (id, name, color) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id.to_string(), format!("g{i}"), colour],
+        )
+        .unwrap();
+    }
+    let store = AppStore::open(&path).unwrap();
+    let groups = store.list_groups().unwrap();
+    assert_eq!(groups.len(), 9);
+    let want = [
+        GroupColor::Indigo,
+        GroupColor::Gold,
+        GroupColor::Gold,
+        GroupColor::Green,
+        GroupColor::Teal,
+        GroupColor::Sky,
+        GroupColor::Violet,
+        GroupColor::Indigo,
+        GroupColor::Pink,
+    ];
+    for (i, w) in want.iter().enumerate() {
+        let g = groups.iter().find(|g| g.name == format!("g{i}")).unwrap();
+        assert_eq!(g.color, *w, "old colour {}", old[i]);
+    }
+    // Saving one rewrites its stored name to the new slot.
+    let first = groups.iter().find(|g| g.name == "g0").unwrap();
+    store.save_group(first).unwrap();
+    let stored: String = raw
+        .query_row(
+            "SELECT color FROM groups WHERE id = ?1",
+            [first.id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, "indigo");
 }
 
 #[tokio::test]
@@ -212,6 +264,163 @@ fn last_group_forgets_deleted_group() {
     assert_eq!(svc.last_group().unwrap(), None);
 }
 
+#[test]
+fn ui_prefs_default_to_dark() {
+    let (_d, _s, svc) = service();
+    assert_eq!(svc.ui_prefs().unwrap().theme, ThemeChoice::Dark);
+}
+
+#[test]
+fn ui_prefs_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    let svc = ConnectionService::new(
+        AppStore::open(&path).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    svc.save_ui_prefs(UiPrefs {
+        theme: ThemeChoice::Light,
+        ..UiPrefs::default()
+    })
+    .unwrap();
+    drop(svc);
+    let svc = ConnectionService::new(
+        AppStore::open(&path).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    assert_eq!(svc.ui_prefs().unwrap().theme, ThemeChoice::Light);
+}
+
+#[test]
+fn ui_prefs_unreadable_falls_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    let store = AppStore::open(&path).unwrap();
+    store.set_setting("ui_prefs", "{").unwrap();
+    let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()));
+    assert_eq!(svc.ui_prefs().unwrap().theme, ThemeChoice::Dark);
+}
+
+fn service_with_setting(key: &str, raw: &str) -> (tempfile::TempDir, ConnectionService) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    store.set_setting(key, raw).unwrap();
+    let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()));
+    (dir, svc)
+}
+
+fn assert_all_defaults_except_theme(p: &UiPrefs) {
+    assert_eq!(p.row_height.0, 28);
+    assert_eq!(p.editor.family, "JetBrains Mono");
+    assert_eq!((p.editor.size, p.editor.line_height), (13, 20));
+    assert!(p.editor.ligatures);
+    assert!(!p.brighter_comments);
+    assert!(!p.inline_suggestions);
+    assert_eq!(p.history_keep_days, None);
+}
+
+#[test]
+fn ui_prefs_from_v070_have_every_default() {
+    let (_d, _s, svc) = service();
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Dark);
+    assert_all_defaults_except_theme(&p);
+}
+
+#[test]
+fn ui_prefs_from_the_restyle_keep_the_theme() {
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"theme":"light"}"#);
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_all_defaults_except_theme(&p);
+}
+
+#[test]
+fn ui_prefs_one_bad_field_keeps_the_others() {
+    let (_d, svc) = service_with_setting(
+        "ui_prefs",
+        r#"{"theme":"light","rowHeight":"tall","editor":{"size":40,"family":"Comic"},"historyKeepDays":90}"#,
+    );
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_eq!(p.row_height.0, 28);
+    assert_eq!(p.editor.size, 20);
+    assert_eq!(p.editor.family, "JetBrains Mono");
+    assert_eq!(p.history_keep_days, Some(90));
+}
+
+#[test]
+fn ui_prefs_round_trip_every_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    let svc = ConnectionService::new(
+        AppStore::open(&path).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    svc.save_ui_prefs(UiPrefs {
+        theme: ThemeChoice::Light,
+        row_height: RowHeight(24),
+        editor: EditorPrefs {
+            family: "Consolas".into(),
+            size: 15,
+            line_height: 22,
+            ligatures: false,
+        },
+        brighter_comments: true,
+        inline_suggestions: true,
+        history_keep_days: Some(30),
+    })
+    .unwrap();
+    drop(svc);
+    let svc = ConnectionService::new(
+        AppStore::open(&path).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_eq!(p.row_height.0, 24);
+    assert_eq!(p.editor.family, "Consolas");
+    assert_eq!((p.editor.size, p.editor.line_height), (15, 22));
+    assert!(!p.editor.ligatures);
+    assert!(p.brighter_comments);
+    assert!(p.inline_suggestions);
+    assert_eq!(p.history_keep_days, Some(30));
+}
+
+#[test]
+fn ui_prefs_keep_days_of_zero_reads_one() {
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"historyKeepDays":0}"#);
+    assert_eq!(svc.ui_prefs().unwrap().history_keep_days, Some(1));
+}
+
+#[test]
+fn ui_prefs_row_height_other_than_24_reads_28() {
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"rowHeight":30}"#);
+    assert_eq!(svc.ui_prefs().unwrap().row_height.0, 28);
+}
+
+#[test]
+fn keymap_defaults_to_empty() {
+    let (_d, _s, svc) = service();
+    assert!(svc.keymap().unwrap().is_empty());
+}
+
+#[test]
+fn keymap_round_trip() {
+    let (_d, _s, svc) = service();
+    let mut o = KeymapOverrides::new();
+    o.insert("query.run".into(), vec!["Ctrl+R".into()]);
+    o.insert("query.new".into(), vec![]);
+    svc.save_keymap(o.clone()).unwrap();
+    assert_eq!(svc.keymap().unwrap(), o);
+}
+
+#[test]
+fn keymap_unreadable_is_empty() {
+    let (_d, svc) = service_with_setting("keymap", "[");
+    assert!(svc.keymap().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn open_discards_session_when_saved_while_connecting() {
     let (_d, _s, svc) = service();
@@ -243,6 +452,29 @@ async fn open_fails_when_deleted_while_connecting() {
     assert!(matches!(err, Error::NotFound(_)));
     assert!(!svc.is_open(saved.id));
     db.drop_db().await;
+}
+
+#[tokio::test]
+async fn open_returns_the_server_version() {
+    let (dir, _s, svc) = service();
+    let file = dir.path().join("shop.sqlite");
+    rusqlite::Connection::open(&file)
+        .unwrap()
+        .execute_batch("CREATE TABLE t (id INTEGER)")
+        .unwrap();
+    let saved = svc
+        .save(ConnectionInput {
+            dialect: DialectKind::Sqlite,
+            file: Some(file.clone()),
+            ..input("lite", PasswordChange::Keep)
+        })
+        .await
+        .unwrap();
+    let first: String = svc.open(saved.id).await.unwrap();
+    assert!(first.starts_with("3."), "{first}");
+    // Opening an open Connection still answers with its version.
+    assert_eq!(svc.open(saved.id).await.unwrap(), first);
+    svc.close(saved.id).await.unwrap();
 }
 
 #[test]
@@ -514,5 +746,275 @@ async fn ai_access_is_saved_with_the_connection() {
     assert_eq!(
         svc.list().unwrap()[0].ai_access,
         contura_core::ai::AiAccess::Never
+    );
+}
+
+fn history_row(sql: &str, error: Option<&str>) -> contura_core::query::NewHistory {
+    contura_core::query::NewHistory {
+        connection_id: uuid::Uuid::new_v4(),
+        sql: sql.into(),
+        ran_at_ms: 1,
+        elapsed_ms: 7,
+        outcome: contura_core::query::Outcome::Ok,
+        rows: Some(1),
+        changed: false,
+        error: error.map(str::to_owned),
+    }
+}
+
+#[tokio::test]
+async fn data_folder_info_counts_and_history_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    store.add_history(&history_row("SELECT 1", None)).unwrap();
+    store.add_history(&history_row("SELECT 1", None)).unwrap();
+    let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+        .with_data_dir(dir.path().to_path_buf());
+    svc.save(input("a", PasswordChange::Keep)).await.unwrap();
+    svc.save(input("b", PasswordChange::Keep)).await.unwrap();
+    svc.save_group(GroupInput {
+        id: None,
+        name: "g".into(),
+        color: GroupColor::Indigo,
+    })
+    .unwrap();
+    svc.save_saved_query(contura_core::query::SavedQueryInput {
+        id: None,
+        name: "q".into(),
+        sql: "SELECT 2".into(),
+        connection_id: None,
+    })
+    .unwrap();
+    let info = svc.data_folder_info().unwrap();
+    assert_eq!(info.path, Some(dir.path().to_path_buf()));
+    assert_eq!(
+        (info.connections, info.groups, info.saved_queries),
+        (2, 1, 1)
+    );
+    assert_eq!(info.history_bytes, 2 * (8 + 64));
+    let (_plain_dir, _, plain) = service();
+    assert_eq!(plain.data_folder_info().unwrap().path, None);
+}
+
+fn sqlite_input(name: &str, file: std::path::PathBuf) -> ConnectionInput {
+    ConnectionInput {
+        dialect: DialectKind::Sqlite,
+        host: String::new(),
+        port: 0,
+        user: String::new(),
+        file: Some(file),
+        ..input(name, PasswordChange::Keep)
+    }
+}
+
+#[tokio::test]
+async fn opening_a_connection_records_its_time() {
+    let (dir, _s, svc) = service();
+    let file = dir.path().join("shop.db");
+    rusqlite::Connection::open(&file).unwrap();
+    let ok = svc.save(sqlite_input("shop", file)).await.unwrap();
+    let broken = svc
+        .save(ConnectionInput {
+            port: 1,
+            ..input("down", PasswordChange::Keep)
+        })
+        .await
+        .unwrap();
+    assert!(svc.connection_opened_times().unwrap().is_empty());
+    svc.open(ok.id).await.unwrap();
+    svc.open(broken.id).await.unwrap_err();
+    let times = svc.connection_opened_times().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    assert_eq!(times.len(), 1);
+    assert!((now - times[&ok.id]).abs() < 5000);
+    assert!(!times.contains_key(&broken.id));
+}
+
+#[tokio::test]
+async fn saved_query_keeps_the_connection_it_opens_on() {
+    let (_d, _s, svc) = service();
+    let c = svc.save(input("a", PasswordChange::Keep)).await.unwrap();
+    let q = svc
+        .save_saved_query(contura_core::query::SavedQueryInput {
+            id: None,
+            name: "q".into(),
+            sql: "SELECT 1".into(),
+            connection_id: Some(c.id),
+        })
+        .unwrap();
+    assert_eq!(q.connection_id, Some(c.id));
+    assert_eq!(
+        svc.list_saved_queries().unwrap()[0].connection_id,
+        Some(c.id)
+    );
+    svc.delete(c.id).await.unwrap();
+    assert_eq!(svc.list_saved_queries().unwrap()[0].connection_id, None);
+}
+
+#[tokio::test]
+async fn saving_without_a_connection_keeps_the_one_it_opens_on() {
+    let (_d, _s, svc) = service();
+    let c = svc.save(input("a", PasswordChange::Keep)).await.unwrap();
+    let q = svc
+        .save_saved_query(contura_core::query::SavedQueryInput {
+            id: None,
+            name: "q".into(),
+            sql: "SELECT 1".into(),
+            connection_id: Some(c.id),
+        })
+        .unwrap();
+    let again = svc
+        .save_saved_query(contura_core::query::SavedQueryInput {
+            id: Some(q.id),
+            name: "renamed".into(),
+            sql: "SELECT 2".into(),
+            connection_id: None,
+        })
+        .unwrap();
+    assert_eq!(again.connection_id, Some(c.id));
+    assert_eq!(
+        svc.list_saved_queries().unwrap()[0].connection_id,
+        Some(c.id)
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_connection_forgets_its_opened_time() {
+    let (dir, _s, svc) = service();
+    let file = dir.path().join("shop.db");
+    rusqlite::Connection::open(&file).unwrap();
+    let c = svc.save(sqlite_input("shop", file)).await.unwrap();
+    svc.open(c.id).await.unwrap();
+    assert_eq!(svc.connection_opened_times().unwrap().len(), 1);
+    svc.delete(c.id).await.unwrap();
+    assert!(svc.connection_opened_times().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn saved_query_runs_match_the_trimmed_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    store.add_history(&history_row(" SELECT 1", None)).unwrap();
+    let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()));
+    let ran = svc
+        .save_saved_query(contura_core::query::SavedQueryInput {
+            id: None,
+            name: "ran".into(),
+            sql: "SELECT 1\n".into(),
+            connection_id: None,
+        })
+        .unwrap();
+    svc.save_saved_query(contura_core::query::SavedQueryInput {
+        id: None,
+        name: "never".into(),
+        sql: "SELECT 99".into(),
+        connection_id: None,
+    })
+    .unwrap();
+    let runs = svc.saved_query_runs().unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].saved_id, ran.id);
+    assert_eq!(
+        (runs[0].ran_at_ms, runs[0].rows, runs[0].elapsed_ms),
+        (1, Some(1), 7)
+    );
+}
+
+const PNG_SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+
+fn png_bytes() -> Vec<u8> {
+    let mut b = PNG_SIG.to_vec();
+    b.extend_from_slice(b"fake-body");
+    b
+}
+
+fn service_with_data() -> (tempfile::TempDir, ConnectionService) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+        .with_data_dir(dir.path().to_path_buf());
+    (dir, svc)
+}
+
+#[test]
+fn group_image_round_trips_and_sets_has_image() {
+    let (_dir, svc) = service_with_data();
+    let g = svc.save_group(group("Shop")).unwrap();
+    assert!(!g.has_image);
+    assert_eq!(svc.group_image(g.id).unwrap(), None);
+    let png = png_bytes();
+    let updated = svc.set_group_image(g.id, &png).unwrap();
+    assert!(updated.has_image);
+    assert_eq!(svc.group_image(g.id).unwrap(), Some(png));
+    assert!(svc.list_groups().unwrap()[0].has_image);
+}
+
+#[test]
+fn group_image_refuses_bytes_that_are_not_png() {
+    let (dir, svc) = service_with_data();
+    let g = svc.save_group(group("Shop")).unwrap();
+    let err = svc.set_group_image(g.id, b"GIF89a-not-a-png").unwrap_err();
+    assert!(matches!(err, Error::InvalidInput(_)));
+    assert!(
+        !dir.path()
+            .join("group-images")
+            .join(format!("{}.png", g.id))
+            .exists()
+    );
+}
+
+#[test]
+fn group_image_refuses_more_than_256_kb() {
+    let (_dir, svc) = service_with_data();
+    let g = svc.save_group(group("Shop")).unwrap();
+    let mut big = PNG_SIG.to_vec();
+    big.resize(262_145, 0);
+    assert!(matches!(
+        svc.set_group_image(g.id, &big).unwrap_err(),
+        Error::InvalidInput(_)
+    ));
+    big.truncate(262_144);
+    assert!(svc.set_group_image(g.id, &big).is_ok());
+}
+
+#[test]
+fn clearing_or_deleting_the_group_removes_the_file() {
+    let (dir, svc) = service_with_data();
+    let a = svc.save_group(group("A")).unwrap();
+    let b = svc.save_group(group("B")).unwrap();
+    let file = |id: uuid::Uuid| dir.path().join("group-images").join(format!("{id}.png"));
+    svc.set_group_image(a.id, &png_bytes()).unwrap();
+    svc.set_group_image(b.id, &png_bytes()).unwrap();
+    assert!(file(a.id).exists() && file(b.id).exists());
+    let cleared = svc.clear_group_image(a.id).unwrap();
+    assert!(!cleared.has_image);
+    assert!(!file(a.id).exists());
+    svc.delete_group(b.id).unwrap();
+    assert!(!file(b.id).exists());
+}
+
+#[test]
+fn group_image_without_a_data_folder_is_refused() {
+    let (_dir, _secrets, svc) = service();
+    let g = svc.save_group(group("Shop")).unwrap();
+    assert!(matches!(
+        svc.set_group_image(g.id, &png_bytes()).unwrap_err(),
+        Error::InvalidInput(m) if m == "no data folder"
+    ));
+}
+
+#[test]
+fn oversize_base64_is_refused_before_decoding() {
+    use contura_core::connections::decode_group_image;
+    let huge = "A".repeat(262_144 / 3 * 4 + 5);
+    assert!(
+        matches!(decode_group_image(&huge), Err(Error::InvalidInput(m)) if m.contains("256 KB"))
+    );
+    assert_eq!(
+        decode_group_image("iVBORw==").unwrap(),
+        vec![137, 80, 78, 71]
     );
 }

@@ -114,7 +114,6 @@ export default function InlineAsk({ context, schema, groupId, onOpenInChat, onOp
   return (
     <div className="ask-pop" role="dialog" aria-label="Ask AI" onKeyDown={onKey}>
       <div className="pop-head">
-        <Icon name="sparkle" />
         <span>{outcome ? outcome.q : "Ask about the selection"}</span>
         <span className="prov">{provider ? `${providerName} · ${settings?.settings.model}` : "No provider"}</span>
         <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={onClose}>

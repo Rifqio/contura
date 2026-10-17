@@ -1,140 +1,410 @@
 /*
-  Every DESIGN.md token as a CSS custom property (ADR 0008). Components use
-  only these properties, so a Theme is a different set of values here.
-  Naming: --color-*, --font-<scale>-*, --rounded-*, --spacing-*, then the
-  component tokens. Role tokens (--color-surface, ...) switch to the dark-*
-  values under prefers-color-scheme: dark.
+  Design tokens as CSS custom properties (ADR 0008). Components use only these
+  properties, so a Theme is a different set of values here.
+
+  The colour roles are DESIGN-NEXT.md section 3, copied verbatim: Alucard on
+  :root (and on .theme-light, which exports read so they always use the light
+  set), Dracula on :root[data-theme="dark"] (and on .theme-dark, for the
+  Settings theme cards), and Dracula again for "follow
+  Windows" when no data-theme is set and Windows is dark. src/theme/ sets or
+  removes data-theme. The scale and component tokens follow on :root.
 */
 :root {
-  /* colors */
-  --color-primary: #0e7c86;
-  --color-primary-hover: #0b6971;
-  --color-primary-soft: #dff0f1;
-  --color-on-primary: #ffffff;
-  --color-on-primary-soft: #0a5960;
-  --color-surface: #ffffff;
-  --color-surface-chrome: #f2f4f5;
-  --color-surface-panel: #f8f9fa;
-  --color-line: #dfe3e7;
-  --color-line-soft: #eef1f3;
-  --color-ink: #1b1f23;
-  --color-ink-muted: #56616b;
-  --color-ink-faint: #6b7680;
-  --color-highlighter: #fff2a8;
-  --color-highlighter-edge: #b38f00;
-  --color-highlighter-ink: #6e5800;
-  --color-added-soft: #e3f4ea;
-  --color-added-ink: #1d6b3f;
-  --color-deleted-soft: #fbe4e2;
-  --color-deleted-ink: #a1322b;
-  --color-production: #b76e00;
-  --color-production-soft: #fcefd9;
-  --color-production-ink: #7a4500;
-  --color-danger: #b3362e;
-  --color-syntax-keyword: #2f5fc4;
-  --color-syntax-string: #1d7a45;
-  --color-syntax-number: #b4451f;
-  --color-syntax-comment: #6b7680;
-  --color-syntax-name: #7b3fa0;
-  /* Editor warnings: gold, so a warning never reads as the Production amber. */
-  --color-warning: #a07c00;
-  --color-warning-soft: #fbf3cf;
-  /* The quiet gutter bar on lines changed since the last save. */
-  --color-changed: #8a96a3;
-  --color-dark-syntax-keyword: #82aaff;
-  --color-dark-syntax-string: #9ccc9c;
-  --color-dark-syntax-number: #f0a070;
-  --color-dark-syntax-comment: #8a949e;
-  --color-dark-syntax-name: #c792ea;
-  --color-dark-warning: #e0b938;
-  --color-dark-warning-soft: #3a3216;
-  --color-dark-changed: #5b6670;
-  --color-dark-added-soft: #183a28;
-  --color-dark-added-ink: #7fd6a1;
-  --color-group-red: #d23a2e;
-  --color-group-orange: #b4510f;
-  --color-group-amber: #8f6700;
-  --color-group-green: #26804e;
-  --color-group-teal: #17808a;
-  --color-group-blue: #2f6fdb;
-  --color-group-violet: #7556cf;
-  --color-group-rose: #c2417a;
-  --color-group-slate: #5c6b7a;
-  --color-dark-surface: #14181b;
-  --color-dark-surface-chrome: #0f1215;
-  --color-dark-surface-panel: #171b1f;
-  --color-dark-line: #2a3036;
-  --color-dark-line-soft: #20252a;
-  --color-dark-ink: #e4e8eb;
-  --color-dark-ink-muted: #a0aab3;
-  --color-dark-ink-faint: #8a949d;
-  --color-dark-primary: #3fb8c2;
-  --color-dark-on-primary: #06272a;
-  --color-dark-primary-soft: #15363b;
-  --color-dark-highlighter: #3d3510;
-  --color-dark-highlighter-edge: #e0b400;
-  --color-dark-production: #e8a33a;
-  --color-dark-primary-hover: #5cc6cf;
-  --color-dark-on-primary-soft: #8fdde3;
-  --color-dark-highlighter-ink: #f0d466;
-  --color-dark-deleted-soft: #3a1d1b;
-  --color-dark-deleted-ink: #f28b83;
-  --color-dark-production-soft: #3a2a12;
-  --color-dark-production-ink: #f3c27a;
-  --color-dark-danger: #f28b83;
-  /* The Group initial is always white on the Group colour, in both variants. */
-  --color-on-group: #ffffff;
+  --row-h: 28px;
+}
+:root[data-density="compact"] {
+  --row-h: 24px;
+}
 
-  /* typography */
-  --font-display-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+:root, .theme-light {
+  --c-ink: #16181a;
+  --on-accent: #ffffff;
+  --c-bg-app: #ece9df;
+  --c-bg-panel: #efeddc;
+  --c-bg-surface: #fffbeb;
+  --c-bg-raised: #fffbeb;
+  --c-bg-canvas: #f8f4e3;
+  --c-bg-hover: #e2deca;
+  --c-bg-active: #dedccf;
+  --c-border-subtle: #e2deca;
+  --c-border: #cecbc0;
+  --c-border-strong: #8f8a73;
+  --c-text: #1f1f1f;
+  --c-text-muted: #48432f;
+  --c-text-subtle: #6c664b;
+  --c-text-faint: #857f66;
+  --c-accent: #644ac9;
+  --c-accent-hover: #5840b5;
+  --c-accent-pressed: #4d37a0;
+  --c-accent-text: #5a41bf;
+  --c-accent-subtle: #cfcfde;
+  --c-focus: #644ac9;
+  --c-success-subtle: #e1ecc9;
+  --c-success-text: #14710a;
+  --c-success-solid: #14710a;
+  --c-warning-subtle: #faf4da;
+  --c-warning-text: #846e15;
+  --c-warning-solid: #c9a227;
+  --c-danger-subtle: #fdf1eb;
+  --c-danger-text: #cb3a2a;
+  --c-danger-solid: #cb3a2a;
+  --c-info-subtle: #dbe8ec;
+  --c-info-text: #036a96;
+  --c-info-solid: #036a96;
+  --c-prod-solid: #d06a14;
+  --c-prod-subtle: #f8e1c9;
+  --c-prod-text: #a34d14;
+  --c-prod-wash: #fdf2dd;
+  --c-gmk-ink: #ffffff;
+  --c-group-teal: #036a96;
+  --c-group-teal-tint: #dbe8ec;
+  --c-group-indigo: #a3144d;
+  --c-group-indigo-tint: #f2d9e1;
+  --c-group-green: #14710a;
+  --c-group-green-tint: #e1ecc9;
+  --c-group-gold: #846e15;
+  --c-group-gold-tint: #f3eac2;
+  --c-group-lime: #4d6b0f;
+  --c-group-lime-tint: #e6edcc;
+  --c-group-sky: #2a5db0;
+  --c-group-sky-tint: #dde6f5;
+  --c-group-violet: #8b2f86;
+  --c-group-violet-tint: #f0dcef;
+  --c-group-pink: #5a6072;
+  --c-group-pink-tint: #e3e4e8;
+  --c-node-table-stroke: #478cc4;
+  --c-node-table-fill: #eaf5ff;
+  --c-node-view-stroke: #8a7abc;
+  --c-node-view-fill: #f4f1ff;
+  --c-node-enum-stroke: #b07a20;
+  --c-node-enum-fill: #fff1df;
+  --c-node-note-stroke: #95864c;
+  --c-node-note-fill: #faf4dd;
+  --c-node-service-stroke: #489a68;
+  --c-node-service-fill: #e5faeb;
+  --c-node-datastore-stroke: #2695ac;
+  --c-node-datastore-fill: #e0f9ff;
+  --c-node-queue-stroke: #b26b9b;
+  --c-node-queue-fill: #ffeef8;
+  --c-node-external-stroke: #868686;
+  --c-node-external-fill: #f1f4f6;
+  --c-syn-keyword: #a3144d;
+  --c-syn-function: #14710a;
+  --c-syn-string: #846e15;
+  --c-syn-number: #644ac9;
+  --c-syn-type: #036a96;
+  --c-syn-identifier: #1f1f1f;
+  --c-syn-comment: #6c664b;
+  --c-syn-operator: #a3144d;
+  --c-syn-punctuation: #1f1f1f;
+  --c-syn-error: #cb3a2a;
+  --c-syn-ref: #644ac9;
+  --syn-kw-weight: 400;
+  --syn-type-style: italic;
+  --c-tree-guide: #c9c6b6;
+  --c-tree-guide-strong: #8f8a73;
+  --db-mysql: #00758f;
+  --db-pg: #336791;
+  --db-sqlite: #0f80cc;
+  --win-close: #c42b1c;
+  --win-close-ink: #ffffff;
+  /* elevation (DESIGN-NEXT.md 6): level 1 raised, level 2 overlay */
+  --shadow-1: 0 4px 12px rgb(0 0 0 / .10), 0 1px 2px rgb(0 0 0 / .06);
+  --shadow-2: 0 16px 40px rgb(0 0 0 / .18), 0 2px 6px rgb(0 0 0 / .08);
+  --color-scrim: rgb(0 0 0 / .32);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"], .theme-dark {
+  --c-ink: #16181a;
+  --on-accent: #191a21;
+  --c-bg-app: #191a21;
+  --c-bg-panel: #21222c;
+  --c-bg-surface: #282a36;
+  --c-bg-raised: #343746;
+  --c-bg-canvas: #21222c;
+  --c-bg-hover: #343746;
+  --c-bg-active: #3c3f52;
+  --c-border-subtle: #191a21;
+  --c-border: #3b3d4f;
+  --c-border-strong: #6272a4;
+  --c-text: #f8f8f2;
+  --c-text-muted: #c7c8d3;
+  --c-text-subtle: #a0a3ba;
+  --c-text-faint: #6272a4;
+  --c-accent: #bd93f9;
+  --c-accent-hover: #caa8fa;
+  --c-accent-pressed: #a87bf0;
+  --c-accent-text: #c9a6ff;
+  --c-accent-subtle: #44475a;
+  --c-focus: #bd93f9;
+  --c-success-subtle: #233b2c;
+  --c-success-text: #50fa7b;
+  --c-success-solid: #50fa7b;
+  --c-warning-subtle: #3a3b2c;
+  --c-warning-text: #f1fa8c;
+  --c-warning-solid: #f1fa8c;
+  --c-danger-subtle: #43272e;
+  --c-danger-text: #ff6e6e;
+  --c-danger-solid: #ff5555;
+  --c-info-subtle: #24384a;
+  --c-info-text: #8be9fd;
+  --c-info-solid: #8be9fd;
+  --c-prod-solid: #ffb86c;
+  --c-prod-subtle: #45372b;
+  --c-prod-text: #ffb86c;
+  --c-prod-wash: #3b3438;
+  --c-gmk-ink: #16181a;
+  --c-group-teal: #8be9fd;
+  --c-group-teal-tint: #24384a;
+  --c-group-indigo: #ff79c6;
+  --c-group-indigo-tint: #43293d;
+  --c-group-green: #7ddc94;
+  --c-group-green-tint: #233b2c;
+  --c-group-gold: #e9d98b;
+  --c-group-gold-tint: #3a3829;
+  --c-group-lime: #c3e88d;
+  --c-group-lime-tint: #2f3a29;
+  --c-group-sky: #7fb8ff;
+  --c-group-sky-tint: #253552;
+  --c-group-violet: #e3a8f2;
+  --c-group-violet-tint: #3d2c45;
+  --c-group-pink: #a9b1d6;
+  --c-group-pink-tint: #2f3243;
+  --c-node-table-stroke: #599fd8;
+  --c-node-table-fill: #152839;
+  --c-node-view-stroke: #9d8cd0;
+  --c-node-view-fill: #282238;
+  --c-node-enum-stroke: #c38c37;
+  --c-node-enum-fill: #32230e;
+  --c-node-note-stroke: #a8985e;
+  --c-node-note-fill: #2d260e;
+  --c-node-service-stroke: #5bac7a;
+  --c-node-service-fill: #152c1e;
+  --c-node-datastore-stroke: #3fa8bf;
+  --c-node-datastore-fill: #0a2b33;
+  --c-node-queue-stroke: #c57dae;
+  --c-node-queue-fill: #341f2d;
+  --c-node-external-stroke: #989898;
+  --c-node-external-fill: #252728;
+  --c-syn-keyword: #ff79c6;
+  --c-syn-function: #50fa7b;
+  --c-syn-string: #f1fa8c;
+  --c-syn-number: #bd93f9;
+  --c-syn-type: #8be9fd;
+  --c-syn-identifier: #f8f8f2;
+  --c-syn-comment: #6272a4;
+  --c-syn-comment-bright: #939fcb;
+  --c-syn-operator: #ff79c6;
+  --c-syn-punctuation: #f8f8f2;
+  --c-syn-error: #ff5555;
+  --c-syn-ref: #bd93f9;
+  --syn-kw-weight: 400;
+  --syn-type-style: italic;
+  --c-tree-guide: #3c3f52;
+  --c-tree-guide-strong: #6272a4;
+  --db-mysql: #5fb6cc;
+  --db-pg: #8fb3e3;
+  --db-sqlite: #63b4ec;
+  --win-close: #c42b1c;
+  --win-close-ink: #ffffff;
+  /* elevation (DESIGN-NEXT.md 6): level 1 raised, level 2 overlay */
+  --shadow-1: 0 4px 12px rgb(0 0 0 / .40), 0 1px 2px rgb(0 0 0 / .30);
+  --shadow-2: 0 16px 40px rgb(0 0 0 / .55), 0 2px 6px rgb(0 0 0 / .35);
+  --color-scrim: rgb(0 0 0 / .5);
+  color-scheme: dark;
+}
+
+/* Follow Windows: Dracula when Windows is dark and no theme is chosen. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-ink: #16181a;
+    --on-accent: #191a21;
+    --c-bg-app: #191a21;
+    --c-bg-panel: #21222c;
+    --c-bg-surface: #282a36;
+    --c-bg-raised: #343746;
+    --c-bg-canvas: #21222c;
+    --c-bg-hover: #343746;
+    --c-bg-active: #3c3f52;
+    --c-border-subtle: #191a21;
+    --c-border: #3b3d4f;
+    --c-border-strong: #6272a4;
+    --c-text: #f8f8f2;
+    --c-text-muted: #c7c8d3;
+    --c-text-subtle: #a0a3ba;
+    --c-text-faint: #6272a4;
+    --c-accent: #bd93f9;
+    --c-accent-hover: #caa8fa;
+    --c-accent-pressed: #a87bf0;
+    --c-accent-text: #c9a6ff;
+    --c-accent-subtle: #44475a;
+    --c-focus: #bd93f9;
+    --c-success-subtle: #233b2c;
+    --c-success-text: #50fa7b;
+    --c-success-solid: #50fa7b;
+    --c-warning-subtle: #3a3b2c;
+    --c-warning-text: #f1fa8c;
+    --c-warning-solid: #f1fa8c;
+    --c-danger-subtle: #43272e;
+    --c-danger-text: #ff6e6e;
+    --c-danger-solid: #ff5555;
+    --c-info-subtle: #24384a;
+    --c-info-text: #8be9fd;
+    --c-info-solid: #8be9fd;
+    --c-prod-solid: #ffb86c;
+    --c-prod-subtle: #45372b;
+    --c-prod-text: #ffb86c;
+    --c-prod-wash: #3b3438;
+    --c-gmk-ink: #16181a;
+    --c-group-teal: #8be9fd;
+    --c-group-teal-tint: #24384a;
+    --c-group-indigo: #ff79c6;
+    --c-group-indigo-tint: #43293d;
+    --c-group-green: #7ddc94;
+    --c-group-green-tint: #233b2c;
+    --c-group-gold: #e9d98b;
+    --c-group-gold-tint: #3a3829;
+    --c-group-lime: #c3e88d;
+    --c-group-lime-tint: #2f3a29;
+    --c-group-sky: #7fb8ff;
+    --c-group-sky-tint: #253552;
+    --c-group-violet: #e3a8f2;
+    --c-group-violet-tint: #3d2c45;
+    --c-group-pink: #a9b1d6;
+    --c-group-pink-tint: #2f3243;
+    --c-node-table-stroke: #599fd8;
+    --c-node-table-fill: #152839;
+    --c-node-view-stroke: #9d8cd0;
+    --c-node-view-fill: #282238;
+    --c-node-enum-stroke: #c38c37;
+    --c-node-enum-fill: #32230e;
+    --c-node-note-stroke: #a8985e;
+    --c-node-note-fill: #2d260e;
+    --c-node-service-stroke: #5bac7a;
+    --c-node-service-fill: #152c1e;
+    --c-node-datastore-stroke: #3fa8bf;
+    --c-node-datastore-fill: #0a2b33;
+    --c-node-queue-stroke: #c57dae;
+    --c-node-queue-fill: #341f2d;
+    --c-node-external-stroke: #989898;
+    --c-node-external-fill: #252728;
+    --c-syn-keyword: #ff79c6;
+    --c-syn-function: #50fa7b;
+    --c-syn-string: #f1fa8c;
+    --c-syn-number: #bd93f9;
+    --c-syn-type: #8be9fd;
+    --c-syn-identifier: #f8f8f2;
+    --c-syn-comment: #6272a4;
+    --c-syn-comment-bright: #939fcb;
+    --c-syn-operator: #ff79c6;
+    --c-syn-punctuation: #f8f8f2;
+    --c-syn-error: #ff5555;
+    --c-syn-ref: #bd93f9;
+    --syn-kw-weight: 400;
+    --syn-type-style: italic;
+    --c-tree-guide: #3c3f52;
+    --c-tree-guide-strong: #6272a4;
+    --db-mysql: #5fb6cc;
+    --db-pg: #8fb3e3;
+    --db-sqlite: #63b4ec;
+    --win-close: #c42b1c;
+    --win-close-ink: #ffffff;
+    /* elevation (DESIGN-NEXT.md 6): level 1 raised, level 2 overlay */
+    --shadow-1: 0 4px 12px rgb(0 0 0 / .40), 0 1px 2px rgb(0 0 0 / .30);
+    --shadow-2: 0 16px 40px rgb(0 0 0 / .55), 0 2px 6px rgb(0 0 0 / .35);
+    --color-scrim: rgb(0 0 0 / .5);
+    color-scheme: dark;
+  }
+}
+
+/* Brighter comments (PR33): Dracula only, so Alucard keeps its own comment colour. */
+:root[data-theme="dark"][data-brighter-comments],
+:root[data-brighter-comments] .theme-dark {
+  --c-syn-comment: var(--c-syn-comment-bright);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"])[data-brighter-comments] {
+    --c-syn-comment: var(--c-syn-comment-bright);
+  }
+}
+
+:root {
+  /* typography: the three families of DESIGN-NEXT.md 4.1 */
+  --font-family-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-family-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-family-code: "JetBrains Mono", "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+  --font-display-family: var(--font-family-display);
   --font-display-size: 28px;
   --font-display-weight: 600;
   --font-display-line-height: 34px;
   --font-display: var(--font-display-weight) var(--font-display-size) / var(--font-display-line-height)
     var(--font-display-family);
-  --font-headline-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-headline-family: var(--font-family-display);
   --font-headline-size: 20px;
   --font-headline-weight: 600;
   --font-headline-line-height: 28px;
   --font-headline: var(--font-headline-weight) var(--font-headline-size) / var(--font-headline-line-height)
     var(--font-headline-family);
-  --font-title-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-title-size: 16px;
+  --font-title-family: var(--font-family-display);
+  --font-title-size: 15px;
   --font-title-weight: 600;
-  --font-title-line-height: 22px;
+  --font-title-line-height: 20px;
   --font-title: var(--font-title-weight) var(--font-title-size) / var(--font-title-line-height) var(--font-title-family);
-  --font-body-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-body-size: 14px;
+  --font-subtitle-family: var(--font-family-display);
+  --font-subtitle-size: 14px;
+  --font-subtitle-weight: 600;
+  --font-subtitle-line-height: 20px;
+  --font-subtitle: var(--font-subtitle-weight) var(--font-subtitle-size) / var(--font-subtitle-line-height)
+    var(--font-subtitle-family);
+  --font-body-family: var(--font-family-ui);
+  --font-body-size: 13px;
   --font-body-weight: 400;
-  --font-body-line-height: 20px;
+  --font-body-line-height: 18px;
   --font-body: var(--font-body-weight) var(--font-body-size) / var(--font-body-line-height) var(--font-body-family);
-  --font-body-strong-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-body-strong-size: 14px;
+  --font-body-strong-family: var(--font-family-ui);
+  --font-body-strong-size: 13px;
   --font-body-strong-weight: 600;
-  --font-body-strong-line-height: 20px;
+  --font-body-strong-line-height: 18px;
   --font-body-strong: var(--font-body-strong-weight) var(--font-body-strong-size) / var(--font-body-strong-line-height)
     var(--font-body-strong-family);
-  --font-label-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-label-family: var(--font-family-ui);
   --font-label-size: 12px;
   --font-label-weight: 600;
   --font-label-line-height: 16px;
   --font-label: var(--font-label-weight) var(--font-label-size) / var(--font-label-line-height) var(--font-label-family);
-  --font-mono-family: "Cascadia Mono", Consolas, monospace;
+  --font-small-family: var(--font-family-ui);
+  --font-small-size: 12px;
+  --font-small-weight: 400;
+  --font-small-line-height: 16px;
+  --font-small: var(--font-small-weight) var(--font-small-size) / var(--font-small-line-height) var(--font-small-family);
+  /* UI micro: add letter-spacing 0.04em where it is used (the PROD tag in Recent). */
+  --font-micro-family: var(--font-family-ui);
+  --font-micro-size: 10px;
+  --font-micro-weight: 600;
+  --font-micro-line-height: 14px;
+  --font-micro: var(--font-micro-weight) var(--font-micro-size) / var(--font-micro-line-height) var(--font-micro-family);
+  --font-mono-family: var(--font-family-code);
   --font-mono-size: 13px;
   --font-mono-weight: 400;
   --font-mono-line-height: 20px;
   --font-mono: var(--font-mono-weight) var(--font-mono-size) / var(--font-mono-line-height) var(--font-mono-family);
-  --font-mono-small-family: "Cascadia Mono", Consolas, monospace;
-  --font-mono-small-size: 11px;
+  --font-mono-small-family: var(--font-family-code);
+  --font-mono-small-size: 12px;
   --font-mono-small-weight: 400;
-  --font-mono-small-line-height: 14px;
+  --font-mono-small-line-height: 16px;
   --font-mono-small: var(--font-mono-small-weight) var(--font-mono-small-size) / var(--font-mono-small-line-height)
     var(--font-mono-small-family);
-  --font-code-editor-family: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
-  --font-code-editor-size: 14px;
+  --font-mono-micro-family: var(--font-family-code);
+  --font-mono-micro-size: 11px;
+  --font-mono-micro-weight: 400;
+  --font-mono-micro-line-height: 16px;
+  --font-mono-micro: var(--font-mono-micro-weight) var(--font-mono-micro-size) / var(--font-mono-micro-line-height)
+    var(--font-mono-micro-family);
+  --font-code-editor-family: var(--font-family-code);
+  --font-code-editor-size: 13px;
   --font-code-editor-weight: 400;
-  --font-code-editor-line-height: 22px;
-  --font-code-editor-feature: "calt" 1, "liga" 1;
+  --font-code-editor-line-height: 20px;
   --font-code-editor: var(--font-code-editor-weight) var(--font-code-editor-size) / var(--font-code-editor-line-height)
     var(--font-code-editor-family);
 
@@ -143,6 +413,8 @@
   --rounded-xs: 3px;
   --rounded-sm: 4px;
   --rounded-md: 6px;
+  --rounded-lg: 8px;
+  --rounded-xl: 10px;
   --rounded-full: 999px;
 
   /* spacing */
@@ -156,158 +428,107 @@
   --spacing-3xl: 48px;
 
   /* components */
-  --button-primary-background: var(--color-primary);
-  --button-primary-text: var(--color-on-primary);
+  --button-primary-background: var(--c-accent);
+  --button-primary-text: var(--on-accent);
   --button-primary-font: var(--font-body-strong);
-  --button-primary-rounded: var(--rounded-md);
-  --button-primary-padding: 6px 12px;
-  --button-primary-height: 32px;
-  --button-primary-hover-background: var(--color-primary-hover);
-  --button-primary-hover-text: var(--color-on-primary);
-  --button-secondary-background: var(--color-surface);
-  --button-secondary-text: var(--color-ink);
+  --button-primary-rounded: var(--rounded-sm);
+  --button-primary-padding: 0px 12px;
+  --button-primary-height: 28px;
+  --button-primary-hover-background: var(--c-accent-hover);
+  --button-primary-hover-text: var(--on-accent);
+  --button-secondary-background: var(--c-bg-surface);
+  --button-secondary-text: var(--c-text);
   --button-secondary-font: var(--font-body);
-  --button-secondary-rounded: var(--rounded-md);
-  --button-secondary-padding: 6px 12px;
-  --button-secondary-height: 32px;
-  --input-background: var(--color-surface);
-  --input-text: var(--color-ink);
+  --button-secondary-rounded: var(--rounded-sm);
+  --button-secondary-padding: 0px 12px;
+  --button-secondary-height: 28px;
+  /* Buttons inside toolbars and small "Add" buttons (.button-small). */
+  --button-small-height: 24px;
+  --input-background: var(--c-bg-surface);
+  --input-text: var(--c-text);
   --input-font: var(--font-body);
-  --input-rounded: var(--rounded-md);
+  --input-rounded: var(--rounded-sm);
   --input-padding: 0px 8px;
-  --input-height: 32px;
-  --title-bar-background: var(--color-surface-chrome);
-  --title-bar-text: var(--color-ink-muted);
+  --input-height: 28px;
+  --title-bar-background: var(--c-bg-app);
+  --title-bar-text: var(--c-text-muted);
   --title-bar-height: 40px;
-  --tab-background: var(--color-surface-chrome);
-  --tab-text: var(--color-ink-muted);
+  --tab-background: var(--c-bg-app);
+  --tab-text: var(--c-text-muted);
   --tab-font: var(--font-body);
   --tab-rounded: var(--rounded-sm);
   --tab-padding: 0px 10px;
-  --tab-height: 34px;
-  --tab-active-background: var(--color-surface);
-  --tab-active-text: var(--color-ink);
-  --group-badge-text: var(--color-on-group);
-  --group-badge-font: var(--font-label);
-  --group-badge-rounded: var(--rounded-sm);
-  --group-badge-size: 22px;
-  /* The badge inside menus: same label face, scaled to an 18 px square. */
-  --group-badge-small-size: 18px;
-  --group-badge-small-font: var(--font-label-weight) 10px / 1 var(--font-label-family);
-  --tree-row-background: var(--color-surface-panel);
-  --tree-row-text: var(--color-ink);
+  --tab-height: 32px;
+  /* Pane strip (editor header); result and diagram toolbars use --layout-toolbar-height. */
+  --strip-height: 32px;
+  --tab-active-background: var(--c-bg-surface);
+  --tab-active-text: var(--c-text);
+  --tree-row-background: var(--c-bg-panel);
+  --tree-row-text: var(--c-text);
   --tree-row-font: var(--font-body);
   --tree-row-rounded: var(--rounded-sm);
   --tree-row-padding: 0px 8px;
-  --tree-row-height: 28px;
-  --tree-row-selected-background: var(--color-primary-soft);
-  --tree-row-selected-text: var(--color-on-primary-soft);
-  --grid-header-background: var(--color-surface-panel);
-  --grid-header-text: var(--color-ink);
-  --grid-header-font: var(--font-body-strong);
-  --grid-header-padding: 0px 10px;
-  --grid-header-height: 44px;
-  --grid-cell-background: var(--color-surface);
-  --grid-cell-text: var(--color-ink);
-  --grid-cell-font: var(--font-body);
-  --grid-cell-padding: 0px 10px;
-  --grid-cell-height: 40px;
-  --grid-cell-edited-background: var(--color-highlighter);
-  --grid-cell-edited-text: var(--color-ink);
-  --grid-cell-null-text: var(--color-ink-faint);
-  --type-hint-text: var(--color-ink-muted);
-  --type-hint-font: var(--font-mono-small);
-  --kbd-background: var(--color-surface);
-  --kbd-text: var(--color-ink-muted);
-  --kbd-font: var(--font-mono-small);
+  --tree-row-height: var(--row-h);
+  --tree-row-selected-background: var(--c-accent-subtle);
+  --tree-row-selected-text: var(--c-text);
+  --grid-header-background: var(--c-bg-panel);
+  --grid-header-text: var(--c-text);
+  --grid-header-font: var(--font-label);
+  --grid-header-padding: 0px 8px;
+  --grid-header-height: var(--row-h);
+  --grid-cell-background: var(--c-bg-surface);
+  --grid-cell-text: var(--c-text);
+  --grid-cell-font: var(--font-mono-small);
+  --grid-cell-padding: 0px 8px;
+  --grid-cell-height: var(--row-h);
+  --menu-item-height: var(--row-h);
+  --grid-footer-height: 32px;
+  --grid-cell-edited-background: var(--c-warning-subtle);
+  --grid-cell-edited-text: var(--c-text);
+  --grid-cell-null-text: var(--c-text-faint);
+  --type-hint-text: var(--c-text-subtle);
+  --type-hint-font: var(--font-mono-micro);
+  --kbd-background: var(--c-bg-surface);
+  --kbd-text: var(--c-text-muted);
+  --kbd-font: var(--font-mono-micro);
   --kbd-rounded: var(--rounded-xs);
   --kbd-padding: 1px 5px;
-  --tag-production-background: var(--color-production-soft);
-  --tag-production-text: var(--color-production-ink);
+  --tag-production-background: var(--c-prod-subtle);
+  --tag-production-text: var(--c-prod-text);
   --tag-production-font: var(--font-label);
   --tag-production-rounded: var(--rounded-sm);
   --tag-production-padding: 2px 6px;
-  --group-card-background: var(--color-surface);
-  --group-card-text: var(--color-ink);
+  --group-card-background: var(--c-bg-surface);
+  --group-card-text: var(--c-text);
   --group-card-font: var(--font-title);
   --group-card-rounded: var(--rounded-md);
   --group-card-padding: 16px;
-  --status-bar-background: var(--color-surface);
-  --status-bar-text: var(--color-ink-muted);
-  --status-bar-font: var(--font-body);
-  --status-bar-height: 44px;
+  --status-bar-background: var(--c-bg-surface);
+  --status-bar-text: var(--c-text-muted);
+  --status-bar-font: var(--font-small);
+  --status-bar-height: 24px;
 
-  /* layout (DESIGN.md "Layout") */
-  --layout-rail-width: 48px;
-  --layout-tree-width: 240px;
-  --layout-toolbar-height: 44px;
-  --layout-row-number-width: 40px;
+  /* layout (DESIGN-NEXT.md 5.2) */
+  --layout-tree-width: 288px;
+  --layout-toolbar-height: 36px;
+  --layout-row-number-width: 48px;
   --layout-group-card-min: 240px;
   --border-hairline: 1px;
   --focus-ring-width: 2px;
-  --focus-ring-offset: 2px;
+  --focus-ring-offset: 1px;
 
-  /* elevation (DESIGN.md "Shadow Vocabulary") */
-  --shadow-menu: 0 8px 24px rgba(16, 24, 32, 0.12), 0 1px 2px rgba(16, 24, 32, 0.08);
-  --shadow-dialog: 0 24px 64px rgba(16, 24, 32, 0.24);
-  --shadow-toast: 0 6px 16px rgba(16, 24, 32, 0.14);
-  --color-scrim: rgba(16, 24, 32, 0.32);
+  /* elevation (DESIGN-NEXT.md 6): --shadow-1 and -2 are set per theme above */
+  --shadow-menu: var(--shadow-1);
+  --shadow-toast: var(--shadow-1);
+  --shadow-dialog: var(--shadow-2);
 
-  /* motion (DESIGN.md "Motion") */
-  --motion-fast: 90ms;
+  /* motion (DESIGN-NEXT.md 8) */
+  --motion-fast: 80ms;
   --motion-base: 120ms;
-  --motion-slow: 150ms;
-  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
-  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
-
-  color-scheme: light;
-}
-
-/*
-  Dark variant of the default Theme. Roles with a dark-* token use it; the
-  roles DESIGN.md gives no dark value for take the Motion Lab reference's
-  dark values.
-*/
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-surface: var(--color-dark-surface);
-    --color-surface-chrome: var(--color-dark-surface-chrome);
-    --color-surface-panel: var(--color-dark-surface-panel);
-    --color-line: var(--color-dark-line);
-    --color-line-soft: var(--color-dark-line-soft);
-    --color-ink: var(--color-dark-ink);
-    --color-ink-muted: var(--color-dark-ink-muted);
-    --color-ink-faint: var(--color-dark-ink-faint);
-    --color-primary: var(--color-dark-primary);
-    --color-on-primary: var(--color-dark-on-primary);
-    --color-primary-soft: var(--color-dark-primary-soft);
-    --color-highlighter: var(--color-dark-highlighter);
-    --color-highlighter-edge: var(--color-dark-highlighter-edge);
-    --color-production: var(--color-dark-production);
-    --color-primary-hover: var(--color-dark-primary-hover);
-    --color-on-primary-soft: var(--color-dark-on-primary-soft);
-    --color-highlighter-ink: var(--color-dark-highlighter-ink);
-    --color-deleted-soft: var(--color-dark-deleted-soft);
-    --color-deleted-ink: var(--color-dark-deleted-ink);
-    --color-danger: var(--color-dark-danger);
-    --color-production-soft: var(--color-dark-production-soft);
-    --color-production-ink: var(--color-dark-production-ink);
-    --color-syntax-keyword: var(--color-dark-syntax-keyword);
-    --color-syntax-string: var(--color-dark-syntax-string);
-    --color-syntax-number: var(--color-dark-syntax-number);
-    --color-syntax-comment: var(--color-dark-syntax-comment);
-    --color-syntax-name: var(--color-dark-syntax-name);
-    --color-warning: var(--color-dark-warning);
-    --color-warning-soft: var(--color-dark-warning-soft);
-    --color-changed: var(--color-dark-changed);
-    --color-added-soft: var(--color-dark-added-soft);
-    --color-added-ink: var(--color-dark-added-ink);
-    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.5);
-    --shadow-dialog: 0 24px 64px rgba(0, 0, 0, 0.6);
-    --shadow-toast: 0 6px 16px rgba(0, 0, 0, 0.5);
-    --color-scrim: rgba(0, 0, 0, 0.5);
-    color-scheme: dark;
-  }
+  --motion-slow: 180ms;
+  --motion-canvas: 240ms;
+  --ease-enter: cubic-bezier(.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(.4, 0, 1, 1);
 }
 
 /* Windows reduce-motion: everything is instant. */
@@ -316,5 +537,6 @@
     --motion-fast: 0ms;
     --motion-base: 0ms;
     --motion-slow: 0ms;
+    --motion-canvas: 0ms;
   }
 }

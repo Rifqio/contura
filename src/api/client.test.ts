@@ -87,7 +87,7 @@ test("postgres_auth_hint_mentions_access_rules", () => {
 
 test("error_text_for_query_sessions", () => {
   expect(errorText({ kind: "cancelled" })).toBe("The query was cancelled.");
-  expect(errorText({ kind: "timedOut", message: 30 })).toBe("Stopped after 30 s, the Connection's timeout.");
+  expect(errorText({ kind: "timedOut", message: 30 })).toBe("Stopped after 30s, the Connection's timeout.");
   expect(errorText({ kind: "invalidInput", message: "Give the query a name." })).toBe("Give the query a name.");
   expect(errorText({ kind: "invalidInput", message: "name must not be empty" })).toBe("Name must not be empty.");
   expect(errorText({ kind: "notFound", message: "That query session is closed." })).toBe(
@@ -106,6 +106,6 @@ test("error_text_for_ai_errors", () => {
   expect(errorText({ kind: "ai", message: { kind: "notAvailable", provider: "groq" } })).toBe(
     "Answers from Groq arrive in a later Contura version. Nothing was sent.",
   );
-  expect(errorText({ kind: "ai", message: { kind: "rateLimited", retryAfterSecs: 7 } })).toContain("7 s");
+  expect(errorText({ kind: "ai", message: { kind: "rateLimited", retryAfterSecs: 7 } })).toContain("7s");
   expect(errorText({ kind: "ai", message: { kind: "network", host: "api.groq.com" } })).toContain("api.groq.com");
 });

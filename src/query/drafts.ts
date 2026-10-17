@@ -1,5 +1,5 @@
 // Query tab drafts, kept per place (a Group, or Ungrouped) so they come back after a restart.
-import type { Place } from "../components/GroupSwitcher";
+import type { Place } from "../shell/tabs";
 import type { QueryTabDoc } from "./QueryTab";
 
 export function placeKey(place: Place): string {

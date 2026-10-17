@@ -36,6 +36,26 @@ pub fn classify(dialect: DialectKind, sql: &str) -> StatementClass {
     StatementClass::Read
 }
 
+/// How many non-empty top-level pieces `sql` holds. When a backslash makes the quoting
+/// ambiguous, the reading with more pieces counts.
+pub fn statement_count(dialect: DialectKind, sql: &str) -> usize {
+    let (pieces, _) = lex(dialect, sql, false);
+    let mut count = pieces.len();
+    if sql.contains('\\') {
+        let (other, clean) = lex(dialect, sql, true);
+        count = count.max(other.len() - usize::from(!clean && !other.is_empty()));
+    }
+    count
+}
+
+/// The first word of the first piece of `sql`, upper-cased; `None` when it has none.
+pub fn leading_word(dialect: DialectKind, sql: &str) -> Option<String> {
+    let (pieces, _) = lex(dialect, sql, false);
+    let toks = &pieces.first()?.toks;
+    toks.iter()
+        .find_map(|t| word(t).map(|(w, _)| w.to_string()))
+}
+
 /// Proof that the user confirmed one run; see `ConnectionService::confirm_run`.
 pub type PassId = uuid::Uuid;
 
@@ -882,6 +902,44 @@ mod tests {
         (SL, "SELECT 'x\\'; DELETE FROM t", W),
         (SL, "frobnicate", W),
     ];
+
+    #[test]
+    fn statement_count_counts_top_level_pieces() {
+        assert_eq!(statement_count(PG, "SELECT 1; SELECT 2"), 2);
+        assert_eq!(statement_count(PG, "SELECT ';'"), 1);
+        assert_eq!(statement_count(MY, "-- c\nSELECT 1;"), 1);
+        assert_eq!(statement_count(SL, "  "), 0);
+        assert_eq!(statement_count(MY, "SELECT 'a\\'; DELETE FROM t; -- '"), 2);
+    }
+
+    #[test]
+    fn explain_without_analyze_is_read_and_with_analyze_never_is() {
+        let cases: &[(DialectKind, &str, StatementClass)] = &[
+            (MY, "EXPLAIN FORMAT=TREE UPDATE t SET a = 9", R),
+            (MY, "EXPLAIN FORMAT=TREE DELETE FROM t", R),
+            (MY, "EXPLAIN UPDATE t SET a = 9", R),
+            (MY, "EXPLAIN ANALYZE FORMAT=TREE DELETE FROM t", W),
+            (PG, "EXPLAIN (FORMAT JSON) UPDATE t SET a = 9", R),
+            (PG, "EXPLAIN (FORMAT JSON) DELETE FROM t", R),
+            (PG, "EXPLAIN (FORMAT JSON, ANALYZE) DELETE FROM t", W),
+            (PG, "EXPLAIN (ANALYZE, FORMAT JSON) UPDATE t SET a = 9", W),
+            (PG, "EXPLAIN ANALYZE UPDATE t SET a = 9", W),
+            (SL, "EXPLAIN QUERY PLAN UPDATE t SET a = 9", R),
+            (SL, "EXPLAIN QUERY PLAN DELETE FROM t", R),
+        ];
+        for (d, sql, want) in cases {
+            assert_eq!(classify(*d, sql), *want, "{d:?}: {sql:?}");
+        }
+    }
+
+    #[test]
+    fn leading_word_skips_comments() {
+        assert_eq!(
+            leading_word(PG, "-- x\n explain select 1").as_deref(),
+            Some("EXPLAIN")
+        );
+        assert_eq!(leading_word(PG, "  "), None);
+    }
 
     #[test]
     fn classifier_table() {

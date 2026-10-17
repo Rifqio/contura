@@ -11,9 +11,13 @@ export type Layout = {
 
 export const EMPTY_LAYOUT: Layout = { version: 1, tables: {} };
 
-/** Card size estimate for auto-layout: a header plus one row per column. */
-export const CARD_WIDTH = 240;
-export const cardHeight = (columns: number) => 40 + 28 * columns;
+/** The one card size: layout, canvas CSS and exports all use these (app.css `.table-card*` repeats them). */
+export const CARD_WIDTH = 216;
+export const CARD_HEADER = 32;
+export const CARD_ROW = 24;
+/** Below the rows: the column list's 4 px padding top and bottom (the card has no Add column row). */
+export const CARD_FOOTER = 8;
+export const cardHeight = (columns: number) => CARD_HEADER + CARD_ROW * columns + CARD_FOOTER;
 
 function isPoint(v: unknown): v is { x: number; y: number } {
   return (

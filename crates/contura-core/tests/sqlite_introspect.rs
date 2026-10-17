@@ -68,6 +68,7 @@ async fn lists_tables_views_triggers_in_order() {
     let obj = |kind, name: &str| DbObject {
         kind,
         name: name.into(),
+        rows: None,
     };
     assert_eq!(
         db.list_objects("main", None).await.unwrap(),
@@ -112,4 +113,11 @@ async fn routines_are_invalid_input() {
         let err = db.object_definition(kind, &path("x")).await.unwrap_err();
         assert!(matches!(err, Error::InvalidInput(m) if m == "SQLite has no stored routines"));
     }
+}
+
+#[tokio::test]
+async fn sqlite_tables_have_no_row_estimate() {
+    let (_dir, db) = fixture().await;
+    let objects = db.list_objects("main", None).await.unwrap();
+    assert!(objects.iter().all(|o| o.rows.is_none()));
 }

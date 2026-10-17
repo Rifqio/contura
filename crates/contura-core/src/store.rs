@@ -1,7 +1,9 @@
 use crate::ai::{AiThread, ThreadId};
 use crate::error::{Error, Result};
 use crate::model::{ConnectionConfig, ConnectionId, Group, GroupId};
-use crate::query::{HistoryEntry, HistoryFilter, HistoryOnly, NewHistory, Outcome, SavedQuery};
+use crate::query::{
+    HistoryEntry, HistoryFilter, HistoryOnly, NewHistory, Outcome, SavedQuery, SavedQueryRun,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
@@ -162,9 +164,10 @@ impl AppStore {
     }
 
     /// Newest first. `search` matches anywhere in the SQL, ignoring case.
+    /// `None` lists every Connection's rows together.
     pub fn query_history(
         &self,
-        conn: ConnectionId,
+        conn: Option<ConnectionId>,
         f: &HistoryFilter,
     ) -> Result<Vec<HistoryEntry>> {
         let only = match f.only {
@@ -186,28 +189,111 @@ impl AppStore {
                 )
             });
         let sql = format!(
-            "SELECT id, sql, ran_at_ms, elapsed_ms, outcome, rows, changed, error FROM query_history
-             WHERE connection_id = ?1 AND (?2 IS NULL OR sql LIKE ?2 ESCAPE '\\'){only}
+            "SELECT id, sql, ran_at_ms, elapsed_ms, outcome, rows, changed, error, connection_id
+             FROM query_history
+             WHERE (?1 IS NULL OR connection_id = ?1) AND (?2 IS NULL OR sql LIKE ?2 ESCAPE '\\'){only}
              ORDER BY id DESC LIMIT ?3"
         );
         let mut stmt = self.db.prepare(&sql).map_err(store_err)?;
         let rows = stmt
-            .query_map(params![conn.to_string(), pattern, HISTORY_LIMIT], |r| {
-                Ok(HistoryEntry {
-                    id: r.get(0)?,
-                    connection_id: conn,
-                    sql: r.get(1)?,
-                    ran_at_ms: r.get(2)?,
-                    elapsed_ms: r.get::<_, i64>(3)? as u64,
-                    outcome: Outcome::parse(&r.get::<_, String>(4)?).unwrap_or(Outcome::Error),
-                    rows: r.get::<_, Option<i64>>(5)?.map(|n| n as u64),
-                    changed: r.get(6)?,
-                    error: r.get(7)?,
-                })
-            })
+            .query_map(
+                params![conn.map(|c| c.to_string()), pattern, HISTORY_LIMIT],
+                |r| {
+                    let owner: String = r.get(8)?;
+                    Ok(HistoryEntry {
+                        id: r.get(0)?,
+                        connection_id: owner.parse().map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                8,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?,
+                        sql: r.get(1)?,
+                        ran_at_ms: r.get(2)?,
+                        elapsed_ms: r.get::<_, i64>(3)? as u64,
+                        outcome: Outcome::parse(&r.get::<_, String>(4)?).unwrap_or(Outcome::Error),
+                        rows: r.get::<_, Option<i64>>(5)?.map(|n| n as u64),
+                        changed: r.get(6)?,
+                        error: r.get(7)?,
+                    })
+                },
+            )
             .map_err(store_err)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(store_err)
+    }
+
+    /// Removes rows that ran before `older_than_ms`; returns how many.
+    pub fn prune_history(&self, older_than_ms: i64) -> Result<u64> {
+        let n = self
+            .db
+            .execute(
+                "DELETE FROM query_history WHERE ran_at_ms < ?1",
+                params![older_than_ms],
+            )
+            .map_err(store_err)?;
+        Ok(n as u64)
+    }
+
+    pub fn clear_all_history(&self) -> Result<()> {
+        self.db
+            .execute("DELETE FROM query_history", [])
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    /// Bytes the history rows hold: the SQL and error text plus 64 per row.
+    pub fn history_bytes(&self) -> Result<u64> {
+        let n: i64 = self
+            .db
+            .query_row(
+                "SELECT COALESCE(SUM(length(CAST(sql AS BLOB)) + length(CAST(COALESCE(error, '') AS BLOB)) + 64), 0)
+                 FROM query_history",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(store_err)?;
+        Ok(n as u64)
+    }
+
+    /// The newest run of each Saved Query, matched on its text with surrounding whitespace and
+    /// one final ";" ignored on both sides: History keeps a statement without its ";".
+    pub fn saved_query_runs(&self) -> Result<Vec<SavedQueryRun>> {
+        let mut stmt = self
+            .db
+            .prepare(&format!(
+                "WITH h AS (SELECT id, {h_key} AS k FROM query_history),
+                      latest AS (SELECT k, MAX(id) AS id FROM h GROUP BY k)
+                 SELECT s.id, q.ran_at_ms, q.rows, q.elapsed_ms
+                 FROM saved_queries s
+                 JOIN latest ON latest.k = {s_key}
+                 JOIN query_history q ON q.id = latest.id",
+                h_key = statement_key("sql"),
+                s_key = statement_key("s.sql"),
+            ))
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(store_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, ran_at_ms, rows, elapsed) = row.map_err(store_err)?;
+            out.push(SavedQueryRun {
+                saved_id: id.parse().map_err(store_err)?,
+                ran_at_ms,
+                rows: rows.map(|n| n as u64),
+                elapsed_ms: elapsed as u64,
+            });
+        }
+        Ok(out)
     }
 
     pub fn clear_history(&self, conn: ConnectionId) -> Result<()> {
@@ -239,6 +325,7 @@ impl AppStore {
                 name,
                 sql,
                 updated_at_ms,
+                connection_id: None,
             });
         }
         Ok(out)
@@ -336,6 +423,7 @@ impl AppStore {
                 name,
                 color: serde_json::from_value(serde_json::Value::String(color))
                     .map_err(store_err)?,
+                has_image: false,
             });
         }
         out.sort_by_key(|g| g.name.to_lowercase());
@@ -400,6 +488,15 @@ impl AppStore {
             .map_err(store_err)?;
         Ok(())
     }
+}
+
+/// SQL for `column`'s text with surrounding whitespace and one final ";" removed.
+fn statement_key(column: &str) -> String {
+    const WS: &str = "' ' || char(9) || char(10) || char(13)";
+    let t = format!("trim({column}, {WS})");
+    format!(
+        "CASE WHEN substr({t}, -1) = ';' THEN rtrim(substr({t}, 1, length({t}) - 1), {WS}) ELSE {t} END"
+    )
 }
 
 #[cfg(test)]
@@ -495,13 +592,15 @@ mod tests {
         let g = Group {
             id: Uuid::new_v4(),
             name: "Prod".into(),
-            color: GroupColor::Red,
+            color: GroupColor::Indigo,
+            has_image: false,
         };
         s.save_group(&g).unwrap();
         let b = Group {
             id: Uuid::new_v4(),
             name: "alpha".into(),
-            color: GroupColor::Blue,
+            color: GroupColor::Sky,
+            has_image: false,
         };
         s.save_group(&b).unwrap();
         assert_eq!(s.list_groups().unwrap(), vec![b, g]);
@@ -513,12 +612,14 @@ mod tests {
         let a = Group {
             id: Uuid::new_v4(),
             name: "A".into(),
-            color: GroupColor::Red,
+            color: GroupColor::Indigo,
+            has_image: false,
         };
         let b = Group {
             id: Uuid::new_v4(),
             name: "B".into(),
             color: GroupColor::Green,
+            has_image: false,
         };
         s.save_group(&a).unwrap();
         s.save_group(&b).unwrap();
@@ -592,7 +693,11 @@ mod tests {
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(v, 3);
-        assert!(s.query_history(Uuid::new_v4(), &all()).unwrap().is_empty());
+        assert!(
+            s.query_history(Some(Uuid::new_v4()), &all())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     fn thread(place: &str, title: &str, updated_at: i64) -> crate::ai::AiThread {
@@ -672,7 +777,7 @@ mod tests {
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(v, 3);
-        let h = s.query_history(c, &all()).unwrap();
+        let h = s.query_history(Some(c), &all()).unwrap();
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].sql, "SELECT 1");
         assert!(s.list_ai_threads("ungrouped").unwrap().is_empty());
@@ -683,6 +788,51 @@ mod tests {
             search: None,
             only: None,
         }
+    }
+
+    #[test]
+    fn saved_query_runs_ignore_one_final_semicolon_and_whitespace() {
+        let (_d, s) = open_tmp();
+        let conn = Uuid::new_v4();
+        let saved = |name: &str, sql: &str| {
+            let q = SavedQuery {
+                id: Uuid::new_v4(),
+                name: name.into(),
+                sql: sql.into(),
+                updated_at_ms: 1,
+                connection_id: None,
+            };
+            s.save_saved_query(&q).unwrap();
+            q.id
+        };
+        // History stores the statement without its ";"; the Saved Query keeps it.
+        let with_semi = saved("with", "SELECT * FROM users;\n");
+        // The other way round, with whitespace before the ";".
+        let history_semi = saved("other", " SELECT 2 ");
+        let never = saved("never", "SELECT 3;");
+        let double = saved("double", "SELECT 4;;");
+        // Whole-text equality: "SELECT 1" never matches a run of "SELECT 10".
+        let near = saved("near", "SELECT 1;");
+        s.add_history(&entry(conn, "SELECT * FROM users", Outcome::Ok, false))
+            .unwrap();
+        s.add_history(&entry(conn, "SELECT 2 ;", Outcome::Ok, false))
+            .unwrap();
+        s.add_history(&entry(conn, "SELECT 4", Outcome::Ok, false))
+            .unwrap();
+        s.add_history(&entry(conn, "SELECT 10", Outcome::Ok, false))
+            .unwrap();
+        let ids: std::collections::HashSet<_> = s
+            .saved_query_runs()
+            .unwrap()
+            .iter()
+            .map(|r| r.saved_id)
+            .collect();
+        assert!(ids.contains(&with_semi));
+        assert!(ids.contains(&history_semi));
+        assert!(!ids.contains(&never));
+        // Only one ";" is ignored.
+        assert!(!ids.contains(&double));
+        assert!(!ids.contains(&near));
     }
 
     fn entry(conn: Uuid, sql: &str, outcome: Outcome, changed: bool) -> NewHistory {
@@ -708,11 +858,11 @@ mod tests {
             s.add_history(&entry(a, &format!("SELECT {i}"), Outcome::Ok, false))
                 .unwrap();
         }
-        let h = s.query_history(a, &all()).unwrap();
+        let h = s.query_history(Some(a), &all()).unwrap();
         assert_eq!(h.len(), 1000);
         assert_eq!(h[0].sql, "SELECT 1004");
         assert_eq!(h[999].sql, "SELECT 5");
-        assert_eq!(s.query_history(b, &all()).unwrap().len(), 1);
+        assert_eq!(s.query_history(Some(b), &all()).unwrap().len(), 1);
     }
 
     #[test]
@@ -730,7 +880,7 @@ mod tests {
         s.add_history(&entry(a, "SELECT 2", Outcome::Cancelled, false))
             .unwrap();
         let sqls = |f: HistoryFilter| -> Vec<String> {
-            s.query_history(a, &f)
+            s.query_history(Some(a), &f)
                 .unwrap()
                 .into_iter()
                 .map(|e| e.sql)
@@ -758,7 +908,7 @@ mod tests {
             vec!["UPDATE stores SET x = 1"]
         );
         s.clear_history(a).unwrap();
-        assert!(s.query_history(a, &all()).unwrap().is_empty());
+        assert!(s.query_history(Some(a), &all()).unwrap().is_empty());
     }
 
     #[test]

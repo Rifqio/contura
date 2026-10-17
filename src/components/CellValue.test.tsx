@@ -13,6 +13,28 @@ test('number renders exact string "18446744073709551615"', () => {
   expect(screen.getByText("18446744073709551615")).toBeTruthy();
 });
 
+test("a_boolean_true_cell_has_cell_bool", () => {
+  const { container } = render(<CellValue cell={{ t: "text", value: "true", truncated: false, totalBytes: 4 }} boolean />);
+  expect(container.querySelector(".cell-bool")?.textContent).toBe("true");
+});
+
+test("true_in_a_text_column_stays_plain_text", () => {
+  const { container } = render(<CellValue cell={{ t: "text", value: "true", truncated: false, totalBytes: 4 }} />);
+  expect(container.querySelector(".cell-bool")).toBeNull();
+  expect(container.querySelector(".cell-text")?.textContent).toBe("true");
+});
+
+test("null_and_numbers_keep_their_classes", () => {
+  const { container } = render(
+    <>
+      <CellValue cell={{ t: "null" }} boolean />
+      <CellValue cell={{ t: "number", value: "42" }} />
+    </>,
+  );
+  expect(container.querySelector(".cell-null")?.textContent).toBe("NULL");
+  expect(container.querySelector(".cell-number")?.textContent).toBe("42");
+});
+
 test("truncated text offers full value and calls fetch_full_value with pk key", async () => {
   routeInvoke({ fetch_full_value: () => ({ t: "text", value: "the whole long note" }) });
   const key = [{ column: "id", value: { t: "number" as const, value: "7" } }];

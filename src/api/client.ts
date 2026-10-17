@@ -20,6 +20,7 @@ import type {
   EditPlan,
   EditSet,
   KeyPart,
+  KeymapOverrides,
   FullValue,
   FullValueRequest,
   Group,
@@ -32,6 +33,7 @@ import type {
   PageRequest,
   SchemaInfo,
   SuggestedConnection,
+  UiPrefs,
   ModelFiles,
   SchemaModel,
   SqlSchema,
@@ -40,11 +42,16 @@ import type {
   HistoryFilter,
   MoreRows,
   PassId,
+  Plan,
   QuerySessionId,
   RunVerdict,
   StatementClass,
   SavedQuery,
   SavedQueryInput,
+  SavedQueryRun,
+  DataFolderInfo,
+  RecentItem,
+  RecentTarget,
 } from "./types";
 
 export const DIALECT_LABEL: Record<DialectKind, string> = {
@@ -96,7 +103,29 @@ export const testConnection = (input: ConnectionInput): Promise<string> => invok
 
 export const suggestedConnections = (): Promise<SuggestedConnection[]> => invoke("suggested_connections");
 
-export const openConnection = (id: ConnectionId): Promise<void> => invoke("open_connection", { id });
+// Opens in flight per Connection, from any part of the app: a cancelled open asks before it closes.
+const opening = new Map<ConnectionId, number>();
+
+/** Resolves to the server version (R3); an open Connection answers again. */
+export function openConnection(id: ConnectionId): Promise<string> {
+  opening.set(id, (opening.get(id) ?? 0) + 1);
+  const done = () => {
+    const n = (opening.get(id) ?? 1) - 1;
+    if (n > 0) opening.set(id, n);
+    else opening.delete(id);
+  };
+  let p: Promise<string>;
+  try {
+    p = invoke<string>("open_connection", { id });
+  } catch (e) {
+    p = Promise.reject(e);
+  }
+  p.then(done, done);
+  return p;
+}
+
+/** How many opens of this Connection are still in flight. */
+export const opensInFlight = (id: ConnectionId): number => opening.get(id) ?? 0;
 
 export const closeConnection = (id: ConnectionId): Promise<void> => invoke("close_connection", { id });
 
@@ -151,12 +180,44 @@ export const saveGroup = (input: GroupInput): Promise<Group> => invoke("save_gro
 
 export const deleteGroup = (id: GroupId): Promise<void> => invoke("delete_group", { id });
 
+export const setGroupImage = (id: GroupId, pngBase64: string): Promise<Group> =>
+  invoke("set_group_image", { id, png: pngBase64 });
+
+export const clearGroupImage = (id: GroupId): Promise<Group> => invoke("clear_group_image", { id });
+
+export const groupImage = (id: GroupId): Promise<string | null> => invoke("group_image", { id });
+
 export const moveConnection = (id: ConnectionId, groupId: GroupId | null): Promise<ConnectionConfig> =>
   invoke("move_connection", { id, groupId });
 
 export const lastGroup = (): Promise<GroupId | null> => invoke("last_group");
 
 export const setLastGroup = (id: GroupId | null): Promise<void> => invoke("set_last_group", { id });
+
+export const uiPrefs = (): Promise<UiPrefs> => invoke("ui_prefs");
+
+export const saveUiPrefs = (prefs: UiPrefs): Promise<void> => invoke("save_ui_prefs", { prefs });
+
+export const keymap = (): Promise<KeymapOverrides> => invoke("keymap");
+
+export const saveKeymap = (overrides: KeymapOverrides): Promise<void> => invoke("save_keymap", { overrides });
+
+export const recentItems = (): Promise<RecentItem[]> => invoke("recent_items");
+
+export const clearRecent = (): Promise<RecentItem[]> => invoke("clear_recent");
+
+export const restoreRecent = (items: RecentItem[]): Promise<void> => invoke("restore_recent", { items });
+
+export const connectionOpenedTimes = (): Promise<Record<ConnectionId, number>> => invoke("connection_opened_times");
+
+export const dataFolderInfo = (): Promise<DataFolderInfo> => invoke("data_folder_info");
+
+export const openDataFolder = (): Promise<void> => invoke("open_data_folder");
+
+export const savedQueryRuns = (): Promise<SavedQueryRun[]> => invoke("saved_query_runs");
+
+export const recordRecent = (target: RecentTarget, connectionId: ConnectionId | null): Promise<void> =>
+  invoke("record_recent", { target, connectionId });
 
 export const openQuerySession = (id: ConnectionId, database: string | null): Promise<QuerySessionId> =>
   invoke("open_query_session", { id, database });
@@ -187,6 +248,10 @@ export const applyEdits = (id: ConnectionId, edits: EditSet, pass: PassId | null
 export const classifySql = (dialect: DialectKind, sql: string): Promise<StatementClass> =>
   invoke("classify_sql", { dialect, sql });
 
+/** The plan of one statement; the Core asks the server to explain it and never runs it. */
+export const explainStatement = (session: QuerySessionId, statement: string): Promise<Plan> =>
+  invoke("explain_statement", { session, statement });
+
 export const fetchMoreRows = (session: QuerySessionId): Promise<MoreRows> => invoke("fetch_more_rows", { session });
 
 export const cancelQuery = (session: QuerySessionId): Promise<void> => invoke("cancel_query", { session });
@@ -196,10 +261,10 @@ export const closeQueryResult = (session: QuerySessionId): Promise<void> => invo
 export const closeQuerySession = (session: QuerySessionId): Promise<void> =>
   invoke("close_query_session", { session });
 
-export const queryHistory = (id: ConnectionId, filter: HistoryFilter): Promise<HistoryEntry[]> =>
+export const queryHistory = (id: ConnectionId | null, filter: HistoryFilter): Promise<HistoryEntry[]> =>
   invoke("query_history", { id, filter });
 
-export const clearQueryHistory = (id: ConnectionId): Promise<void> => invoke("clear_query_history", { id });
+export const clearQueryHistory = (id: ConnectionId | null): Promise<void> => invoke("clear_query_history", { id });
 
 export const listSavedQueries = (): Promise<SavedQuery[]> => invoke("list_saved_queries");
 
@@ -241,9 +306,14 @@ export function isNotOpen(e: unknown): boolean {
   return isCommandError(e) && e.kind === "notFound" && e.message === "connection not open";
 }
 
-function formatBytes(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toLocaleString("en-US", { maximumFractionDigits: 1 })} MiB`;
-  if (n >= 1024) return `${(n / 1024).toLocaleString("en-US", { maximumFractionDigits: 1 })} KiB`;
+/**
+ * A size in 1024 steps. `"windows"` labels them KB and MB as Windows Explorer does, for sizes
+ * shown beside files (the data folder); messages keep KiB and MiB.
+ */
+function formatBytes(n: number, units: "iec" | "windows" = "iec"): string {
+  const [kb, mb] = units === "windows" ? ["KB", "MB"] : ["KiB", "MiB"];
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toLocaleString("en-US", { maximumFractionDigits: 1 })} ${mb}`;
+  if (n >= 1024) return `${(n / 1024).toLocaleString("en-US", { maximumFractionDigits: 1 })} ${kb}`;
   return `${n.toLocaleString("en-US")} bytes`;
 }
 
@@ -270,7 +340,7 @@ function aiErrorText(e: AiError): string {
     case "rateLimited":
       return e.retryAfterSecs === null
         ? "The provider is limiting requests. Try again in a moment."
-        : `The provider is limiting requests. Try again in ${e.retryAfterSecs} s.`;
+        : `The provider is limiting requests. Try again in ${e.retryAfterSecs}s.`;
     case "network":
       return `Could not reach ${e.host}. Check your connection and the base URL.`;
   }
@@ -329,7 +399,7 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
     case "cancelled":
       return "The query was cancelled.";
     case "timedOut":
-      return `Stopped after ${e.message} s, the Connection's timeout.`;
+      return `Stopped after ${e.message}s, the Connection's timeout.`;
     case "ai":
       return aiErrorText(e.message);
     case "readOnly":

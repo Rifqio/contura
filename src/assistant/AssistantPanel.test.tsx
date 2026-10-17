@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { AiAccess, AiError, AiSettings, AiSettingsView, AiThread } from "../api/types";
+import { iconElement, type IconName } from "../components/Icon";
 import { callsTo, routeInvoke } from "../test/invoke";
-import AssistantPanel, { useAssistantHotkey } from "./AssistantPanel";
+import { useCommandKeys } from "../commands/useCommandKeys";
+import AssistantPanel from "./AssistantPanel";
 import type { AskContext } from "./context";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -18,6 +20,7 @@ const none: AiSettings = {
   maxTokens: null,
   inlineAsk: true,
   errorAsk: true,
+  newConnectionAccess: "schema",
 };
 const groq: AiSettings = {
   ...none,
@@ -99,7 +102,7 @@ function renderPanel(props: Partial<React.ComponentProps<typeof AssistantPanel>>
 
 function Harness() {
   const [open, setOpen] = useState(false);
-  useAssistantHotkey(() => setOpen((o) => !o));
+  useCommandKeys({ "assistant.toggle": () => setOpen((o) => !o) });
   return <p>{open ? "open" : "closed"}</p>;
 }
 
@@ -125,26 +128,25 @@ test("ctrl_alt_i_ignores_an_open_dialog", async () => {
   expect(screen.getByText("closed")).toBeTruthy();
 });
 
-test("chips_show_context_and_can_be_removed", async () => {
+test("sends_items_can_be_switched_off_and_stay_off_while_typing", async () => {
   const user = userEvent.setup();
   settings = groq;
   const { rerender } = renderPanel();
-  const chips = within(await screen.findByRole("group", { name: "Context" }));
-  expect(await chips.findByText("Selected SQL · lines 1 to 1")).toBeTruthy();
-  expect(chips.getByText("Schema · orders")).toBeTruthy();
+  const statement = async () => screen.findByRole("button", { name: /^the current statement/ });
+  expect((await statement()).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "schema of 1 table" })).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "Show exactly" }));
   expect(screen.getByText(/SELECT \* FROM orders/, { selector: "pre" })).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: "Remove Selected SQL · lines 1 to 1" }));
-  expect(screen.queryByText("Selected SQL · lines 1 to 1")).toBeNull();
+  await user.click(await statement());
   expect(screen.queryByText(/SELECT \* FROM orders/)).toBeNull();
-  expect(screen.queryByRole("button", { name: /^Query text/ })).toBeNull();
+  expect((await statement()).getAttribute("aria-pressed")).toBe("false");
 
-  // Typing more SQL must not bring the removed chip back.
+  // Typing more SQL must not switch it back on.
   const edited = { ...ctx("schemaQueryRows"), sql: "SELECT * FROM orders WHERE id = 1" };
   rerender(
     <AssistantPanel place="ungrouped" groupId={null} context={edited} schema={schema} onOpenSettings={() => {}} />,
   );
-  expect(screen.queryByText("Selected SQL · lines 1 to 1")).toBeNull();
+  expect((await statement()).getAttribute("aria-pressed")).toBe("false");
   await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
   await waitFor(() => expect(callsTo("ai_ask")).toHaveLength(1));
   const payload = (callsTo("ai_ask")[0].request as { payload: string }).payload;
@@ -185,9 +187,8 @@ test("show_exactly_reveals_the_payload", async () => {
   const user = userEvent.setup();
   settings = groq;
   const first = renderPanel();
-  await screen.findByText(/Groq/);
-  await user.click(screen.getByRole("button", { name: "Show exactly" }));
-  expect(screen.getByText(/To api\.groq\.com \(llama-3\.3-70b-versatile\)/)).toBeTruthy();
+  await user.click(await screen.findByRole("button", { name: "Show exactly" }));
+  expect(await screen.findByText(/To api\.groq\.com \(llama-3\.3-70b-versatile\)/)).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "Hide" }));
   expect(screen.queryByText(/To api\.groq\.com/)).toBeNull();
   first.unmount();
@@ -213,7 +214,7 @@ test("asking_with_a_provider_saves_the_thread", async () => {
   settings = groq;
   askError = { kind: "notAvailable", provider: "groq" };
   renderPanel();
-  await screen.findByText(/Groq/);
+  await waitFor(() => expect(callsTo("ai_settings")).toHaveLength(1));
   await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
   const note = "Answers from Groq arrive in a later Contura version. Nothing was sent.";
   expect(await screen.findByText(note)).toBeTruthy();
@@ -238,8 +239,8 @@ test("panel_says_what_it_cannot_see", async () => {
     ),
   ).toBeTruthy();
   expect(screen.getByRole("button", { name: "Connection settings" })).toBeTruthy();
-  expect(screen.getByText("No context from Shop prod")).toBeTruthy();
-  expect(screen.getByText("Your question only")).toBeTruthy();
+  expect(screen.getByText("your question")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /current statement|schema of/ })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Show exactly" }));
   expect(screen.queryByText(/SELECT|orders/)).toBeNull();
   await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
@@ -247,47 +248,188 @@ test("panel_says_what_it_cannot_see", async () => {
   expect((callsTo("ai_ask")[0].request as { payload: string }).payload).toBe("Only your question");
 });
 
-test("rows_switch_is_per_question", async () => {
+test("sample_rows_is_shown_as_not_available_and_never_toggles", async () => {
   const user = userEvent.setup();
   settings = groq;
   askError = { kind: "notAvailable", provider: "groq" };
   renderPanel();
-  await screen.findByText(/Groq/);
-  const rows = () => screen.getByRole("button", { name: /^Sample rows/ });
-  await user.click(rows());
-  expect(rows().getAttribute("aria-pressed")).toBe("false");
+  const rows = await screen.findByRole("button", { name: /^Sample rows/ });
+  expect(rows.getAttribute("aria-disabled")).toBe("true");
+  expect(rows.getAttribute("title")).toBe("Sample rows arrive with a later step.");
+  await user.click(rows);
+  expect(rows.getAttribute("aria-pressed")).toBeNull();
   await user.type(screen.getByRole("textbox", { name: "Message" }), "one{Enter}");
-  await screen.findByText(/Answers from Groq/);
-  await user.type(screen.getByRole("textbox", { name: "Message" }), "two{Enter}");
-  await waitFor(() => expect(callsTo("ai_ask")).toHaveLength(2));
-  const [a, b] = callsTo("ai_ask").map((c) => (c.request as { payload: string }).payload);
-  expect(a).not.toContain("Sample rows");
-  expect(b).toContain("Sample rows");
-  expect(rows().getAttribute("aria-pressed")).toBe("true");
+  await waitFor(() => expect(callsTo("ai_ask")).toHaveLength(1));
+  expect((callsTo("ai_ask")[0].request as { payload: string }).payload).not.toMatch(/sample rows/i);
 });
 
+const openHistory = async (user: ReturnType<typeof userEvent.setup>) =>
+  user.click(await screen.findByRole("button", { name: "History" }));
+
 test("threads_follow_the_group", async () => {
+  const user = userEvent.setup();
   threads = [thread("a", "group:g1", "Group one chat", 1), thread("b", "group:g2", "Group two chat", 2)];
   const { rerender } = renderPanel({ place: "group:g1", groupId: "g1", context: ctx("schema", "One DB") });
-  const select = await screen.findByRole("combobox", { name: "Chat" });
-  await waitFor(() => expect(within(select).getByText("Group one chat")).toBeTruthy());
-  expect(within(screen.getByRole("group", { name: "Context" })).getByText("Schema · orders")).toBeTruthy();
+  await screen.findByText("Group one chat", { selector: ".msg-user" });
+  expect(screen.getByRole("button", { name: "schema of 1 table" })).toBeTruthy();
   rerender(
     <AssistantPanel place="group:g2" groupId="g2" context={null} schema={null} onOpenSettings={() => {}} />,
   );
-  await waitFor(() =>
-    expect(within(screen.getByRole("combobox", { name: "Chat" })).getByText("Group two chat")).toBeTruthy(),
-  );
+  await screen.findByText("Group two chat", { selector: ".msg-user" });
   expect(screen.queryByText("Group one chat")).toBeNull();
-  expect(screen.queryByText(/Schema ·/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /schema of/ })).toBeNull();
+  await openHistory(user);
+  expect(screen.getByRole("menuitem", { name: "Group two chat" })).toBeTruthy();
+  expect(screen.queryByRole("menuitem", { name: "Group one chat" })).toBeNull();
 });
 
-test("clear_removes_the_groups_threads", async () => {
+test("header_reads_ask_with_access_chip_history_and_close", async () => {
+  const user = userEvent.setup();
+  const onClose = vi.fn();
+  renderPanel({ context: ctx("schemaQuery"), onClose });
+  const head = document.querySelector(".ai-panel-head") as HTMLElement;
+  expect(within(head).getByText("Ask")).toBeTruthy();
+  expect(within(head).getByText("Schema and query text")).toBeTruthy();
+  expect(within(head).getByRole("button", { name: "History" })).toBeTruthy();
+  await user.click(within(head).getByRole("button", { name: "Close" }));
+  expect(onClose).toHaveBeenCalled();
+  expect(within(head).queryByRole("combobox")).toBeNull();
+});
+
+test("history_menu_lists_threads_new_chat_and_clear", async () => {
+  const user = userEvent.setup();
+  threads = [thread("a", "ungrouped", "Old chat", 1), thread("b", "ungrouped", "Newer chat", 2)];
+  renderPanel();
+  await screen.findByText("Newer chat", { selector: ".msg-user" });
+  await openHistory(user);
+  const menu = within(screen.getByRole("menu", { name: "History" }));
+  const names = menu.getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"));
+  expect(names).toEqual(["Newer chat", "Old chat", "New chat", "Clear chats"]);
+  await user.click(menu.getByRole("menuitem", { name: "Old chat" }));
+  expect(await screen.findByText("Old chat", { selector: ".msg-user" })).toBeTruthy();
+  expect(screen.queryByText("Newer chat")).toBeNull();
+  await openHistory(user);
+  await user.click(screen.getByRole("menuitem", { name: "New chat" }));
+  expect(screen.queryByText("Old chat")).toBeNull();
+});
+
+test("clear_chats_removes_the_groups_threads", async () => {
   const user = userEvent.setup();
   threads = [thread("a", "ungrouped", "Old chat", 1)];
   renderPanel();
-  await screen.findByText("Old chat", { selector: "option" });
-  await user.click(screen.getByRole("button", { name: "Clear" }));
+  await screen.findByText("Old chat", { selector: ".msg-user" });
+  await openHistory(user);
+  await user.click(screen.getByRole("menuitem", { name: "Clear chats" }));
   await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "ungrouped" }]));
-  expect(screen.queryByText("Old chat", { selector: "option" })).toBeNull();
+  expect(screen.queryByText("Old chat")).toBeNull();
+});
+
+test("composer_order_sends_line_input_subline_hint_and_send", async () => {
+  renderPanel({ context: ctx("schemaQuery", "kestrel-main") });
+  const input = await screen.findByRole("textbox", { name: "Message" });
+  expect(input.getAttribute("placeholder")).toBe("Ask about kestrel-main");
+  const sends = screen.getByText("Sends");
+  const sub = screen.getByText("No sample rows are sent");
+  const hint = screen.getByText("Enter");
+  const send = screen.getByRole("button", { name: "Send" });
+  const before = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(before(sends, input)).toBe(true);
+  expect(before(input, sub)).toBe(true);
+  expect(before(sub, hint)).toBe(true);
+  expect(before(hint, send)).toBe(true);
+  expect(hint.tagName).toBe("KBD");
+});
+
+test("the_sample_rows_line_always_says_none_are_sent", async () => {
+  renderPanel({ context: ctx("schemaQueryRows") });
+  await screen.findByRole("textbox", { name: "Message" });
+  expect(screen.getByText("No sample rows are sent")).toBeTruthy();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Show exactly" }));
+  expect(screen.queryByText(/sample rows \(/i)).toBeNull();
+});
+
+test("sends_items_have_their_own_icons", async () => {
+  renderPanel({ context: ctx("schemaQuery") });
+  const iconOf = (el: HTMLElement) => el.querySelector("path")?.getAttribute("d");
+  const d = (name: IconName) => iconElement(name).querySelector("path")?.getAttribute("d");
+  expect(iconOf(await screen.findByRole("button", { name: "schema of 1 table" }))).toBe(d("table"));
+  expect(iconOf(screen.getByRole("button", { name: /^the current statement/ }))).toBe(d("fileQuery"));
+  expect(iconOf(screen.getByText("your question"))).toBe(d("msg"));
+});
+
+const FENCED = "Join them:\n```sql\nSELECT id FROM orders\n```\nThat is all.";
+
+test("answer_sql_renders_with_insert_run_and_copy", async () => {
+  const user = userEvent.setup();
+  const onInsert = vi.fn();
+  const onRun = vi.fn().mockResolvedValue({ ran: true, rows: 8 });
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  threads = [
+    {
+      id: "t",
+      place: "ungrouped",
+      title: "q",
+      updatedAt: 1,
+      messages: [
+        { role: "user", text: "q", context: [], at: 1 },
+        { role: "assistant", text: FENCED, context: [], at: 2 },
+      ],
+    },
+  ];
+  renderPanel({ onInsert, onRun });
+  const block = await screen.findByRole("group", { name: "SQL answer" });
+  expect(block.textContent).toContain("SELECT id FROM orders");
+  expect(block.querySelector(".sql-block-gutter")).toBeNull();
+  expect(screen.getByText("Join them:")).toBeTruthy();
+  expect(screen.getByText("That is all.")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
+  expect(onInsert).toHaveBeenCalledWith("SELECT id FROM orders");
+  await user.click(screen.getByRole("button", { name: "Copy" }));
+  expect(writeText).toHaveBeenCalledWith("SELECT id FROM orders");
+  expect(screen.queryByText(/Inserted into the editor and run/)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Run" }));
+  expect(onRun).toHaveBeenCalledWith("SELECT id FROM orders");
+  expect(await screen.findByText("Inserted into the editor and run, 8 rows")).toBeTruthy();
+});
+
+const answerThread = (): AiThread => ({
+  id: "t",
+  place: "ungrouped",
+  title: "q",
+  updatedAt: 1,
+  messages: [
+    { role: "user", text: "q", context: [], at: 1 },
+    { role: "assistant", text: FENCED, context: [], at: 2 },
+  ],
+});
+
+test("a_run_that_did_not_happen_says_only_that_it_was_inserted", async () => {
+  threads = [answerThread()];
+  renderPanel({ onInsert: vi.fn(), onRun: vi.fn().mockResolvedValue({ ran: false }) });
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Run" }));
+  expect(await screen.findByText("Inserted into the editor")).toBeTruthy();
+  expect(screen.queryByText(/and run/)).toBeNull();
+});
+
+test("one_row_is_singular", async () => {
+  threads = [answerThread()];
+  renderPanel({ onInsert: vi.fn(), onRun: vi.fn().mockResolvedValue({ ran: true, rows: 1 }) });
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Run" }));
+  expect(await screen.findByText("Inserted into the editor and run, 1 row")).toBeTruthy();
+});
+
+test("a_run_with_more_rows_than_the_first_page_says_plus", async () => {
+  threads = [answerThread()];
+  renderPanel({ onInsert: vi.fn(), onRun: vi.fn().mockResolvedValue({ ran: true, rows: 200, more: true }) });
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Run" }));
+  expect(await screen.findByText("Inserted into the editor and run, 200+ rows")).toBeTruthy();
+});
+
+test("without_a_query_tab_insert_and_run_are_disabled", async () => {
+  threads = [answerThread()];
+  renderPanel();
+  const insert = await screen.findByRole("button", { name: "Insert into the editor" });
+  expect((insert as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Run" }) as HTMLButtonElement).disabled).toBe(true);
 });

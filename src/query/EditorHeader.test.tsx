@@ -1,0 +1,224 @@
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { expect, test, vi } from "vitest";
+import type { AiAccess, ConnectionConfig } from "../api/types";
+import EditorHeader from "./EditorHeader";
+
+const conn: ConnectionConfig = {
+  id: "c1",
+  name: "freight-prod",
+  dialect: "postgres",
+  host: "h",
+  port: 5432,
+  user: "u",
+  database: "freight",
+  ssl: { mode: "disable" },
+  file: null,
+  groupId: null,
+  queryTimeoutSecs: null,
+  aiAccess: "schema",
+  production: false,
+  readOnly: false,
+};
+const other: ConnectionConfig = { ...conn, id: "c2", name: "kestrel-main", database: "kestrel" };
+
+function setup(over: Partial<Parameters<typeof EditorHeader>[0]> = {}) {
+  const props = {
+    connection: conn,
+    connections: [conn, other],
+    openIds: new Set(["c1"]),
+    databases: ["freight", "archive"],
+    database: "freight",
+    production: false,
+    running: false,
+    writeHazard: false,
+    canRun: true,
+    blockedTip: null,
+    compact: false,
+    aiAccess: "schema" as AiAccess,
+    historyOpen: false,
+    onPickConnection: vi.fn(),
+    onPickDatabase: vi.fn(),
+    onRun: vi.fn(),
+    onRunAll: vi.fn(),
+    onExplain: vi.fn(),
+    onFormat: vi.fn(),
+    onSave: vi.fn(),
+    onToggleHistory: vi.fn(),
+    onCancel: vi.fn(),
+    ...over,
+  };
+  return { ...props, ...render(<EditorHeader {...props} />) };
+}
+
+test("strip_order_matches_frame_b", () => {
+  setup({ production: true, connection: { ...conn, production: true } });
+  const strip = screen.getByRole("toolbar", { name: "Query" });
+  const names = Array.from(strip.querySelectorAll("button, .chip, .production-label, .editor-header-divider")).map((el) =>
+    el.classList.contains("production-label") ? "PRODUCTION" : el.classList.contains("editor-header-divider") ? "|" : (el.getAttribute("aria-label") ?? el.textContent ?? "").replace(/\s+/g, " ").trim(),
+  );
+  expect(names).toEqual(["freight-prod", "PRODUCTION", "freight", "|", "Run Ctrl+Enter", "Run all", "Explain", "Format", "AI: Schema only", "Save query (Ctrl+S)", "Query History"]);
+  expect(strip.querySelector(".spacer")).toBeTruthy();
+});
+
+test("production_shows_the_production_label", () => {
+  setup({ production: true, connection: { ...conn, production: true } });
+  expect(screen.getByText("PRODUCTION")).toBeTruthy();
+});
+
+test("a_normal_connection_has_no_production_label", () => {
+  setup();
+  expect(screen.queryByText("PRODUCTION")).toBeNull();
+});
+
+test("connection_button_opens_a_menu_of_the_place_connections", async () => {
+  const { onPickConnection } = setup();
+  await userEvent.click(screen.getByRole("button", { name: /freight-prod/ }));
+  const menu = screen.getByRole("menu", { name: "Connection" });
+  expect(menu).toBeTruthy();
+  const closed = screen.getByRole("menuitem", { name: "kestrel-main" });
+  expect(closed.textContent).toContain("closed");
+  expect(screen.getByRole("menuitem", { name: "freight-prod" }).textContent).not.toContain("closed");
+  await userEvent.click(closed);
+  expect(onPickConnection).toHaveBeenCalledWith("c2");
+});
+
+test("database_button_lists_databases", async () => {
+  const { onPickDatabase } = setup();
+  await userEvent.click(screen.getByRole("button", { name: /^freight$/ }));
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["freight", "archive"]);
+  await userEvent.click(screen.getByRole("menuitem", { name: "archive" }));
+  expect(onPickDatabase).toHaveBeenCalledWith("archive");
+});
+
+test("no_database_button_without_a_database_list", () => {
+  setup({ databases: null });
+  expect(screen.queryByRole("button", { name: /^freight$/ })).toBeNull();
+});
+
+test("compact_turns_run_all_explain_and_format_into_icon_buttons", () => {
+  setup({ compact: true });
+  for (const name of ["Run all (Ctrl+Shift+Enter)", "Explain", "Format (Shift+Alt+F)"]) {
+    const b = screen.getByRole("button", { name });
+    expect(b.getAttribute("title")).toBe(name);
+    expect(b.textContent).toBe("");
+    expect(b.querySelector("svg")).toBeTruthy();
+  }
+});
+
+/** E2: at 1280 px with Run on PROD and a long database name, labels that would overflow turn into icons so Save and History stay in reach. */
+test("labels_turn_into_icons_when_they_would_overflow_and_come_back_when_there_is_room", () => {
+  let width = 900;
+  const sizes = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("editor-header") ? width : 0;
+  });
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+    if (!this.classList.contains("editor-header")) return 0;
+    // The labelled strip needs 980 px; the icon strip 760.
+    return this.querySelector("button[aria-label^='Explain']") ? 760 : 980;
+  });
+  let resize: () => void = () => {};
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(cb: () => void) {
+        resize = cb;
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  try {
+    setup({ production: true, writeHazard: true, database: "dbview_test_023794c6" });
+    expect(screen.getByRole("button", { name: "Explain" }).textContent).toBe("");
+    expect(screen.getByRole("button", { name: "Save query (Ctrl+S)" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Query History" })).toBeTruthy();
+    width = 1000;
+    act(() => resize());
+    expect(screen.getByRole("button", { name: "Explain" }).textContent).toBe("Explain");
+  } finally {
+    sizes.mockRestore();
+    scroll.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+test("the_database_name_shows_in_full_as_its_tooltip", () => {
+  setup({ database: "dbview_test_023794c6", databases: ["dbview_test_023794c6"] });
+  expect(screen.getByRole("button", { name: /dbview_test_023794c6/ }).getAttribute("title")).toBe("dbview_test_023794c6");
+});
+
+test("wide_keeps_the_labels", () => {
+  setup();
+  for (const t of ["Run all", "Explain", "Format"]) expect(screen.getByRole("button", { name: t }).textContent).toBe(t);
+});
+
+test("ai_chip_names_the_access_level", () => {
+  const cases: [AiAccess, string, string][] = [
+    ["never", "AI: Nothing", "chip-neutral"],
+    ["schema", "AI: Schema only", "chip-info"],
+    ["schemaQuery", "AI: Schema and query text", "chip-info"],
+    ["schemaQueryRows", "AI: Plus sample rows", "chip-warning"],
+  ];
+  for (const [access, text, cls] of cases) {
+    const { unmount } = setup({ aiAccess: access });
+    const chip = screen.getByText(text).closest(".chip") as HTMLElement;
+    expect(chip.className).toContain(cls);
+    unmount();
+  }
+});
+
+test("run_on_prod_is_the_outline_with_a_boxed_hint", () => {
+  setup({ production: true, writeHazard: true, connection: { ...conn, production: true } });
+  const run = screen.getByRole("button", { name: "Run on Production (Ctrl+Enter)" });
+  expect(run.className).toContain("button-prod");
+  expect(run.textContent).toContain("Run on PROD");
+  expect(run.querySelector("kbd.kbd")?.textContent).toBe("Ctrl+Enter");
+});
+
+test("run_is_the_primary_24px_button_and_cancel_replaces_it_while_running", async () => {
+  const { onRun, rerender, ...rest } = setup();
+  const run = screen.getByRole("button", { name: /^Run Ctrl\+Enter/ });
+  expect(run.className).toContain("button-primary");
+  await userEvent.click(run);
+  expect(onRun).toHaveBeenCalled();
+  rerender(<EditorHeader {...(rest as unknown as Parameters<typeof EditorHeader>[0])} running />);
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Run/ })).toBeNull();
+});
+
+test("a_blocked_run_is_disabled_and_says_why", () => {
+  setup({ blockedTip: "This Connection is Read-only" });
+  const run = screen.getByRole("button", { name: /^Run Ctrl\+Enter/ }) as HTMLButtonElement;
+  expect(run.disabled).toBe(true);
+  expect(run.title).toBe("This Connection is Read-only");
+});
+
+test("pickers_lock_while_running", () => {
+  setup({ running: true });
+  expect((screen.getByRole("button", { name: /freight-prod/ }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("the_ai_chip_toggles_the_assistant_when_wired", async () => {
+  const onToggleAssistant = vi.fn();
+  setup({ onToggleAssistant, assistantOpen: true });
+  const chip = screen.getByRole("button", { name: "AI: Schema only" });
+  expect(chip.getAttribute("aria-pressed")).toBe("true");
+  await userEvent.click(chip);
+  expect(onToggleAssistant).toHaveBeenCalled();
+});
+
+/** NF4, frames i and 8: a Read-only Connection shows a lock and Read-only chip after its name. */
+test("read_only_connection_shows_the_read_only_chip", () => {
+  setup({ connection: { ...conn, readOnly: true } });
+  const chip = screen.getByRole("toolbar", { name: "Query" }).querySelector(".editor-header-readonly") as HTMLElement;
+  expect(chip.textContent).toBe("Read-only");
+  expect(chip.className).toContain("chip");
+  expect(chip.querySelector("svg")).toBeTruthy();
+  expect(chip.previousElementSibling?.className).toBe("menu-root");
+});
+
+test("ordinary_connection_has_no_read_only_chip", () => {
+  setup();
+  expect(document.querySelector(".editor-header-readonly")).toBeNull();
+});

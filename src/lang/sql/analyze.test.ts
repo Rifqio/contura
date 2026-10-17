@@ -63,3 +63,24 @@ test("insert_update_delete_targets_are_refs", () => {
   const del = pg("DELETE FROM menu_items WHERE id = 1");
   expect(del.statements[0].blocks[0].refs[0]).toMatchObject({ kind: "table", name: "menu_items" });
 });
+
+/** NF5: PostgreSQL's typed literals are a keyword and a string, never an unknown column. */
+test.each([
+  "SELECT id FROM sales.orders WHERE placed_at >= TIMESTAMP '2026-10-01'",
+  "SELECT id FROM sales.orders WHERE placed_at >= timestamp '2026-10-01 08:00'",
+  "SELECT id FROM sales.orders WHERE placed_at::date = DATE '2026-10-01'",
+  "SELECT id FROM sales.orders WHERE placed_at::time > TIME '08:00'",
+  "SELECT id FROM sales.orders WHERE placed_at > now() - INTERVAL '7 days'",
+  "SELECT id FROM sales.orders WHERE placed_at >= TIMESTAMPTZ '2026-10-01'",
+  "SELECT id FROM sales.orders WHERE placed_at >= TIMESTAMP WITH TIME ZONE '2026-10-01 08:00+02'",
+  "SELECT id FROM sales.orders WHERE placed_at >= TIMESTAMP WITHOUT TIME ZONE '2026-10-01'",
+])("typed_literal_is_not_an_error: %s", (sql) => {
+  expect(pg(sql).problems.filter((p) => p.severity === "error")).toEqual([]);
+});
+
+test("a_column_named_like_a_type_still_resolves_without_a_string", () => {
+  // `date` without a string after it is a name, so an unknown one is still reported.
+  const a = pg("SELECT date FROM sales.orders");
+  expect(a.problems.map((p) => p.message)).toContain("Unknown column date.");
+  expect(pg("SELECT day FROM sales.v_store_daily_sales WHERE day = DATE '2026-10-01'").problems.filter((p) => p.severity === "error")).toEqual([]);
+});

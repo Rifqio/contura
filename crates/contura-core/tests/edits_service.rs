@@ -396,7 +396,7 @@ async fn save_adds_one_history_entry() {
     let f = fixture(false, false).await;
     let plan = f.svc.plan_edits(f.id, mixed("z")).await.unwrap();
     f.svc.apply_edits(f.id, mixed("z"), None).await.unwrap();
-    let history = f.svc.query_history(f.id, all()).unwrap();
+    let history = f.svc.query_history(Some(f.id), all()).unwrap();
     assert_eq!(history.len(), 1);
     let entry = &history[0];
     assert_eq!(entry.sql, plan.statements.join(";\n"));
@@ -411,7 +411,7 @@ async fn save_adds_one_history_entry() {
         deletes: vec![],
     };
     f.svc.apply_edits(f.id, bad, None).await.unwrap_err();
-    assert_eq!(f.svc.query_history(f.id, all()).unwrap().len(), 1);
+    assert_eq!(f.svc.query_history(Some(f.id), all()).unwrap().len(), 1);
 }
 
 #[tokio::test]

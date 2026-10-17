@@ -1,6 +1,6 @@
 # Contura design system (next)
 
-Status: approved direction, 2026-10-17. It sits beside `DESIGN.md`, which stays the source for the app as it ships today, until a migration adopts this file.
+Status: the design source for Contura since the restyle of 2026-10-17 (ADR 0015). The earlier `DESIGN.md` is archived in `docs/archive/DESIGN.md`; section 14 maps it to this file.
 Look: **Alucard** (light) and **Dracula** (dark), one colour family, with **JetBrains Mono** for code and **Segoe UI** for the interface.
 Reference build: the "Contura Next Screens" artifact, version 8 (Home, Query workspace on a Production Connection, Schema Builder, AI assistant panel, Flow diagram, Publish image), https://claude.ai/artifact/HQaEgpnALncQp9TdU677MM. Everything below is written so the app can be built without opening it.
 
@@ -273,6 +273,7 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --c-syn-type: #8be9fd;
   --c-syn-identifier: #f8f8f2;
   --c-syn-comment: #6272a4;
+  --c-syn-comment-bright: #939fcb;
   --c-syn-operator: #ff79c6;
   --c-syn-punctuation: #f8f8f2;
   --c-syn-error: #ff5555;
@@ -363,6 +364,7 @@ Targets: body text 7:1 where possible and never below 4.5:1; secondary text 4.5:
 | `syn-type` on `bg-surface` | 5.78 | 10.29 |
 | `syn-identifier` on `bg-surface` | 15.89 | 13.36 |
 | `syn-comment` on `bg-surface` | 5.56 | 3.03 |
+| `syn-comment-bright` on `bg-surface` (Brighter comments, Dracula only) | n/a | 5.47 |
 | `syn-operator` on `bg-surface` | 7.33 | 5.97 |
 | `syn-punctuation` on `bg-surface` | 15.89 | 13.36 |
 | `syn-error` on `bg-surface` | 4.85 | 4.53 |
@@ -698,8 +700,9 @@ All chips: 20 px default, 0 6 px, 4 px radius, UI small, never shrink, never sta
 ### 10.12 Menus, tooltips, toasts, dialogs, empty states
 - Menus and popovers: level 1, 8 px radius, 4 px outer padding, 28 px items (24 compact) with 12 px padding, icon 16, label, shortcut right in Code micro `--c-text-subtle`; separators 1 px `--c-border-subtle` with 4 px margin; destructive items in `--c-danger-text`.
 - Tooltips: `--c-bg-raised`, 1 px `--c-border`, 4 px radius, UI small, max 280 px, 500 ms delay, include the shortcut.
-- Toasts: bottom right, 360 px, level 1, icon + one line + optional action + close; info 4 s, success 3 s, errors stay. Never used to confirm writes.
-- Dialogs: widths 420 (confirm), 560 (form), 760 (SQL preview, Publish); max 80 vh with inner scroll; header 52 px, body 16 px padding, footer 56 px with buttons right-aligned and the primary rightmost; `Esc` closes; Enter triggers the primary only outside multi-line fields.
+- Toasts: bottom right, 360 px wide, 44 px high, level 1, icon + one line + optional action + close; info 4 s, success 3 s, errors stay. Never used to confirm writes.
+- Dialogs: widths 420 (confirm), 560 (form), 640 (model), 760 (SQL preview, Publish); max 80 vh with inner scroll; header 52 px with no rule under it, body 16 px padding, footer 56 px with buttons right-aligned and the primary rightmost; `Esc` closes; Enter triggers the primary only outside multi-line fields.
+- Scrollbars: 10 px, themed in both themes, no arrow buttons; text selection uses `--c-accent-subtle` with the text colour unchanged. Density: `--row-h` is 28 px, 24 px under `data-density="compact"`, and drives grid cells and header, tree rows and menu items.
 - Empty states: centred, max 360 px, 20 px icon in `--c-text-faint`, Title line, one `--c-text-subtle` line, one primary action with its key hint. Examples: "No Connections yet"; "Run a query to see results" + `Ctrl+Enter`.
 
 ## 11. Production and Read-only treatment
@@ -748,7 +751,7 @@ Four options were drawn (A data-source wash, B hazard where you write, C waterma
 
 ## 14. Mapping from DESIGN.md
 
-| Area | DESIGN.md (current app) | DESIGN-NEXT (this file) |
+| Area | DESIGN.md (the app before the restyle) | DESIGN-NEXT (this file) |
 |---|---|---|
 | Palette | Cool neutrals, Harbor Teal `#0E7C86` accent, custom dark | Alucard light, Dracula dark; accent purple `#644AC9` / `#BD93F9` |
 | Focus ring | 2 px teal, offset 2 | 2 px `--c-focus` (accent purple), offset 1, inset in rows |

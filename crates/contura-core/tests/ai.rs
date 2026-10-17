@@ -1,6 +1,7 @@
 use contura_core::Error;
 use contura_core::ai::{
-    AiError, AiProvider, AiProviderKind, AiRequest, AiService, AiSettings, KeyChange, Placeholder,
+    AiAccess, AiError, AiProvider, AiProviderKind, AiRequest, AiService, AiSettings, KeyChange,
+    Placeholder,
 };
 use contura_core::model::ConnectionConfig;
 use contura_core::secrets::{MemorySecretStore, SecretStore};
@@ -143,6 +144,23 @@ fn group_override_falls_back_to_global() {
     let view = svc.settings(Some(group)).unwrap();
     assert!(!view.group_override);
     assert_eq!(view.settings.provider, Some(AiProviderKind::Groq));
+}
+
+#[test]
+fn new_connection_access_defaults_to_schema_and_round_trips() {
+    let (_dir, _secrets, svc) = service();
+    assert_eq!(
+        svc.settings(None).unwrap().settings.new_connection_access,
+        AiAccess::Schema
+    );
+    let mut saved = groq();
+    saved.new_connection_access = AiAccess::SchemaQuery;
+    svc.save_settings(None, saved, false, KeyChange::Keep)
+        .unwrap();
+    assert_eq!(
+        svc.settings(None).unwrap().settings.new_connection_access,
+        AiAccess::SchemaQuery
+    );
 }
 
 #[test]

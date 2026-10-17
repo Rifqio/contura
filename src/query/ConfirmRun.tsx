@@ -1,8 +1,11 @@
 import { useState } from "react";
-import type { RunVerdict } from "../api/types";
+import type { DialectKind, Group, RunVerdict } from "../api/types";
+import DbMark from "../components/DbMark";
 import Dialog from "../components/Dialog";
+import GroupBadge from "../components/GroupBadge";
 import Icon from "../components/Icon";
 import SafetyTag from "../components/SafetyTag";
+import SqlBlock, { type SqlMark } from "../components/SqlBlock";
 
 type Ask = Extract<RunVerdict, { kind: "needsConfirmation" }>;
 
@@ -15,6 +18,12 @@ interface Props {
   onAddWhere(): void;
   /** "Save" for Pending Edits: the title and button say Save instead of Run. */
   verb?: "Run" | "Save";
+  /** The Connection's database, for the mark before the title. */
+  dialect?: DialectKind;
+  /** The Connection's Group, for the square after the PROD chip; none for Ungrouped. */
+  group?: Group | null;
+  /** Rows the statement without WHERE would change, when known; the warning says "about N rows". */
+  rowEstimate?: number | null;
 }
 
 /** "2 of 3 statements write.", "1 of 2 statements writes.", "1 of 1 statement writes." */
@@ -26,22 +35,57 @@ function countText(writes: number, total: number): string {
  * The one confirmation before a run that writes on a Production Connection. The SQL shown is
  * exactly what will run. Focus starts on the SQL, so Enter does nothing until Run has focus.
  */
-export default function ConfirmRun({ verdict, noWhere, onRun, onCancel, onAddWhere, verb = "Run" }: Props) {
+export default function ConfirmRun({
+  verdict,
+  noWhere,
+  onRun,
+  onCancel,
+  onAddWhere,
+  verb = "Run",
+  dialect,
+  group,
+  rowEstimate,
+}: Props) {
   const [runFocused, setRunFocused] = useState(false);
   const runLabel = `${verb} on ${verdict.connection}`;
   const does = verb === "Save" ? "saves" : "runs";
-  let line = 0;
+
+  // One block for every statement, a blank line between them. Writes get the Production band, and
+  // each statement's first line its tag.
+  const marks: SqlMark[] = [];
+  let next = 1;
+  const sql = verdict.statements
+    .map((s) => {
+      const lines = s.text.split("\n").length;
+      const write = s.class === "write";
+      marks.push({ firstLine: next, lastLine: next + lines - 1, tag: write ? "writes" : "reads", ...(write && { band: "prod" as const }) });
+      next += lines + 1;
+      return s.text;
+    })
+    .join("\n\n");
 
   return (
     <Dialog
       className="dialog-confirm"
+      size="wide"
       title={
         <span className="confirm-title">
           {verb} on <b>{verdict.connection}</b>
           {verdict.database !== null && ` · ${verdict.database}`}
         </span>
       }
-      badge={<SafetyTag connection={{ production: true, readOnly: false }} />}
+      lead={dialect && <DbMark dialect={dialect} open />}
+      badge={
+        <span className="confirm-badges">
+          <SafetyTag connection={{ production: true, readOnly: false }} />
+          {group && (
+            <span className="confirm-group">
+              <GroupBadge id={group.id} name={group.name} color={group.color} />
+              {group.name}
+            </span>
+          )}
+        </span>
+      }
       onClose={onCancel}
     >
       <div
@@ -55,10 +99,9 @@ export default function ConfirmRun({ verdict, noWhere, onRun, onCancel, onAddWhe
           <div className="confirm-nowhere" role="alert">
             <Icon name="warning" />
             <p>
-              <strong>
-                {noWhere.verb} without WHERE changes every row in <code>{noWhere.table}</code>.
-              </strong>{" "}
-              Check it before you run it on Production.
+              <strong>Statement {noWhere.index + 1} has no WHERE.</strong> It changes every row in{" "}
+              <code>{noWhere.table}</code>
+              {typeof rowEstimate === "number" ? `, about ${rowEstimate.toLocaleString("en-US")} rows.` : "."}
             </p>
             <button type="button" className="button button-small" onClick={onAddWhere}>
               Add WHERE
@@ -66,45 +109,17 @@ export default function ConfirmRun({ verdict, noWhere, onRun, onCancel, onAddWhe
           </div>
         )}
         <p className="confirm-count">
-          <strong>{countText(verdict.writes, verdict.statements.length)}</strong>
+          {countText(verdict.writes, verdict.statements.length)}
+          {verb === "Save" && " They run in one transaction."}
         </p>
         <div className="confirm-sql" tabIndex={0} data-autofocus aria-label="SQL to run, read-only">
-          {verdict.statements.map((s, i) => (
-            <div key={i} className={s.class === "write" ? "confirm-stmt confirm-stmt-write" : "confirm-stmt"}>
-              {s.text.split("\n").map((t, j) => {
-                line += 1;
-                return (
-                  <div key={j} className="confirm-line">
-                    <span className="confirm-gutter" aria-hidden="true">
-                      {line}
-                    </span>
-                    <span className="confirm-text">{t || " "}</span>
-                    {j === 0 && noWhere?.index === i && <span className="confirm-tag-danger">no WHERE</span>}
-                    {j === 0 && (
-                      <span className={s.class === "write" ? "confirm-tag confirm-tag-write" : "confirm-tag"}>
-                        {s.class === "write" ? "writes" : "reads"}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          <SqlBlock sql={sql} dialect={dialect ?? "postgres"} marks={marks} />
         </div>
+        <p className="confirm-hint">
+          {runFocused ? `Enter ${does} now.` : `Enter ${does} only when ${runLabel} has focus. Press Tab to reach it, or click it.`}
+        </p>
       </div>
       <footer className="dialog-footer">
-        <span className="confirm-hint">
-          {runFocused ? (
-            <>
-              <span className="kbd">Enter</span> {does} now.
-            </>
-          ) : (
-            <>
-              <span className="kbd">Enter</span> {does} only when <b>{runLabel}</b> has focus. Press{" "}
-              <span className="kbd">Tab</span> to reach it, or click it.
-            </>
-          )}
-        </span>
         <button type="button" className="button" onClick={onCancel}>
           Cancel
         </button>

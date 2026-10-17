@@ -1,9 +1,10 @@
 import type { Cell, ColumnInfo, NewValue, Page } from "../api/types";
 import { isDeleted, keyOf, type LocalId, newRows, type Pending, pendingValue, type RowKey } from "./pending";
 
-/** One row as the editable grid shows it: new rows first, then the loaded page. */
+/** One row as the editable grid shows it: the loaded page, then the new rows under it (T3). */
 export type DisplayRow =
-  | { kind: "new"; id: LocalId; cells: Cell[]; set: boolean[] }
+  /** `defaults`: the unset key columns, which show `default`; other unset cells stay empty. */
+  | { kind: "new"; id: LocalId; cells: Cell[]; set: boolean[]; defaults: boolean[] }
   | { kind: "loaded"; key: RowKey | null; source: Cell[]; cells: Cell[]; deleted: boolean };
 
 export function valueCell(v: NewValue): Cell {
@@ -27,17 +28,16 @@ export function cellText(c: Cell): string {
 export function displayRows(p: Pending | null, page: Page | null): DisplayRow[] {
   const columns = page?.columns ?? p?.columns ?? [];
   const added: DisplayRow[] = p
-    ? newRows(p)
-        .reverse()
-        .map((r) => ({
-          kind: "new" as const,
-          id: r.localId,
-          cells: columns.map((c) => {
-            const v = r.values.get(c.name);
-            return v ? valueCell(v) : { t: "null" as const };
-          }),
-          set: columns.map((c) => r.values.has(c.name)),
-        }))
+    ? newRows(p).map((r) => ({
+        kind: "new" as const,
+        id: r.localId,
+        cells: columns.map((c) => {
+          const v = r.values.get(c.name);
+          return v ? valueCell(v) : { t: "null" as const };
+        }),
+        set: columns.map((c) => r.values.has(c.name)),
+        defaults: columns.map((c) => c.isPrimaryKey && !r.values.has(c.name)),
+      }))
     : [];
   const loaded: DisplayRow[] = (page?.rows ?? []).map((row) => {
     const key = keyOf(columns, row);
@@ -52,7 +52,7 @@ export function displayRows(p: Pending | null, page: Page | null): DisplayRow[] 
       deleted: !!(p && key && isDeleted(p, key)),
     };
   });
-  return [...added, ...loaded];
+  return [...loaded, ...added];
 }
 
 /** Tab-separated text as rows of values; a trailing line break adds no row. */

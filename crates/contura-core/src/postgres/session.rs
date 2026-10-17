@@ -103,6 +103,10 @@ async fn actor(
                 let result = execute(&client, &sql, &mut open, read_only).await;
                 let _ = reply.send(result.map_err(|e| or_cancelled(&flag, e)));
             }
+            Command::Explain { sql, reply } => {
+                let result = explain(&client, &sql, read_only).await;
+                let _ = reply.send(result.map_err(|e| or_cancelled(&flag, e)));
+            }
             Command::FetchMore { reply } => {
                 let result = match open.as_mut() {
                     None => Err(no_more()),
@@ -240,6 +244,25 @@ async fn execute(
         rows,
         has_more,
     })
+}
+
+/// Every cell of every row as full text.
+async fn explain(client: &Client, sql: &str, read_only: bool) -> Result<Vec<Vec<String>>> {
+    let messages = client
+        .simple_query(sql)
+        .await
+        .map_err(|e| session_err(e, read_only))?;
+    Ok(messages
+        .iter()
+        .filter_map(|m| match m {
+            SimpleQueryMessage::Row(row) => Some(
+                (0..row.len())
+                    .map(|i| row.get(i).unwrap_or("").to_string())
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect())
 }
 
 /// Up to one page; reads one message ahead to know whether more rows follow.

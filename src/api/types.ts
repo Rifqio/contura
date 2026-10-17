@@ -30,24 +30,69 @@ export interface ConnectionConfig {
   readOnly: boolean;
 }
 
-export type GroupColor = "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "rose" | "slate";
+export type ThemeChoice = "system" | "light" | "dark";
+
+export type RowHeight = 24 | 28;
+
+export interface EditorPrefs {
+  family: string;
+  size: number;
+  lineHeight: number;
+  ligatures: boolean;
+}
+
+export interface UiPrefs {
+  theme: ThemeChoice;
+  rowHeight: RowHeight;
+  editor: EditorPrefs;
+  brighterComments: boolean;
+  inlineSuggestions: boolean;
+  /** `null` keeps history forever. */
+  historyKeepDays: number | null;
+}
+
+/** Mirrors the Core defaults; used before the Core answers. */
+export const DEFAULT_UI_PREFS: UiPrefs = {
+  theme: "dark",
+  rowHeight: 28,
+  editor: { family: "JetBrains Mono", size: 13, lineHeight: 20, ligatures: true },
+  brighterComments: false,
+  inlineSuggestions: false,
+  historyKeepDays: null,
+};
+
+/** Shortcut overrides by command id; an empty list unbinds the command. */
+export type KeymapOverrides = Record<string, string[]>;
+
+export type RecentTarget =
+  | { kind: "query"; savedId: string; name: string }
+  | { kind: "table"; path: ObjectPath; object: ObjectKind }
+  | { kind: "schemaModel"; file: string };
+
+export interface RecentItem {
+  target: RecentTarget;
+  connectionId: string | null;
+  openedAtMs: number;
+}
+
+export type GroupColor = "teal" | "indigo" | "green" | "gold" | "lime" | "sky" | "violet" | "pink";
 
 export const GROUP_COLORS: readonly GroupColor[] = [
-  "red",
-  "orange",
-  "amber",
-  "green",
   "teal",
-  "blue",
+  "indigo",
+  "green",
+  "gold",
+  "lime",
+  "sky",
   "violet",
-  "rose",
-  "slate",
+  "pink",
 ];
 
 export interface Group {
   id: GroupId;
   name: string;
   color: GroupColor;
+  hasImage: boolean;
 }
 
 export interface ObjectPath {
@@ -66,6 +111,7 @@ export type ObjectKind = "table" | "view" | "procedure" | "function" | "trigger"
 export interface DbObject {
   kind: ObjectKind;
   name: string;
+  rows: number | null;
 }
 
 export interface ColumnInfo {
@@ -147,6 +193,7 @@ export interface SuggestedConnection {
   host: string;
   port: number;
   user: string;
+  version: string | null;
 }
 
 /** `message` is absent for unit variants and a byte count for `valueTooLarge`. */
@@ -360,6 +407,21 @@ export interface MoreRows {
   hasMore: boolean;
 }
 
+export interface PlanNode {
+  label: string;
+  object: string | null;
+  rows: number | null;
+  cost: number | null;
+  fullScan: boolean;
+  children: PlanNode[];
+}
+
+export interface Plan {
+  nodes: PlanNode[];
+  raw: string;
+  totalCost: number | null;
+}
+
 export type Outcome = "ok" | "error" | "cancelled" | "timedOut";
 
 export interface HistoryEntry {
@@ -385,12 +447,30 @@ export interface SavedQuery {
   name: string;
   sql: string;
   updatedAtMs: number;
+  /** The Connection the query opens on; null when none or it was deleted. */
+  connectionId: ConnectionId | null;
 }
 
 export interface SavedQueryInput {
   id: string | null;
   name: string;
   sql: string;
+  connectionId?: ConnectionId | null;
+}
+
+export interface SavedQueryRun {
+  savedId: string;
+  ranAtMs: number;
+  rows: number | null;
+  elapsedMs: number;
+}
+
+export interface DataFolderInfo {
+  path: string | null;
+  connections: number;
+  groups: number;
+  savedQueries: number;
+  historyBytes: number;
 }
 export type AiAccess = "never" | "schema" | "schemaQuery" | "schemaQueryRows";
 
@@ -405,6 +485,7 @@ export interface AiSettings {
   maxTokens: number | null;
   inlineAsk: boolean;
   errorAsk: boolean;
+  newConnectionAccess: AiAccess;
 }
 
 /** The saved key never comes back: only whether one is saved and its last 4 characters. */

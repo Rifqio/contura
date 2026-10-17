@@ -1,7 +1,7 @@
 {
   "name": "contura",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -26,7 +26,8 @@
     "@tauri-apps/plugin-dialog": "^2.8.3",
     "@xyflow/react": "12.12.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "style-mod": "4.1.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

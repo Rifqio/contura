@@ -61,19 +61,83 @@ pub struct ConnectionConfig {
     pub read_only: bool,
 }
 
+/// The eight design-next Group slots. The nine names saved by older builds
+/// still load through the aliases and are written back as the new slot.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GroupColor {
-    Red,
-    Orange,
-    Amber,
-    Green,
     Teal,
-    Blue,
+    #[serde(alias = "red", alias = "rose")]
+    Indigo,
+    Green,
+    #[serde(alias = "orange", alias = "amber")]
+    Gold,
+    Lime,
+    #[serde(alias = "blue")]
+    Sky,
     Violet,
-    Rose,
-    Slate,
+    #[serde(alias = "slate")]
+    Pink,
 }
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+    System,
+    Light,
+    #[default]
+    Dark,
+}
+
+/// Grid row height in pixels: 24 (compact) or 28 (comfortable).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct RowHeight(pub u32);
+
+impl Default for RowHeight {
+    fn default() -> Self {
+        Self(28)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EditorPrefs {
+    pub family: String,
+    pub size: u32,
+    pub line_height: u32,
+    pub ligatures: bool,
+}
+
+impl Default for EditorPrefs {
+    fn default() -> Self {
+        Self {
+            family: "JetBrains Mono".into(),
+            size: 13,
+            line_height: 20,
+            ligatures: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UiPrefs {
+    pub theme: ThemeChoice,
+    #[serde(default)]
+    pub row_height: RowHeight,
+    #[serde(default)]
+    pub editor: EditorPrefs,
+    #[serde(default)]
+    pub brighter_comments: bool,
+    #[serde(default)]
+    pub inline_suggestions: bool,
+    #[serde(default)]
+    pub history_keep_days: Option<u32>,
+}
+
+/// Shortcut overrides by command id; an empty list unbinds the command.
+pub type KeymapOverrides = std::collections::BTreeMap<String, Vec<String>>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -81,7 +145,13 @@ pub struct Group {
     pub id: GroupId,
     pub name: String,
     pub color: GroupColor,
+    /// Whether `group-images/<id>.png` exists; filled in by the service.
+    #[serde(default)]
+    pub has_image: bool,
 }
+
+/// The largest Group image the data folder accepts.
+pub const GROUP_IMAGE_MAX: usize = 262_144;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +183,9 @@ pub struct SchemaInfo {
 pub struct DbObject {
     pub kind: ObjectKind,
     pub name: String,
+    /// The database's own row estimate; tables only.
+    #[serde(default)]
+    pub rows: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -213,6 +286,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn group_color_reads_all_nine_old_names() {
+        let json = include_str!("../tests/fixtures/old_group_colours.json");
+        let read: Vec<GroupColor> = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            read,
+            vec![
+                GroupColor::Indigo,
+                GroupColor::Gold,
+                GroupColor::Gold,
+                GroupColor::Green,
+                GroupColor::Teal,
+                GroupColor::Sky,
+                GroupColor::Violet,
+                GroupColor::Indigo,
+                GroupColor::Pink,
+            ]
+        );
+    }
+
+    #[test]
+    fn group_color_writes_the_new_slot() {
+        assert_eq!(
+            serde_json::to_string(&GroupColor::Indigo).unwrap(),
+            r#""indigo""#
+        );
+    }
+
+    #[test]
     fn timeout_field_defaults_to_none_for_old_configs() {
         let json = r#"{"id":"6f2c0b1e-7a7e-4c8e-9a4b-1f0d6e2a9c11","name":"old","dialect":"mysql",
             "host":"h","port":3306,"user":"u","database":null,"ssl":{"mode":"disable"},"groupId":null}"#;
@@ -246,5 +347,20 @@ mod tests {
             serde_json::to_value(&s).unwrap(),
             serde_json::json!({"mode":"verifyCa","caPath":"C:/ca.pem"})
         );
+    }
+
+    #[test]
+    fn old_groups_load_without_has_image() {
+        let g: Group = serde_json::from_str(
+            r#"{"id":"6f9619ff-8b86-d011-b42d-00c04fc964ff","name":"Shop","color":"teal"}"#,
+        )
+        .unwrap();
+        assert!(!g.has_image);
+    }
+
+    #[test]
+    fn old_objects_load_without_rows() {
+        let o: DbObject = serde_json::from_str(r#"{"kind":"table","name":"t"}"#).unwrap();
+        assert_eq!(o.rows, None);
     }
 }

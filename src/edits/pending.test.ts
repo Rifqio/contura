@@ -21,6 +21,7 @@ import {
   missingFull,
   withFullOld,
 } from "./pending";
+import { displayRows } from "./gridRows";
 
 const columns: ColumnInfo[] = [
   { name: "id", typeName: "bigint", isPrimaryKey: true },
@@ -168,5 +169,24 @@ describe("cut-short old values", () => {
     p = withFullOld(p, keyC, "note", full);
     expect(missingFull(p)).toEqual([]);
     expect(toEditSet(p, table).updates[0].changes[0].old).toEqual(full);
+  });
+});
+
+describe("display rows", () => {
+  it("new_rows_go_at_the_bottom_with_default_only_in_the_key", () => {
+    let p = emptyPending(columns);
+    let first: string;
+    [p, first] = addRow(p);
+    let second: string;
+    [p, second] = addRow(p, new Map([["status", t("pending")]]));
+    const rows = displayRows(p, { columns, rows: [rowA, rowB], hasMore: false });
+    expect(rows.map((d) => d.kind)).toEqual(["loaded", "loaded", "new", "new"]);
+    const added = rows.slice(2) as Extract<(typeof rows)[number], { kind: "new" }>[];
+    // The newest row is last, under the one added before it.
+    expect(added.map((d) => d.id)).toEqual([first, second]);
+    // `default` shows only in the key column; other unset cells stay empty.
+    expect(added[0].defaults).toEqual([true, false, false]);
+    expect(added[1].defaults).toEqual([true, false, false]);
+    expect(added[1].set).toEqual([false, true, false]);
   });
 });

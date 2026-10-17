@@ -1,8 +1,12 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { aiAsk, aiSettings, clearAiThreads, listAiThreads, saveAiThread } from "../api/client";
-import type { AiMessage, AiSettingsView, AiThread, ConnectionConfig, SqlSchema } from "../api/types";
+import type { AiAccess, AiMessage, AiSettingsView, AiThread, ConnectionConfig, SqlSchema } from "../api/types";
 import Icon from "../components/Icon";
+import Kbd from "../components/Kbd";
+import Menu, { type MenuItem } from "../components/Menu";
 import { PROVIDERS } from "../settings/ai/providers";
+import AnswerSql from "./AnswerSql";
+import { answerParts } from "./answerParts";
 import answerState, { aiErrorOf, notAvailableText } from "./answerState";
 import type { AskContext } from "./context";
 import { buildSends, payloadText, type SendItem } from "./payload";
@@ -18,25 +22,22 @@ interface Props {
   seed?: { question: string; context: AskContext };
   /** The current Connections, so a seeded question uses the access they have now, not when it was asked. */
   connections?: ConnectionConfig[];
+  onClose?(): void;
+  /** Puts an answer's SQL into the query tab's editor. */
+  onInsert?(sql: string): void;
+  /** Inserts an answer's SQL and runs it through the query tab's runner, so the Production and Read-only checks apply. */
+  onRun?(sql: string): Promise<{ ran: boolean; rows?: number; more?: boolean }>;
 }
+
+/** The access chip in the header, in the words of the Connection's AI access setting. */
+const ACCESS_CHIP: Record<AiAccess, { text: string; tone: string }> = {
+  never: { text: "Nothing", tone: "chip-neutral" },
+  schema: { text: "Schema only", tone: "chip-info" },
+  schemaQuery: { text: "Schema and query text", tone: "chip-info" },
+  schemaQueryRows: { text: "Plus sample rows", tone: "chip-warning" },
+};
 
 const NO_CONTEXT: AskContext = { kind: "none", connection: null, tables: [], label: "" };
-
-/** Ctrl+Alt+I toggles the panel, unless a modal dialog is open. */
-export function useAssistantHotkey(toggle: () => void) {
-  const latest = useRef(toggle);
-  latest.current = toggle;
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.key.toLowerCase() !== "i") return;
-      if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
-      e.preventDefault();
-      latest.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-}
 
 const newId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -51,13 +52,32 @@ function hostOf(url: string): string {
   }
 }
 
+/** The words of a Sends item in the composer line. */
+function sendsLabel(item: SendItem, ctx: AskContext): string {
+  const n = ctx.tables.length;
+  switch (item.key) {
+    case "schema":
+      return `schema of ${n} ${n === 1 ? "table" : "tables"}`;
+    case "query":
+      return ctx.kind === "filter" ? "the filter text" : "the current statement";
+    case "error":
+      return "the error";
+    case "dbml":
+      return "the DBML";
+    case "rows":
+      return "Sample rows";
+    default:
+      return item.label;
+  }
+}
+
 function chipLabel(item: SendItem, ctx: AskContext): string {
   if (item.key === "query" && ctx.kind !== "filter") return `Selected SQL · lines ${ctx.lines?.[0] ?? 1} to ${ctx.lines?.[1] ?? ctx.sql?.split("\n").length ?? 1}`;
   if (item.key === "error") return "Error";
   return item.label;
 }
 
-export default function AssistantPanel({ place, groupId, context, schema, onOpenSettings, seed, connections }: Props) {
+export default function AssistantPanel({ place, groupId, context, schema, onOpenSettings, seed, connections, onClose, onInsert, onRun }: Props) {
   const ctx = useMemo<AskContext>(() => {
     if (!seed) return context ?? NO_CONTEXT;
     const asked = seed.context;
@@ -72,7 +92,7 @@ export default function AssistantPanel({ place, groupId, context, schema, onOpen
   const [threads, setThreads] = useState<AiThread[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
-  const [removed, setRemoved] = useState<ReadonlySet<string>>(new Set());
+  const [ran, setRan] = useState<ReadonlyMap<string, { ran: boolean; rows?: number; more?: boolean }>>(new Map());
   const [offKeys, setOffKeys] = useState<ReadonlySet<string>>(new Set());
   const [rowsOff, setRowsOff] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -86,7 +106,7 @@ export default function AssistantPanel({ place, groupId, context, schema, onOpen
     setThreads([]);
     setCurrentId(null);
     setFailure(null);
-    setRemoved(new Set());
+    setRan(new Map());
     setOffKeys(new Set());
     setRowsOff(false);
     listAiThreads(place)
@@ -116,11 +136,10 @@ export default function AssistantPanel({ place, groupId, context, schema, onOpen
     };
   }, [groupId]);
 
-  // New context, new chips. The text itself is left out of the key: typing in the editor must not bring back a removed chip.
+  // New context, new items. The text itself is left out of the key: typing in the editor must not switch a turned-off item back on.
   const ctxKey = `${conn?.id ?? ""}|${ctx.kind}|${ctx.label}|${conn?.access ?? ""}`;
   useEffect(() => {
     void ctxKey;
-    setRemoved(new Set());
     setOffKeys(new Set());
   }, [ctxKey]);
 
@@ -131,17 +150,15 @@ export default function AssistantPanel({ place, groupId, context, schema, onOpen
   const sees = !!conn && conn.access !== "never";
   const items = useMemo<SendItem[]>(() => {
     if (!sees) return [];
-    return buildSends(ctx, schema, rowsOff)
-      .filter((i) => !removed.has(i.key))
-      .map((i) => (offKeys.has(i.key) && !i.locked ? { ...i, on: false } : i));
-  }, [sees, ctx, schema, rowsOff, removed, offKeys]);
+    return buildSends(ctx, schema, rowsOff).map((i) => (offKeys.has(i.key) && !i.locked ? { ...i, on: false } : i));
+  }, [sees, ctx, schema, rowsOff, offKeys]);
 
-  const chips = items.filter((i) => !i.locked && i.key !== "rows");
   const provider = settings?.settings.provider ?? null;
   const header = provider
     ? `To ${hostOf(settings?.settings.baseUrl ?? "")} (${settings?.settings.model})`
     : "Nothing is sent until a provider is set.";
   const providerName = provider ? PROVIDERS[provider].name : undefined;
+  const accessChip = conn ? ACCESS_CHIP[conn.access] : null;
 
   const current = threads.find((t) => t.id === currentId) ?? null;
 
@@ -213,40 +230,65 @@ export default function AssistantPanel({ place, groupId, context, schema, onOpen
     }
   };
 
+  const historyItems: MenuItem[] = [
+    ...(threads.length > 0 ? [{ key: "chats", label: "Chats", heading: "Chats" }] : []),
+    ...threads.map((t) => ({
+      key: `thread-${t.id}`,
+      label: t.title,
+      current: t.id === currentId,
+      onSelect: () => {
+        setCurrentId(t.id);
+        setFailure(null);
+      },
+    })),
+    {
+      key: "new",
+      label: "New chat",
+      icon: <Icon name="plus" size={14} />,
+      separatorBefore: threads.length > 0,
+      onSelect: () => {
+        setCurrentId(null);
+        setFailure(null);
+      },
+    },
+    {
+      key: "clear",
+      label: "Clear chats",
+      icon: <Icon name="trash" size={14} />,
+      danger: true,
+      disabled: threads.length === 0,
+      onSelect: () => void clear(),
+    },
+  ];
+
+  const runAnswer = async (key: string, sql: string) => {
+    if (!onRun) return;
+    const outcome = await onRun(sql).catch(() => ({ ran: false }));
+    setRan((r) => new Map(r).set(key, outcome));
+  };
+
   return (
-    <aside className="ai-panel" aria-label="Assistant">
+    <aside className="ai-panel" aria-label="Ask">
       <header className="ai-panel-head">
-        <Icon name="sparkle" />
-        <span className="t">Assistant</span>
-        <span className="prov">{provider ? `${providerName} · ${settings?.settings.model}` : "No provider"}</span>
-        <select
-          className="ai-thread-select"
-          aria-label="Chat"
-          value={currentId ?? ""}
-          onChange={(e) => {
-            setCurrentId(e.target.value || null);
-            setFailure(null);
-          }}
-        >
-          <option value="">New chat</option>
-          {threads.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.title}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="button button-small"
-          onClick={() => {
-            setCurrentId(null);
-            setFailure(null);
-          }}
-        >
-          New chat
-        </button>
-        <button type="button" className="button button-small" disabled={threads.length === 0} onClick={() => void clear()}>
-          Clear
+        <span className="t">Ask</span>
+        {accessChip && conn && (
+          <span className={`chip ${accessChip.tone}`} title={`AI access for ${conn.name}`}>
+            {accessChip.text}
+          </span>
+        )}
+        <span className="spacer" />
+        <Menu
+          label="History"
+          align="end"
+          items={historyItems}
+          trigger={(p) => (
+            <button type="button" className="icon-button" aria-label="History" title="History" {...p}>
+              <Icon name="history" size={14} />
+            </button>
+          )}
+        />
+        <button type="button" className="icon-button" aria-label="Close" title="Close" onClick={onClose}>
+          <Icon name="close" size={14} />
         </button>
       </header>
 
@@ -273,11 +315,22 @@ export default function AssistantPanel({ place, groupId, context, schema, onOpen
             </div>
           ) : m.role === "assistant" ? (
             <div key={`${m.at}-a`} className="msg-ai">
-              <span className="who">
-                <Icon name="sparkle" />
-                Assistant
-              </span>
-              <div>{m.text}</div>
+              {answerParts(m.text).map((part, i) => {
+                const key = `${m.at}-${i}`;
+                return part.kind === "text" ? (
+                  <p key={key}>{part.text}</p>
+                ) : (
+                  <AnswerSql
+                    key={key}
+                    sql={part.sql}
+                    dialect={conn?.dialect ?? "postgres"}
+                    onInsert={onInsert}
+                    onRun={onRun ? (sql) => void runAnswer(key, sql) : undefined}
+                    onCopy={(sql) => void navigator.clipboard?.writeText(sql).catch(() => {})}
+                    ran={ran.get(key) ?? null}
+                  />
+                );
+              })}
             </div>
           ) : (
             <p key={`${m.at}-n`} className="msg-notice">
@@ -290,41 +343,30 @@ export default function AssistantPanel({ place, groupId, context, schema, onOpen
       </div>
 
       <div className="composer">
-        <div className="ctx-chips" role="group" aria-label="Context">
-          {conn && conn.access === "never" ? (
-            <span className="ctx-chip">
-              <Icon name="lock" />
-              <span>No context from {conn.name}</span>
-            </span>
-          ) : (
-            chips.map((i) => {
-              const label = chipLabel(i, ctx);
-              return (
-                <span key={i.key} className="ctx-chip">
-                  <Icon name={i.key === "query" ? "play" : "schema"} />
-                  <span>{label}</span>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${label}`}
-                    onClick={() => setRemoved((s) => new Set(s).add(i.key))}
-                  >
-                    <Icon name="close" />
-                  </button>
-                </span>
-              );
-            })
-          )}
-        </div>
+        <Sends items={items} header={header} onToggle={toggle} withQuestion labelOf={(i) => sendsLabel(i, ctx)} />
         <div className="comp-box">
           <textarea
             aria-label="Message"
-            placeholder="Ask about your SQL or schema"
+            placeholder={`Ask about ${conn?.name ?? "your database"}`}
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={onKey}
           />
+          <div className="comp-foot">
+            <span className="comp-sub">No sample rows are sent</span>
+            <span className="spacer" />
+            <Kbd keys="Enter" />
+            <button
+              type="button"
+              className="button button-primary ai-send"
+              aria-label="Send"
+              disabled={busy || !question.trim()}
+              onClick={() => void ask()}
+            >
+              <Icon name="arrowUp" size={14} />
+            </button>
+          </div>
         </div>
-        <Sends items={items} header={header} onToggle={toggle} />
       </div>
     </aside>
   );

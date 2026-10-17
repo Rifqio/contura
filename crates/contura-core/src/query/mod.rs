@@ -133,6 +133,19 @@ pub struct SavedQuery {
     pub name: String,
     pub sql: String,
     pub updated_at_ms: i64,
+    /// The Connection the query opens on.
+    #[serde(default)]
+    pub connection_id: Option<ConnectionId>,
+}
+
+/// The newest run of a Saved Query, found by its text.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedQueryRun {
+    pub saved_id: uuid::Uuid,
+    pub ran_at_ms: i64,
+    pub rows: Option<u64>,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -141,6 +154,8 @@ pub struct SavedQueryInput {
     pub id: Option<uuid::Uuid>,
     pub name: String,
     pub sql: String,
+    #[serde(default)]
+    pub connection_id: Option<ConnectionId>,
 }
 
 pub(crate) enum Command {
@@ -150,6 +165,11 @@ pub(crate) enum Command {
     },
     FetchMore {
         reply: oneshot::Sender<Result<MoreRows>>,
+    },
+    /// Runs an EXPLAIN statement and answers every cell as full text.
+    Explain {
+        sql: String,
+        reply: oneshot::Sender<Result<Vec<Vec<String>>>>,
     },
     CloseResult {
         reply: oneshot::Sender<()>,
@@ -240,6 +260,15 @@ impl SessionHandle {
         let _busy = Busy::start(&self.busy);
         let sql = sql.to_string();
         self.ask(|reply| Command::Execute { sql, reply }).await?
+    }
+
+    /// Runs `sql`, an EXPLAIN statement, and returns every cell as full text, with no
+    /// preview cut. Nothing is recorded.
+    pub async fn explain_rows(&self, sql: &str) -> Result<Vec<Vec<String>>> {
+        self.flag.clear();
+        let _busy = Busy::start(&self.busy);
+        let sql = sql.to_string();
+        self.ask(|reply| Command::Explain { sql, reply }).await?
     }
 
     pub async fn fetch_more(&self) -> Result<MoreRows> {

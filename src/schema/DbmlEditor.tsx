@@ -1,10 +1,13 @@
 import { autocompletion, type Completion as CmCompletion, snippet, snippetCompletion } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { type Diagnostic as CmDiagnostic, lintGutter, openLintPanel, setDiagnostics } from "@codemirror/lint";
-import { EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import type { DialectKind } from "../api/types";
+import { type EditorCommands, editorCommandKeymap } from "../commands/editorKeymap";
+import type { CommandId } from "../commands/registry";
+import { useKeymap } from "../commands/useCommandKeys";
 import { LangClient } from "../lang/client";
 import { completeDbml } from "../lang/dbml/complete";
 import { renameColumn, renameTable } from "../lang/dbml/edits";
@@ -28,9 +31,36 @@ interface Props {
   editsRef: React.MutableRefObject<((edits: TextEdit[]) => void) | null>;
   /** Set by the editor: moves the caret to an offset and focuses the editor. */
   focusRef?: React.MutableRefObject<((offset: number) => void) | null>;
+  /** Set by the editor: scrolls an offset into view without moving the selection or the focus. */
+  revealRef?: React.MutableRefObject<((offset: number) => void) | null>;
+  /** Text ranges to band: the blocks of the tables selected on the canvas. */
+  band?: { from: number; to: number }[];
   /** The language engine; one is created when absent. */
   client?: LangClient;
+  /** The command keys and how to run app commands; the app's keymap when absent. */
+  commands?: EditorCommands;
 }
+
+/** The blocks of the tables selected on the canvas; each line of each gets a band. */
+const setBand = StateEffect.define<{ from: number; to: number }[]>();
+const bandLine = Decoration.line({ class: "cm-block-band" });
+const bandField = StateField.define<{ from: number; to: number }[]>({
+  create: () => [],
+  update: (ranges, tr) => {
+    const set = tr.effects.find((e) => e.is(setBand));
+    if (set) return set.value;
+    return tr.docChanged ? ranges.map((r) => ({ from: tr.changes.mapPos(r.from, 1), to: tr.changes.mapPos(r.to, -1) })) : ranges;
+  },
+  provide: (f) =>
+    EditorView.decorations.compute([f], (state) => {
+      const lines: number[] = [];
+      for (const r of state.field(f)) {
+        const last = state.doc.lineAt(Math.min(Math.max(r.to, r.from), state.doc.length)).number;
+        for (let n = state.doc.lineAt(Math.min(r.from, state.doc.length)).number; n <= last; n++) lines.push(state.doc.line(n).from);
+      }
+      return Decoration.set([...new Set(lines)].sort((a, b) => a - b).map((at) => bandLine.range(at)));
+    }),
+});
 
 const KIND: Record<string, string> = { table: "class", column: "property", type: "type", keyword: "keyword" };
 
@@ -55,12 +85,20 @@ export default function DbmlEditor({
   onResult,
   editsRef,
   focusRef,
+  revealRef,
+  band,
   client,
+  commands,
 }: Props) {
+  const appKeys = useKeymap();
+  const cmds = commands ?? appKeys;
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const latest = useRef({ onChange, onResult, dialect });
-  latest.current = { onChange, onResult, dialect };
+  const commandKeys = useRef(new Compartment());
+  /** Runs a command id: the editor's own, else the owner's. Set once the view exists. */
+  const runCommand = useRef<(id: CommandId) => boolean>(() => false);
+  const latest = useRef({ onChange, onResult, dialect, cmds });
+  latest.current = { onChange, onResult, dialect, cmds };
 
   useEffect(() => {
     const lang = client ?? new LangClient();
@@ -147,26 +185,34 @@ export default function DbmlEditor({
       return true;
     };
 
+    /** The commands that act on this editor; any other id goes to the owner. */
+    const own: Partial<Record<CommandId, (view: EditorView) => boolean>> = {
+      "editor.quickFix": openFixes,
+      "editor.rename": rename,
+    };
+    runCommand.current = (id) => {
+      const v = viewRef.current;
+      if (!v) return false;
+      const mine = own[id];
+      return mine ? mine(v) : latest.current.cmds.run(id);
+    };
+
     const view = new EditorView({
       parent: host.current!,
       state: EditorState.create({
         doc: value,
         extensions: [
           lineNumbers(),
+          bandField,
           changedLinesGutter(savedValue),
           lintGutter(),
           history(),
           dbmlLanguage,
           dbmlHighlight,
           autocompletion({ override: [completionSource] }),
-          Prec.high(
-            keymap.of([
-              { key: "Tab", run: expandTemplate },
-              { key: "Ctrl-.", run: openFixes },
-              { key: "Alt-Enter", run: openFixes },
-              { key: "F2", run: rename },
-            ]),
-          ),
+          Prec.high(keymap.of([{ key: "Tab", run: expandTemplate }])),
+          // Every command key, above the editor's defaults, so a confirmed override wins (PR11).
+          commandKeys.current.of(editorCommandKeymap(latest.current.cmds.map, (id) => runCommand.current(id))),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.contentAttributes.of({ "aria-label": "DBML" }),
           EditorView.updateListener.of((u) => {
@@ -188,6 +234,10 @@ export default function DbmlEditor({
         view.focus();
       };
     }
+    if (revealRef) {
+      revealRef.current = (offset) =>
+        view.dispatch({ effects: EditorView.scrollIntoView(Math.min(offset, view.state.doc.length), { y: "nearest" }) });
+    }
     parse(view);
     return () => {
       if (caretTimer) clearTimeout(caretTimer);
@@ -198,6 +248,13 @@ export default function DbmlEditor({
     };
     // The view is created once; later prop changes are pushed in below.
   }, []);
+
+  // A changed keymap rebinds the keys in place.
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: commandKeys.current.reconfigure(editorCommandKeymap(cmds.map, (id) => runCommand.current(id))),
+    });
+  }, [cmds.map]);
 
   // A new document from outside (open, reverse-engineer) replaces the text.
   useEffect(() => {
@@ -210,6 +267,11 @@ export default function DbmlEditor({
   useEffect(() => {
     viewRef.current?.dispatch({ effects: setSaved.of(savedValue) });
   }, [savedValue]);
+
+  // Selecting a card bands its block.
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: setBand.of(band ?? []) });
+  }, [band]);
 
   return <div ref={host} className="dbml-editor" />;
 }

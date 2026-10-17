@@ -10,7 +10,9 @@ import { SchemaCache } from "../lang/sql/schemaCache";
 import { mockEditorDom } from "../test/editor";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
+import tokensCss from "../styles/tokens.css?raw";
 import DataGrid from "./DataGrid";
+import { ToastProvider } from "./Toast";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 mockEditorDom();
@@ -222,7 +224,7 @@ test("scrolling to the bottom renders row 1,000 with its number", async () => {
   routeInvoke({ fetch_page: () => bigPage() });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
   await screen.findByText("note 1");
-  scrollGrid(ROWS * 40 - VIEW_HEIGHT);
+  scrollGrid(ROWS * 28 - VIEW_HEIGHT);
   const last = (await screen.findByText("note 1000")).closest("tr") as HTMLElement;
   expect(last.querySelector(".row-number")?.textContent).toBe("1,000");
   expect(last.getAttribute("aria-rowindex")).toBe(String(ROWS + 1));
@@ -235,13 +237,181 @@ test("the next page after scrolling starts at its first row", async () => {
   routeInvoke({ fetch_page: () => bigPage() });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
   await screen.findByText("note 1");
-  scrollGrid(ROWS * 40 - VIEW_HEIGHT);
+  scrollGrid(ROWS * 28 - VIEW_HEIGHT);
   await screen.findByText("note 1000");
   await userEvent.click(nextButton());
-  await screen.findByText("Rows 1,001 to 2,000");
+  await waitFor(() => expect(document.querySelector(".table-range")!.textContent).toBe("1,001 to 2,000"));
   const top = (await screen.findByText("note 1")).closest("tr") as HTMLElement;
   expect(top.querySelector(".row-number")?.textContent).toBe("1,001");
   expect((document.querySelector(".grid-scroll") as HTMLElement).scrollTop).toBe(0);
+});
+
+test("row_and_header_height_are_28", () => {
+  const css = tokensCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  expect(css).toMatch(/--row-h:\s*28px;/);
+  expect(css).toMatch(/--grid-cell-height:\s*var\(--row-h\);/);
+  expect(css).toMatch(/--grid-header-height:\s*var\(--row-h\);/);
+});
+
+/** jsdom has no layout: give headers, the gutter and the scroll box widths; change them through the result. */
+function stubWidths(view: number) {
+  // label: the .header-label box, which clips; name and hint: its parts at full width.
+  const sizes = { view, gutter: 48, th: 80, label: 50, name: 50, hint: 0 };
+  const proto = HTMLElement.prototype;
+  const saved = ["offsetWidth", "scrollWidth", "clientWidth"].map(
+    (k) => [k, Object.getOwnPropertyDescriptor(proto, k)] as const,
+  );
+  Object.defineProperty(proto, "offsetWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains("type-hint")) return sizes.hint;
+      if (this.tagName !== "TH") return 0;
+      return this.classList.contains("row-number") ? sizes.gutter : sizes.th;
+    },
+  });
+  Object.defineProperty(proto, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains("header-name")) return sizes.name;
+      return this.classList.contains("header-label") ? sizes.label : 0;
+    },
+  });
+  Object.defineProperty(proto, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList.contains("grid-scroll") ? sizes.view : 0;
+    },
+  });
+  onTestFinished(() => {
+    for (const [k, d] of saved) if (d) Object.defineProperty(proto, k, d);
+  });
+  return sizes;
+}
+
+/** A ResizeObserver the test fires by hand. */
+function stubResizeObserver() {
+  const callbacks: (() => void)[] = [];
+  const original = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(cb: () => void) {
+      callbacks.push(cb);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  onTestFinished(() => {
+    globalThis.ResizeObserver = original;
+  });
+  return () => act(() => callbacks.forEach((cb) => cb()));
+}
+
+/** A `document.fonts` still loading; resolve it to finish. */
+function stubFontsLoading() {
+  let finish = () => {};
+  const ready = new Promise<void>((r) => (finish = r));
+  const fonts = { status: "loading", ready, addEventListener() {}, removeEventListener() {} };
+  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+  onTestFinished(() => {
+    delete (document as { fonts?: unknown }).fonts;
+  });
+  return async () => {
+    fonts.status = "loaded";
+    finish();
+    await act(async () => {
+      await ready;
+    });
+  };
+}
+
+const colWidths = () => Array.from(document.querySelectorAll("colgroup col"), (c) => (c as HTMLElement).style.width);
+
+test("a_short_result_fills_the_pane", async () => {
+  // 449 = the 48 px gutter, 400 px for the columns and the 1 px the collapsed border takes.
+  stubWidths(449);
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "200px", "200px"]));
+  expect(screen.getByRole("table").style.width).toBe("448px");
+});
+
+test("a_dragged_column_keeps_its_width_and_never_goes_under_its_header", async () => {
+  stubWidths(449);
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "200px", "200px"]));
+  const handle = document.querySelectorAll(".col-resize")[0];
+  expect(handle.getAttribute("aria-hidden")).toBe("true");
+  fireEvent.mouseDown(handle, { clientX: 300, button: 0 });
+  fireEvent.mouseMove(window, { clientX: 260 });
+  expect(colWidths()).toEqual(["48px", "160px", "240px"]);
+  fireEvent.mouseMove(window, { clientX: -1000 });
+  fireEvent.mouseUp(window);
+  // The header label is 50 px plus 16 px of padding.
+  expect(colWidths()).toEqual(["48px", "66px", "334px"]);
+  fireEvent.mouseMove(window, { clientX: 600 });
+  expect(colWidths()).toEqual(["48px", "66px", "334px"]);
+  expect(callsTo("fetch_page")).toHaveLength(1);
+});
+
+test("a_column_is_never_fitted_narrower_than_its_whole_header", async () => {
+  // The label box is clipped to 50 px, but the name needs 120 and the type hint 40:
+  // the column takes all of it plus the 16 px of padding, so no name is cut ("stat...").
+  const sizes = stubWidths(49);
+  sizes.name = 120;
+  sizes.hint = 40;
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "176px", "176px"]));
+});
+
+test("widths_are_measured_again_once_the_fonts_load", async () => {
+  // 49 px leaves no free space, so the columns show their measured widths.
+  const sizes = stubWidths(49);
+  const loaded = stubFontsLoading();
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+  sizes.th = 120;
+  await loaded();
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "120px", "120px"]));
+});
+
+test("a_resized_column_keeps_its_width_after_the_fonts_load", async () => {
+  const sizes = stubWidths(49);
+  const loaded = stubFontsLoading();
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+  fireEvent.mouseDown(document.querySelectorAll(".col-resize")[0], { clientX: 100, button: 0 });
+  fireEvent.mouseMove(window, { clientX: 200 });
+  fireEvent.mouseUp(window);
+  expect(colWidths()).toEqual(["48px", "180px", "80px"]);
+  sizes.th = 120;
+  await loaded();
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "180px", "120px"]));
+});
+
+test("a_grid_first_shown_while_hidden_measures_when_it_appears", async () => {
+  const sizes = stubWidths(0);
+  sizes.gutter = 0;
+  sizes.th = 0;
+  sizes.label = 0;
+  const resize = stubResizeObserver();
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  expect(colWidths()).toEqual([]);
+  expect(document.querySelector(".col-resize")).toBeNull();
+  Object.assign(sizes, { view: 449, gutter: 48, th: 80, label: 50 });
+  resize();
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "200px", "200px"]));
+  expect(document.querySelector(".col-resize")).toBeTruthy();
 });
 
 test("a row rendered after scrolling opens its own full value", async () => {
@@ -252,7 +422,7 @@ test("a row rendered after scrolling opens its own full value", async () => {
   });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
   await screen.findByText("note 1");
-  scrollGrid(ROWS * 40 - VIEW_HEIGHT);
+  scrollGrid(ROWS * 28 - VIEW_HEIGHT);
   const last = (await screen.findByText("note 1000")).closest("tr") as HTMLElement;
   await userEvent.click(within(last).getByRole("button", { name: "Open full value" }));
   await screen.findByText("the whole note");
@@ -290,4 +460,168 @@ test("ctrl_i_in_the_filter_asks_about_the_filter_text", async () => {
   fireEvent.keyDown(screen.getByRole("textbox", { name: "Question" }), { key: "Escape" });
   expect(screen.queryByRole("dialog", { name: "Ask AI" })).toBeNull();
   expect(document.activeElement).toBe(v.contentDOM);
+});
+
+// ---- Task 19: table data as designed (frames j and i) ----
+
+const pgOrders = { database: "shop", schema: "public", name: "orders" };
+const header = () => document.querySelector(".table-header") as HTMLElement;
+const footer = () => document.querySelector(".table-foot") as HTMLElement;
+const orderBy = () => screen.getByRole("textbox", { name: "Order by" }) as HTMLInputElement;
+const cell = (row: number, col: number) => document.querySelector(`tr[data-row="${row}"] td[data-col="${col}"]`) as HTMLElement;
+
+async function editFirst(value = "lost") {
+  fireEvent.doubleClick(cell(0, 1));
+  const box = screen.getByRole("textbox", { name: "Cell value" });
+  fireEvent.change(box, { target: { value } });
+  fireEvent.keyDown(box, { key: "Enter" });
+}
+
+test("one_header_strip_with_inline_where_and_order_by", async () => {
+  routeInvoke({ fetch_page: () => page(true) });
+  render(
+    <DataGrid connectionId="c1" table={pgOrders} onClose={() => {}} dialect="postgres" production connectionName="freight-prod" onOpenQuery={() => {}} />,
+  );
+  await screen.findByText("first");
+  expect(document.querySelectorAll(".table-header")).toHaveLength(1);
+  const strip = within(header());
+  expect(header().getAttribute("role")).toBe("toolbar");
+  expect(strip.getByRole("button", { name: /freight-prod/ }).getAttribute("aria-haspopup")).toBe("menu");
+  expect(strip.getByText("PRODUCTION").className).toContain("production-label");
+  const name = strip.getByRole("heading", { level: 2 });
+  expect(name.textContent).toBe("public.orders");
+  expect(name.className).toContain("table-header-name");
+  // WHERE and ORDER BY sit inline in the strip, each with its keyword label.
+  expect(header().querySelector(".grid-filter .cm-editor")).not.toBeNull();
+  expect(header().querySelector(".grid-filter-label")!.textContent).toBe("WHERE");
+  expect(header().contains(orderBy())).toBe(true);
+  expect(header().querySelector(".order-by-label")!.textContent).toBe("ORDER BY");
+  const names = strip.getAllByRole("button").map((b) => b.getAttribute("aria-label")).filter(Boolean);
+  expect(names.slice(-6)).toEqual(["Reload", "Add row", "Delete row", "Filter rows", "Columns", "Export"]);
+  // No title row and no range in the header.
+  expect(header().textContent).not.toMatch(/\d+ to \d+/);
+  expect(document.querySelector(".toolbar-title")).toBeNull();
+});
+
+test("order_by_sorts_by_one_column", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await userEvent.type(orderBy(), "NOTE desc{Enter}");
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await userEvent.clear(orderBy());
+  await userEvent.type(orderBy(), "id asc{Enter}");
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
+  await userEvent.clear(orderBy());
+  await userEvent.type(orderBy(), "{Enter}");
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(4));
+  const sorts = callsTo("fetch_page").map((a) => (a.request as { sort: unknown }).sort);
+  expect(sorts).toEqual([null, { column: "note", descending: true }, { column: "id", descending: false }, null]);
+  // A header click writes its sort into the field.
+  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
+  await waitFor(() => expect(orderBy().value).toBe("note"));
+  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
+  await waitFor(() => expect(orderBy().value).toBe("note DESC"));
+});
+
+test("order_by_explains_what_it_takes", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} readOnly />);
+  await screen.findByText("first");
+  await userEvent.type(orderBy(), "id, note{Enter}");
+  expect(screen.getByRole("status").textContent).toBe("Sort by one column, such as total DESC.");
+  await userEvent.clear(orderBy());
+  await userEvent.type(orderBy(), "id sideways{Enter}");
+  expect(screen.getByRole("status").textContent).toBe("Sort by one column, such as total DESC.");
+  expect(callsTo("fetch_page")).toHaveLength(1);
+});
+
+test("footer_shows_range_pager_and_context_line", async () => {
+  routeInvoke({ fetch_page: () => page(true) });
+  const { rerender } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={1284} />);
+  await screen.findByText("first");
+  const foot = within(footer());
+  expect(footer().querySelector(".table-range")!.textContent).toBe("1 to 1 of 1,284");
+  // The pager arrows sit after the range, on the left.
+  const prev = foot.getByRole("button", { name: "Previous page" });
+  const next = foot.getByRole("button", { name: "Next page" });
+  expect(footer().querySelector(".table-range")!.compareDocumentPosition(prev) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(prev.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  rerender(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={null} />);
+  expect(footer().querySelector(".table-range")!.textContent).toBe("1 to 1");
+  await editFirst();
+  fireEvent.click(screen.getByRole("button", { name: "Add row" }));
+  expect(footer().querySelector(".table-context")!.textContent).toBe("Saving runs the 2 statements in one transaction.");
+  rerender(<DataGrid connectionId="c1" table={table} onClose={() => {}} production />);
+  expect(footer().querySelector(".table-context")!.textContent).toBe(
+    "Saving runs on Production and asks you to confirm the SQL first.",
+  );
+});
+
+const fkPage: Page = {
+  columns: [
+    { name: "id", typeName: "int4", isPrimaryKey: true },
+    { name: "customer_id", typeName: "int4", isPrimaryKey: false },
+    { name: "status", typeName: "text", isPrimaryKey: false },
+  ],
+  rows: [[{ t: "number", value: "1" }, { t: "number", value: "7" }, { t: "text", value: "paid", truncated: false, totalBytes: 4 }]],
+  hasMore: false,
+};
+
+test("fk_columns_show_a_link_icon", async () => {
+  routeInvoke({ fetch_page: () => fkPage, sql_schema: () => KFC_SCHEMA });
+  const client = new LangClient(() => fakeWorker());
+  const lang = { client, schemas: new SchemaCache(client) };
+  const orders = { database: "kfc", schema: "sales", name: "orders" };
+  render(<DataGrid connectionId="c1" table={orders} onClose={() => {}} dialect="postgres" lang={lang} />);
+  await screen.findByText("paid");
+  const th = (name: string) => screen.getByRole("button", { name: `Sort by ${name}` });
+  await waitFor(() => expect(th("customer_id").querySelector(".fk-icon")).not.toBeNull());
+  // The link icon comes before the name; the key stays on the key column only.
+  expect(th("customer_id").querySelector(".header-label")!.firstElementChild!.classList.contains("fk-icon")).toBe(true);
+  expect(th("id").querySelector(".key-icon")).not.toBeNull();
+  expect(th("id").querySelector(".fk-icon")).toBeNull();
+  expect(th("status").querySelector(".fk-icon")).toBeNull();
+});
+
+test("production_table_pane_has_the_wash", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} production readOnly />);
+  await screen.findByText("first");
+  const pane = screen.getByRole("region", { name: "Data of orders" });
+  expect(pane.classList.contains("prod-wash")).toBe(true);
+  for (const part of [header(), footer()]) expect(pane.contains(part)).toBe(true);
+});
+
+test("read_only_footer_says_why", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} readOnly production />);
+  await screen.findByText("first");
+  expect(footer().querySelector(".table-context")!.textContent).toBe("Read-only Connection: cells cannot be edited");
+});
+
+test("editing_a_read_only_cell_shows_one_toast", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(
+    <ToastProvider>
+      <DataGrid connectionId="c1" table={table} onClose={() => {}} readOnly connectionName="freight-reporting" />
+    </ToastProvider>,
+  );
+  await screen.findByText("first");
+  fireEvent.doubleClick(cell(0, 1));
+  fireEvent.doubleClick(cell(0, 1));
+  const toasts = document.querySelectorAll(".toast");
+  expect(toasts).toHaveLength(1);
+  expect(toasts[0].textContent).toContain("freight-reporting is Read-only. Changes are not allowed.");
+  expect(toasts[0].className).toContain("toast-readOnly");
+  expect(screen.queryByRole("textbox", { name: "Cell value" })).toBeNull();
+});
+
+test("edited_cell_tooltip", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await editFirst("second");
+  expect(cell(0, 1).title).toBe("Was first. Edited, not saved yet.");
+  expect(cell(0, 0).title).toBe("");
 });
