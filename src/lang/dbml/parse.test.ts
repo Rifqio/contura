@@ -78,7 +78,7 @@ test("worker_crash_restarts_and_rejects_pending", async () => {
 });
 
 test("parses_core_reverse_engineered_output", () => {
-  // The expected output of crates/dbview-core/src/dbml_writer.rs `writes_tables_settings_and_refs`.
+  // The expected output of crates/contura-core/src/dbml_writer.rs `writes_tables_settings_and_refs`.
   const core = `// Reverse-engineered from kfc / shop.public on 2026-10-16
 // Dialect: PostgreSQL
 

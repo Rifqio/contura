@@ -624,6 +624,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "contura"
+version = "0.1.0"
+dependencies = [
+ "contura-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-single-instance",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "contura-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "futures-util",
+ "keyring",
+ "mysql_async",
+ "rusqlite",
+ "rust-ini",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "uuid",
+ "winreg",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -862,21 +900,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "db-view"
-version = "0.1.0"
-dependencies = [
- "dbview-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-single-instance",
- "tempfile",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -885,29 +908,6 @@ dependencies = [
  "libc",
  "libdbus-sys",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "dbview-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "futures-util",
- "keyring",
- "mysql_async",
- "rusqlite",
- "rust-ini",
- "rustls",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "uuid",
- "winreg",
 ]
 
 [[package]]

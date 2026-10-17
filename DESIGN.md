@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: DB View
+name: Contura
 description: A calm, light-first Windows database client where colour only ever means something.
 colors:
   primary: "#0E7C86"
@@ -240,13 +240,13 @@ components:
 
 <!-- SEED: written from the theme survey (2026-10-15) before any UI code exists. Re-run `/impeccable document` once the first screens are built, to check these tokens against the real build and generate the .impeccable/design.json sidecar. -->
 
-# Design System: DB View
+# Design System: Contura
 
 ## Overview
 
 **Creative North Star: "The Marked Ledger"**
 
-DB View is a working ledger: quiet, ruled, exact, and marked only where something needs your attention. The base is Flat minimal, with white work surfaces, cool-grey chrome, hairline rules and a single teal accent. Every other colour carries a meaning. A Group's colour tells you whose databases you are in. Highlighter yellow marks a change you haven't saved, the way you would mark a paper ledger. Amber means Production. Nothing is coloured for decoration.
+Contura is a working ledger: quiet, ruled, exact, and marked only where something needs your attention. The base is Flat minimal, with white work surfaces, cool-grey chrome, hairline rules and a single teal accent. Every other colour carries a meaning. A Group's colour tells you whose databases you are in. Highlighter yellow marks a change you haven't saved, the way you would mark a paper ledger. Amber means Production. Nothing is coloured for decoration.
 
 The interface reads as a native Windows tool. It uses Segoe UI and Windows caption buttons, and puts tabs in the title bar like a browser. The design gets out of the way of dense data. Density is comfortable (40 px grid rows), because sessions are long and rows must be easy to track across a wide grid. The visual references that set this direction are the cansaas ERD and console, the light employee table, the Hexora DBML builder and Drizzle Studio's typed headers and row counts.
 
@@ -305,7 +305,7 @@ The `dark-*` tokens mirror the light roles one for one, for the dark variant of 
 **Label/Mono Font:** Cascadia Mono, bundled with the app (with Consolas)
 **Code Editor Font:** Cascadia Code, bundled, with ligatures on (`code-editor`)
 
-**Character:** Windows-native and invisible. Segoe UI makes DB View feel like part of the OS and costs nothing to load. Cascadia Mono is the voice of the database itself: SQL, column types, row counts, timings and shortcuts.
+**Character:** Windows-native and invisible. Segoe UI makes Contura feel like part of the OS and costs nothing to load. Cascadia Mono is the voice of the database itself: SQL, column types, row counts, timings and shortcuts.
 
 ### Hierarchy
 - **Display** (600, 28 px, 34 px line): the Home heading only.

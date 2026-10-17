@@ -1,20 +1,20 @@
-use dbview_core::Error;
-use dbview_core::ai::{
+use contura_core::Error;
+use contura_core::ai::{
     AiAccess, AiAnswer, AiRequest, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread,
     KeyChange, ThreadId,
 };
-use dbview_core::connections::{ConnectionInput, ConnectionService, GroupInput};
-use dbview_core::model::{
+use contura_core::connections::{ConnectionInput, ConnectionService, GroupInput};
+use contura_core::model::{
     ConnectionConfig, ConnectionId, DbObject, FullValue, FullValueRequest, Group, GroupId,
     ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
 };
-use dbview_core::query::{
+use contura_core::query::{
     Execution, HistoryEntry, HistoryFilter, MoreRows, QuerySessionId, SavedQuery, SavedQueryId,
     SavedQueryInput,
 };
-use dbview_core::schema_model::SchemaModel;
-use dbview_core::sql_schema::SqlSchema;
-use dbview_core::suggest::SuggestedConnection;
+use contura_core::schema_model::SchemaModel;
+use contura_core::sql_schema::SqlSchema;
+use contura_core::suggest::SuggestedConnection;
 use std::path::PathBuf;
 
 use tauri::State;
@@ -132,12 +132,12 @@ pub async fn fetch_full_value(
     service.session(id).await?.fetch_full_value(&request).await
 }
 
-/// DB View's own data folder; Schema Models and exports are never written inside it.
+/// Contura's own data folder; Schema Models and exports are never written inside it.
 pub struct DataDir(pub PathBuf);
 
 #[tauri::command]
-pub fn read_model_files(path: PathBuf) -> Result<dbview_core::model_files::ModelFiles, Error> {
-    dbview_core::model_files::read_model_files(&path)
+pub fn read_model_files(path: PathBuf) -> Result<contura_core::model_files::ModelFiles, Error> {
+    contura_core::model_files::read_model_files(&path)
 }
 
 #[tauri::command]
@@ -147,12 +147,12 @@ pub fn write_model_files(
     dbml: String,
     layout: String,
 ) -> Result<(), Error> {
-    dbview_core::model_files::write_model_files(&path, &dbml, &layout, &data.0)
+    contura_core::model_files::write_model_files(&path, &dbml, &layout, &data.0)
 }
 
 #[tauri::command]
 pub fn write_text_file(data: State<'_, DataDir>, path: PathBuf, text: String) -> Result<(), Error> {
-    dbview_core::model_files::write_text_file(&path, &text, &data.0)
+    contura_core::model_files::write_text_file(&path, &text, &data.0)
 }
 
 #[tauri::command]
@@ -161,13 +161,13 @@ pub fn write_binary_file(
     path: PathBuf,
     base64: String,
 ) -> Result<(), Error> {
-    dbview_core::model_files::write_base64_file(&path, &base64, &data.0)
+    contura_core::model_files::write_base64_file(&path, &base64, &data.0)
 }
 
 /// A CREATE script for the model, in the model's own Dialect. Never executed.
 #[tauri::command]
 pub fn export_sql(model: SchemaModel) -> Result<String, Error> {
-    dbview_core::ddl::create_script(&model)
+    contura_core::ddl::create_script(&model)
 }
 
 /// Reads a database (or Postgres schema) and writes it as DBML. Read only.
@@ -193,7 +193,7 @@ pub async fn reverse_engineer(
         Some(s) => format!("{database}.{s}"),
         None => database,
     };
-    Ok(dbview_core::dbml_writer::write_dbml(
+    Ok(contura_core::dbml_writer::write_dbml(
         &model,
         &format!("{connection} / {place}"),
     ))
@@ -258,7 +258,7 @@ pub fn set_last_group(service: Service<'_>, id: Option<GroupId>) -> Result<(), E
 
 #[tauri::command]
 pub fn create_sqlite_database(path: PathBuf) -> Result<(), Error> {
-    dbview_core::sqlite::create_database(&path)
+    contura_core::sqlite::create_database(&path)
 }
 
 #[tauri::command]

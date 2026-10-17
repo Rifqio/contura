@@ -10,7 +10,7 @@ pub fn show_error(message: &str) {
                 .collect::<Vec<u16>>()
         };
         let text = wide(message);
-        let caption = wide("DB View");
+        let caption = wide("Contura");
         // SAFETY: both strings are NUL-terminated UTF-16 buffers that outlive the call.
         unsafe {
             MessageBoxW(

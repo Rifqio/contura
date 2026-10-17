@@ -1,11 +1,11 @@
-# DB View
+# Contura
 
 A personal desktop database client for browsing, querying and changing databases, in the spirit of Navicat but lighter on memory.
 
 ## Language
 
 **Core**:
-The Rust side of DB View that talks to databases and owns all data access.
+The Rust side of Contura that talks to databases and owns all data access.
 _Avoid_: Engine, backend engine
 
 **Dialect**:
@@ -37,18 +37,18 @@ The last 1,000 statements run on a Connection, with when, how long and how they 
 _Avoid_: Log, journal
 
 **Saved Query**:
-SQL kept by name in DB View, shared by every Connection.
+SQL kept by name in Contura, shared by every Connection.
 _Avoid_: Snippet, favourite, bookmark
 **Theme**:
-A named set of visual tokens (colours, type, corners, icon style) that DB View can be switched to. Flat minimal is the default.
+A named set of visual tokens (colours, type, corners, icon style) that Contura can be switched to. Flat minimal is the default.
 _Avoid_: Skin, style, appearance
 
 **Home**:
-The starting place of DB View, listing every Group and the Ungrouped Connections.
+The starting place of Contura, listing every Group and the Ungrouped Connections.
 _Avoid_: Dashboard, start page, launcher
 
 **Suggested Connection**:
-A Connection that DB View pre-fills from a database it found installed locally (currently Laragon). It isn't saved until the user accepts it.
+A Connection that Contura pre-fills from a database it found installed locally (currently Laragon). It isn't saved until the user accepts it.
 _Avoid_: Auto-connection, detected connection, discovered server
 
 **Production Connection**:
@@ -56,7 +56,7 @@ A Connection flagged as production, where every write needs an extra confirmatio
 _Avoid_: Live, prod mode
 
 **Read-only Connection**:
-A Connection that DB View will not send any write to.
+A Connection that Contura will not send any write to.
 _Avoid_: Safe mode, locked
 
 ### Querying
@@ -108,7 +108,7 @@ _Avoid_: Schema editor, ER model
 ### Designing schemas
 
 **Schema Model**:
-A design of tables, columns, indexes, enums and Foreign Keys for one Dialect, written in DBML. It exists only in DB View until it is applied to a Connection.
+A design of tables, columns, indexes, enums and Foreign Keys for one Dialect, written in DBML. It exists only in Contura until it is applied to a Connection.
 _Avoid_: ER diagram, design, draft, model file
 
 **Schema Builder**:
@@ -132,7 +132,7 @@ The reviewable SQL that would make one database's structure match another's.
 _Avoid_: Migration, patch
 
 **Backup**:
-A SQL script written by DB View itself, holding a database's structure and rows.
+A SQL script written by Contura itself, holding a database's structure and rows.
 _Avoid_: Dump, export, snapshot
 
 **Restore**:

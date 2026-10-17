@@ -1,4 +1,4 @@
-// Mirrors the serde shapes of crates/dbview-core (model.rs, connections.rs,
+// Mirrors the serde shapes of crates/contura-core (model.rs, connections.rs,
 // suggest.rs, error.rs). Field names are camelCase on the wire.
 
 export type ConnectionId = string;
@@ -166,7 +166,7 @@ export interface ModelFiles {
   layout: string | null;
 }
 
-// Schema Model: mirrors crates/dbview-core/src/schema_model.rs.
+// Schema Model: mirrors crates/contura-core/src/schema_model.rs.
 
 export type SmDefault =
   | { t: "string"; value: string }

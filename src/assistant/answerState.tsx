@@ -13,7 +13,7 @@ interface Options {
 
 /** The line kept in a thread when a provider is saved but its answers are not built yet. */
 export function notAvailableText(provider: AiProviderKind): string {
-  return `Answers from ${PROVIDERS[provider].name} arrive in a later DB View version. Nothing was sent.`;
+  return `Answers from ${PROVIDERS[provider].name} arrive in a later Contura version. Nothing was sent.`;
 }
 
 function isAiError(e: unknown): e is AiError {

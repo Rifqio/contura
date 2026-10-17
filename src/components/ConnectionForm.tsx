@@ -156,7 +156,7 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
       const version = await testConnection(value);
       const text =
         value.dialect === "sqlite"
-          ? `Opened. DB View uses SQLite ${version}.`
+          ? `Opened. Contura uses SQLite ${version}.`
           : `Connected. The server runs ${DIALECT_LABEL[value.dialect]} ${version}.`;
       setResult({ ok: true, text });
     } catch (e) {
@@ -194,7 +194,7 @@ export default function ConnectionForm({ connection, prefill, groups, defaultGro
       setResult({ ok: true, text: `Created ${fileName(path)}.` });
     } catch (e) {
       const text = isExistingFileRefusal(e)
-        ? "DB View never replaces an existing file. Choose a new name."
+        ? "Contura never replaces an existing file. Choose a new name."
         : errorText(e, "sqlite");
       setResult({ ok: false, text });
     } finally {

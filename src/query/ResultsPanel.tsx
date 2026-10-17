@@ -139,7 +139,7 @@ export default function ResultsPanel({
               Stopped after {fmt(st.secs)} s
             </h3>
             <p className="muted">
-              The query ran longer than this Connection's timeout, so DB View cancelled it on the server. Raise the
+              The query ran longer than this Connection's timeout, so Contura cancelled it on the server. Raise the
               timeout in the Connection's settings if this query needs longer.
             </p>
             <pre className="result-sql">{item.sql}</pre>

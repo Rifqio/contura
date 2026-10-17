@@ -1,4 +1,4 @@
-# Measures DB View's memory: db-view.exe plus all its descendant processes
+# Measures Contura's memory: contura.exe plus all its descendant processes
 # (the msedgewebview2.exe children), found by walking Win32_Process.ParentProcessId.
 #
 # The budget metric is the PRIVATE working set summed over those processes
@@ -12,7 +12,7 @@
 # Before running: open one Connection, close any table, and wait 30 s.
 # Drive the app by hand or over the remote debugging port, not with UI
 # automation: automation turns on Chromium accessibility and inflates every figure.
-# Exit codes: 0 under budget, 1 at or over budget, 2 db-view.exe not running.
+# Exit codes: 0 under budget, 1 at or over budget, 2 contura.exe not running.
 
 param(
     [int]$Samples = 3,
@@ -23,7 +23,7 @@ $BudgetMB = 150
 
 function Measure-Once {
     $all = Get-CimInstance Win32_Process
-    $roots = @($all | Where-Object { $_.Name -eq 'db-view.exe' })
+    $roots = @($all | Where-Object { $_.Name -eq 'contura.exe' })
     if ($roots.Count -eq 0) { return $null }
 
     $byParent = @{}
@@ -88,7 +88,7 @@ for ($i = 1; $i -le $Samples; $i++) {
     if ($i -gt 1) { Start-Sleep -Seconds $IntervalSeconds }
     $s = Measure-Once
     if ($null -eq $s) {
-        [Console]::Error.WriteLine('db-view.exe is not running.')
+        [Console]::Error.WriteLine('contura.exe is not running.')
         exit 2
     }
     Write-Host ("Sample {0} of {1}: {2:N1} MB private, {3:N1} MB working set" -f $i, $Samples, $s.PrivateMB, $s.WorkingSetMB)

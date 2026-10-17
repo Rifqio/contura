@@ -220,7 +220,7 @@ test("new_file_over_existing_says_never_replaces", async () => {
   renderNew();
   await userEvent.selectOptions(dialectSelect(), "sqlite");
   await userEvent.click(screen.getByRole("button", { name: "New file…" }));
-  expect(await screen.findByText("DB View never replaces an existing file. Choose a new name.")).toBeTruthy();
+  expect(await screen.findByText("Contura never replaces an existing file. Choose a new name.")).toBeTruthy();
   expect(fileInput().value).toBe("");
 });
 
@@ -255,13 +255,13 @@ test("sqlite_missing_file_error_has_one_hint", async () => {
   ).toBe("Cannot open C:\\data\\x.db: the file does not exist. Check the path, or choose the file again.");
 });
 
-test("sqlite_test_success_names_db_view_sqlite_version", async () => {
+test("sqlite_test_success_names_contura_sqlite_version", async () => {
   routeInvoke({ test_connection: () => "3.50.2" });
   renderNew();
   await userEvent.selectOptions(dialectSelect(), "sqlite");
   await userEvent.type(fileInput(), "C:\\data\\shop.db");
   await userEvent.click(screen.getByRole("button", { name: "Test" }));
-  expect(await screen.findByText("Opened. DB View uses SQLite 3.50.2.")).toBeTruthy();
+  expect(await screen.findByText("Opened. Contura uses SQLite 3.50.2.")).toBeTruthy();
 });
 
 test("dialect_is_fixed_when_editing", () => {

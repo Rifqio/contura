@@ -4,10 +4,10 @@ mod paths;
 
 use std::sync::Arc;
 
-use dbview_core::ai::AiService;
-use dbview_core::connections::ConnectionService;
-use dbview_core::secrets::KeyringSecretStore;
-use dbview_core::store::AppStore;
+use contura_core::ai::{AiProviderKind, AiService};
+use contura_core::connections::ConnectionService;
+use contura_core::secrets::{self, KeyringSecretStore};
+use contura_core::store::AppStore;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -26,7 +26,7 @@ pub fn run() {
             // Tauri panics on a setup error, which aborts silently in release: report it, then exit.
             if let Err(e) = start(app) {
                 fatal::show_error(&format!(
-                    "DB View could not start.
+                    "Contura could not start.
 
 {e}"
                 ));
@@ -91,7 +91,7 @@ pub fn run() {
         Ok(app) => app,
         Err(e) => {
             fatal::show_error(&format!(
-                "DB View stopped with an error.
+                "Contura stopped with an error.
 
 {e}"
             ));
@@ -109,16 +109,31 @@ pub fn run() {
     });
 }
 
+/// Copies secrets saved under the old "DB View" service to "Contura". Never blocks start-up:
+/// a failure leaves the old entry in place and the app runs with whatever it can read.
+fn migrate_legacy_secrets(store: &AppStore, current: &KeyringSecretStore) {
+    let Ok(legacy) = KeyringSecretStore::legacy() else {
+        return;
+    };
+    // An unreadable Connection row must not stop the AI keys from moving over.
+    let ids: Vec<_> = store
+        .list_connections()
+        .map(|cs| cs.iter().map(|c| c.id).collect())
+        .unwrap_or_default();
+    secrets::migrate_from_legacy(current, &legacy, &ids, &AiProviderKind::key_accounts());
+}
+
 fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = paths::data_dir()?;
     let store = AppStore::open(&data_dir.join("app.sqlite"))?;
     let secrets = Arc::new(KeyringSecretStore::new()?);
+    migrate_legacy_secrets(&store, &secrets);
     let ai_store = AppStore::open(&data_dir.join("app.sqlite"))?;
     app.manage(AiService::new(ai_store, secrets.clone()));
     app.manage(ConnectionService::new(store, secrets));
     app.manage(commands::DataDir(data_dir.clone()));
     WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-        .title("DB View")
+        .title("Contura")
         .data_directory(data_dir.join("webview"))
         .build()?;
     Ok(())

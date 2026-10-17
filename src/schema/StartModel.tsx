@@ -219,7 +219,7 @@ export default function StartModel({ connections, openIds, initial, onStart, onC
                   </select>
                 </label>
               )}
-              <p className="muted">DB View only reads the database. Nothing is changed.</p>
+              <p className="muted">Contura only reads the database. Nothing is changed.</p>
               <button
                 type="button"
                 className="button"

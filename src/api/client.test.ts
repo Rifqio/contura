@@ -18,10 +18,10 @@ test("shortenPath_keeps_file_name", () => {
 
 test("errorText handles an absent message, a numeric message and an unknown kind", () => {
   expect(errorText({ kind: "noPrimaryKey" })).toBe(
-    "This table has no primary key, so DB View cannot pick out one row to open the full value.",
+    "This table has no primary key, so Contura cannot pick out one row to open the full value.",
   );
   expect(errorText({ kind: "valueTooLarge", message: 17 * 1024 * 1024 })).toBe(
-    "This value is 17 MiB, more than the 16 MiB DB View opens at once.",
+    "This value is 17 MiB, more than the 16 MiB Contura opens at once.",
   );
   expect(errorText({ kind: "auth", message: "Access denied" })).toContain("Access denied");
   expect(errorText({ kind: "somethingNew", message: "disk full" })).toBe("Error (somethingNew): disk full");
@@ -45,7 +45,7 @@ test("sqlite_connect_error_hint_mentions_the_file", () => {
     "C:\\data\\notes.txt is not a SQLite database.",
   );
   expect(errorText({ kind: "connect", message: "cannot open C:\\data\\x.db: access is denied" }, "sqlite")).toBe(
-    "Cannot open C:\\data\\x.db: access is denied. Check that DB View can read the file.",
+    "Cannot open C:\\data\\x.db: access is denied. Check that Contura can read the file.",
   );
   // Server Dialects keep the step 1 copy.
   const server = errorText({ kind: "connect", message: "connection refused" }, "postgres");
@@ -78,7 +78,7 @@ test("error_text_for_query_sessions", () => {
 test("error_text_for_ai_errors", () => {
   expect(errorText({ kind: "ai", message: { kind: "notConfigured" } })).toBe("No AI provider is set up. Connect one in Settings.");
   expect(errorText({ kind: "ai", message: { kind: "notAvailable", provider: "groq" } })).toBe(
-    "Answers from Groq arrive in a later DB View version. Nothing was sent.",
+    "Answers from Groq arrive in a later Contura version. Nothing was sent.",
   );
   expect(errorText({ kind: "ai", message: { kind: "rateLimited", retryAfterSecs: 7 } })).toContain("7 s");
   expect(errorText({ kind: "ai", message: { kind: "network", host: "api.groq.com" } })).toContain("api.groq.com");

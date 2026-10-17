@@ -50,7 +50,7 @@ function testFailure(e: AiError, name: string, consoleName: string, baseUrl: str
     case "notAvailable":
       return {
         s: "bad",
-        title: `Testing ${PROVIDERS[e.provider]?.name ?? name} arrives in a later DB View version. Nothing was sent.`,
+        title: `Testing ${PROVIDERS[e.provider]?.name ?? name} arrives in a later Contura version. Nothing was sent.`,
         body: "",
       };
     case "badKey":
@@ -261,7 +261,7 @@ export default function AiSettingsForm({ groupId, groupName, connections, onConn
     <form className="sform" onSubmit={onSave} noValidate aria-label="AI assistant settings">
       <section className="ssec" aria-labelledby={f("provider")}>
         <h2 id={f("provider")}>Provider</h2>
-        <p>DB View talks to one provider at a time. Nothing is sent until you ask a question or press Test.</p>
+        <p>Contura talks to one provider at a time. Nothing is sent until you ask a question or press Test.</p>
         {groupName !== null && (
           <label className="checkbox">
             <input type="checkbox" checked={override} onChange={(e) => void toggleOverride(e.target.checked)} />
@@ -331,7 +331,7 @@ export default function AiSettingsForm({ groupId, groupName, connections, onConn
                     <Icon name="lock" />
                     <span className="mono">••••••••{loaded.keyLast4 ?? ""}</span>
                     <span className="field-hint">
-                      Saved in Windows Credential Manager as DB View/AI/
+                      Saved in Windows Credential Manager as Contura/AI/
                       {provider}
                     </span>
                     <span className="spacer" />

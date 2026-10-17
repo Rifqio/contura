@@ -187,7 +187,7 @@ test("test_shows_each_state", async () => {
 
   failure = { kind: "notAvailable", provider: "groq" };
   await test_();
-  expect(await screen.findByText("Testing Groq arrives in a later DB View version. Nothing was sent.")).toBeTruthy();
+  expect(await screen.findByText("Testing Groq arrives in a later Contura version. Nothing was sent.")).toBeTruthy();
   expect(callsTo("save_ai_settings").length).toBeGreaterThan(0);
 });
 

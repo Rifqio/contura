@@ -1,6 +1,8 @@
-# DB View: User Requirements
+# Contura: User Requirements
 
-What DB View must let its user do, as settled in the design session on 2026-10-14. Terms are defined in [CONTEXT.md](../CONTEXT.md). Decisions and their reasons are in [docs/adr/](adr/). This document says nothing about how screens look or are laid out. Visual design is done separately.
+Contura was called DB View until 2026-10-16.
+
+What Contura must let its user do, as settled in the design session on 2026-10-14. Terms are defined in [CONTEXT.md](../CONTEXT.md). Decisions and their reasons are in [docs/adr/](adr/). This document says nothing about how screens look or are laid out. Visual design is done separately.
 
 ## Product
 
@@ -11,7 +13,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 
 ## Memory (ADR 0003)
 
-- Idle with one open Connection: under ~150 MB private working set, summed over DB View and its WebView2 processes (ADR 0003).
+- Idle with one open Connection: under ~150 MB private working set, summed over Contura and its WebView2 processes (ADR 0003).
 - Table data and query results are fetched a page at a time (1,000 rows), never whole.
 - Closing a tab releases its rows.
 - Large text/JSON/BLOB cells show a preview of about 1 KB. The full value loads only when the user opens that cell.
@@ -19,7 +21,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 
 ## Storage and distribution (ADR 0006)
 
-- Portable app. All DB View data (Connections, Query History, Saved Queries, Visual Queries, logs, WebView2 cache) lives in `data\` next to the `.exe`. Nothing is written to `%APPDATA%` or `%LOCALAPPDATA%`.
+- Portable app. All Contura data (Connections, Query History, Saved Queries, Visual Queries, logs, WebView2 cache) lives in `data\` next to the `.exe`. Nothing is written to `%APPDATA%` or `%LOCALAPPDATA%`.
 - Passwords live in Windows Credential Manager, never in the data folder.
 - No installer, auto-update or code signing.
 
@@ -29,11 +31,11 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
 - SSL modes: disable, require, verify-CA with a CA file.
 - No SSH tunnels in v1.
 - Several Connections can be open at once.
-- A SQLite Connection opens an existing file or creates a new empty one. DB View never overwrites an existing file.
+- A SQLite Connection opens an existing file or creates a new empty one. Contura never overwrites an existing file.
 - A Connection can be marked **Production**, which adds an extra confirmation to every write, including typed SQL. It can be marked **Read-only**, which blocks every write.
 - Each Connection has an **AI access** level (`aiAccess`): "Never send anything", "Schema only" (the default), "Schema and query text", or "Schema, query text and sample rows". It decides what the AI assistant may send (see AI assistant).
 - **Suggested Connections from Laragon:**
-  - On each start, DB View looks for Laragon in the Windows installed-programs list, then reads `<install>\usr\laragon.ini`.
+  - On each start, Contura looks for Laragon in the Windows installed-programs list, then reads `<install>\usr\laragon.ini`.
   - Each database section (`[mysql]`, `[postgresql]`) yields a Suggested Connection on `127.0.0.1`, using the section's `Port` or the Dialect default (3306 / 5432), with user `root` (MySQL) or `postgres` (Postgres).
   - A Suggested Connection is saved only when the user accepts it. One matching a saved Connection's host and port is not offered.
   - Later changes in Laragon do not update saved Connections.
@@ -75,7 +77,7 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
   - NULL is shown as italic grey "NULL".
   - Numbers and dates are shown exactly as stored, with no grouping and no time-zone conversion.
 - **Feedback:** saving confirms with a toast in the bottom right.
-- **Startup:** DB View reopens the last Group and its tabs.
+- **Startup:** Contura reopens the last Group and its tabs.
 
 ## Browsing
 
@@ -125,11 +127,11 @@ What DB View must let its user do, as settled in the design session on 2026-10-1
   - an error where you are typing waits 1.5 s before it shows; errors elsewhere show at once
   - lines changed since the last save get a quiet bar in the gutter
 - **The layout:** DBML on the left (about 42% of the width, collapsible with Ctrl+B), the canvas on the right.
-- **Foreign Keys by drag:** a column can be dropped onto any column. When the target is not a key, unique or indexed, DB View still adds the Ref and warns that the database may refuse it.
+- **Foreign Keys by drag:** a column can be dropped onto any column. When the target is not a key, unique or indexed, Contura still adds the Ref and warns that the database may refuse it.
 - **Enums** live in the DBML only. They get no cards on the canvas.
 - On the canvas, dragging between columns creates a **Foreign Key in the model**. In a Visual Query the same gesture makes a Join.
 - Starting points: blank, reverse-engineered from an existing database through a Connection (read only), or an existing `.dbml` file.
-- Saved anywhere the user chooses, as `<name>.dbml` plus `<name>.dbml.layout.json` for canvas positions, not in `data\` (DB View refuses a path inside it). A model that was never saved, such as a reverse-engineered one, asks where to save on the first Save.
+- Saved anywhere the user chooses, as `<name>.dbml` plus `<name>.dbml.layout.json` for canvas positions, not in `data\` (Contura refuses a path inside it). A model that was never saved, such as a reverse-engineered one, asks where to save on the first Save.
 - Outputs:
   - export a SQL script for the model's Dialect
   - export the diagram as PNG or SVG
@@ -155,7 +157,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
   - The API key is stored in Windows Credential Manager (`AI/<provider id>`), never in `data\`. After saving, the form shows only its last 4 characters.
   - Provider calls are made from the Core, not the WebView.
 - **Placeholder phase**
-  - No network calls. With no provider saved, asking shows "Connect an AI provider in Settings" with a button that opens Settings. With one saved, it says answers arrive in a later DB View version and that nothing was sent.
+  - No network calls. With no provider saved, asking shows "Connect an AI provider in Settings" with a button that opens Settings. With one saved, it says answers arrive in a later Contura version and that nothing was sent.
 - **Chat history**
   - Threads are kept in `data\` per Group (and for Ungrouped), with a Clear action.
 
@@ -165,7 +167,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 - Before running, the exact SQL is shown and must be confirmed for Table Designer, Data Transfer, Sync Scripts and Restore. SQL typed in the editor runs as written (subject to Production/Read-only).
 - Data Transfer works across Dialects, with a type mapping the user reviews. Each run copies structure, data, or both.
 - Import/export: CSV, JSON, Excel (.xlsx), SQL INSERT scripts. Large files are streamed.
-- Backup/Restore uses DB View's own SQL scripts (ADR 0004).
+- Backup/Restore uses Contura's own SQL scripts (ADR 0004).
 - Schema Compare between two databases of the same Dialect produces a reviewable Sync Script.
 
 ## Testing
@@ -179,8 +181,12 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 3. Schema Builder: DBML ↔ canvas, reverse-engineering, SQL and image export (moved up because designing schemas is one of the user's two main activities)
 4. SQL editor (CodeMirror 6, ADR 0009), Query History, Saved Queries
 5. Pending Edits, Table Designer, Production and Read-only Connections
-6. Visual Query
-7. Import/export
+6. Visual Query, plus the shared diagram engine and the query diagram and result shape
+   - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams
+7. Import/export, plus Mermaid flowchart import
 8. Data Transfer
 9. Backup/Restore
 10. Schema Compare, plus applying a Schema Model to a Connection
+   - then sequence diagrams; cloud sharing later
+
+The diagram work and its memory budget are in `docs/superpowers/specs/2026-10-16-contura-direction-design.md`.

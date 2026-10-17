@@ -125,7 +125,7 @@ export const exportSql = (model: SchemaModel): Promise<string> => invoke("export
 
 export const readModelFiles = (path: string): Promise<ModelFiles> => invoke("read_model_files", { path });
 
-/** Saves `<path>` and `<path>.layout.json`; refused inside DB View's data folder. */
+/** Saves `<path>` and `<path>.layout.json`; refused inside Contura's data folder. */
 export const writeModelFiles = (path: string, dbml: string, layout: string): Promise<void> =>
   invoke("write_model_files", { path, dbml, layout });
 
@@ -225,7 +225,7 @@ function sentence(message: string): string {
 function sqliteConnectText(message: string): string {
   if (message.includes("not a SQLite database")) return sentence(message);
   if (message.includes("does not exist")) return `${sentence(message)} Check the path, or choose the file again.`;
-  return `${sentence(message)} Check that DB View can read the file.`;
+  return `${sentence(message)} Check that Contura can read the file.`;
 }
 
 function aiErrorText(e: AiError): string {
@@ -233,7 +233,7 @@ function aiErrorText(e: AiError): string {
     case "notConfigured":
       return "No AI provider is set up. Connect one in Settings.";
     case "notAvailable":
-      return `Answers from ${PROVIDERS[e.provider].name} arrive in a later DB View version. Nothing was sent.`;
+      return `Answers from ${PROVIDERS[e.provider].name} arrive in a later Contura version. Nothing was sent.`;
     case "badKey":
       return "The provider did not accept the key. Check it in Settings.";
     case "rateLimited":
@@ -267,9 +267,9 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       if (e.message === "That query session is closed.") return "This tab lost its session. Run the query again.";
       return `Not found: ${e.message}. Refresh and try again.`;
     case "noPrimaryKey":
-      return "This table has no primary key, so DB View cannot pick out one row to open the full value.";
+      return "This table has no primary key, so Contura cannot pick out one row to open the full value.";
     case "valueTooLarge":
-      return `This value is ${formatBytes(e.message)}, more than the 16 MiB DB View opens at once.`;
+      return `This value is ${formatBytes(e.message)}, more than the 16 MiB Contura opens at once.`;
     case "invalidInput":
       return sentence(e.message);
     case "store":
@@ -277,7 +277,7 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
     case "secret":
       return `Could not use Windows Credential Manager: ${e.message}`;
     case "file":
-      return `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}. Check the folder exists and DB View can write to it.`;
+      return `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}. Check the folder exists and Contura can write to it.`;
     case "cancelled":
       return "The query was cancelled.";
     case "timedOut":

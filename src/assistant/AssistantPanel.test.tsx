@@ -213,7 +213,7 @@ test("asking_with_a_provider_saves_the_thread", async () => {
   renderPanel();
   await screen.findByText(/Groq/);
   await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
-  const note = "Answers from Groq arrive in a later DB View version. Nothing was sent.";
+  const note = "Answers from Groq arrive in a later Contura version. Nothing was sent.";
   expect(await screen.findByText(note)).toBeTruthy();
   await waitFor(() => expect(callsTo("save_ai_thread").length).toBeGreaterThan(0));
   const calls = callsTo("save_ai_thread");

@@ -62,7 +62,7 @@ export default function SaveQueryDialog({ sql, existing, onSaved, onCancel }: Pr
             </p>
           ) : (
             <p className="muted">
-              Saved Queries are kept by name in DB View's data folder and listed under Saved Queries, for every
+              Saved Queries are kept by name in Contura's data folder and listed under Saved Queries, for every
               Connection.
             </p>
           )}
