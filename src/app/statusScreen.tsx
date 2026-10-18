@@ -1,7 +1,7 @@
 import type { ConnectionConfig, ConnectionId } from "../api/types";
 import type { StatusScreen } from "../components/StatusBar";
 import { fileName } from "../home/recent";
-import type { WindowTab, WorkTab } from "../shell/tabs";
+import { type WindowTab, type WorkTab, tabConnectionId } from "../shell/tabs";
 
 export interface StatusInput {
   activeWindow: WindowTab | undefined;
@@ -22,13 +22,9 @@ export function statusScreenFor(s: StatusInput): StatusScreen {
   const statusConnectionId =
     treeBranch !== null && !activeWindow
       ? treeBranch
-      : current?.kind === "query"
-        ? current.doc.connectionId
-        : current?.kind === "object"
-          ? current.selection.connectionId
-          : current?.kind === "design"
-            ? current.connectionId
-            : activeId;
+      : current && current.kind !== "savedQueries"
+        ? tabConnectionId(current)
+        : activeId;
   const statusConnection =
     activeWindow?.kind === "home" ? null : (connections.find((c) => c.id === statusConnectionId) ?? null);
   return activeWindow?.kind === "home"

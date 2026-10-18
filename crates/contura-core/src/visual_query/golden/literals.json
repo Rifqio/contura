@@ -1,0 +1,46 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 }
+    ],
+    "joins": [],
+    "columns": [
+      { "table": "t1", "column": "id", "alias": null, "aggregate": null }
+    ],
+    "filters": [
+      { "joiner": "and", "table": "t1", "column": "status", "op": "eq", "values": ["it's"] },
+      { "joiner": "and", "table": "t1", "column": "note", "op": "ne", "values": ["a\\b"] },
+      { "joiner": "and", "table": "t1", "column": "total", "op": "gt", "values": ["12.5"] },
+      { "joiner": "and", "table": "t1", "column": "id", "op": "le", "values": ["'5'"] },
+      { "joiner": "and", "table": "t1", "column": "ref", "op": "eq", "values": ["12"] },
+      { "joiner": "and", "table": "t1", "column": "channel", "op": "in", "values": ["app, 'kiosk, web'"] },
+      { "joiner": "and", "table": "t1", "column": "total", "op": "between", "values": ["10", "20"] },
+      { "joiner": "or", "table": "t1", "column": "deleted_at", "op": "isNull", "values": [] },
+      { "joiner": "and", "table": "t1", "column": "paid", "op": "eq", "values": ["true"] },
+      { "joiner": "and", "table": "t1", "column": "status", "op": "notLike", "values": ["%test%"] },
+      { "joiner": "and", "table": "t1", "column": "id", "op": "like", "values": ["1%"] },
+      { "joiner": "and", "table": "t1", "column": "channel", "op": "notIn", "values": ["'it''s'", "fax"] },
+      { "joiner": "or", "table": "t1", "column": "deleted_at", "op": "isNotNull", "values": [] }
+    ],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {
+    "t1": {
+      "id": "integer",
+      "status": "text",
+      "note": "text",
+      "total": "numeric(12,2)",
+      "ref": "varchar(8)",
+      "channel": "text",
+      "deleted_at": "timestamp",
+      "paid": "boolean"
+    }
+  },
+  "outputs": ["id"],
+  "warnings": []
+}

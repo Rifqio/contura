@@ -41,6 +41,44 @@ export interface Cte {
   block: Block | null;
 }
 
+export type JoinKind = "inner" | "left" | "right" | "full" | "cross" | "comma";
+
+/** How a reference joins the ones before it: the keyword run, NATURAL, USING and ON. */
+export interface RefJoin {
+  kind: JoinKind;
+  natural: boolean;
+  using: string[] | null;
+  /** The ON condition, without the ON keyword. */
+  on: Range | null;
+  /** From the first keyword of the run to the end of the ON or USING. */
+  range: Range;
+}
+
+export interface SelectItem {
+  /** The whole item, alias included. */
+  range: Range;
+  /** The expression without its alias, whitespace runs as one space. */
+  text: string;
+  alias: string | null;
+  /** The columns the item reads, in order. */
+  sources: { ref: TableRef; column: string }[];
+  /** The function when the item is one call, lower case. */
+  fn: string | null;
+  /** The column name when the item is one column, qualified or not. */
+  column: string | null;
+}
+
+export type ClauseKeyword = "WHERE" | "GROUP BY" | "HAVING" | "ORDER BY" | "LIMIT" | "FETCH";
+
+export interface OrderItem {
+  range: Range;
+  /** The expression without ASC, DESC or NULLS. */
+  text: string;
+  desc: boolean;
+  /** The SELECT item it sorts by: its alias, its own text, its column name, or its position. */
+  output: number | null;
+}
+
 export interface TableRef {
   id: number;
   kind: "table" | "cte" | "subquery" | "unknown" | "noSchema";
@@ -57,7 +95,16 @@ export interface TableRef {
   /** The table an INSERT, UPDATE or DELETE writes. */
   target: boolean;
   block: Block;
+  /** From the name (or the subquery's parenthesis) to the alias. */
+  range: Range;
+  /** Null for the first reference of a FROM, and for UPDATE, INSERT and DELETE targets. */
+  join: RefJoin | null;
+  /** Every column the statement reads through this reference, schema or not. */
+  used: { column: string; range: Range }[];
 }
+
+/** What resolving a name gives, before the reference has its alias and place. */
+type RefBase = Omit<TableRef, "id" | "alias" | "aliasRange" | "target" | "block" | "nameEnd" | "range" | "join" | "used">;
 
 export interface Block {
   /** Index of the opening parenthesis in the statement's tokens; -1 for the statement itself. */
@@ -75,6 +122,10 @@ export interface Block {
   star: Tk | null;
   starQ: { tok: Tk; from: number; qual: string }[];
   insertCols: { k: number; ref: TableRef | undefined }[];
+  select: SelectItem[];
+  clauses: { keyword: ClauseKeyword; range: Range }[];
+  distinct: boolean;
+  orderBy: OrderItem[];
 }
 
 export interface StmtScope {
@@ -136,10 +187,28 @@ export const isW = (t: Tk | undefined): t is Tk => !!t && (t.t === "w" || t.t ==
 export const isKW = (t: Tk | undefined) => !!t && t.t === "w" && t.kw;
 export const U = (t: Tk | undefined) => (t && t.t === "w" ? t.v.toUpperCase() : null);
 /** A name without its quotes. */
-export const idn = (t: Tk) => (t.t === "q" ? t.v.slice(1, t.v.length - (/["`\]]$/.test(t.v) ? 1 : 0)) : t.v);
+export const idn = (t: Tk) => {
+  if (t.t !== "q") return t.v;
+  const q = t.v[0];
+  const inner = t.v.slice(1, t.v.length - (/["`\]]$/.test(t.v) ? 1 : 0));
+  // A doubled quote inside a quoted name is one quote character.
+  return q === '"' || q === "`" ? inner.split(q + q).join(q) : inner;
+};
 
-const NOT_TABLE = new Set(["FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "UNION", "RETURNING", "JOIN", "LEFT", "RIGHT", "INNER", "FULL", "CROSS", "OUTER", "ON", "USING", "SELECT", "LATERAL", "SET", "AS", "WITH", "VALUES"]);
-const CLAUSE = new Set(["FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "UNION", "RETURNING"]);
+const NOT_TABLE = new Set(["FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "UNION", "INTERSECT", "EXCEPT", "RETURNING", "JOIN", "LEFT", "RIGHT", "INNER", "FULL", "CROSS", "OUTER", "ON", "USING", "SELECT", "LATERAL", "SET", "AS", "WITH", "VALUES"]);
+const CLAUSE = new Set(["FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "UNION", "INTERSECT", "EXCEPT", "RETURNING"]);
+const JOIN_RUN = new Set(["INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "NATURAL"]);
+/** Where an ON condition or a clause ends, at the top level. */
+const CLAUSE_END = new Set(["WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "UNION", "INTERSECT", "EXCEPT", "WINDOW", "FETCH", "FOR", "RETURNING", "JOIN", ...JOIN_RUN]);
+/** Where an ON condition ends: a clause, the next Join, or what follows a FROM in UPDATE, INSERT ... ON CONFLICT and ON DUPLICATE KEY. */
+const ON_END = new Set([...CLAUSE_END, "SET", "ON", "DO", "UPDATE", "VALUES", "SELECT"]);
+/** Keywords that end a SELECT's FROM list, so a later comma is not another table. */
+const FROM_END = new Set(["WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "UNION", "INTERSECT", "EXCEPT", "WINDOW", "FETCH", "RETURNING", "SET", "DO", "VALUES"]);
+const CLAUSE_START: Record<string, ClauseKeyword> = { WHERE: "WHERE", GROUP: "GROUP BY", HAVING: "HAVING", ORDER: "ORDER BY", LIMIT: "LIMIT", FETCH: "FETCH" };
+const COMPARISON = /^[<>=!]+$/;
+
+/** Text from `from` to `to` with whitespace runs as one space. */
+export const flat = (text: string, from: number, to: number) => text.slice(from, to).replace(/\s+/g, " ").trim();
 
 /** Levenshtein distance, ignoring case. */
 function lev(a: string, b: string): number {
@@ -313,6 +382,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
   // Blocks: the statement, plus one per parenthesised SELECT or WITH.
   const newBlock = (lo: number, hiIdx: number, open: number, close: number): Block => ({
     open, close, lo, hi: hiIdx, parent: null, children: [], refs: [], columns: [], own: [], depth: 0, selAliases: new Set(), star: null, starQ: [], insertCols: [],
+    select: [], clauses: [], distinct: false, orderBy: [],
   });
   const root = newBlock(0, n - 1, -1, -1);
   const blocks = [root];
@@ -384,7 +454,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
   const refLabel = (r: TableRef) =>
     r.kind === "table" && r.table ? `${r.table.schema ? r.table.schema + "." : ""}${r.table.name}` : r.kind === "cte" ? (r.name ?? "") : (r.alias ?? r.name ?? "the subquery");
 
-  function resolveTable(schemaTok: Tk | null, nameTok: Tk): Omit<TableRef, "id" | "alias" | "aliasRange" | "target" | "block" | "nameEnd"> {
+  function resolveTable(schemaTok: Tk | null, nameTok: Tk): RefBase {
     const name = idn(nameTok);
     const sch = schemaTok ? idn(schemaTok) : null;
     const nameRange = { from: nameTok.s, to: nameTok.e };
@@ -423,10 +493,10 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
   function parseRefs(b: Block) {
     const own = b.own;
     const W = (p: number) => T[own[p]];
-    function ref(q: number, target = false): number {
+    function ref(q: number, target = false, join: { kind: JoinKind; natural: boolean; from: number } | null = null): number {
       const t = W(q);
       if (!t) return q;
-      let base: Omit<TableRef, "id" | "alias" | "aliasRange" | "target" | "block" | "nameEnd">;
+      let base: RefBase;
       let nameEnd: number;
       if (t.v === "(") {
         const child = blocks.find((c) => c.open === own[q]);
@@ -456,7 +526,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
         base = resolveTable(schemaTok, nameTok);
         nameEnd = nameTok.e;
       } else return q;
-      const r: TableRef = { ...base, id: ++nextRefId, alias: null, aliasRange: null, target, block: b, nameEnd };
+      const r: TableRef = { ...base, id: ++nextRefId, alias: null, aliasRange: null, target, block: b, nameEnd, range: { from: t.s, to: nameEnd }, join: null, used: [] };
       if (U(W(q)) === "AS") {
         skip.add(own[q]);
         q++;
@@ -469,20 +539,61 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
         q++;
         A.symbols.push({ from: at.s, to: at.e, kind: "alias-decl", ref: r });
       }
+      r.range.to = r.aliasRange?.to ?? nameEnd;
+      if (join) {
+        let using: string[] | null = null;
+        let on: Range | null = null;
+        let end = r.range.to;
+        if (U(W(q)) === "USING" && W(q + 1)?.v === "(" && match[own[q + 1]] > 0) {
+          const close = match[own[q + 1]];
+          using = [];
+          for (let k = own[q + 1] + 1; k < close; k++) if (isW(T[k])) using.push(idn(T[k]));
+          end = T[close].e;
+        } else if (U(W(q)) === "ON" && isKW(W(q))) {
+          let depth = 0;
+          let last: Tk | null = null;
+          for (let x = q + 1; x < own.length; x++) {
+            const c = W(x);
+            if (depth === 0 && (c.v === "," || c.v === ")" || (isKW(c) && ON_END.has(U(c)!)))) break;
+            if (c.v === "(") depth++;
+            if (c.v === ")") depth--;
+            last = c;
+          }
+          if (last) {
+            on = { from: W(q + 1).s, to: last.e };
+            end = last.e;
+          }
+        }
+        r.join = { kind: join.kind, natural: join.natural, using, on, range: { from: join.from, to: end } };
+      }
       b.refs.push(r);
       S.refs.push(r);
       return q;
     }
     let p = 0;
+    /** Inside a SELECT's FROM list, where a comma after a Join's condition adds a table. */
+    let inFrom = false;
     while (p < own.length) {
       const u = U(W(p));
+      if (u && isKW(W(p)) && FROM_END.has(u)) inFrom = false;
       if (u === "FROM") {
+        inFrom = own.slice(0, p).some((k) => U(T[k]) === "SELECT");
         p = ref(p + 1, U(W(0)) === "DELETE");
-        while (W(p) && W(p).v === ",") p = ref(p + 1);
+        while (W(p) && W(p).v === ",") p = ref(p + 1, false, { kind: "comma", natural: false, from: W(p).s });
         continue;
       }
       if (u === "JOIN") {
-        p = ref(p + 1);
+        // The keyword run before JOIN: NATURAL, INNER, LEFT, RIGHT, FULL, OUTER, CROSS.
+        let st = p;
+        while (st > 0 && isKW(W(st - 1)) && JOIN_RUN.has(U(W(st - 1))!)) st--;
+        const run = new Set(Array.from({ length: p - st }, (_, i) => U(W(st + i))!));
+        const kind: JoinKind = run.has("CROSS") ? "cross" : run.has("LEFT") ? "left" : run.has("RIGHT") ? "right" : run.has("FULL") ? "full" : "inner";
+        const r0 = b.refs.length;
+        p = ref(p + 1, false, { kind, natural: run.has("NATURAL"), from: W(st).s });
+        // `JOIN b ON ..., c`: a comma after the condition adds another FROM item.
+        const end = b.refs[r0]?.join?.range.to ?? -1;
+        while (W(p) && W(p).s < end) p++;
+        if (inFrom) while (W(p) && W(p).v === ",") p = ref(p + 1, false, { kind: "comma", natural: false, from: W(p).s });
         continue;
       }
       if (u === "UPDATE" && p === 0) {
@@ -536,14 +647,17 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
     b.columns = [];
     if (p < 0) return;
     p++;
-    if (U(W(p)) === "DISTINCT") p++;
+    if (U(W(p)) === "DISTINCT") {
+      b.distinct = true;
+      p++;
+    }
     const items: number[][] = [];
     let cur: number[] = [];
     let depth = 0;
     for (; p < own.length; p++) {
       const t = W(p);
       const u = U(t);
-      if (depth === 0 && ["FROM", "WHERE", "GROUP", "ORDER", "LIMIT", "HAVING", "UNION"].includes(u ?? "")) break;
+      if (depth === 0 && ["FROM", "WHERE", "GROUP", "ORDER", "LIMIT", "HAVING", "UNION", "INTERSECT", "EXCEPT"].includes(u ?? "")) break;
       if (t.v === "(") depth++;
       if (t.v === ")") depth--;
       if (depth === 0 && t.v === ",") {
@@ -558,6 +672,8 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
       const tk = it.map((q) => W(q));
       const L = tk.length;
       if (!L) continue;
+      const item: SelectItem = { range: { from: tk[0].s, to: tk[L - 1].e }, text: flat(A.text, tk[0].s, tk[L - 1].e), alias: null, sources: [], fn: null, column: null };
+      b.select.push(item);
       if (L === 1 && tk[0].v === "*") {
         b.star = tk[0];
         for (const r of b.refs) if (r.columns) b.columns.push(...r.columns);
@@ -594,15 +710,20 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
         b.selAliases.add(lc(name));
       }
       const ex = tk.slice(0, exprEnd);
+      if (exprEnd < L) item.alias = name;
+      if (ex.length) item.text = flat(A.text, ex[0].s, ex[ex.length - 1].e);
+      if (ex.length > 1 && ex[0].fn && ex[1].v === "(" && match[own[it[1]]] === own[it[exprEnd - 1]]) item.fn = lc(ex[0].v);
       let typeName = "expr";
       let col: ResolvedColumn | null = null;
       if (ex.length === 1 && isW(ex[0]) && !isKW(ex[0])) {
+        item.column = idn(ex[0]);
         col = lookupCol(b, null, idn(ex[0]));
         if (!name) {
           name = idn(ex[0]);
           nameTok = ex[0];
         }
       } else if (ex.length === 3 && ex[1].v === "." && isW(ex[2])) {
+        item.column = idn(ex[2]);
         col = lookupCol(b, idn(ex[0]), idn(ex[2]));
         if (!name) {
           name = idn(ex[2]);
@@ -628,14 +749,85 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
     }
   }
 
+  /** WHERE, GROUP BY, HAVING, ORDER BY and LIMIT at the block's top level, and the ORDER BY items. */
+  function clauses(b: Block) {
+    const own = b.own;
+    const W = (p: number) => T[own[p]];
+    let depth = 0;
+    let open: { keyword: ClauseKeyword; at: number; body: number } | null = null;
+    const close = (end: number) => {
+      if (!open || end <= open.at) return;
+      b.clauses.push({ keyword: open.keyword, range: { from: W(open.at).s, to: W(end - 1).e } });
+      if (open.keyword === "ORDER BY") orderItems(b, open.body, end);
+      open = null;
+    };
+    for (let p = 0; p < own.length; p++) {
+      const t = W(p);
+      if (t.v === "(") depth++;
+      else if (t.v === ")") depth--;
+      if (depth !== 0 || !isKW(t)) continue;
+      const u = U(t)!;
+      if (!CLAUSE_END.has(u) || JOIN_RUN.has(u) || u === "JOIN") continue;
+      if (u === "OFFSET" && open?.keyword === "LIMIT") continue;
+      if ((u === "GROUP" || u === "ORDER") && U(W(p + 1)) !== "BY") continue;
+      close(p);
+      const kw = CLAUSE_START[u];
+      if (kw) open = { keyword: kw, at: p, body: kw === "GROUP BY" || kw === "ORDER BY" ? p + 2 : p + 1 };
+    }
+    close(own.length);
+  }
+
+  function orderItems(b: Block, from: number, to: number) {
+    const W = (p: number) => T[b.own[p]];
+    const parts: [number, number][] = [];
+    let st = from;
+    let depth = 0;
+    for (let p = from; p <= to; p++) {
+      const t = W(p);
+      if (p === to || (depth === 0 && t.v === ",")) {
+        if (p > st) parts.push([st, p]);
+        st = p + 1;
+        continue;
+      }
+      if (t.v === "(") depth++;
+      if (t.v === ")") depth--;
+    }
+    for (const [a, z] of parts) {
+      let end = z;
+      let desc = false;
+      if (end - 2 > a && U(W(end - 2)) === "NULLS") end -= 2;
+      const dir = U(W(end - 1));
+      if ((dir === "ASC" || dir === "DESC") && end - 1 > a) {
+        desc = dir === "DESC";
+        end--;
+      }
+      const text = flat(A.text, W(a).s, W(end - 1).e);
+      const key = lc(text);
+      let output = b.select.findIndex((s) => s.alias !== null && lc(s.alias) === key);
+      if (output < 0) output = b.select.findIndex((s) => s.alias === null && lc(s.text) === key);
+      if (output < 0 && end - a === 1 && isW(W(a)))
+        output = b.select.findIndex((s) => s.alias === null && s.column !== null && lc(s.column) === lc(idn(W(a))));
+      if (output < 0 && /^\d+$/.test(text) && Number(text) >= 1 && Number(text) <= b.select.length) output = Number(text) - 1;
+      b.orderBy.push({ range: { from: W(a).s, to: W(z - 1).e }, text, desc, output: output < 0 ? null : output });
+    }
+  }
+
   const proc = (b: Block) => {
     b.children.sort((x, y) => x.lo - y.lo).forEach(proc);
     parseRefs(b);
     selectCols(b);
+    clauses(b);
   };
   proc(root);
 
   const schemas = schema ? schemaIndex(schema).schemas : new Set<string>();
+
+  /** A column read through `ref`: on the reference, and on the SELECT item that holds it. */
+  const use = (b: Block, from: number, to: number, ref: TableRef, column: string) => {
+    ref.used.push({ column, range: { from, to } });
+    const item = b.select.find((x) => x.range.from <= from && to <= x.range.to);
+    if (item) item.sources.push({ ref, column });
+  };
 
   function resolve(b: Block) {
     const own = b.own;
@@ -668,8 +860,10 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
           skip.add(own[p + 2]);
           if (r?.columns) {
             const c = r.columns.find((c) => lc(c.name) === lc(idn(ct)));
-            if (c) A.symbols.push({ from: ct.s, to: ct.e, kind: "column", column: c, ref: r });
-            else {
+            if (c) {
+              A.symbols.push({ from: ct.s, to: ct.e, kind: "column", column: c, ref: r });
+              use(b, t.s, ct.e, r, c.name);
+            } else {
               const sug = closest(idn(ct), r.columns.map((c) => c.name));
               prob({
                 from: ct.s,
@@ -680,7 +874,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
                 fixes: sug ? [fix(`Change to ${sug}`, ct.s, ct.e, sug)] : [],
               });
             }
-          }
+          } else if (r) use(b, t.s, ct.e, r, idn(ct));
         } else if (!ct || ct.v !== "*") {
           prob({ from: next.s, to: next.e, severity: "error", kind: "syntax", message: `Expected a column name after ${t.v}.`, fixes: [] });
         }
@@ -696,6 +890,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
       if (list.length === 1) {
         const c = list[0].columns!.find((c) => lc(c.name) === nm)!;
         A.symbols.push({ from: t.s, to: t.e, kind: "column", column: c, ref: list[0] });
+        use(b, t.s, t.e, list[0], c.name);
         continue;
       }
       if (list.length > 1) {
@@ -759,6 +954,17 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
     if (u === "SELECT" && nu === "FROM" && nx) prob({ from: nx.s, to: nx.e, severity: "error", kind: "syntax", message: "Expected a column list after SELECT.", fixes: [] });
     if (["WHERE", "ON", "AND", "OR"].includes(u ?? "") && t.kw && (!nx || CLAUSE.has(nu ?? "")))
       prob({ from: t.s, to: t.e, severity: "error", kind: "syntax", message: `Expected a condition after ${u}.`, fixes: [] });
+    // P15: a comparison with nothing on its right.
+    // Not `ORDER BY x USING >` or `OPERATOR(pg_catalog.=)`.
+    const opName = U(T[i - 1]) === "USING" || T[i - 1]?.v === ".";
+    if (!opName && t.t === "p" && COMPARISON.test(t.v) && !(T[i - 1]?.t === "p" && COMPARISON.test(T[i - 1].v) && T[i - 1].e === t.s)) {
+      let j = i;
+      while (T[j + 1]?.t === "p" && COMPARISON.test(T[j + 1].v) && T[j + 1].s === T[j].e) j++;
+      const after = T[j + 1];
+      const au = isKW(after) ? U(after) : null;
+      if (!after || after.v === ")" || after.v === "," || CLAUSE.has(au ?? "") || au === "AND" || au === "OR" || au === "THEN")
+        prob({ from: t.s, to: T[j].e, severity: "error", kind: "syntax", message: `A value is missing after ${A.text.slice(t.s, T[j].e)}.`, fixes: [] });
+    }
   }
 
   // UPDATE or DELETE without WHERE.

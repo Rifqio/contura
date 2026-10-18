@@ -1,0 +1,17 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "o", "schema": "public", "name": "orders" },
+    { "alias": "s", "schema": "public", "name": "stores" },
+    { "alias": "c", "schema": "public", "name": "customers" },
+    { "alias": "m", "schema": "public", "name": "menu_items" },
+    { "alias": "s2", "schema": "public", "name": "stores" }
+  ],
+  "joins": [
+    { "table": "s", "kind": "inner", "on": [["s.id", "o.store_id"]] },
+    { "table": "c", "kind": "cross", "on": [] },
+    { "table": "m", "kind": "cross", "on": [] },
+    { "table": "s2", "kind": "inner", "on": [["s2.id", "m.store_id"]] }
+  ],
+  "outputs": ["id", "c_name", "m_name", "s2_name"]
+}

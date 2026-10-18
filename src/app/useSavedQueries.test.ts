@@ -5,6 +5,7 @@ import type { SavedQuery } from "../api/types";
 import type { QueryTabDoc } from "../query/QueryTab";
 import type { WorkTab } from "../shell/tabs";
 import { routeInvoke } from "../test/invoke";
+import { emptyQuery } from "../visualquery/model";
 import { useSavedQueries } from "./useSavedQueries";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -52,6 +53,24 @@ describe("useSavedQueries", () => {
     });
     act(() => hook.result.current.load());
     await waitFor(() => expect(hook.result.current.savedQueries).toEqual([]));
+  });
+
+  it("reload_renames_a_saved_visual_query_tab_and_unlinks_a_deleted_one", async () => {
+    routeInvoke({ list_saved_queries: () => [{ ...saved("v1", "Renamed"), kind: "visual", visualJson: "{}" }] });
+    const model = emptyQuery("shop", "mysql");
+    const vdoc = (id: string, savedId: string): WorkTab => ({
+      kind: "visual",
+      doc: { id, name: "Old", connectionId: "c1", database: "shop", model, savedId, savedJson: "{}" },
+    });
+    let tabs: WorkTab[] = [vdoc("a", "v1"), vdoc("b", "v2")];
+    const setTabs = vi.fn((next: SetStateAction<WorkTab[]>) => {
+      tabs = typeof next === "function" ? next(tabs) : next;
+    });
+    const hook = renderHook(() => useSavedQueries({ setTabs, onError: vi.fn() }));
+    act(() => hook.result.current.reloadSaved());
+    await waitFor(() => expect(hook.result.current.savedQueries).toHaveLength(1));
+    expect(tabs[0]).toMatchObject({ doc: { name: "Renamed", savedId: "v1", savedJson: "{}" } });
+    expect(tabs[1]).toMatchObject({ doc: { name: "Old", savedId: null, savedJson: null } });
   });
 
   it("reload_renames_open_tabs_and_unlinks_deleted_ones", async () => {

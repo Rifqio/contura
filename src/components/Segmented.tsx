@@ -4,6 +4,8 @@ export interface SegmentedOption<V extends string> {
   value: V;
   label: string;
   lead?: ReactNode;
+  /** Shown but not choosable, such as Selected nodes with nothing selected. */
+  disabled?: boolean;
 }
 
 interface Props<V extends string> {
@@ -22,7 +24,10 @@ export default function Segmented<V extends string>({ value, options, onChange, 
     if (step === 0) return;
     e.preventDefault();
     const from = Math.max(0, options.findIndex((o) => o.value === value));
-    const to = (from + step + options.length) % options.length;
+    let to = from;
+    do to = (to + step + options.length) % options.length;
+    while (options[to].disabled && to !== from);
+    if (to === from) return;
     onChange(options[to].value);
     group.current?.querySelectorAll<HTMLElement>("[role=radio]")[to]?.focus();
   }
@@ -36,6 +41,7 @@ export default function Segmented<V extends string>({ value, options, onChange, 
           role="radio"
           aria-checked={o.value === value}
           tabIndex={o.value === value ? 0 : -1}
+          disabled={o.disabled}
           className={o.value === value ? "segmented-option segmented-on" : "segmented-option"}
           onClick={() => onChange(o.value)}
         >

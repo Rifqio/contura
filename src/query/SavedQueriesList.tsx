@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { deleteSavedQuery, errorText, savedQueryRuns } from "../api/client";
-import type { ConnectionConfig, SavedQuery, SavedQueryRun } from "../api/types";
+import type { ConnectionConfig, DialectKind, SavedQuery, SavedQueryRun } from "../api/types";
 import DbMark from "../components/DbMark";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
@@ -31,6 +31,17 @@ const agoText = (ranAtMs: number) => {
   const ago = agoShort(Date.now() - ranAtMs, new Date());
   return ago === "now" ? "just now" : `${ago} ago`;
 };
+
+/** A Visual Query's Dialect, from its model, for the preview's colours when its Connection is gone. */
+function modelDialect(q: SavedQuery): DialectKind | null {
+  if (q.kind !== "visual" || !q.visualJson) return null;
+  try {
+    const d = (JSON.parse(q.visualJson) as { dialect?: unknown }).dialect;
+    return d === "mysql" || d === "postgres" || d === "sqlite" ? d : null;
+  } catch {
+    return null;
+  }
+}
 
 /** The Saved Queries tab: every Saved Query, the Connection it opens on, when it last ran, and a preview (frame 4). */
 export default function SavedQueriesList({ queries, connections, onOpen, onChanged, visible = true }: Props) {
@@ -68,6 +79,8 @@ export default function SavedQueriesList({ queries, connections, onOpen, onChang
   }, [queries, filter]);
   const selected = shown.find((q) => q.id === picked) ?? shown[0] ?? null;
   const connectionOf = (q: SavedQuery) => connections.find((c) => c.id === q.connectionId) ?? null;
+  /** A Visual Query always has a Connection, so none means it was removed (D2). */
+  const noConnection = (q: SavedQuery) => (q.kind === "visual" ? "Connection removed" : "No Connection");
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (!selected) return;
@@ -91,7 +104,7 @@ export default function SavedQueriesList({ queries, connections, onOpen, onChang
   function preview(q: SavedQuery) {
     const c = connectionOf(q);
     const run = lastRun.get(q.id);
-    const opensOn = c ? `${c.name}${c.database ? ` · ${c.database}` : ""}` : "No Connection";
+    const opensOn = c ? `${c.name}${c.database ? ` · ${c.database}` : ""}` : noConnection(q);
     const runText = run
       ? `${agoText(run.ranAtMs)}${run.rows === null ? "" : `, ${rowsText(run.rows)}`} in ${durationText(run.elapsedMs)}`
       : "Not run yet";
@@ -106,7 +119,7 @@ export default function SavedQueriesList({ queries, connections, onOpen, onChang
           <dt>Saved</dt>
           <dd>{savedDay(q.updatedAtMs)}</dd>
         </dl>
-        <SqlBlock sql={q.sql} dialect={c?.dialect ?? "postgres"} className="saved-sql" ariaLabel={`SQL of ${q.name}`} />
+        <SqlBlock sql={q.sql} dialect={c?.dialect ?? modelDialect(q) ?? "postgres"} className="saved-sql" ariaLabel={`SQL of ${q.name}`} />
         <div className="saved-actions">
           <button type="button" className="button button-primary" onClick={() => onOpen(q)}>
             <Icon name="external" size={14} />
@@ -178,7 +191,7 @@ export default function SavedQueriesList({ queries, connections, onOpen, onChang
                     >
                       <td>
                         <span className="saved-cell">
-                          <Icon name="fileQuery" size={14} />
+                          <Icon name={q.kind === "visual" ? "visualQuery" : "fileQuery"} size={14} />
                           {q.name}
                         </span>
                       </td>
@@ -191,7 +204,7 @@ export default function SavedQueriesList({ queries, connections, onOpen, onChang
                               <SafetyTag connection={c} small />
                             </>
                           ) : (
-                            "No Connection"
+                            noConnection(q)
                           )}
                         </span>
                       </td>
@@ -210,7 +223,7 @@ export default function SavedQueriesList({ queries, connections, onOpen, onChang
       {renaming && (
         <SaveQueryDialog
           sql={renaming.sql}
-          existing={{ id: renaming.id, name: renaming.name }}
+          existing={renaming}
           onCancel={() => setRenaming(null)}
           onSaved={() => {
             setRenaming(null);

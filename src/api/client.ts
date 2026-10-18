@@ -56,6 +56,10 @@ import type {
   DesignRequest,
   DesignVerdict,
   TableDesign,
+  ColumnTypes,
+  VisualQuery,
+  VqPreview,
+  VqRun,
 } from "./types";
 
 export const DIALECT_LABEL: Record<DialectKind, string> = {
@@ -232,6 +236,18 @@ export const executeSql = (
   pass?: PassId | null,
 ): Promise<Execution> => invoke("execute_sql", { session, sql, pass: pass ?? null });
 
+/** The SQL a Visual Query writes on this Connection, or the problems that stop it. Needs no open session. */
+export const visualQuerySql = (id: ConnectionId, query: VisualQuery, types: ColumnTypes): Promise<VqPreview> =>
+  invoke("visual_query_sql", { id, query, types });
+
+/** Writes a Visual Query and runs it on the session through the same check, History and result as the editor. */
+export const runVisualQuery = (
+  session: QuerySessionId,
+  query: VisualQuery,
+  types: ColumnTypes,
+  pass: PassId | null,
+): Promise<VqRun> => invoke("run_visual_query", { session, query, types, pass });
+
 export const prepareRun = (session: QuerySessionId, statements: string[]): Promise<RunVerdict> =>
   invoke("prepare_run", { session, statements });
 
@@ -292,9 +308,14 @@ export const queryHistory = (id: ConnectionId | null, filter: HistoryFilter): Pr
 
 export const clearQueryHistory = (id: ConnectionId | null): Promise<void> => invoke("clear_query_history", { id });
 
-export const listSavedQueries = (): Promise<SavedQuery[]> => invoke("list_saved_queries");
+/** A row from an older Core has no `kind`: it is SQL. */
+const savedRow = (q: SavedQuery): SavedQuery => ({ ...q, kind: q.kind ?? "sql", visualJson: q.visualJson ?? null });
 
-export const saveSavedQuery = (input: SavedQueryInput): Promise<SavedQuery> => invoke("save_saved_query", { input });
+export const listSavedQueries = (): Promise<SavedQuery[]> =>
+  invoke<SavedQuery[]>("list_saved_queries").then((list) => (Array.isArray(list) ? list.map(savedRow) : list));
+
+export const saveSavedQuery = (input: SavedQueryInput): Promise<SavedQuery> =>
+  invoke<SavedQuery>("save_saved_query", { input }).then((q) => (q ? savedRow(q) : q));
 
 export const deleteSavedQuery = (id: string): Promise<void> => invoke("delete_saved_query", { id });
 

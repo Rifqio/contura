@@ -460,6 +460,8 @@ async fn forget_recent_removes_only_that_table() {
             name: "daily".into(),
             sql: "SELECT 1".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     let table = |name: &str, object: ObjectKind| RecentTarget::Table {

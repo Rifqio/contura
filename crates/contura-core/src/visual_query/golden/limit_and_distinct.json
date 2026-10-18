@@ -1,0 +1,22 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 }
+    ],
+    "joins": [],
+    "columns": [
+      { "table": "t1", "column": "status", "alias": null, "aggregate": null },
+      { "table": "t1", "column": "channel", "alias": null, "aggregate": null }
+    ],
+    "filters": [],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [],
+    "limit": 10,
+    "distinct": true
+  },
+  "types": {},
+  "outputs": ["status", "channel"],
+  "warnings": []
+}

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
 import { errorText, forgetRecent, listConnections, listGroups, setLastGroup } from "./api/client";
 import type { ConnectionConfig, ConnectionId, Group, GroupId, ObjectPath, RecentItem, SavedQuery } from "./api/types";
 import DataGrid from "./components/DataGrid";
 import { GroupImagesProvider, useGroupImageCache } from "./components/GroupBadge";
 import GroupSwitcher, { menuPlaces } from "./components/GroupSwitcher";
-import { ToastProvider } from "./components/Toast";
+import { ToastProvider, useToast } from "./components/Toast";
 import StatusBar from "./components/StatusBar";
 import { version } from "../package.json";
 import { assistantContextFor, assistantTargetFor } from "./app/assistantContext";
@@ -47,13 +47,18 @@ import {
   type Place,
   type Selection,
   type SettingsSection,
+  type VisualTabDoc,
   type WindowTab,
   type WorkTab,
   designKey,
   newDesignKey,
   objectTabOf,
+  tabConnectionId,
   tabKey,
 } from "./shell/tabs";
+import { NEW_VISUAL_NAME, savedVisualModel } from "./visualquery/drafts";
+import { emptyQuery } from "./visualquery/model";
+import VisualQueryTab, { type VisualTabControl } from "./visualquery/VisualQueryTab";
 import { useTheme } from "./theme/useTheme";
 import { KeymapProvider, useCommandKeys } from "./commands/useCommandKeys";
 import { PrefsProvider } from "./prefs/usePrefs";
@@ -75,6 +80,7 @@ export default function App() {
 }
 
 function Workspace() {
+  const toast = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
   const groupImages = useGroupImageCache(groups);
   const [connections, setConnections] = useState<ConnectionConfig[]>([]);
@@ -107,6 +113,7 @@ function Workspace() {
     showHome,
     showPlace,
     openSavedDoc,
+    openVisualDoc,
     openSchemaTab,
     schemaClose,
     schemaCloseFor,
@@ -158,16 +165,27 @@ function Workspace() {
     place,
     tabs,
     ready: startup.s === "ready",
-    onRestored: (docs) => {
-      if (docs.length > 0) {
-        const restored = docs.map((doc): WorkTab => ({ kind: "query", doc }));
+    onRestored: (docs, visual, order) => {
+      // Back in the strip order they were saved in; a draft without one keeps its kind's order.
+      const at = (t: WorkTab) => {
+        const i = order.indexOf(tabKey(t));
+        return i < 0 ? order.length : i;
+      };
+      const restored = [
+        ...docs.map((doc): WorkTab => ({ kind: "query", doc })),
+        ...visual.map((doc): WorkTab => ({ kind: "visual", doc })),
+      ]
+        .map((t, i) => ({ t, i }))
+        .sort((a, b) => at(a.t) - at(b.t) || a.i - b.i)
+        .map((x) => x.t);
+      if (restored.length > 0) {
         setTabs((t) => [...restored, ...t]);
         setActiveKey((k) => k ?? tabKey(restored[0]));
       }
       if (homeIfEmpty.current) {
         homeIfEmpty.current = false;
         // A tab you opened meanwhile stays active.
-        if (docs.length === 0) showHome(true);
+        if (restored.length === 0) showHome(true);
       }
     },
   });
@@ -185,8 +203,17 @@ function Workspace() {
     if (tabs.some(away)) removeTabs(away);
   }, [connections, place, activeId, tabs]);
 
-  const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseSaved, dialog: leaveDialog } =
-    usePendingEditsGuard({ tabs, connections, savedQueries, activate: setActiveKey, onSavedQuerySaved: reloadSaved, onError: setNotice });
+  const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseUnsaved, dialog: leaveDialog } =
+    usePendingEditsGuard({
+      tabs,
+      connections,
+      savedQueries,
+      activate: setActiveKey,
+      onSavedQuerySaved: reloadSaved,
+      onError: setNotice,
+      // The tab is mounted (hidden or not) and knows its SQL: it saves itself.
+      saveVisual: (doc) => visualControl(doc.id).current?.save() ?? Promise.resolve(false),
+    });
   /** Home's ask about Pending Edits: each table shows while it is asked about, then Home comes back. */
   async function askFromHome(keys: string[]): Promise<boolean> {
     if (!keys.some(isDirty)) return true;
@@ -215,7 +242,7 @@ function Workspace() {
       if (created) dropTab(created);
       return;
     }
-    if (tab.kind === "query" && !(await confirmCloseSaved(tab.doc))) return;
+    if (!(await confirmCloseUnsaved(tab))) return;
     const builderClose = tab.kind === "schema" ? schemaCloseFor(tab.id) : null;
     if (builderClose) builderClose();
     else dropTab(key);
@@ -361,6 +388,50 @@ function Workspace() {
     setActiveKey(tabKey({ kind: "query", doc }));
   }
 
+  /** Opens a New Visual Query tab on the Connection and database (its default one unless given). */
+  function newVisualQuery(connectionId: ConnectionId, database?: string | null) {
+    const c = connections.find((x) => x.id === connectionId);
+    if (!c) return;
+    const db = database ?? (c.dialect === "sqlite" ? "main" : c.database);
+    const doc: VisualTabDoc = {
+      id: newId(),
+      name: NEW_VISUAL_NAME,
+      connectionId: c.id,
+      database: db,
+      model: emptyQuery(db, c.dialect),
+      savedId: null,
+      savedJson: null,
+    };
+    setTabs((all) => [...all, { kind: "visual", doc }]);
+    setActiveKey(tabKey({ kind: "visual", doc }));
+  }
+
+  function updateVisual(doc: VisualTabDoc) {
+    setTabs((all) => all.map((t) => (t.kind === "visual" && t.doc.id === doc.id ? { kind: "visual", doc } : t)));
+  }
+
+  /** A copy of a Visual Query in a new unsaved tab beside it. */
+  function duplicateVisual(doc: VisualTabDoc) {
+    const copy: VisualTabDoc = { ...doc, id: newId(), name: `Copy of ${doc.name}`, savedId: null, savedJson: null };
+    setTabs((all) => [...all, { kind: "visual", doc: copy }]);
+    setActiveKey(tabKey({ kind: "visual", doc: copy }));
+  }
+
+  /** Each Visual Query tab's handle, so the tree's Add to Visual Query reaches the active one. */
+  const visualControls = useRef(new Map<string, MutableRefObject<VisualTabControl | null>>());
+  function visualControl(id: string): MutableRefObject<VisualTabControl | null> {
+    let ref = visualControls.current.get(id);
+    if (!ref) {
+      ref = { current: null };
+      visualControls.current.set(id, ref);
+    }
+    return ref;
+  }
+  useEffect(() => {
+    const live = new Set(tabs.flatMap((t) => (t.kind === "visual" ? [t.doc.id] : [])));
+    for (const id of [...visualControls.current.keys()]) if (!live.has(id)) visualControls.current.delete(id);
+  }, [tabs]);
+
   /** Home's Show all history: Query History with every Connection, beside the place's query tab (a new one when it has none). */
   function showAllHistory() {
     const last = tabs.find((t) => tabKey(t) === lastPlaceKey.current);
@@ -377,6 +448,10 @@ function Workspace() {
 
   /** Opens a Saved Query in a tab on `on`: from this place through openSavedHere, from Recent on the Connection it was recorded with. */
   function openSaved(q: SavedQuery, on: ConnectionId | null) {
+    if (q.kind === "visual") {
+      openSavedVisual(q);
+      return;
+    }
     record({ kind: "query", savedId: q.id, name: q.name }, on);
     const c = connections.find((x) => x.id === on) ?? null;
     const doc: QueryTabDoc = {
@@ -390,6 +465,34 @@ function Workspace() {
     };
     // Worked out on the latest tabs, so a draft of this Saved Query restored just now is reused.
     openSavedDoc(doc);
+  }
+
+  /**
+   * Opens a saved Visual Query on the Connection it remembers (none when that was removed: the tab
+   * asks for one), on the model's database. A model from a newer Contura opens nothing.
+   */
+  function openSavedVisual(q: SavedQuery) {
+    const read = savedVisualModel(q.visualJson ?? "");
+    if (read.kind === "newer") {
+      toast.show({ kind: "error", text: "This Visual Query was saved by a newer Contura. Update Contura to open it." });
+      return;
+    }
+    if (read.kind === "unreadable") {
+      toast.show({ kind: "error", text: "This Visual Query could not be read." });
+      return;
+    }
+    const c = connections.find((x) => x.id === q.connectionId) ?? null;
+    record({ kind: "query", savedId: q.id, name: q.name }, c?.id ?? null);
+    const model = read.model;
+    openVisualDoc({
+      id: newId(),
+      name: q.name,
+      connectionId: c?.id ?? null,
+      database: model.database ?? (c?.dialect === "sqlite" ? "main" : (c?.database ?? null)),
+      model,
+      savedId: q.id,
+      savedJson: q.visualJson ?? null,
+    });
   }
 
   /** Opens the Saved Queries list as a tab of the place (one at most) and shows it. */
@@ -603,6 +706,25 @@ function Workspace() {
   /** The active place tab; undefined while a window tab (or none) is active. */
   const current = tabs.find((t) => tabKey(t) === activeKey);
   const selection = current?.kind === "object" ? current.selection : null;
+  /** D10: the active tab's Connection when it is open, else the place's first open one. */
+  const activeConnection = current ? tabConnectionId(current) : null;
+  const visualTarget =
+    activeConnection !== null && openIds.has(activeConnection) && inPlace.some((c) => c.id === activeConnection)
+      ? {
+          id: activeConnection,
+          // M13: from a table tab, the table's own database.
+          database:
+            current?.kind === "query" || current?.kind === "visual"
+              ? current.doc.database
+              : current
+                ? (objectTabOf(current)?.path?.database ?? null)
+                : null,
+        }
+      : (() => {
+          const first = inPlace.find((c) => openIds.has(c.id));
+          return first ? { id: first.id, database: null } : null;
+        })();
+  const activeVisual = current?.kind === "visual" ? current.doc : null;
   const statusScreen = statusScreenFor({ activeWindow, current, treeBranch, activeId, connections, openIds, versions, dataFolder, version });
   const historyFor =
     historyOpen && current?.kind === "query" ? (inPlace.find((c) => c.id === current.doc.connectionId) ?? null) : null;
@@ -641,6 +763,8 @@ function Workspace() {
           onClose={(key) => void closeTab(key)}
           dirtyKeys={dirtyKeys}
           onNew={() => newQuery(activeId)}
+          onNewVisual={() => visualTarget && newVisualQuery(visualTarget.id, visualTarget.database)}
+          newVisualReady={visualTarget !== null}
         />
       </TitleBar>
 
@@ -673,6 +797,11 @@ function Workspace() {
               onEditConnection={(c) => void editConnection(c)}
               onDuplicateConnection={(c) => setForm({ kind: "connection", duplicateOf: c })}
               onNewQuery={(id) => void actions.newQueryOn(id)}
+              onNewVisualQuery={(id) => void actions.newTabOn(id, (c) => newVisualQuery(c))}
+              onAddToVisualQuery={
+                activeVisual?.connectionId ? (s) => visualControls.current.get(activeVisual.id)?.current?.add(s) : undefined
+              }
+              visualQueryConnection={activeVisual?.connectionId ?? null}
               onNewSchemaModel={(connectionId, database, schema) => setModelStart({ initial: { connectionId, database, schema } })}
               onNewTable={newTable}
               onDesignTable={(s) => openDesign(s.connectionId, s.path)}
@@ -865,6 +994,44 @@ function Workspace() {
                 </div>
               ) : null,
             )}
+            {/* Visual Query tabs stay mounted while hidden, so their canvas and preview survive a tab switch. */}
+            {tabs.map((t) => {
+              if (t.kind !== "visual") return null;
+              const key = tabKey(t);
+              const cid = t.doc.connectionId;
+              const c = cid === null ? null : (connections.find((x) => x.id === cid) ?? null);
+              return (
+                <div key={key} className="work-pane" hidden={key !== activeKey}>
+                  <VisualQueryTab
+                    doc={t.doc}
+                    databases={(() => {
+                      const d = c ? tree.branches[c.id]?.databases : undefined;
+                      return d?.s === "loaded" ? d.value : undefined;
+                    })()}
+                    connection={c}
+                    connections={inPlace}
+                    open={c !== null && openIds.has(c.id)}
+                    group={c?.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
+                    visible={key === activeKey}
+                    lang={lang}
+                    rowEstimate={(path) => (c ? tree.estimate(c.id, path) : null)}
+                    onChange={updateVisual}
+                    onOpenInEditor={(sql) => newQuery(cid, sql, t.doc.database ?? undefined)}
+                    onSaved={savedOne}
+                    savedQueries={savedQueries}
+                    onOpenConnection={(id) => {
+                      const target = id ?? c?.id;
+                      if (target && !openIds.has(target)) void actions.openFromTree(target);
+                    }}
+                    onConnectionOpened={(id) => markOpened(id, null)}
+                    onRan={() => setHistoryRefresh((n) => n + 1)}
+                    controlRef={visualControl(t.doc.id)}
+                    onDuplicate={() => duplicateVisual(t.doc)}
+                    onClose={() => void closeTab(key)}
+                  />
+                </div>
+              );
+            })}
             {!current && !activeWindow && (
               <WorkEmpty
                 lastConnection={lastUsed}

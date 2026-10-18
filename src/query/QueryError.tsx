@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { DIALECT_LABEL } from "../api/client";
 import type { DialectKind } from "../api/types";
 import Icon from "../components/Icon";
@@ -40,6 +40,8 @@ interface Props {
   onAsk?(): void;
   onCopy(text: string): void;
   onReconnect(): void;
+  /** One more action after Go to line, such as a Visual Query's "Show the Join". */
+  extraAction?: ReactNode;
 }
 
 /** "Statement 2", "Statements 2 and 3", "Statements 2, 3 and 4". */
@@ -153,6 +155,7 @@ export default function QueryError(p: Props) {
           <Icon name="arrowRight" size={14} />
           Go to line {p.line}
         </button>
+        {p.extraAction}
         {p.onAsk && (
           <button type="button" className="button" onClick={p.onAsk}>
             <Icon name="msg" size={14} />

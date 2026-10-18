@@ -552,6 +552,10 @@ export interface SqlTable {
 export interface SqlFk {
   from: SmEndpoint;
   to: SmEndpoint;
+  /** The constraint's name; SQLite has one only when the table's text gives it. */
+  name?: string | null;
+  /** The constraint's comment, where the server keeps one (PostgreSQL). */
+  comment?: string | null;
 }
 
 /** Names, kinds, column types and Foreign Keys of one database; never row data. */
@@ -656,13 +660,22 @@ export interface SavedQuery {
   updatedAtMs: number;
   /** The Connection the query opens on; null when none or it was deleted. */
   connectionId: ConnectionId | null;
+  /** Missing from an older Core: `listSavedQueries` reads it as "sql". */
+  kind?: SavedQueryKind;
+  /** A Visual Query's model as saved; its `sql` is the last generated SQL. */
+  visualJson?: string | null;
 }
+
+/** What a Saved Query holds; both kinds share one name space. */
+export type SavedQueryKind = "sql" | "visual";
 
 export interface SavedQueryInput {
   id: string | null;
   name: string;
   sql: string;
   connectionId?: ConnectionId | null;
+  kind?: SavedQueryKind;
+  visualJson?: string | null;
 }
 
 export interface SavedQueryRun {
@@ -742,4 +755,159 @@ export interface AiThread {
 export interface AiTestOk {
   model: string;
   millis: number;
+}
+
+// Visual Query (step 6). Mirrors crates/contura-core/src/visual_query.
+
+/** One table card. `schema` is the PostgreSQL schema, or the MySQL database or SQLite scope when it differs from the tab's database. */
+export interface VqTable {
+  id: string;
+  schema: string | null;
+  name: string;
+  alias: string;
+  x: number;
+  y: number;
+}
+
+export type JoinKind = "inner" | "left" | "right" | "full";
+
+export interface ColumnPair {
+  leftColumn: string;
+  rightColumn: string;
+}
+
+/** One Foreign Key a pending Join can use. */
+export interface FkChoice {
+  name: string;
+  on: ColumnPair[];
+  comment?: string | null;
+}
+
+export interface VqJoin {
+  id: string;
+  left: string;
+  right: string;
+  kind: JoinKind;
+  on: ColumnPair[];
+  /** Set while the user has not picked which Foreign Key the Join uses. */
+  pending?: FkChoice[] | null;
+}
+
+export type Aggregate = "count" | "countDistinct" | "sum" | "avg" | "min" | "max";
+
+export interface VqColumn {
+  table: string;
+  column: string;
+  alias: string | null;
+  aggregate: Aggregate | null;
+}
+
+export type FilterOp =
+  | "eq"
+  | "ne"
+  | "lt"
+  | "le"
+  | "gt"
+  | "ge"
+  | "like"
+  | "notLike"
+  | "in"
+  | "notIn"
+  | "between"
+  | "isNull"
+  | "isNotNull";
+
+/** One filter row; an empty `column` means none is picked yet. */
+export interface VqFilter {
+  joiner: "and" | "or";
+  table: string;
+  column: string;
+  op: FilterOp;
+  values: string[];
+}
+
+export interface ColumnRef {
+  table: string;
+  column: string;
+}
+
+export type GroupBy = { kind: "auto" } | { kind: "manual"; columns: ColumnRef[] };
+
+export type SortTarget = { kind: "output"; index: number } | { kind: "column"; table: string; column: string };
+
+export interface VqSort {
+  target: SortTarget;
+  dir: "asc" | "desc";
+}
+
+export interface VisualQuery {
+  version: number;
+  database: string | null;
+  dialect?: DialectKind | null;
+  tables: VqTable[];
+  joins: VqJoin[];
+  columns: VqColumn[];
+  filters: VqFilter[];
+  groupBy: GroupBy;
+  orderBy: VqSort[];
+  limit: number | null;
+  distinct: boolean;
+}
+
+/** Table id to column name to type text, from the schema the UI already holds. */
+export type ColumnTypes = Record<string, Record<string, string>>;
+
+export type PartKind =
+  | { kind: "select" }
+  | { kind: "from"; table: string }
+  | { kind: "join"; join: string }
+  | { kind: "where"; filter: number }
+  | { kind: "groupBy" }
+  | { kind: "orderBy" }
+  | { kind: "limit" };
+
+/** The lines one piece of the model wrote, 1-based and inclusive. */
+export interface SqlPart {
+  part: PartKind;
+  fromLine: number;
+  toLine: number;
+}
+
+/** `table` is a table id. `rows` is always null from the Core; the UI fills it. */
+export type VqWarning =
+  | { kind: "crossJoin"; table: string; rows: number | null }
+  | { kind: "pendingPick"; table: string }
+  | { kind: "leftOut"; table: string; columns: string[] };
+
+export interface GeneratedQuery {
+  sql: string;
+  parts: SqlPart[];
+  /** Each output column's final name, in SELECT order. */
+  outputs: string[];
+  warnings: VqWarning[];
+}
+
+export type ProblemTarget =
+  | { kind: "query" }
+  | { kind: "columns" }
+  | { kind: "table"; id: string }
+  | { kind: "join"; id: string }
+  | { kind: "filter"; index: number }
+  | { kind: "sort"; index: number };
+
+export interface VqProblem {
+  target: ProblemTarget;
+  message: string;
+}
+
+/** The query when nothing stops it, else every problem with the field it belongs to. */
+export interface VqPreview {
+  query: GeneratedQuery | null;
+  problems: VqProblem[];
+}
+
+/** A Visual Query run: the text that ran and the editor's result for it. */
+export interface VqRun {
+  sql: string;
+  execution: Execution;
 }

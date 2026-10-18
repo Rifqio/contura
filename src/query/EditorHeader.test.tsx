@@ -222,3 +222,47 @@ test("ordinary_connection_has_no_read_only_chip", () => {
   setup();
   expect(document.querySelector(".editor-header-readonly")).toBeNull();
 });
+
+test("diagram_button_sits_after_format_with_its_key_and_is_pressed_while_open", async () => {
+  const onToggleDiagram = vi.fn();
+  const { rerender, container: _c, baseElement: _b, ...rest } = setup({ onToggleDiagram, diagramOpen: false });
+  const strip = screen.getByRole("toolbar", { name: "Query" });
+  const names = Array.from(strip.querySelectorAll("button")).map((el) => (el.getAttribute("aria-label") ?? el.textContent ?? "").replace(/\s+/g, " ").trim());
+  expect(names.indexOf("Diagram Ctrl+Shift+D")).toBe(names.indexOf("Format") + 1);
+  const diagram = screen.getByRole("button", { name: /^Diagram/ });
+  expect(diagram.getAttribute("aria-pressed")).toBe("false");
+  expect(diagram.querySelector(".kbd, kbd")).toBeTruthy();
+  await userEvent.click(diagram);
+  expect(onToggleDiagram).toHaveBeenCalledTimes(1);
+  const props: Parameters<typeof EditorHeader>[0] = {
+    connection: rest.connection,
+    connections: rest.connections,
+    openIds: rest.openIds,
+    databases: rest.databases,
+    database: rest.database,
+    production: rest.production,
+    running: rest.running,
+    writeHazard: rest.writeHazard,
+    canRun: rest.canRun,
+    blockedTip: rest.blockedTip,
+    compact: rest.compact,
+    aiAccess: rest.aiAccess,
+    historyOpen: rest.historyOpen,
+    onPickConnection: rest.onPickConnection,
+    onPickDatabase: rest.onPickDatabase,
+    onRun: rest.onRun,
+    onRunAll: rest.onRunAll,
+    onExplain: rest.onExplain,
+    onFormat: rest.onFormat,
+    onSave: rest.onSave,
+    onToggleHistory: rest.onToggleHistory,
+    onCancel: rest.onCancel,
+  };
+  rerender(<EditorHeader {...props} onToggleDiagram={onToggleDiagram} diagramOpen />);
+  expect(screen.getByRole("button", { name: /^Diagram/ }).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("no_diagram_button_without_a_handler", () => {
+  setup();
+  expect(screen.queryByRole("button", { name: /^Diagram/ })).toBeNull();
+});

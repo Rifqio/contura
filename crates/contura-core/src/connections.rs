@@ -23,7 +23,7 @@ use crate::model::{
 };
 use crate::query::{
     ExecOutcome, Execution, HistoryEntry, HistoryFilter, MoreRows, NewHistory, Outcome,
-    QuerySessionId, SavedQuery, SavedQueryInput, SavedQueryRun, SessionHandle,
+    QuerySessionId, SavedQuery, SavedQueryInput, SavedQueryKind, SavedQueryRun, SessionHandle,
 };
 use crate::recent::{RecentItem, RecentTarget, merge_restored, push_recent};
 use crate::safety::{
@@ -32,6 +32,7 @@ use crate::safety::{
 use crate::secrets::SecretStore;
 use crate::store::AppStore;
 use crate::suggest::{SuggestedConnection, laragon_suggestions};
+use crate::visual_query::{self, ColumnTypes, VisualQuery, VqPreview, VqRun};
 use std::time::{Duration, Instant};
 
 const LAST_GROUP_KEY: &str = "last_group";
@@ -43,6 +44,15 @@ const QUERY_TABS_KEY: &str = "query_tabs:";
 const SAVED_QUERY_CONNECTIONS_KEY: &str = "saved_query_connections";
 const CONNECTION_OPENED_KEY: &str = "connection_opened";
 const DAY_MS: i64 = 86_400_000;
+
+/// The server version a Visual Query is written for, without a round trip (D3): only
+/// SQLite's matters (RIGHT and FULL JOIN), and that is the bundled library's.
+fn server_version(kind: DialectKind) -> &'static str {
+    match kind {
+        DialectKind::Sqlite => rusqlite::version(),
+        DialectKind::MySql | DialectKind::Postgres => "",
+    }
+}
 
 /// What the data folder holds, for Settings.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1351,6 +1361,55 @@ impl ConnectionService {
         Err(Error::NotFound("connection not open".into()))
     }
 
+    /// The SQL a Visual Query writes on this Connection, or its problems. Reads only the
+    /// Connection's Dialect, so it works while the Connection is closed (D3): only SQLite's
+    /// version matters, and that is the bundled library's.
+    pub fn visual_query_sql(
+        &self,
+        id: ConnectionId,
+        query: VisualQuery,
+        types: ColumnTypes,
+    ) -> Result<VqPreview> {
+        let kind = self.config(id)?.dialect;
+        Ok(visual_query::preview(
+            kind,
+            server_version(kind),
+            &query,
+            &types,
+        ))
+    }
+
+    /// Writes a Visual Query for the session's Connection and runs it exactly as the editor
+    /// runs a statement (D12): the same Read-only and Production check, Query History and
+    /// paged result. A query with problems is refused before anything reaches the server.
+    pub async fn run_visual_query(
+        &self,
+        s: QuerySessionId,
+        query: VisualQuery,
+        types: ColumnTypes,
+        pass: Option<PassId>,
+    ) -> Result<VqRun> {
+        let (conn, _, session_db) = self.query_slot(s)?;
+        let config = self.config(conn)?;
+        let kind = config.dialect;
+        // MySQL writes the model's own tables bare, so they resolve against the session's
+        // database: a session left on another one would read the wrong tables. A session
+        // opened with no database is on the Connection's own. SQLite names a scope, not a
+        // database, in the model.
+        let on = session_db.or(config.database);
+        if kind != DialectKind::Sqlite
+            && let Some(want) = query.database.as_deref()
+            && on.as_deref() != Some(want)
+        {
+            return Err(Error::InvalidInput(
+                "The tab's database changed. Run again.".into(),
+            ));
+        }
+        let sql = visual_query::generate(kind, server_version(kind), &query, &types)?.sql;
+        let execution = self.execute_sql(s, sql.clone(), pass).await?;
+        Ok(VqRun { sql, execution })
+    }
+
     /// Runs one statement, applying the Connection's timeout, and records it in Query History.
     /// Read-only and Production are enforced first; a blocked statement is not recorded.
     pub async fn execute_sql(
@@ -1572,12 +1631,62 @@ impl ConnectionService {
         if name.is_empty() {
             return Err(Error::InvalidInput("Give the query a name.".into()));
         }
+        // An update keeps the row's kind and model unless the request sets them, so a client
+        // that leaves them out never drops a Visual Query's model. A kind never changes.
+        let stored = match input.id {
+            Some(id) => self.store()?.get_saved_query(id)?,
+            None => None,
+        };
+        let kind = match (&stored, input.kind) {
+            (Some(s), Some(k)) if s.kind != k => {
+                return Err(Error::InvalidInput(
+                    match s.kind {
+                        SavedQueryKind::Visual => {
+                            "This name belongs to a Visual Query. Pick another name."
+                        }
+                        SavedQueryKind::Sql => {
+                            "This name belongs to a SQL query. Pick another name."
+                        }
+                    }
+                    .into(),
+                ));
+            }
+            (Some(s), _) => s.kind,
+            (None, k) => k.unwrap_or_default(),
+        };
+        // A Visual Query update with no SQL text (no preview to take it from) keeps the stored
+        // SQL, so the row's tooltip, search and Open in editor never go blank.
+        let sql = match &stored {
+            Some(s) if kind == SavedQueryKind::Visual && input.sql.trim().is_empty() => {
+                s.sql.clone()
+            }
+            _ => input.sql,
+        };
+        // A SQL row has no model; a Visual Query row keeps its model and its last generated SQL.
+        let visual_json = match kind {
+            SavedQueryKind::Sql => None,
+            SavedQueryKind::Visual => {
+                match input
+                    .visual_json
+                    .or_else(|| stored.and_then(|s| s.visual_json))
+                {
+                    Some(j) => Some(j),
+                    None => {
+                        return Err(Error::InvalidInput(
+                            "A Visual Query needs its model.".into(),
+                        ));
+                    }
+                }
+            }
+        };
         let mut q = SavedQuery {
             id: input.id.unwrap_or_else(Uuid::new_v4),
             name,
-            sql: input.sql,
+            sql,
             updated_at_ms: now_ms(),
             connection_id: input.connection_id,
+            kind,
+            visual_json,
         };
         self.store()?.save_saved_query(&q)?;
         let mut opens_on = self.setting_map::<ConnectionId>(SAVED_QUERY_CONNECTIONS_KEY)?;

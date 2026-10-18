@@ -51,7 +51,9 @@ export type RunState =
       ms?: number;
     }
   | { s: "cancelled"; ms: number }
-  | { s: "timedOut"; secs: number };
+  | { s: "timedOut"; secs: number }
+  /** Stopped by Contura, not by the server or the statement: its session went. `why` says so in a sentence. */
+  | { s: "stopped"; why: string; ms: number };
 
 export interface ResultItem {
   id: number;
@@ -97,8 +99,11 @@ export type RunnerAction =
   /** Explain: a Plan tab joins the results without asking and without touching the run queue. */
   | { type: "explain"; stmt: Stmt; now: number }
   | { type: "planned"; id: number; plan: Plan; ms: number }
-  | { type: "done"; id: number; outcome: ExecOutcome; ms: number }
+  /** `sql`: the text that ran, when the caller learns it only with the answer (a Visual Query run). */
+  | { type: "done"; id: number; outcome: ExecOutcome; ms: number; sql?: string }
   | { type: "failed"; id: number; error: unknown; ms?: number }
+  /** A run whose session went while it was going (a Visual Query): a stop, not a failure. */
+  | { type: "stopped"; id: number; why: string; ms: number }
   | { type: "confirmNeeded"; verb: "UPDATE" | "DELETE"; table: string }
   | { type: "confirmed" }
   | { type: "declined" }
@@ -229,6 +234,7 @@ export function runnerReducer(state: RunnerState, action: RunnerAction): RunnerS
       const { outcome, ms } = action;
       return update(state, action.id, (i) => ({
         ...i,
+        ...(action.sql !== undefined && { sql: action.sql, to: i.from + action.sql.length }),
         state:
           outcome.t === "rows"
             ? { s: "rows", columns: outcome.columns, rows: outcome.rows, hasMore: outcome.hasMore, open: outcome.hasMore, ms }
@@ -248,6 +254,8 @@ export function runnerReducer(state: RunnerState, action: RunnerAction): RunnerS
       // Run all stops at the first failure.
       return { ...next, queue: [] };
     }
+    case "stopped":
+      return { ...update(state, action.id, (i) => ({ ...i, state: { s: "stopped", why: action.why, ms: action.ms } })), queue: [] };
     case "confirmNeeded": {
       const stmt = state.queue[0];
       return stmt ? { ...state, confirm: { stmt, verb: action.verb, table: action.table } } : state;

@@ -1,6 +1,6 @@
 import { type MutableRefObject, type SetStateAction, useCallback, useEffect, useLayoutEffect, useReducer, useRef } from "react";
 import type { QueryTabDoc } from "../query/QueryTab";
-import { type AnyTab, type WindowTab, type WorkTab, afterClose, stripOrder, tabKey } from "../shell/tabs";
+import { type AnyTab, type VisualTabDoc, type WindowTab, type WorkTab, afterClose, stripOrder, tabKey } from "../shell/tabs";
 import { type SchemaTab, tabsReducer } from "./tabsReducer";
 
 /** The place's tabs, the window's tabs and the active tab, on one reducer so no setter runs inside another's updater. */
@@ -78,6 +78,10 @@ export function useWorkspaceTabs() {
     dispatch({ type: "openSaved", doc });
   }
 
+  function openVisualDoc(doc: VisualTabDoc) {
+    dispatch({ type: "openVisual", doc });
+  }
+
   function openSchemaTab(tab: SchemaTab) {
     dispatch({ type: "openSchema", tab });
   }
@@ -104,6 +108,7 @@ export function useWorkspaceTabs() {
     showHome,
     showPlace,
     openSavedDoc,
+    openVisualDoc,
     openSchemaTab,
     schemaClose,
     schemaCloseFor,

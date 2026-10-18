@@ -184,7 +184,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 4. SQL editor (CodeMirror 6, ADR 0009), Query History, Saved Queries
 5. Pending Edits, Table Designer, Production and Read-only Connections (5a done: Production and Read-only Connections, ADR 0013; 5b done: Pending Edits, ADR 0014; 5c done: Table Designer, ADR 0016)
    - Restyle to DESIGN-NEXT (done before 5c, ADR 0015): Alucard and Dracula, JetBrains Mono, 28 px density, Home with Recent
-6. Visual Query, plus the shared diagram engine and the query diagram and result shape
+6. Visual Query, plus the shared diagram engine and the query diagram and result shape (done: Visual Query, the shared diagram engine and the query diagram, ADR 0017)
    - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams
 7. Import/export, plus Mermaid flowchart import
 8. Data Transfer

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DialectKind } from "../api/types";
 import InlineAsk from "../assistant/InlineAsk";
 import { type AskContext, type AskSetup, tablesIn } from "../assistant/context";
@@ -49,6 +49,8 @@ interface Props {
   onGoTo(from: number, to: number): void;
   /** Ask AI on a failed query; without it, or with `errorAsk` off, the button is absent. */
   ask?: AskSetup;
+  /** One more action in a failed statement's error box. */
+  errorAction?: ReactNode;
 }
 
 /** After a reconnect ran statement N alone (R43): "Statements 3 and 4 did not run." */
@@ -127,6 +129,7 @@ export default function ResultsPanel({
   onRunAgain,
   onGoTo,
   ask,
+  errorAction,
 }: Props) {
   const { map } = useKeymap();
   const runKey = hintFor(map, "query.run");
@@ -200,6 +203,23 @@ export default function ResultsPanel({
                 ? "The server rolled the statement back. No rows changed."
                 : "The server stopped the query."}
             </p>
+            <pre className="result-sql">{item.sql}</pre>
+            <div className="result-actions">
+              <button type="button" className="button" onClick={() => onRunAgain(item.id)}>
+                Run again
+              </button>
+            </div>
+          </div>
+        );
+        break;
+      case "stopped":
+        body = (
+          <div className="result-state result-state-warn">
+            <h3>
+              <Icon name="warning" />
+              Stopped after {durationText(st.ms)}
+            </h3>
+            <p className="muted">{st.why}</p>
             <pre className="result-sql">{item.sql}</pre>
             <div className="result-actions">
               <button type="button" className="button" onClick={() => onRunAgain(item.id)}>
@@ -296,6 +316,7 @@ export default function ResultsPanel({
               onAsk={ctx ? () => setAskOpen((o) => !o) : undefined}
               onCopy={copyText}
               onReconnect={() => onReconnect?.()}
+              extraAction={errorAction}
             />
             {ctx && askOpen && (
               <div className="ask-anchor">

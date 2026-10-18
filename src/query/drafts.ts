@@ -1,5 +1,5 @@
 // Query tab drafts, kept per place (a Group, or Ungrouped) so they come back after a restart.
-import type { Place } from "../shell/tabs";
+import type { Place, VisualTabDoc } from "../shell/tabs";
 import type { QueryTabDoc } from "./QueryTab";
 
 export function placeKey(place: Place): string {
@@ -7,8 +7,32 @@ export function placeKey(place: Place): string {
   return place.kind;
 }
 
-export function serializeDrafts(docs: QueryTabDoc[]): string {
-  return JSON.stringify({ version: 1, tabs: docs });
+/**
+ * The place's drafts. Visual Query tabs go under their own `visual` key, so the file stays
+ * `version: 1` and a build from before step 6 reads its query tabs and ignores the rest.
+ */
+export function serializeDrafts(
+  docs: QueryTabDoc[],
+  visual: VisualTabDoc[] = [],
+  extra: {
+    /** The tabs' keys in strip order, so query and Visual Query tabs come back in place. */
+    order?: string[];
+    /** Visual drafts this build cannot open (a newer model version), written back untouched. */
+    kept?: unknown[];
+  } = {},
+): string {
+  const order = extra.order && visual.length > 0 ? { order: extra.order } : {};
+  return JSON.stringify({ version: 1, tabs: docs, visual: [...visual, ...(extra.kept ?? [])], ...order });
+}
+
+/** The strip order written with the drafts; empty when none (never throws). */
+export function parseDraftOrder(json: string): string[] {
+  try {
+    const raw = JSON.parse(json) as { order?: unknown };
+    return Array.isArray(raw?.order) ? raw.order.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 const str = (v: unknown) => typeof v === "string";

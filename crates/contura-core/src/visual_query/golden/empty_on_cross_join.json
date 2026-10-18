@@ -1,0 +1,34 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "stores", "alias": "s", "x": 300, "y": 0 },
+      { "id": "t3", "schema": null, "name": "regions", "alias": "r", "x": 600, "y": 0 }
+    ],
+    "joins": [
+      { "id": "j1", "left": "t1", "right": "t2", "kind": "left", "on": [] },
+      { "id": "j2", "left": "t2", "right": "t3", "kind": "inner", "on": [{ "leftColumn": "region_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t1", "column": "id", "alias": null, "aggregate": null },
+      { "table": "t2", "column": "city", "alias": null, "aggregate": null },
+      { "table": "t3", "column": "code", "alias": null, "aggregate": null }
+    ],
+    "filters": [
+      { "joiner": "and", "table": "t2", "column": "city", "op": "eq", "values": ["Oslo"] }
+    ],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [
+      { "target": { "kind": "column", "table": "t3", "column": "code" }, "dir": "asc" }
+    ],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["id", "city", "code"],
+  "warnings": [
+    { "kind": "crossJoin", "table": "t2", "rows": null }
+  ]
+}

@@ -477,6 +477,51 @@ async fn open_returns_the_server_version() {
     svc.close(saved.id).await.unwrap();
 }
 
+#[tokio::test]
+async fn visual_query_sql_previews_without_opening() {
+    let (dir, _s, svc) = service();
+    let saved = svc
+        .save(ConnectionInput {
+            dialect: DialectKind::Sqlite,
+            file: Some(dir.path().join("shop.sqlite")),
+            ..input("lite", PasswordChange::Keep)
+        })
+        .await
+        .unwrap();
+    let query: contura_core::visual_query::VisualQuery =
+        serde_json::from_value(serde_json::json!({
+            "version": 1, "database": "main",
+            "tables": [
+                {"id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0},
+                {"id": "t2", "schema": null, "name": "stores", "alias": "s", "x": 0, "y": 0}
+            ],
+            "joins": [{"id": "j1", "left": "t1", "right": "t2", "kind": "full",
+                       "on": [{"leftColumn": "store_id", "rightColumn": "id"}]}],
+            "columns": [{"table": "t1", "column": "id", "alias": null, "aggregate": null}],
+            "filters": [], "groupBy": {"kind": "auto"}, "orderBy": [], "limit": 5, "distinct": false
+        }))
+        .unwrap();
+    let preview = svc
+        .visual_query_sql(saved.id, query.clone(), Default::default())
+        .unwrap();
+    assert_eq!(preview.problems, vec![]);
+    assert_eq!(
+        preview.query.unwrap().sql,
+        "SELECT o.id\nFROM orders AS o\nFULL JOIN stores AS s ON s.id = o.store_id\nLIMIT 5"
+    );
+    assert!(!svc.is_open(saved.id));
+
+    let mysql = svc.save(input("my", PasswordChange::Keep)).await.unwrap();
+    let refused = svc
+        .visual_query_sql(mysql.id, query, Default::default())
+        .unwrap();
+    assert_eq!(refused.query, None);
+    assert_eq!(
+        refused.problems[0].message,
+        "MySQL has no FULL JOIN. Pick Left or Right."
+    );
+}
+
 #[test]
 fn service_futures_are_send() {
     fn assert_send<T: Send>(_: T) {}
@@ -783,6 +828,8 @@ async fn data_folder_info_counts_and_history_bytes() {
         name: "q".into(),
         sql: "SELECT 2".into(),
         connection_id: None,
+        kind: Default::default(),
+        visual_json: None,
     })
     .unwrap();
     let info = svc.data_folder_info().unwrap();
@@ -843,6 +890,8 @@ async fn saved_query_keeps_the_connection_it_opens_on() {
             name: "q".into(),
             sql: "SELECT 1".into(),
             connection_id: Some(c.id),
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     assert_eq!(q.connection_id, Some(c.id));
@@ -864,6 +913,8 @@ async fn saving_without_a_connection_keeps_the_one_it_opens_on() {
             name: "q".into(),
             sql: "SELECT 1".into(),
             connection_id: Some(c.id),
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     let again = svc
@@ -872,6 +923,8 @@ async fn saving_without_a_connection_keeps_the_one_it_opens_on() {
             name: "renamed".into(),
             sql: "SELECT 2".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     assert_eq!(again.connection_id, Some(c.id));
@@ -905,6 +958,8 @@ async fn saved_query_runs_match_the_trimmed_text() {
             name: "ran".into(),
             sql: "SELECT 1\n".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     svc.save_saved_query(contura_core::query::SavedQueryInput {
@@ -912,6 +967,8 @@ async fn saved_query_runs_match_the_trimmed_text() {
         name: "never".into(),
         sql: "SELECT 99".into(),
         connection_id: None,
+        kind: Default::default(),
+        visual_json: None,
     })
     .unwrap();
     let runs = svc.saved_query_runs().unwrap();

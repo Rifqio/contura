@@ -1,0 +1,11 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "l", "schema": "public", "name": "order_lines" },
+    { "alias": "sh", "schema": "public", "name": "shipments" }
+  ],
+  "joins": [
+    { "table": "sh", "kind": "inner", "on": [["sh.order_id", "l.order_id"], ["sh.line_no", "l.line_no"]] }
+  ],
+  "outputs": ["order_id", "line_no", "shipped_at"]
+}

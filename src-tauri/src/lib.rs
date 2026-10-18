@@ -76,6 +76,8 @@ pub fn run() {
             commands::create_sqlite_database,
             commands::open_query_session,
             commands::execute_sql,
+            commands::visual_query_sql,
+            commands::run_visual_query,
             commands::prepare_run,
             commands::confirm_run,
             commands::plan_edits,

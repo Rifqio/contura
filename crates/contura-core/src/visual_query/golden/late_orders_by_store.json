@@ -1,0 +1,40 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "stores", "alias": "s", "x": 300, "y": 0 },
+      { "id": "t3", "schema": null, "name": "customers", "alias": "c", "x": 300, "y": 200 }
+    ],
+    "joins": [
+      { "id": "j1", "left": "t1", "right": "t2", "kind": "inner", "on": [{ "leftColumn": "store_id", "rightColumn": "id" }] },
+      { "id": "j2", "left": "t1", "right": "t3", "kind": "left", "on": [{ "leftColumn": "customer_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t2", "column": "name", "alias": null, "aggregate": null },
+      { "table": "t2", "column": "city", "alias": null, "aggregate": null },
+      { "table": "t1", "column": "id", "alias": "late_orders", "aggregate": "count" },
+      { "table": "t1", "column": "total", "alias": "late_total", "aggregate": "sum" }
+    ],
+    "filters": [
+      { "joiner": "and", "table": "t1", "column": "status", "op": "eq", "values": ["late"] },
+      { "joiner": "and", "table": "t1", "column": "placed_at", "op": "ge", "values": ["2026-10-01"] },
+      { "joiner": "and", "table": "t1", "column": "channel", "op": "in", "values": ["app, kiosk"] }
+    ],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [
+      { "target": { "kind": "output", "index": 2 }, "dir": "desc" },
+      { "target": { "kind": "column", "table": "t2", "column": "name" }, "dir": "asc" }
+    ],
+    "limit": 50,
+    "distinct": false
+  },
+  "types": {
+    "t1": { "id": "integer", "store_id": "integer", "customer_id": "integer", "status": "text", "placed_at": "timestamp", "total": "numeric(12,2)", "channel": "text" },
+    "t2": { "id": "integer", "name": "text", "city": "text" },
+    "t3": { "id": "integer", "name": "text" }
+  },
+  "outputs": ["name", "city", "late_orders", "late_total"],
+  "warnings": []
+}

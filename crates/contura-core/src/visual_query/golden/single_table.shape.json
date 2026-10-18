@@ -1,0 +1,8 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "o", "schema": "public", "name": "orders" }
+  ],
+  "joins": [],
+  "outputs": ["id", "status"]
+}

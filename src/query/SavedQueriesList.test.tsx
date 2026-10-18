@@ -144,3 +144,17 @@ test("a_hidden_list_does_not_read_runs", async () => {
   await act(async () => {});
   expect(callsTo("saved_query_runs")).toHaveLength(0);
 });
+
+test("renaming_a_visual_query_from_the_list_keeps_its_kind_and_model", async () => {
+  const v: SavedQuery = { ...saved("v1", "by store", null, OCT14), kind: "visual", visualJson: '{"version":1}' };
+  routes({ list_saved_queries: () => [v] });
+  const onChanged = vi.fn();
+  render(<SavedQueriesList queries={[v]} connections={connections} onOpen={() => {}} onChanged={onChanged} />);
+  expect(within(screen.getByRole("table")).getByText("Connection removed")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: /^Rename/ }));
+  const name = screen.getByLabelText("Name");
+  await userEvent.clear(name);
+  await userEvent.type(name, "orders by store{Enter}");
+  await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  expect(callsTo("save_saved_query")[0].input).toEqual({ id: "v1", name: "orders by store", sql: v.sql, kind: "visual", visualJson: '{"version":1}' });
+});

@@ -49,6 +49,8 @@ import { EMPTY_RUNNER, type Rerun, runnerReducer } from "./runner";
 import SaveQueryDialog from "./SaveQueryDialog";
 import SqlEditor, { type AskSelection, type SqlEditorApi } from "./SqlEditor";
 import { type Stmt, splitStatements } from "./statements";
+import { useCommandKeys } from "../commands/useCommandKeys";
+import QueryDiagramPane from "../querydiagram/QueryDiagramPane";
 
 /** A query tab as the app keeps it, and as its draft is saved. */
 export type QueryTabDoc = {
@@ -174,6 +176,17 @@ function saveShare(v: number) {
   }
 }
 
+/** The offset of a 1-based line and column in `text`, clamped to the text. */
+function offsetOf(text: string, line: number, column: number): number {
+  let at = 0;
+  for (let n = 1; n < line; n++) {
+    const next = text.indexOf("\n", at);
+    if (next < 0) return text.length;
+    at = next + 1;
+  }
+  return Math.min(text.length, at + column - 1);
+}
+
 /** The word an error points at, so the underline covers it. */
 function wordAt(text: string, at: number): { from: number; to: number } {
   const m = /^[\w$"`.]+/.exec(text.slice(at));
@@ -232,6 +245,12 @@ export default function QueryTab({
   /** A cancelled open has not settled yet: Open waits for it. */
   const [stopping, setStopping] = useState(false);
   const [position, setPosition] = useState({ line: 1, column: 1 });
+  // The query diagram beside the editor (B1), and its "3 tables, 2 Joins" for the status line.
+  const [diagramOpen, setDiagramOpen] = useState(false);
+  const [diagramCount, setDiagramCount] = useState<string | null>(null);
+  const root = useRef<HTMLElement>(null);
+  const toggleDiagram = () => setDiagramOpen((o) => !o);
+  useCommandKeys(lang ? { "diagram.toggle": toggleDiagram } : {}, { region: root });
   const [share, setShare] = useState(loadShare);
   const [askSel, setAskSel] = useState<AskSelection | null>(null);
   // Bumped to open the tab's session again after a dropped Connection was reopened.
@@ -796,11 +815,12 @@ export default function QueryTab({
       <span className="query-position">
         Ln {position.line}, Col {position.column}
       </span>
+      {diagramOpen && diagramCount && <span>{diagramCount}</span>}
     </div>
   );
 
   return (
-    <section className="query-tab" aria-label={tab.name}>
+    <section className={diagramOpen && lang ? "query-tab query-tab-with-diagram" : "query-tab"} aria-label={tab.name} ref={root}>
       <EditorHeader
         connection={connection}
         connections={connections}
@@ -831,6 +851,8 @@ export default function QueryTab({
         onToggleHistory={onToggleHistory}
         onToggleAssistant={onToggleAssistant}
         onCancel={cancel}
+        diagramOpen={diagramOpen}
+        onToggleDiagram={lang ? toggleDiagram : undefined}
       />
 
       <div className="query-work" ref={work} style={{ gridTemplateRows: `${share}fr 6px ${1 - share}fr` }}>
@@ -1008,6 +1030,24 @@ export default function QueryTab({
       </div>
 
       {statusSlot ? createPortal(status, statusSlot) : status}
+
+      {diagramOpen && lang && (
+        <QueryDiagramPane
+          source={{ kind: "editor", docId: tab.id, text: tab.text, pos: offsetOf(tab.text, position.line, position.column) }}
+          dialect={dialect}
+          schemaKey={editorLang ? editorLang.schemaKey : null}
+          schemaState={editorLang ? editorLang.schemaState : "none"}
+          schemas={live && connection ? { cache: lang.schemas, connectionId: connection.id, database: schemaDb } : null}
+          lang={lang}
+          visible={visible}
+          onBand={(ranges) => editorRef.current?.band(ranges)}
+          onStatus={setDiagramCount}
+          onClose={() => {
+            setDiagramOpen(false);
+            editorRef.current?.focus();
+          }}
+        />
+      )}
 
       {state.ask && (
         <ConfirmRun

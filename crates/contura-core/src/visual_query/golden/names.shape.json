@@ -1,0 +1,11 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "o", "schema": "public", "name": "order" },
+    { "alias": "c", "schema": "public", "name": "Customers" }
+  ],
+  "joins": [
+    { "table": "c", "kind": "inner", "on": [["c.Id", "o.CustomerId"]] }
+  ],
+  "outputs": ["select", "First Name", "say \"hi\"", "back`tick", "café", "Customer Id"]
+}

@@ -21,5 +21,6 @@ pub mod sql_schema;
 pub mod sqlite;
 pub mod store;
 pub mod suggest;
+pub mod visual_query;
 
 pub use error::{Error, Result};

@@ -1,5 +1,9 @@
-import { expect, test } from "vitest";
-import { connectionTarget, errorText, shortenPath } from "./client";
+import { invoke } from "@tauri-apps/api/core";
+import { expect, test, vi } from "vitest";
+import { connectionTarget, errorText, listSavedQueries, runVisualQuery, shortenPath, visualQuerySql } from "./client";
+import type { ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 test("shortenPath_keeps_file_name", () => {
   expect(shortenPath("C:\\data\\shop.db")).toBe("C:\\data\\shop.db");
@@ -131,4 +135,79 @@ test("error_text_for_ai_errors", () => {
   );
   expect(errorText({ kind: "ai", message: { kind: "rateLimited", retryAfterSecs: 7 } })).toContain("7s");
   expect(errorText({ kind: "ai", message: { kind: "network", host: "api.groq.com" } })).toContain("api.groq.com");
+});
+
+test("visualQuerySql invokes visual_query_sql with id, query and types", async () => {
+  const query: VisualQuery = {
+    version: 1,
+    database: "app",
+    dialect: "postgres",
+    tables: [{ id: "t1", schema: "sales", name: "orders", alias: "o", x: 0, y: 0 }],
+    joins: [],
+    columns: [{ table: "t1", column: "id", alias: null, aggregate: "count" }],
+    filters: [{ joiner: "and", table: "t1", column: "status", op: "eq", values: ["late"] }],
+    groupBy: { kind: "auto" },
+    orderBy: [{ target: { kind: "output", index: 0 }, dir: "desc" }],
+    limit: 50,
+    distinct: false,
+  };
+  const types: ColumnTypes = { t1: { id: "integer", status: "text" } };
+  const preview: VqPreview = {
+    query: {
+      sql: "SELECT count(o.id) AS count_id\nFROM sales.orders AS o",
+      parts: [{ part: { kind: "select" }, fromLine: 1, toLine: 1 }],
+      outputs: ["count_id"],
+      warnings: [{ kind: "crossJoin", table: "t2", rows: null }],
+    },
+    problems: [],
+  };
+  vi.mocked(invoke).mockResolvedValueOnce(preview);
+  await expect(visualQuerySql("c1", query, types)).resolves.toEqual(preview);
+  expect(invoke).toHaveBeenCalledWith("visual_query_sql", { id: "c1", query, types });
+});
+
+test("runVisualQuery invokes run_visual_query with session, query, types and pass", async () => {
+  const query: VisualQuery = {
+    version: 1,
+    database: "app",
+    tables: [{ id: "t1", schema: null, name: "orders", alias: "o", x: 0, y: 0 }],
+    joins: [],
+    columns: [{ table: "t1", column: "id", alias: null, aggregate: null }],
+    filters: [],
+    groupBy: { kind: "auto" },
+    orderBy: [],
+    limit: null,
+    distinct: false,
+  };
+  const types: ColumnTypes = {};
+  const run: VqRun = {
+    sql: "SELECT o.id\nFROM orders AS o",
+    execution: { outcome: { t: "rows", columns: [], rows: [], hasMore: false }, elapsedMs: 3 },
+  };
+  vi.mocked(invoke).mockResolvedValueOnce(run);
+  await expect(runVisualQuery("s1", query, types, null)).resolves.toEqual(run);
+  expect(invoke).toHaveBeenLastCalledWith("run_visual_query", { session: "s1", query, types, pass: null });
+  vi.mocked(invoke).mockResolvedValueOnce(run);
+  await runVisualQuery("s1", query, types, "p1");
+  expect(invoke).toHaveBeenLastCalledWith("run_visual_query", { session: "s1", query, types, pass: "p1" });
+});
+
+test("SqlFk carries its constraint name and comment", () => {
+  const fk: SqlFk = {
+    from: { schema: "public", table: "orders", columns: ["store_id"] },
+    to: { schema: "public", table: "stores", columns: ["id"] },
+    name: "orders_store_id_fkey",
+    comment: "Where the order was placed",
+  };
+  expect(fk.name).toBe("orders_store_id_fkey");
+});
+
+test("a_saved_query_without_kind_from_an_older_core_reads_as_sql", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce([
+    { id: "q1", name: "late orders", sql: "SELECT 1", updatedAtMs: 1, connectionId: null },
+    { id: "q2", name: "by store", sql: "SELECT 2", updatedAtMs: 2, connectionId: "c1", kind: "visual", visualJson: '{"version":1}' },
+  ]);
+  const list = await listSavedQueries();
+  expect(list[0]).toEqual({ id: "q1", name: "late orders", sql: "SELECT 1", updatedAtMs: 1, connectionId: null, kind: "sql", visualJson: null });
+  expect(list[1]).toMatchObject({ kind: "visual", visualJson: '{"version":1}' });
 });

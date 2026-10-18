@@ -29,6 +29,11 @@ export function useSavedQueries(opts: {
         // A renamed Saved Query renames its open tab; a deleted one leaves the tab as a plain query.
         setTabs((ts) =>
           ts.map((t) => {
+            if (t.kind === "visual" && t.doc.savedId) {
+              const v = all.find((x) => x.id === t.doc.savedId);
+              if (v && v.name === t.doc.name) return t;
+              return { kind: "visual", doc: v ? { ...t.doc, name: v.name } : { ...t.doc, savedId: null, savedJson: null } };
+            }
             if (t.kind !== "query" || !t.doc.savedId) return t;
             const q = all.find((x) => x.id === t.doc.savedId);
             return {

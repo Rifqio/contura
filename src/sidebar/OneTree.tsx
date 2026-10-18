@@ -15,6 +15,9 @@ import { connectionMenu } from "./connectionMenu";
 import { flattenTree, moveFocus, SAVED_ROOT_ID, type TreeKey, type TreeNode, type TreeRow, windowRange } from "./treeModel";
 import type { TreeData } from "./useTreeData";
 
+/** The drag data type of a table or view row: JSON `{ connectionId, kind, path }` (D15). */
+export const OBJECT_DRAG_TYPE = "application/x-contura-object";
+
 /** How a Connection's last open went, when it is not plain open or closed (frames 10b, 10c). */
 export type ConnectionOpenStatus = { s: "connecting" } | { s: "failed"; error: string };
 
@@ -37,6 +40,15 @@ export interface OneTreeProps {
   onEditConnection(c: ConnectionConfig): void;
   onDuplicateConnection(c: ConnectionConfig): void;
   onNewQuery(id: ConnectionId): void;
+  /** Opens a Visual Query tab on the Connection (from its row menu). */
+  onNewVisualQuery(id: ConnectionId): void;
+  /**
+   * Adds a table or view to the active Visual Query: "Add to Visual Query" on its row. The App
+   * passes it only while a Visual Query tab is active, with that tab's Connection.
+   */
+  onAddToVisualQuery?(s: Selection): void;
+  /** The active Visual Query's Connection: only its rows offer Add to Visual Query. */
+  visualQueryConnection?: ConnectionId | null;
   onNewSchemaModel(id: ConnectionId, database: string, schema: string | null): void;
   /** Opens a New table design tab in a database (and schema); the menus offer it only when set (D7). */
   onNewTable?(connectionId: ConnectionId, database: string, schema: string | null): void;
@@ -465,6 +477,7 @@ export default function OneTree(props: OneTreeProps) {
             {
               toggleOpen: () => (open ? props.onCloseConnection(c.id) : openConnection(c)),
               newQuery: () => props.onNewQuery(c.id),
+              newVisualQuery: () => props.onNewVisualQuery(c.id),
               newSchemaModel: () => props.onNewSchemaModel(c.id, c.dialect === "sqlite" ? "main" : (c.database ?? ""), null),
               edit: () => props.onEditConnection(c),
               duplicate: () => props.onDuplicateConnection(c),
@@ -522,11 +535,23 @@ export default function OneTree(props: OneTreeProps) {
         return newTable ? { label: n.label, items: [newTable] } : null;
       }
       case "object": {
+        const add = props.onAddToVisualQuery;
+        const addItem: MenuItem | null =
+          add && (n.objectKind === "table" || n.objectKind === "view") && (props.visualQueryConnection ?? n.connectionId) === n.connectionId
+            ? {
+                key: "add-visual",
+                label: "Add to Visual Query",
+                icon: <Icon name="visualQuery" />,
+                onSelect: () => add({ connectionId: n.connectionId, kind: n.objectKind, path: n.path }),
+              }
+            : null;
+        if (n.objectKind === "view") return addItem ? { label: n.path.name, items: [addItem] } : null;
         if (n.objectKind !== "table") return null;
         const selection: Selection = { connectionId: n.connectionId, kind: "table", path: n.path };
         const items: MenuItem[] = [
           { key: "open", label: "Open", icon: <Icon name="table" />, onSelect: () => onSelectObject(selection) },
         ];
+        if (addItem) items.push(addItem);
         const design = props.onDesignTable;
         if (design) items.push({ key: "design", label: "Design table", icon: <Icon name="edit" />, onSelect: () => design(selection) });
         const drop = props.onDropTable;
@@ -554,7 +579,12 @@ export default function OneTree(props: OneTreeProps) {
         return {
           label: n.query.name,
           items: [
-            { key: "open", label: "Open", icon: <Icon name="fileQuery" />, onSelect: () => props.onOpenSaved(n.query) },
+            {
+              key: "open",
+              label: "Open",
+              icon: <Icon name={n.query.kind === "visual" ? "visualQuery" : "fileQuery"} />,
+              onSelect: () => props.onOpenSaved(n.query),
+            },
             { key: "rename", label: "Rename...", icon: <Icon name="edit" />, onSelect: () => setRenaming(n.query) },
             {
               key: "delete",
@@ -830,15 +860,19 @@ export default function OneTree(props: OneTreeProps) {
             )}
           </>
         );
-      case "saved":
+      case "saved": {
+        const visual = n.query.kind === "visual";
+        // A Visual Query always has a Connection, so none means it was removed (D2).
+        const meta = n.opensOn ?? (visual ? "Connection removed" : null);
         return (
           <>
             {chevron(row)}
-            <Icon name="fileQuery" size={14} />
+            <Icon name={visual ? "visualQuery" : "fileQuery"} size={14} />
             <Name text={n.query.name} match={row.match} />
-            {n.opensOn && <span className="tree-meta">{n.opensOn}</span>}
+            {meta && <span className="tree-meta">{meta}</span>}
           </>
         );
+      }
     }
   }
 
@@ -856,8 +890,12 @@ export default function OneTree(props: OneTreeProps) {
       .join(" ");
     let title: string | undefined;
     if (n.kind === "object") title = n.path.name;
-    else if (n.kind === "saved") title = n.opensOn ? `${n.query.name}, Saved Query on ${n.opensOn}` : n.query.name;
+    else if (n.kind === "saved") {
+      const what = n.query.kind === "visual" ? "Visual Query" : "Saved Query";
+      title = n.opensOn ? `${n.query.name}, ${what} on ${n.opensOn}` : n.query.kind === "visual" ? `${n.query.name}, Connection removed` : n.query.name;
+    }
     else if (n.kind === "savedRoot") title = "Saved Queries, kept for every Connection";
+    const draggable = n.kind === "object" && (n.objectKind === "table" || n.objectKind === "view");
     return (
       <div
         key={n.id}
@@ -876,6 +914,17 @@ export default function OneTree(props: OneTreeProps) {
         data-level={row.level}
         data-index={i}
         title={title}
+        // D15: tables and views drag onto a Visual Query canvas.
+        draggable={draggable || undefined}
+        onDragStart={
+          draggable && n.kind === "object"
+            ? (e) => {
+                const object: Selection = { connectionId: n.connectionId, kind: n.objectKind, path: n.path };
+                e.dataTransfer.setData(OBJECT_DRAG_TYPE, JSON.stringify(object));
+                e.dataTransfer.effectAllowed = "copy";
+              }
+            : undefined
+        }
         onFocus={(e) => {
           if (e.target !== e.currentTarget) return;
           setFocusId(n.id);
@@ -1041,7 +1090,7 @@ export default function OneTree(props: OneTreeProps) {
       {renaming && (
         <SaveQueryDialog
           sql={renaming.sql}
-          existing={{ id: renaming.id, name: renaming.name }}
+          existing={renaming}
           onCancel={() => setRenaming(null)}
           onSaved={() => {
             setRenaming(null);

@@ -136,6 +136,38 @@ pub struct SavedQuery {
     /// The Connection the query opens on.
     #[serde(default)]
     pub connection_id: Option<ConnectionId>,
+    #[serde(default)]
+    pub kind: SavedQueryKind,
+    /// A Visual Query's model as the UI wrote it; `sql` keeps its last generated SQL.
+    #[serde(default)]
+    pub visual_json: Option<String>,
+}
+
+/// What a Saved Query holds: SQL text, or a Visual Query. One name space covers both.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SavedQueryKind {
+    #[default]
+    Sql,
+    Visual,
+}
+
+impl SavedQueryKind {
+    /// The `saved_queries.kind` text.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SavedQueryKind::Sql => "sql",
+            SavedQueryKind::Visual => "visual",
+        }
+    }
+
+    pub fn from_store(s: &str) -> SavedQueryKind {
+        if s == "visual" {
+            SavedQueryKind::Visual
+        } else {
+            SavedQueryKind::Sql
+        }
+    }
 }
 
 /// The newest run of a Saved Query, found by its text.
@@ -156,6 +188,12 @@ pub struct SavedQueryInput {
     pub sql: String,
     #[serde(default)]
     pub connection_id: Option<ConnectionId>,
+    /// None keeps an existing row's kind (Sql for a new one); a different kind is refused.
+    #[serde(default)]
+    pub kind: Option<SavedQueryKind>,
+    /// None keeps a Visual Query's stored model.
+    #[serde(default)]
+    pub visual_json: Option<String>,
 }
 
 pub(crate) enum Command {

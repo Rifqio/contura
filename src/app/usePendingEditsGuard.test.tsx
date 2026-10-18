@@ -235,22 +235,22 @@ describe("usePendingEditsGuard", () => {
     expect(g.groupTableKeys("g3")).toEqual([]);
   });
 
-  it("confirm_close_saved_asks_only_when_the_text_changed", async () => {
+  it("confirm_close_unsaved_asks_a_query_only_when_the_text_changed", async () => {
     const { opts } = setup([]);
     let ok: boolean | undefined;
     await act(async () => {
-      ok = await g.confirmCloseSaved(savedDoc("SELECT 1"));
+      ok = await g.confirmCloseUnsaved({ kind: "query", doc: savedDoc("SELECT 1") });
     });
     expect(ok).toBe(true);
     await act(async () => {
-      ok = await g.confirmCloseSaved({ ...savedDoc("SELECT 2"), savedId: null, savedText: null });
+      ok = await g.confirmCloseUnsaved({ kind: "query", doc: { ...savedDoc("SELECT 2"), savedId: null, savedText: null } });
     });
     expect(ok).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
 
     let result: Promise<boolean>;
     act(() => {
-      result = g.confirmCloseSaved(savedDoc("SELECT 2"));
+      result = g.confirmCloseUnsaved({ kind: "query", doc: savedDoc("SELECT 2") });
     });
     expect(await screen.findByText("Save changes to late shipments?")).toBeTruthy();
     expect(screen.getByRole("dialog").textContent).toContain(
@@ -262,12 +262,62 @@ describe("usePendingEditsGuard", () => {
     expect(callsTo("save_saved_query")).toHaveLength(0);
   });
 
+  it("confirm_close_unsaved_asks_a_visual_query_only_when_its_model_changed", async () => {
+    const model = { version: 1, database: "shop", dialect: "postgres" as const, tables: [], joins: [], columns: [], filters: [], groupBy: { kind: "auto" as const }, orderBy: [], limit: null, distinct: false };
+    const visual = (changed: boolean, savedId: string | null = "q1"): WorkTab => ({
+      kind: "visual",
+      doc: {
+        id: "v1",
+        name: "late shipments",
+        connectionId: "c1",
+        database: "shop",
+        model: changed ? { ...model, limit: 5 } : model,
+        savedId,
+        savedJson: savedId ? JSON.stringify(model) : null,
+      },
+    });
+    const { opts } = setup([]);
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await g.confirmCloseUnsaved(visual(false));
+    });
+    expect(ok).toBe(true);
+    await act(async () => {
+      ok = await g.confirmCloseUnsaved(visual(true, null));
+    });
+    expect(ok).toBe(true);
+    // Window tabs and other tabs never ask.
+    await act(async () => {
+      ok = await g.confirmCloseUnsaved({ kind: "home" });
+    });
+    expect(ok).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    let result: Promise<boolean>;
+    act(() => {
+      result = g.confirmCloseUnsaved(visual(true));
+    });
+    expect(await screen.findByText("Save changes to late shipments?")).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).toContain("Your edits to this Visual Query are not saved.");
+    expect(opts.activate).toHaveBeenCalledWith("visual:v1");
+    await userEvent.click(button("Cancel"));
+    expect(await result!).toBe(false);
+
+    act(() => {
+      result = g.confirmCloseUnsaved(visual(true));
+    });
+    await screen.findByText("Save changes to late shipments?");
+    await userEvent.click(button("Discard"));
+    expect(await result!).toBe(true);
+    expect(callsTo("save_saved_query")).toHaveLength(0);
+  });
+
   it("saving_a_saved_query_from_the_ask_saves_and_reports_it", async () => {
     routeInvoke({ save_saved_query: ({ input }) => ({ ...savedQ, sql: (input as { sql: string }).sql }) });
     const { opts } = setup([]);
     let result: Promise<boolean>;
     act(() => {
-      result = g.confirmCloseSaved(savedDoc("SELECT 2"));
+      result = g.confirmCloseUnsaved({ kind: "query", doc: savedDoc("SELECT 2") });
     });
     await screen.findByText("Save changes to late shipments?");
     await userEvent.click(button("Save"));
@@ -287,7 +337,7 @@ describe("usePendingEditsGuard", () => {
     const { opts } = setup([]);
     let result: Promise<boolean>;
     act(() => {
-      result = g.confirmCloseSaved(savedDoc("SELECT 2"));
+      result = g.confirmCloseUnsaved({ kind: "query", doc: savedDoc("SELECT 2") });
     });
     await screen.findByText("Save changes to late shipments?");
     await userEvent.click(button("Save"));

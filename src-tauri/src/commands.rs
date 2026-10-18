@@ -23,6 +23,7 @@ use contura_core::safety::{self, PassId, RunVerdict, StatementClass};
 use contura_core::schema_model::SchemaModel;
 use contura_core::sql_schema::SqlSchema;
 use contura_core::suggest::SuggestedConnection;
+use contura_core::visual_query::{ColumnTypes, VisualQuery, VqPreview, VqRun};
 use std::path::PathBuf;
 
 use tauri::State;
@@ -338,6 +339,29 @@ pub async fn execute_sql(
     pass: Option<PassId>,
 ) -> Result<Execution, Error> {
     service.execute_sql(session, sql, pass).await
+}
+
+/// The SQL a Visual Query writes, or the problems that stop it. Needs no open session.
+#[tauri::command]
+pub fn visual_query_sql(
+    service: Service<'_>,
+    id: ConnectionId,
+    query: VisualQuery,
+    types: ColumnTypes,
+) -> Result<VqPreview, Error> {
+    service.visual_query_sql(id, query, types)
+}
+
+/// Writes a Visual Query and runs it on the session as the editor runs a statement.
+#[tauri::command]
+pub async fn run_visual_query(
+    service: Service<'_>,
+    session: QuerySessionId,
+    query: VisualQuery,
+    types: ColumnTypes,
+    pass: Option<PassId>,
+) -> Result<VqRun, Error> {
+    service.run_visual_query(session, query, types, pass).await
 }
 
 #[tauri::command]

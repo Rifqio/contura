@@ -43,4 +43,10 @@ pub struct SqlColumn {
 pub struct SqlFk {
     pub from: SmEndpoint,
     pub to: SmEndpoint,
+    /// The constraint's name; SQLite has one only when the table's text gives it.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The constraint's comment, where the server keeps one (PostgreSQL).
+    #[serde(default)]
+    pub comment: Option<String>,
 }

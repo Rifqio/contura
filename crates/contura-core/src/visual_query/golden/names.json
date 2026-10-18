@@ -1,0 +1,34 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "order", "alias": "o", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "Customers", "alias": "c", "x": 300, "y": 0 }
+    ],
+    "joins": [
+      { "id": "j1", "left": "t1", "right": "t2", "kind": "inner", "on": [{ "leftColumn": "CustomerId", "rightColumn": "Id" }] }
+    ],
+    "columns": [
+      { "table": "t1", "column": "select", "alias": null, "aggregate": null },
+      { "table": "t1", "column": "First Name", "alias": null, "aggregate": null },
+      { "table": "t1", "column": "say \"hi\"", "alias": null, "aggregate": null },
+      { "table": "t1", "column": "back`tick", "alias": null, "aggregate": null },
+      { "table": "t2", "column": "café", "alias": null, "aggregate": null },
+      { "table": "t2", "column": "Id", "alias": "Customer Id", "aggregate": null }
+    ],
+    "filters": [
+      { "joiner": "and", "table": "t1", "column": "select", "op": "eq", "values": ["x"] }
+    ],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [
+      { "target": { "kind": "output", "index": 5 }, "dir": "desc" },
+      { "target": { "kind": "column", "table": "t1", "column": "First Name" }, "dir": "asc" }
+    ],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["select", "First Name", "say \"hi\"", "back`tick", "café", "Customer Id"],
+  "warnings": []
+}

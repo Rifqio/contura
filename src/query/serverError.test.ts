@@ -31,3 +31,36 @@ test("missing_kind_tells_tables_from_columns", () => {
   expect(missingKind("Unknown column 'x' in 'field list'")).toBe("column");
   expect(missingKind("division by zero")).toBeNull();
 });
+
+/** P12: where the error points, as a line (and column when known) of the SQL that ran. */
+test("a_postgres_position_becomes_a_line_and_column_of_the_sql", () => {
+  const sql = "SELECT o.id\nFROM orders AS o\nINNER JOIN stores AS s ON s.idd = o.store_id";
+  const at = sql.indexOf("s.idd") + 1;
+  expect(serverError(`column s.idd does not exist (position ${at})`, "postgres", sql)).toEqual({
+    code: null,
+    text: "column s.idd does not exist",
+    position: { line: 3, column: sql.split("\n")[2].indexOf("s.idd") + 1 },
+  });
+  // Position 1 is the first character.
+  expect(serverError("syntax error at or near \"SELEC\" (position 1)", "postgres", "SELEC 1").position).toEqual({ line: 1, column: 1 });
+  // Without the text, only the message is known.
+  expect(serverError("division by zero (position 3)", "postgres").position).toBeUndefined();
+  // Past the end of the text: no line is made up.
+  expect(serverError("boom (position 99)", "postgres", "SELECT 1").position).toBeUndefined();
+});
+
+test("a_mysql_at_line_becomes_a_line", () => {
+  const m =
+    "Server error: `ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'ON' at line 3'";
+  expect(serverError(m, "mysql", "SELECT 1\nFROM a\nJOIN b ON")).toEqual({
+    code: "42000",
+    text: "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'ON' at line 3",
+    position: { line: 3 },
+  });
+  expect(serverError("ERROR 1054 (42S22): Unknown column 'x' in 'field list'", "mysql").position).toBeUndefined();
+});
+
+test("messages_without_a_place_have_no_position", () => {
+  expect(serverError("no such table: shipment", "sqlite", "SELECT 1").position).toBeUndefined();
+  expect(serverError('relation "x" does not exist', "postgres", "SELECT 1").position).toBeUndefined();
+});

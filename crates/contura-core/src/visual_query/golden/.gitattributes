@@ -1,0 +1,2 @@
+# Golden text is compared byte for byte by Rust and TS tests: keep LF on every checkout.
+* text eol=lf

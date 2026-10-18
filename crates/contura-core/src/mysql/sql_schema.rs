@@ -70,13 +70,19 @@ pub(crate) async fn sql_schema(pool: &Pool, database: &str) -> Result<SqlSchema>
                 fk.from.columns.push(col);
                 fk.to.columns.push(ref_col);
             }
-            _ => fks.push((
-                key,
-                SqlFk {
-                    from: endpoint(database, table, col),
-                    to: endpoint(database, ref_table, ref_col),
-                },
-            )),
+            _ => {
+                let name = Some(key.1.clone());
+                fks.push((
+                    key,
+                    SqlFk {
+                        from: endpoint(database, table, col),
+                        to: endpoint(database, ref_table, ref_col),
+                        name,
+                        // MySQL keeps no comment on a constraint.
+                        comment: None,
+                    },
+                ))
+            }
         }
     }
 

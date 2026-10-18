@@ -103,3 +103,18 @@ test("renaming_asks_only_for_the_name_and_keeps_the_stored_connection", async ()
   await waitFor(() => expect(callsTo("save_saved_query")).toHaveLength(1));
   expect(callsTo("save_saved_query")[0].input).toEqual({ id: "q1", name: "late shipments by carrier 2", sql: "SELECT 1" });
 });
+
+test("saving_sql_over_a_visual_querys_name_is_refused", async () => {
+  routeInvoke({
+    list_saved_queries: () => [{ ...existing, id: "v1", name: "late orders by store", kind: "visual", visualJson: "{}" }],
+    save_saved_query: () => null,
+  });
+  render(<SaveQueryDialog sql="SELECT 1" connections={connections} connectionId="c1" onSaved={vi.fn()} onCancel={vi.fn()} />);
+  await waitFor(() => expect(callsTo("list_saved_queries")).toHaveLength(1));
+  await userEvent.type(screen.getByLabelText("Name"), "Late Orders By Store");
+  expect((await screen.findByRole("alert")).textContent).toBe("This name belongs to a Visual Query. Pick another name.");
+  const save = screen.getByRole("button", { name: /^Save/ }) as HTMLButtonElement;
+  expect(save.disabled).toBe(true);
+  await userEvent.keyboard("{Enter}");
+  expect(callsTo("save_saved_query")).toHaveLength(0);
+});

@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QueryTabDoc } from "../query/QueryTab";
-import type { Place, WorkTab } from "../shell/tabs";
+import type { Place, VisualTabDoc, WorkTab } from "../shell/tabs";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { DRAFT_SAVE_MS, usePlaceDrafts } from "./usePlaceDrafts";
 
@@ -20,7 +20,7 @@ const doc = (id: string, name: string): QueryTabDoc => ({
   savedText: null,
 });
 const tab = (d: QueryTabDoc): WorkTab => ({ kind: "query", doc: d });
-const draftsJson = (docs: QueryTabDoc[]) => JSON.stringify({ version: 1, tabs: docs });
+const draftsJson = (docs: QueryTabDoc[]) => JSON.stringify({ version: 1, tabs: docs, visual: [] });
 
 /** A load_query_tabs answer per place that the test releases (or fails) when it wants. */
 function heldLoads() {
@@ -66,9 +66,27 @@ describe("usePlaceDrafts", () => {
     const d = doc("d1", "Late deliveries");
     routeInvoke({ load_query_tabs: ({ place }) => (place === "group:g1" ? draftsJson([d]) : null) });
     const { onRestored } = setup();
-    await waitFor(() => expect(onRestored).toHaveBeenCalledWith([d]));
+    await waitFor(() => expect(onRestored).toHaveBeenCalledWith([d], [], []));
     expect(onRestored).toHaveBeenCalledTimes(1);
     expect(callsTo("load_query_tabs")).toEqual([{ place: "group:g1" }]);
+  });
+
+  it("visual_drafts_keep_the_strip_order_and_a_newer_draft_survives_the_next_save", async () => {
+    vi.useFakeTimers();
+    const loads = heldLoads();
+    const q = doc("d1", "Query 1");
+    const model = { version: 1, database: "shop", dialect: "mysql", tables: [], joins: [], columns: [], filters: [], groupBy: { kind: "auto" }, orderBy: [], limit: null, distinct: false };
+    const v: VisualTabDoc = { id: "v1", name: "New Visual Query", connectionId: "c1", database: "shop", model: model as VisualTabDoc["model"], savedId: null, savedJson: null };
+    const newer = { ...v, id: "v9", model: { ...model, version: 2, somethingNew: true } };
+    const { onRestored, rerender } = setup();
+    await loads.answer("group:g1", JSON.stringify({ version: 1, tabs: [q], visual: [v, newer], order: ["visual:v1", "query:d1"] }));
+    expect(onRestored).toHaveBeenCalledWith([q], [v], ["visual:v1", "query:d1"]);
+    // The app shows them in that order; the next save writes it, and the newer draft goes back untouched.
+    rerender({ place: g1, tabs: [{ kind: "visual", doc: v }, tab(q)], ready: true });
+    act(() => vi.advanceTimersByTime(DRAFT_SAVE_MS));
+    const saved = JSON.parse(callsTo("save_query_tabs").slice(-1)[0].json as string);
+    expect(saved.order).toEqual(["visual:v1", "query:d1"]);
+    expect(saved.visual).toEqual([v, newer]);
   });
 
   it("a_failed_load_hands_over_no_drafts", async () => {
@@ -78,7 +96,7 @@ describe("usePlaceDrafts", () => {
       },
     });
     const { onRestored } = setup();
-    await waitFor(() => expect(onRestored).toHaveBeenCalledWith([]));
+    await waitFor(() => expect(onRestored).toHaveBeenCalledWith([], [], []));
   });
 
   it("saves_after_the_pause_and_only_once_loaded", async () => {
@@ -187,6 +205,6 @@ describe("usePlaceDrafts", () => {
     expect(callsTo("save_query_tabs")).toEqual([]);
     await loads.answer("group:g2", null);
     expect(onRestored).toHaveBeenCalledTimes(1);
-    expect(onRestored).toHaveBeenCalledWith([]);
+    expect(onRestored).toHaveBeenCalledWith([], [], []);
   });
 });

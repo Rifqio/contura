@@ -1,0 +1,26 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 }
+    ],
+    "joins": [],
+    "columns": [
+      { "table": "t1", "column": "id", "alias": null, "aggregate": null },
+      { "table": "t1", "column": "total", "alias": "amount", "aggregate": null }
+    ],
+    "filters": [],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [
+      { "target": { "kind": "output", "index": 1 }, "dir": "desc" },
+      { "target": { "kind": "column", "table": "t1", "column": "placed_at" }, "dir": "asc" },
+      { "target": { "kind": "output", "index": 0 }, "dir": "asc" }
+    ],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["id", "amount"],
+  "warnings": []
+}

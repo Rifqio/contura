@@ -1,0 +1,11 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "o", "schema": "public", "name": "orders" },
+    { "alias": "s", "schema": "public", "name": "stores" }
+  ],
+  "joins": [
+    { "table": "s", "kind": "inner", "on": [["s.id", "o.store_id"]] }
+  ],
+  "outputs": ["city", "sum_total", "name", "avg_total", "min_placed_at", "max_placed_at"]
+}

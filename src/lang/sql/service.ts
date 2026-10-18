@@ -6,6 +6,7 @@ import type { Diagnostic, SqlAt, SqlRefactorAction, SqlRefactorResult } from "..
 import { analyzeSql, type SqlAnalysis } from "./analyze";
 import { completeSql, type SqlCompletionResult } from "./complete";
 import { inspectSql, type SchemaState } from "./inspect";
+import { type QueryShape, queryShape, type ShapeProblem } from "./queryShape";
 import { definitionAt, expandStar, parameterHints, renameBlocked, renameTargets } from "./refactor";
 import type { SqlSchema } from "./types";
 
@@ -15,6 +16,7 @@ const KEEP_DOCS = 8;
 export function createSqlService() {
   const schemas = new Map<string, SqlSchema>();
   const last = new Map<string, SqlAnalysis>();
+  let parses = 0;
 
   function analysis(docId: string | undefined, text: string, dialect: DialectKind, schemaKey: string | null): SqlAnalysis {
     const schema = schemaKey ? (schemas.get(schemaKey) ?? null) : null;
@@ -22,6 +24,7 @@ export function createSqlService() {
     const prev = last.get(key);
     if (prev && prev.text === text && prev.dialect === dialect && prev.schema === schema) return prev;
     const a = analyzeSql(text, dialect, schema);
+    parses++;
     // Map order is insertion order: re-inserting marks the document as the newest.
     last.delete(key);
     last.set(key, a);
@@ -39,9 +42,16 @@ export function createSqlService() {
     },
     /** How many documents' analyses are kept, for tests. */
     cachedDocs: () => last.size,
+    /** How many times the service has analysed text, for tests. */
+    parses: () => parses,
     analyze(docId: string, text: string, dialect: DialectKind, schemaKey: string | null, schemaState: SchemaState): Diagnostic[] {
       const known = schemaKey && schemas.has(schemaKey) ? schemaState : "none";
       return inspectSql(analysis(docId, text, dialect, schemaKey), text, dialect, known);
+    },
+    /** The query diagram's shape of the statement at `pos`, over the same cached analysis. */
+    shape(docId: string, text: string, dialect: DialectKind, schemaKey: string | null, schemaState: SchemaState, pos: number): QueryShape | ShapeProblem {
+      const known = schemaKey && schemas.has(schemaKey) ? schemaState : "none";
+      return queryShape(analysis(docId, text, dialect, schemaKey), pos, known);
     },
     complete(at: SqlAt & { docId?: string; explicit: boolean; aliasTables?: boolean }): SqlCompletionResult {
       const a = analysis(at.docId, at.text, at.dialect, at.schemaKey);

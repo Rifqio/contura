@@ -114,6 +114,8 @@ fn drops_a_deleted_saved_query() {
             name: "q".into(),
             sql: "select 1".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     svc.record_recent(
@@ -149,6 +151,8 @@ fn a_renamed_saved_query_shows_once_with_the_new_name() {
             name: "old".into(),
             sql: "select 1".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     let target = |name: &str| RecentTarget::Query {
@@ -161,6 +165,8 @@ fn a_renamed_saved_query_shows_once_with_the_new_name() {
         name: "new".into(),
         sql: "select 1".into(),
         connection_id: None,
+        kind: Default::default(),
+        visual_json: None,
     })
     .unwrap();
     assert_eq!(svc.recent_items().unwrap()[0].target, target("new"));

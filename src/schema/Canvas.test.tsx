@@ -7,7 +7,7 @@ import { mockReactFlowDom } from "../test/reactFlow";
 import { applyEdits, renameColumn, renameTable } from "../lang/dbml/edits";
 import { KFC_MODEL, KFC_TEXT } from "../lang/dbml/fixtures";
 import { parseDbml } from "../lang/dbml/parse";
-import type { Ranges, TextEdit } from "../lang/protocol";
+import { type Ranges, type TextEdit, tableKey } from "../lang/protocol";
 import Canvas, { edgeSides, edgesFor, refFromConnection } from "./Canvas";
 import { sourceConnectionFor } from "./sourceConnection";
 import { autoLayout, followRenames, parseLayout, serializeLayout } from "./layout";
@@ -367,4 +367,20 @@ test("a_card_has_no_ask_ai_without_the_setting", async () => {
   const stores = screen.getByRole("group", { name: "Table stores" });
   await userEvent.click(within(stores).getByRole("button", { name: "Table actions" }));
   expect(screen.queryByRole("menuitem", { name: "Ask AI" })).toBeNull();
+});
+
+test("arrange_falls_back_to_the_in_process_layout_when_the_worker_fails", async () => {
+  const onLayout = vi.fn();
+  const runLayout = vi.fn(() => Promise.reject(new Error("worker gone")));
+  const layout = { version: 1 as const, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } };
+  render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas model={KFC_MODEL} layout={layout} blocked={false} onLayout={onLayout} onEdit={() => {}} onGoToError={() => {}} runLayout={runLayout} />
+    </div>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Arrange" }));
+  await waitFor(() => expect(onLayout).toHaveBeenCalledTimes(1));
+  expect(runLayout).toHaveBeenCalledTimes(1);
+  const placed = onLayout.mock.calls[0][0].tables;
+  expect(Object.keys(placed).sort()).toEqual(KFC_MODEL.tables.map(tableKey).sort());
 });

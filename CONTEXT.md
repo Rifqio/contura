@@ -70,8 +70,16 @@ _Avoid_: Token, approval
 ### Querying
 
 **Visual Query**:
-A query built by adding tables to a canvas and linking their columns, instead of typing SQL.
+A query built by adding tables of one Connection to a canvas and linking their columns, instead of typing SQL. It is its own tab and runs on its own Query Session. Saved under Saved Queries; SQL is generated one way: the Core writes it from the Visual Query, and editing that SQL never changes the Visual Query (ADR 0017).
 _Avoid_: Query builder, diagram, designer
+
+**Query diagram**:
+A read-only drawing of the current statement, shown beside a SQL tab or a Visual Query. It shows table details only, never rows, and ends in the Result node.
+_Avoid_: Visual Query, execution plan, ER diagram
+
+**Result node**:
+The node of a query diagram that lists the statement's output columns, each with its source and type, then its clauses (WHERE, GROUP BY, ORDER BY, LIMIT).
+_Avoid_: Output table, result grid
 
 **Join**:
 An arrow between two columns in a Visual Query, saying how their tables are combined. Changing a Join changes only the query, never the database.
@@ -126,6 +134,10 @@ _Avoid_: ER designer, modeler, diagram editor
 **Layout**:
 The canvas positions of a Schema Model's tables, saved beside the DBML file because DBML cannot hold them.
 _Avoid_: Diagram, positions file
+
+**Diagram engine**:
+The one canvas that the Schema Builder, the Visual Query and the query diagram all draw with (`src/diagram/`): card sizes, edges, level of detail, layout and image export (ADR 0017).
+_Avoid_: Canvas library, renderer, React Flow
 
 **Data Transfer**:
 Copying a table's structure and/or rows from one database to another, possibly across Dialects.

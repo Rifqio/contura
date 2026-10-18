@@ -2,6 +2,7 @@ import { Handle, type NodeProps, Position } from "@xyflow/react";
 import { useState } from "react";
 import Icon from "../components/Icon";
 import type { DialectKind, SmColumn, SmTable } from "../api/types";
+import CardFrame from "../diagram/CardFrame";
 import InlineAsk from "../assistant/InlineAsk";
 import type { AskContext, AskKit } from "../assistant/context";
 import { DIALECT_TYPES } from "../lang/dialectTypes";
@@ -96,152 +97,152 @@ export default function TableCard({ data, selected }: NodeProps & { data: TableC
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const pkIndex = table.indexes.find((i) => i.pk);
 
-  return (
-    <div className="table-card" role="group" aria-label={`Table ${table.name}`}>
-      <div className="table-card-header">
-        <Icon name="table" className="table-card-icon" />
-        <Editable
-          value={table.name}
-          label={`Table name ${table.name}`}
-          className="table-card-name"
-          disabled={blocked}
-          onCommit={(v) => onEdit((t, r) => renameTable(t, r, key, v))}
-        />
-        {table.alias && <span className="table-card-alias">as {table.alias}</span>}
-        {table.schema && <span className="table-card-schema">{table.schema}</span>}
-        <span className="table-card-spacer" />
-        <span className="table-card-count">{table.columns.length}</span>
-        <button
-          type="button"
-          className="icon-button nodrag"
-          aria-label="Table actions"
-          aria-haspopup="menu"
-          aria-expanded={menu}
-          onClick={() => setMenu((m) => !m)}
-        >
-          ⋯
-        </button>
-        {menu && (
-          <div className="menu card-menu nodrag" role="menu" onKeyDown={(e) => e.key === "Escape" && setMenu(false)}>
+  const actions = (
+    <>
+      <button
+        type="button"
+        className="icon-button nodrag"
+        aria-label="Table actions"
+        aria-haspopup="menu"
+        aria-expanded={menu}
+        onClick={() => setMenu((m) => !m)}
+      >
+        ⋯
+      </button>
+      {menu && (
+        <div className="menu card-menu nodrag" role="menu" onKeyDown={(e) => e.key === "Escape" && setMenu(false)}>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            disabled={blocked}
+            onClick={() => {
+              setMenu(false);
+              const used = new Set(table.columns.map((c) => c.name));
+              let name = "new_column";
+              for (let n = 2; used.has(name); n++) name = `new_column_${n}`;
+              onEdit((t, r) => addColumn(t, r, key, name, DIALECT_TYPES[dialect][0]));
+            }}
+          >
+            Add column
+          </button>
+          {askData && (
             <button
               type="button"
               role="menuitem"
               className="menu-item"
-              disabled={blocked}
               onClick={() => {
                 setMenu(false);
-                const used = new Set(table.columns.map((c) => c.name));
-                let name = "new_column";
-                for (let n = 2; used.has(name); n++) name = `new_column_${n}`;
-                onEdit((t, r) => addColumn(t, r, key, name, DIALECT_TYPES[dialect][0]));
+                setAsk(true);
               }}
             >
-              Add column
+              Ask AI
             </button>
-            {askData && (
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                onClick={() => {
-                  setMenu(false);
-                  setAsk(true);
-                }}
-              >
-                Ask AI
-              </button>
-            )}
-          </div>
-        )}
-        {ask && askData && (
-          <div className="card-ask nodrag nowheel">
-            <InlineAsk
-              context={{
-                kind: "card",
-                connection: askData.connection ?? null,
-                dbml: askData.getDbml(),
-                tables: askData.tables,
-                label: askData.label,
-              }}
-              schema={null}
-              groupId={askData.kit.groupId}
-              onOpenInChat={askData.kit.onOpenInChat}
-              onOpenSettings={askData.kit.onOpenSettings}
-              onClose={() => setAsk(false)}
-            />
-          </div>
-        )}
-      </div>
-      <ul className="table-card-columns">
-        {table.columns.map((c) => {
-          const pk = c.pk || !!pkIndex?.columns.includes(c.name);
-          return (
-            <li key={c.name} className="table-card-column">
-              <Handle type="target" id={`${c.name}:t`} position={Position.Left} isConnectable={!blocked} />
-              {/* Edge ends only: an edge leaves or enters on the side facing the other card (edgeSides). */}
-              <Handle type="source" id={`${c.name}:sl`} position={Position.Left} isConnectable={false} className="edge-anchor" />
-              <span className={pk ? "table-card-key table-card-pk" : "table-card-key"}>
-                {pk ? <Icon name="key" size={14} /> : fkColumns.includes(c.name) ? <Icon name="link" size={14} /> : null}
-              </span>
-              <span className="table-card-col-main">
-                <Editable
-                  value={c.name}
-                  label={`Column ${c.name}`}
-                  className="table-card-col-name"
-                  disabled={blocked}
-                  onCommit={(v) => onEdit((t, r) => renameColumn(t, r, key, c.name, v))}
-                />
-              </span>
-              <span className="table-card-col-end">
-                <Editable
-                  value={c.typeName}
-                  label={`Type of ${c.name}`}
-                  className="table-card-col-type"
-                  disabled={blocked}
-                  onCommit={(v) => onEdit((t, r) => setColumnType(t, r, key, c.name, v))}
-                />
-                {!c.notNull && !pk && <span className="table-card-nullable">?</span>}
-                <button
-                  type="button"
-                  className="icon-button nodrag table-card-settings"
-                  aria-label={`Settings of ${c.name}`}
-                  disabled={blocked}
-                  onClick={() => setSettingsFor((s) => (s === c.name ? null : c.name))}
-                >
-                  ⚙
-                </button>
-              </span>
-              <span aria-hidden="true" />
-              {settingsFor === c.name && (
-                <div className="card-popover nodrag" role="dialog" aria-label={`Settings of ${c.name}`}>
-                  {SETTINGS.map((s) => (
-                    <label key={s.setting} className="checkbox">
-                      <input
-                        type="checkbox"
-                        checked={s.on(c)}
-                        onChange={(e) =>
-                          onEdit((t, r) => setColumnSetting(t, r, key, c.name, s.setting, e.target.checked))
-                        }
-                      />
-                      {s.label}
-                    </label>
-                  ))}
-                </div>
-              )}
-              <Handle type="source" id={`${c.name}:s`} position={Position.Right} isConnectable={!blocked} />
-              <Handle type="target" id={`${c.name}:tr`} position={Position.Right} isConnectable={false} className="edge-anchor" />
-            </li>
-          );
-        })}
-      </ul>
-      {selected && (
-        <div className="selbox" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-          <i />
+          )}
         </div>
       )}
-    </div>
+      {ask && askData && (
+        <div className="card-ask nodrag nowheel">
+          <InlineAsk
+            context={{
+              kind: "card",
+              connection: askData.connection ?? null,
+              dbml: askData.getDbml(),
+              tables: askData.tables,
+              label: askData.label,
+            }}
+            schema={null}
+            groupId={askData.kit.groupId}
+            onOpenInChat={askData.kit.onOpenInChat}
+            onOpenSettings={askData.kit.onOpenSettings}
+            onClose={() => setAsk(false)}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <CardFrame
+      kind="table"
+      label={`Table ${table.name}`}
+      name={table.name}
+      title={
+        <>
+          <Editable
+            value={table.name}
+            label={`Table name ${table.name}`}
+            className="table-card-name"
+            disabled={blocked}
+            onCommit={(v) => onEdit((t, r) => renameTable(t, r, key, v))}
+          />
+          {table.alias && <span className="table-card-alias">as {table.alias}</span>}
+        </>
+      }
+      subtitle={table.schema || undefined}
+      count={table.columns.length}
+      selected={!!selected}
+      actions={actions}
+      rows={table.columns.map((c) => {
+        const pk = c.pk || !!pkIndex?.columns.includes(c.name);
+        return (
+          <li key={c.name} className="table-card-column">
+            <Handle type="target" id={`${c.name}:t`} position={Position.Left} isConnectable={!blocked} />
+            {/* Edge ends only: an edge leaves or enters on the side facing the other card (edgeSides). */}
+            <Handle type="source" id={`${c.name}:sl`} position={Position.Left} isConnectable={false} className="edge-anchor" />
+            <span className={pk ? "table-card-key table-card-pk" : "table-card-key"}>
+              {pk ? <Icon name="key" size={14} /> : fkColumns.includes(c.name) ? <Icon name="link" size={14} /> : null}
+            </span>
+            <span className="table-card-col-main">
+              <Editable
+                value={c.name}
+                label={`Column ${c.name}`}
+                className="table-card-col-name"
+                disabled={blocked}
+                onCommit={(v) => onEdit((t, r) => renameColumn(t, r, key, c.name, v))}
+              />
+            </span>
+            <span className="table-card-col-end">
+              <Editable
+                value={c.typeName}
+                label={`Type of ${c.name}`}
+                className="table-card-col-type"
+                disabled={blocked}
+                onCommit={(v) => onEdit((t, r) => setColumnType(t, r, key, c.name, v))}
+              />
+              {!c.notNull && !pk && <span className="table-card-nullable">?</span>}
+              <button
+                type="button"
+                className="icon-button nodrag table-card-settings"
+                aria-label={`Settings of ${c.name}`}
+                disabled={blocked}
+                onClick={() => setSettingsFor((s) => (s === c.name ? null : c.name))}
+              >
+                ⚙
+              </button>
+            </span>
+            <span aria-hidden="true" />
+            {settingsFor === c.name && (
+              <div className="card-popover nodrag" role="dialog" aria-label={`Settings of ${c.name}`}>
+                {SETTINGS.map((s) => (
+                  <label key={s.setting} className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={s.on(c)}
+                      onChange={(e) =>
+                        onEdit((t, r) => setColumnSetting(t, r, key, c.name, s.setting, e.target.checked))
+                      }
+                    />
+                    {s.label}
+                  </label>
+                ))}
+              </div>
+            )}
+            <Handle type="source" id={`${c.name}:s`} position={Position.Right} isConnectable={!blocked} />
+            <Handle type="target" id={`${c.name}:tr`} position={Position.Right} isConnectable={false} className="edge-anchor" />
+          </li>
+        );
+      })}
+    />
   );
 }

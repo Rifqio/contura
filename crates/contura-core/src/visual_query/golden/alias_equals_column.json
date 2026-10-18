@@ -1,0 +1,29 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "customers", "alias": "c", "x": 300, "y": 0 }
+    ],
+    "joins": [
+      { "id": "j1", "left": "t1", "right": "t2", "kind": "left", "on": [{ "leftColumn": "customer_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t1", "column": "id", "alias": "id", "aggregate": null },
+      { "table": "t2", "column": "id", "alias": "customer_id", "aggregate": null },
+      { "table": "t2", "column": "name", "alias": null, "aggregate": null }
+    ],
+    "filters": [],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [
+      { "target": { "kind": "output", "index": 0 }, "dir": "desc" },
+      { "target": { "kind": "output", "index": 1 }, "dir": "asc" }
+    ],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["id", "customer_id", "name"],
+  "warnings": []
+}

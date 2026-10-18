@@ -1,0 +1,11 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "e", "schema": "public", "name": "employees" },
+    { "alias": "e2", "schema": "public", "name": "employees" }
+  ],
+  "joins": [
+    { "table": "e2", "kind": "left", "on": [["e2.id", "e.manager_id"]] }
+  ],
+  "outputs": ["e_name", "e2_name"]
+}

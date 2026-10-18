@@ -1,8 +1,10 @@
 // Messages between the editor side (LangClient) and the language worker.
 import type { DialectKind, SchemaModel } from "../api/types";
+import type { LayoutRequest, Positions } from "../diagram/layout";
 import type { Range } from "./sql/analyze";
 import type { SqlCompletionResult } from "./sql/complete";
 import type { SchemaState } from "./sql/inspect";
+import type { QueryShape, ShapeProblem } from "./sql/queryShape";
 import type { Definition, ParameterHints } from "./sql/refactor";
 import type { SqlSchema } from "./sql/types";
 
@@ -56,14 +58,20 @@ export type ToWorker =
   /** A schema for a Connection and database; null drops it. */
   | { type: "sqlSchema"; key: string; schema: SqlSchema | null }
   | { type: "sqlAnalyze"; id: number; docId: string; text: string; dialect: DialectKind; schemaKey: string | null; schemaState: SchemaState }
+  /** The query diagram's shape of the statement at `pos`, debounced like sqlAnalyze (D13). */
+  | { type: "sqlShape"; id: number; docId: string; text: string; dialect: DialectKind; schemaKey: string | null; schemaState: SchemaState; pos: number }
   | ({ type: "sqlComplete"; id: number; docId?: string; explicit: boolean; aliasTables?: boolean } & SqlAt)
-  | ({ type: "sqlRefactor"; id: number; docId?: string; action: SqlRefactorAction } & SqlAt);
+  | ({ type: "sqlRefactor"; id: number; docId?: string; action: SqlRefactorAction } & SqlAt)
+  /** Places the diagram nodes the request has no position for (ruling D14). */
+  | { type: "layout"; id: number; request: LayoutRequest };
 
 export type FromWorker =
   | { type: "result"; ids: number[]; docId: string; result: ParseResult }
   | { type: "sqlDiagnostics"; ids: number[]; docId: string; diagnostics: Diagnostic[] }
+  | { type: "sqlShape"; ids: number[]; result: QueryShape | ShapeProblem }
   | { type: "sqlCompletion"; ids: number[]; result: SqlCompletionResult }
   | { type: "sqlRefactor"; ids: number[]; result: SqlRefactorResult }
+  | { type: "layout"; ids: number[]; positions: Positions }
   | { type: "failed"; ids: number[]; message: string };
 
 /** The one key for a table, used by ranges, edits and the canvas layout. */

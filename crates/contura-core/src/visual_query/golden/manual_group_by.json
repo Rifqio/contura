@@ -1,0 +1,33 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "stores", "alias": "s", "x": 300, "y": 0 }
+    ],
+    "joins": [
+      { "id": "j1", "left": "t1", "right": "t2", "kind": "inner", "on": [{ "leftColumn": "store_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t2", "column": "city", "alias": null, "aggregate": null },
+      { "table": "t1", "column": "id", "alias": "orders", "aggregate": "count" }
+    ],
+    "filters": [],
+    "groupBy": {
+      "kind": "manual",
+      "columns": [
+        { "table": "t2", "column": "city" },
+        { "table": "t2", "column": "region_id" }
+      ]
+    },
+    "orderBy": [
+      { "target": { "kind": "column", "table": "t2", "column": "region_id" }, "dir": "asc" }
+    ],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["city", "orders"],
+  "warnings": []
+}

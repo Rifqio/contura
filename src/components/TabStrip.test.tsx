@@ -4,7 +4,8 @@ import { expect, test, vi } from "vitest";
 import { nextQueryName, parseDrafts, placeKey, serializeDrafts } from "../query/drafts";
 import type { QueryTabDoc } from "../query/QueryTab";
 import { EMPTY_LAYOUT } from "../schema/layout";
-import type { AnyTab } from "../shell/tabs";
+import type { AnyTab, VisualTabDoc } from "../shell/tabs";
+import { parseVisualDrafts } from "../visualquery/drafts";
 import Icon, { type IconName } from "./Icon";
 import TabStrip, { type WorkTab } from "./TabStrip";
 
@@ -317,4 +318,90 @@ test("design_tabs_read_table_design_or_new_table_with_the_edit_icon", () => {
   expect(within(tab).getByText("PROD")).toBeTruthy();
   const fresh = screen.getByRole("tab", { name: "New table, Production" });
   expect(iconsIn(fresh, [...KINDS, "edit"])).toEqual(["edit"]);
+});
+
+const vqModel = (tables: string[] = []) => ({
+  version: 1,
+  database: "shop",
+  dialect: "mysql" as const,
+  tables: tables.map((name, i) => ({ id: `t${i}`, schema: null, name, alias: name[0], x: 0, y: 0 })),
+  joins: [],
+  columns: [],
+  filters: [],
+  groupBy: { kind: "auto" as const },
+  orderBy: [],
+  limit: null,
+  distinct: false,
+});
+const visual = (id: string, over: Partial<VisualTabDoc> = {}): WorkTab => ({
+  kind: "visual",
+  doc: { id, name: "New Visual Query", connectionId: "c1", database: "shop", model: vqModel(), savedId: null, savedJson: null, ...over },
+});
+
+test("visual_tab_shows_its_icon_name_mark_and_prod_chip", () => {
+  render(<TabStrip tabs={[visual("v1")]} active="visual:v1" onSelect={() => {}} onClose={() => {}} onNew={() => {}} onNewVisual={() => {}} connections={[prod]} />);
+  const tab = screen.getByRole("tab", { name: "New Visual Query, Production", selected: true });
+  expect(iconsIn(tab, ["visualQuery", ...KINDS])).toEqual(["visualQuery"]);
+  expect(tab.querySelector(".db-mark")).toBeTruthy();
+  expect(within(tab).getByText("PROD")).toBeTruthy();
+});
+
+test("visual_tab_is_dirty_only_when_saved_and_its_model_changed", () => {
+  const saved = JSON.stringify(vqModel(["orders"]));
+  render(
+    <TabStrip
+      tabs={[
+        visual("a", { name: "late orders", savedId: "s1", savedJson: saved, model: vqModel(["orders"]) }),
+        visual("b", { name: "by store", savedId: "s2", savedJson: saved, model: vqModel(["orders", "stores"]) }),
+        visual("c", { model: vqModel(["orders"]) }),
+      ]}
+      active="visual:a"
+      onSelect={() => {}}
+      onClose={() => {}}
+      onNew={() => {}}
+      onNewVisual={() => {}}
+    />,
+  );
+  expect(within(screen.getByRole("tab", { name: "late orders" })).queryByLabelText("Unsaved changes")).toBeNull();
+  expect(within(screen.getByRole("tab", { name: "by store, unsaved changes" })).getByLabelText("Unsaved changes")).toBeTruthy();
+  expect(within(screen.getByRole("tab", { name: "New Visual Query" })).queryByLabelText("Unsaved changes")).toBeNull();
+});
+
+test("the_chevron_menu_offers_new_query_and_new_visual_query", async () => {
+  const onNew = vi.fn();
+  const onNewVisual = vi.fn();
+  const { rerender } = render(<TabStrip tabs={[]} active={null} onSelect={() => {}} onClose={() => {}} onNew={onNew} onNewVisual={onNewVisual} />);
+  await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
+  const menu = screen.getByRole("menu", { name: "More new tabs" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["New query", "New Visual Query"]);
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "New Visual Query" }));
+  expect(onNewVisual).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "New query" }));
+  expect(onNew).toHaveBeenCalledTimes(1);
+
+  // No open Connection: New Visual Query is off and says why.
+  rerender(<TabStrip tabs={[]} active={null} onSelect={() => {}} onClose={() => {}} onNew={onNew} onNewVisual={onNewVisual} newVisualReady={false} />);
+  await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
+  const off = screen.getByRole("menuitem", { name: "New Visual Query" }) as HTMLButtonElement;
+  expect(off.disabled).toBe(true);
+  expect(off.title).toBe("Open a Connection first");
+});
+
+test("a_visual_draft_round_trips_and_an_old_draft_has_none", () => {
+  const doc: VisualTabDoc = { id: "v1", name: "New Visual Query", connectionId: "c1", database: "shop", model: vqModel(["orders"]), savedId: null, savedJson: null };
+  const queries = [{ id: "a", name: "Query 1", text: "SELECT 1", connectionId: "c1", database: "shop", savedId: null, savedText: null }];
+  const json = serializeDrafts(queries, [doc]);
+  expect(JSON.parse(json).version).toBe(1);
+  expect(parseDrafts(json)).toEqual(queries);
+  expect(parseVisualDrafts(json)).toEqual([doc]);
+  // A draft written before step 6 has no `visual` key.
+  expect(parseVisualDrafts(JSON.stringify({ version: 1, tabs: queries }))).toEqual([]);
+  // A model of an unknown version is dropped; nothing throws.
+  const newer = { ...doc, id: "v2", model: { ...doc.model, version: 2 } };
+  expect(parseVisualDrafts(JSON.stringify({ version: 1, tabs: [], visual: [doc, newer, { id: 3 }] }))).toEqual([doc]);
+  expect(parseVisualDrafts("not json")).toEqual([]);
+  // A removed Connection is null and still restores (P10).
+  const removed = { ...doc, id: "v3", connectionId: null };
+  expect(parseVisualDrafts(serializeDrafts([], [removed]))).toEqual([removed]);
 });

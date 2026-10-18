@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { QueryTabDoc } from "../query/QueryTab";
 import type { ModelDoc } from "../schema/SchemaBuilder";
-import { type Selection, type WorkTab, tabKey } from "../shell/tabs";
+import { type Selection, type VisualTabDoc, type WorkTab, tabKey } from "../shell/tabs";
+import { emptyQuery } from "../visualquery/model";
 import { type SchemaTab, type TabsAction, type TabsState, tabsReducer } from "./tabsReducer";
 
 const doc = (id: string, savedId: string | null = null): QueryTabDoc => ({
@@ -81,6 +82,26 @@ describe("tabsReducer", () => {
     const next = tabsReducer(s, { type: "openSaved", doc: doc("new", null) });
     expect(next.tabs).toEqual([query("plain"), query("new", null)]);
     expect(next.activeKey).toBe("query:new");
+  });
+
+  it("open_visual_shows_the_tab_of_the_same_saved_visual_query_else_adds_it", () => {
+    const vdoc = (id: string, savedId: string | null): VisualTabDoc => ({
+      id,
+      name: `V ${id}`,
+      connectionId: "c1",
+      database: "shop",
+      model: emptyQuery("shop", "mysql"),
+      savedId,
+      savedJson: savedId ? "{}" : null,
+    });
+    // A query tab with the same savedId is not the Visual Query's tab.
+    const s = state({ tabs: [query("q", "s1"), { kind: "visual", doc: vdoc("old", "s1") }], activeKey: "query:q" });
+    const again = tabsReducer(s, { type: "openVisual", doc: vdoc("new", "s1") });
+    expect(again.tabs).toBe(s.tabs);
+    expect(again.activeKey).toBe("visual:old");
+    const other = tabsReducer(s, { type: "openVisual", doc: vdoc("new", "s2") });
+    expect(other.tabs).toHaveLength(3);
+    expect(other.activeKey).toBe("visual:new");
   });
 
   it("open_schema_reuses_the_tab_of_an_open_file", () => {

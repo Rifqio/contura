@@ -1,6 +1,6 @@
 // The window's tab model (PR5): Home, Settings and Schema Model tabs belong to the window and
 // survive a Group change; query and table tabs belong to the place.
-import type { ConnectionId, GroupId, ObjectKind, ObjectPath } from "../api/types";
+import type { ConnectionId, GroupId, ObjectKind, ObjectPath, VisualQuery } from "../api/types";
 import type { QueryTabDoc } from "../query/QueryTab";
 import type { ModelDoc } from "../schema/SchemaBuilder";
 import { objectKey } from "../objectPath";
@@ -22,11 +22,27 @@ export type DesignTabTarget =
   | { kind: "alter"; path: ObjectPath }
   | { kind: "create"; scope: { database: string; schema: string | null }; id: string };
 
+/**
+ * A Visual Query tab as the app keeps it, and as its draft is saved. `connectionId` is null when
+ * its Connection was removed (P10): the tab still opens and offers one of the model's Dialect.
+ * `savedJson` is the model as last saved, for the dirty mark.
+ */
+export type VisualTabDoc = {
+  id: string;
+  name: string;
+  connectionId: ConnectionId | null;
+  database: string | null;
+  model: VisualQuery;
+  savedId: string | null;
+  savedJson: string | null;
+};
+
 /** A tab of the place; the Saved Queries list is one, since Saved Queries are listed beside the place's Connections. */
 export type WorkTab =
   | { kind: "object"; key: string; selection: Selection }
   | { kind: "design"; key: string; connectionId: ConnectionId; target: DesignTabTarget }
   | { kind: "query"; doc: QueryTabDoc }
+  | { kind: "visual"; doc: VisualTabDoc }
   | { kind: "savedQueries" };
 
 /** A tab of the window. */
@@ -48,6 +64,8 @@ export function tabKey(t: AnyTab): string {
       return `schema:${t.id}`;
     case "query":
       return `query:${t.doc.id}`;
+    case "visual":
+      return `visual:${t.doc.id}`;
     case "savedQueries":
       return "savedQueries";
     case "object":
@@ -74,6 +92,67 @@ export function objectTabOf(t: AnyTab): { key: string; connectionId: ConnectionI
   if (t.kind === "object") return { key: t.key, connectionId: t.selection.connectionId, path: t.selection.path };
   if (t.kind === "design") return { key: t.key, connectionId: t.connectionId, path: t.target.kind === "alter" ? t.target.path : null };
   return null;
+}
+
+/** The Connection a tab works on, for its mark, chips and Group hue; null for window tabs and tabs without one. */
+export function tabConnectionId(t: AnyTab): ConnectionId | null {
+  switch (t.kind) {
+    case "query":
+    case "visual":
+      return t.doc.connectionId;
+    case "object":
+      return t.selection.connectionId;
+    case "design":
+      return t.connectionId;
+    default:
+      return null;
+  }
+}
+
+/** JSON with every object's keys sorted, so two equal values always give the same text. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    const entries = Object.entries(v as Record<string, unknown>)
+      .filter(([, x]) => x !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonicalJson(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
+}
+
+/** The canonical text of recent saved models, so the dirty check does not parse on every render. */
+const savedCanonical = new Map<string, string | null>();
+
+function canonicalSaved(savedJson: string): string | null {
+  const hit = savedCanonical.get(savedJson);
+  if (hit !== undefined) return hit;
+  let text: string | null;
+  try {
+    text = canonicalJson(JSON.parse(savedJson));
+  } catch {
+    text = null;
+  }
+  if (savedCanonical.size >= 64) {
+    const oldest = savedCanonical.keys().next().value;
+    if (oldest !== undefined) savedCanonical.delete(oldest);
+  }
+  savedCanonical.set(savedJson, text);
+  return text;
+}
+
+/** True when `model` is the model saved as `savedJson`, whatever order its keys were written in. */
+export function sameModel(model: VisualQuery, savedJson: string | null): boolean {
+  if (savedJson === null) return false;
+  const saved = canonicalSaved(savedJson);
+  return saved !== null && canonicalJson(model) === saved;
+}
+
+/** A Saved Query or Visual Query tab whose text or model differs from what was saved. */
+export function isUnsaved(t: AnyTab): boolean {
+  if (t.kind === "query") return t.doc.savedId !== null && t.doc.text !== t.doc.savedText;
+  if (t.kind === "visual") return t.doc.savedId !== null && !sameModel(t.doc.model, t.doc.savedJson);
+  return false;
 }
 
 /** Home, then the place's tabs, then the other window tabs in the order they were opened. */

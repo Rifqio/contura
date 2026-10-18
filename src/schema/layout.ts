@@ -1,6 +1,11 @@
 // Canvas positions, kept in `<name>.dbml.layout.json` beside the DBML (ADR 0007).
 import type { SchemaModel } from "../api/types";
+import { type LayoutRequest, layoutMissing, parseLayoutFile, type Positions, serializeLayoutFile } from "../diagram/layout";
+import { CARD_WIDTH, cardHeight } from "../diagram/metrics";
 import { tableKey } from "../lang/protocol";
+
+/** The Schema Builder's file keeps its `tables` key. */
+const TABLES = "tables";
 
 export type Layout = {
   version: 1;
@@ -11,40 +16,17 @@ export type Layout = {
 
 export const EMPTY_LAYOUT: Layout = { version: 1, tables: {} };
 
-/** The one card size: layout, canvas CSS and exports all use these (app.css `.table-card*` repeats them). */
-export const CARD_WIDTH = 216;
-export const CARD_HEADER = 32;
-export const CARD_ROW = 24;
-/** Below the rows: the column list's 4 px padding top and bottom (the card has no Add column row). */
-export const CARD_FOOTER = 8;
-export const cardHeight = (columns: number) => CARD_HEADER + CARD_ROW * columns + CARD_FOOTER;
-
-function isPoint(v: unknown): v is { x: number; y: number } {
-  return (
-    typeof v === "object" && v !== null && Number.isFinite((v as { x: number }).x) && Number.isFinite((v as { y: number }).y)
-  );
-}
+export { CARD_FOOTER, CARD_HEADER, CARD_ROW, CARD_WIDTH, cardHeight } from "../diagram/metrics";
 
 /** Never throws: anything unreadable becomes an empty layout. */
 export function parseLayout(json: string): Layout {
-  try {
-    const raw = JSON.parse(json) as { version?: unknown; tables?: unknown; viewport?: unknown };
-    if (raw.version !== 1 || typeof raw.tables !== "object" || raw.tables === null) return { version: 1, tables: {} };
-    const tables: Layout["tables"] = {};
-    for (const [k, v] of Object.entries(raw.tables)) if (isPoint(v)) tables[k] = { x: v.x, y: v.y };
-    const vp = raw.viewport as Layout["viewport"];
-    const viewport = vp && isPoint(vp) && Number.isFinite(vp.zoom) ? { x: vp.x, y: vp.y, zoom: vp.zoom } : undefined;
-    return viewport ? { version: 1, tables, viewport } : { version: 1, tables };
-  } catch {
-    return { version: 1, tables: {} };
-  }
+  const { nodes: tables, viewport } = parseLayoutFile(json, TABLES);
+  return viewport ? { version: 1, tables, viewport } : { version: 1, tables };
 }
 
 /** Stable key order and 2-space JSON, so the file diffs well in git. */
 export function serializeLayout(l: Layout): string {
-  const tables = Object.fromEntries(Object.keys(l.tables).sort().map((k) => [k, l.tables[k]]));
-  const out: Layout = l.viewport ? { version: 1, tables, viewport: l.viewport } : { version: 1, tables };
-  return `${JSON.stringify(out, null, 2)}\n`;
+  return serializeLayoutFile({ version: 1, nodes: l.tables, viewport: l.viewport }, TABLES);
 }
 
 /**
@@ -61,28 +43,22 @@ export function followRenames(l: Layout, before: SchemaModel, after: SchemaModel
   return { ...l, tables: { ...rest, [added[0]]: pos } };
 }
 
-/** Places only the tables `existing` lacks, with dagre (loaded on first use). */
-export async function autoLayout(model: SchemaModel, existing: Layout): Promise<Layout> {
-  const missing = model.tables.filter((t) => !existing.tables[tableKey(t)]);
-  if (missing.length === 0) return existing;
-  const { default: dagre } = await import("@dagrejs/dagre");
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: "LR", nodesep: 40, ranksep: 80 });
-  g.setDefaultEdgeLabel(() => ({}));
-  for (const t of model.tables) g.setNode(tableKey(t), { width: CARD_WIDTH, height: cardHeight(t.columns.length) });
-  for (const r of model.refs) {
-    const from = tableKey({ schema: r.from.schema, name: r.from.table });
-    const to = tableKey({ schema: r.to.schema, name: r.to.table });
-    if (g.hasNode(from) && g.hasNode(to)) g.setEdge(to, from);
-  }
-  dagre.layout(g);
-  const tables = { ...existing.tables };
-  // Shift new tables below anything already placed, so they never land on top of it.
-  const placed = Object.values(existing.tables);
-  const offsetY = placed.length ? Math.max(...placed.map((p) => p.y)) + 400 : 0;
-  for (const t of missing) {
-    const n = g.node(tableKey(t));
-    tables[tableKey(t)] = { x: Math.round(n.x - CARD_WIDTH / 2), y: Math.round(n.y - n.height / 2 + offsetY) };
-  }
+/** Places only the tables `existing` lacks; `run` is the language worker's layout when there is a client. */
+export async function autoLayout(
+  model: SchemaModel,
+  existing: Layout,
+  run: (r: LayoutRequest) => Promise<Positions> = layoutMissing,
+): Promise<Layout> {
+  if (model.tables.every((t) => existing.tables[tableKey(t)])) return existing;
+  const edges = model.refs.map((r) => ({
+    from: tableKey({ schema: r.to.schema, name: r.to.table }),
+    to: tableKey({ schema: r.from.schema, name: r.from.table }),
+  }));
+  const tables = await run({
+    nodes: model.tables.map((t) => ({ id: tableKey(t), w: CARD_WIDTH, h: cardHeight(t.columns.length) })),
+    edges,
+    existing: existing.tables,
+    rankdir: "LR",
+  });
   return { ...existing, tables };
 }

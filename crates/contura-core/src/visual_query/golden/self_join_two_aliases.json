@@ -1,0 +1,27 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "employees", "alias": "e", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "employees", "alias": "e2", "x": 300, "y": 0 }
+    ],
+    "joins": [
+      { "id": "j1", "left": "t1", "right": "t2", "kind": "left", "on": [{ "leftColumn": "manager_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t1", "column": "name", "alias": null, "aggregate": null },
+      { "table": "t2", "column": "name", "alias": null, "aggregate": null }
+    ],
+    "filters": [
+      { "joiner": "and", "table": "t2", "column": "id", "op": "isNotNull", "values": [] }
+    ],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["e_name", "e2_name"],
+  "warnings": []
+}

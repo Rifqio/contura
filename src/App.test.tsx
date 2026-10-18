@@ -1677,6 +1677,8 @@ async function changeStatusInDesign() {
   fireEvent.keyDown(box, { key: "Enter" });
   await screen.findByRole("tab", { name: "orders design, unsaved changes" });
   await waitFor(() => expect(designApply().disabled).toBe(false));
+  // Apply runs only the plan the preview shows, so wait for the preview first.
+  await within(designPane()).findByLabelText("SQL Apply runs", undefined, { timeout: LOAD_TIMEOUT });
 }
 
 type Routes = Record<string, (a: Record<string, unknown>) => unknown>;
@@ -1868,4 +1870,219 @@ test("a_refused_discard_while_apply_runs_keeps_the_tab_the_group_and_the_connect
   expect(screen.getByRole("tab", { name: "orders design, unsaved changes" })).toBeTruthy();
   gate.release();
   await waitFor(() => expect(callsTo("apply_design")).toHaveLength(1));
+}, LOAD_TIMEOUT);
+
+test("new_visual_query_from_the_connection_menu_opens_on_that_connection_and_comes_back_with_the_drafts", async () => {
+  const shopSchema = { searchPath: ["public"], tables: [], fks: [] };
+  workspaceRoutes({ sql_schema: () => shopSchema, visual_query_sql: () => ({ query: null, problems: [] }) });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "More actions for KFC Postgres" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "New Visual Query" }));
+  expect(await screen.findByRole("tab", { name: "New Visual Query", selected: true })).toBeTruthy();
+  // A closed Connection opens first, as New query does.
+  await waitFor(() => expect(callsTo("open_connection")).toEqual([{ id: "c1" }]));
+  const bar = await screen.findByRole("toolbar", { name: "Visual Query" });
+  expect(within(bar).getByRole("button", { name: /KFC Postgres/ })).toBeTruthy();
+  let saved = "";
+  await waitFor(
+    () => {
+      const last = callsTo("save_query_tabs").slice(-1)[0];
+      const visual = JSON.parse((last?.json as string) ?? "{}").visual ?? [];
+      expect(visual).toHaveLength(1);
+      expect(visual[0]).toMatchObject({ name: "New Visual Query", connectionId: "c1", database: "kfc_shop", model: { database: "kfc_shop", dialect: "postgres" } });
+      saved = last!.json as string;
+    },
+    { timeout: 3000 },
+  );
+  cleanup();
+
+  workspaceRoutes({
+    sql_schema: () => shopSchema,
+    visual_query_sql: () => ({ query: null, problems: [] }),
+    load_query_tabs: ({ place }) => (place === "group:g1" ? saved : null),
+  });
+  render(<App />);
+  expect(await screen.findByRole("tab", { name: "New Visual Query", selected: true })).toBeTruthy();
+  expect(await screen.findByRole("toolbar", { name: "Visual Query" })).toBeTruthy();
+});
+
+test("restored_drafts_keep_the_strip_order_of_query_and_visual_tabs", async () => {
+  const q = { id: "d1", name: "Late deliveries", text: "SELECT 1", connectionId: "c1", database: "kfc_shop", savedId: null, savedText: null };
+  const model = { version: 1, database: "kfc_shop", dialect: "postgres", tables: [], joins: [], columns: [], filters: [], groupBy: { kind: "auto" }, orderBy: [], limit: null, distinct: false };
+  const v = { id: "v1", name: "New Visual Query", connectionId: "c1", database: "kfc_shop", model, savedId: null, savedJson: null };
+  workspaceRoutes({
+    sql_schema: () => ({ searchPath: ["public"], tables: [], fks: [] }),
+    visual_query_sql: () => ({ query: null, problems: [] }),
+    load_query_tabs: ({ place }) =>
+      place === "group:g1" ? JSON.stringify({ version: 1, tabs: [q], visual: [v], order: ["visual:v1", "query:d1"] }) : null,
+  });
+  render(<App />);
+  await screen.findByRole("tab", { name: "Late deliveries" });
+  const strip = screen.getByRole("tablist", { name: "Open tabs" });
+  expect(within(strip).getAllByRole("tab").map((t) => t.getAttribute("aria-label"))).toEqual(["New Visual Query", "Late deliveries"]);
+});
+
+test("open_in_editor_makes_a_plain_query_tab_with_the_generated_sql_and_leaves_the_visual_query", async () => {
+  const model = {
+    version: 1,
+    database: "kfc_shop",
+    dialect: "postgres",
+    tables: [{ id: "t1", schema: "public", name: "orders", alias: "o", x: 48, y: 48 }],
+    joins: [],
+    columns: [{ table: "t1", column: "id", alias: null, aggregate: null }],
+    filters: [],
+    groupBy: { kind: "auto" },
+    orderBy: [],
+    limit: null,
+    distinct: false,
+  };
+  const v = { id: "v1", name: "Late deliveries", connectionId: "c1", database: "kfc_shop", model, savedId: null, savedJson: null };
+  const sql = "SELECT o.id\nFROM public.orders AS o";
+  workspaceRoutes({
+    sql_schema: () => ({ searchPath: ["public"], tables: [], fks: [] }),
+    visual_query_sql: () => ({
+      query: { sql, parts: [{ part: { kind: "select" }, fromLine: 1, toLine: 1 }], outputs: ["id"], warnings: [] },
+      problems: [],
+    }),
+    load_query_tabs: ({ place }) => (place === "group:g1" ? JSON.stringify({ version: 1, tabs: [], visual: [v] }) : null),
+  });
+  render(<App />);
+  expect(await screen.findByRole("tab", { name: "Late deliveries", selected: true })).toBeTruthy();
+  const pane = await screen.findByRole("region", { name: "SQL" });
+  await waitFor(() => expect((within(pane).getByRole("button", { name: /Open in editor/ }) as HTMLButtonElement).disabled).toBe(false));
+  await userEvent.keyboard("{Control>}{Shift>}e{/Shift}{/Control}");
+  expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+  await waitFor(() => {
+    const last = callsTo("save_query_tabs").slice(-1)[0];
+    const saved = JSON.parse((last?.json as string) ?? "{}");
+    expect(saved.tabs).toEqual([expect.objectContaining({ name: "Query 1", text: sql, connectionId: "c1", database: "kfc_shop", savedId: null })]);
+    // Nothing links back: the Visual Query is as it was.
+    expect(saved.visual).toEqual([expect.objectContaining({ id: "v1", name: "Late deliveries", model })]);
+  });
+  expect(screen.getByRole("tab", { name: "Late deliveries" })).toBeTruthy();
+}, LOAD_TIMEOUT);
+
+// ---------- Saved Visual Queries (Task 10) ----------
+
+const vqModel = (database = "kfc_shop", version = 1) => ({
+  version,
+  database,
+  dialect: "postgres",
+  tables: [{ id: "t1", schema: "public", name: "orders", alias: "o", x: 48, y: 48 }],
+  joins: [],
+  columns: [{ table: "t1", column: "id", alias: null, aggregate: null }],
+  filters: [],
+  groupBy: { kind: "auto" },
+  orderBy: [],
+  limit: null,
+  distinct: false,
+});
+const savedVq = (over: Record<string, unknown> = {}) => ({
+  id: "sv1",
+  name: "late orders by store",
+  sql: "SELECT o.id\nFROM public.orders AS o",
+  updatedAtMs: 1,
+  connectionId: "c1",
+  kind: "visual",
+  visualJson: JSON.stringify(vqModel("kfc_reports")),
+  ...over,
+});
+const vqRoutes = { sql_schema: () => ({ searchPath: ["public"], tables: [], fks: [] }), visual_query_sql: () => ({ query: null, problems: [] }) };
+
+test("opening_a_saved_visual_query_opens_its_tab_on_its_connection_and_the_models_database", async () => {
+  workspaceRoutes({ ...vqRoutes, list_saved_queries: () => [savedVq()], open_query_session: () => "s1" });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("treeitem", { name: /^late orders by store/ }));
+  expect(await screen.findByRole("tab", { name: "late orders by store", selected: true })).toBeTruthy();
+  // Its Connection is closed: the canvas offers to open it.
+  const banner = await screen.findByText("KFC Postgres is not open", { selector: ".vq-banner p" });
+  await userEvent.click(within(banner.closest(".vq-banner") as HTMLElement).getByRole("button", { name: "Open KFC Postgres" }));
+  await waitFor(() => expect(callsTo("open_connection")).toEqual([{ id: "c1" }]));
+  // A run opens its session on the model's database.
+  await waitFor(() => expect(callsTo("open_query_session")).toEqual([{ id: "c1", database: "kfc_reports" }]));
+  // Opening it, and opening its Connection, never runs it.
+  expect(callsTo("run_visual_query")).toHaveLength(0);
+  // Opening it again shows the same tab.
+  await userEvent.keyboard("{Control>}t{/Control}");
+  await screen.findByRole("tab", { name: "Query 1", selected: true });
+  await userEvent.click(screen.getByRole("treeitem", { name: /^late orders by store/ }));
+  expect(await screen.findByRole("tab", { name: "late orders by store", selected: true })).toBeTruthy();
+  expect(screen.getAllByRole("tab", { name: "late orders by store" })).toHaveLength(1);
+}, LOAD_TIMEOUT);
+
+test("a_saved_visual_query_from_a_newer_contura_opens_nothing_and_says_so", async () => {
+  workspaceRoutes({ ...vqRoutes, list_saved_queries: () => [savedVq({ visualJson: JSON.stringify(vqModel("kfc_shop", 2)) })] });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("treeitem", { name: /^late orders by store/ }));
+  expect(await screen.findByText("This Visual Query was saved by a newer Contura. Update Contura to open it.")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "late orders by store" })).toBeNull();
+});
+
+test("a_saved_visual_query_whose_connection_was_removed_asks_for_one_and_open_here_rebinds", async () => {
+  workspaceRoutes({ ...vqRoutes, list_saved_queries: () => [savedVq({ connectionId: null })] });
+  render(<App />);
+  await closeHome();
+  const row = await screen.findByRole("treeitem", { name: /^late orders by store/ });
+  expect(row.querySelector(".tree-meta")?.textContent).toBe("Connection removed");
+  await userEvent.click(row);
+  expect(await screen.findByRole("tab", { name: "late orders by store", selected: true })).toBeTruthy();
+  const banner = (await screen.findByText("This Visual Query's Connection was removed.")).closest(".vq-banner") as HTMLElement;
+  await userEvent.click(within(banner).getByRole("button", { name: "Open here" }));
+  await waitFor(() => expect(callsTo("open_connection")).toEqual([{ id: "c1" }]));
+  await waitFor(() => expect(screen.queryByText("This Visual Query's Connection was removed.")).toBeNull());
+  await waitFor(() => {
+    const last = callsTo("save_query_tabs").slice(-1)[0];
+    expect(JSON.parse((last?.json as string) ?? "{}").visual?.[0]).toMatchObject({ connectionId: "c1", savedId: "sv1" });
+  });
+}, LOAD_TIMEOUT);
+
+test("restored_visual_draft_with_deleted_connection_asks_for_one", async () => {
+  const v = { id: "v1", name: "Late deliveries", connectionId: "gone", database: "kfc_shop", model: vqModel(), savedId: null, savedJson: null };
+  workspaceRoutes({ ...vqRoutes, load_query_tabs: ({ place }) => (place === "group:g1" ? JSON.stringify({ version: 1, tabs: [], visual: [v] }) : null) });
+  render(<App />);
+  expect(await screen.findByRole("tab", { name: "Late deliveries", selected: true })).toBeTruthy();
+  expect(await screen.findByText("This Visual Query's Connection was removed.")).toBeTruthy();
+  const banner = screen.getByText("This Visual Query's Connection was removed.").closest(".vq-banner") as HTMLElement;
+  expect(within(banner).getByRole("button", { name: "Open here" })).toBeTruthy();
+});
+
+test("closing_a_changed_saved_visual_query_and_choosing_save_saves_it_and_closes", async () => {
+  const saved = JSON.stringify(vqModel());
+  const v = { id: "v1", name: "late orders by store", connectionId: "c1", database: "kfc_shop", model: { ...vqModel(), distinct: true }, savedId: "sv1", savedJson: saved };
+  workspaceRoutes({
+    ...vqRoutes,
+    load_query_tabs: ({ place }) => (place === "group:g1" ? JSON.stringify({ version: 1, tabs: [], visual: [v] }) : null),
+    list_saved_queries: () => [savedVq({ visualJson: saved })],
+    save_saved_query: ({ input }) => ({ ...(input as object), updatedAtMs: 2, connectionId: "c1" }),
+  });
+  render(<App />);
+  await screen.findByRole("tab", { name: /^late orders by store/, selected: true });
+  await userEvent.click(screen.getByRole("button", { name: "Close late orders by store" }));
+  expect(await screen.findByText(/Your edits to this Visual Query are not saved/)).toBeTruthy();
+  await userEvent.click(inAsk("Save"));
+  await waitFor(() => expect(callsTo("save_saved_query")).toHaveLength(1));
+  const input = callsTo("save_saved_query")[0].input as Record<string, unknown>;
+  expect(input).toMatchObject({ id: "sv1", name: "late orders by store", kind: "visual" });
+  expect(JSON.parse(input.visualJson as string)).toMatchObject({ distinct: true });
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /^late orders by store/ })).toBeNull());
+});
+
+test("a_recent_saved_visual_query_opens_as_a_visual_query_tab", async () => {
+  const model = { ...vqModel("shop"), dialect: "mysql", tables: [{ id: "t1", schema: null, name: "orders", alias: "o", x: 48, y: 48 }] };
+  // Its own Connection id: the app's schema cache outlives a test, and earlier ones load c1.
+  recentRoutes({
+    ...vqRoutes,
+    list_connections: () => [{ ...shopMy, id: "c7" }],
+    last_group: () => null,
+    list_saved_queries: () => [savedVq({ connectionId: "c7", visualJson: JSON.stringify(model) })],
+    recent_items: () => [{ target: { kind: "query", savedId: "sv1", name: "late orders by store" }, connectionId: "c7", openedAtMs: Date.now() }],
+  });
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: /^late orders by store, / }));
+  expect(await screen.findByRole("tab", { name: "late orders by store", selected: true })).toBeTruthy();
+  expect(await screen.findByRole("toolbar", { name: "Visual Query" })).toBeTruthy();
+  expect(screen.queryByRole("toolbar", { name: "Query" })).toBeNull();
 }, LOAD_TIMEOUT);

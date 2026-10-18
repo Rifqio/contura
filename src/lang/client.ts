@@ -1,5 +1,6 @@
 // The editor side of the language engine. It talks to one worker and restarts it if it crashes.
 import type { DialectKind } from "../api/types";
+import type { LayoutRequest, Positions } from "../diagram/layout";
 import type {
   Diagnostic,
   FromWorker,
@@ -11,6 +12,7 @@ import type {
 } from "./protocol";
 import type { SqlCompletionResult } from "./sql/complete";
 import type { SchemaState } from "./sql/inspect";
+import type { QueryShape, ShapeProblem } from "./sql/queryShape";
 import type { SqlSchema } from "./sql/types";
 
 export interface WorkerLike {
@@ -86,6 +88,7 @@ export class LangClient {
       const resolve = p.resolve as (r: unknown) => void;
       if (m.type === "failed") p.reject(new Error(m.message));
       else if (m.type === "sqlDiagnostics") resolve(m.diagnostics);
+      else if (m.type === "layout") resolve(m.positions);
       else resolve(m.result);
     }
   }
@@ -112,12 +115,22 @@ export class LangClient {
     return this.ask((id) => ({ type: "sqlAnalyze", id, ...q }));
   }
 
+  /** The query diagram's shape of the statement at `pos`; earlier calls for the same document resolve with the newest result. */
+  sqlShape(q: { docId: string; text: string; dialect: DialectKind; schemaKey: string | null; schemaState: SchemaState; pos: number }): Promise<QueryShape | ShapeProblem> {
+    return this.ask((id) => ({ type: "sqlShape", id, ...q }));
+  }
+
   completeSql(q: SqlAt & { docId?: string; explicit: boolean; aliasTables?: boolean }): Promise<SqlCompletionResult> {
     return this.ask((id) => ({ type: "sqlComplete", id, ...q }));
   }
 
   refactorSql<A extends SqlRefactorAction>(q: SqlAt & { docId?: string; action: A }): Promise<Extract<SqlRefactorResult, { action: A }>> {
     return this.ask((id) => ({ type: "sqlRefactor", id, ...q }));
+  }
+
+  /** Places the diagram nodes the request has no position for, in the worker (ruling D14). */
+  layout(request: LayoutRequest): Promise<Positions> {
+    return this.ask((id) => ({ type: "layout", id, request }));
   }
 
   private ask<R>(message: (id: number) => ToWorker): Promise<R> {

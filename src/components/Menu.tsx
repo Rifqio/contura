@@ -17,6 +17,8 @@ export interface MenuItem {
   /** Makes the row a checkable item (`menuitemcheckbox`) with a check mark in the icon slot when on. */
   checked?: boolean;
   disabled?: boolean;
+  /** The row's tooltip, such as why it is off. */
+  title?: string;
   danger?: boolean;
   separatorBefore?: boolean;
   /** Opens to the right with the right arrow. */
@@ -133,6 +135,7 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
               aria-haspopup={item.submenu ? "menu" : undefined}
               aria-expanded={item.submenu ? open : undefined}
               disabled={item.disabled}
+              title={item.title}
               className={cls}
               onMouseEnter={() => {
                 if (item.submenu && !item.disabled) setSub({ key: item.key, focus: false });

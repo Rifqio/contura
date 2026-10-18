@@ -54,6 +54,9 @@ interface Props {
   onToggleHistory(): void;
   onToggleAssistant?(): void;
   onCancel(): void;
+  /** The query diagram is open beside the editor (pressed), and the button that toggles it; no button without it. */
+  diagramOpen?: boolean;
+  onToggleDiagram?(): void;
 }
 
 /** The one 32 px strip above the query editor (E1, E2). */
@@ -84,9 +87,12 @@ export default function EditorHeader({
   onToggleHistory,
   onToggleAssistant,
   onCancel,
+  diagramOpen = false,
+  onToggleDiagram,
 }: Props) {
   const map = useKeymap().map;
   const runKey = hintFor(map, "query.run");
+  const diagramKey = hintFor(map, "diagram.toggle");
   const strip = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
   const icons = compact || narrow;
@@ -210,6 +216,30 @@ export default function EditorHeader({
       {labelled("explain", "Explain", hintFor(map, "query.explain"), onExplain)}
       {labelled("format", "Format", hintFor(map, "query.format"), onFormat)}
       <span className="spacer" />
+      {/* Frame 6.2: the diagram toggle opens the right-hand group, pressed while the pane is open. */}
+      {onToggleDiagram &&
+        (icons ? (
+          <button
+            type="button"
+            className={diagramOpen ? "icon-button icon-button-on" : "icon-button"}
+            aria-label={withHint("Diagram", diagramKey)}
+            aria-pressed={diagramOpen}
+            title={withHint("Diagram", diagramKey)}
+            onClick={onToggleDiagram}
+          >
+            <Icon name="flow" size={14} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={diagramOpen ? "button button-small button-quiet button-on" : "button button-small button-quiet"}
+            aria-pressed={diagramOpen}
+            onClick={onToggleDiagram}
+          >
+            <Icon name="flow" size={14} />
+            Diagram {diagramKey && <Kbd keys={diagramKey} />}
+          </button>
+        ))}
       {chip &&
         (onToggleAssistant ? (
           <button

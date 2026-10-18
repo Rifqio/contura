@@ -1290,3 +1290,89 @@ test("a_cancelled_open_leaves_the_connection_open_while_another_open_is_in_fligh
   finishers[1]("16");
   await other;
 });
+
+// The query diagram beside the editor (step 6, B1).
+
+const DIAGRAM_SQL = "SELECT o.id, s.name\nFROM sales.orders o\nJOIN stores s ON s.id = o.store_id";
+const ctrlShiftD = (view: EditorView) => key(view, "D", { ctrlKey: true, shiftKey: true, code: "KeyD", keyCode: 68 });
+
+test("ctrl_shift_d_opens_the_query_diagram_beside_the_editor_and_closes_it_again", async () => {
+  routes({ sql_schema: () => KFC_SCHEMA });
+  const lang = withLang();
+  const asked = vi.spyOn(lang.client, "sqlShape");
+  const { view, rerenderCurrent } = setup(doc(DIAGRAM_SQL), true, { lang, visible: true });
+  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  const diagramButton = () => screen.getByRole("button", { name: /^Diagram/ });
+  expect(diagramButton().getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByRole("region", { name: "Query diagram" })).toBeNull();
+  expect(asked).not.toHaveBeenCalled();
+
+  ctrlShiftD(view());
+  const pane = await screen.findByRole("region", { name: "Query diagram" });
+  expect(diagramButton().getAttribute("aria-pressed")).toBe("true");
+  await waitFor(() => expect(asked).toHaveBeenCalled());
+  expect(asked.mock.calls[0][0]).toMatchObject({ docId: "t1", text: DIAGRAM_SQL, dialect: "postgres", pos: 0 });
+  expect(await within(pane).findByRole("group", { name: "Table orders o" })).toBeTruthy();
+  // The editor keeps 580 px; the pane takes the rest.
+  expect(document.querySelector(".query-tab")?.classList.contains("query-tab-with-diagram")).toBe(true);
+  expect(/\.query-tab-with-diagram\s*\{[^}]*grid-template-columns:\s*580px minmax\(0, 1fr\)/.test(appCss)).toBe(true);
+
+  // Moving where you are typing asks again.
+  const before = asked.mock.calls.length;
+  act(() => view().dispatch({ selection: { anchor: DIAGRAM_SQL.indexOf("JOIN") } }));
+  rerenderCurrent();
+  await waitFor(() => expect(asked.mock.calls.length).toBeGreaterThan(before));
+  expect(asked.mock.calls[asked.mock.calls.length - 1][0].pos).toBe(DIAGRAM_SQL.indexOf("JOIN"));
+
+  ctrlShiftD(view());
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Query diagram" })).toBeNull());
+  expect(diagramButton().getAttribute("aria-pressed")).toBe("false");
+  const closedAt = asked.mock.calls.length;
+  act(() => view().dispatch({ changes: { from: 0, insert: "-- note\n" } }));
+  rerenderCurrent();
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(asked.mock.calls.length).toBe(closedAt);
+});
+
+test("the_diagram_button_opens_the_pane_and_a_selected_card_bands_its_lines_in_the_editor", async () => {
+  routes({ sql_schema: () => KFC_SCHEMA });
+  const lang = withLang();
+  setup(doc(DIAGRAM_SQL), true, { lang, visible: true });
+  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await userEvent.click(screen.getByRole("button", { name: /^Diagram/ }));
+  const pane = await screen.findByRole("region", { name: "Query diagram" });
+  const card = await within(pane).findByRole("group", { name: "Table stores s" });
+  fireEvent.click(card.closest(".react-flow__node") as HTMLElement);
+  // Line 3 names stores (FROM ... JOIN stores s ON s.id = ...); line 1 reads s.name.
+  await waitFor(() => expect([...document.querySelectorAll(".cm-line.cm-diagram-band")].map((l) => l.textContent)).toEqual([
+    "SELECT o.id, s.name",
+    "JOIN stores s ON s.id = o.store_id",
+  ]));
+  await userEvent.click(within(pane).getByRole("button", { name: "Close diagram" }));
+  await waitFor(() => expect(document.querySelectorAll(".cm-line.cm-diagram-band")).toHaveLength(0));
+});
+
+test("the_diagram_loads_another_mysql_database_a_statement_names", async () => {
+  const mysql: ConnectionConfig = { ...conn, dialect: "mysql", port: 3306, database: "shop" };
+  const SHOP_SCHEMA = { searchPath: [], tables: [{ schema: null, name: "orders", kind: "table" as const, columns: [{ name: "id", typeName: "int", pk: true }] }], fks: [] };
+  const ARCHIVE_SCHEMA = { searchPath: [], tables: [{ schema: null, name: "old_orders", kind: "table" as const, columns: [{ name: "id", typeName: "int", pk: true }, { name: "placed_at", typeName: "datetime", pk: false }] }], fks: [] };
+  let release: () => void = () => {};
+  routes({
+    list_databases: () => ["shop", "archive"],
+    sql_schema: ({ database }) => (database === "archive" ? new Promise((r) => (release = () => r(ARCHIVE_SCHEMA))) : SHOP_SCHEMA),
+  });
+  const lang = withLang();
+  setup(doc("SELECT a.placed_at FROM archive.old_orders a", { database: "shop" }), true, { lang, connections: [mysql], visible: true });
+  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await userEvent.click(screen.getByRole("button", { name: /^Diagram/ }));
+  const pane = await screen.findByRole("region", { name: "Query diagram" });
+  await waitFor(() => expect(callsTo("sql_schema")).toContainEqual({ id: "c1", database: "archive" }));
+  const card = await within(pane).findByRole("group", { name: "Table old_orders a" });
+  expect(card.textContent).toContain("Loading schema");
+  expect(card.textContent).not.toContain("Not in the schema");
+  act(() => release());
+  await waitFor(() => expect(within(pane).getByRole("group", { name: "Table old_orders a" }).textContent).toContain("datetime"));
+  expect(within(pane).getByRole("group", { name: "Table old_orders a" }).textContent).not.toContain("Loading schema");
+});

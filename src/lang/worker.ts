@@ -1,13 +1,14 @@
 // The language worker: parses DBML about 120 ms after the last edit, checks
-// SQL about 150 ms after, and answers SQL completion and refactors at once,
-// all off the UI thread.
+// SQL and draws its query shape about 150 ms after, and answers SQL completion and refactors at once,
+// all off the UI thread. It also lays out diagrams, loading dagre on first use.
 import type { SchemaModel } from "../api/types";
+import { layoutMissing } from "../diagram/layout";
 import { inspectDbml } from "./dbml/inspect";
 import { parseDbml } from "./dbml/parse";
 import type { FromWorker, ToWorker } from "./protocol";
 import { createSqlService } from "./sql/service";
 
-type Debounced = Extract<ToWorker, { type: "update" } | { type: "sqlAnalyze" }>;
+type Debounced = Extract<ToWorker, { type: "update" } | { type: "sqlAnalyze" } | { type: "sqlShape" }>;
 
 /** Handles messages from the client; `debounceMs` 0 runs everything synchronously (tests). */
 export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, sqlDebounceMs = debounceMs === 0 ? 0 : 150): (m: ToWorker) => void {
@@ -19,6 +20,11 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
 
   function run(m: Debounced, ids: number[]) {
     try {
+      if (m.type === "sqlShape") {
+        pending.delete(`shape:${m.docId}`);
+        post({ type: "sqlShape", ids, result: sql.shape(m.docId, m.text, m.dialect, m.schemaKey, m.schemaState, m.pos) });
+        return;
+      }
       if (m.type === "sqlAnalyze") {
         pending.delete(`sql:${m.docId}`);
         const diagnostics = sql.analyze(m.docId, m.text, m.dialect, m.schemaKey, m.schemaState);
@@ -54,6 +60,8 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         return debounce(m, m.docId, debounceMs);
       case "sqlAnalyze":
         return debounce(m, `sql:${m.docId}`, sqlDebounceMs);
+      case "sqlShape":
+        return debounce(m, `shape:${m.docId}`, sqlDebounceMs);
       case "sqlSchema":
         return sql.setSchema(m.key, m.schema);
       case "sqlComplete":
@@ -69,6 +77,12 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         } catch (e) {
           fail([m.id], e);
         }
+        return;
+      case "layout":
+        layoutMissing(m.request).then(
+          (positions) => post({ type: "layout", ids: [m.id], positions }),
+          (e: unknown) => fail([m.id], e),
+        );
         return;
     }
   };

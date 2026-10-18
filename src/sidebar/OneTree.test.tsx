@@ -5,6 +5,7 @@ import App from "../App";
 import type { ConnectionConfig, ConnectionId, DbObject, Group, SavedQuery } from "../api/types";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { GroupImagesProvider } from "../components/GroupBadge";
+import { iconElement } from "../components/Icon";
 import OneTree, { type OneTreeProps } from "./OneTree";
 import { type RevealRequest, useTreeData } from "./useTreeData";
 
@@ -63,6 +64,7 @@ function handlers() {
     onEditConnection: vi.fn(),
     onDuplicateConnection: vi.fn(),
     onNewQuery: vi.fn(),
+    onNewVisualQuery: vi.fn(),
     onNewSchemaModel: vi.fn(),
     onMoveConnection: vi.fn(),
     onNewGroup: vi.fn(),
@@ -98,6 +100,7 @@ function Harness({ connections, open = [], reveal, onNotOpen, onRevealed, treeRe
       onEditConnection={noop}
       onDuplicateConnection={noop}
       onNewQuery={noop}
+      onNewVisualQuery={noop}
       onNewSchemaModel={noop}
       onMoveConnection={noop}
       onNewGroup={noop}
@@ -320,6 +323,7 @@ test("row_menu_matches_frame_7", async () => {
   expect(menuRows(menu)).toEqual([
     ["Close Connection", ""],
     ["New query", "Ctrl+T"],
+    ["New Visual Query", ""],
     ["New Schema Model...", ""],
     ["Edit Connection...", ""],
     ["Duplicate", ""],
@@ -784,6 +788,41 @@ test("saved_queries_is_the_last_branch_with_opens_on_text", async () => {
   expect(h.onOpenSaved).toHaveBeenCalledWith(SAVED[0]);
 });
 
+test("a_saved_visual_query_row_has_its_icon_and_connection_or_says_the_connection_was_removed", async () => {
+  routeInvoke({});
+  const h = handlers();
+  const visual: SavedQuery[] = [
+    { id: "v1", name: "late orders by store", sql: "SELECT 1", updatedAtMs: 1, connectionId: "a", kind: "visual", visualJson: "{}" },
+    { id: "v2", name: "orphan", sql: "SELECT 1", updatedAtMs: 1, connectionId: null, kind: "visual", visualJson: "{}" },
+  ];
+  render(<Harness connections={[conn("a", "shop-staging")]} saved={[...SAVED, ...visual]} {...h} />);
+  const vq = iconElement("visualQuery").querySelector("path")!.getAttribute("d");
+  const iconOf = (name: string) => item(name).querySelector("path")?.getAttribute("d");
+  expect(iconOf("late orders by store")).toBe(vq);
+  expect(iconOf("late orders")).not.toBe(vq);
+  expect(item("late orders by store").querySelector(".tree-meta")?.textContent).toBe("shop-staging");
+  expect(item("orphan").querySelector(".tree-meta")?.textContent).toBe("Connection removed");
+  // A SQL row with no Connection says nothing.
+  expect(item("weekly sales").querySelector(".tree-meta")).toBeNull();
+  await userEvent.click(item("orphan"));
+  expect(h.onOpenSaved).toHaveBeenCalledWith(visual[1]);
+});
+
+test("renaming_a_saved_visual_query_keeps_it_visual", async () => {
+  routeInvoke({ save_saved_query: ({ input }) => ({ ...(input as object), updatedAtMs: 3, connectionId: null }) });
+  const h = handlers();
+  const v: SavedQuery = { id: "v1", name: "by store", sql: "SELECT 1", updatedAtMs: 1, connectionId: null, kind: "visual", visualJson: '{"version":1}' };
+  render(<Harness connections={[]} saved={[v]} {...h} />);
+  fireEvent.contextMenu(item("by store"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Rename..." }));
+  const name = screen.getByLabelText("Name");
+  await userEvent.clear(name);
+  await userEvent.type(name, "orders by store");
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^Save/ }));
+  await waitFor(() => expect(h.onSavedChanged).toHaveBeenCalledTimes(1));
+  expect(callsTo("save_saved_query")[0].input).toEqual({ id: "v1", name: "orders by store", sql: "SELECT 1", kind: "visual", visualJson: '{"version":1}' });
+});
+
 test("saved_list_button_opens_the_list", async () => {
   routeInvoke({});
   const h = handlers();
@@ -1149,4 +1188,62 @@ test("read_only_table_row_has_design_but_no_drop", async () => {
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
   expect(menuLabels("orders")).toEqual(["Open", "Design table"]);
+});
+
+
+test("connection_menu_offers_new_visual_query_open_or_closed", async () => {
+  routeMy();
+  const h = handlers();
+  render(<Harness connections={[conn("a", "Shop"), conn("b", "Archive")]} open={["a"]} {...h} />);
+  await userEvent.click(screen.getByRole("button", { name: "More actions for Shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "New Visual Query" }));
+  expect(h.onNewVisualQuery).toHaveBeenCalledWith("a");
+  fireEvent.contextMenu(item(/^Archive/));
+  const menu = screen.getByRole("menu", { name: "Archive" });
+  expect(menuRows(menu).map(([label]) => label).slice(0, 3)).toEqual(["Open Connection", "New query", "New Visual Query"]);
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "New Visual Query" }));
+  expect(h.onNewVisualQuery).toHaveBeenCalledWith("b");
+});
+
+test("add_to_visual_query_shows_only_with_its_handler_on_tables_and_views", async () => {
+  routeMy();
+  const h = { ...handlers(), onDesignTable: vi.fn() };
+  const { rerender } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("orders"));
+  expect(menuLabels("orders")).toEqual(["Open", "Design table"]);
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(item("Views"));
+  fireEvent.contextMenu(await findItem("v_daily_sales"));
+  expect(screen.queryByRole("menu", { name: "v_daily_sales" })).toBeNull();
+
+  const onAddToVisualQuery = vi.fn();
+  rerender(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} onAddToVisualQuery={onAddToVisualQuery} />);
+  fireEvent.contextMenu(item("orders"));
+  expect(menuLabels("orders")).toEqual(["Open", "Add to Visual Query", "Design table"]);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Add to Visual Query" }));
+  expect(onAddToVisualQuery).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } });
+  fireEvent.contextMenu(item("v_daily_sales"));
+  expect(menuLabels("v_daily_sales")).toEqual(["Add to Visual Query"]);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Add to Visual Query" }));
+  expect(onAddToVisualQuery).toHaveBeenLastCalledWith({ connectionId: "a", kind: "view", path: { database: "shop", schema: null, name: "v_daily_sales" } });
+});
+
+test("table_and_view_rows_drag_their_object", async () => {
+  routeMy();
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} />);
+  await findItem("orders");
+  await userEvent.click(item("Views"));
+  expect(item("orders").getAttribute("draggable")).toBe("true");
+  expect((await findItem("v_daily_sales")).getAttribute("draggable")).toBe("true");
+  expect(item("Views").getAttribute("draggable")).toBeNull();
+  const data = new Map<string, string>();
+  const dataTransfer = { setData: (t: string, v: string) => data.set(t, v), effectAllowed: "" };
+  fireEvent.dragStart(item("orders"), { dataTransfer });
+  expect(JSON.parse(data.get("application/x-contura-object")!)).toEqual({
+    connectionId: "a",
+    kind: "table",
+    path: { database: "shop", schema: null, name: "orders" },
+  });
+  expect(dataTransfer.effectAllowed).toBe("copy");
 });

@@ -1,60 +1,83 @@
-// The diagram as plain SVG built from the model and layout: rect, text and path
-// elements only, no foreignObject and no web fonts, so other tools open it cleanly.
+// The Schema Builder's diagram as an export scene, drawn by the engine's sceneToSvg.
 import type { SchemaModel } from "../api/types";
+import { CARD_HEADER, CARD_ROW, CARD_WIDTH, cardHeight } from "../diagram/metrics";
+import { type ExportPalette, exportPalette } from "../diagram/export/palette";
+import type { Scene, SceneEdge, SceneNode } from "../diagram/export/scene";
+import { sceneToSvg } from "../diagram/export/svg";
 import { tableKey } from "../lang/protocol";
-import { type ExportPalette, exportPalette } from "./exportPalette";
-import { CARD_HEADER, CARD_ROW, CARD_WIDTH, type Layout } from "./layout";
+import type { Layout } from "./layout";
 
-const PAD = 40;
+/** The Schema Builder's own exports: the light colours, 40 px round the cards, no mark. */
+export const SCHEMA_EXPORT = { padding: 40, background: "theme", mark: false } as const;
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-export function exportSvg(model: SchemaModel, layout: Layout, palette: ExportPalette = exportPalette()): string {
-  const pos = new Map(
-    model.tables.map((t, i) => [
-      tableKey(t),
-      layout.tables[tableKey(t)] ?? { x: (i % 4) * 300, y: Math.floor(i / 4) * 320 },
-    ]),
-  );
-  const height = (cols: number) => CARD_HEADER + CARD_ROW * cols;
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  const cards = model.tables.map((t) => {
-    const p = pos.get(tableKey(t))!;
-    const h = height(t.columns.length);
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x + CARD_WIDTH);
-    maxY = Math.max(maxY, p.y + h);
-    const rows = t.columns
-      .map((c, i) => {
-        const y = p.y + CARD_HEADER + CARD_ROW * i + 16;
-        return `<text x="${p.x + 10}" y="${y}">${esc(c.name)}</text><text x="${p.x + CARD_WIDTH - 10}" y="${y}" text-anchor="end" fill="${palette.type}">${esc(c.typeName)}</text>`;
-      })
-      .join("");
-    return `<g><rect x="${p.x}" y="${p.y}" width="${CARD_WIDTH}" height="${h}" rx="6" fill="${palette.surface}" stroke="${palette.stroke}"/><rect x="${p.x}" y="${p.y}" width="${CARD_WIDTH}" height="${CARD_HEADER}" rx="6" fill="${palette.fill}"/><line x1="${p.x}" y1="${p.y + CARD_HEADER}" x2="${p.x + CARD_WIDTH}" y2="${p.y + CARD_HEADER}" stroke="${palette.border}"/><text x="${p.x + 10}" y="${p.y + 21}" font-weight="600">${esc(t.name)}</text>${rows}</g>`;
+/** Each table as a card at its layout position, and each Ref as an orthogonal edge from its many side to its one side. */
+export function schemaScene(model: SchemaModel, layout: Layout): Scene {
+  const fk = new Map<string, Set<string>>();
+  for (const r of model.refs) {
+    const k = tableKey({ schema: r.from.schema, name: r.from.table });
+    const set = fk.get(k) ?? new Set<string>();
+    for (const c of r.from.columns) set.add(c);
+    fk.set(k, set);
+  }
+  const nodes: SceneNode[] = model.tables.map((t, i) => {
+    const key = tableKey(t);
+    const p = layout.tables[key] ?? { x: (i % 4) * 300, y: Math.floor(i / 4) * 320 };
+    const pkIndex = new Set(t.indexes.filter((x) => x.pk).flatMap((x) => x.columns));
+    return {
+      id: key,
+      kind: "table",
+      x: p.x,
+      y: p.y,
+      w: CARD_WIDTH,
+      h: cardHeight(t.columns.length),
+      title: t.alias ? `${t.name} as ${t.alias}` : t.name,
+      subtitle: t.schema ?? undefined,
+      rows: t.columns.map((c) => ({
+        left: c.name,
+        right: c.typeName,
+        mark: c.pk || pkIndex.has(c.name) ? "pk" : fk.get(key)?.has(c.name) ? "fk" : undefined,
+      })),
+    };
   });
-  const paths = model.refs.flatMap((r) => {
-    const from = model.tables.find((t) => tableKey(t) === tableKey({ schema: r.from.schema, name: r.from.table }));
-    const to = model.tables.find((t) => tableKey(t) === tableKey({ schema: r.to.schema, name: r.to.table }));
-    if (!from || !to) return [];
-    const a = pos.get(tableKey(from))!;
-    const b = pos.get(tableKey(to))!;
-    const ay = a.y + CARD_HEADER + CARD_ROW * Math.max(0, from.columns.findIndex((c) => c.name === r.from.columns[0])) + 12;
-    const by = b.y + CARD_HEADER + CARD_ROW * Math.max(0, to.columns.findIndex((c) => c.name === r.to.columns[0])) + 12;
-    const leftToRight = a.x <= b.x;
-    const ax = leftToRight ? a.x + CARD_WIDTH : a.x;
-    const bx = leftToRight ? b.x : b.x + CARD_WIDTH;
-    const mid = (ax + bx) / 2;
-    return [`<path d="M${ax} ${ay} C${mid} ${ay} ${mid} ${by} ${bx} ${by}" fill="none" stroke="${palette.subtle}" stroke-width="1.5"/>`];
+  const byKey = new Map(nodes.map((n) => [n.id, n]));
+  const rowOf = (t: SchemaModel["tables"][number] | undefined, col: string) => Math.max(0, t?.columns.findIndex((c) => c.name === col) ?? 0);
+  const edges: SceneEdge[] = model.refs.flatMap((r, i) => {
+    const fromKey = tableKey({ schema: r.from.schema, name: r.from.table });
+    const toKey = tableKey({ schema: r.to.schema, name: r.to.table });
+    const a = byKey.get(fromKey);
+    const b = byKey.get(toKey);
+    if (!a || !b) return [];
+    const ay = a.y + CARD_HEADER + CARD_ROW * rowOf(model.tables.find((t) => tableKey(t) === fromKey), r.from.columns[0]) + 12;
+    const by = b.y + CARD_HEADER + CARD_ROW * rowOf(model.tables.find((t) => tableKey(t) === toKey), r.to.columns[0]) + 12;
+    // Each end leaves by the side facing the other card; cards above one another both use their right side (as on the canvas).
+    let points;
+    if (a.x + a.w <= b.x || b.x + b.w <= a.x) {
+      const ltr = a.x + a.w <= b.x;
+      const ax = ltr ? a.x + a.w : a.x;
+      const bx = ltr ? b.x : b.x + b.w;
+      const mid = Math.round((ax + bx) / 2);
+      points = [
+        { x: ax, y: ay },
+        { x: mid, y: ay },
+        { x: mid, y: by },
+        { x: bx, y: by },
+      ];
+    } else {
+      const ax = a.x + a.w;
+      const bx = b.x + b.w;
+      const out = Math.max(ax, bx) + 24;
+      points = [
+        { x: ax, y: ay },
+        { x: out, y: ay },
+        { x: out, y: by },
+        { x: bx, y: by },
+      ];
+    }
+    return [{ id: `ref-${i}`, kind: "fk" as const, points }];
   });
-  if (model.tables.length === 0) minX = minY = maxX = maxY = 0;
-  // Frame every card, wherever it was dragged, with the image at the frame's own size.
-  const x = Math.floor(minX - PAD);
-  const y = Math.floor(minY - PAD);
-  const w = Math.ceil(maxX + PAD) - x;
-  const h = Math.ceil(maxY + PAD) - y;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${x} ${y} ${w} ${h}" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="${palette.text}"><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${palette.surface}"/>${paths.join("")}${cards.join("")}</svg>\n`;
+  return { nodes, edges };
+}
+
+export function exportSvg(model: SchemaModel, layout: Layout, palette: ExportPalette = exportPalette("light")): string {
+  return sceneToSvg(schemaScene(model, layout), palette, SCHEMA_EXPORT);
 }

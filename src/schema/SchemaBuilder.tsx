@@ -6,12 +6,15 @@ import type { AskContext, AskKit } from "../assistant/context";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
 import Menu, { type MenuItem } from "../components/Menu";
+import { blobToBase64, exportPng } from "../diagram/export/png";
+import PublishDialog from "../diagram/export/PublishDialog";
+import type { Box } from "../diagram/export/scene";
+import type { LayoutRequest } from "../diagram/layout";
 import type { LangClient } from "../lang/client";
 import type { ParseResult, TextEdit } from "../lang/protocol";
 import Canvas from "./Canvas";
 import DbmlEditor from "./DbmlEditor";
-import { exportPng, blobToBase64 } from "./exportPng";
-import { exportSvg } from "./exportSvg";
+import { exportSvg, schemaScene } from "./exportSvg";
 import { followRenames, type Layout, serializeLayout } from "./layout";
 import type { MakeEdits } from "./TableCard";
 
@@ -67,6 +70,8 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
   const [status, setStatus] = useState<string | null>(null);
   const [pendingExport, setPendingExport] = useState<ExportKind | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
+  /** The part of the canvas on screen when Publish was pressed; the dialog is open while set. */
+  const [publishAt, setPublishAt] = useState<Box | null>(null);
   const editsRef = useRef<((edits: TextEdit[]) => void) | null>(null);
   const focusRef = useRef<((offset: number) => void) | null>(null);
   const revealRef = useRef<((offset: number) => void) | null>(null);
@@ -103,6 +108,9 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
     () => (ask?.inlineAsk ? { getDbml: () => textRef.current, label: `${name}.dbml`, connection: sourceConnection, kit: { ...ask, onOpenInChat: undefined } } : undefined),
     [ask, name, sourceConnection],
   );
+
+  /** Arrange runs in the language worker when there is a client (ruling D14). */
+  const runLayout = useMemo(() => (client ? (r: LayoutRequest) => client.layout(r) : undefined), [client]);
 
   const onEdit = useCallback(
     (make: MakeEdits) => {
@@ -257,6 +265,7 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
           ) : (
             <Canvas
               ask={askForCards}
+              runLayout={runLayout}
               model={model}
               layout={layout}
               blocked={blocked}
@@ -267,6 +276,7 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
               }}
               onEdit={onEdit}
               onSelectionChange={setSelected}
+              onPublish={setPublishAt}
               onShowText={collapsed ? () => setCollapsed(false) : undefined}
               onGoToError={() => {
                 setCollapsed(false);
@@ -276,6 +286,19 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
           )}
         </div>
       </div>
+      {publishAt && model && (
+        <PublishDialog
+          scene={schemaScene(model, layout)}
+          fileName={name}
+          selected={selected}
+          onScreen={publishAt}
+          onClose={() => setPublishAt(null)}
+          onSaved={(target) => {
+            setPublishAt(null);
+            setStatus(`Exported ${basename(target)}`);
+          }}
+        />
+      )}
       {pendingExport && (
         <Dialog title="Export" size="confirm" onClose={() => setPendingExport(null)}>
           <div className="dialog-body">

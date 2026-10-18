@@ -291,6 +291,8 @@ pub(crate) fn has_word(sql: &str, word: &str) -> bool {
 /// does not report: `deferrable`, `initially deferred`, `match <kind>`.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct FkClause {
+    /// The `CONSTRAINT` name, when the text gives one.
+    pub(crate) name: Option<String>,
     pub(crate) columns: Vec<String>,
     pub(crate) target: String,
     pub(crate) attributes: Vec<String>,
@@ -429,7 +431,14 @@ pub(crate) fn fk_clauses(create_sql: &str) -> Vec<FkClause> {
                 }
                 k += 1;
             }
+            // `CONSTRAINT n FOREIGN KEY ...` on the table, or `CONSTRAINT n REFERENCES` on a column.
+            let name = if table_key {
+                (at == 2).then(|| item[1].text.clone())
+            } else {
+                (r >= 2 && item[r - 2].is_word("CONSTRAINT")).then(|| item[r - 1].text.clone())
+            };
             out.push(FkClause {
+                name,
                 columns,
                 target: target.text.clone(),
                 attributes,
@@ -453,6 +462,8 @@ mod tests {
                    FOREIGN KEY (y) REFERENCES q (b) MATCH SIMPLE, \
                    note text DEFAULT 'REFERENCES z DEFERRABLE')";
         let got = fk_clauses(sql);
+        let names: Vec<_> = got.iter().map(|c| c.name.as_deref()).collect();
+        assert_eq!(names, [None, Some("b_fk"), Some("xy"), None]);
         let want = [
             (vec!["a"], "p", vec!["deferrable", "initially deferred"]),
             (vec!["b"], "p", vec![]),

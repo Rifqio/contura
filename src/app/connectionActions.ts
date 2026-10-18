@@ -16,12 +16,15 @@ export interface ConnectionActionsEnv {
 }
 
 export function connectionActions(env: ConnectionActionsEnv) {
-  async function newQueryOn(id: ConnectionId) {
+  /** Opens a new tab on the Connection (a query, a Visual Query), then opens the Connection when it is closed. */
+  async function newTabOn(id: ConnectionId, make: (id: ConnectionId) => void) {
     env.setActiveId(id);
-    env.newQuery(id);
+    make(id);
     if (env.openIds.has(id)) return;
     await env.openTracked(id).catch(() => {});
   }
+
+  const newQueryOn = (id: ConnectionId) => newTabOn(id, env.newQuery);
 
   /** Opens a Connection from the tree; its row says Failed, with the reason, when it does not open. */
   async function openFromTree(id: ConnectionId) {
@@ -71,5 +74,5 @@ export function connectionActions(env: ConnectionActionsEnv) {
     }
   }
 
-  return { newQueryOn, openFromTree, closeFromTree, moveFromTree, deleteFromTree, clearHistoryFromTree };
+  return { newQueryOn, newTabOn, openFromTree, closeFromTree, moveFromTree, deleteFromTree, clearHistoryFromTree };
 }

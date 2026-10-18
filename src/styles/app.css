@@ -2497,7 +2497,7 @@ textarea.input {
   font-feature-settings: "calt" 1, "liga" 1;
 }
 
-/* Schema canvas (step 3) */
+/* Diagram canvas (src/diagram, A1) and the Schema Builder canvas (step 3) */
 .schema-canvas {
   position: relative;
   display: flex;
@@ -2560,8 +2560,34 @@ textarea.input {
   border-radius: 0 0 7px 7px;
   background: var(--c-bg-canvas);
 }
+/* The engine's canvas fills its client's box and takes focus for Shift+1, Ctrl+Plus and Ctrl+Minus. */
+.diagram-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--c-bg-canvas);
+  outline: none;
+}
+.diagram-canvas:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: -2px;
+}
+/* The snap grid (DESIGN-NEXT 10.6): 16 px dots in the border colour, 80 px dots in the strong border at 50 percent. */
+.diagram-canvas .diagram-grid-minor {
+  fill: var(--c-border);
+}
+.diagram-canvas .diagram-grid-major {
+  fill: color-mix(in srgb, var(--c-border-strong) 50%, transparent);
+}
+/* Fast mode (over 300 nodes): no hover, no motion. */
+.diagram-canvas.is-fast .react-flow__node {
+  transition: none;
+}
+.diagram-canvas.is-fast .react-flow__node:hover .react-flow__handle {
+  opacity: 0;
+}
 /* React Flow reads its look from these variables: dot grid in the border colour, tokens for the rest. */
-.canvas-flow .react-flow {
+.diagram-canvas .react-flow {
   --xy-background-color-default: var(--c-bg-canvas);
   --xy-background-pattern-dots-color-default: var(--c-border);
   --xy-edge-stroke-default: var(--c-text-subtle);
@@ -2575,7 +2601,7 @@ textarea.input {
   --xy-controls-box-shadow-default: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 /* The zoom control sits 10 px above the 140 px minimap, both 12 px from the right edge. */
-.canvas-flow .react-flow__panel.canvas-zoom {
+.diagram-canvas .react-flow__panel.canvas-zoom {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -2603,7 +2629,7 @@ textarea.input {
   margin: 0 2px;
   background: var(--c-border-subtle);
 }
-.canvas-flow .react-flow__minimap {
+.diagram-canvas .react-flow__minimap {
   --xy-minimap-background-color-default: var(--c-bg-raised);
   --xy-minimap-mask-background-color-default: color-mix(in srgb, var(--c-accent-subtle) 30%, transparent);
   --xy-minimap-mask-stroke-color-default: var(--c-accent);
@@ -2626,21 +2652,31 @@ textarea.input {
   stroke: var(--c-text-subtle);
   stroke-width: 1.5;
 }
-.canvas-flow .react-flow__handle {
+.edge-marker-fill {
+  fill: var(--c-text-subtle);
+  stroke: none;
+}
+/* The badge slot at an edge's midpoint (a Join's kind); its content brings its own look. */
+.edge-badge {
+  position: absolute;
+  z-index: 1;
+  pointer-events: all;
+}
+.diagram-canvas .react-flow__handle {
   width: 8px;
   height: 8px;
   border: 1px solid var(--c-accent);
   opacity: 0;
 }
-.canvas-flow .react-flow__node:hover .react-flow__handle,
-.canvas-flow .react-flow__node.selected .react-flow__handle,
-.canvas-flow .react-flow__handle.connectingfrom,
-.canvas-flow .react-flow__handle.connectingto {
+.diagram-canvas .react-flow__node:hover .react-flow__handle,
+.diagram-canvas .react-flow__node.selected .react-flow__handle,
+.diagram-canvas .react-flow__handle.connectingfrom,
+.diagram-canvas .react-flow__handle.connectingto {
   opacity: 1;
 }
 /* Where an edge ends on the side facing the other card: never drawn, never dragged. */
-.canvas-flow .react-flow__node .react-flow__handle.edge-anchor,
-.canvas-flow .react-flow__node.selected .react-flow__handle.edge-anchor {
+.diagram-canvas .react-flow__node .react-flow__handle.edge-anchor,
+.diagram-canvas .react-flow__node.selected .react-flow__handle.edge-anchor {
   opacity: 0;
   pointer-events: none;
 }
@@ -2650,22 +2686,83 @@ textarea.input {
   width: 216px;
   box-sizing: border-box;
   background: var(--c-bg-surface);
-  border: 1px solid var(--c-node-table-stroke);
+  border: 1px solid var(--card-stroke, var(--c-node-table-stroke));
   border-radius: 6px;
   color: var(--c-text);
   font: var(--font-mono-small);
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
 }
+/* A card's marks: a dashed edge, a warning edge (a lone card), a danger edge (a missing table). */
+.table-card.card-dashed,
+.card-box.card-dashed {
+  border-style: dashed;
+}
+.table-card.card-warning,
+.card-box.card-warning {
+  border-color: var(--c-warning-solid);
+}
+.table-card.card-danger,
+.card-box.card-danger {
+  border-color: var(--c-danger-solid);
+}
+/* Zoomed out (below 45 percent, or fast mode): a 100 x 48 box with the name and "5 columns" (metrics BOX_WIDTH, BOX_HEIGHT). */
+.card-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100px;
+  height: 48px;
+  box-sizing: border-box;
+  padding: 0 var(--spacing-sm);
+  background: var(--card-fill, var(--c-node-table-fill));
+  border: 1px solid var(--card-stroke, var(--c-node-table-stroke));
+  border-radius: 6px;
+  color: var(--c-text);
+}
+/* 16 / 20 600 as DESIGN-NEXT 10.6 draws it; no font token has this size, so it is set here on purpose. */
+.card-box-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.card-box-count {
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+/* Below 15 percent: a plain block in the stroke colour. */
+.card-block {
+  position: relative;
+  width: 100px;
+  height: 48px;
+  border-radius: 4px;
+  background: var(--card-stroke, var(--c-node-table-stroke));
+}
+.card-block.card-warning {
+  background: var(--c-warning-solid);
+}
+.card-block.card-danger {
+  background: var(--c-danger-solid);
+}
 /* The selection: a 2 px accent outline 5 px outside the card, with a square handle on each corner. */
-.table-card .selbox {
+.table-card .selbox,
+.card-box .selbox,
+.card-block .selbox {
   position: absolute;
   inset: -5px;
   border: 2px solid var(--c-accent);
   border-radius: 9px;
   pointer-events: none;
 }
-.table-card .selbox i {
+.table-card .selbox i,
+.card-box .selbox i,
+.card-block .selbox i {
   position: absolute;
   width: 8px;
   height: 8px;
@@ -2673,19 +2770,27 @@ textarea.input {
   background: var(--c-bg-surface);
   border: 1px solid var(--c-accent);
 }
-.table-card .selbox i:nth-child(1) {
+.table-card .selbox i:nth-child(1),
+.card-box .selbox i:nth-child(1),
+.card-block .selbox i:nth-child(1) {
   left: -5px;
   top: -5px;
 }
-.table-card .selbox i:nth-child(2) {
+.table-card .selbox i:nth-child(2),
+.card-box .selbox i:nth-child(2),
+.card-block .selbox i:nth-child(2) {
   right: -5px;
   top: -5px;
 }
-.table-card .selbox i:nth-child(3) {
+.table-card .selbox i:nth-child(3),
+.card-box .selbox i:nth-child(3),
+.card-block .selbox i:nth-child(3) {
   left: -5px;
   bottom: -5px;
 }
-.table-card .selbox i:nth-child(4) {
+.table-card .selbox i:nth-child(4),
+.card-box .selbox i:nth-child(4),
+.card-block .selbox i:nth-child(4) {
   right: -5px;
   bottom: -5px;
 }
@@ -2697,8 +2802,8 @@ textarea.input {
   height: 32px;
   box-sizing: border-box;
   padding: 0 var(--spacing-sm);
-  border-bottom: 1px solid var(--c-node-table-stroke);
-  background: var(--c-node-table-fill);
+  border-bottom: 1px solid var(--card-stroke, var(--c-node-table-stroke));
+  background: var(--card-fill, var(--c-node-table-fill));
   border-radius: 5px 5px 0 0;
 }
 .table-card-icon {
@@ -2822,6 +2927,204 @@ textarea.input {
 }
 .card-popover p {
   margin: 0 0 var(--spacing-xs);
+}
+
+/* Publish image dialog (DESIGN-NEXT 10.9): body grid 1fr 240px; a 308 px preview on the canvas colour. */
+.publish-keys {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.publish-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: var(--spacing-lg);
+}
+.publish-left,
+.publish-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  min-width: 0;
+}
+.publish-preview {
+  position: relative;
+  height: 308px;
+  overflow: hidden;
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-canvas);
+}
+.publish-stage {
+  position: absolute;
+}
+.publish-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  pointer-events: none;
+}
+/* The crop box: 1 px accent, the outside dimmed by the scrim, eight 8 px handles. */
+.publish-crop {
+  position: absolute;
+  box-sizing: border-box;
+  border: var(--border-hairline) solid var(--c-accent);
+  box-shadow: 0 0 0 9999px var(--color-scrim);
+  cursor: move;
+  touch-action: none;
+}
+.publish-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  background: var(--c-bg-surface);
+  border: var(--border-hairline) solid var(--c-accent);
+}
+.publish-handle-nw,
+.publish-handle-n,
+.publish-handle-ne {
+  top: -4px;
+}
+.publish-handle-sw,
+.publish-handle-s,
+.publish-handle-se {
+  bottom: -4px;
+}
+.publish-handle-e,
+.publish-handle-w {
+  top: calc(50% - 4px);
+}
+.publish-handle-nw,
+.publish-handle-w,
+.publish-handle-sw {
+  left: -4px;
+}
+.publish-handle-ne,
+.publish-handle-e,
+.publish-handle-se {
+  right: -4px;
+}
+.publish-handle-n,
+.publish-handle-s {
+  left: calc(50% - 4px);
+}
+.publish-handle-nw,
+.publish-handle-se {
+  cursor: nwse-resize;
+}
+.publish-handle-ne,
+.publish-handle-sw {
+  cursor: nesw-resize;
+}
+.publish-handle-n,
+.publish-handle-s {
+  cursor: ns-resize;
+}
+.publish-handle-e,
+.publish-handle-w {
+  cursor: ew-resize;
+}
+.publish-size {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 0 var(--spacing-xs);
+  border-radius: var(--rounded-xs);
+  background: var(--c-bg-raised);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.publish-crop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.publish-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.publish-radio-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.publish-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font: var(--font-body);
+  accent-color: var(--c-accent);
+}
+.publish-range {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.publish-range-value {
+  min-width: 40px;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* A slider: a 4 px track in the border colour, a 12 px accent thumb. */
+.range {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--rounded-full);
+  background: var(--c-border);
+}
+.range::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: 0;
+  border-radius: var(--rounded-full);
+  background: var(--c-accent);
+  appearance: none;
+}
+.range:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+.publish-output {
+  display: grid;
+  gap: var(--spacing-2xs);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.publish-output-label,
+.publish-output-file {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.publish-output-size {
+  font: var(--font-body);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.publish-note {
+  min-width: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.publish-error {
+  color: var(--c-danger-text);
 }
 
 /* Schema Builder screen (step 3) */
@@ -6789,4 +7092,1060 @@ button.send-pill:hover {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-xs);
+}
+
+/* ---- Visual Query tab (step 6, Task 7, frame 6.1) ---- */
+/* Canvas on top; below it a 318 px row with the panel and the 480 px SQL pane. */
+.vq-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--c-bg-app);
+}
+.vq-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 36px;
+  flex: none;
+  padding: 0 6px;
+  white-space: nowrap;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-toolbar .spacer {
+  flex: 1;
+}
+.vq-count {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.vq-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 6px 12px;
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  font: var(--font-small);
+}
+.vq-banner p {
+  margin: 0;
+}
+.vq-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.vq-canvas > .diagram-canvas {
+  flex: 1;
+  min-width: 0;
+}
+/* The empty state sits over the middle of the canvas, with the finder in place. */
+.vq-empty {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-xs);
+  width: 420px;
+  text-align: center;
+}
+.vq-empty-title {
+  margin: 0;
+  font: var(--font-title);
+  color: var(--c-text);
+}
+.vq-empty-text {
+  margin: 0 0 var(--spacing-sm);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.vq-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  z-index: 5;
+  display: flex;
+  gap: var(--spacing-md);
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  pointer-events: none;
+}
+.vq-hint span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The finder: 420 px, search field with its key, rows of icon, name, schema and rows; a footnote. */
+.vq-finder {
+  width: 420px;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  background: var(--c-bg-raised);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  box-shadow: var(--shadow-menu);
+}
+.vq-finder-over {
+  position: fixed;
+  z-index: 200;
+}
+.vq-finder-search {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 36px;
+  padding: 0 10px;
+  color: var(--c-text-muted);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-finder-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.vq-finder-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.vq-finder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 28px;
+  padding: 0 10px;
+  color: var(--c-text);
+  cursor: pointer;
+}
+.vq-finder-row-on {
+  background: var(--c-bg-active);
+}
+.vq-finder-name {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-finder-schema {
+  flex: 1;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.vq-finder-rows {
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-finder-none {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.vq-finder-foot {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+
+/* Cards: 24 px rows of checkbox, key or link mark, name (600 when ticked), type or aggregate. */
+.vq-card-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+}
+.vq-card-row:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.vq-card-check {
+  margin: 0;
+  accent-color: var(--c-accent);
+}
+.vq-card-mark {
+  display: inline-flex;
+  width: 14px;
+  color: var(--c-text-subtle);
+}
+.vq-card-col {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-card-row-on .vq-card-col {
+  font-weight: 600;
+}
+.vq-card-row-faded {
+  opacity: 0.6;
+}
+.vq-card-type {
+  color: var(--c-syn-type);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-card-agg {
+  color: var(--c-accent-text);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-card-alias {
+  color: var(--c-text-subtle);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-card-more,
+.vq-card-note {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  font: var(--font-small);
+}
+.vq-card-note-warning {
+  color: var(--c-warning-text);
+}
+.vq-card-note-danger {
+  color: var(--c-danger-text);
+}
+
+/* Below the canvas: the panel and the 480 px SQL pane, 318 px tall. */
+.vq-bottom {
+  display: flex;
+  flex: none;
+  height: 318px;
+  min-height: 0;
+  border-top: var(--border-hairline) solid var(--c-border);
+}
+.vq-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.vq-panel-tabs {
+  display: flex;
+  gap: var(--spacing-xs);
+  height: 36px;
+  flex: none;
+  padding: 0 8px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-panel-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--c-text-muted);
+  font: var(--font-label);
+  padding: 0 8px;
+  cursor: pointer;
+}
+.vq-panel-tab-on {
+  color: var(--c-text);
+  border-bottom-color: var(--c-accent);
+}
+.vq-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.vq-panel-empty {
+  padding: 24px;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  text-align: center;
+}
+.vq-panel-empty p {
+  margin: 0;
+}
+.vq-panel-empty-title {
+  color: var(--c-text);
+  font: var(--font-body-strong);
+}
+.vq-panel-list {
+  margin: 0;
+  padding: 4px 12px;
+  list-style: none;
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-panel-row {
+  height: 24px;
+  display: flex;
+  align-items: center;
+}
+.vq-sql {
+  width: 480px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: var(--border-hairline) solid var(--c-border);
+  background: var(--c-bg-surface);
+}
+.vq-sql-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 36px;
+  flex: none;
+  padding: 0 8px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-sql-strip .spacer {
+  flex: 1;
+}
+.vq-sql-title {
+  font: var(--font-label);
+  color: var(--c-text);
+}
+.vq-sql-readonly {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.vq-sql-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: 8px;
+}
+.vq-sql-code .sql-block-line {
+  cursor: pointer;
+}
+.sql-block-line-select {
+  background: var(--c-accent-subtle);
+}
+.sql-block-line-danger {
+  background: var(--c-danger-subtle);
+}
+.vq-sql-empty {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.vq-sql-empty p {
+  margin: 0 0 4px;
+}
+.vq-sql-foot {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+
+/* ---- Visual Query joins and panel tabs (step 6, Task 8, frame 6.1) ---- */
+/* Joins: Foreign Key Joins solid, made here dashed, pending dashed in warning; the open one in the accent. */
+.vq-join-line {
+  stroke: var(--c-text-subtle);
+  stroke-width: 1.5;
+}
+.vq-join-made {
+  stroke-dasharray: 5 4;
+}
+.vq-join-pending {
+  stroke: var(--c-warning-solid);
+  stroke-dasharray: 4 4;
+}
+.vq-join-selected {
+  stroke: var(--c-accent);
+  stroke-width: 2;
+}
+.vq-join-danger {
+  stroke: var(--c-danger-solid);
+}
+.vq-join-dot {
+  fill: var(--c-text-subtle);
+}
+.vq-join-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-full);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-micro);
+  cursor: pointer;
+}
+.vq-join-badge:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.vq-join-badge-on {
+  border-color: var(--c-accent);
+  color: var(--c-accent-text);
+}
+.vq-join-badge-pick {
+  border-color: var(--c-warning-solid);
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+}
+.vq-join-badge-danger {
+  border-color: var(--c-danger-solid);
+  color: var(--c-danger-text);
+}
+.vq-venn {
+  flex: none;
+}
+.vq-venn-ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+.vq-venn-fill {
+  fill: var(--c-accent-subtle);
+  stroke: none;
+}
+
+/* Dots on both sides of a row on hover and focus; while dragging every row is a target, the one under the drag marked (gold when the types differ). */
+.vq-canvas .vq-card-row:hover .react-flow__handle,
+.vq-canvas .vq-card-row:focus .react-flow__handle,
+.vq-canvas .vq-card-row:focus-within .react-flow__handle {
+  opacity: 1;
+}
+.vq-joining .vq-card-row {
+  box-shadow: inset 0 0 0 1px var(--c-border-subtle);
+}
+.vq-joining .vq-card-row-target {
+  background: var(--c-accent-subtle);
+  box-shadow: inset 0 0 0 1px var(--c-accent);
+}
+.vq-joining .vq-card-row-target-warn {
+  background: var(--c-warning-subtle);
+  box-shadow: inset 0 0 0 1px var(--c-warning-solid);
+}
+.vq-drop-chip {
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 280px;
+  padding: 6px 8px;
+  transform: translateY(calc(-100% - 6px));
+  background: var(--c-bg-raised);
+  border: var(--border-hairline) solid var(--c-accent);
+  border-radius: var(--rounded-md);
+  box-shadow: var(--shadow-menu);
+  color: var(--c-text);
+  font: var(--font-small);
+  pointer-events: none;
+}
+.vq-drop-chip-warn {
+  border-color: var(--c-warning-solid);
+}
+.vq-drop-chip-condition {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-drop-chip-types {
+  color: var(--c-warning-text);
+}
+
+/* The Join and Pick popovers: fixed in the body, beside the badge. */
+.vq-popover {
+  position: fixed;
+  z-index: 250;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  box-sizing: border-box;
+  padding: 10px;
+  background: var(--c-bg-raised);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  box-shadow: var(--shadow-menu);
+  color: var(--c-text);
+  font: var(--font-small);
+}
+.vq-popover:focus {
+  outline: none;
+}
+.vq-popover-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.vq-popover-title {
+  flex: 1;
+  font: var(--font-body-strong);
+}
+.vq-popover-caption,
+.vq-popover-hint {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.vq-popover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-popover-label,
+.vq-panel-label {
+  color: var(--c-text-subtle);
+  font: var(--font-label);
+}
+.vq-popover-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding-top: 6px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-popover-foot .spacer {
+  flex: 1;
+}
+.vq-danger-text {
+  color: var(--c-danger-text);
+}
+.vq-join-kinds,
+.vq-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vq-join-kind,
+.vq-pick-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text);
+  text-align: left;
+  cursor: pointer;
+}
+.vq-join-kind:hover:not(:disabled),
+.vq-pick-choice:hover {
+  background: var(--c-bg-active);
+}
+.vq-join-kind:disabled {
+  color: var(--c-text-subtle);
+  cursor: default;
+}
+.vq-join-kind-on {
+  background: var(--c-accent-subtle);
+}
+.vq-join-kind-text,
+.vq-pick-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.vq-join-kind-name,
+.vq-pick-name {
+  font: var(--font-label);
+}
+.vq-join-kind-line,
+.vq-pick-comment,
+.vq-pick-key {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.vq-pick-columns,
+.vq-join-condition {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-join-conditions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.vq-join-condition-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+}
+
+/* Problems the Core gives, under the field they belong to. */
+.vq-problem {
+  margin: 2px 0 0;
+  color: var(--c-danger-text);
+  font: var(--font-small);
+}
+.select-invalid .select-button,
+.vq-tab .input[aria-invalid="true"] {
+  border-color: var(--c-danger-solid);
+}
+.vq-mono {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+
+/* The Columns tab: grip, checkbox, Output name, From, Aggregate, Sort; then Group by. */
+.vq-columns,
+.vq-filters {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-xs);
+  padding: 8px 12px;
+}
+.vq-grid {
+  border-collapse: collapse;
+  width: 100%;
+}
+.vq-grid th {
+  padding: 0 6px 4px 0;
+  color: var(--c-text-subtle);
+  font: var(--font-label);
+  text-align: left;
+}
+.vq-grid td {
+  padding: 2px 6px 2px 0;
+  vertical-align: middle;
+}
+.vq-grid-row-dragged {
+  opacity: 0.5;
+}
+.vq-grip {
+  cursor: grab;
+}
+.vq-col-name {
+  width: 160px;
+}
+.vq-col-from {
+  color: var(--c-text-muted);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: stretch;
+  padding-top: 6px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.vq-group-head .spacer {
+  flex: 1;
+}
+.vq-group-auto {
+  color: var(--c-text-muted);
+}
+.vq-group-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.vq-group-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-height: 24px;
+}
+/* A row's own problem (no column picked) wraps under it. */
+.vq-group-row .vq-problem {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* The Filter and sort tab. */
+.vq-filter-list,
+.vq-sort-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: stretch;
+}
+.vq-filter-row,
+.vq-limit-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.vq-limit-row {
+  align-self: stretch;
+}
+.vq-limit-row .spacer {
+  flex: 1;
+}
+.vq-filter-where {
+  width: 64px;
+  color: var(--c-syn-keyword);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-filter-joiner {
+  width: 64px;
+}
+.vq-filter-value {
+  width: 140px;
+}
+.vq-filter-between {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.vq-filter-and {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.vq-limit {
+  width: 96px;
+}
+.vq-panel-hint {
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* The status line, here only when there is no window status bar to take it. */
+.vq-status-line {
+  flex: none;
+  padding: 0 12px;
+  font: var(--font-small);
+}
+.vq-status {
+  color: var(--c-warning-text);
+}
+.vq-status:empty,
+.vq-status-line:not(:has(.vq-status-ran, .vq-changed)):has(.vq-status:empty) {
+  display: none;
+}
+
+/* Visual Query: Run, Results and server error marks (Task 9). */
+.vq-status-line:has(.vq-status-ran, .vq-changed) {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+.vq-status-ran {
+  color: var(--c-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.vq-changed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--c-warning-text);
+  font: var(--font-small);
+  white-space: nowrap;
+}
+.vq-panel-head {
+  display: flex;
+  align-items: center;
+  flex: none;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.vq-panel-head .vq-panel-tabs {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+.vq-panel-changed {
+  padding: 0 var(--spacing-md);
+}
+.vq-card-row.vq-card-row-danger {
+  background: var(--c-danger-subtle);
+  box-shadow: inset 2px 0 0 var(--c-danger-solid);
+}
+.vq-card-row-danger .vq-card-col {
+  color: var(--c-danger-text);
+}
+.vq-cross-ask p {
+  margin: 0 0 var(--spacing-sm);
+}
+
+/* Saved Visual Queries (Task 10): a closed or removed Connection fades the Joins with the cards. */
+.vq-canvas-closed .react-flow__edge {
+  opacity: 0.6;
+}
+.vq-banner .button {
+  flex: none;
+}
+
+/* ---- Query diagram (step 6, Task 13, frame 6.2) ---- */
+/* Beside a SQL tab: the editor keeps 580 px and the diagram fills the rest, over every row of the tab. */
+.query-tab-with-diagram {
+  grid-template-columns: 580px minmax(0, 1fr);
+}
+.query-tab-with-diagram > * {
+  grid-column: 1;
+}
+.query-tab-with-diagram > .query-diagram {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  border-left: var(--border-hairline) solid var(--c-border-subtle);
+}
+/* Beside a Visual Query's canvas: the two share the width. */
+.vq-canvas > .query-diagram {
+  flex: 1;
+  min-width: 0;
+  border-left: var(--border-hairline) solid var(--c-border-subtle);
+}
+.editor-header .button-quiet.button-on,
+.vq-toolbar .button-quiet.button-on {
+  background: var(--c-accent-subtle);
+  color: var(--c-text);
+  box-shadow: inset 0 0 0 1px var(--c-accent);
+}
+.sql-editor .cm-line.cm-diagram-band {
+  background: var(--c-accent-subtle);
+}
+.query-diagram {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--c-bg-surface);
+}
+.query-diagram-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 36px;
+  flex: none;
+  padding: 0 6px 0 10px;
+  white-space: nowrap;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.query-diagram-title {
+  font: var(--font-body-strong);
+  margin-right: 4px;
+}
+.query-diagram-about {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: 4px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.query-diagram-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--c-bg-canvas);
+}
+.query-diagram-body > .diagram-canvas {
+  flex: 1;
+  min-width: 0;
+}
+/* The danger banner of a statement that cannot be read, and the note of a UNION, over the canvas. */
+.qd-banner {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 8px 10px;
+  border-radius: var(--rounded-md);
+  color: var(--c-text);
+  font: var(--font-small);
+}
+.qd-banner .icon {
+  flex: none;
+}
+.qd-banner-danger {
+  background: var(--c-danger-subtle);
+}
+.qd-banner-danger .icon {
+  color: var(--c-danger-text);
+}
+.qd-banner-info {
+  background: var(--c-info-subtle);
+}
+.qd-banner-info .icon {
+  color: var(--c-info-text);
+}
+.qd-empty {
+  margin: auto;
+  max-width: 360px;
+  text-align: center;
+  color: var(--c-text-subtle);
+}
+.qd-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  pointer-events: none;
+}
+/* Cards: 200 px on the table tokens, the Result 268 px on the view tokens (D1); the header's count is not shown. */
+.qd-card {
+  position: relative;
+}
+.qd-card > .react-flow__handle {
+  top: 16px;
+}
+.qd-card .table-card-count {
+  display: none;
+}
+.qd-card .table-card-schema {
+  margin-left: auto;
+}
+.qd-alias {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.qd-chip {
+  height: 18px;
+}
+.qd-row {
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  padding: 0 10px;
+}
+.qd-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qd-mono {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.qd-more,
+.qd-note {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px 0 30px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.qd-note-danger {
+  color: var(--c-danger-text);
+}
+.qd-note .link-button {
+  margin-left: var(--spacing-xs);
+}
+.qd-result-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+}
+.qd-result-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.qd-result-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.qd-result-type {
+  color: var(--c-syn-type);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  font-style: italic;
+}
+.qd-clauses {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 6px 10px 4px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  line-height: 18px;
+}
+.qd-clause-keyword {
+  display: inline-block;
+  min-width: 72px;
+  color: var(--c-syn-keyword);
+}
+.qd-clause-number {
+  color: var(--c-syn-number);
+}
+/* Lines: Joins and conditions in the subtle stroke, WHERE equalities dotted, lineage thin into the Result. */
+.diagram-canvas .qd-edge .react-flow__edge-path {
+  stroke: var(--c-text-subtle);
+  stroke-width: 1.5;
+}
+.diagram-canvas .qd-edge-cross .react-flow__edge-path {
+  stroke-dasharray: 6 4;
+}
+.diagram-canvas .qd-edge-where .react-flow__edge-path {
+  stroke-dasharray: 2 4;
+}
+.diagram-canvas .qd-edge-lineage .react-flow__edge-path {
+  stroke: var(--c-border-strong);
+  stroke-width: 1;
+}
+.qd-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--rounded-full);
+  background: var(--c-bg-canvas);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  white-space: nowrap;
 }

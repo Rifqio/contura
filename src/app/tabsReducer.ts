@@ -1,6 +1,6 @@
 import type { SetStateAction } from "react";
 import type { QueryTabDoc } from "../query/QueryTab";
-import { type WindowTab, type WorkTab, afterClose, tabKey } from "../shell/tabs";
+import { type VisualTabDoc, type WindowTab, type WorkTab, afterClose, tabKey } from "../shell/tabs";
 
 /** The place's tabs, the window's tabs and the active tab, in one state so each step sees the ones before it. */
 export interface TabsState {
@@ -19,6 +19,8 @@ export type TabsAction =
   | { type: "remove"; drop: (t: WorkTab) => boolean; order: string[] }
   /** Shows the tab of the same Saved Query (a restored draft included), else adds `doc`. */
   | { type: "openSaved"; doc: QueryTabDoc }
+  /** Shows the tab of the same saved Visual Query (a restored draft included), else adds `doc`. */
+  | { type: "openVisual"; doc: VisualTabDoc }
   /** Shows the tab of the same file, else adds `tab`. */
   | { type: "openSchema"; tab: SchemaTab };
 
@@ -56,6 +58,13 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const found = all.find((t) => t.kind === "query" && doc.savedId !== null && t.doc.savedId === doc.savedId);
       if (found) return { ...state, activeKey: tabKey(found) };
       return { ...state, tabs: [...all, { kind: "query", doc }], activeKey: tabKey({ kind: "query", doc }) };
+    }
+    case "openVisual": {
+      const { doc } = action;
+      const all = state.tabs;
+      const found = all.find((t) => t.kind === "visual" && doc.savedId !== null && t.doc.savedId === doc.savedId);
+      if (found) return { ...state, activeKey: tabKey(found) };
+      return { ...state, tabs: [...all, { kind: "visual", doc }], activeKey: tabKey({ kind: "visual", doc }) };
     }
     case "openSchema": {
       const { tab } = action;

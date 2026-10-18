@@ -1,0 +1,28 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "stores", "alias": "s", "x": 300, "y": 0 },
+      { "id": "t3", "schema": null, "name": "customers", "alias": "c", "x": 300, "y": 200 }
+    ],
+    "joins": [
+      { "id": "j1", "left": "t1", "right": "t2", "kind": "inner", "on": [{ "leftColumn": "store_id", "rightColumn": "id" }] },
+      { "id": "j2", "left": "t1", "right": "t3", "kind": "left", "on": [{ "leftColumn": "customer_id", "rightColumn": "id" }] },
+      { "id": "j3", "left": "t3", "right": "t2", "kind": "inner", "on": [{ "leftColumn": "store_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t1", "column": "id", "alias": null, "aggregate": null },
+      { "table": "t3", "column": "name", "alias": null, "aggregate": null }
+    ],
+    "filters": [],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [],
+    "limit": null,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["id", "name"],
+  "warnings": []
+}

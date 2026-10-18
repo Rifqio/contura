@@ -114,6 +114,11 @@ const PATHS = {
   fileCode: "M10 12.5 8 15l2 2.5M14 12.5l2 2.5-2 2.5M14 2v4a2 2 0 0 0 2 2h4M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z",
   external: "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
   fit: "M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3",
+  // Visual Query: three table blocks with the lines that join them.
+  visualQuery: `${rect(2, 3, 8, 6, 1)}${rect(14, 3, 8, 6, 1)}${rect(14, 15, 8, 6, 1)}M10 6h4M18 9v6`,
+  // Lucide arrow-left-right and grip-vertical (ISC): Swap sides, and a row's drag handle.
+  swap: "M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4",
+  grip: `${circle(9, 5, 1)}${circle(9, 12, 1)}${circle(9, 19, 1)}${circle(15, 5, 1)}${circle(15, 12, 1)}${circle(15, 19, 1)}`,
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { EMPTY_LAYOUT } from "../schema/layout";
 import type { ModelDoc } from "../schema/SchemaBuilder";
 import { objectKey } from "../objectPath";
-import { afterClose, designKey, newDesignKey, stripOrder, tabKey, type WindowTab, type WorkTab } from "./tabs";
+import { afterClose, designKey, newDesignKey, stripOrder, tabConnectionId, tabKey, type WindowTab, type WorkTab } from "./tabs";
 
 const query = (id: string): WorkTab => ({
   kind: "query",
@@ -65,4 +65,24 @@ test("a_design_tab_is_keyed_apart_from_its_table", () => {
   expect(key).not.toBe(objectKey("c1", "table", path));
   expect(key).toBe(`design\u0000${objectKey("c1", "table", path)}`);
   expect(newDesignKey("n1")).toBe("design\u0000new\u0000n1");
+});
+
+test("a_visual_tab_is_keyed_by_its_doc_and_names_its_connection", () => {
+  const visual: WorkTab = {
+    kind: "visual",
+    doc: {
+      id: "v1",
+      name: "New Visual Query",
+      connectionId: "c1",
+      database: "shop",
+      model: { version: 1, database: "shop", dialect: "mysql", tables: [], joins: [], columns: [], filters: [], groupBy: { kind: "auto" }, orderBy: [], limit: null, distinct: false },
+      savedId: null,
+      savedJson: null,
+    },
+  };
+  expect(tabKey(visual)).toBe("visual:v1");
+  expect(tabConnectionId(visual)).toBe("c1");
+  expect(tabConnectionId(query("q1"))).toBeNull();
+  expect(tabConnectionId(table)).toBe("c1");
+  expect(tabConnectionId(home)).toBeNull();
 });

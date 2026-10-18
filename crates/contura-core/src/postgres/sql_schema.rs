@@ -45,7 +45,8 @@ fn fks_sql(only_search_path: bool) -> String {
          ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord) \
                JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum ORDER BY k.ord), \
          ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(attnum, ord) \
-               JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum ORDER BY k.ord) \
+               JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum ORDER BY k.ord), \
+         con.conname::text, obj_description(con.oid, 'pg_constraint') \
          FROM pg_constraint con \
          JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
          JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
@@ -115,6 +116,8 @@ pub(super) async fn sql_schema(client: &Client) -> Result<SqlSchema> {
                 table: row.get(3),
                 columns: row.get(5),
             },
+            name: Some(row.get(6)),
+            comment: row.get(7),
         });
     }
 

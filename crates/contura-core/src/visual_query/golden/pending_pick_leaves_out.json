@@ -1,0 +1,51 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t1", "schema": null, "name": "orders", "alias": "o", "x": 0, "y": 0 },
+      { "id": "t2", "schema": null, "name": "stores", "alias": "s", "x": 300, "y": 0 },
+      { "id": "t3", "schema": null, "name": "regions", "alias": "r", "x": 600, "y": 0 },
+      { "id": "t4", "schema": null, "name": "customers", "alias": "c", "x": 0, "y": 200 }
+    ],
+    "joins": [
+      {
+        "id": "j1", "left": "t1", "right": "t2", "kind": "inner", "on": [],
+        "pending": [
+          { "name": "orders_store_fk", "on": [{ "leftColumn": "store_id", "rightColumn": "id" }] },
+          { "name": "orders_pickup_store_fk", "on": [{ "leftColumn": "pickup_store_id", "rightColumn": "id" }], "comment": "Where the order is collected" }
+        ]
+      },
+      { "id": "j2", "left": "t2", "right": "t3", "kind": "inner", "on": [{ "leftColumn": "region_id", "rightColumn": "id" }] },
+      { "id": "j3", "left": "t1", "right": "t4", "kind": "left", "on": [{ "leftColumn": "customer_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t1", "column": "id", "alias": null, "aggregate": null },
+      { "table": "t2", "column": "name", "alias": null, "aggregate": null },
+      { "table": "t3", "column": "name", "alias": null, "aggregate": null },
+      { "table": "t3", "column": "code", "alias": null, "aggregate": null },
+      { "table": "t4", "column": "name", "alias": null, "aggregate": null }
+    ],
+    "filters": [
+      { "joiner": "and", "table": "t2", "column": "city", "op": "eq", "values": ["Oslo"] },
+      { "joiner": "and", "table": "t1", "column": "status", "op": "eq", "values": ["late"] },
+      { "joiner": "or", "table": "t3", "column": "code", "op": "eq", "values": ["N"] }
+    ],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [
+      { "target": { "kind": "column", "table": "t2", "column": "name" }, "dir": "asc" },
+      { "target": { "kind": "output", "index": 2 }, "dir": "asc" },
+      { "target": { "kind": "output", "index": 0 }, "dir": "desc" }
+    ],
+    "limit": 100,
+    "distinct": false
+  },
+  "types": {
+    "t1": { "id": "integer", "status": "text" }
+  },
+  "outputs": ["id", "name"],
+  "warnings": [
+    { "kind": "pendingPick", "table": "t2" },
+    { "kind": "leftOut", "table": "t3", "columns": ["name", "code"] }
+  ]
+}

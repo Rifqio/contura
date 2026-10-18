@@ -24,7 +24,10 @@ export type CommandId =
   | "editor.rename"
   | "editor.definition"
   | "editor.parameterHints"
-  | "history.toggle";
+  | "history.toggle"
+  | "visualQuery.addTable"
+  | "visualQuery.openInEditor"
+  | "diagram.toggle";
 
 export interface Command {
   id: CommandId;
@@ -62,6 +65,10 @@ export const COMMANDS: readonly Command[] = [
   editor("editor.definition", "Go to definition", ["F12"]),
   editor("editor.parameterHints", "Parameter hints", ["Ctrl+Shift+Space"]),
   app("history.toggle", "Query History"),
+  // Step 6 (D9): each Visual Query tab registers these with its region, so the focused tab wins.
+  app("visualQuery.addTable", "Add table", ["Ctrl+Shift+A"]),
+  app("visualQuery.openInEditor", "Open the SQL in the editor", ["Ctrl+Shift+E"]),
+  app("diagram.toggle", "Show or hide the diagram", ["Ctrl+Shift+D"]),
 ];
 
 const BY_ID = new Map(COMMANDS.map((c) => [c.id, c]));

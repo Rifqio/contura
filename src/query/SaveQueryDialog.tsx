@@ -9,8 +9,8 @@ import Select from "../components/Select";
 
 interface Props {
   sql: string;
-  /** Set when renaming an existing Saved Query. */
-  existing?: { id: string; name: string };
+  /** Set when renaming an existing Saved Query; a Visual Query keeps its kind and model. */
+  existing?: { id: string; name: string; kind?: SavedQuery["kind"]; visualJson?: string | null };
   /** The Connections of the place, for "Opens on". */
   connections?: ConnectionConfig[];
   /** The Connection the query opens on to begin with: the tab's. */
@@ -43,20 +43,27 @@ export default function SaveQueryDialog({ sql, existing, connections = [], conne
 
   const wanted = name.trim().toLowerCase();
   const taken = wanted ? others.find((q) => q.id !== existing?.id && q.name.toLowerCase() === wanted) : undefined;
+  // V8: a SQL query never replaces a Visual Query, which would lose its model.
+  const takenVisual = !!taken && taken.kind === "visual" && existing?.kind !== "visual";
   // Renaming onto another query's name is not a replace: the Core refuses it.
-  const replacing = !!taken && !existing;
+  const replacing = !!taken && !existing && !takenVisual;
 
   async function submit() {
     if (!name.trim()) {
       setError("Give the query a name.");
       return;
     }
-    if (taken && existing) return;
+    if ((taken && existing) || takenVisual) return;
     setBusy(true);
     try {
       const input: SavedQueryInput = { id: replacing ? taken.id : (existing?.id ?? null), name: name.trim(), sql };
       // Renaming keeps the stored Connection (R10): only a new or replaced query sends one.
       if (!existing) input.connectionId = opensOn === NONE ? null : opensOn;
+      // A renamed Visual Query stays one.
+      if (existing?.kind === "visual") {
+        input.kind = "visual";
+        input.visualJson = existing.visualJson ?? null;
+      }
       onSaved(await saveSavedQuery(input));
     } catch (e) {
       setError(errorText(e));
@@ -74,7 +81,13 @@ export default function SaveQueryDialog({ sql, existing, connections = [], conne
       hint: c.database ? `· ${c.database}` : undefined,
     })),
   ];
-  const message = error ?? (taken ? "A Saved Query with this name already exists. Replace it, or change the name." : null);
+  const message =
+    error ??
+    (takenVisual
+      ? "This name belongs to a Visual Query. Pick another name."
+      : taken
+        ? "A Saved Query with this name already exists. Replace it, or change the name."
+        : null);
 
   return (
     <Dialog title={existing ? "Rename Saved Query" : "Save query"} icon="bookmark" size="form" onClose={onCancel}>
@@ -133,7 +146,7 @@ export default function SaveQueryDialog({ sql, existing, connections = [], conne
             Cancel
             <Kbd keys="Esc" />
           </button>
-          <button type="submit" className="button button-primary" disabled={busy || (!!taken && !!existing)}>
+          <button type="submit" className="button button-primary" disabled={busy || (!!taken && !!existing) || takenVisual}>
             {replacing ? "Replace" : "Save"}
             <Kbd keys="Enter" />
           </button>

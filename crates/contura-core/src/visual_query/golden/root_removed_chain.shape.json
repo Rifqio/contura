@@ -1,0 +1,13 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "s", "schema": "public", "name": "stores" },
+    { "alias": "r", "schema": "public", "name": "regions" },
+    { "alias": "c", "schema": "public", "name": "customers" }
+  ],
+  "joins": [
+    { "table": "r", "kind": "inner", "on": [["r.id", "s.region_id"]] },
+    { "table": "c", "kind": "cross", "on": [] }
+  ],
+  "outputs": ["s_name", "r_name", "email"]
+}

@@ -49,10 +49,12 @@ interface Props<V extends string> {
   className?: string;
   /** The id of a help line that describes the control. */
   describedBy?: string;
+  /** Marks the control in danger: its value has a problem, said in the `describedBy` line. */
+  invalid?: boolean;
 }
 
 /** The themed replacement for a native select: a combobox button and a listbox popover. */
-export default function Select<V extends string>({ value, options, onChange, label, disabled, mono, className, describedBy }: Props<V>) {
+export default function Select<V extends string>({ value, options, onChange, label, disabled, mono, className, describedBy, invalid }: Props<V>) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -187,7 +189,7 @@ export default function Select<V extends string>({ value, options, onChange, lab
     }
   }
 
-  const classes = ["select", mono ? "select-mono" : "", className ?? ""].filter(Boolean).join(" ");
+  const classes = ["select", mono ? "select-mono" : "", invalid ? "select-invalid" : "", className ?? ""].filter(Boolean).join(" ");
   return (
     <div className={classes} ref={root}>
       <button
@@ -197,6 +199,7 @@ export default function Select<V extends string>({ value, options, onChange, lab
         className="select-button"
         aria-label={label}
         aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? `${id}-list` : undefined}

@@ -1,28 +1,16 @@
-import "@xyflow/react/dist/style.css";
-import {
-  Background,
-  BackgroundVariant,
-  type Connection,
-  type Edge,
-  MiniMap,
-  type Node,
-  Panel,
-  ReactFlow,
-  type ReactFlowInstance,
-  getViewportForBounds,
-  useNodesState,
-  useReactFlow,
-  useStore,
-  useStoreApi,
-} from "@xyflow/react";
+import type { Connection, Edge, Node, ReactFlowInstance } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Icon from "../components/Icon";
 import { useToast } from "../components/Toast";
 import type { SchemaModel, SmEndpoint } from "../api/types";
 import { addRef, addTable, fkTargetWarning } from "../lang/dbml/edits";
 import { tableKey } from "../lang/protocol";
-import EdgeMarkers, { MANY_MARKER, ONE_MARKER } from "./EdgeMarkers";
-import { autoLayout, CARD_WIDTH, cardHeight, type Layout } from "./layout";
+import { MANY_MARKER, ONE_MARKER } from "./EdgeMarkers";
+import DiagramCanvas from "../diagram/DiagramCanvas";
+import type { LayoutRequest, Positions } from "../diagram/layout";
+import { CARD_WIDTH, cardHeight } from "../diagram/metrics";
+import type { Port } from "../diagram/types";
+import { autoLayout, type Layout } from "./layout";
 import type { AskContext, AskKit } from "../assistant/context";
 import TableCard, { type MakeEdits, type TableCardData } from "./TableCard";
 
@@ -41,81 +29,13 @@ interface Props {
   onShowText?: () => void;
   /** The DBML text and name the table cards ask about; absent, the cards have no Ask AI. */
   ask?: { getDbml(): string; label: string; kit: AskKit; connection?: AskContext["connection"] };
+  /** Runs a layout; the language worker's when the Builder has a client, in-process when absent. */
+  runLayout?: (r: LayoutRequest) => Promise<Positions>;
+  /** Opens the Publish image dialog with the part of the diagram on screen, in canvas units; absent, Publish is off. */
+  onPublish?: (onScreen: { x: number; y: number; w: number; h: number }) => void;
 }
 
 const nodeTypes = { table: TableCard };
-
-/** Refit this long after the last window resize. */
-const RESIZE_REFIT_MS = 150;
-
-/**
- * Fits the view once, as soon as the pane has a size, and again after a window resize. Every
- * card has a known size up front (CARD_WIDTH, cardHeight), so this does not wait for React Flow to
- * measure the cards: with onlyRenderVisibleElements the off-screen cards are never measured, and a
- * wait would never end. Also draws the zoom control: minus, the percent, plus and fit.
- */
-function ViewControls({ nodes }: { nodes: Node[] }) {
-  const store = useStoreApi();
-  const width = useStore((s) => s.width);
-  const height = useStore((s) => s.height);
-  const ready = useStore((s) => s.panZoom !== null);
-  const zoom = useStore((s) => s.transform[2]);
-  const { setViewport, zoomIn, zoomOut } = useReactFlow();
-  const fitted = useRef(false);
-
-  const fit = useCallback(() => {
-    const { width: w, height: h, minZoom, maxZoom, panZoom } = store.getState();
-    if (!panZoom || !w || !h || nodes.length === 0) return false;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const n of nodes) {
-      x0 = Math.min(x0, n.position.x);
-      y0 = Math.min(y0, n.position.y);
-      x1 = Math.max(x1, n.position.x + (n.initialWidth ?? CARD_WIDTH));
-      y1 = Math.max(y1, n.position.y + (n.initialHeight ?? 0));
-    }
-    const viewport = getViewportForBounds({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, w, h, minZoom, maxZoom, 0.1);
-    const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    void setViewport(viewport, { duration: reduced ? 0 : 240 });
-    return true;
-  }, [nodes, store, setViewport]);
-
-  const latestFit = useRef(fit);
-  latestFit.current = fit;
-
-  useEffect(() => {
-    if (fitted.current || !ready || !width || !height) return;
-    if (fit()) fitted.current = true;
-  }, [ready, width, height, fit]);
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const onResize = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => latestFit.current(), RESIZE_REFIT_MS);
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
-
-  return (
-    <Panel position="bottom-right" className="canvas-zoom" role="group" aria-label="Zoom">
-      <button type="button" className="icon-button" aria-label="Zoom out" title="Zoom out" onClick={() => void zoomOut({ duration: 150 })}>
-        <Icon name="minus" size={14} />
-      </button>
-      <span className="canvas-zoom-percent">{Math.round(zoom * 100)}%</span>
-      <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in" onClick={() => void zoomIn({ duration: 150 })}>
-        <Icon name="plus" size={14} />
-      </button>
-      <span className="canvas-zoom-divider" aria-hidden="true" />
-      <button type="button" className="icon-button" aria-label="Fit to view" title="Fit to view" onClick={() => fit()}>
-        <Icon name="fit" size={14} />
-      </button>
-    </Panel>
-  );
-}
 
 /** A dropped connection as a Foreign Key: the source column is the many side. */
 export function refFromConnection(
@@ -164,6 +84,7 @@ export function edgesFor(model: SchemaModel, xOf: (key: string) => number | unde
       sourceHandle: `${r.from.columns[0]}:${sides.source === "right" ? "s" : "sl"}`,
       target,
       targetHandle: `${r.to.columns[0]}:${sides.target === "left" ? "t" : "tr"}`,
+      // Same shape as the engine's `orthogonal` type (8 px corners); kept as smoothstep for this client's tests. New clients use `orthogonal`.
       type: "smoothstep",
       pathOptions: { borderRadius: 8 },
       markerStart: MANY_MARKER,
@@ -172,10 +93,22 @@ export function edgesFor(model: SchemaModel, xOf: (key: string) => number | unde
   });
 }
 
+/** The sides of every Ref's edge as one string, from each card's left edge. */
+function sidesKeyFor(model: SchemaModel, xs: Map<string, number>): string {
+  return model.refs
+    .map((r) => {
+      const a = xs.get(tableKey({ schema: r.from.schema, name: r.from.table })) ?? 0;
+      const b = xs.get(tableKey({ schema: r.to.schema, name: r.to.table })) ?? CARD_WIDTH;
+      const sides = edgeSides(a, b);
+      return `${sides.source}${sides.target}`;
+    })
+    .join(",");
+}
+
 /** The schema a table without one parses to: Postgres models default to "public" (Ruling R4). */
 const newTableSchema = (model: SchemaModel) => (model.dialect === "postgres" ? "public" : null);
 
-export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEdit, onGoToError, onSelectionChange, onShowText, ask }: Props) {
+export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEdit, onGoToError, onSelectionChange, onShowText, ask, runLayout, onPublish }: Props) {
   const { show } = useToast();
   const flow = useRef<ReactFlowInstance | null>(null);
   const flowRef = useRef<HTMLDivElement>(null);
@@ -213,25 +146,52 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
     });
   }, [model, layout, blocked, onEdit, ask]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initial);
-  // A new model keeps what is selected: an edit made on a card must not drop its outline.
-  useEffect(
-    () => setNodes((prev) => initial.map((n) => ({ ...n, selected: prev.find((p) => p.id === n.id)?.selected }))),
-    [initial, setNodes],
+  // Each card's left edge: from the layout, and live while cards are dragged, so an edge changes
+  // sides as one card passes another. Edges are rebuilt only when a side changes, not every frame.
+  const baseX = useMemo(() => new Map(initial.map((n) => [n.id, n.position.x])), [initial]);
+  const liveX = useRef(new Map<string, number>());
+  const [dragSides, setDragSides] = useState<string | null>(null);
+  useEffect(() => {
+    liveX.current = new Map(baseX);
+    setDragSides(null);
+  }, [baseX]);
+  const sidesKey = dragSides ?? sidesKeyFor(model, baseX);
+  // The positions are left out on purpose: sidesKey changes when an edge's sides do.
+  const edges = useMemo(() => edgesFor(model, (k) => (dragSides === null ? baseX : liveX.current).get(k)), [model, sidesKey]);
+  const onDrag = useCallback(
+    (id: string, x: number) => {
+      liveX.current.set(id, x);
+      setDragSides(sidesKeyFor(model, liveX.current));
+    },
+    [model],
   );
 
-  // Recomputed only when a side changes, not on every drag frame.
-  const xs = new Map(nodes.map((n) => [n.id, n.position.x]));
-  const sidesKey = model.refs
-    .map((r) => {
-      const a = xs.get(tableKey({ schema: r.from.schema, name: r.from.table })) ?? 0;
-      const b = xs.get(tableKey({ schema: r.to.schema, name: r.to.table })) ?? CARD_WIDTH;
-      const sides = edgeSides(a, b);
-      return `${sides.source}${sides.target}`;
-    })
-    .join(",");
-  // `xs` is left out on purpose: it changes on every drag frame, and sidesKey changes when an edge's sides do.
-  const edges = useMemo(() => edgesFor(model, (k) => xs.get(k)), [model, sidesKey]);
+  // A multi-card drag reports each card in turn: each move builds on the one before.
+  const latestLayout = useRef(layout);
+  latestLayout.current = layout;
+  const onMove = useCallback(
+    (id: string, x: number, y: number) => {
+      const next = { ...latestLayout.current, tables: { ...latestLayout.current.tables, [id]: { x, y } } };
+      latestLayout.current = next;
+      onLayout(next);
+    },
+    [onLayout],
+  );
+
+  const onConnectPorts = useCallback(
+    (from: Port, to: Port) => {
+      const ref = refFromConnection(model, { source: from.node, sourceHandle: `${from.port}:s`, target: to.node, targetHandle: `${to.port}:t` });
+      if (!ref) return;
+      onEdit((text, ranges) => addRef(text, ranges, ref.from, ref.to));
+      if (ref.warning) show({ kind: "info", text: ref.warning });
+    },
+    [model, onEdit, show],
+  );
+
+  const onSelect = useCallback(
+    (keys: string[]) => setSelected((was) => (was.length === keys.length && was.every((k, i) => k === keys[i]) ? was : keys)),
+    [],
+  );
 
   const addNewTable = () => {
     const used = new Set(model.tables.map((t) => t.name));
@@ -247,14 +207,42 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
 
   const selectedName = model.tables.find((t) => tableKey(t) === selected[0])?.name;
 
-  /** Lays every card out again, the ones already placed included. */
+  /** The canvas box in canvas units; the cards' frame before the canvas has been measured. */
+  function onScreen() {
+    const box = flowRef.current?.getBoundingClientRect();
+    const f = flow.current;
+    if (box && f && box.width > 0 && box.height > 0) {
+      const a = f.screenToFlowPosition({ x: box.x, y: box.y });
+      const b = f.screenToFlowPosition({ x: box.x + box.width, y: box.y + box.height });
+      return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+    }
+    const xs = initial.map((n) => n.position.x);
+    const ys = initial.map((n) => n.position.y);
+    if (xs.length === 0) return { x: 0, y: 0, w: 0, h: 0 };
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) + CARD_WIDTH - x, h: Math.max(...initial.map((n) => n.position.y + (n.initialHeight ?? 0))) - y };
+  }
+
+  /**
+   * Lays every card out again, the ones already placed included. A worker that fails (gone, or
+   * answering `failed`) gives way to the in-process layout; if that fails too, the cards stay and a toast says so.
+   */
   async function arrange() {
-    onLayout(await autoLayout(model, { ...layout, tables: {} }));
+    const fresh = { ...layout, tables: {} };
+    try {
+      onLayout(await autoLayout(model, fresh, runLayout));
+    } catch {
+      try {
+        onLayout(await autoLayout(model, fresh));
+      } catch (e) {
+        show({ kind: "error", text: `Arrange did not finish: ${e instanceof Error ? e.message : String(e)}` });
+      }
+    }
   }
 
   return (
     <div className="schema-canvas">
-      <EdgeMarkers />
       <div className="canvas-toolbar" role="toolbar" aria-label="Canvas">
         {onShowText && (
           <>
@@ -281,8 +269,8 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
           <span className="canvas-toolbar-note">{selected.length === 1 ? `${selectedName} selected` : `${selected.length} tables selected`}</span>
         )}
         <span className="spacer" />
-        <button type="button" className="button button-small button-quiet" disabled>
-          <Icon name="export" size={14} />
+        <button type="button" className="button button-small button-quiet" disabled={!onPublish} onClick={() => onPublish?.(onScreen())}>
+          <Icon name="image" size={14} />
           Publish
         </button>
         <span title="Arrives with Schema Compare">
@@ -303,37 +291,18 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
         </div>
       )}
       <div className="canvas-flow" ref={flowRef}>
-        <ReactFlow
+        <DiagramCanvas
+          nodes={initial}
+          edges={edges}
+          nodeTypes={nodeTypes}
           onInit={(instance) => {
             flow.current = instance;
           }}
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onNodeDragStop={(_, node) =>
-            onLayout({ ...layout, tables: { ...layout.tables, [node.id]: { x: node.position.x, y: node.position.y } } })
-          }
-          onConnect={(c) => {
-            if (blocked) return;
-            const ref = refFromConnection(model, c);
-            if (!ref) return;
-            onEdit((text, ranges) => addRef(text, ranges, ref.from, ref.to));
-            if (ref.warning) show({ kind: "info", text: ref.warning });
-          }}
-          onSelectionChange={({ nodes: picked }) => {
-            const keys = picked.map((n) => n.id);
-            setSelected((was) => (was.length === keys.length && was.every((k, i) => k === keys[i]) ? was : keys));
-          }}
-          nodesConnectable={!blocked}
-          onlyRenderVisibleElements
-          minZoom={0.1}
-          proOptions={{ hideAttribution: true }}
-        >
-          <ViewControls nodes={initial} />
-          <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-          <MiniMap pannable zoomable ariaLabel="Overview" style={{ width: 200, height: 140 }} />
-        </ReactFlow>
+          onMove={onMove}
+          onDrag={onDrag}
+          onConnectPorts={blocked ? undefined : onConnectPorts}
+          onSelect={onSelect}
+        />
       </div>
     </div>
   );

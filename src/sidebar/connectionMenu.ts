@@ -8,6 +8,8 @@ export interface ConnectionMenuActions {
   /** Close when open, Open when closed. */
   toggleOpen(): void;
   newQuery(): void;
+  /** Opens a Visual Query tab on the Connection, opening it first when closed. */
+  newVisualQuery(): void;
   newSchemaModel(): void;
   edit(): void;
   duplicate(): void;
@@ -58,6 +60,7 @@ export function connectionMenu(c: ConnectionConfig, ctx: ConnectionMenuContext, 
       ? { key: "close", label: "Close Connection", icon: icon("unplug"), onSelect: act.toggleOpen }
       : { key: "open", label: "Open Connection", icon: icon("plug"), onSelect: act.toggleOpen },
     { key: "new-query", label: "New query", icon: icon("fileQuery"), shortcut: ctx.newQueryKey, onSelect: act.newQuery },
+    { key: "new-visual", label: "New Visual Query", icon: icon("visualQuery"), onSelect: act.newVisualQuery },
     { key: "new-model", label: "New Schema Model...", icon: icon("layers"), onSelect: act.newSchemaModel },
     { key: "edit", label: "Edit Connection...", icon: icon("edit"), separatorBefore: true, onSelect: act.edit },
     { key: "duplicate", label: "Duplicate", icon: icon("duplicate"), onSelect: act.duplicate },

@@ -6,7 +6,8 @@ export interface SqlMark {
   firstLine: number;
   lastLine: number;
   tag?: "writes" | "reads";
-  band?: "prod" | "readOnly";
+  /** `select` marks what a selected card or Join wrote; `danger` the line a server error names. */
+  band?: "prod" | "readOnly" | "select" | "danger";
 }
 
 interface Props {
@@ -17,6 +18,8 @@ interface Props {
   marks?: SqlMark[];
   className?: string;
   ariaLabel?: string;
+  /** A line was clicked, by its number (`startLine` based). */
+  onLineClick?(line: number): void;
 }
 
 /** A read-only block of SQL in the editor's syntax colours, with optional statement tags and bands. */
@@ -28,6 +31,7 @@ export default function SqlBlock({
   marks = [],
   className,
   ariaLabel,
+  onLineClick,
 }: Props) {
   const lines = useMemo(() => highlightSql(sql, dialect), [sql, dialect]);
   return (
@@ -48,6 +52,7 @@ export default function SqlBlock({
             className={
               band ? `sql-block-line sql-block-line-${band}` : "sql-block-line"
             }
+            onClick={onLineClick && (() => onLineClick(n))}
           >
             {lineNumbers && (
               <span className="sql-block-gutter" aria-hidden="true">

@@ -60,6 +60,8 @@ export interface SqlEditorApi {
   insert(text: string): void;
   replaceAll(text: string): void;
   focus(): void;
+  /** Bands every line the ranges touch in --c-accent-subtle (the query diagram's selected card); empty clears. */
+  band(ranges: Range[]): void;
 }
 
 /** The language service for this editor: which document, and which schema applies. */
@@ -134,6 +136,30 @@ const marksField = StateField.define<DecorationSet>({
         if (r.from < r.to) ranges.push(errorMark.range(r.from, r.to));
       }
       next = Decoration.set(ranges, true);
+    }
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+const setBand = StateEffect.define<Range[]>();
+const bandLine = Decoration.line({ class: "cm-diagram-band" });
+
+/** The lines a query diagram card was read from; they follow edits until the next band. */
+const bandField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(band, tr) {
+    let next = band.map(tr.changes);
+    for (const e of tr.effects) {
+      if (!e.is(setBand)) continue;
+      const doc = tr.state.doc;
+      const starts = new Set<number>();
+      for (const r of e.value) {
+        const from = Math.max(0, Math.min(r.from, doc.length));
+        const to = Math.max(from, Math.min(r.to, doc.length));
+        for (let n = doc.lineAt(from).number; n <= doc.lineAt(to).number; n++) starts.add(doc.line(n).from);
+      }
+      next = Decoration.set([...starts].sort((a, b) => a - b).map((at) => bandLine.range(at)));
     }
     return next;
   },
@@ -744,6 +770,7 @@ export default function SqlEditor({
           functionCallMarks,
           oneLine ? [] : currentStatement(() => latest.current.dialect),
           marksField,
+          bandField,
           blockedField,
           writeHazardField,
           noticeField,
@@ -817,6 +844,9 @@ export default function SqlEditor({
       },
       focus() {
         view.focus();
+      },
+      band(ranges) {
+        view.dispatch({ effects: setBand.of(ranges) });
       },
     };
     analyze(view);

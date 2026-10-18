@@ -123,3 +123,15 @@ test("a_crash_restarts_and_resends_schemas", async () => {
   const c = await client.completeSql({ text: "SELECT * FROM ", pos: 14, dialect: "postgres", schemaKey: "a", explicit: false });
   expect(c.items.some((i) => i.label === "orders")).toBe(true);
 });
+
+test("analyze_and_shape_on_the_same_text_parse_once", () => {
+  const service = createSqlService();
+  service.setSchema("k", KFC_SCHEMA);
+  const text = "SELECT o.id FROM sales.orders o JOIN stores s ON s.id = o.store_id";
+  service.analyze("d", text, "postgres", "k", "loaded");
+  const shape = service.shape("d", text, "postgres", "k", "loaded", 0);
+  expect("tables" in shape && shape.tables.length).toBe(2);
+  expect(service.parses()).toBe(1);
+  service.shape("d", text + " ", "postgres", "k", "loaded", 0);
+  expect(service.parses()).toBe(2);
+});

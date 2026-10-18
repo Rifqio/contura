@@ -5,7 +5,7 @@ import type { ConnectionConfig, ConnectionId, GroupId, SavedQuery } from "../api
 import type { GridControl } from "../components/DataGrid";
 import UnsavedEdits, { designBody, tableBody } from "../components/UnsavedEdits";
 import type { QueryTabDoc } from "../query/QueryTab";
-import { type WorkTab, objectTabOf, tabKey } from "../shell/tabs";
+import { type AnyTab, type VisualTabDoc, type WorkTab, isUnsaved, objectTabOf, tabKey } from "../shell/tabs";
 
 export interface PendingEditsGuard {
   dirtyKeys: ReadonlySet<string>;
@@ -20,8 +20,12 @@ export interface PendingEditsGuard {
   /** Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is cancelled. */
   confirmLeave(keys: string[]): Promise<boolean>;
   leaveAll(): Promise<boolean>;
-  /** A Saved Query tab with edits asks before it closes (PR22); false when cancelled or the save failed. */
-  confirmCloseSaved(doc: QueryTabDoc): Promise<boolean>;
+  /**
+   * A tab whose Saved Query text or Visual Query model differs from what was saved (`isUnsaved`)
+   * asks Save, Discard or Cancel before it closes (PR22); false when cancelled or the save failed.
+   * Every other tab closes at once.
+   */
+  confirmCloseUnsaved(tab: AnyTab): Promise<boolean>;
   /** The Unsaved Edits dialog while an ask is open, else null. */
   dialog: ReactNode;
 }
@@ -36,6 +40,8 @@ export function usePendingEditsGuard(opts: {
   onSavedQuerySaved(): void;
   /** A save from the ask failed (App: setNotice). */
   onError(text: string): void;
+  /** Saves a Visual Query from the ask; true when it saved. Without it, Save keeps the tab open. */
+  saveVisual?(doc: VisualTabDoc): Promise<boolean>;
 }): PendingEditsGuard {
   const { tabs, connections, savedQueries } = opts;
 
@@ -53,6 +59,8 @@ export function usePendingEditsGuard(opts: {
     verb: "Save" | "Apply";
     /** A Saved Query's text, not a grid's Pending Edits. */
     doc?: QueryTabDoc;
+    /** A saved Visual Query's model. */
+    visual?: VisualTabDoc;
     busy: boolean;
     resolve(ok: boolean): void;
   } | null>(null);
@@ -137,20 +145,31 @@ export function usePendingEditsGuard(opts: {
     }
     return true;
   }
-  /** A Saved Query tab with edits asks Save, Discard or Cancel before it closes (PR22); false when cancelled or the save failed. */
-  function confirmCloseSaved(doc: QueryTabDoc): Promise<boolean> {
-    if (!doc.savedId || doc.savedText === null || doc.text === doc.savedText) return Promise.resolve(true);
+  /** A saved tab with unsaved edits (a query's text, a Visual Query's model) asks Save, Discard or Cancel before it closes (PR22). */
+  function confirmCloseUnsaved(tab: AnyTab): Promise<boolean> {
+    if (!isUnsaved(tab) || (tab.kind !== "query" && tab.kind !== "visual")) return Promise.resolve(true);
     const run = leaveQueue.current.then(() => {
+      const doc = tab.doc;
       const q = savedQueries.find((x) => x.id === doc.savedId);
       const day = q ? new Date(q.updatedAtMs).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+      const what = tab.kind === "visual" ? "this Visual Query" : "this Saved Query";
       const body = (
         <span>
-          Your edits to this Saved Query are not saved. Discard keeps the version {day ? `saved on ${day}` : "you saved"}.
+          Your edits to {what} are not saved. Discard keeps the version {day ? `saved on ${day}` : "you saved"}.
         </span>
       );
-      opts.activate(tabKey({ kind: "query", doc }));
+      opts.activate(tabKey(tab));
       return new Promise<boolean>((resolve) =>
-        setLeaveAsk({ key: doc.id, title: `Save changes to ${doc.name}?`, body, production: false, verb: "Save", doc, busy: false, resolve }),
+        setLeaveAsk({
+          key: doc.id,
+          title: `Save changes to ${doc.name}?`,
+          body,
+          production: false,
+          verb: "Save",
+          ...(tab.kind === "query" ? { doc: tab.doc } : { visual: tab.doc }),
+          busy: false,
+          resolve,
+        }),
       );
     });
     leaveQueue.current = run.then(
@@ -209,7 +228,14 @@ export function usePendingEditsGuard(opts: {
           const ask = leaveAsk;
           setLeaveAsk({ ...ask, busy: true });
           let ok: boolean;
-          if (ask.doc) {
+          if (ask.visual) {
+            try {
+              ok = (await opts.saveVisual?.(ask.visual)) ?? false;
+            } catch (e) {
+              opts.onError(errorText(e));
+              ok = false;
+            }
+          } else if (ask.doc) {
             try {
               await saveSavedQuery({ id: ask.doc.savedId, name: ask.doc.name, sql: ask.doc.text });
               opts.onSavedQuerySaved();
@@ -226,7 +252,7 @@ export function usePendingEditsGuard(opts: {
         }}
         onDiscard={() => {
           // Refused while a save or Apply runs: the tab, Group or Connection stays, as on Cancel.
-          const ok = leaveAsk.doc ? true : (gridControl(leaveAsk.key).current?.discard() ?? true);
+          const ok = leaveAsk.doc || leaveAsk.visual ? true : (gridControl(leaveAsk.key).current?.discard() ?? true);
           setLeaveAsk(null);
           leaveAsk.resolve(ok);
         }}
@@ -246,7 +272,7 @@ export function usePendingEditsGuard(opts: {
     groupTableKeys,
     confirmLeave,
     leaveAll,
-    confirmCloseSaved,
+    confirmCloseUnsaved,
     dialog,
   };
 }

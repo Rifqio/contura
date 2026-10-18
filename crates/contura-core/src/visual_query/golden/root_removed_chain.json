@@ -1,0 +1,29 @@
+{
+  "query": {
+    "version": 1,
+    "database": "app",
+    "tables": [
+      { "id": "t2", "schema": null, "name": "stores", "alias": "s", "x": 300, "y": 0 },
+      { "id": "t3", "schema": null, "name": "regions", "alias": "r", "x": 600, "y": 0 },
+      { "id": "t4", "schema": null, "name": "customers", "alias": "c", "x": 0, "y": 200 }
+    ],
+    "joins": [
+      { "id": "j2", "left": "t2", "right": "t3", "kind": "inner", "on": [{ "leftColumn": "region_id", "rightColumn": "id" }] }
+    ],
+    "columns": [
+      { "table": "t2", "column": "name", "alias": null, "aggregate": null },
+      { "table": "t3", "column": "name", "alias": null, "aggregate": null },
+      { "table": "t4", "column": "email", "alias": null, "aggregate": null }
+    ],
+    "filters": [],
+    "groupBy": { "kind": "auto" },
+    "orderBy": [],
+    "limit": 100,
+    "distinct": false
+  },
+  "types": {},
+  "outputs": ["s_name", "r_name", "email"],
+  "warnings": [
+    { "kind": "crossJoin", "table": "t4", "rows": null }
+  ]
+}

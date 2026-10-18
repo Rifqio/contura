@@ -204,3 +204,136 @@ async fn sqlite_sql_schema_lists_tables_views_columns_and_fks() {
     assert_eq!(s.fks.len(), 1);
     assert_eq!((s.fks[0].from.clone(), s.fks[0].to.clone()), (from, to));
 }
+
+fn fk_names(s: &SqlSchema) -> Vec<(String, Option<String>, Option<String>)> {
+    let mut v: Vec<_> = s
+        .fks
+        .iter()
+        .map(|f| {
+            (
+                f.from.table.to_lowercase(),
+                f.name.clone(),
+                f.comment.clone(),
+            )
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+#[tokio::test]
+async fn mysql_fks_carry_their_constraint_names() {
+    let db = TestDb::create().await;
+    let opts: Opts = OptsBuilder::default()
+        .ip_or_hostname(db.config.host.clone())
+        .tcp_port(db.config.port)
+        .user(Some(db.config.user.clone()))
+        .pass(db.password.clone())
+        .db_name(Some(db.name.clone()))
+        .into();
+    let pool = Pool::new(opts);
+    let mut conn = pool.get_conn().await.expect("connect");
+    for sql in [
+        "CREATE TABLE stores (id INT PRIMARY KEY)",
+        "CREATE TABLE orders (id INT PRIMARY KEY, store_id INT, \
+         CONSTRAINT fk_order_store FOREIGN KEY (store_id) REFERENCES stores(id))",
+        "CREATE TABLE refunds (id INT PRIMARY KEY, store_id INT, \
+         FOREIGN KEY (store_id) REFERENCES stores(id))",
+    ] {
+        conn.query_drop(sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    drop(conn);
+    pool.disconnect().await.ok();
+
+    let dialect = connect(&db.config, db.password.as_deref()).await.unwrap();
+    let s = dialect.sql_schema(&db.name).await.unwrap();
+    dialect.disconnect().await.ok();
+    // MySQL names an unnamed key itself; it has no comments on constraints.
+    assert_eq!(
+        fk_names(&s),
+        vec![
+            ("orders".into(), Some("fk_order_store".into()), None),
+            ("refunds".into(), Some("refunds_ibfk_1".into()), None),
+        ]
+    );
+    db.drop_db().await;
+}
+
+#[tokio::test]
+async fn pg_fks_carry_their_constraint_names_and_comments() {
+    let db = PgTestDb::create().await;
+    let admin = pg_admin_client(&db.name).await;
+    admin
+        .batch_execute(
+            "CREATE TABLE stores (id int PRIMARY KEY);
+             CREATE TABLE orders (id int PRIMARY KEY, store_id int REFERENCES stores(id));
+             CREATE TABLE refunds (id int PRIMARY KEY, store_id int,
+                 CONSTRAINT \"Refund Store\" FOREIGN KEY (store_id) REFERENCES stores(id));
+             COMMENT ON CONSTRAINT orders_store_id_fkey ON orders IS 'Where the order was placed';",
+        )
+        .await
+        .expect("seed");
+    drop(admin);
+
+    let dialect = connect(&db.config, db.password.as_deref()).await.unwrap();
+    let s = dialect.sql_schema(&db.name).await.unwrap();
+    dialect.disconnect().await.ok();
+    assert_eq!(
+        fk_names(&s),
+        vec![
+            (
+                "orders".into(),
+                Some("orders_store_id_fkey".into()),
+                Some("Where the order was placed".into())
+            ),
+            ("refunds".into(), Some("Refund Store".into()), None),
+        ]
+    );
+    db.drop_db().await;
+}
+
+#[tokio::test]
+async fn sqlite_fks_carry_their_constraint_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shop.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE stores (id INTEGER PRIMARY KEY, code TEXT, UNIQUE (id, code));
+             CREATE TABLE orders (id INTEGER PRIMARY KEY,
+                 store_id INTEGER CONSTRAINT fk_order_store REFERENCES stores(id));
+             CREATE TABLE refunds (id INTEGER PRIMARY KEY, store_id INTEGER REFERENCES stores(id));
+             CREATE TABLE returns (id INTEGER PRIMARY KEY, store_id INTEGER, code TEXT,
+                 CONSTRAINT \"Return Store\" FOREIGN KEY (store_id, code) REFERENCES stores (id, code));",
+        )
+        .unwrap();
+    let config = ConnectionConfig {
+        id: uuid::Uuid::new_v4(),
+        name: "t".into(),
+        dialect: DialectKind::Sqlite,
+        host: String::new(),
+        port: 0,
+        user: String::new(),
+        database: None,
+        ssl: SslMode::Disable,
+        group_id: None,
+        file: Some(path),
+        query_timeout_secs: None,
+        ai_access: Default::default(),
+        production: false,
+        read_only: false,
+    };
+    let dialect = connect(&config, None).await.unwrap();
+    let s = dialect.sql_schema("main").await.unwrap();
+    // SQLite keeps a name only when the text gives one, and has no comments.
+    assert_eq!(
+        fk_names(&s),
+        vec![
+            ("orders".into(), Some("fk_order_store".into()), None),
+            ("refunds".into(), None, None),
+            ("returns".into(), Some("Return Store".into()), None),
+        ]
+    );
+}

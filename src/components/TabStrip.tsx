@@ -2,10 +2,11 @@ import { useEffect, useRef } from "react";
 import type { ConnectionConfig, Group } from "../api/types";
 import { hintFor, withHint } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
-import { type AnyTab, type WorkTab, tabKey } from "../shell/tabs";
+import { type AnyTab, isUnsaved, tabConnectionId, tabKey } from "../shell/tabs";
 import DbMark from "./DbMark";
 import { groupStyle } from "./GroupBadge";
 import Icon, { type IconName } from "./Icon";
+import Menu from "./Menu";
 import SafetyTag from "./SafetyTag";
 
 export type { Selection, WorkTab } from "../shell/tabs";
@@ -21,6 +22,7 @@ export function tabName(t: AnyTab): string {
     case "schema":
       return t.doc.path ? basename(t.doc.path) : "untitled.dbml";
     case "query":
+    case "visual":
       return t.doc.name;
     case "savedQueries":
       return "Saved Queries";
@@ -31,8 +33,6 @@ export function tabName(t: AnyTab): string {
       return t.target.kind === "alter" ? `${t.target.path.name} design` : "New table";
   }
 }
-
-const isDirty = (t: WorkTab) => t.kind === "query" && t.doc.savedId !== null && t.doc.text !== t.doc.savedText;
 
 /** The kind icon before the title; query tabs show only their database mark (C5). */
 function iconOf(t: AnyTab): IconName | null {
@@ -45,6 +45,8 @@ function iconOf(t: AnyTab): IconName | null {
       return "layers";
     case "query":
       return null;
+    case "visual":
+      return "visualQuery";
     case "savedQueries":
       return "bookmark";
     case "object":
@@ -62,6 +64,10 @@ interface Props {
   onSelect(key: string): void;
   onClose(key: string): void;
   onNew(): void;
+  /** The chevron menu's New Visual Query (D10). */
+  onNewVisual?(): void;
+  /** False while no Connection is open: New Visual Query is off and says why. */
+  newVisualReady?: boolean;
   /** Lets a query tab show the Production or Read-only mark of its Connection. */
   connections?: ConnectionConfig[];
   /** Table and design tabs (by key) with Pending Edits or an unapplied design. */
@@ -71,7 +77,18 @@ interface Props {
 }
 
 /** The open tabs of the window and its place, in the title bar. Ctrl+W closes, Ctrl+Tab and Ctrl+Shift+Tab move. */
-export default function TabStrip({ tabs, active, onSelect, onClose, onNew, connections = [], dirtyKeys, groups = [] }: Props) {
+export default function TabStrip({
+  tabs,
+  active,
+  onSelect,
+  onClose,
+  onNew,
+  onNewVisual,
+  newVisualReady = true,
+  connections = [],
+  dirtyKeys,
+  groups = [],
+}: Props) {
   const { map } = useKeymap();
   const keys = tabs.map(tabKey);
   const list = useRef<HTMLDivElement>(null);
@@ -113,17 +130,9 @@ export default function TabStrip({ tabs, active, onSelect, onClose, onNew, conne
           const key = tabKey(t);
           const on = key === active;
           const name = tabName(t);
-          const work = t.kind === "query" || t.kind === "object" || t.kind === "design";
-          const isSaved = t.kind === "query" && t.doc.savedId !== null;
-          const dirty = work && (isDirty(t) || ((t.kind === "object" || t.kind === "design") && !!dirtyKeys?.has(t.key)));
-          const cid =
-            t.kind === "query"
-              ? t.doc.connectionId
-              : t.kind === "object"
-                ? t.selection.connectionId
-                : t.kind === "design"
-                  ? t.connectionId
-                  : null;
+          const isSaved = (t.kind === "query" || t.kind === "visual") && t.doc.savedId !== null;
+          const dirty = isUnsaved(t) || ((t.kind === "object" || t.kind === "design") && !!dirtyKeys?.has(t.key));
+          const cid = tabConnectionId(t);
           const owner = cid === null ? undefined : connections.find((c) => c.id === cid);
           // R8: the chip shows PROD; the spoken name keeps the word.
           const label = [
@@ -164,7 +173,7 @@ export default function TabStrip({ tabs, active, onSelect, onClose, onNew, conne
                 onClick={() => onSelect(key)}
               >
                 {icon && <Icon name={icon} size={14} />}
-                {t.kind === "query" && owner && <DbMark dialect={owner.dialect} open size={14} label={null} />}
+                {(t.kind === "query" || t.kind === "visual") && owner && <DbMark dialect={owner.dialect} open size={14} label={null} />}
                 {owner && <SafetyTag connection={owner} small />}
                 <span className="work-tab-name">{name}</span>
                 {dirty && (
@@ -189,6 +198,29 @@ export default function TabStrip({ tabs, active, onSelect, onClose, onNew, conne
       <button type="button" className="icon-button" aria-label="New query" title={withHint("New query", hintFor(map, "query.new"))} onClick={onNew}>
         <Icon name="plus" />
       </button>
+      {onNewVisual && (
+        // D10: the other kinds of new tab, beside New query.
+        <Menu
+          label="More new tabs"
+          align="end"
+          trigger={(p) => (
+            <button type="button" {...p} className="icon-button tab-strip-more" aria-label="More new tabs" title="More new tabs">
+              <Icon name="chevronDown" size={14} />
+            </button>
+          )}
+          items={[
+            { key: "query", label: "New query", icon: <Icon name="fileQuery" />, shortcut: hintFor(map, "query.new") ?? undefined, onSelect: onNew },
+            {
+              key: "visual",
+              label: "New Visual Query",
+              icon: <Icon name="visualQuery" />,
+              disabled: !newVisualReady,
+              title: newVisualReady ? undefined : "Open a Connection first",
+              onSelect: onNewVisual,
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }

@@ -2,13 +2,14 @@ use crate::ai::{AiThread, ThreadId};
 use crate::error::{Error, Result};
 use crate::model::{ConnectionConfig, ConnectionId, Group, GroupId};
 use crate::query::{
-    HistoryEntry, HistoryFilter, HistoryOnly, NewHistory, Outcome, SavedQuery, SavedQueryRun,
+    HistoryEntry, HistoryFilter, HistoryOnly, NewHistory, Outcome, SavedQuery, SavedQueryKind,
+    SavedQueryRun,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
 /// The `user_version` this build writes and understands.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// Chat threads returned per place.
 pub const THREAD_LIMIT: i64 = 50;
@@ -79,6 +80,18 @@ impl AppStore {
                    updated_at INTEGER NOT NULL);
                  CREATE INDEX ai_threads_by_place ON ai_threads (place, updated_at DESC);
                  PRAGMA user_version = 3;
+                 COMMIT;",
+            )
+            .map_err(store_err)?;
+        }
+        if version < 4 {
+            // Saved Visual Queries: rows from before read as SQL. The Connection a Saved Query
+            // opens on stays in the settings map (D2).
+            db.execute_batch(
+                "BEGIN;
+                 ALTER TABLE saved_queries ADD COLUMN kind TEXT NOT NULL DEFAULT 'sql';
+                 ALTER TABLE saved_queries ADD COLUMN visual_json TEXT;
+                 PRAGMA user_version = 4;
                  COMMIT;",
             )
             .map_err(store_err)?;
@@ -310,34 +323,77 @@ impl AppStore {
     pub fn list_saved_queries(&self) -> Result<Vec<SavedQuery>> {
         let mut stmt = self
             .db
-            .prepare("SELECT id, name, sql, updated_at_ms FROM saved_queries ORDER BY name COLLATE NOCASE")
+            .prepare(
+                "SELECT id, name, sql, updated_at_ms, kind, visual_json FROM saved_queries
+                 ORDER BY name COLLATE NOCASE",
+            )
             .map_err(store_err)?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get(5)?,
+                ))
             })
             .map_err(store_err)?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, name, sql, updated_at_ms) = row.map_err(store_err)?;
+            let (id, name, sql, updated_at_ms, kind, visual_json) = row.map_err(store_err)?;
             out.push(SavedQuery {
                 id: id.parse().map_err(store_err)?,
                 name,
                 sql,
                 updated_at_ms,
                 connection_id: None,
+                kind: SavedQueryKind::from_store(&kind),
+                visual_json,
             });
         }
         Ok(out)
     }
 
+    /// One Saved Query by id, without its Connection (that lives in the settings map).
+    pub fn get_saved_query(&self, id: uuid::Uuid) -> Result<Option<SavedQuery>> {
+        self.db
+            .query_row(
+                "SELECT name, sql, updated_at_ms, kind, visual_json FROM saved_queries WHERE id = ?1",
+                params![id.to_string()],
+                |r| {
+                    Ok(SavedQuery {
+                        id,
+                        name: r.get(0)?,
+                        sql: r.get(1)?,
+                        updated_at_ms: r.get(2)?,
+                        connection_id: None,
+                        kind: SavedQueryKind::from_store(&r.get::<_, String>(3)?),
+                        visual_json: r.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(store_err)
+    }
+
     /// Fails with `InvalidInput` when another Saved Query has the same name, ignoring case.
     pub fn save_saved_query(&self, q: &SavedQuery) -> Result<()> {
         let saved = self.db.execute(
-            "INSERT INTO saved_queries (id, name, sql, updated_at_ms) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO saved_queries (id, name, sql, updated_at_ms, kind, visual_json)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (id) DO UPDATE SET name = excluded.name, sql = excluded.sql,
-               updated_at_ms = excluded.updated_at_ms",
-            params![q.id.to_string(), q.name, q.sql, q.updated_at_ms],
+               updated_at_ms = excluded.updated_at_ms, kind = excluded.kind,
+               visual_json = excluded.visual_json",
+            params![
+                q.id.to_string(),
+                q.name,
+                q.sql,
+                q.updated_at_ms,
+                q.kind.as_str(),
+                q.visual_json
+            ],
         );
         match saved {
             Ok(_) => Ok(()),
@@ -692,7 +748,7 @@ mod tests {
         let v: i64 =
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, SCHEMA_VERSION);
         assert!(
             s.query_history(Some(Uuid::new_v4()), &all())
                 .unwrap()
@@ -769,14 +825,20 @@ mod tests {
             let s = AppStore::open(&path).unwrap();
             s.add_history(&entry(c, "SELECT 1", Outcome::Ok, false))
                 .unwrap();
-            s.db.execute_batch("DROP TABLE ai_threads; PRAGMA user_version = 2;")
-                .unwrap();
+            // Back to schema 2: no ai_threads, no Saved Visual Query columns.
+            s.db.execute_batch(
+                "DROP TABLE ai_threads;
+                 ALTER TABLE saved_queries DROP COLUMN kind;
+                 ALTER TABLE saved_queries DROP COLUMN visual_json;
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
         }
         let s = AppStore::open(&path).unwrap();
         let v: i64 =
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, SCHEMA_VERSION);
         let h = s.query_history(Some(c), &all()).unwrap();
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].sql, "SELECT 1");
@@ -801,6 +863,8 @@ mod tests {
                 sql: sql.into(),
                 updated_at_ms: 1,
                 connection_id: None,
+                kind: SavedQueryKind::Sql,
+                visual_json: None,
             };
             s.save_saved_query(&q).unwrap();
             q.id
@@ -918,5 +982,179 @@ mod tests {
         s.set_setting("theme", "dark").unwrap();
         s.set_setting("theme", "light").unwrap();
         assert_eq!(s.get_setting("theme").unwrap(), Some("light".to_string()));
+    }
+
+    fn saved(name: &str, sql: &str, kind: SavedQueryKind, visual_json: Option<&str>) -> SavedQuery {
+        SavedQuery {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            sql: sql.into(),
+            updated_at_ms: 1,
+            connection_id: None,
+            kind,
+            visual_json: visual_json.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn migration_4_keeps_sql_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        {
+            // A store as schema 3 left it, with two Saved Queries.
+            let v3 = Connection::open(&path).unwrap();
+            v3.execute_batch(
+                "CREATE TABLE connections (id TEXT PRIMARY KEY, config_json TEXT NOT NULL);
+                 CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL);
+                 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE query_history (
+                   id INTEGER PRIMARY KEY, connection_id TEXT NOT NULL, sql TEXT NOT NULL,
+                   ran_at_ms INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, outcome TEXT NOT NULL,
+                   rows INTEGER, changed INTEGER NOT NULL, error TEXT);
+                 CREATE INDEX query_history_by_connection ON query_history (connection_id, id DESC);
+                 CREATE TABLE saved_queries (
+                   id TEXT PRIMARY KEY, name TEXT NOT NULL, sql TEXT NOT NULL,
+                   updated_at_ms INTEGER NOT NULL);
+                 CREATE UNIQUE INDEX saved_queries_by_name ON saved_queries (name COLLATE NOCASE);
+                 CREATE TABLE ai_threads (
+                   id TEXT PRIMARY KEY, place TEXT NOT NULL, json TEXT NOT NULL,
+                   updated_at INTEGER NOT NULL);
+                 CREATE INDEX ai_threads_by_place ON ai_threads (place, updated_at DESC);
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+            v3.execute(
+                "INSERT INTO saved_queries VALUES (?1, 'late orders', 'SELECT 1', 10), (?2, 'stores', 'SELECT 2', 20)",
+                params![a.to_string(), b.to_string()],
+            )
+            .unwrap();
+        }
+        let s = AppStore::open(&path).unwrap();
+        let v: i64 =
+            s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(v, 4);
+        let list = s.list_saved_queries().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            (
+                list[0].id,
+                list[0].name.as_str(),
+                list[0].sql.as_str(),
+                list[0].updated_at_ms
+            ),
+            (a, "late orders", "SELECT 1", 10)
+        );
+        assert_eq!(
+            (
+                list[1].id,
+                list[1].name.as_str(),
+                list[1].sql.as_str(),
+                list[1].updated_at_ms
+            ),
+            (b, "stores", "SELECT 2", 20)
+        );
+        for q in &list {
+            assert_eq!(q.kind, SavedQueryKind::Sql);
+            assert_eq!(q.visual_json, None);
+        }
+        // Opening again runs no migration twice.
+        drop(s);
+        let s = AppStore::open(&path).unwrap();
+        assert_eq!(s.list_saved_queries().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_failed_migration_4_leaves_the_store_at_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        {
+            let s = AppStore::open(&path).unwrap();
+            // A v3 file that already has visual_json: the second ALTER of migration 4 fails.
+            s.db.execute_batch(
+                "ALTER TABLE saved_queries DROP COLUMN kind;
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+        }
+        assert!(AppStore::open(&path).is_err());
+        let db = Connection::open(&path).unwrap();
+        let v: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 3);
+        let kind: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('saved_queries') WHERE name = 'kind'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, 0);
+    }
+
+    #[test]
+    fn get_saved_query_reads_one_row() {
+        let (_d, s) = open_tmp();
+        let q = saved("one", "SELECT 1", SavedQueryKind::Visual, Some("{}"));
+        s.save_saved_query(&q).unwrap();
+        assert_eq!(s.get_saved_query(q.id).unwrap(), Some(q));
+        assert_eq!(s.get_saved_query(Uuid::new_v4()).unwrap(), None);
+    }
+
+    #[test]
+    fn visual_row_round_trips() {
+        let (_d, s) = open_tmp();
+        let json = r#"{"version":1,"tables":[]}"#;
+        let q = saved(
+            "Late orders by store",
+            "SELECT o.id\nFROM orders AS o",
+            SavedQueryKind::Visual,
+            Some(json),
+        );
+        s.save_saved_query(&q).unwrap();
+        let sql_row = saved("plain", "SELECT 1", SavedQueryKind::Sql, None);
+        s.save_saved_query(&sql_row).unwrap();
+        assert_eq!(s.list_saved_queries().unwrap(), vec![q.clone(), sql_row]);
+        // A later save overwrites the model and the SQL.
+        let mut again = q.clone();
+        again.visual_json = Some(r#"{"version":1,"tables":[1]}"#.into());
+        again.sql = "SELECT 2".into();
+        s.save_saved_query(&again).unwrap();
+        let back = s.list_saved_queries().unwrap();
+        assert_eq!(back[0], again);
+    }
+
+    #[test]
+    fn one_name_space_across_kinds() {
+        let (_d, s) = open_tmp();
+        s.save_saved_query(&saved("late orders", "SELECT 1", SavedQueryKind::Sql, None))
+            .unwrap();
+        let err = s
+            .save_saved_query(&saved(
+                "Late Orders",
+                "SELECT 2",
+                SavedQueryKind::Visual,
+                Some("{}"),
+            ))
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)), "{err:?}");
+        assert_eq!(s.list_saved_queries().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_store_newer_than_4_is_refused() {
+        assert_eq!(SCHEMA_VERSION, 4);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        drop(AppStore::open(&path).unwrap());
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", 5)
+            .unwrap();
+        assert!(
+            matches!(AppStore::open(&path), Err(Error::Store(m)) if m == "data folder was written by a newer Contura")
+        );
     }
 }

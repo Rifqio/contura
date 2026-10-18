@@ -1,0 +1,13 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    { "alias": "s", "schema": "public", "name": "stores" },
+    { "alias": "o", "schema": "public", "name": "orders" },
+    { "alias": "c", "schema": "public", "name": "customers" }
+  ],
+  "joins": [
+    { "table": "o", "kind": "right", "on": [["o.store_id", "s.id"]] },
+    { "table": "c", "kind": "left", "on": [["c.store_id", "s.id"]] }
+  ],
+  "outputs": ["name", "order_id", "customer_id"]
+}

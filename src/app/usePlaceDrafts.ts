@@ -1,8 +1,10 @@
 import { type MutableRefObject, useEffect, useRef } from "react";
 import { loadQueryTabs, saveQueryTabs } from "../api/client";
-import { parseDrafts, placeKey, serializeDrafts } from "../query/drafts";
+import { parseDraftOrder, parseDrafts, placeKey, serializeDrafts } from "../query/drafts";
 import type { QueryTabDoc } from "../query/QueryTab";
-import type { Place, WorkTab } from "../shell/tabs";
+import type { Place, VisualTabDoc, WorkTab } from "../shell/tabs";
+import { keptVisualDrafts, parseVisualDrafts } from "../visualquery/drafts";
+import { tabKey } from "../shell/tabs";
 
 /** How long typing pauses before the query tab drafts are saved. */
 export const DRAFT_SAVE_MS = 500;
@@ -26,7 +28,7 @@ export function usePlaceDrafts(opts: {
   /** startup.s === "ready" */
   ready: boolean;
   /** The place's drafts were read (empty when none or the read failed); called before the queued open runs. */
-  onRestored(docs: QueryTabDoc[]): void;
+  onRestored(docs: QueryTabDoc[], visual: VisualTabDoc[], order: string[]): void;
 }): PlaceDrafts {
   /** The place whose drafts are loaded, so saving never overwrites drafts not yet read. */
   const draftsLoaded = useRef<string | null>(null);
@@ -56,22 +58,29 @@ export function usePlaceDrafts(opts: {
 
   const draftKey = placeKey(opts.place);
   const queryDocs = opts.tabs.flatMap((t) => (t.kind === "query" ? [t.doc] : []));
-  const draftsJson = serializeDrafts(queryDocs);
+  const visualDocs = opts.tabs.flatMap((t) => (t.kind === "visual" ? [t.doc] : []));
+  /** Visual drafts of the loaded place this build cannot open, kept for the next save. */
+  const kept = useRef<{ key: string; entries: unknown[] }>({ key: "", entries: [] });
+  const order = opts.tabs.flatMap((t) => (t.kind === "query" || t.kind === "visual" ? [tabKey(t)] : []));
+  const draftsJson = serializeDrafts(queryDocs, visualDocs, { order, kept: kept.current.key === draftKey ? kept.current.entries : [] });
 
-  // Entering a place brings back its query tabs.
+  // Entering a place brings back its query and Visual Query tabs.
   useEffect(() => {
     if (!opts.ready) return;
     let live = true;
     draftsLoaded.current = null;
-    const restore = (docs: QueryTabDoc[]) => {
+    const restore = (docs: QueryTabDoc[], visual: VisualTabDoc[], order: string[], keep: unknown[]) => {
       if (!live) return;
-      onRestoredRef.current(docs);
+      kept.current = { key: draftKey, entries: keep };
+      onRestoredRef.current(docs, visual, order);
       draftsLoaded.current = draftKey;
       runAfterDrafts(draftKey);
     };
     loadQueryTabs(draftKey)
-      .then((json) => restore(json ? parseDrafts(json) : []))
-      .catch(() => restore([]));
+      .then((json) =>
+        json ? restore(parseDrafts(json), parseVisualDrafts(json), parseDraftOrder(json), keptVisualDrafts(json)) : restore([], [], [], []),
+      )
+      .catch(() => restore([], [], [], []));
     return () => {
       live = false;
     };

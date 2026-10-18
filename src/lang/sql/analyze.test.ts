@@ -84,3 +84,103 @@ test("a_column_named_like_a_type_still_resolves_without_a_string", () => {
   expect(a.problems.map((p) => p.message)).toContain("Unknown column date.");
   expect(pg("SELECT day FROM sales.v_store_daily_sales WHERE day = DATE '2026-10-01'").problems.filter((p) => p.severity === "error")).toEqual([]);
 });
+
+const slice = (text: string, r: { from: number; to: number } | null | undefined) => (r ? text.slice(r.from, r.to) : null);
+
+test("join_kinds_and_on_ranges_sit_on_each_reference", () => {
+  const text = [
+    "SELECT o.id FROM sales.orders o",
+    "JOIN stores s ON s.id = o.store_id",
+    "LEFT OUTER JOIN customers c ON c.id = o.customer_id AND c.points > 3",
+    "RIGHT JOIN menu_items m USING (id)",
+    "FULL JOIN sales.order_items i ON i.order_id = o.id",
+    "CROSS JOIN archive.orders_2019 a",
+    "NATURAL INNER JOIN sales.v_store_daily_sales v,",
+    "  customers c2",
+    "WHERE o.total > 1",
+  ].join("\n");
+  const refs = pg(text).statements[0].blocks[0].refs;
+  expect(refs.map((r) => r.join?.kind ?? null)).toEqual([null, "inner", "left", "right", "full", "cross", "inner", "comma"]);
+  expect(slice(text, refs[1].join?.on)).toBe("s.id = o.store_id");
+  expect(slice(text, refs[2].join?.on)).toBe("c.id = o.customer_id AND c.points > 3");
+  expect(refs[3].join).toMatchObject({ using: ["id"], on: null, natural: false });
+  expect(refs[6].join).toMatchObject({ natural: true, using: null, on: null });
+  expect(slice(text, refs[2].join?.range)).toBe("LEFT OUTER JOIN customers c ON c.id = o.customer_id AND c.points > 3");
+  expect(refs[5].join?.on).toBeNull();
+});
+
+test("select_items_carry_sources_alias_and_function", () => {
+  const text = "SELECT s.name, count(o.id) AS late_orders, o.total * 2 doubled, status FROM sales.orders o JOIN stores s ON s.id = o.store_id";
+  const sel = pg(text).statements[0].blocks[0].select;
+  expect(sel.map((x) => x.text)).toEqual(["s.name", "count(o.id)", "o.total * 2", "status"]);
+  expect(sel.map((x) => x.alias)).toEqual([null, "late_orders", "doubled", null]);
+  expect(sel.map((x) => x.column)).toEqual(["name", null, null, "status"]);
+  expect(sel.map((x) => x.fn)).toEqual([null, "count", null, null]);
+  expect(sel[0].sources.map((x) => `${x.ref.alias}.${x.column}`)).toEqual(["s.name"]);
+  expect(sel[1].sources.map((x) => `${x.ref.alias}.${x.column}`)).toEqual(["o.id"]);
+  expect(sel[3].sources.map((x) => `${x.ref.alias}.${x.column}`)).toEqual(["o.status"]);
+  expect(slice(text, sel[1].range)).toBe("count(o.id) AS late_orders");
+});
+
+test("clause_ranges_and_distinct", () => {
+  const text = "SELECT DISTINCT s.city FROM stores s WHERE s.is_active GROUP BY s.city HAVING count(*) > 1 ORDER BY s.city DESC LIMIT 5";
+  const b = pg(text).statements[0].blocks[0];
+  expect(b.distinct).toBe(true);
+  expect(b.clauses.map((c) => [c.keyword, slice(text, c.range)])).toEqual([
+    ["WHERE", "WHERE s.is_active"],
+    ["GROUP BY", "GROUP BY s.city"],
+    ["HAVING", "HAVING count(*) > 1"],
+    ["ORDER BY", "ORDER BY s.city DESC"],
+    ["LIMIT", "LIMIT 5"],
+  ]);
+  expect(pg("SELECT id FROM stores").statements[0].blocks[0].distinct).toBe(false);
+});
+
+test("order_by_a_qualified_column_reads_back_as_its_output", () => {
+  const text = "SELECT s.name, count(o.id) AS late_orders FROM sales.orders o JOIN stores s ON s.id = o.store_id GROUP BY s.name ORDER BY late_orders DESC, s.name, 1, o.id";
+  const b = pg(text).statements[0].blocks[0];
+  expect(b.orderBy.map((x) => [x.text, x.desc, x.output])).toEqual([
+    ["late_orders", true, 1],
+    ["s.name", false, 0],
+    ["1", false, 0],
+    ["o.id", false, null],
+  ]);
+});
+
+test("a_comparison_without_a_value_is_a_syntax_problem", () => {
+  const a = pg("SELECT id FROM sales.orders o\nWHERE o.placed_at >=\nGROUP BY id");
+  const p = a.problems.find((x) => x.kind === "syntax");
+  expect(p?.message).toBe("A value is missing after >=.");
+  expect(pg("SELECT id FROM sales.orders o WHERE o.total =").problems.map((x) => x.message)).toContain("A value is missing after =.");
+  expect(pg("SELECT id FROM sales.orders o WHERE o.total <> 1 AND o.id >= 2").problems.filter((x) => x.kind === "syntax")).toEqual([]);
+});
+
+test("doubled_quotes_inside_a_quoted_name_read_as_one", () => {
+  const a = analyzeSql('SELECT o."say ""hi""" FROM orders o', "postgres", null);
+  expect(a.statements[0].blocks[0].select[0].column).toBe('say "hi"');
+});
+
+const unknownTables = (a: ReturnType<typeof analyzeSql>) => a.problems.filter((p) => p.message.startsWith("Unknown table"));
+const columnAt = (a: ReturnType<typeof analyzeSql>, text: string, word: string) => symbolAt(a, text.lastIndexOf(word))?.kind;
+
+test.each([
+  ["mysql", "UPDATE sales.orders o JOIN stores s ON s.id = o.store_id SET o.status = 'x', o.channel = 'y' WHERE s.id = 1"],
+  ["postgres", "INSERT INTO sales.orders (id, status) SELECT s.id, s.code FROM stores s JOIN customers c ON c.id = s.id ON CONFLICT (id) DO UPDATE SET status = 'x', channel = 'y'"],
+  ["mysql", "INSERT INTO sales.orders (id, status) SELECT s.id, s.code FROM stores s JOIN customers c ON c.id = s.id ON DUPLICATE KEY UPDATE status = 'x', channel = 'y'"],
+] as const)("an_on_condition_stops_before_set_and_its_commas_are_not_tables: %s %s", (dialect, text) => {
+  const a = analyzeSql(text, dialect, KFC_SCHEMA);
+  expect(unknownTables(a)).toEqual([]);
+  expect(columnAt(a, text, "channel")).toBe("column");
+  expect(a.statements[0].blocks.flatMap((b) => b.refs).some((r) => r.join?.kind === "comma")).toBe(false);
+});
+
+test("a_comparison_after_using_or_inside_operator_is_not_missing_a_value", () => {
+  expect(pg("SELECT id FROM stores ORDER BY id USING >").problems.filter((p) => p.kind === "syntax")).toEqual([]);
+  expect(pg("SELECT id FROM stores WHERE id OPERATOR(pg_catalog.=) 1").problems.filter((p) => p.message.startsWith("A value"))).toEqual([]);
+});
+
+test("except_and_intersect_end_a_select_list", () => {
+  const a = analyzeSql("SELECT 1 AS a EXCEPT SELECT 2", "postgres", null);
+  expect(a.statements[0].blocks[0].select.map((x) => x.text)).toEqual(["1"]);
+  expect(pg("SELECT id FROM EXCEPT SELECT 1").problems.map((p) => p.message)).toContain("Expected a table name after FROM.");
+});

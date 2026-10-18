@@ -7,7 +7,7 @@ use contura_core::Error;
 use contura_core::ai::AiAccess;
 use contura_core::connections::{ConnectionInput, ConnectionService, PasswordChange};
 use contura_core::model::{ConnectionConfig, ConnectionId, DialectKind, SslMode};
-use contura_core::query::{ExecOutcome, HistoryFilter, Outcome, SavedQueryInput};
+use contura_core::query::{ExecOutcome, HistoryFilter, Outcome, SavedQueryInput, SavedQueryKind};
 use contura_core::secrets::MemorySecretStore;
 use contura_core::store::AppStore;
 
@@ -201,6 +201,8 @@ async fn saved_query_names_are_unique_ignoring_case() {
             name: "Weekly sales".into(),
             sql: "SELECT 1".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     let err = f
@@ -210,6 +212,8 @@ async fn saved_query_names_are_unique_ignoring_case() {
             name: "weekly SALES".into(),
             sql: "SELECT 2".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap_err();
     assert!(
@@ -223,6 +227,8 @@ async fn saved_query_names_are_unique_ignoring_case() {
             name: "Weekly sales".into(),
             sql: "SELECT 3".into(),
             connection_id: None,
+            kind: Default::default(),
+            visual_json: None,
         })
         .unwrap();
     assert_eq!(again.id, q.id);
@@ -231,6 +237,8 @@ async fn saved_query_names_are_unique_ignoring_case() {
         name: "  ".into(),
         sql: String::new(),
         connection_id: None,
+        kind: Default::default(),
+        visual_json: None,
     });
     assert!(matches!(empty, Err(Error::InvalidInput(m)) if m == "Give the query a name."));
     let list = f.svc.list_saved_queries().unwrap();
@@ -238,6 +246,177 @@ async fn saved_query_names_are_unique_ignoring_case() {
     assert_eq!(list[0].sql, "SELECT 3");
     f.svc.delete_saved_query(q.id).unwrap();
     assert!(f.svc.list_saved_queries().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_saved_visual_query_keeps_its_model_sql_and_connection() {
+    let f = fixture(None).await;
+    let json = r#"{"version":1,"tables":[]}"#.to_string();
+    let q = f
+        .svc
+        .save_saved_query(SavedQueryInput {
+            id: None,
+            name: "Late orders by store".into(),
+            sql: "SELECT 1".into(),
+            connection_id: Some(f.id),
+            kind: Some(SavedQueryKind::Visual),
+            visual_json: Some(json.clone()),
+        })
+        .unwrap();
+    assert_eq!(q.kind, SavedQueryKind::Visual);
+    let list = f.svc.list_saved_queries().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].kind, SavedQueryKind::Visual);
+    assert_eq!(list[0].visual_json.as_deref(), Some(json.as_str()));
+    assert_eq!(list[0].sql, "SELECT 1");
+    assert_eq!(list[0].connection_id, Some(f.id));
+    // The same name as SQL is refused: one name space across kinds.
+    let clash = f.svc.save_saved_query(SavedQueryInput {
+        id: None,
+        name: "late orders BY store".into(),
+        sql: "SELECT 2".into(),
+        connection_id: None,
+        kind: Some(SavedQueryKind::Sql),
+        visual_json: None,
+    });
+    assert!(matches!(clash, Err(Error::InvalidInput(_))));
+    // A Visual Query with no model is refused.
+    let bare = f.svc.save_saved_query(SavedQueryInput {
+        id: None,
+        name: "bare".into(),
+        sql: String::new(),
+        connection_id: None,
+        kind: Some(SavedQueryKind::Visual),
+        visual_json: None,
+    });
+    assert!(matches!(bare, Err(Error::InvalidInput(m)) if m == "A Visual Query needs its model."));
+    // Its Connection deleted: the row lists no Connection ("Connection removed").
+    f.svc.delete(f.id).await.unwrap();
+    assert_eq!(f.svc.list_saved_queries().unwrap()[0].connection_id, None);
+}
+
+#[tokio::test]
+async fn an_update_that_leaves_out_kind_keeps_a_visual_rows_model() {
+    let f = fixture(None).await;
+    let json = r#"{"version":1,"tables":[]}"#.to_string();
+    let q = f
+        .svc
+        .save_saved_query(SavedQueryInput {
+            id: None,
+            name: "by store".into(),
+            sql: "SELECT 1".into(),
+            connection_id: Some(f.id),
+            kind: Some(SavedQueryKind::Visual),
+            visual_json: Some(json.clone()),
+        })
+        .unwrap();
+    // As an older client or a query tab sends it: no kind, no model.
+    let input: SavedQueryInput = serde_json::from_str(&format!(
+        r#"{{"id":"{}","name":"orders by store","sql":"SELECT 2"}}"#,
+        q.id
+    ))
+    .unwrap();
+    assert_eq!(input.kind, None);
+    let again = f.svc.save_saved_query(input).unwrap();
+    assert_eq!(again.kind, SavedQueryKind::Visual);
+    assert_eq!(again.visual_json.as_deref(), Some(json.as_str()));
+    let list = f.svc.list_saved_queries().unwrap();
+    assert_eq!(list[0].name, "orders by store");
+    assert_eq!(list[0].kind, SavedQueryKind::Visual);
+    assert_eq!(list[0].visual_json.as_deref(), Some(json.as_str()));
+    // A new model replaces the stored one.
+    let newer = f
+        .svc
+        .save_saved_query(SavedQueryInput {
+            id: Some(q.id),
+            name: "orders by store".into(),
+            sql: "SELECT 3".into(),
+            connection_id: None,
+            kind: Some(SavedQueryKind::Visual),
+            visual_json: Some("{}".into()),
+        })
+        .unwrap();
+    assert_eq!(newer.visual_json.as_deref(), Some("{}"));
+    // An update with no SQL text keeps the stored SQL; a SQL row may still be emptied.
+    let blank = f
+        .svc
+        .save_saved_query(SavedQueryInput {
+            id: Some(q.id),
+            name: "orders by store".into(),
+            sql: "  ".into(),
+            connection_id: None,
+            kind: None,
+            visual_json: None,
+        })
+        .unwrap();
+    assert_eq!(blank.sql, "SELECT 3");
+    assert_eq!(f.svc.list_saved_queries().unwrap()[0].sql, "SELECT 3");
+    let plain = f
+        .svc
+        .save_saved_query(SavedQueryInput {
+            id: None,
+            name: "plain".into(),
+            sql: "SELECT 4".into(),
+            connection_id: None,
+            kind: Some(SavedQueryKind::Sql),
+            visual_json: None,
+        })
+        .unwrap();
+    let emptied = f
+        .svc
+        .save_saved_query(SavedQueryInput {
+            id: Some(plain.id),
+            name: "plain".into(),
+            sql: String::new(),
+            connection_id: None,
+            kind: None,
+            visual_json: None,
+        })
+        .unwrap();
+    assert_eq!(emptied.sql, "");
+}
+
+#[tokio::test]
+async fn changing_a_saved_querys_kind_is_refused() {
+    let f = fixture(None).await;
+    let input = |id: Option<uuid::Uuid>, name: &str, kind: SavedQueryKind| SavedQueryInput {
+        id,
+        name: name.into(),
+        sql: "SELECT 1".into(),
+        connection_id: None,
+        kind: Some(kind),
+        visual_json: (kind == SavedQueryKind::Visual).then(|| "{}".to_string()),
+    };
+    let v = f
+        .svc
+        .save_saved_query(input(None, "visual one", SavedQueryKind::Visual))
+        .unwrap();
+    let s = f
+        .svc
+        .save_saved_query(input(None, "sql one", SavedQueryKind::Sql))
+        .unwrap();
+    let over_visual = f
+        .svc
+        .save_saved_query(input(Some(v.id), "visual one", SavedQueryKind::Sql));
+    assert!(
+        matches!(&over_visual, Err(Error::InvalidInput(m)) if m == "This name belongs to a Visual Query. Pick another name."),
+        "{over_visual:?}"
+    );
+    let over_sql = f
+        .svc
+        .save_saved_query(input(Some(s.id), "sql one", SavedQueryKind::Visual));
+    assert!(
+        matches!(&over_sql, Err(Error::InvalidInput(m)) if m == "This name belongs to a SQL query. Pick another name."),
+        "{over_sql:?}"
+    );
+    let list = f.svc.list_saved_queries().unwrap();
+    let kept = list.iter().find(|q| q.id == v.id).unwrap();
+    assert_eq!(kept.kind, SavedQueryKind::Visual);
+    assert_eq!(kept.visual_json.as_deref(), Some("{}"));
+    assert_eq!(
+        list.iter().find(|q| q.id == s.id).unwrap().kind,
+        SavedQueryKind::Sql
+    );
 }
 
 #[tokio::test]

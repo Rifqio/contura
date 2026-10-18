@@ -142,7 +142,7 @@ test(
     const buttons = within(bar).getAllByRole("button").map((b) => b.textContent);
     expect(buttons).toEqual(["Select", "Add table", "Arrange", "Publish", "Apply to Connection..."]);
     expect(within(bar).getByRole("button", { name: "Select" }).getAttribute("aria-pressed")).toBe("true");
-    expect((within(bar).getByRole("button", { name: "Publish" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(bar).getByRole("button", { name: "Publish" }) as HTMLButtonElement).disabled).toBe(false);
     expect((within(bar).getByRole("button", { name: "Apply to Connection..." }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(container.querySelector('.react-flow__node[data-id="public.orders"]')!, { key: "Enter" });
     await within(bar).findByText("orders selected");
@@ -194,13 +194,23 @@ test("svg_export_has_cards_and_refs_without_foreign_object", () => {
   expect(svg).toContain(">stores<");
   expect(svg).toContain(">orders<");
   expect(svg).toContain(">varchar(80)<");
-  expect(svg.match(/<path /g)).toHaveLength(1);
+  expect(svg.match(/<g data-edge=/g)).toHaveLength(1);
   expect(svg).not.toContain("foreignObject");
   expect(svg).not.toContain("http://fonts");
 });
 
 test("svg_export_has_no_literal_colours", () => {
-  const palette = { surface: "#010101", text: "#020202", subtle: "#030303", stroke: "#040404", fill: "#050505", type: "#060606", border: "#070707" };
+  const node = { fill: "#050505", stroke: "#040404" };
+  const palette = {
+    surface: "#010101",
+    canvas: "#080808",
+    text: "#020202",
+    subtle: "#030303",
+    border: "#070707",
+    type: "#060606",
+    keyword: "#090909",
+    nodes: { table: node, view: node, derived: node, result: node },
+  };
   const svg = exportSvg(
     KFC_MODEL,
     { version: 1, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 400, y: 0 } } },
@@ -208,24 +218,41 @@ test("svg_export_has_no_literal_colours", () => {
   );
   const colours = [...svg.matchAll(/(?:fill|stroke)="([^"]+)"/g)].map((m) => m[1]).filter((c) => c !== "none");
   expect(colours.length).toBeGreaterThan(0);
-  const allowed = new Set(Object.values(palette));
+  const allowed = new Set([...Object.values(palette).filter((v) => typeof v === "string"), node.fill, node.stroke]);
   expect(colours.filter((c) => !allowed.has(c))).toEqual([]);
 });
 
 test("export_palette_reads_the_light_tokens_from_a_hidden_theme_light_element", () => {
   const style = document.createElement("style");
   style.textContent =
-    ".theme-light{--c-bg-surface:#111111;--c-text:#222222;--c-text-subtle:#333333;--c-node-table-stroke:#444444;--c-node-table-fill:#555555;--c-syn-type:#666666;--c-border:#777777}";
+    ".theme-light{--c-bg-surface:#111111;--c-bg-canvas:#888888;--c-text:#222222;--c-text-subtle:#333333;--c-node-table-stroke:#444444;--c-node-table-fill:#555555;--c-syn-type:#666666;--c-border:#777777;--c-syn-keyword:#999999}";
   document.head.appendChild(style);
-  expect(exportPalette()).toEqual({
+  expect(exportPalette()).toMatchObject({
     surface: "#111111",
+    canvas: "#888888",
     text: "#222222",
     subtle: "#333333",
-    stroke: "#444444",
-    fill: "#555555",
     type: "#666666",
     border: "#777777",
+    keyword: "#999999",
+    nodes: { table: { stroke: "#444444", fill: "#555555" } },
   });
   expect(document.querySelector(".theme-light")).toBeNull();
   style.remove();
 });
+
+test(
+  "publish_opens_the_publish_image_dialog",
+  patient(async () => {
+    const { container } = setup(doc());
+    await screen.findByRole("group", { name: "Table stores" });
+    const bar = container.querySelector(".canvas-toolbar") as HTMLElement;
+    await userEvent.click(within(bar).getByRole("button", { name: "Publish" }));
+    const dialog = await screen.findByRole("dialog", { name: "Publish image" });
+    expect(within(dialog).getByText("shop")).toBeTruthy();
+    expect(within(dialog).getByRole("status", { name: "Output" }).textContent).toMatch(/PNG, about/);
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Publish image" })).toBeNull());
+  }),
+  LOAD_TIMEOUT,
+);

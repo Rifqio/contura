@@ -336,3 +336,17 @@ describe("KeymapProvider", () => {
     expect(onNew).toHaveBeenCalledTimes(1);
   });
 });
+
+test("visual_query_keys_are_app_commands_without_a_clash", () => {
+  const map = resolveKeymap({});
+  const want = [
+    ["visualQuery.addTable", "Add table", "Ctrl+Shift+A"],
+    ["visualQuery.openInEditor", "Open the SQL in the editor", "Ctrl+Shift+E"],
+    ["diagram.toggle", "Show or hide the diagram", "Ctrl+Shift+D"],
+  ] as const;
+  for (const [id, title, key] of want) {
+    const c = COMMANDS.find((x) => x.id === id)!;
+    expect(c).toMatchObject({ title, keys: [key], scope: "app" });
+    expect(findClash(map, id, key)).toBeNull();
+  }
+});
