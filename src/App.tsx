@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { errorText, listConnections, listGroups, setLastGroup } from "./api/client";
-import type { ConnectionConfig, ConnectionId, Group, GroupId, RecentItem, SavedQuery } from "./api/types";
+import { errorText, forgetRecent, listConnections, listGroups, setLastGroup } from "./api/client";
+import type { ConnectionConfig, ConnectionId, Group, GroupId, ObjectPath, RecentItem, SavedQuery } from "./api/types";
 import DataGrid from "./components/DataGrid";
 import { GroupImagesProvider, useGroupImageCache } from "./components/GroupBadge";
 import GroupSwitcher, { menuPlaces } from "./components/GroupSwitcher";
@@ -27,12 +27,14 @@ import { useStartup } from "./app/useStartup";
 import { openRecentItem } from "./app/openRecent";
 import { placeOf } from "./app/places";
 import { useRecentList } from "./app/useRecentList";
+import { useTableDrop } from "./app/useTableDrop";
 import { useWorkspaceTabs } from "./app/useWorkspaceTabs";
 import LaunchScreen from "./components/LaunchScreen";
 import TabStrip from "./components/TabStrip";
 import TitleBar from "./components/TitleBar";
 import WorkEmpty from "./components/WorkEmpty";
 import AssistantPanel from "./assistant/AssistantPanel";
+import TableDesigner from "./design/TableDesigner";
 import { appLang } from "./lang/appLang";
 import { schemaKey } from "./lang/sql/schemaCache";
 import { nextQueryName, placeKey } from "./query/drafts";
@@ -47,6 +49,9 @@ import {
   type SettingsSection,
   type WindowTab,
   type WorkTab,
+  designKey,
+  newDesignKey,
+  objectTabOf,
   tabKey,
 } from "./shell/tabs";
 import { useTheme } from "./theme/useTheme";
@@ -80,7 +85,7 @@ function Workspace() {
     connections,
     onClosed: (id) => {
       lang.schemas.dropConnection(id);
-      removeTabs((t) => t.kind === "object" && t.selection.connectionId === id);
+      removeTabs((t) => objectTabOf(t)?.connectionId === id);
     },
     onLost: () => setNotice("That Connection is not open any more. Open it again to continue."),
   });
@@ -173,9 +178,11 @@ function Workspace() {
     const here = place.kind === "group" ? place.groupId : null;
     const isHere = (id: ConnectionId) => connections.some((c) => c.id === id && c.groupId === here);
     if (activeId !== null && !isHere(activeId)) setActiveId(null);
-    if (tabs.some((t) => t.kind === "object" && !isHere(t.selection.connectionId))) {
-      removeTabs((t) => t.kind === "object" && !isHere(t.selection.connectionId));
-    }
+    const away = (t: WorkTab) => {
+      const o = objectTabOf(t);
+      return !!o && !isHere(o.connectionId);
+    };
+    if (tabs.some(away)) removeTabs(away);
   }, [connections, place, activeId, tabs]);
 
   const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseSaved, dialog: leaveDialog } =
@@ -193,11 +200,21 @@ function Workspace() {
     if (await confirmLeave(tableKeys(c.id))) setForm({ kind: "connection", connection: c });
   }
 
-  /** Closes a tab: a table with Pending Edits asks first, a Schema Model through its own Close. */
+  /** A New table tab its create turned into a design tab: its key then, or null when it closed instead. */
+  const createdTabs = useRef(new Map<string, string | null>());
+
+  /** Closes a tab: a table with Pending Edits or an unapplied design asks first, a Schema Model through its own Close. */
   async function closeTab(key: string) {
     const tab = [...tabs, ...windowTabs].find((t) => tabKey(t) === key);
     if (!tab) return;
-    if (tab.kind === "object" && !(await confirmLeave([tab.key]))) return;
+    if (objectTabOf(tab) && !(await confirmLeave([key]))) return;
+    // A New table created through the ask's Apply is its table's design tab now: that tab closes (M2).
+    const created = createdTabs.current.get(key);
+    if (created !== undefined) {
+      createdTabs.current.delete(key);
+      if (created) dropTab(created);
+      return;
+    }
     if (tab.kind === "query" && !(await confirmCloseSaved(tab.doc))) return;
     const builderClose = tab.kind === "schema" ? schemaCloseFor(tab.id) : null;
     if (builderClose) builderClose();
@@ -227,6 +244,106 @@ function Workspace() {
     // Worked out on the latest tabs: a Recent open runs after drafts were restored into them.
     setTabs((all) => (all.some((t) => t.kind === "object" && t.key === key) ? all : [...all, { kind: "object", key, selection }]));
     setActiveKey(key);
+  }
+
+  /** Opens a table's design tab, or shows it when it is open already. */
+  function openDesign(connectionId: ConnectionId, path: ObjectPath) {
+    const key = designKey(connectionId, path);
+    setTabs((all) =>
+      all.some((t) => t.kind === "design" && t.key === key)
+        ? all
+        : [...all, { kind: "design", key, connectionId, target: { kind: "alter", path } }],
+    );
+    setActiveKey(key);
+  }
+
+  /** Opens a New table design tab in a database (and schema) and shows it (D7). */
+  function newTable(connectionId: ConnectionId, database: string, schema: string | null) {
+    const id = newId();
+    const key = newDesignKey(id);
+    setTabs((all) => [...all, { kind: "design", key, connectionId, target: { kind: "create", scope: { database, schema }, id } }]);
+    setActiveKey(key);
+  }
+
+  /** Per grid tab: bumped to load the table's new columns; a notice when that was put off. */
+  const [gridVersions, setGridVersions] = useState<Record<string, number>>({});
+  const [gridNotices, setGridNotices] = useState<Record<string, string>>({});
+  const forgetNotice = (key: string) =>
+    setGridNotices((n) => {
+      if (!(key in n)) return n;
+      const next = { ...n };
+      delete next[key];
+      return next;
+    });
+  // A closed grid tab takes its notice with it.
+  useEffect(() => {
+    const live = new Set(tabs.flatMap((t) => (t.kind === "object" ? [t.key] : [])));
+    setGridNotices((n) => {
+      const kept = Object.entries(n).filter(([k]) => live.has(k));
+      return kept.length === Object.keys(n).length ? n : Object.fromEntries(kept);
+    });
+  }, [tabs]);
+
+  /** The table's grid tab loads its new columns, after its Pending Edits are asked about; Cancel keeps it with a notice. */
+  async function reloadGrid(connectionId: ConnectionId, path: ObjectPath) {
+    const key = objectKey(connectionId, "table", path);
+    if (!tabsRef.current.some((t) => t.kind === "object" && t.key === key)) return;
+    if (await confirmLeave([key])) {
+      forgetNotice(key);
+      setGridVersions((v) => ({ ...v, [key]: (v[key] ?? 0) + 1 }));
+    } else {
+      setGridNotices((n) => ({ ...n, [key]: `${path.name} changed. Reload to see its new columns.` }));
+    }
+  }
+
+  /**
+   * A design tab changed the database: the table's grid, the completion schema and the applied
+   * Connection's tree branch load again (whichever branch is focused), and a new table is revealed.
+   * A create (done, or partly run, M4) turns its tab into the new table's design tab in place, so
+   * the next Apply is an ALTER and never a second CREATE.
+   */
+  function designApplied(key: string, connectionId: ConnectionId, path: ObjectPath, kind: "altered" | "created" | "dropped") {
+    if (kind === "dropped") {
+      tableDropped(connectionId, path);
+      return;
+    }
+    lang.schemas.invalidate(connectionId, path.database);
+    tree.refresh(connectionId);
+    void reloadGrid(connectionId, path);
+    if (kind !== "created") return;
+    setReveal((r) => ({ connectionId, database: path.database, schema: path.schema, name: path.name, seq: (r?.seq ?? 0) + 1 }));
+    const next = designKey(connectionId, path);
+    const open = tabsRef.current.some((t) => t.kind === "design" && t.key === next);
+    createdTabs.current.set(key, open ? null : next);
+    setTabs((all) => {
+      const at = all.findIndex((t) => t.kind === "design" && t.key === key);
+      if (at < 0) return all;
+      // That table's design tab is open already: it stays, and this one goes.
+      if (all.some((t) => t.kind === "design" && t.key === next)) return all.filter((_, i) => i !== at);
+      const copy = [...all];
+      copy[at] = { kind: "design", key: next, connectionId, target: { kind: "alter", path } };
+      return copy;
+    });
+    setActiveKey((k) => (k === key ? next : k));
+  }
+
+  /** After a drop: the table's tabs close without asking (asked before, D11), and what lists it reloads. */
+  function tableDropped(connectionId: ConnectionId, path: ObjectPath) {
+    const keys = new Set([objectKey(connectionId, "table", path), designKey(connectionId, path)]);
+    removeTabs((t) => {
+      const o = objectTabOf(t);
+      return !!o && keys.has(o.key);
+    });
+    tree.refresh(connectionId);
+    lang.schemas.invalidate(connectionId, path.database);
+    // D28: Recent forgets the table, then shows the list without it.
+    forgetRecent(connectionId, path).then(
+      () => loadRecent(),
+      (e) => {
+        setNotice(errorText(e));
+        loadRecent();
+      },
+    );
   }
 
   function newQuery(connectionId: ConnectionId | null, text = "", database?: string) {
@@ -456,6 +573,8 @@ function Workspace() {
     await enterPlace({ kind: "ungrouped" });
   }
 
+  const tableDrop = useTableDrop({ connections, groups, confirmLeave, onDropped: tableDropped });
+
   const actions = connectionActions({
     openIds,
     confirmLeave,
@@ -555,6 +674,9 @@ function Workspace() {
               onDuplicateConnection={(c) => setForm({ kind: "connection", duplicateOf: c })}
               onNewQuery={(id) => void actions.newQueryOn(id)}
               onNewSchemaModel={(connectionId, database, schema) => setModelStart({ initial: { connectionId, database, schema } })}
+              onNewTable={newTable}
+              onDesignTable={(s) => openDesign(s.connectionId, s.path)}
+              onDropTable={(id, path) => void tableDrop.drop(id, path)}
               onMoveConnection={(id, to) => void actions.moveFromTree(id, to)}
               onNewGroup={() => setForm({ kind: "newGroup" })}
               onClearHistory={(id) => void actions.clearHistoryFromTree(id)}
@@ -641,6 +763,10 @@ function Workspace() {
                     connectionName={c?.name}
                     rowEstimate={s.kind === "table" ? tree.estimate(s.connectionId, s.path) : null}
                     onOpenQuery={(sql) => newQuery(s.connectionId, sql, s.path.database)}
+                    onDesign={s.kind === "table" ? () => openDesign(s.connectionId, s.path) : undefined}
+                    version={gridVersions[t.key] ?? 0}
+                    notice={gridNotices[t.key] ?? null}
+                    onNoticeDone={() => forgetNotice(t.key)}
                     lang={lang}
                     ask={{
                       ...askKit,
@@ -648,6 +774,27 @@ function Workspace() {
                         ? { id: c.id, name: c.name, dialect: c.dialect, database: s.path.database, access: c.aiAccess }
                         : null,
                     }}
+                  />
+                </div>
+              );
+            })}
+            {/* Design tabs stay mounted while hidden too, so an unapplied design survives a tab switch. */}
+            {tabs.map((t) => {
+              if (t.kind !== "design") return null;
+              const c = connections.find((x) => x.id === t.connectionId);
+              if (!c) return null;
+              return (
+                <div key={t.key} className="work-pane" hidden={t.key !== activeKey}>
+                  <TableDesigner
+                    connection={c}
+                    target={t.target}
+                    group={c.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
+                    visible={t.key === activeKey}
+                    onDirtyChange={(dirty) => markDirty(t.key, dirty)}
+                    controlRef={gridControl(t.key)}
+                    onApplied={(path, kind) => designApplied(t.key, c.id, path, kind)}
+                    onDrop={(path) => void tableDrop.drop(c.id, path)}
+                    lang={lang}
                   />
                 </div>
               );
@@ -789,6 +936,7 @@ function Workspace() {
         }}
       />
       {leaveDialog}
+      {tableDrop.dialog}
       <StartModelDialog
         modelStart={modelStart}
         connections={connections}

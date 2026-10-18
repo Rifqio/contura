@@ -17,6 +17,9 @@ test("a_tab_loads_its_schema_once_per_connection_and_database", async () => {
   expect(load).toHaveBeenCalledTimes(1);
   expect(cache.state("c1", "kfc")).toBe("loaded");
   expect(client.sqlSchemaFor(schemaKey("c1", "kfc"))).toBe(KFC_SCHEMA);
+  // The designer's Foreign Key target list: tables only.
+  expect(cache.tables("c1", "kfc")).toEqual(KFC_SCHEMA.tables.filter((t) => t.kind === "table"));
+  expect(cache.tables("c1", "nope")).toBeNull();
   await cache.ensure("c1", "other");
   expect(load).toHaveBeenCalledTimes(2);
 });

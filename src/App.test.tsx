@@ -2,11 +2,12 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { beforeAll, expect, test, vi } from "vitest";
 import { mockEditorDom } from "./test/editor";
-import { patientFile } from "./test/load";
+import { LOAD_TIMEOUT, patientFile } from "./test/load";
 import { mockReactFlowDom } from "./test/reactFlow";
 import { callsTo, routeInvoke } from "./test/invoke";
 import { EditorView } from "@codemirror/view";
 import App from "./App";
+import { appLang } from "./lang/appLang";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const closeWindow = vi.hoisted(() => ({
@@ -1410,3 +1411,461 @@ test("ctrl_shift_f_on_the_home_tab_focuses_the_home_filter", async () => {
   await userEvent.keyboard("{Control>}{Shift>}f{/Shift}{/Control}");
   expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Filter Connections" }));
 });
+
+// ---- Table Designer tab (step 5c) ----
+
+const ordersDesign = {
+  path: { database: "shop", schema: null, name: "orders" },
+  columns: [
+    { name: "id", typeSql: "int", nullable: false, defaultSql: null, increment: { kind: "autoIncrement" }, comment: null, generated: false, mysql: null, sqliteAutoincrement: false, collation: null, advanced: false },
+    { name: "status", typeSql: "varchar(16)", nullable: true, defaultSql: null, increment: { kind: "none" }, comment: null, generated: false, mysql: null, sqliteAutoincrement: false, collation: null, advanced: false },
+  ],
+  indexes: [],
+  foreignKeys: [],
+  referencedBy: [],
+  comment: null,
+  unsupported: [],
+  sqlite: null,
+};
+
+async function openOrders(over: Record<string, (a: Record<string, unknown>) => unknown> = {}) {
+  workspaceRoutes({
+    list_connections: () => [shopMy],
+    list_databases: () => ["shop"],
+    list_objects: () => [{ kind: "table", name: "orders" }],
+    fetch_page: () => ordersPage,
+    set_last_group: () => null,
+    sql_schema: () => ({ tables: [], functions: [] }),
+    table_design: () => ordersDesign,
+    ...over,
+  });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await screen.findByRole("tab", { name: "orders", selected: true });
+}
+const designButton = () =>
+  within(document.querySelector(".work-pane:not([hidden]) .table-header") as HTMLElement).getByRole("button", { name: "Design table" });
+
+test("design_table_opens_one_design_tab_beside_the_table", async () => {
+  await openOrders();
+  await userEvent.click(designButton());
+  expect(await screen.findByRole("tab", { name: "orders design", selected: true })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "orders" })).toBeTruthy();
+  expect(await screen.findByRole("tab", { name: "Columns 2" })).toBeTruthy();
+  // The status bar follows the design tab's Connection.
+  const bar = document.querySelector("footer.app-status") as HTMLElement;
+  expect(bar.textContent).toContain("KFC Shop");
+  await userEvent.click(screen.getByRole("tab", { name: "orders" }));
+  await userEvent.click(designButton());
+  expect(await screen.findByRole("tab", { name: "orders design", selected: true })).toBeTruthy();
+  expect(screen.getAllByRole("tab", { name: /^orders design/ })).toHaveLength(1);
+  expect(callsTo("table_design")).toHaveLength(1);
+});
+
+test("closing_a_design_tab_with_changes_asks_first", async () => {
+  await openOrders();
+  await userEvent.click(designButton());
+  await screen.findByRole("tab", { name: "Columns 2" });
+  await userEvent.click(screen.getByRole("button", { name: "Add column" }));
+  const tab = await screen.findByRole("tab", { name: "orders design, unsaved changes" });
+  expect(tab).toBeTruthy();
+  const strip = screen.getByRole("tablist", { name: "Open tabs" });
+  await userEvent.click(within(strip).getByRole("button", { name: "Close orders design" }));
+  expect(await screen.findByText("Apply changes to orders?")).toBeTruthy();
+  await userEvent.click(inAsk("Cancel"));
+  expect(screen.getByRole("tab", { name: /^orders design/ })).toBeTruthy();
+  await userEvent.click(within(strip).getByRole("button", { name: "Close orders design" }));
+  await screen.findByText("Apply changes to orders?");
+  await userEvent.click(inAsk("Discard"));
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /^orders design/ })).toBeNull());
+  expect(screen.getByRole("tab", { name: "orders" })).toBeTruthy();
+});
+
+test("group_switch_with_an_unapplied_design_asks_by_click_and_by_ctrl_number", async () => {
+  await openOrders();
+  await userEvent.click(designButton());
+  await screen.findByRole("tab", { name: "Columns 2" });
+  await userEvent.click(screen.getByRole("button", { name: "Add column" }));
+  await screen.findByRole("tab", { name: "orders design, unsaved changes" });
+  await userEvent.click(screen.getByRole("button", { name: "Switch Group, current KFC" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Ungrouped" }));
+  expect(await screen.findByText("Apply changes to orders?")).toBeTruthy();
+  await userEvent.click(inAsk("Cancel"));
+  expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
+  // Ctrl+2 is Ungrouped here (KFC is the only Group).
+  (document.activeElement as HTMLElement | null)?.blur();
+  await userEvent.keyboard("{Control>}2{/Control}");
+  expect(await screen.findByText("Apply changes to orders?")).toBeTruthy();
+  await userEvent.click(inAsk("Cancel"));
+  expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "orders design, unsaved changes" })).toBeTruthy();
+});
+
+// ---- New table and Drop table (step 5c, Task 10) ----
+
+const DROP = "DROP TABLE `orders`";
+const dropPlan = (verdict: Record<string, unknown> = { kind: "ok" }) => ({
+  plan: {
+    statements: [DROP],
+    warnings: [{ kind: "dropTable", table: "orders", rows: { kind: "exact", n: 1204 }, referencedBy: [] }],
+    mode: { kind: "atomic" },
+    before: 0,
+    after: 0,
+    checks: [],
+    foreignKeys: null,
+  },
+  verdict,
+});
+const dropRoutes = {
+  table_design: () => ordersDesign,
+  plan_design: () => dropPlan(),
+  apply_design: () => ({ kind: "done", ran: 1 }),
+  forget_recent: () => null,
+  recent_items: () => [],
+};
+const ordersRoutes = (c: typeof shopMy) => ({
+  list_connections: () => [c],
+  list_databases: () => ["shop"],
+  list_objects: () => [{ kind: "table", name: "orders", rows: 1204 }],
+  fetch_page: () => ordersPage,
+  set_last_group: () => null,
+  sql_schema: () => ({ tables: [], functions: [] }),
+});
+const dropFromTree = async () => {
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Drop table..." }));
+};
+
+test("drop_asks_about_pending_edits_before_it_runs", async () => {
+  await openOrdersWithAnEdit(dropRoutes);
+  await dropFromTree();
+  expect(await screen.findByText("Save changes to orders?")).toBeTruthy();
+  await userEvent.click(inAsk("Cancel"));
+  // Cancel stops the drop: nothing planned, the table and its edits stay.
+  await waitFor(() => expect(screen.queryByText("Save changes to orders?")).toBeNull());
+  expect(callsTo("plan_design")).toHaveLength(0);
+  expect(screen.getByRole("tab", { name: /^orders/ })).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Pending Edits" })).toBeTruthy();
+  await dropFromTree();
+  await screen.findByText("Save changes to orders?");
+  await userEvent.click(inAsk("Discard"));
+  const dialog = await screen.findByRole("dialog", { name: "Drop orders?" });
+  expect(callsTo("plan_design")).toHaveLength(1);
+  await userEvent.click(within(dialog).getByRole("button", { name: "Drop orders" }));
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /^orders/ })).toBeNull());
+  // The tab closes without a second ask.
+  expect(screen.queryByText("Save changes to orders?")).toBeNull();
+  expect(callsTo("apply_design")).toHaveLength(1);
+});
+
+test("plain_drop_warns_closes_both_tabs_and_reloads_tree_and_recent", async () => {
+  await openOrders(dropRoutes);
+  await userEvent.click(designButton());
+  await screen.findByRole("tab", { name: "Columns 2" });
+  const listsBefore = callsTo("list_objects").length;
+  await dropFromTree();
+  const dialog = await screen.findByRole("dialog", { name: "Drop orders?" });
+  expect(within(dialog).getByText("Dropping orders deletes its 1,204 rows.")).toBeTruthy();
+  expect(dialog.querySelector(".sql-block")?.textContent).toContain(DROP);
+  const plan = callsTo("plan_design").slice(-1)[0].request as { target: { kind: string; base: unknown }; edits: unknown[] };
+  expect(plan).toEqual({ target: { kind: "drop", base: ordersDesign }, edits: [] });
+  await userEvent.click(within(dialog).getByRole("button", { name: "Drop orders" }));
+  expect(await screen.findByText("Dropped orders.")).toBeTruthy();
+  expect(callsTo("apply_design").slice(-1)[0].pass).toBeNull();
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /^orders/ })).toBeNull());
+  await waitFor(() => expect(callsTo("list_objects").length).toBeGreaterThan(listsBefore));
+  expect(callsTo("list_objects").slice(listsBefore).every((a) => a.id === "c2")).toBe(true);
+  await waitFor(() =>
+    expect(callsTo("forget_recent")).toEqual([{ connectionId: "c2", path: { database: "shop", schema: null, name: "orders" } }]),
+  );
+});
+
+test("drop_from_the_designer_strip_asks_the_same_way", async () => {
+  await openOrders(dropRoutes);
+  await userEvent.click(designButton());
+  await screen.findByRole("tab", { name: "Columns 2" });
+  await userEvent.click(screen.getByRole("button", { name: "Drop table orders" }));
+  const dialog = await screen.findByRole("dialog", { name: "Drop orders?" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Drop orders?" })).toBeNull());
+  expect(callsTo("apply_design")).toHaveLength(0);
+  expect(screen.getByRole("tab", { name: "orders design", selected: true })).toBeTruthy();
+});
+
+test("production_drop_opens_confirm_run_and_applies_with_the_pass", async () => {
+  const prod = { ...shopMy, name: "freight-prod", production: true };
+  const ask = {
+    kind: "needsConfirmation",
+    connection: "freight-prod",
+    database: "shop",
+    statements: [{ text: DROP, class: "write" }],
+    writes: 1,
+  };
+  workspaceRoutes({
+    ...ordersRoutes(prod),
+    ...dropRoutes,
+    plan_design: () => dropPlan(ask),
+    confirm_design: () => "pass-1",
+  });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open freight-prod" }));
+  await screen.findByRole("treeitem", { name: "orders" });
+  await dropFromTree();
+  const dialog = await screen.findByRole("dialog", { name: "Drop on freight-prod · shop" });
+  expect(within(dialog).getByText("Dropping orders deletes its 1,204 rows.")).toBeTruthy();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Drop on freight-prod" }));
+  await waitFor(() => expect(callsTo("apply_design")).toHaveLength(1));
+  expect(callsTo("confirm_design")).toHaveLength(1);
+  expect(callsTo("apply_design")[0].pass).toBe("pass-1");
+  expect(await screen.findByText("Dropped orders.")).toBeTruthy();
+});
+
+test("read_only_shows_neither_new_table_nor_drop_table", async () => {
+  const ro = { ...shopMy, name: "shop-ro", readOnly: true };
+  workspaceRoutes({ ...ordersRoutes(ro), ...dropRoutes });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open shop-ro" }));
+  await screen.findByRole("treeitem", { name: "orders" });
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  const dbMenu = screen.getByRole("menu", { name: "shop" });
+  expect(within(dbMenu).queryByRole("menuitem", { name: "New table..." })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  const menu = screen.getByRole("menu", { name: "orders" });
+  expect(within(menu).getByRole("menuitem", { name: "Design table" })).toBeTruthy();
+  expect(within(menu).queryByRole("menuitem", { name: "Drop table..." })).toBeNull();
+});
+
+// ---- Refresh after Apply and the leave asks (step 5c, Task 11) ----
+
+const ordersPageWide = {
+  ...ordersPage,
+  columns: [...ordersPage.columns, { name: "total", typeName: "int", isPrimaryKey: false }],
+  rows: [[...ordersPage.rows[0], { t: "number", value: "7" }]],
+};
+const okPlan = {
+  plan: {
+    statements: ["ALTER TABLE `orders` MODIFY `status` varchar(32)"],
+    warnings: [],
+    mode: { kind: "atomic" },
+    before: 0,
+    after: 0,
+    checks: [],
+    foreignKeys: null,
+  },
+  verdict: { kind: "ok" },
+};
+const designPane = () => document.querySelector(".work-pane:not([hidden]) .design-view") as HTMLElement;
+const designCell = (name: string, field: string) => {
+  const rows = [...designPane().querySelectorAll("tbody tr")];
+  const row = rows.find((r) => r.querySelector('td[data-field="name"]')?.textContent === name) as HTMLElement;
+  return row.querySelector(`td[data-field="${field}"]`) as HTMLElement;
+};
+const designApply = () => within(designPane()).getByRole("button", { name: /^Apply/ }) as HTMLButtonElement;
+
+/** Opens orders' design tab (beside the grid tab) and changes status's type. */
+async function changeStatusInDesign() {
+  await userEvent.click(designButton());
+  await screen.findByRole("tab", { name: "Columns 2" });
+  fireEvent.doubleClick(designCell("status", "type"));
+  const box = within(designPane()).getByRole("combobox", { name: "Cell value" });
+  fireEvent.change(box, { target: { value: "varchar(32)" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await screen.findByRole("tab", { name: "orders design, unsaved changes" });
+  await waitFor(() => expect(designApply().disabled).toBe(false));
+}
+
+type Routes = Record<string, (a: Record<string, unknown>) => unknown>;
+const applyRoutes = (over: Routes = {}): Routes => {
+  let applied = false;
+  return {
+    table_design: () => ordersDesign,
+    plan_design: () => okPlan,
+    apply_design: () => {
+      applied = true;
+      return { kind: "done", ran: 1 };
+    },
+    fetch_page: () => (applied ? ordersPageWide : ordersPage),
+    ...over,
+  };
+};
+
+test("after_apply_a_grid_tab_with_pending_edits_asks_and_discard_reloads_it", async () => {
+  const invalidate = vi.spyOn(appLang().schemas, "invalidate");
+  try {
+    await openOrdersWithAnEdit(applyRoutes());
+    await changeStatusInDesign();
+    const fetches = callsTo("fetch_page").length;
+    const lists = callsTo("list_objects").length;
+    await userEvent.click(designApply());
+    // The grid of the same table has Pending Edits: it is asked about before it reloads.
+    expect(await screen.findByText("Save changes to orders?")).toBeTruthy();
+    await userEvent.click(inAsk("Discard"));
+    await waitFor(() => expect(callsTo("fetch_page").length).toBeGreaterThan(fetches));
+    expect((callsTo("fetch_page").slice(-1)[0].request as { page: number }).page).toBe(0);
+    expect(await screen.findByRole("columnheader", { name: /total/ })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
+    expect(invalidate).toHaveBeenCalledWith("c2", "shop");
+    await waitFor(() => expect(callsTo("list_objects").length).toBeGreaterThan(lists));
+  } finally {
+    invalidate.mockRestore();
+  }
+});
+
+test("after_apply_cancel_keeps_the_grid_and_says_it_changed", async () => {
+  await openOrdersWithAnEdit(applyRoutes());
+  await changeStatusInDesign();
+  const fetches = callsTo("fetch_page").length;
+  await userEvent.click(designApply());
+  await screen.findByText("Save changes to orders?");
+  await userEvent.click(inAsk("Cancel"));
+  expect(await screen.findByText("orders changed. Reload to see its new columns.")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Pending Edits" })).toBeTruthy();
+  expect(callsTo("fetch_page")).toHaveLength(fetches);
+});
+
+test("after_apply_a_clean_grid_reloads_without_asking", async () => {
+  await openOrders(applyRoutes());
+  await changeStatusInDesign();
+  const fetches = callsTo("fetch_page").length;
+  await userEvent.click(designApply());
+  await waitFor(() => expect(callsTo("fetch_page").length).toBeGreaterThan(fetches));
+  expect(screen.queryByText("Save changes to orders?")).toBeNull();
+});
+
+test("after_apply_the_tree_reloads_the_applied_connection_only_while_another_branch_is_focused", async () => {
+  const archive = { ...shopMy, id: "c4", name: "KFC Archive", database: "archive" };
+  await openOrders({
+    ...applyRoutes(),
+    list_connections: () => [shopMy, archive],
+    list_databases: ({ id }) => (id === "c4" ? ["archive"] : ["shop"]),
+  });
+  await changeStatusInDesign();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Archive" }));
+  const archiveRow = await screen.findByRole("treeitem", { name: "archive" });
+  await waitFor(() => expect(callsTo("list_objects").some((a) => a.id === "c4")).toBe(true));
+  archiveRow.focus();
+  const lists = callsTo("list_objects").length;
+  await userEvent.click(designApply());
+  await waitFor(() => expect(callsTo("list_objects").length).toBeGreaterThan(lists));
+  expect(callsTo("list_objects").slice(lists).every((a) => a.id === "c2")).toBe(true);
+});
+
+test("a_created_table_is_revealed_in_the_tree", async () => {
+  let created = false;
+  await openOrders({
+    ...applyRoutes(),
+    plan_design: () => ({ ...okPlan, plan: { ...okPlan.plan, statements: ["CREATE TABLE `invoices` (`id` int)"] } }),
+    apply_design: () => {
+      created = true;
+      return { kind: "done", ran: 1 };
+    },
+    list_objects: () => [{ kind: "table", name: "orders" }, ...(created ? [{ kind: "table", name: "invoices" }] : [])],
+  });
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
+  await screen.findByRole("tab", { name: "Columns 1" });
+  fireEvent.doubleClick(designCell("", "name"));
+  let box = within(designPane()).getByRole("textbox", { name: "Cell value" });
+  fireEvent.change(box, { target: { value: "id" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  fireEvent.doubleClick(designCell("id", "type"));
+  box = within(designPane()).getByRole("combobox", { name: "Cell value" });
+  fireEvent.change(box, { target: { value: "int" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  fireEvent.change(within(designPane()).getByRole("textbox", { name: "Table name" }), { target: { value: "invoices" } });
+  await waitFor(() => expect(designApply().disabled).toBe(false));
+  // Apply runs what the preview shows (S13 I2).
+  await within(designPane()).findByLabelText("SQL Apply runs");
+  await userEvent.click(designApply());
+  const row = await screen.findByRole("treeitem", { name: "invoices" });
+  await waitFor(() => expect(document.activeElement).toBe(row));
+  expect(await screen.findByRole("tab", { name: /^invoices design/ })).toBeTruthy();
+});
+
+test("closing_an_unapplied_design_asks_apply_and_a_failed_apply_keeps_the_tab", async () => {
+  await openOrders(
+    applyRoutes({
+      apply_design: () => {
+        throw { kind: "designFailed", message: { statement: 0, ran: 0, total: 1, message: "Unknown column 'status'" } };
+      },
+    }),
+  );
+  await changeStatusInDesign();
+  const strip = screen.getByRole("tablist", { name: "Open tabs" });
+  await userEvent.click(within(strip).getByRole("button", { name: "Close orders design" }));
+  expect(await screen.findByText("Apply changes to orders?")).toBeTruthy();
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.querySelector(".dialog-body")?.textContent).toBe(
+    "You have 1 unapplied change to orders on KFC Shop. Closing the tab without applying loses it.",
+  );
+  expect(within(dialog).queryByRole("button", { name: /^Save/ })).toBeNull();
+  await userEvent.click(inAsk("Apply"));
+  await waitFor(() => expect(callsTo("apply_design")).toHaveLength(1));
+  expect(await screen.findByText("Nothing was changed. Statement 1 failed: Unknown column 'status'")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "orders design, unsaved changes" })).toBeTruthy();
+});
+
+test("window_close_is_prevented_while_a_design_is_unapplied", async () => {
+  await openOrders(applyRoutes());
+  await changeStatusInDesign();
+  await waitFor(() => expect(closeWindow.handler).not.toBeNull());
+  closeWindow.destroy.mockClear();
+  const event = { preventDefault: vi.fn() };
+  const done = closeWindow.handler!(event);
+  expect(event.preventDefault).toHaveBeenCalled();
+  await screen.findByText("Apply changes to orders?");
+  await userEvent.click(inAsk("Cancel"));
+  await done;
+  expect(closeWindow.destroy).not.toHaveBeenCalled();
+});
+
+/** A plan_design held until the test releases it, so Apply stays running. */
+function heldPlanRoute() {
+  // The preview plans too, so every held call is kept and released together.
+  const held: (() => void)[] = [];
+  const gate = { hold: false, release: () => held.splice(0).forEach((go) => go()) };
+  const plan_design = () => {
+    if (!gate.hold) return okPlan;
+    return new Promise((resolve) => held.push(() => resolve(okPlan)));
+  };
+  return { gate, plan_design };
+}
+
+test("a_refused_discard_while_apply_runs_keeps_the_tab_the_group_and_the_connection", async () => {
+  const { gate, plan_design } = heldPlanRoute();
+  await openOrders(applyRoutes({ plan_design, close_connection: () => null }));
+  await changeStatusInDesign();
+  gate.hold = true;
+  await userEvent.click(designApply());
+  await waitFor(() => expect(designApply().textContent).toContain("Applying"));
+  const strip = screen.getByRole("tablist", { name: "Open tabs" });
+  const gone = () => waitFor(() => expect(screen.queryByText("Apply changes to orders?")).toBeNull());
+  // Closing the tab.
+  await userEvent.click(within(strip).getByRole("button", { name: "Close orders design" }));
+  await screen.findByText("Apply changes to orders?");
+  await userEvent.click(inAsk("Discard"));
+  await gone();
+  expect(screen.getByRole("tab", { name: "orders design, unsaved changes" })).toBeTruthy();
+  // Switching Group.
+  await userEvent.click(screen.getByRole("button", { name: "Switch Group, current KFC" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Ungrouped" }));
+  await screen.findByText("Apply changes to orders?");
+  await userEvent.click(inAsk("Discard"));
+  await gone();
+  expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "orders design, unsaved changes" })).toBeTruthy();
+  // Closing the Connection.
+  await userEvent.click(screen.getByRole("button", { name: "Close KFC Shop" }));
+  await screen.findByText("Apply changes to orders?");
+  await userEvent.click(inAsk("Discard"));
+  await gone();
+  expect(callsTo("close_connection")).toHaveLength(0);
+  expect(screen.getByRole("tab", { name: "orders design, unsaved changes" })).toBeTruthy();
+  gate.release();
+  await waitFor(() => expect(callsTo("apply_design")).toHaveLength(1));
+}, LOAD_TIMEOUT);

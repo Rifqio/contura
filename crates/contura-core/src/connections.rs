@@ -8,13 +8,18 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::ai::AiAccess;
+use crate::common::sql_table;
+use crate::design::{
+    self, DesignOutcome, DesignPlan, DesignRequest, DesignTarget, DesignWarning, RowCount,
+    TableDesign,
+};
 use crate::dialect::{Dialect, connect};
 use crate::edits::{self, EditSet, PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::explain::{Plan, explain_sql, plan_from_rows};
 use crate::model::{
-    ConnectionConfig, ConnectionId, DialectKind, EditorPrefs, GROUP_IMAGE_MAX, Group, GroupColor,
-    GroupId, KeymapOverrides, ObjectPath, PageRequest, RowHeight, SslMode, UiPrefs,
+    Cell, ConnectionConfig, ConnectionId, DialectKind, EditorPrefs, GROUP_IMAGE_MAX, Group,
+    GroupColor, GroupId, KeymapOverrides, ObjectPath, PageRequest, RowHeight, SslMode, UiPrefs,
 };
 use crate::query::{
     ExecOutcome, Execution, HistoryEntry, HistoryFilter, MoreRows, NewHistory, Outcome,
@@ -147,6 +152,8 @@ pub enum PassScope {
     Query(QuerySessionId),
     /// A save of pending edits to one table.
     Edits(ConnectionId, ObjectPath),
+    /// A design of one table: the table changed, created or dropped.
+    Design(ConnectionId, ObjectPath),
 }
 
 /// The statements a save would run and what running them needs.
@@ -164,6 +171,61 @@ pub struct EditOutcome {
     pub updated: u64,
     pub inserted: u64,
     pub deleted: u64,
+}
+
+/// A design plan and what applying it needs.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesignVerdict {
+    pub plan: DesignPlan,
+    pub verdict: RunVerdict,
+}
+
+/// The Query History entry an applied design leaves.
+#[derive(Debug, PartialEq, Eq)]
+struct DesignHistory {
+    sql: String,
+    outcome: Outcome,
+    error: Option<String>,
+}
+
+/// What a design's run puts in Query History: the whole plan when it ran to the
+/// end; on MySQL only the statements already committed before one failed (D12);
+/// the whole plan when the change was applied but a closing statement failed;
+/// nothing when nothing was changed, and nothing for a plan with no statements.
+fn design_history(statements: &[String], result: &Result<DesignOutcome>) -> Option<DesignHistory> {
+    if statements.is_empty() {
+        return None;
+    }
+    match result {
+        Ok(DesignOutcome::Done { .. }) => Some(DesignHistory {
+            sql: statements.join(";\n"),
+            outcome: Outcome::Ok,
+            error: None,
+        }),
+        Ok(DesignOutcome::Failed { ran, message, .. }) if *ran > 0 => Some(DesignHistory {
+            sql: statements[..(*ran).min(statements.len())].join(";\n"),
+            outcome: Outcome::Error,
+            error: Some(message.clone()),
+        }),
+        Err(e @ Error::DesignRestoreFailed { applied: true, .. }) => Some(DesignHistory {
+            sql: statements.join(";\n"),
+            outcome: Outcome::Error,
+            error: Some(e.to_string()),
+        }),
+        _ => None,
+    }
+}
+
+/// Where a Drop's row count stops (D5).
+const DROP_COUNT_LIMIT: u64 = 10_000;
+
+/// The table a design request changes, creates or drops.
+fn design_path(req: &DesignRequest) -> &ObjectPath {
+    match &req.target {
+        DesignTarget::Alter { base } | DesignTarget::Drop { base } => &base.path,
+        DesignTarget::Create { path } => path,
+    }
 }
 
 const PASS_TTL: Duration = Duration::from_secs(120);
@@ -389,8 +451,14 @@ impl ConnectionService {
         if p.scope != *scope || p.expires <= Instant::now() {
             return Err(Error::NeedsConfirmation);
         }
+        // A design pass covers every statement of the plan, its checks included.
+        let covered: Vec<&String> = if matches!(scope, PassScope::Design(..)) {
+            statements.iter().collect()
+        } else {
+            writes.iter().map(|(_, sql)| *sql).collect()
+        };
         let mut remaining = p.remaining.clone();
-        for (_, sql) in &writes {
+        for sql in covered {
             let hash = text_hash(sql);
             let at = remaining
                 .iter()
@@ -398,7 +466,7 @@ impl ConnectionService {
                 .ok_or(Error::NeedsConfirmation)?;
             remaining.swap_remove(at);
         }
-        if matches!(scope, PassScope::Edits(..)) && !remaining.is_empty() {
+        if matches!(scope, PassScope::Edits(..) | PassScope::Design(..)) && !remaining.is_empty() {
             return Err(Error::NeedsConfirmation);
         }
         if remaining.is_empty() {
@@ -522,6 +590,144 @@ impl ConnectionService {
             });
         }
         Ok(outcome)
+    }
+
+    /// The table as the Table Designer loads it.
+    pub async fn table_design(&self, id: ConnectionId, path: ObjectPath) -> Result<TableDesign> {
+        self.session(id).await?.table_design(&path).await
+    }
+
+    /// The table's CREATE statements for copying, as the server holds the table (D14).
+    pub async fn table_ddl(&self, id: ConnectionId, path: ObjectPath) -> Result<String> {
+        self.session(id).await?.table_ddl(&path).await
+    }
+
+    /// The table's rows, counted up to just past the limit on a session of its own;
+    /// `None` when the count could not run, so the Drop warning shows no figure.
+    async fn drop_row_count(
+        &self,
+        id: ConnectionId,
+        kind: DialectKind,
+        path: &ObjectPath,
+    ) -> Option<RowCount> {
+        let sql = format!(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM {} LIMIT {}) x",
+            sql_table(kind, path).ok()?,
+            DROP_COUNT_LIMIT + 1
+        );
+        let handle = self
+            .session(id)
+            .await
+            .ok()?
+            .open_query_session(Some(&path.database))
+            .await
+            .ok()?;
+        let result = handle.execute(&sql).await;
+        close_handle(&handle).await;
+        let ExecOutcome::Rows { rows, .. } = result.ok()? else {
+            return None;
+        };
+        let n: u64 = match rows.first()?.first()? {
+            Cell::Number { value } | Cell::Text { value, .. } => value.trim().parse().ok()?,
+            _ => return None,
+        };
+        Some(if n > DROP_COUNT_LIMIT {
+            RowCount::Over {
+                n: DROP_COUNT_LIMIT,
+            }
+        } else {
+            RowCount::Exact { n }
+        })
+    }
+
+    /// The DDL a design runs, its warnings, and whether it may run, needs a
+    /// confirmation or is blocked. A Drop's warning carries a bounded row count (D5).
+    pub async fn plan_design(&self, id: ConnectionId, req: DesignRequest) -> Result<DesignVerdict> {
+        let config = self.config(id)?;
+        let mut plan = design::plan_design(config.dialect, &req)?;
+        if let DesignTarget::Drop { base } = &req.target {
+            let count = self.drop_row_count(id, config.dialect, &base.path).await;
+            for w in &mut plan.warnings {
+                if let DesignWarning::DropTable { rows, .. } = w {
+                    *rows = count;
+                }
+            }
+        }
+        let verdict = verdict(&config, Some(&design_path(&req).database), &plan.statements);
+        Ok(DesignVerdict { plan, verdict })
+    }
+
+    /// Records the user's confirmation of a design on a Production Connection. The pass
+    /// covers exactly this plan's statements, its checks included, once, for a limited
+    /// time, and replaces the table's earlier design pass.
+    pub async fn confirm_design(&self, id: ConnectionId, req: DesignRequest) -> Result<PassId> {
+        let config = self.config(id)?;
+        let plan = design::plan_design(config.dialect, &req)?;
+        self.issue_pass(
+            PassScope::Design(id, design_path(&req).clone()),
+            &plan.statements,
+        )
+    }
+
+    /// Runs a design after the Read-only and Production checks. A plan that ran to the
+    /// end is one Query History entry; so are the statements MySQL already committed
+    /// before one failed (D12). A failure that rolled back records nothing.
+    pub async fn apply_design(
+        &self,
+        id: ConnectionId,
+        req: DesignRequest,
+        pass: Option<PassId>,
+    ) -> Result<DesignOutcome> {
+        let config = self.config(id)?;
+        let plan = design::plan_design(config.dialect, &req)?;
+        let path = design_path(&req).clone();
+        let scope = PassScope::Design(id, path.clone());
+        self.authorize(&scope, &config, &plan.statements, pass)?;
+        let session = self.session(id).await?;
+        // S14: a plan made from an older design would put back what changed since.
+        // SQLite compares inside the runner's transaction; here the table is read again.
+        if config.dialect != DialectKind::Sqlite
+            && let DesignTarget::Alter { base } | DesignTarget::Drop { base } = &req.target
+            && session.table_design(&base.path).await? != *base
+        {
+            return Err(Error::InvalidInput(design::TABLE_CHANGED.into()));
+        }
+        let ran_at_ms = now_ms();
+        let started = Instant::now();
+        let result = browse_result(
+            session.apply_design(&path.database, &plan).await,
+            config.read_only,
+        );
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        // History is a record, not part of the change: a store failure must not hide the result.
+        if let Some(entry) = design_history(&plan.statements, &result)
+            && let Ok(store) = self.store()
+        {
+            let _ = store.add_history(&NewHistory {
+                connection_id: id,
+                sql: entry.sql,
+                ran_at_ms,
+                elapsed_ms,
+                outcome: entry.outcome,
+                rows: None,
+                changed: true,
+                error: entry.error,
+            });
+        }
+        match result? {
+            DesignOutcome::Failed {
+                statement,
+                ran,
+                message,
+            } => Err(Error::DesignFailed {
+                statement,
+                ran,
+                total: plan.statements.len(),
+                message,
+            }),
+            DesignOutcome::ForeignKeys { table } => Err(Error::DesignForeignKeys { table }),
+            done => Ok(done),
+        }
     }
 
     fn config(&self, id: ConnectionId) -> Result<ConnectionConfig> {
@@ -1092,6 +1298,22 @@ impl ConnectionService {
         store.set_setting(RECENT_ITEMS_KEY, &json)
     }
 
+    /// Drops the Recent items of a dropped table: any object kind with that path on
+    /// that Connection (D28).
+    pub fn forget_recent(&self, connection_id: ConnectionId, path: &ObjectPath) -> Result<()> {
+        let store = self.store()?;
+        let mut list: Vec<RecentItem> = store
+            .get_setting(RECENT_ITEMS_KEY)?
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default();
+        list.retain(|i| {
+            !(i.connection_id == Some(connection_id)
+                && matches!(&i.target, RecentTarget::Table { path: p, .. } if p == path))
+        });
+        let json = serde_json::to_string(&list).map_err(|e| Error::Store(e.to_string()))?;
+        store.set_setting(RECENT_ITEMS_KEY, &json)
+    }
+
     /// A query tab's own session on an open Connection.
     pub async fn open_query_session(
         &self,
@@ -1431,5 +1653,81 @@ fn plain_message(e: &Error) -> String {
             m.clone()
         }
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod design_history_tests {
+    use super::*;
+
+    fn plan() -> Vec<String> {
+        vec!["ALTER A".into(), "ALTER B".into(), "ALTER C".into()]
+    }
+
+    #[test]
+    fn done_records_the_whole_plan() {
+        let entry = design_history(&plan(), &Ok(DesignOutcome::Done { ran: 3 })).unwrap();
+        assert_eq!(entry.sql, "ALTER A;\nALTER B;\nALTER C");
+        assert_eq!(entry.outcome, Outcome::Ok);
+        assert_eq!(entry.error, None);
+    }
+
+    /// D12: only the statements MySQL already committed.
+    #[test]
+    fn partial_failure_records_the_applied_statements() {
+        let failed = Ok(DesignOutcome::Failed {
+            statement: 2,
+            ran: 2,
+            message: "no such table".into(),
+        });
+        let entry = design_history(&plan(), &failed).unwrap();
+        assert_eq!(entry.sql, "ALTER A;\nALTER B");
+        assert_eq!(entry.outcome, Outcome::Error);
+        assert_eq!(entry.error.as_deref(), Some("no such table"));
+    }
+
+    #[test]
+    fn nothing_changed_records_nothing() {
+        let clean = Ok(DesignOutcome::Failed {
+            statement: 0,
+            ran: 0,
+            message: "x".into(),
+        });
+        assert_eq!(design_history(&plan(), &clean), None);
+        let fk = Ok(DesignOutcome::ForeignKeys {
+            table: "orders".into(),
+        });
+        assert_eq!(design_history(&plan(), &fk), None);
+        assert_eq!(design_history(&plan(), &Err(Error::ReadOnlyRefused)), None);
+        let not_applied = Err(Error::DesignRestoreFailed {
+            applied: false,
+            sql: "ALTER C".into(),
+            message: "x".into(),
+        });
+        assert_eq!(design_history(&plan(), &not_applied), None);
+    }
+
+    #[test]
+    fn an_empty_plan_records_nothing() {
+        assert_eq!(
+            design_history(&[], &Ok(DesignOutcome::Done { ran: 0 })),
+            None
+        );
+    }
+
+    #[test]
+    fn applied_change_with_a_failed_restore_is_recorded() {
+        let restore = Err(Error::DesignRestoreFailed {
+            applied: true,
+            sql: "PRAGMA foreign_keys = ON".into(),
+            message: "disk I/O error".into(),
+        });
+        let entry = design_history(&plan(), &restore).unwrap();
+        assert_eq!(entry.sql, "ALTER A;\nALTER B;\nALTER C");
+        assert_eq!(entry.outcome, Outcome::Error);
+        assert_eq!(
+            entry.error.as_deref(),
+            Some("restoring the connection with PRAGMA foreign_keys = ON failed: disk I/O error")
+        );
     }
 }

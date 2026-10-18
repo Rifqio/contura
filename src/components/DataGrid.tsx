@@ -110,11 +110,20 @@ interface Props {
   rowEstimate?: number | null;
   /** Opens a new, unsaved query tab on this Connection with this SQL, without running it. */
   onOpenQuery?(sql: string): void;
+  /** Opens the table's design tab (tables only, D15). */
+  onDesign?(): void;
+  /** Bumped when the table's design changed: the grid loads its columns and page 0 again, with no Pending Edits. */
+  version?: number;
+  /** A line under the header from the owner, such as a design change not loaded yet. */
+  notice?: string | null;
+  /** The rows were reloaded with no Pending Edits, so the owner's notice is answered. */
+  onNoticeDone?(): void;
 }
 
 export interface GridControl {
   save(): Promise<boolean>;
-  discard(): void;
+  /** Drops the Pending Edits (or the draft); false when it could not, as while a save or Apply runs. */
+  discard(): boolean;
   /** Keeps the value in an open cell editor; true when the grid then has Pending Edits. */
   flush(): boolean;
   /** How many Pending Edits the grid holds, for the unsaved changes dialog. */
@@ -209,6 +218,10 @@ export default function DataGrid({
   connectionName,
   rowEstimate = null,
   onOpenQuery,
+  onDesign,
+  version = 0,
+  notice = null,
+  onNoticeDone,
 }: Props) {
   const { show: showToast } = useToast();
   const [pageIndex, setPageIndex] = useState(0);
@@ -738,17 +751,42 @@ export default function DataGrid({
     focusGrid();
   }
 
-  function discardAll() {
+  /** Drops every Pending Edit; false, with nothing dropped, while a save runs. */
+  function discardAll(): boolean {
+    if (inflight.current) return false;
     setEditing(null);
     update(discard);
     setSaveError(null);
     setConflict(null);
+    return true;
   }
 
   function reloadRows() {
     flushEditor();
+    // With no Pending Edits the reloaded page brings its columns with it (a design may have changed them).
+    if (!pendingRef.current || count(pendingRef.current) === 0) {
+      put(null);
+      onNoticeDone?.();
+    }
     setAttempt((n) => n + 1);
   }
+
+  // A new design: the columns and page 0 load again, and the Pending Edits (of the old columns) go.
+  const shownVersion = useRef(version);
+  useEffect(() => {
+    if (shownVersion.current === version) return;
+    shownVersion.current = version;
+    setEditing(null);
+    put(null);
+    setSel(null);
+    setMenu(null);
+    setNote(null);
+    setSaveError(null);
+    setConflict(null);
+    setPreviewOpen(false);
+    setPageIndex(0);
+    setAttempt((n) => n + 1);
+  }, [version]);
 
   function goToPage(index: number) {
     flushEditor();
@@ -856,7 +894,7 @@ export default function DataGrid({
         : editable && changes > 0
           ? savingText(changes)
           : "";
-  const noteText = note ?? (editable && page && !keyed ? NO_KEY : null);
+  const noteText = note ?? notice ?? (editable && page && !keyed ? NO_KEY : null);
 
   /** R3: a Read-only Connection never opens the cell editor; one toast says why. */
   function readOnlyEdit() {
@@ -997,6 +1035,11 @@ export default function DataGrid({
         >
           <Icon name="refresh" size={14} />
         </button>
+        {onDesign && kind === "table" && (
+          <button type="button" className="icon-button" aria-label="Design table" title="Design table" onClick={onDesign}>
+            <Icon name="edit" size={14} />
+          </button>
+        )}
         {editable && page && (
           <>
             {/* R20: the grid handles these keys itself (no registry command), so the hints stay literal. */}
@@ -1171,7 +1214,7 @@ export default function DataGrid({
           production={production}
           previewOpen={previewOpen}
           onPreview={() => setPreviewOpen((o) => !o)}
-          onDiscard={discardAll}
+          onDiscard={() => void discardAll()}
           onSave={() => void save()}
         />
       )}

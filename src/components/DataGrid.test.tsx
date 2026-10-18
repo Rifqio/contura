@@ -625,3 +625,68 @@ test("edited_cell_tooltip", async () => {
   expect(cell(0, 1).title).toBe("Was first. Edited, not saved yet.");
   expect(cell(0, 0).title).toBe("");
 });
+
+test("design_table_shows_on_a_table_with_on_design_and_not_on_a_view", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  const onDesign = vi.fn();
+  const { unmount } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onDesign={onDesign} />);
+  await screen.findByText("first");
+  const strip = within(screen.getByRole("toolbar", { name: "Table" }));
+  const names = strip.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
+  expect(names.indexOf("Design table")).toBe(names.indexOf("Reload") + 1);
+  const button = strip.getByRole("button", { name: "Design table" });
+  expect(button.getAttribute("title")).toBe("Design table");
+  await userEvent.click(button);
+  expect(onDesign).toHaveBeenCalledTimes(1);
+  unmount();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} kind="view" onDesign={onDesign} />);
+  await screen.findByText("first");
+  expect(screen.queryByRole("button", { name: "Design table" })).toBeNull();
+});
+
+// ---- After a design apply (step 5c, Task 11) ----
+
+test("a_new_version_reloads_columns_and_page_0_with_no_pending_edits", async () => {
+  let wide = false;
+  routeInvoke({
+    fetch_page: () => {
+      const p = page(true);
+      if (!wide) return p;
+      return {
+        ...p,
+        columns: [...p.columns, { name: "total", typeName: "int", isPrimaryKey: false }],
+        rows: [[...p.rows[0], { t: "number", value: "7" }]],
+      };
+    },
+  });
+  const props = { connectionId: "c1", table, onClose: () => {} };
+  const { rerender } = render(<DataGrid {...props} version={0} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(nextButton().disabled).toBe(false));
+  await userEvent.click(nextButton());
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  const cell = document.querySelector('tr[data-row="0"] td[data-col="1"]') as HTMLElement;
+  fireEvent.doubleClick(cell);
+  const box = await screen.findByRole("textbox", { name: "Cell value" });
+  fireEvent.change(box, { target: { value: "edited" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await screen.findByRole("region", { name: "Pending Edits" });
+  wide = true;
+  rerender(<DataGrid {...props} version={1} />);
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
+  expect((callsTo("fetch_page")[2].request as { page: number }).page).toBe(0);
+  expect(await screen.findByRole("columnheader", { name: /total/ })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
+  // The edit is gone with the old columns; the new cell can be edited at once.
+  fireEvent.doubleClick(document.querySelector('tr[data-row="0"] td[data-col="2"]') as HTMLElement);
+  const next = await screen.findByRole("textbox", { name: "Cell value" });
+  fireEvent.change(next, { target: { value: "9" } });
+  fireEvent.keyDown(next, { key: "Enter" });
+  expect(await screen.findByRole("region", { name: "Pending Edits" })).toBeTruthy();
+});
+
+test("a_grid_notice_shows_under_the_header", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} notice="orders changed. Reload to see its new columns." />);
+  expect(await screen.findByText("orders changed. Reload to see its new columns.")).toBeTruthy();
+});

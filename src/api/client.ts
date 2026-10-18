@@ -52,6 +52,10 @@ import type {
   DataFolderInfo,
   RecentItem,
   RecentTarget,
+  DesignOutcome,
+  DesignRequest,
+  DesignVerdict,
+  TableDesign,
 } from "./types";
 
 export const DIALECT_LABEL: Record<DialectKind, string> = {
@@ -244,6 +248,28 @@ export const confirmEdits = (id: ConnectionId, edits: EditSet): Promise<PassId> 
 export const applyEdits = (id: ConnectionId, edits: EditSet, pass: PassId | null): Promise<EditOutcome> =>
   invoke("apply_edits", { id, edits, pass });
 
+/** One table as the Table Designer loads it. */
+export const tableDesign = (id: ConnectionId, path: ObjectPath): Promise<TableDesign> =>
+  invoke("table_design", { id, path });
+
+/** The table's CREATE statement for copying; on PostgreSQL built from its design. */
+export const tableDdl = (id: ConnectionId, path: ObjectPath): Promise<string> => invoke("table_ddl", { id, path });
+
+/** The DDL a design runs, its warnings, and whether it may run, needs a confirmation or is blocked. */
+export const planDesign = (id: ConnectionId, request: DesignRequest): Promise<DesignVerdict> =>
+  invoke("plan_design", { id, request });
+
+/** A single-use pass for applying exactly this design on a Production Connection. */
+export const confirmDesign = (id: ConnectionId, request: DesignRequest): Promise<PassId> =>
+  invoke("confirm_design", { id, request });
+
+export const applyDesign = (id: ConnectionId, request: DesignRequest, pass: PassId | null): Promise<DesignOutcome> =>
+  invoke("apply_design", { id, request, pass });
+
+/** Removes a dropped table's Recent items on that Connection. */
+export const forgetRecent = (connectionId: ConnectionId, path: ObjectPath): Promise<void> =>
+  invoke("forget_recent", { connectionId, path });
+
 /** Whether one statement reads or writes, as the Core decides it for the Dialect. */
 export const classifySql = (dialect: DialectKind, sql: string): Promise<StatementClass> =>
   invoke("classify_sql", { dialect, sql });
@@ -412,6 +438,18 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `Row ${keyText(e.message.key)} changed since you loaded it. Revert the row, then Reload to see the current values.`;
     case "editFailed":
       return `Save failed at statement ${e.message.statement + 1}: ${e.message.message}`;
+    case "designFailed": {
+      const { statement, ran, total, message } = e.message;
+      const failed = `Statement ${statement + 1} failed: ${message}`;
+      return ran === 0 ? `Nothing was changed. ${failed}` : `${ran} of ${total} statements were applied. ${failed}`;
+    }
+    case "designForeignKeys":
+      return `Rows in ${e.message.table} would break a Foreign Key. Nothing was changed.`;
+    case "designRestoreFailed": {
+      const { applied, sql, message } = e.message;
+      const what = applied ? "The change was applied, but" : "The change was not applied, and";
+      return `${what} restoring the connection with ${sql} failed afterwards: ${message}. Reconnect before you go on.`;
+    }
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

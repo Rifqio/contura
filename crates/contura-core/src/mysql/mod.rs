@@ -11,6 +11,7 @@ use std::time::Duration;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 
+use crate::design::{self, DesignOutcome, DesignPlan, Parts};
 use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
@@ -68,6 +69,20 @@ impl MySqlDialect {
     pub async fn browse_first_for_test(&self, sql: &str) -> Result<Option<String>> {
         let mut conn = self.pool.get_conn().await.map_err(query_err)?;
         conn.query_first(sql).await.map_err(query_err)
+    }
+
+    /// `table_design` on a pooled connection after `session_sql` ran on it, such as
+    /// a `SET SESSION sql_mode`. Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn table_design_after_for_test(
+        &self,
+        session_sql: &str,
+        path: &ObjectPath,
+    ) -> Result<crate::design::TableDesign> {
+        let mut conn = self.pool.get_conn().await.map_err(query_err)?;
+        conn.query_drop(session_sql).await.map_err(query_err)?;
+        snapshot::table_design_on(&mut conn, path).await
     }
 }
 
@@ -180,6 +195,73 @@ async fn run_planned(conn: &mut Conn, edits: &[PlannedEdit], read_only: bool) ->
     Ok(TxOutcome::Committed { rows })
 }
 
+/// Runs `sql`. `Some` (the first column of the first row as text, empty when it
+/// is not text) when it returned a row.
+async fn first_row(conn: &mut Conn, sql: &str) -> mysql_async::Result<Option<String>> {
+    let rows: Vec<mysql_async::Row> = conn.query(sql).await?;
+    Ok(rows.first().map(|row| {
+        row.get_opt::<String, usize>(0)
+            .and_then(|v| v.ok())
+            .unwrap_or_default()
+    }))
+}
+
+/// Runs a design plan on `conn`, statement by statement: MySQL commits each DDL
+/// statement on its own, so there is no transaction and the statements before a
+/// failure stay applied (`ran`). The `after` statements run whatever happened.
+async fn run_design(
+    conn: &mut Conn,
+    plan: &DesignPlan,
+    parts: &Parts,
+    read_only: bool,
+) -> Result<DesignOutcome> {
+    let outcome = run_design_body(conn, plan, parts, read_only).await;
+    for at in parts.after.clone() {
+        let sql = &plan.statements[at];
+        if let Err(e) = first_row(conn, sql).await {
+            return Err(design::after_failed(&outcome, sql, &e.to_string()));
+        }
+    }
+    outcome
+}
+
+async fn run_design_body(
+    conn: &mut Conn,
+    plan: &DesignPlan,
+    parts: &Parts,
+    read_only: bool,
+) -> Result<DesignOutcome> {
+    for at in parts.before.start..parts.middle.end {
+        // Every statement before this one ran (and committed).
+        let ran = at;
+        match first_row(conn, &plan.statements[at]).await {
+            Ok(None) => {}
+            Ok(Some(first)) => return Ok(design::returned_row(plan, at, ran, Some(first))),
+            Err(e) => {
+                if ran == 0 && read_only && is_read_only_refusal(&e) {
+                    return Err(Error::ReadOnlyRefused);
+                }
+                let message = match e {
+                    mysql_async::Error::Server(server) => server.message,
+                    // The connection failed: the statement may or may not have run.
+                    other => format!(
+                        "{other}. The connection failed, so this statement may or may not \
+                         have run: reload the table to see where it stands."
+                    ),
+                };
+                return Ok(DesignOutcome::Failed {
+                    statement: at,
+                    ran,
+                    message,
+                });
+            }
+        }
+    }
+    Ok(DesignOutcome::Done {
+        ran: plan.statements.len(),
+    })
+}
+
 #[async_trait::async_trait]
 impl Dialect for MySqlDialect {
     async fn server_version(&self) -> Result<String> {
@@ -235,6 +317,13 @@ impl Dialect for MySqlDialect {
         )
     }
 
+    async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
+        browse_result(
+            snapshot::table_design(&self.pool, path).await,
+            self.read_only,
+        )
+    }
+
     async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
         browse_result(
             sql_schema::sql_schema(&self.pool, database).await,
@@ -265,6 +354,17 @@ impl Dialect for MySqlDialect {
             .map_err(|e| Error::Connect(format!("cannot open a connection for the save: {e}")))?;
         let outcome = run_planned(&mut conn, edits, self.read_only).await;
         // Closing without COMMIT rolls back whatever is still open.
+        let _ = conn.disconnect().await;
+        browse_result(outcome, self.read_only)
+    }
+
+    /// The planned statements name their database, so `database` is not used.
+    async fn apply_design(&self, _database: &str, plan: &DesignPlan) -> Result<DesignOutcome> {
+        let parts = design::runnable(plan)?;
+        let mut conn = Conn::new(self.opts.clone())
+            .await
+            .map_err(|e| Error::Connect(format!("cannot open a connection for the change: {e}")))?;
+        let outcome = run_design(&mut conn, plan, &parts, self.read_only).await;
         let _ = conn.disconnect().await;
         browse_result(outcome, self.read_only)
     }

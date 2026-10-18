@@ -78,6 +78,14 @@ export function useTreeData({ connections, openIds, onNotOpen, onRevealed }: Opt
   /** Bumped when a Connection's branch starts or ends, so a late answer for an older session is dropped. */
   const epochs = useRef(new Map<ConnectionId, number>());
   const revealSeq = useRef(0);
+  /** Object lists being loaded, by Connection and scope: a reveal waits for them, even while a kept list shows. */
+  const loadingScopes = useRef(new Map<string, number>());
+  const scopeLoad = (id: ConnectionId, scope: string) => `${id}${scope}`;
+  const loadEnded = (key: string) => {
+    const n = (loadingScopes.current.get(key) ?? 1) - 1;
+    if (n > 0) loadingScopes.current.set(key, n);
+    else loadingScopes.current.delete(key);
+  };
 
   const open = useCallback((...ids: string[]) => {
     setExpanded((s) => {
@@ -105,13 +113,17 @@ export function useTreeData({ connections, openIds, onNotOpen, onRevealed }: Opt
     const before = branchesRef.current[c.id]?.objects[scope];
     const first = !before || before.s !== "loaded";
     if (!(keep && before?.s === "loaded")) patch(c.id, epoch, (b) => ({ ...b, objects: { ...b.objects, [scope]: { s: "loading" } } }));
+    const loadKey = scopeLoad(c.id, scope);
+    loadingScopes.current.set(loadKey, (loadingScopes.current.get(loadKey) ?? 0) + 1);
     listObjects(c.id, database, schema)
       .then((value) => {
+        loadEnded(loadKey);
         patch(c.id, epoch, (b) => ({ ...b, objects: { ...b.objects, [scope]: { s: "loaded", value } } }));
         // A scope shows its tables at once the first time it loads.
         if (first && epochs.current.get(c.id) === epoch) open(folderId(c.id, scope, "table"));
       })
       .catch((e) => {
+        loadEnded(loadKey);
         const message = fail(c, e);
         patch(c.id, epoch, (b) => ({ ...b, objects: { ...b.objects, [scope]: { s: "failed", message } } }));
       });
@@ -306,7 +318,9 @@ export function useTreeData({ connections, openIds, onNotOpen, onRevealed }: Opt
   useEffect(() => {
     if (!pendingReveal) return;
     const load = branches[pendingReveal.connectionId]?.objects[pendingReveal.scope];
-    if (!load || load.s === "loading") {
+    // A list reloading under a kept one (a refresh after a create) is waited for too.
+    const reloading = loadingScopes.current.has(scopeLoad(pendingReveal.connectionId, pendingReveal.scope));
+    if (!load || load.s === "loading" || reloading) {
       if (!branches[pendingReveal.connectionId]) {
         setPendingReveal(null);
         callbacks.current.onRevealed?.();

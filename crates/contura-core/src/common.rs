@@ -136,7 +136,22 @@ pub(crate) fn sql_string(kind: DialectKind, s: &str) -> String {
     if kind == DialectKind::MySql && s.contains('\\') {
         return format!("_utf8mb4 X'{}'", hex_lower(s.as_bytes()));
     }
+    if kind == DialectKind::Postgres {
+        return pg_string(s);
+    }
     format!("'{}'", s.replace('\'', "''"))
+}
+
+/// A PostgreSQL text literal that reads the same whether the session's
+/// `standard_conforming_strings` is on or off: text holding a backslash is an
+/// `E'..'` string with backslashes doubled; quotes are doubled either way.
+pub(crate) fn pg_string(s: &str) -> String {
+    let quoted = s.replace('\'', "''");
+    if s.contains('\\') {
+        format!("E'{}'", quoted.replace('\\', "\\\\"))
+    } else {
+        format!("'{quoted}'")
+    }
 }
 
 /// The qualified table name a page query puts after FROM.
@@ -176,6 +191,22 @@ mod sql_text_tests {
             sql_table(DialectKind::Postgres, &path).unwrap(),
             r#""public"."t""#
         );
+    }
+}
+
+#[cfg(test)]
+mod literal_tests {
+    use super::*;
+
+    #[test]
+    fn pg_string_reads_the_same_under_either_setting() {
+        assert_eq!(pg_string("plain"), "'plain'");
+        assert_eq!(pg_string("it's"), "'it''s'");
+        assert_eq!(pg_string(r"a\b"), r"E'a\\b'");
+        assert_eq!(pg_string(r"\' ; x"), r"E'\\'' ; x'");
+        assert_eq!(sql_string(DialectKind::Postgres, r"a\b"), r"E'a\\b'");
+        assert_eq!(sql_string(DialectKind::Sqlite, r"a\b"), r"'a\b'");
+        assert_eq!(sql_string(DialectKind::MySql, r"a\b"), "_utf8mb4 X'615c62'");
     }
 }
 

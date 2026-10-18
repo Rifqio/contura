@@ -224,3 +224,51 @@ test("no_where_names_the_row_estimate", () => {
   expect(screen.getByRole("alert").textContent).toContain("Statement 1 has no WHERE. It changes every row in order_items.");
   expect(screen.getByRole("alert").textContent).not.toContain("about");
 });
+
+test("apply_verb_title_hint_and_warning_banners", () => {
+  render(
+    <ConfirmRun
+      verb="Apply"
+      verdict={{
+        kind: "needsConfirmation",
+        connection: "freight-prod",
+        database: "shop",
+        statements: [{ text: "ALTER TABLE orders DROP COLUMN total", class: "write" }],
+        writes: 1,
+      }}
+      warnings={["Dropping total deletes its data in every row."]}
+      onRun={() => {}}
+      onCancel={() => {}}
+    />,
+  );
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.querySelector("h2")!.textContent).toBe("Apply on freight-prod · shop");
+  expect(screen.getByRole("button", { name: "Apply on freight-prod" }).className).toContain("button-primary");
+  expect(dialog.textContent).toContain("Enter applies only when Apply on freight-prod has focus.");
+  const banner = screen.getByRole("alert");
+  expect(banner.className).toContain("warning-banner");
+  expect(banner.textContent).toContain("Dropping total deletes its data in every row.");
+  // Warnings sit above the count line.
+  const count = screen.getByText("1 of 1 statement writes.");
+  expect(banner.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Add WHERE" })).toBeNull();
+});
+
+test("no_where_banner_keeps_its_class", () => {
+  setup(VERDICT, { index: 1, verb: "UPDATE", table: "orders" });
+  const banner = screen.getByRole("alert");
+  expect(banner.className).toContain("confirm-nowhere");
+  expect(banner.className).toContain("warning-banner");
+});
+
+test("drop_verb_uses_the_danger_button", () => {
+  render(
+    <ConfirmRun
+      verb="Drop"
+      verdict={{ kind: "needsConfirmation", connection: "freight-prod", database: "shop", statements: [{ text: "DROP TABLE orders", class: "write" }], writes: 1 }}
+      onRun={() => {}}
+      onCancel={() => {}}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Drop on freight-prod" }).className).toContain("button-danger-fill");
+});

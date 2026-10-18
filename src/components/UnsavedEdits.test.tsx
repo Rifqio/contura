@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
-import UnsavedEdits, { tableBody } from "./UnsavedEdits";
+import UnsavedEdits, { designBody, tableBody } from "./UnsavedEdits";
 
 function setup(over: Partial<Parameters<typeof UnsavedEdits>[0]> = {}) {
   const fns = { onSave: vi.fn(), onDiscard: vi.fn(), onCancel: vi.fn() };
@@ -69,4 +69,30 @@ test("ctrl_s_saves_and_discard_discards", async () => {
   expect(fns.onSave).toHaveBeenCalledTimes(1);
   await userEvent.click(screen.getByRole("button", { name: "Discard" }));
   expect(fns.onDiscard).toHaveBeenCalled();
+});
+
+// ---- Design tabs (step 5c, Task 11) ----
+
+test("apply_verb_reads_apply_with_the_save_keys", async () => {
+  const fns = setup({ title: "Apply changes to orders?", body: designBody(2, "orders", "shop-staging", false), verb: "Apply" });
+  expect(screen.getByRole("heading", { name: "Apply changes to orders?" })).toBeTruthy();
+  const apply = screen.getByRole("button", { name: /^Apply/ });
+  expect(apply.className).toContain("button-primary");
+  expect(apply.textContent).toContain("Ctrl+S");
+  expect(screen.queryByRole("button", { name: /^Save/ })).toBeNull();
+  expect(document.querySelector(".dialog-body")!.textContent).toBe(
+    "You have 2 unapplied changes to orders on shop-staging. Closing the tab without applying loses them.",
+  );
+  await userEvent.click(apply);
+  expect(fns.onSave).toHaveBeenCalled();
+});
+
+test("apply_verb_on_production_reads_apply_on_prod", () => {
+  setup({ title: "Apply changes to orders?", body: designBody(1, "orders", "freight-prod", true), production: true, verb: "Apply" });
+  const apply = screen.getByRole("button", { name: "Apply on PROD..." });
+  expect(apply.className).toContain("button-prod");
+  expect(screen.queryByRole("button", { name: "Save on PROD..." })).toBeNull();
+  const body = document.querySelector(".dialog-body")!.textContent;
+  expect(body).toContain("You have 1 unapplied change to orders on freight-prod (Production). Closing the tab without applying loses it.");
+  expect(body).toContain("Apply on PROD shows the SQL and asks you to confirm before anything runs.");
 });

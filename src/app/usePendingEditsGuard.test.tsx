@@ -94,6 +94,7 @@ function control(key: string, save: () => Promise<boolean> = async () => true) {
     save: vi.fn(save),
     discard: vi.fn(() => {
       state.dirty = false;
+      return true;
     }),
   };
   g.gridControl(key).current = c;

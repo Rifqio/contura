@@ -290,3 +290,31 @@ test("the_active_tab_scrolls_into_view", () => {
     else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   }
 });
+
+test("design_tabs_read_table_design_or_new_table_with_the_edit_icon", () => {
+  const path = { database: "shop", schema: null, name: "orders" };
+  const design: WorkTab = { kind: "design", key: "design\u0000orders", connectionId: "c1", target: { kind: "alter", path } };
+  const create: WorkTab = {
+    kind: "design",
+    key: "design\u0000new\u0000n1",
+    connectionId: "c1",
+    target: { kind: "create", scope: { database: "shop", schema: null }, id: "n1" },
+  };
+  render(
+    <TabStrip
+      tabs={[design, create]}
+      active={design.key}
+      connections={[prod]}
+      dirtyKeys={new Set([design.key])}
+      onSelect={() => {}}
+      onClose={() => {}}
+      onNew={() => {}}
+    />,
+  );
+  const tab = screen.getByRole("tab", { name: "orders design, unsaved changes, Production" });
+  expect(iconsIn(tab, [...KINDS, "edit"])).toEqual(["edit"]);
+  expect(within(tab).getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
+  expect(within(tab).getByText("PROD")).toBeTruthy();
+  const fresh = screen.getByRole("tab", { name: "New table, Production" });
+  expect(iconsIn(fresh, [...KINDS, "edit"])).toEqual(["edit"]);
+});

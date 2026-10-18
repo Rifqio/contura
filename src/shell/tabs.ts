@@ -3,6 +3,7 @@
 import type { ConnectionId, GroupId, ObjectKind, ObjectPath } from "../api/types";
 import type { QueryTabDoc } from "../query/QueryTab";
 import type { ModelDoc } from "../schema/SchemaBuilder";
+import { objectKey } from "../objectPath";
 
 /** Where the window's Connections come from: a Group, or the Ungrouped Connections. */
 export type Place = { kind: "group"; groupId: GroupId } | { kind: "ungrouped" };
@@ -16,9 +17,15 @@ export interface Selection {
   path: ObjectPath;
 }
 
+/** What a design tab designs: a table that exists, or a new one in a database (and schema). */
+export type DesignTabTarget =
+  | { kind: "alter"; path: ObjectPath }
+  | { kind: "create"; scope: { database: string; schema: string | null }; id: string };
+
 /** A tab of the place; the Saved Queries list is one, since Saved Queries are listed beside the place's Connections. */
 export type WorkTab =
   | { kind: "object"; key: string; selection: Selection }
+  | { kind: "design"; key: string; connectionId: ConnectionId; target: DesignTabTarget }
   | { kind: "query"; doc: QueryTabDoc }
   | { kind: "savedQueries" };
 
@@ -44,8 +51,29 @@ export function tabKey(t: AnyTab): string {
     case "savedQueries":
       return "savedQueries";
     case "object":
+    case "design":
       return t.key;
   }
+}
+
+/** The key of a table's design tab; never the same as the table tab's `objectKey`. */
+export function designKey(connectionId: ConnectionId, path: ObjectPath): string {
+  return `design\u0000${objectKey(connectionId, "table", path)}`;
+}
+
+/** The key of a New table tab. */
+export function newDesignKey(id: string): string {
+  return `design\u0000new\u0000${id}`;
+}
+
+/**
+ * A tab tied to one object of a Connection: a table, view, routine or trigger tab, or a design tab.
+ * These close with their Connection and are asked about before they lose Pending Edits.
+ */
+export function objectTabOf(t: AnyTab): { key: string; connectionId: ConnectionId; path: ObjectPath | null } | null {
+  if (t.kind === "object") return { key: t.key, connectionId: t.selection.connectionId, path: t.selection.path };
+  if (t.kind === "design") return { key: t.key, connectionId: t.connectionId, path: t.target.kind === "alter" ? t.target.path : null };
+  return null;
 }
 
 /** Home, then the place's tabs, then the other window tabs in the order they were opened. */

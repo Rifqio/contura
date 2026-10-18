@@ -1,15 +1,18 @@
 mod introspect;
 mod page;
 mod session;
-mod snapshot;
+pub(crate) mod snapshot;
 mod sql_schema;
+pub(crate) mod tokens;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rusqlite::{Connection, ErrorCode, OpenFlags};
+use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension};
 
+use crate::common::quote_double;
+use crate::design::{self, DesignOutcome, DesignPlan, LoadedSchema, Parts};
 use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
@@ -138,6 +141,16 @@ impl SqliteDialect {
             .await
     }
 
+    /// The first column of the first row of `sql` as an integer, from the browse
+    /// connection. Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn browse_i64_for_test(&self, sql: &str) -> Result<i64> {
+        let sql = sql.to_string();
+        self.run(move |c| c.query_row(&sql, [], |r| r.get(0)).map_err(query_err))
+            .await
+    }
+
     async fn run<T, F>(&self, work: F) -> Result<T>
     where
         T: Send + 'static,
@@ -212,6 +225,165 @@ fn run_in_transaction(
     Ok(TxOutcome::Committed { rows })
 }
 
+/// Runs `sql` to its first row. `Some` (the first column as text, empty when it
+/// is not text or a number) when it returned a row.
+fn first_row(conn: &Connection, sql: &str) -> rusqlite::Result<Option<String>> {
+    let mut statement = conn.prepare(sql)?;
+    let mut rows = statement.query([])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(match row.get_ref(0) {
+        Ok(rusqlite::types::ValueRef::Text(t)) => String::from_utf8_lossy(t).into_owned(),
+        Ok(rusqlite::types::ValueRef::Integer(n)) => n.to_string(),
+        _ => String::new(),
+    }))
+}
+
+/// Runs a design plan on `conn`: refuses when `PRAGMA foreign_keys` is not the
+/// value the plan was made with (S9), then the `before` statements, the middle in
+/// one transaction, and the `after` statements whatever happened.
+fn run_design(
+    conn: &Connection,
+    plan: &DesignPlan,
+    parts: &Parts,
+    read_only: bool,
+) -> Result<DesignOutcome> {
+    if let Some(loaded) = plan.foreign_keys {
+        let on: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .map_err(query_err)?;
+        if (on == 1) != loaded {
+            return Err(Error::InvalidInput(design::FOREIGN_KEYS_CHANGED.into()));
+        }
+    }
+    let outcome = run_design_body(conn, plan, parts, read_only);
+    // This is the shared browse connection: whatever happened, no transaction may
+    // stay open on it.
+    if !conn.is_autocommit() {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+    for at in parts.after.clone() {
+        let sql = &plan.statements[at];
+        if let Err(e) = first_row(conn, sql) {
+            return Err(design::after_failed(&outcome, sql, &e.to_string()));
+        }
+    }
+    outcome
+}
+
+/// The saved SQL of the table, its indexes and triggers, and the loaded views and
+/// their triggers, is still what the plan was made from (S14). A rebuild built
+/// from an older design would drop what was added since, so any difference refuses.
+fn schema_unchanged(conn: &Connection, loaded: &LoadedSchema) -> rusqlite::Result<bool> {
+    let master = format!("{}.sqlite_master", quote_double(&loaded.database));
+    let key = |(kind, name, sql): &(String, String, String)| {
+        (kind.clone(), name.to_lowercase(), sql.clone())
+    };
+    let mut found: Vec<(String, String, String)> = conn
+        .prepare(&format!(
+            "SELECT type, name, sql FROM {master} \
+             WHERE tbl_name = ?1 COLLATE NOCASE AND sql IS NOT NULL"
+        ))?
+        .query_map([&loaded.table], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .map(key)
+        .collect();
+    let mut expected: Vec<_> = loaded.own.iter().map(key).collect();
+    found.sort();
+    expected.sort();
+    if found != expected {
+        return Ok(false);
+    }
+    let mut statement = conn.prepare(&format!(
+        "SELECT sql FROM {master} WHERE type = ?1 AND name = ?2 COLLATE NOCASE"
+    ))?;
+    for (kind, name, sql) in &loaded.named {
+        let now: Option<Option<String>> =
+            statement.query_row((kind, name), |r| r.get(0)).optional()?;
+        if now.flatten().as_deref() != Some(sql.as_str()) {
+            return Ok(false);
+        }
+    }
+    if let Some(children) = &loaded.children {
+        // Every other table whose Foreign Keys point at the table, as saved now.
+        let key = |(name, sql): &(String, String)| (name.to_lowercase(), sql.clone());
+        let mut found: Vec<(String, String)> = conn
+            .prepare(&format!(
+                "SELECT m.name, m.sql FROM {master} m WHERE m.type = 'table' \
+                 AND m.name <> ?1 COLLATE NOCASE AND m.sql IS NOT NULL \
+                 AND EXISTS (SELECT 1 FROM pragma_foreign_key_list(m.name, ?2) f \
+                 WHERE f.\"table\" = ?1 COLLATE NOCASE)"
+            ))?
+            .query_map((&loaded.table, &loaded.database), |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .map(key)
+            .collect();
+        let mut expected: Vec<_> = children.iter().map(key).collect();
+        found.sort();
+        expected.sort();
+        if found != expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn run_design_body(
+    conn: &Connection,
+    plan: &DesignPlan,
+    parts: &Parts,
+    read_only: bool,
+) -> Result<DesignOutcome> {
+    let failed = |statement: usize, e: rusqlite::Error| {
+        if read_only && is_read_only_refusal(&e) {
+            return Err(Error::ReadOnlyRefused);
+        }
+        Ok(DesignOutcome::Failed {
+            statement,
+            ran: 0,
+            message: e.to_string(),
+        })
+    };
+    for at in parts.before.clone() {
+        if let Err(e) = first_row(conn, &plan.statements[at]) {
+            return failed(at, e);
+        }
+    }
+    // IMMEDIATE takes the write lock up front, so no other writer gets in between statements.
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(query_err)?;
+    // With the write lock held, the table cannot change between this check and the change.
+    if let Some(loaded) = &plan.loaded
+        && !schema_unchanged(conn, loaded).map_err(query_err)?
+    {
+        let _ = rollback(conn);
+        return Err(Error::InvalidInput(design::TABLE_CHANGED.into()));
+    }
+    for at in parts.middle.clone() {
+        match first_row(conn, &plan.statements[at]) {
+            Ok(None) => {}
+            // A row from any statement in the middle is a failed check.
+            // `run_design` rolls back again if this ROLLBACK fails.
+            Ok(Some(first)) => {
+                let _ = rollback(conn);
+                return Ok(design::returned_row(plan, at, 0, Some(first)));
+            }
+            Err(e) => {
+                let _ = rollback(conn);
+                return failed(at, e);
+            }
+        }
+    }
+    conn.execute_batch("COMMIT").map_err(query_err)?;
+    Ok(DesignOutcome::Done {
+        ran: plan.statements.len(),
+    })
+}
+
 #[async_trait::async_trait]
 impl Dialect for SqliteDialect {
     async fn server_version(&self) -> Result<String> {
@@ -262,6 +434,11 @@ impl Dialect for SqliteDialect {
             .await
     }
 
+    async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
+        let path = path.clone();
+        self.run(move |c| snapshot::table_design(c, &path)).await
+    }
+
     async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
         let database = database.to_string();
         self.run(move |c| sql_schema::sql_schema(c, &database))
@@ -287,6 +464,17 @@ impl Dialect for SqliteDialect {
         self.run(move |c| run_planned(c, &edits, read_only)).await
     }
 
+    /// SQLite has one database per file, so `database` is not used.
+    async fn apply_design(&self, _database: &str, plan: &DesignPlan) -> Result<DesignOutcome> {
+        let parts = design::runnable(plan)?;
+        let plan = plan.clone();
+        let read_only = self.read_only;
+        // One `run`: the connection lock is held from the first statement to the last
+        // `after` statement, so nothing else uses the connection in between.
+        self.run(move |c| run_design(c, &plan, &parts, read_only))
+            .await
+    }
+
     async fn disconnect(&self) -> Result<()> {
         Ok(())
     }
@@ -295,9 +483,204 @@ impl Dialect for SqliteDialect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::design::DesignMode;
 
     fn readonly_failure() -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(8), None)
+    }
+
+    /// One leading and one trailing statement, as a rebuild has.
+    fn plan(statements: &[&str], before: usize, checks: Vec<usize>) -> DesignPlan {
+        DesignPlan {
+            statements: statements.iter().map(|s| s.to_string()).collect(),
+            warnings: vec![],
+            mode: DesignMode::Transaction,
+            before,
+            after: 1,
+            checks,
+            foreign_keys: Some(true),
+            loaded: None,
+        }
+    }
+
+    fn keys_on() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; CREATE TABLE a (n int); INSERT INTO a VALUES (1);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn run(conn: &Connection, plan: &DesignPlan) -> Result<DesignOutcome> {
+        let parts = design::runnable(plan).unwrap();
+        run_design(conn, plan, &parts, false)
+    }
+
+    fn int(conn: &Connection, sql: &str) -> i64 {
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_check_that_returns_a_row_rolls_back_and_after_runs() {
+        let conn = keys_on();
+        let p = plan(
+            &[
+                "PRAGMA foreign_keys = OFF",
+                "CREATE TABLE x (n int)",
+                "SELECT count(*) FROM a EXCEPT SELECT 0",
+                "PRAGMA foreign_keys = ON",
+            ],
+            1,
+            vec![2],
+        );
+        assert_eq!(
+            run(&conn, &p).unwrap(),
+            DesignOutcome::Failed {
+                statement: 2,
+                ran: 0,
+                message: "The copy of the table has a different number of rows than the table."
+                    .into()
+            }
+        );
+        assert_eq!(
+            int(&conn, "SELECT count(*) FROM sqlite_master WHERE name = 'x'"),
+            0
+        );
+        assert_eq!(int(&conn, "PRAGMA foreign_keys"), 1);
+        assert!(conn.is_autocommit());
+    }
+
+    #[test]
+    fn any_statement_in_the_middle_that_returns_a_row_fails() {
+        let conn = keys_on();
+        let p = plan(
+            &[
+                "PRAGMA foreign_keys = OFF",
+                "CREATE TABLE x (n int)",
+                "SELECT n FROM a",
+                "PRAGMA foreign_keys = ON",
+            ],
+            1,
+            vec![],
+        );
+        match run(&conn, &p).unwrap() {
+            DesignOutcome::Failed {
+                statement: 2,
+                ran: 0,
+                message,
+            } => assert!(message.contains("returned rows"), "{message}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(
+            int(&conn, "SELECT count(*) FROM sqlite_master WHERE name = 'x'"),
+            0
+        );
+        assert_eq!(int(&conn, "PRAGMA foreign_keys"), 1);
+    }
+
+    #[test]
+    fn a_failed_leading_statement_still_runs_after() {
+        let conn = keys_on();
+        let p = plan(
+            &[
+                "PRAGMA foreign_keys = OFF",
+                "SELECT * FROM missing",
+                "CREATE TABLE x (n int)",
+                "PRAGMA foreign_keys = ON",
+            ],
+            2,
+            vec![],
+        );
+        match run(&conn, &p).unwrap() {
+            DesignOutcome::Failed {
+                statement: 1,
+                ran: 0,
+                message,
+            } => assert!(message.contains("missing"), "{message}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(
+            int(&conn, "SELECT count(*) FROM sqlite_master WHERE name = 'x'"),
+            0
+        );
+        assert_eq!(int(&conn, "PRAGMA foreign_keys"), 1);
+    }
+
+    #[test]
+    fn success_commits_and_after_runs() {
+        let conn = keys_on();
+        let p = plan(
+            &[
+                "PRAGMA foreign_keys = OFF",
+                "CREATE TABLE x (n int)",
+                "PRAGMA foreign_key_check(\"x\")",
+                "PRAGMA foreign_keys = ON",
+            ],
+            1,
+            vec![2],
+        );
+        assert_eq!(run(&conn, &p).unwrap(), DesignOutcome::Done { ran: 4 });
+        assert_eq!(
+            int(&conn, "SELECT count(*) FROM sqlite_master WHERE name = 'x'"),
+            1
+        );
+        assert_eq!(int(&conn, "PRAGMA foreign_keys"), 1);
+    }
+
+    #[test]
+    fn a_failed_after_statement_says_whether_the_change_was_applied() {
+        let conn = keys_on();
+        let p = plan(
+            &[
+                "PRAGMA foreign_keys = OFF",
+                "CREATE TABLE x (n int)",
+                "SELECT * FROM missing_after",
+            ],
+            1,
+            vec![],
+        );
+        match run(&conn, &p) {
+            Err(Error::DesignRestoreFailed {
+                applied: true,
+                sql,
+                message,
+            }) => {
+                assert_eq!(sql, "SELECT * FROM missing_after");
+                assert!(message.contains("missing_after"), "{message}");
+            }
+            other => panic!("expected DesignRestoreFailed, applied, got {other:?}"),
+        }
+        assert_eq!(
+            int(&conn, "SELECT count(*) FROM sqlite_master WHERE name = 'x'"),
+            1
+        );
+        // The failed restore left Foreign Keys off; this test turns them back on.
+        assert_eq!(int(&conn, "PRAGMA foreign_keys"), 0);
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let p = plan(
+            &[
+                "PRAGMA foreign_keys = OFF",
+                "CREATE TABLE a (n int)",
+                "SELECT * FROM missing_after",
+            ],
+            1,
+            vec![],
+        );
+        assert!(matches!(
+            run(&conn, &p),
+            Err(Error::DesignRestoreFailed { applied: false, .. })
+        ));
+    }
+
+    #[test]
+    fn a_plan_that_does_not_fit_its_statements_is_refused() {
+        let mut p = plan(&["PRAGMA foreign_keys = OFF"], 1, vec![]);
+        assert!(matches!(design::runnable(&p), Err(Error::InvalidInput(_))));
+        p.after = 0;
+        p.checks = vec![3];
+        assert!(matches!(design::runnable(&p), Err(Error::InvalidInput(_))));
     }
 
     #[test]

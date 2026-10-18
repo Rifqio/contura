@@ -47,6 +47,26 @@ pub enum Error {
     /// The server refused a save's statement (by plan index).
     #[error("{message}")]
     EditFailed { statement: usize, message: String },
+    /// A design's statement (by plan index) failed after `ran` of the plan's
+    /// `total` statements stayed applied (MySQL; 0 where it rolls back).
+    #[error("{message}")]
+    DesignFailed {
+        statement: usize,
+        ran: usize,
+        total: usize,
+        message: String,
+    },
+    /// An SQLite rebuild's `foreign_key_check` found rows; it was rolled back.
+    #[error("rows in {table} would break a Foreign Key")]
+    DesignForeignKeys { table: String },
+    /// A design's closing statement `sql`, which restores the connection, failed.
+    /// `applied`: the change itself was applied (in full, or in part on MySQL).
+    #[error("restoring the connection with {sql} failed: {message}")]
+    DesignRestoreFailed {
+        applied: bool,
+        sql: String,
+        message: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -157,6 +177,36 @@ mod tests {
                 message: "bad value".into(),
             }),
             serde_json::json!({"kind":"editFailed","message":{"statement":2,"message":"bad value"}})
+        );
+    }
+
+    #[test]
+    fn design_errors_shape() {
+        let json = |e: Error| serde_json::to_value(e).unwrap();
+        assert_eq!(
+            json(Error::DesignFailed {
+                statement: 1,
+                ran: 1,
+                total: 2,
+                message: "no such table".into(),
+            }),
+            serde_json::json!({"kind":"designFailed","message":{"statement":1,"ran":1,
+                "total":2,"message":"no such table"}})
+        );
+        assert_eq!(
+            json(Error::DesignForeignKeys {
+                table: "orders".into()
+            }),
+            serde_json::json!({"kind":"designForeignKeys","message":{"table":"orders"}})
+        );
+        assert_eq!(
+            json(Error::DesignRestoreFailed {
+                applied: true,
+                sql: "PRAGMA foreign_keys = ON".into(),
+                message: "disk I/O error".into(),
+            }),
+            serde_json::json!({"kind":"designRestoreFailed","message":{"applied":true,
+                "sql":"PRAGMA foreign_keys = ON","message":"disk I/O error"}})
         );
     }
 

@@ -4,8 +4,10 @@ use contura_core::ai::{
     KeyChange, ThreadId,
 };
 use contura_core::connections::{
-    ConnectionInput, ConnectionService, DataFolderInfo, EditOutcome, EditPlan, GroupInput,
+    ConnectionInput, ConnectionService, DataFolderInfo, DesignVerdict, EditOutcome, EditPlan,
+    GroupInput,
 };
+use contura_core::design::{DesignOutcome, DesignRequest, TableDesign};
 use contura_core::edits::EditSet;
 use contura_core::explain::Plan;
 use contura_core::model::{
@@ -387,6 +389,61 @@ pub async fn apply_edits(
     pass: Option<PassId>,
 ) -> Result<EditOutcome, Error> {
     service.apply_edits(id, edits, pass).await
+}
+
+#[tauri::command]
+pub async fn table_design(
+    service: Service<'_>,
+    id: ConnectionId,
+    path: ObjectPath,
+) -> Result<TableDesign, Error> {
+    service.table_design(id, path).await
+}
+
+#[tauri::command]
+pub async fn table_ddl(
+    service: Service<'_>,
+    id: ConnectionId,
+    path: ObjectPath,
+) -> Result<String, Error> {
+    service.table_ddl(id, path).await
+}
+
+#[tauri::command]
+pub async fn plan_design(
+    service: Service<'_>,
+    id: ConnectionId,
+    request: DesignRequest,
+) -> Result<DesignVerdict, Error> {
+    service.plan_design(id, request).await
+}
+
+#[tauri::command]
+pub async fn confirm_design(
+    service: Service<'_>,
+    id: ConnectionId,
+    request: DesignRequest,
+) -> Result<PassId, Error> {
+    service.confirm_design(id, request).await
+}
+
+#[tauri::command]
+pub async fn apply_design(
+    service: Service<'_>,
+    id: ConnectionId,
+    request: DesignRequest,
+    pass: Option<PassId>,
+) -> Result<DesignOutcome, Error> {
+    service.apply_design(id, request, pass).await
+}
+
+#[tauri::command]
+pub fn forget_recent(
+    service: Service<'_>,
+    connection_id: ConnectionId,
+    path: ObjectPath,
+) -> Result<(), Error> {
+    service.forget_recent(connection_id, &path)
 }
 
 #[tauri::command]

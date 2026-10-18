@@ -26,7 +26,9 @@ export function statusScreenFor(s: StatusInput): StatusScreen {
         ? current.doc.connectionId
         : current?.kind === "object"
           ? current.selection.connectionId
-          : activeId;
+          : current?.kind === "design"
+            ? current.connectionId
+            : activeId;
   const statusConnection =
     activeWindow?.kind === "home" ? null : (connections.find((c) => c.id === statusConnectionId) ?? null);
   return activeWindow?.kind === "home"

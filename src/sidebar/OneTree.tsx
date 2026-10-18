@@ -38,6 +38,12 @@ export interface OneTreeProps {
   onDuplicateConnection(c: ConnectionConfig): void;
   onNewQuery(id: ConnectionId): void;
   onNewSchemaModel(id: ConnectionId, database: string, schema: string | null): void;
+  /** Opens a New table design tab in a database (and schema); the menus offer it only when set (D7). */
+  onNewTable?(connectionId: ConnectionId, database: string, schema: string | null): void;
+  /** Opens a table's design tab. */
+  onDesignTable?(s: Selection): void;
+  /** Starts dropping a table; the App asks first. */
+  onDropTable?(connectionId: ConnectionId, path: ObjectPath): void;
   onMoveConnection(id: ConnectionId, group: GroupId | null): void;
   onNewGroup(): void;
   /** Asked for after the tree's own confirmation. */
@@ -350,12 +356,29 @@ export default function OneTree(props: OneTreeProps) {
     el.focus({ preventScroll: true });
   });
 
-  // A reveal found its row: focus it.
+  // A reveal found its row: focus it. A filter that hides the row is cleared first, so a reveal
+  // always ends on a visible, focused row.
+  const revealAfterClear = useRef<string | null>(null);
   useEffect(() => {
-    if (tree.focusRequest) moveTo(tree.focusRequest.id);
+    const id = tree.focusRequest?.id;
+    if (!id) return;
+    if (filtering && !indexOf.has(id)) {
+      revealAfterClear.current = id;
+      setFilter("");
+      return;
+    }
+    moveTo(id);
     // Once per request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree.focusRequest?.seq]);
+  useEffect(() => {
+    const id = revealAfterClear.current;
+    if (!id || !indexOf.has(id)) return;
+    revealAfterClear.current = null;
+    moveTo(id);
+    // The rows after the filter cleared.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indexOf]);
 
   function tell(id: ConnectionId | null) {
     if (told.current === id) return;
@@ -414,6 +437,20 @@ export default function OneTree(props: OneTreeProps) {
     void navigator.clipboard?.writeText(connectionTarget(c)).catch(() => {});
   }
 
+  const isReadOnly = (id: ConnectionId) => connections.find((x) => x.id === id)?.readOnly ?? false;
+
+  /** "New table..." for a database, schema or Tables folder; absent on Read-only Connections (D7). */
+  function newTableItem(connectionId: ConnectionId, database: string, schema: string | null): MenuItem | null {
+    const newTable = props.onNewTable;
+    if (!newTable || isReadOnly(connectionId)) return null;
+    return {
+      key: "new-table",
+      label: "New table...",
+      icon: <Icon name="plus" />,
+      onSelect: () => newTable(connectionId, database, schema),
+    };
+  }
+
   function menuFor(row: TreeRow): { label: string; items: MenuItem[] } | null {
     const n = row.node;
     switch (n.kind) {
@@ -453,19 +490,24 @@ export default function OneTree(props: OneTreeProps) {
             onSelect: () => tree.setShowSystem(n.connectionId, n.name, !shown),
           });
         }
+        // PostgreSQL tables live in a schema, so its database row offers no New table.
+        const newTable = c?.dialect === "postgres" ? null : newTableItem(n.connectionId, n.name, null);
+        if (newTable) items.push({ ...newTable, separatorBefore: items.length > 0 });
         items.push({
           key: "model",
           label: "Reverse-engineer into a Schema Model",
           icon: <Icon name="layers" />,
-          separatorBefore: items.length > 0,
+          separatorBefore: items.length > 0 && !newTable,
           onSelect: () => props.onNewSchemaModel(n.connectionId, n.name, null),
         });
         return { label: n.name, items };
       }
-      case "schema":
+      case "schema": {
+        const newTable = newTableItem(n.connectionId, n.database, n.name);
         return {
           label: n.name,
           items: [
+            ...(newTable ? [newTable] : []),
             {
               key: "model",
               label: "Reverse-engineer into a Schema Model",
@@ -474,6 +516,32 @@ export default function OneTree(props: OneTreeProps) {
             },
           ],
         };
+      }
+      case "folder": {
+        const newTable = n.objectKind === "table" ? newTableItem(n.connectionId, n.database, n.schema) : null;
+        return newTable ? { label: n.label, items: [newTable] } : null;
+      }
+      case "object": {
+        if (n.objectKind !== "table") return null;
+        const selection: Selection = { connectionId: n.connectionId, kind: "table", path: n.path };
+        const items: MenuItem[] = [
+          { key: "open", label: "Open", icon: <Icon name="table" />, onSelect: () => onSelectObject(selection) },
+        ];
+        const design = props.onDesignTable;
+        if (design) items.push({ key: "design", label: "Design table", icon: <Icon name="edit" />, onSelect: () => design(selection) });
+        const drop = props.onDropTable;
+        if (drop && !isReadOnly(n.connectionId)) {
+          items.push({
+            key: "drop",
+            label: "Drop table...",
+            icon: <Icon name="trash" />,
+            danger: true,
+            separatorBefore: true,
+            onSelect: () => drop(n.connectionId, n.path),
+          });
+        }
+        return { label: n.path.name, items };
+      }
       case "savedRoot": {
         const openList = props.onOpenSavedList;
         if (!openList) return null;

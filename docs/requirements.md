@@ -182,7 +182,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 2. Postgres and SQLite Dialects
 3. Schema Builder: DBML ↔ canvas, reverse-engineering, SQL and image export (moved up because designing schemas is one of the user's two main activities)
 4. SQL editor (CodeMirror 6, ADR 0009), Query History, Saved Queries
-5. Pending Edits, Table Designer, Production and Read-only Connections (5a done: Production and Read-only Connections, ADR 0013; 5b done: Pending Edits, ADR 0014; the Table Designer is 5c)
+5. Pending Edits, Table Designer, Production and Read-only Connections (5a done: Production and Read-only Connections, ADR 0013; 5b done: Pending Edits, ADR 0014; 5c done: Table Designer, ADR 0016)
    - Restyle to DESIGN-NEXT (done before 5c, ADR 0015): Alucard and Dracula, JetBrains Mono, 28 px density, Home with Recent
 6. Visual Query, plus the shared diagram engine and the query diagram and result shape
    - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams
@@ -192,5 +192,6 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 10. Schema Compare, plus applying a Schema Model to a Connection
 11. AI answers: real provider calls (Anthropic and OpenAI-compatible, incl. local Ollama), access levels enforced in the Core, rule-based guardrails, schema context with an on-disk index and sync, chat memory. All in the Rust Core, no Python (research in docs/research/2026-10-17-ai-*.md)
    - then sequence diagrams; cloud sharing later
+12. Refinements: UI and UX polish from the user's critique, always the last step after every feature step (list in docs/step12-refinements.md, kept growing until then)
 
 The diagram work and its memory budget are in `docs/superpowers/specs/2026-10-16-contura-direction-design.md`.

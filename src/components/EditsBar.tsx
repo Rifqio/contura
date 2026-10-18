@@ -1,3 +1,4 @@
+import { plural } from "../format/plural";
 import Icon from "./Icon";
 import Kbd from "./Kbd";
 
@@ -16,8 +17,6 @@ interface Props {
 
 /** R20: the grid handles Ctrl+S itself (no registry command), so the hint stays literal. */
 const SAVE_KEY = "Ctrl+S";
-
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 export function summaryText({ cells, newRows, deletedRows }: Props["summary"]): string {
   return [

@@ -11,17 +11,20 @@ interface Props {
   onSave?(value: string): void;
   /** Told on every change, so the grid can keep the value before it acts. */
   onInput?(value: string): void;
+  /** One line with a native suggestion list (the designer's Type cell, D26); `id` names the list. */
+  suggestions?: { id: string; values: string[] };
 }
 
 /** The editor that opens inside a grid cell. Leaving it keeps the value. */
-export default function CellEditor({ initial, multiline, onCommit, onCancel, onSave, onInput }: Props) {
+export default function CellEditor({ initial, multiline, onCommit, onCancel, onSave, onInput, suggestions }: Props) {
   const [value, setValue] = useState(initial);
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   /** Set once a key kept or dropped the value, so the blur that follows does nothing. */
   const done = useRef(false);
 
   useEffect(() => {
-    const box = ref.current;
+    const box = areaRef.current ?? inputRef.current;
     if (!box) return;
     box.focus();
     box.setSelectionRange(box.value.length, box.value.length);
@@ -32,7 +35,7 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
     run();
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) {
     e.stopPropagation();
     if (e.key === "Escape") {
       e.preventDefault();
@@ -52,20 +55,48 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
     }
   }
 
+  const change = (next: string) => {
+    setValue(next);
+    onInput?.(next);
+  };
+  const blur = () => !done.current && finish(() => onCommit(value, "none", true));
+
+  if (suggestions) {
+    return (
+      <>
+        <input
+          ref={inputRef}
+          type="text"
+          className="cell-editor"
+          aria-label="Cell value"
+          list={suggestions.id}
+          value={value}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => change(e.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={blur}
+        />
+        <datalist id={suggestions.id}>
+          {suggestions.values.map((v) => (
+            <option key={v} value={v} />
+          ))}
+        </datalist>
+      </>
+    );
+  }
+
   return (
     <textarea
-      ref={ref}
+      ref={areaRef}
       className={multiline ? "cell-editor cell-editor-multiline" : "cell-editor"}
       aria-label="Cell value"
       value={value}
       rows={multiline ? 4 : 1}
       spellCheck={false}
-      onChange={(e) => {
-        setValue(e.target.value);
-        onInput?.(e.target.value);
-      }}
+      onChange={(e) => change(e.target.value)}
       onKeyDown={onKeyDown}
-      onBlur={() => !done.current && finish(() => onCommit(value, "none", true))}
+      onBlur={blur}
     />
   );
 }

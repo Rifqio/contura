@@ -219,7 +219,214 @@ export type CommandError =
   /** A save's UPDATE or DELETE (`statement` is its index in the plan) found its row changed or gone. */
   | { kind: "rowChanged"; message: { statement: number; key: KeyPart[] } }
   /** The server refused a save's statement (by index in the plan). */
-  | { kind: "editFailed"; message: { statement: number; message: string } };
+  | { kind: "editFailed"; message: { statement: number; message: string } }
+  /**
+   * A design's statement (by index in the plan) failed. `ran` statements before it stay
+   * applied: MySQL commits each one, elsewhere it is always 0.
+   */
+  | { kind: "designFailed"; message: { statement: number; ran: number; total: number; message: string } }
+  /** An SQLite rebuild found rows in `table` that break a Foreign Key; nothing was changed. */
+  | { kind: "designForeignKeys"; message: { table: string } }
+  /**
+   * A design's closing statement `sql`, which restores the connection, failed. `applied`:
+   * the change itself was applied, so the table differs from the one loaded.
+   */
+  | { kind: "designRestoreFailed"; message: { applied: boolean; sql: string; message: string } };
+
+/** One table as the server holds it, for the Table Designer. */
+export interface TableDesign {
+  path: ObjectPath;
+  columns: TableColumn[];
+  /** The primary key first, then the rest by name (SQLite: by creation). */
+  indexes: TableIndex[];
+  foreignKeys: TableForeignKey[];
+  /** Foreign Keys of other tables (or this one) that reference this table. */
+  referencedBy: IncomingRef[];
+  comment: string | null;
+  /** What the designer cannot edit, such as `check <name>` or `trigger <name>`. */
+  unsupported: string[];
+  sqlite: SqliteExtras | null;
+}
+
+export type Increment = { kind: "none" } | { kind: "autoIncrement" } | { kind: "identity" } | { kind: "serial" };
+
+export interface TableColumn {
+  name: string;
+  /** The type as the server writes it, such as `varchar(16)`. */
+  typeSql: string;
+  nullable: boolean;
+  /** The default as SQL text, such as `'new'` or `CURRENT_TIMESTAMP`. */
+  defaultSql: string | null;
+  increment: Increment;
+  comment: string | null;
+  generated: boolean;
+  mysql: MySqlColumn | null;
+  sqliteAutoincrement: boolean;
+  collation: string | null;
+  /** MySQL: the column may only be renamed or dropped. */
+  advanced: boolean;
+}
+
+export interface MySqlColumn {
+  charset: string | null;
+  collation: string | null;
+  onUpdate: string | null;
+}
+
+export interface TableIndex {
+  name: string;
+  /** Column names; an expression key part holds its text. */
+  columns: string[];
+  unique: boolean;
+  primary: boolean;
+  /** PostgreSQL: the index backs a PRIMARY KEY or UNIQUE constraint. */
+  constraint: boolean;
+  /** SQLite: the saved `CREATE INDEX` text. */
+  sql: string | null;
+  /** PostgreSQL access method, MySQL index type, lower case; SQLite null. */
+  method: string | null;
+  /** A partial index's WHERE text. */
+  predicate: string | null;
+  /** Some key part is an expression. */
+  expression: boolean;
+  advanced: boolean;
+}
+
+export interface TableForeignKey {
+  name: string;
+  columns: string[];
+  target: ObjectPath;
+  targetColumns: string[];
+  /** Upper case, such as `CASCADE`; null for the Dialect's default. */
+  onDelete: string | null;
+  onUpdate: string | null;
+  advanced: boolean;
+}
+
+export interface IncomingRef {
+  name: string;
+  table: ObjectPath;
+  /** SQLite: the key's ON DELETE action, upper case, such as `CASCADE`; null for NO ACTION and on MySQL and PostgreSQL. */
+  onDelete: string | null;
+}
+
+export interface SavedObject {
+  name: string;
+  sql: string;
+}
+
+/** What an SQLite rebuild must carry over. */
+export interface SqliteExtras {
+  createSql: string;
+  triggers: SavedObject[];
+  views: SavedObject[];
+  foreignKeysOn: boolean;
+  viewTriggers: SavedObject[];
+  /** Other tables with a Foreign Key to this one, with their saved CREATE TABLE. */
+  children: SavedObject[];
+}
+
+export interface ColumnDraft {
+  name: string;
+  typeSql: string;
+  nullable: boolean;
+  defaultSql: string | null;
+  increment: boolean;
+  comment: string | null;
+}
+
+export interface IndexDraft {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  primary: boolean;
+}
+
+export interface ForeignKeyDraft {
+  name: string;
+  columns: string[];
+  target: ObjectPath;
+  targetColumns: string[];
+  onDelete: string | null;
+  onUpdate: string | null;
+}
+
+export type Position = { kind: "last" } | { kind: "first" } | { kind: "after"; column: string };
+
+/** One change, keyed by the name as loaded. */
+export type DesignEdit =
+  | { op: "addColumn"; column: ColumnDraft; position: Position }
+  | { op: "dropColumn"; name: string }
+  /** A rename when `column.name !== name`. */
+  | { op: "changeColumn"; name: string; column: ColumnDraft }
+  | { op: "moveColumn"; name: string; position: Position }
+  | { op: "addIndex"; index: IndexDraft }
+  | { op: "dropIndex"; name: string }
+  | { op: "renameIndex"; name: string; to: string }
+  | { op: "addForeignKey"; key: ForeignKeyDraft }
+  | { op: "dropForeignKey"; name: string }
+  | { op: "tableComment"; comment: string | null };
+
+/** Alter and Drop carry the design as loaded. */
+export type DesignTarget =
+  | { kind: "alter"; base: TableDesign }
+  | { kind: "create"; path: ObjectPath }
+  | { kind: "drop"; base: TableDesign };
+
+export interface DesignRequest {
+  target: DesignTarget;
+  edits: DesignEdit[];
+}
+
+export type DesignMode =
+  | { kind: "atomic" }
+  | { kind: "sequential" }
+  | { kind: "transaction" }
+  /** Shown for copying only; Apply refuses it. */
+  | { kind: "copyOnly"; reason: string };
+
+export type Rule = "notNull" | "unique" | "primaryKey" | "foreignKey";
+
+/** A Drop's bounded row count: `over` stopped at `n`, the table holds more. */
+export type RowCount = { kind: "exact"; n: number } | { kind: "over"; n: number };
+
+export type DesignWarning =
+  | { kind: "dropColumn"; column: string }
+  | { kind: "narrowType"; column: string; from: string; to: string; note: string | null }
+  | { kind: "existingRows"; rule: Rule; name: string }
+  | { kind: "dropRule"; rule: Rule; name: string }
+  | { kind: "rewriteLock"; table: string }
+  | { kind: "rebuildCopy"; table: string }
+  | { kind: "renameColumn"; from: string; to: string }
+  | { kind: "dropTable"; table: string; rows: RowCount | null; referencedBy: string[] }
+  /** SQLite with Foreign Keys on: the drop deletes every row first, which runs the ON DELETE action of a key in `child`. */
+  | { kind: "childRows"; table: string; child: string; action: ChildAction };
+
+/** What a SQLite drop does to a child table's rows. */
+export type ChildAction = "delete" | "clear" | "setDefault" | "fail";
+
+/** The exact DDL a design runs. */
+export interface DesignPlan {
+  statements: string[];
+  warnings: DesignWarning[];
+  mode: DesignMode;
+  /** Leading statements that run before the transaction (SQLite rebuild). */
+  before: number;
+  /** Trailing statements that run after it, also after a failure (SQLite rebuild). */
+  after: number;
+  /** Positions of the statements that are checks. */
+  checks: number[];
+  /** SQLite rebuild: the `PRAGMA foreign_keys` value the plan was made with. */
+  foreignKeys: boolean | null;
+}
+
+export interface DesignVerdict {
+  plan: DesignPlan;
+  verdict: RunVerdict;
+}
+
+/** What Apply did. A failure comes back as an error (`designFailed`, `designForeignKeys`), never as an outcome. */
+export type DesignOutcome = { kind: "done"; ran: number };
 
 /** A value typed into a cell; numbers and dates are sent as text too. */
 export type NewValue = { t: "text"; value: string } | { t: "null" };

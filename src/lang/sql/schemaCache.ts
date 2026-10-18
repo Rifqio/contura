@@ -4,7 +4,7 @@
 import { sqlSchema } from "../../api/client";
 import type { ConnectionId } from "../../api/types";
 import type { LangClient } from "../client";
-import type { SqlSchema } from "./types";
+import type { SqlSchema, SqlTable } from "./types";
 
 export type SchemaLoad = "loading" | "loaded" | "failed";
 
@@ -24,6 +24,12 @@ export class SchemaCache {
 
   state(connectionId: ConnectionId, database: string): SchemaLoad | null {
     return this.states.get(schemaKey(connectionId, database)) ?? null;
+  }
+
+  /** The tables of the last schema loaded for this database (views left out); null before one is. */
+  tables(connectionId: ConnectionId, database: string): SqlTable[] | null {
+    const schema = this.client.sqlSchemaFor(schemaKey(connectionId, database));
+    return schema ? schema.tables.filter((t) => t.kind === "table") : null;
   }
 
   subscribe(listener: () => void): () => void {

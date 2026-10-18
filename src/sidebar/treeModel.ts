@@ -21,6 +21,9 @@ export type TreeNode =
       id: string;
       connectionId: ConnectionId;
       scope: string;
+      /** The database and schema the folder lists, so its menu knows where a new table goes. */
+      database: string;
+      schema: string | null;
       objectKind: ObjectKind;
       label: string;
       count: number;
@@ -246,7 +249,17 @@ export function flattenTree(d: TreeData): TreeRow[] {
       const id = folderId(c.id, scope, f.kind);
       const open = filtering ? true : d.expanded.has(id);
       push(
-        { kind: "folder", id, connectionId: c.id, scope, objectKind: f.kind, label: f.label, count: items.length },
+        {
+          kind: "folder",
+          id,
+          connectionId: c.id,
+          scope,
+          database: db,
+          schema,
+          objectKind: f.kind,
+          label: f.label,
+          count: items.length,
+        },
         level,
         true,
         open,

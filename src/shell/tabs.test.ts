@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import { EMPTY_LAYOUT } from "../schema/layout";
 import type { ModelDoc } from "../schema/SchemaBuilder";
-import { afterClose, stripOrder, tabKey, type WindowTab, type WorkTab } from "./tabs";
+import { objectKey } from "../objectPath";
+import { afterClose, designKey, newDesignKey, stripOrder, tabKey, type WindowTab, type WorkTab } from "./tabs";
 
 const query = (id: string): WorkTab => ({
   kind: "query",
@@ -54,4 +55,14 @@ test("keys_are_stable_per_kind", () => {
   const renamed = query("d1");
   if (renamed.kind === "query") renamed.doc.name = "Weekly sales";
   expect(tabKey(renamed)).toBe("query:d1");
+});
+
+test("a_design_tab_is_keyed_apart_from_its_table", () => {
+  const path = { database: "shop", schema: null, name: "orders" };
+  const key = designKey("c1", path);
+  const design: WorkTab = { kind: "design", key, connectionId: "c1", target: { kind: "alter", path } };
+  expect(tabKey(design)).toBe(key);
+  expect(key).not.toBe(objectKey("c1", "table", path));
+  expect(key).toBe(`design\u0000${objectKey("c1", "table", path)}`);
+  expect(newDesignKey("n1")).toBe("design\u0000new\u0000n1");
 });

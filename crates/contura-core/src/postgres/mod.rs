@@ -6,6 +6,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, NoTls};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
+use crate::design::{self, DesignOutcome, DesignPlan, Parts};
 use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
@@ -14,6 +15,7 @@ use crate::model::{
     PageRequest, SchemaInfo, SslMode,
 };
 
+mod ddl;
 mod introspect;
 mod page;
 mod session;
@@ -222,6 +224,87 @@ async fn run_planned(client: &Client, edits: &[PlannedEdit], read_only: bool) ->
     }
     client.batch_execute("COMMIT").await.map_err(query_err)?;
     Ok(TxOutcome::Committed { rows })
+}
+
+/// Runs `sql` (one statement: the extended protocol refuses more). `Some` (the
+/// first column of the first row as text, empty when it is not text) when it
+/// returned a row.
+async fn first_row(
+    client: &Client,
+    sql: &str,
+) -> std::result::Result<Option<String>, tokio_postgres::Error> {
+    let rows = client.query(sql, &[]).await?;
+    Ok(rows.first().map(|row| {
+        row.try_get::<_, Option<String>>(0)
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    }))
+}
+
+/// Runs a design plan on `client`: the `before` statements, the middle in one
+/// transaction that a failure or a returned row rolls back, and the `after`
+/// statements whatever happened.
+async fn run_design(
+    client: &Client,
+    plan: &DesignPlan,
+    parts: &Parts,
+    read_only: bool,
+) -> Result<DesignOutcome> {
+    let outcome = run_design_body(client, plan, parts, read_only).await;
+    for at in parts.after.clone() {
+        let sql = &plan.statements[at];
+        if let Err(e) = first_row(client, sql).await {
+            return Err(design::after_failed(&outcome, sql, &e.to_string()));
+        }
+    }
+    outcome
+}
+
+async fn run_design_body(
+    client: &Client,
+    plan: &DesignPlan,
+    parts: &Parts,
+    read_only: bool,
+) -> Result<DesignOutcome> {
+    // A server error is `Failed`, except a read-only refusal on a Read-only
+    // Connection; any other error is the connection's.
+    let failed = |statement: usize, e: tokio_postgres::Error| {
+        let Some(db) = e.as_db_error() else {
+            return Err(query_err(e));
+        };
+        if read_only && *db.code() == SqlState::READ_ONLY_SQL_TRANSACTION {
+            return Err(Error::ReadOnlyRefused);
+        }
+        Ok(DesignOutcome::Failed {
+            statement,
+            ran: 0,
+            message: db.message().to_string(),
+        })
+    };
+    for at in parts.before.clone() {
+        if let Err(e) = first_row(client, &plan.statements[at]).await {
+            return failed(at, e);
+        }
+    }
+    client.batch_execute("BEGIN").await.map_err(query_err)?;
+    for at in parts.middle.clone() {
+        let result = first_row(client, &plan.statements[at]).await;
+        if matches!(result, Ok(None)) {
+            continue;
+        }
+        // This client is the apply's own: if ROLLBACK fails, dropping it rolls back.
+        let _ = client.batch_execute("ROLLBACK").await;
+        return match result {
+            // A row from any statement in the middle is a failed check.
+            Ok(first) => Ok(design::returned_row(plan, at, 0, first)),
+            Err(e) => failed(at, e),
+        };
+    }
+    client.batch_execute("COMMIT").await.map_err(query_err)?;
+    Ok(DesignOutcome::Done {
+        ran: plan.statements.len(),
+    })
 }
 
 /// `SHOW server_version` can carry a build note, as in `16.4 (Debian 16.4-1)`.
@@ -443,6 +526,24 @@ impl Dialect for PostgresDialect {
         )
     }
 
+    async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
+        let schema = snapshot::require_schema(path.schema.as_deref())?;
+        let client = self.client(&path.database).await?;
+        browse_result(
+            snapshot::table_design(&client, schema, path).await,
+            self.read_only,
+        )
+    }
+
+    async fn table_ddl(&self, path: &ObjectPath) -> Result<String> {
+        let schema = snapshot::require_schema(path.schema.as_deref())?;
+        let client = self.client(&path.database).await?;
+        browse_result(
+            ddl::table_ddl(&client, schema, &path.name).await,
+            self.read_only,
+        )
+    }
+
     async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {
         let client = self.client(database).await?;
         browse_result(sql_schema::sql_schema(&client).await, self.read_only)
@@ -466,6 +567,16 @@ impl Dialect for PostgresDialect {
         let client = open_client(&self.settings, database).await?;
         browse_result(
             run_planned(&client, edits, self.read_only).await,
+            self.read_only,
+        )
+    }
+
+    async fn apply_design(&self, database: &str, plan: &DesignPlan) -> Result<DesignOutcome> {
+        let parts = design::runnable(plan)?;
+        // A client of its own, so a page fetch from another tab never joins the transaction.
+        let client = open_client(&self.settings, database).await?;
+        browse_result(
+            run_design(&client, plan, &parts, self.read_only).await,
             self.read_only,
         )
     }

@@ -3,6 +3,7 @@ pub(crate) mod common;
 pub mod connections;
 pub mod dbml_writer;
 pub mod ddl;
+pub mod design;
 pub mod dialect;
 pub mod edits;
 pub mod error;

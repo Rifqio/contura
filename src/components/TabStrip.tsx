@@ -26,6 +26,9 @@ export function tabName(t: AnyTab): string {
       return "Saved Queries";
     case "object":
       return t.selection.path.name;
+    case "design":
+      // D23: "New table" until it is created.
+      return t.target.kind === "alter" ? `${t.target.path.name} design` : "New table";
   }
 }
 
@@ -46,6 +49,8 @@ function iconOf(t: AnyTab): IconName | null {
       return "bookmark";
     case "object":
       return t.selection.kind === "table" ? "table" : t.selection.kind === "view" ? "view" : t.selection.kind === "trigger" ? "trigger" : "routine";
+    case "design":
+      return "edit";
   }
 }
 
@@ -59,7 +64,7 @@ interface Props {
   onNew(): void;
   /** Lets a query tab show the Production or Read-only mark of its Connection. */
   connections?: ConnectionConfig[];
-  /** Table tabs (by key) whose grid has Pending Edits. */
+  /** Table and design tabs (by key) with Pending Edits or an unapplied design. */
   dirtyKeys?: ReadonlySet<string>;
   /** Lets a tab draw in its Connection's Group hue. */
   groups?: Group[];
@@ -108,10 +113,17 @@ export default function TabStrip({ tabs, active, onSelect, onClose, onNew, conne
           const key = tabKey(t);
           const on = key === active;
           const name = tabName(t);
-          const work = t.kind === "query" || t.kind === "object";
+          const work = t.kind === "query" || t.kind === "object" || t.kind === "design";
           const isSaved = t.kind === "query" && t.doc.savedId !== null;
-          const dirty = work && (isDirty(t) || (t.kind === "object" && !!dirtyKeys?.has(t.key)));
-          const cid = t.kind === "query" ? t.doc.connectionId : t.kind === "object" ? t.selection.connectionId : null;
+          const dirty = work && (isDirty(t) || ((t.kind === "object" || t.kind === "design") && !!dirtyKeys?.has(t.key)));
+          const cid =
+            t.kind === "query"
+              ? t.doc.connectionId
+              : t.kind === "object"
+                ? t.selection.connectionId
+                : t.kind === "design"
+                  ? t.connectionId
+                  : null;
           const owner = cid === null ? undefined : connections.find((c) => c.id === cid);
           // R8: the chip shows PROD; the spoken name keeps the word.
           const label = [

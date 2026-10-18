@@ -3,8 +3,11 @@ use std::collections::BTreeMap;
 use tokio_postgres::Client;
 
 use super::query_err;
+use crate::design::{
+    IncomingRef, Increment, TableColumn, TableDesign, TableForeignKey, TableIndex, advanced_note,
+};
 use crate::error::{Error, Result};
-use crate::model::DialectKind;
+use crate::model::{DialectKind, ObjectPath};
 use crate::schema_model::{
     SchemaModel, SmColumn, SmEndpoint, SmEnum, SmIndex, SmRef, SmTable, parse_sql_default,
 };
@@ -247,4 +250,324 @@ pub(super) async fn schema_snapshot(client: &Client, schema: &str) -> Result<Sch
 
 pub(super) fn require_schema(schema: Option<&str>) -> Result<&str> {
     schema.ok_or_else(|| Error::InvalidInput("choose a schema".into()))
+}
+
+const DESIGN_TABLE_SQL: &str = "SELECT obj_description(c.oid, 'pg_class') \
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+    WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r','p')";
+
+const DESIGN_COLUMNS_SQL: &str = "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), \
+    a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text, \
+    col_description(a.attrelid, a.attnum), \
+    CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation \
+         THEN (SELECT co.collname::text FROM pg_collation co WHERE co.oid = a.attcollation) END \
+    FROM pg_attribute a \
+    JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
+    JOIN pg_type t ON t.oid = a.atttypid \
+    LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+    WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped \
+    ORDER BY a.attnum";
+
+/// Key columns only (`indnkeyatts`); an expression key part reads as its text.
+const DESIGN_INDEXES_SQL: &str = "SELECT i.relname::text, ix.indisunique, ix.indisprimary, \
+    EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = ix.indexrelid \
+            AND k.conrelid = ix.indrelid AND k.contype IN ('p','u')), \
+    am.amname::text, pg_get_expr(ix.indpred, ix.indrelid), ix.indexprs IS NOT NULL, \
+    ARRAY(SELECT CASE WHEN ix.indkey[k.ord - 1] = 0 \
+                 THEN pg_get_indexdef(ix.indexrelid, k.ord, false) \
+                 ELSE (SELECT a.attname::text FROM pg_attribute a \
+                       WHERE a.attrelid = ix.indrelid AND a.attnum = ix.indkey[k.ord - 1]) END \
+          FROM generate_series(1, ix.indnkeyatts::int) k(ord) ORDER BY k.ord), \
+    array_remove(ARRAY[ \
+      CASE WHEN ix.indnatts > ix.indnkeyatts THEN 'include columns' END, \
+      CASE WHEN EXISTS (SELECT 1 FROM generate_series(0, ix.indnkeyatts - 1) k \
+                        WHERE (ix.indoption[k] & 1) <> 0) THEN 'descending order' END, \
+      CASE WHEN EXISTS (SELECT 1 FROM generate_series(0, ix.indnkeyatts - 1) k \
+                        WHERE ((ix.indoption[k] & 1) <> 0) <> ((ix.indoption[k] & 2) <> 0)) \
+           THEN 'nulls order' END, \
+      CASE WHEN EXISTS (SELECT 1 FROM generate_series(0, ix.indnkeyatts - 1) k \
+                        JOIN pg_opclass oc ON oc.oid = ix.indclass[k] WHERE NOT oc.opcdefault) \
+           THEN 'operator class' END, \
+      CASE WHEN EXISTS (SELECT 1 FROM generate_series(0, ix.indnkeyatts - 1) k \
+                        LEFT JOIN pg_attribute a ON a.attrelid = ix.indrelid \
+                             AND a.attnum = ix.indkey[k] AND ix.indkey[k] <> 0 \
+                        WHERE ix.indcollation[k] <> 0 \
+                          AND ix.indcollation[k] <> COALESCE(a.attcollation, 100)) \
+           THEN 'collation' END, \
+      CASE WHEN COALESCE((to_jsonb(ix) ->> 'indnullsnotdistinct')::boolean, false) \
+           THEN 'nulls not distinct' END \
+    ]::text[], NULL) \
+    FROM pg_index ix JOIN pg_class c ON c.oid = ix.indrelid JOIN pg_class i ON i.oid = ix.indexrelid \
+    JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_am am ON am.oid = i.relam \
+    WHERE n.nspname = $1 AND c.relname = $2 \
+    ORDER BY ix.indisprimary DESC, i.relname";
+
+const DESIGN_REFS_SQL: &str = "SELECT con.conname::text, fn.nspname::text, fc.relname::text, \
+    ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord) \
+          JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum ORDER BY k.ord), \
+    ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(attnum, ord) \
+          JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum ORDER BY k.ord), \
+    con.confdeltype::text, con.confupdtype::text, \
+    con.condeferrable, con.condeferred, con.confmatchtype::text \
+    FROM pg_constraint con \
+    JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
+    JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
+    WHERE con.contype = 'f' AND n.nspname = $1 AND c.relname = $2 \
+    ORDER BY con.conname";
+
+const DESIGN_INCOMING_SQL: &str = "SELECT con.conname::text, n.nspname::text, c.relname::text \
+    FROM pg_constraint con \
+    JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
+    JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
+    WHERE con.contype = 'f' AND fn.nspname = $1 AND fc.relname = $2 \
+    ORDER BY n.nspname, c.relname, con.conname";
+
+/// Checks and triggers of one table, as `unsupported` notes.
+const DESIGN_NOTES_SQL: &str = "SELECT kind, name FROM ( \
+    SELECT 1 AS ord, 'check' AS kind, con.conname::text AS name \
+      FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid \
+      JOIN pg_namespace n ON n.oid = c.relnamespace \
+      WHERE n.nspname = $1 AND c.relname = $2 AND con.contype = 'c' \
+    UNION ALL \
+    SELECT 2, 'trigger', t.tgname::text \
+      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid \
+      JOIN pg_namespace n ON n.oid = c.relnamespace \
+      WHERE n.nspname = $1 AND c.relname = $2 AND NOT t.tgisinternal \
+    ) s ORDER BY ord, name";
+
+/// `'new'::character varying` on a `character varying(16)` column reads as `'new'`: a
+/// quoted literal takes the column's type anyway. A cast to any other type stays.
+fn strip_own_cast(default: &str, type_sql: &str) -> String {
+    let Some(rest) = default.strip_prefix('\'') else {
+        return default.to_string();
+    };
+    let mut chars = rest.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c != '\'' {
+            continue;
+        }
+        if chars.peek().is_some_and(|(_, n)| *n == '\'') {
+            chars.next();
+            continue;
+        }
+        let end = i + 2;
+        let Some(cast) = default[end..].strip_prefix("::") else {
+            return default.to_string();
+        };
+        let mut base = String::new();
+        let mut depth = 0;
+        for ch in type_sql.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ if depth == 0 => base.push(ch),
+                _ => {}
+            }
+        }
+        let base = base.split_whitespace().collect::<Vec<_>>().join(" ");
+        return if cast == type_sql || cast == base {
+            default[..end].to_string()
+        } else {
+            default.to_string()
+        };
+    }
+    default.to_string()
+}
+
+/// One table for the Table Designer: the snapshot's catalog sources, filtered by
+/// table, with real index and key names and nothing folded into columns.
+pub(super) async fn table_design(
+    client: &Client,
+    schema: &str,
+    path: &ObjectPath,
+) -> Result<TableDesign> {
+    let table = path.name.as_str();
+    let Some(found) = client
+        .query_opt(DESIGN_TABLE_SQL, &[&schema, &table])
+        .await
+        .map_err(query_err)?
+    else {
+        return Err(Error::NotFound(table.to_string()));
+    };
+    let comment: Option<String> = found.get(0);
+    let mut unsupported = Vec::new();
+
+    let mut columns = Vec::new();
+    for row in client
+        .query(DESIGN_COLUMNS_SQL, &[&schema, &table])
+        .await
+        .map_err(query_err)?
+    {
+        let name: String = row.get(0);
+        let type_sql: String = row.get(1);
+        let not_null: bool = row.get(2);
+        let default_expr: Option<String> = row.get(3);
+        let identity: String = row.get(4);
+        // `s` stored, `v` virtual (PostgreSQL 18); both are generated.
+        let generated = !row.get::<_, String>(5).is_empty();
+        if generated {
+            unsupported.push(format!("generated column {name}"));
+        }
+        let increment = if !identity.is_empty() {
+            Increment::Identity
+        } else if default_expr
+            .as_deref()
+            .is_some_and(|d| d.starts_with("nextval("))
+        {
+            Increment::Serial
+        } else {
+            Increment::None
+        };
+        let default_sql = default_expr
+            .filter(|_| !generated)
+            .map(|d| strip_own_cast(&d, &type_sql));
+        columns.push(TableColumn {
+            name,
+            type_sql,
+            nullable: !not_null,
+            default_sql,
+            increment,
+            comment: row.get(6),
+            generated,
+            mysql: None,
+            sqlite_autoincrement: false,
+            collation: row.get(7),
+            advanced: false,
+        });
+    }
+
+    let mut indexes = Vec::new();
+    let mut advanced = Vec::new();
+    for row in client
+        .query(DESIGN_INDEXES_SQL, &[&schema, &table])
+        .await
+        .map_err(query_err)?
+    {
+        let attrs: Vec<String> = row.get(8);
+        let name: String = row.get(0);
+        if !attrs.is_empty() {
+            advanced.push(advanced_note("index", &name, &attrs));
+        }
+        indexes.push(TableIndex {
+            name,
+            unique: row.get(1),
+            primary: row.get(2),
+            constraint: row.get(3),
+            sql: None,
+            method: Some(row.get(4)),
+            predicate: row.get(5),
+            expression: row.get(6),
+            columns: row.get(7),
+            advanced: !attrs.is_empty(),
+        });
+    }
+
+    let foreign_keys = client
+        .query(DESIGN_REFS_SQL, &[&schema, &table])
+        .await
+        .map_err(query_err)?
+        .into_iter()
+        .map(|row| {
+            let on_delete: String = row.get(5);
+            let on_update: String = row.get(6);
+            let mut attrs = Vec::new();
+            if row.get::<_, bool>(7) {
+                attrs.push("deferrable".to_string());
+            }
+            if row.get::<_, bool>(8) {
+                attrs.push("initially deferred".to_string());
+            }
+            match row.get::<_, String>(9).as_str() {
+                "f" => attrs.push("match full".to_string()),
+                "p" => attrs.push("match partial".to_string()),
+                _ => {}
+            }
+            let name: String = row.get(0);
+            if !attrs.is_empty() {
+                advanced.push(advanced_note("foreign key", &name, &attrs));
+            }
+            TableForeignKey {
+                advanced: !attrs.is_empty(),
+                name,
+                columns: row.get(3),
+                target: ObjectPath {
+                    database: path.database.clone(),
+                    schema: Some(row.get(1)),
+                    name: row.get(2),
+                },
+                target_columns: row.get(4),
+                on_delete: rule(&on_delete),
+                on_update: rule(&on_update),
+            }
+        })
+        .collect();
+
+    let referenced_by = client
+        .query(DESIGN_INCOMING_SQL, &[&schema, &table])
+        .await
+        .map_err(query_err)?
+        .into_iter()
+        .map(|row| IncomingRef {
+            name: row.get(0),
+            table: ObjectPath {
+                database: path.database.clone(),
+                schema: Some(row.get(1)),
+                name: row.get(2),
+            },
+            on_delete: None,
+        })
+        .collect();
+
+    for row in client
+        .query(DESIGN_NOTES_SQL, &[&schema, &table])
+        .await
+        .map_err(query_err)?
+    {
+        let kind: String = row.get(0);
+        let name: String = row.get(1);
+        unsupported.push(format!("{kind} {name}"));
+    }
+    unsupported.extend(advanced);
+
+    Ok(TableDesign {
+        path: path.clone(),
+        columns,
+        indexes,
+        foreign_keys,
+        referenced_by,
+        comment,
+        unsupported,
+        sqlite: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_own_cast;
+
+    #[test]
+    fn strips_only_a_cast_to_the_column_type() {
+        let cases = [
+            ("'new'::character varying", "character varying(16)", "'new'"),
+            ("'it''s'::text", "text", "'it''s'"),
+            ("'mall'::store_kind", "store_kind", "'mall'"),
+            ("'{}'::text[]", "text[]", "'{}'"),
+            ("'2020-01-01'::date", "text", "'2020-01-01'::date"),
+            ("'a'::text || 'b'::text", "text", "'a'::text || 'b'::text"),
+            ("0", "numeric(10,2)", "0"),
+            (
+                "CURRENT_TIMESTAMP",
+                "timestamp without time zone",
+                "CURRENT_TIMESTAMP",
+            ),
+            ("'x'", "text", "'x'"),
+        ];
+        for (default, type_sql, want) in cases {
+            assert_eq!(
+                strip_own_cast(default, type_sql),
+                want,
+                "{default} on {type_sql}"
+            );
+        }
+    }
 }

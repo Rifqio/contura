@@ -528,12 +528,14 @@ mod tests {
         e.updates
             .push(update(vec![change("note", Cell::Null, nv("a\\b"))]));
         assert!(one_sql(DialectKind::MySql, &e).contains("= _utf8mb4 X'615c62'"));
-        for k in [DialectKind::Postgres, DialectKind::Sqlite] {
-            let mut e = set(k);
-            e.updates
-                .push(update(vec![change("note", Cell::Null, nv("a\\b"))]));
-            assert!(one_sql(k, &e).contains("= 'a\\b'"));
-        }
+        let mut e = set(DialectKind::Postgres);
+        e.updates
+            .push(update(vec![change("note", Cell::Null, nv(r"a\b"))]));
+        assert!(one_sql(DialectKind::Postgres, &e).contains(r"= E'a\\b'"));
+        let mut e = set(DialectKind::Sqlite);
+        e.updates
+            .push(update(vec![change("note", Cell::Null, nv(r"a\b"))]));
+        assert!(one_sql(DialectKind::Sqlite, &e).contains(r"= 'a\b'"));
     }
 
     #[test]

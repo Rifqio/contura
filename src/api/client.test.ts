@@ -49,6 +49,29 @@ test("errorText names the changed row and the failed statement of a save", () =>
   );
 });
 
+test("error_text_for_design_errors", () => {
+  expect(
+    errorText({ kind: "designFailed", message: { statement: 0, ran: 0, total: 2, message: "Duplicate column name 'note'" } }),
+  ).toBe("Nothing was changed. Statement 1 failed: Duplicate column name 'note'");
+  expect(
+    errorText({ kind: "designFailed", message: { statement: 1, ran: 1, total: 2, message: "Failed to open the referenced table 'nowhere'" } }),
+  ).toBe("1 of 2 statements were applied. Statement 2 failed: Failed to open the referenced table 'nowhere'");
+  expect(errorText({ kind: "designForeignKeys", message: { table: "orders" } })).toBe(
+    "Rows in orders would break a Foreign Key. Nothing was changed.",
+  );
+  const restore = { sql: "PRAGMA foreign_keys = ON", message: "disk I/O error" };
+  expect(errorText({ kind: "designRestoreFailed", message: { applied: true, ...restore } })).toBe(
+    "The change was applied, but restoring the connection with PRAGMA foreign_keys = ON failed afterwards: disk I/O error. Reconnect before you go on.",
+  );
+  expect(errorText({ kind: "designRestoreFailed", message: { applied: false, ...restore } })).toBe(
+    "The change was not applied, and restoring the connection with PRAGMA foreign_keys = ON failed afterwards: disk I/O error. Reconnect before you go on.",
+  );
+  // A plain query error that happens to start with the same words keeps its prefix.
+  expect(errorText({ kind: "query", message: "The change was applied" })).toBe(
+    "The query failed: The change was applied",
+  );
+});
+
 test("connectionTarget_by_dialect", () => {
   expect(connectionTarget({ dialect: "mysql", host: "127.0.0.1", port: 3306, file: null })).toBe("127.0.0.1:3306");
   expect(connectionTarget({ dialect: "postgres", host: "10.0.4.20", port: 5432, file: null })).toBe("10.0.4.20:5432");

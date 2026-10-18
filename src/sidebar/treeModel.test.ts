@@ -102,7 +102,7 @@ describe("flattenTree", () => {
       }),
     );
     const folder = rows.find((r) => r.node.kind === "folder")!;
-    expect(folder.node).toMatchObject({ label: "Tables", count: 2, objectKind: "table" });
+    expect(folder.node).toMatchObject({ label: "Tables", count: 2, objectKind: "table", database: "shop", schema: null });
     expect(folder.level).toBe(2);
     const tables = rows.filter((r) => r.node.kind === "object");
     expect(tables.map((r) => [r.level, (r.node as { rows: number | null }).rows])).toEqual([
@@ -139,6 +139,7 @@ describe("flattenTree", () => {
     const schemas = hidden.filter((r) => r.node.kind === "schema");
     expect(schemas.map((r) => [(r.node as { name: string }).name, r.level])).toEqual([["public", 2]]);
     expect(hidden.find((r) => r.node.kind === "object")!.level).toBe(4);
+    expect(hidden.find((r) => r.node.kind === "folder")!.node).toMatchObject({ database: "app", schema: "public" });
     const shown = flattenTree(base(["app"]));
     expect(shown.filter((r) => r.node.kind === "schema").map((r) => (r.node as { name: string }).name)).toEqual([
       "public",

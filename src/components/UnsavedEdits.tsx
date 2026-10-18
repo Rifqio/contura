@@ -14,6 +14,8 @@ interface Props {
   /** Saving writes to a Production Connection: the button says so and focus starts on Cancel. */
   production: boolean;
   busy: boolean;
+  /** "Apply" for a design tab's unapplied changes; the save keys still apply. */
+  verb?: "Save" | "Apply";
   onSave(): void;
   onDiscard(): void;
   onCancel(): void;
@@ -40,8 +42,29 @@ export function tableBody(count: number, table: string, connection: string, prod
   );
 }
 
+/** The body for a design tab's unapplied changes: how many, to which table, on which Connection. */
+export function designBody(count: number, table: string, connection: string, production: boolean): ReactNode {
+  const changes = `${count} unapplied ${count === 1 ? "change" : "changes"}`;
+  const loses = `Closing the tab without applying loses ${count === 1 ? "it" : "them"}.`;
+  if (production) {
+    return (
+      <>
+        <span>
+          You have <b>{changes}</b> to {table} on <b>{connection}</b> (Production). {loses}
+        </span>
+        <span className="dialog-aside">Apply on PROD shows the SQL and asks you to confirm before anything runs.</span>
+      </>
+    );
+  }
+  return (
+    <span>
+      You have <b>{changes}</b> to {table} on {connection}. {loses}
+    </span>
+  );
+}
+
 /** Asked before a tab with unsaved work is closed or left: a grid with Pending Edits, or a Saved Query's text. */
-export default function UnsavedEdits({ title, body, production, busy, onSave, onDiscard, onCancel }: Props) {
+export default function UnsavedEdits({ title, body, production, busy, verb = "Save", onSave, onDiscard, onCancel }: Props) {
   const { map } = useKeymap();
   const saveKeys = keysFor(map, "query.save");
   const save = useRef(onSave);
@@ -83,11 +106,11 @@ export default function UnsavedEdits({ title, body, production, busy, onSave, on
         {production ? (
           <button type="button" className="button button-prod" disabled={busy} onClick={onSave}>
             <Icon name="check" size={14} />
-            Save on PROD...
+            {verb} on PROD...
           </button>
         ) : (
           <button ref={saveButton} type="button" className="button button-primary" disabled={busy} onClick={onSave}>
-            Save
+            {verb}
             {saveKeys[0] && <Kbd keys={saveKeys[0]} />}
           </button>
         )}

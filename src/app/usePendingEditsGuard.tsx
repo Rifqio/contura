@@ -3,9 +3,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { errorText, saveSavedQuery } from "../api/client";
 import type { ConnectionConfig, ConnectionId, GroupId, SavedQuery } from "../api/types";
 import type { GridControl } from "../components/DataGrid";
-import UnsavedEdits, { tableBody } from "../components/UnsavedEdits";
+import UnsavedEdits, { designBody, tableBody } from "../components/UnsavedEdits";
 import type { QueryTabDoc } from "../query/QueryTab";
-import { type WorkTab, tabKey } from "../shell/tabs";
+import { type WorkTab, objectTabOf, tabKey } from "../shell/tabs";
 
 export interface PendingEditsGuard {
   dirtyKeys: ReadonlySet<string>;
@@ -13,8 +13,9 @@ export interface PendingEditsGuard {
   markDirty(key: string, dirty: boolean): void;
   /** Keeps a value still in a cell editor, then says whether the grid has Pending Edits. */
   isDirty(key: string): boolean;
+  /** The keys of every tab that can hold Pending Edits or an unapplied design, of one Connection or all. */
   tableKeys(only?: ConnectionId): string[];
-  /** The open tables of a Group's Connections. */
+  /** The same tabs of a Group's Connections. */
   groupTableKeys(groupId: GroupId): string[];
   /** Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is cancelled. */
   confirmLeave(keys: string[]): Promise<boolean>;
@@ -38,7 +39,7 @@ export function usePendingEditsGuard(opts: {
 }): PendingEditsGuard {
   const { tabs, connections, savedQueries } = opts;
 
-  // ---- Pending Edits in table tabs: ask before they are closed or left ----
+  // ---- Pending Edits in table tabs and unapplied designs: ask before they are closed or left ----
   const [dirtyGrids, setDirtyGrids] = useState<ReadonlySet<string>>(new Set());
   const dirtyRef = useRef(dirtyGrids);
   dirtyRef.current = dirtyGrids;
@@ -48,6 +49,8 @@ export function usePendingEditsGuard(opts: {
     title: string;
     body: ReactNode;
     production: boolean;
+    /** "Apply" for a design tab's unapplied changes. */
+    verb: "Save" | "Apply";
     /** A Saved Query's text, not a grid's Pending Edits. */
     doc?: QueryTabDoc;
     busy: boolean;
@@ -75,7 +78,7 @@ export function usePendingEditsGuard(opts: {
 
   // A removed tab, by any path, takes its dirty mark and its control with it.
   useEffect(() => {
-    const live = new Set(tabs.flatMap((t) => (t.kind === "object" ? [t.key] : [])));
+    const live = new Set(tabs.flatMap((t) => objectTabOf(t)?.key ?? []));
     for (const key of [...gridControls.current.keys()]) if (!live.has(key)) gridControls.current.delete(key);
     setDirtyGrids((s) => {
       const kept = [...s].filter((key) => live.has(key));
@@ -85,9 +88,10 @@ export function usePendingEditsGuard(opts: {
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const tableKeys = (only?: ConnectionId) =>
-    tabsRef.current.flatMap((t) =>
-      t.kind === "object" && (only === undefined || t.selection.connectionId === only) ? [t.key] : [],
-    );
+    tabsRef.current.flatMap((t) => {
+      const o = objectTabOf(t);
+      return o && (only === undefined || o.connectionId === only) ? [o.key] : [];
+    });
 
   /** Keeps a value still in a cell editor, then says whether the grid has Pending Edits. */
   function isDirty(key: string): boolean {
@@ -110,23 +114,23 @@ export function usePendingEditsGuard(opts: {
   async function askLeave(keys: string[]): Promise<boolean> {
     for (const key of keys) {
       if (!isDirty(key)) continue;
-      const tabs = tabsRef.current;
-      const index = tabs.findIndex((t) => t.kind === "object" && t.key === key);
-      const tab = tabs[index];
-      if (index >= 0) opts.activate(key);
-      const table = tab?.kind === "object" ? tab.selection.path.name : "this table";
-      const path = tab?.kind === "object" ? [tab.selection.path.database, tab.selection.path.schema, tab.selection.path.name] : [table];
-      const conn = tab?.kind === "object" ? connections.find((c) => c.id === tab.selection.connectionId) : undefined;
+      const raw = tabsRef.current.find((t) => objectTabOf(t)?.key === key);
+      const tab = raw ? objectTabOf(raw) : null;
+      if (tab) opts.activate(key);
+      const design = raw?.kind === "design";
+      const table = tab?.path?.name ?? (design ? "the new table" : "this table");
+      const path = tab?.path ? [tab.path.database, tab.path.schema, tab.path.name] : [table];
+      const conn = tab ? connections.find((c) => c.id === tab.connectionId) : undefined;
       const production = conn?.production ?? false;
-      const body = tableBody(
-        gridControls.current.get(key)?.current?.pendingCount() ?? 1,
-        path.filter(Boolean).join("."),
-        conn?.name ?? "this Connection",
-        production,
-      );
-      const title = `Save changes to ${table}?`;
+      const count = gridControls.current.get(key)?.current?.pendingCount() ?? 1;
+      const connName = conn?.name ?? "this Connection";
+      const body = design
+        ? designBody(count, table, connName, production)
+        : tableBody(count, path.filter(Boolean).join("."), connName, production);
+      const title = design ? `Apply changes to ${table}?` : `Save changes to ${table}?`;
+      const verb = design ? "Apply" : "Save";
       const ok = await new Promise<boolean>((resolve) =>
-        setLeaveAsk({ key, title, body, production, busy: false, resolve }),
+        setLeaveAsk({ key, title, body, production, verb, busy: false, resolve }),
       );
       if (!ok) return false;
       markDirty(key, false);
@@ -146,7 +150,7 @@ export function usePendingEditsGuard(opts: {
       );
       opts.activate(tabKey({ kind: "query", doc }));
       return new Promise<boolean>((resolve) =>
-        setLeaveAsk({ key: doc.id, title: `Save changes to ${doc.name}?`, body, production: false, doc, busy: false, resolve }),
+        setLeaveAsk({ key: doc.id, title: `Save changes to ${doc.name}?`, body, production: false, verb: "Save", doc, busy: false, resolve }),
       );
     });
     leaveQueue.current = run.then(
@@ -158,10 +162,13 @@ export function usePendingEditsGuard(opts: {
   const confirmLeaveRef = useRef(confirmLeave);
   confirmLeaveRef.current = confirmLeave;
   const leaveAll = () => confirmLeave(tableKeys());
-  /** The open tables of a Group's Connections. */
+  /** The table and design tabs of a Group's Connections. */
   const groupTableKeys = (groupId: GroupId) => {
     const ids = new Set(connections.filter((c) => c.groupId === groupId).map((c) => c.id));
-    return tabsRef.current.flatMap((t) => (t.kind === "object" && ids.has(t.selection.connectionId) ? [t.key] : []));
+    return tabsRef.current.flatMap((t) => {
+      const o = objectTabOf(t);
+      return o && ids.has(o.connectionId) ? [o.key] : [];
+    });
   };
 
   // Quitting with Pending Edits asks first; the title bar's Close raises this request too.
@@ -196,6 +203,7 @@ export function usePendingEditsGuard(opts: {
         title={leaveAsk.title}
         body={leaveAsk.body}
         production={leaveAsk.production}
+        verb={leaveAsk.verb}
         busy={leaveAsk.busy}
         onSave={async () => {
           const ask = leaveAsk;
@@ -217,9 +225,10 @@ export function usePendingEditsGuard(opts: {
           ask.resolve(ok);
         }}
         onDiscard={() => {
-          if (!leaveAsk.doc) gridControl(leaveAsk.key).current?.discard();
+          // Refused while a save or Apply runs: the tab, Group or Connection stays, as on Cancel.
+          const ok = leaveAsk.doc ? true : (gridControl(leaveAsk.key).current?.discard() ?? true);
           setLeaveAsk(null);
-          leaveAsk.resolve(true);
+          leaveAsk.resolve(ok);
         }}
         onCancel={() => {
           setLeaveAsk(null);

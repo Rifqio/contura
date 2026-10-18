@@ -110,8 +110,8 @@ A change to row data in the grid that has not been saved yet: an edited cell, a 
 _Avoid_: Draft, unsaved change, dirty row
 
 **Table Designer**:
-The editor for one table's columns, indexes and Foreign Keys, which produces schema-changing SQL.
-_Avoid_: Schema editor, ER model
+The editor for one table's columns, indexes and Foreign Keys, which also creates a new table and drops one. It is its own tab ("orders design", tab kind `design`), opened from the table row menu in the tree or from the Design button in the table's grid. Changes are tracked by each column's, index's and key's name as loaded, so a renamed column stays one change, never a drop and an add. The Core writes the SQL and its warnings, the preview shows them, and Apply runs exactly what the preview showed (ADR 0016).
+_Avoid_: Schema editor, ER model, structure editor
 
 ### Designing schemas
 

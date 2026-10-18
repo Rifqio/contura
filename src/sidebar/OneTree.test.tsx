@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import App from "../App";
@@ -49,6 +49,8 @@ type HarnessProps = Partial<OneTreeProps> & {
   reveal?: RevealRequest | null;
   onNotOpen?: (id: ConnectionId) => void;
   onRevealed?: () => void;
+  /** Hands the test the tree's data, to call refresh and reveal as the App does. */
+  treeRef?: { current: ReturnType<typeof useTreeData> | null };
 };
 
 function noop() {}
@@ -74,9 +76,10 @@ function handlers() {
   };
 }
 
-function Harness({ connections, open = [], reveal, onNotOpen, onRevealed, ...rest }: HarnessProps) {
+function Harness({ connections, open = [], reveal, onNotOpen, onRevealed, treeRef, ...rest }: HarnessProps) {
   const openIds = new Set(open);
   const tree = useTreeData({ connections, openIds: useStable(openIds), onNotOpen, onRevealed });
+  if (treeRef) treeRef.current = tree;
   const revealSeq = reveal?.seq;
   // The App calls reveal once per request, as here.
   useRevealOnce(tree, reveal ?? null, revealSeq);
@@ -663,6 +666,52 @@ test("reveal_expands_to_the_object_and_focuses_it", async () => {
   expect(onRevealed).toHaveBeenCalledTimes(1);
 });
 
+test("reveal_clears_a_filter_that_hides_the_row", async () => {
+  routeMy();
+  const { rerender } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} />);
+  await findItem("orders");
+  const field = screen.getByRole("searchbox", { name: "Filter objects" }) as HTMLInputElement;
+  await userEvent.type(field, "sto");
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "orders" })).toBeNull());
+  rerender(
+    <Harness connections={[conn("a", "Shop")]} open={["a"]} reveal={{ connectionId: "a", database: "shop", schema: null, name: "orders", seq: 1 }} />,
+  );
+  // A reveal always ends on a visible, focused row.
+  const row = await findItem("orders");
+  await waitFor(() => expect(document.activeElement).toBe(row));
+  expect(field.value).toBe("");
+});
+
+test("reveal_keeps_a_filter_that_shows_the_row", async () => {
+  routeMy();
+  const { rerender } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} />);
+  await findItem("orders");
+  const field = screen.getByRole("searchbox", { name: "Filter objects" }) as HTMLInputElement;
+  await userEvent.type(field, "sto");
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "orders" })).toBeNull());
+  rerender(
+    <Harness connections={[conn("a", "Shop")]} open={["a"]} reveal={{ connectionId: "a", database: "shop", schema: null, name: "stores", seq: 1 }} />,
+  );
+  await waitFor(() => expect(document.activeElement).toBe(item("stores")));
+  expect(field.value).toBe("sto");
+});
+
+test("a_reveal_right_after_a_refresh_waits_for_the_new_list", async () => {
+  let created = false;
+  routeMy({ list_objects: () => (created ? [...OBJECTS, { kind: "table", name: "invoices", rows: 0 }] : OBJECTS) });
+  const treeRef: { current: ReturnType<typeof useTreeData> | null } = { current: null };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} treeRef={treeRef} />);
+  await findItem("orders");
+  created = true;
+  // The App refreshes the branch and reveals the new table in the same turn.
+  act(() => {
+    treeRef.current!.refresh("a");
+    treeRef.current!.reveal({ connectionId: "a", database: "shop", schema: null, name: "invoices", seq: 1 });
+  });
+  const row = await findItem("invoices");
+  await waitFor(() => expect(document.activeElement).toBe(row));
+});
+
 // ---------- Filter ----------
 
 const ctrlShiftF = () =>
@@ -1000,4 +1049,104 @@ test("postgres_database_with_only_system_schemas_offers_to_show_them", async () 
   expect(await findItem("pg_catalog")).toBeTruthy();
   expect(item("information_schema")).toBeTruthy();
   expect(screen.queryByText("shop has no user schemas.")).toBeNull();
+});
+
+// ---------- New table and Drop table (D7) ----------
+
+const menuLabels = (name: string) =>
+  within(screen.getByRole("menu", { name }))
+    .getAllByRole("menuitem")
+    .map((el) => el.getAttribute("aria-label"));
+
+test("mysql_database_row_menu_offers_new_table", async () => {
+  routeMy();
+  const h = { ...handlers(), onNewTable: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("shop"));
+  expect(menuLabels("shop")).toEqual(["New table...", "Reverse-engineer into a Schema Model"]);
+  await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
+  expect(h.onNewTable).toHaveBeenCalledWith("a", "shop", null);
+});
+
+test("postgres_schema_row_offers_new_table_and_its_database_row_does_not", async () => {
+  routePg();
+  const h = { ...handlers(), onNewTable: vi.fn() };
+  render(<Harness connections={[pgConn]} open={["p"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("shop"));
+  expect(menuLabels("shop")).not.toContain("New table...");
+  await userEvent.keyboard("{Escape}");
+  fireEvent.contextMenu(item("public"));
+  expect(menuLabels("public")[0]).toBe("New table...");
+  await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
+  expect(h.onNewTable).toHaveBeenCalledWith("p", "shop", "public");
+});
+
+test("tables_folder_row_offers_new_table", async () => {
+  routeMy();
+  const h = { ...handlers(), onNewTable: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("Tables"));
+  expect(menuLabels("Tables")).toEqual(["New table..."]);
+  await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
+  expect(h.onNewTable).toHaveBeenCalledWith("a", "shop", null);
+});
+
+test("new_table_is_absent_without_the_handler_and_on_read_only", async () => {
+  routeMy();
+  const { unmount } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("shop"));
+  expect(menuLabels("shop")).not.toContain("New table...");
+  unmount();
+  routeMy();
+  render(<Harness connections={[conn("b", "Shop RO", { readOnly: true })]} open={["b"]} onNewTable={vi.fn()} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("shop"));
+  expect(menuLabels("shop")).not.toContain("New table...");
+  await userEvent.keyboard("{Escape}");
+  fireEvent.contextMenu(item("Tables"));
+  expect(screen.queryByRole("menu", { name: "Tables" })).toBeNull();
+});
+
+test("table_row_menu_has_open_design_and_drop", async () => {
+  routeMy();
+  const h = { ...handlers(), onDesignTable: vi.fn(), onDropTable: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("orders"));
+  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Drop table..."]);
+  const path = { database: "shop", schema: null, name: "orders" };
+  await userEvent.click(screen.getByRole("menuitem", { name: "Open" }));
+  expect(h.onSelectObject).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path });
+  fireEvent.contextMenu(item("orders"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Design table" }));
+  expect(h.onDesignTable).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path });
+  fireEvent.contextMenu(item("orders"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Drop table..." }));
+  expect(h.onDropTable).toHaveBeenCalledWith("a", path);
+  // The row count stays on the right; no hover buttons on table rows.
+  expect(within(item("orders")).queryByRole("button")).toBeNull();
+  expect(within(item("orders")).getByText("18,402")).toBeTruthy();
+});
+
+test("table_row_menu_opens_from_the_keyboard", async () => {
+  routeMy();
+  const h = { ...handlers(), onDesignTable: vi.fn(), onDropTable: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await findItem("orders");
+  await userEvent.click(item("orders"));
+  await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Drop table..."]);
+});
+
+test("read_only_table_row_has_design_but_no_drop", async () => {
+  routeMy();
+  const h = { ...handlers(), onDesignTable: vi.fn(), onDropTable: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop", { readOnly: true })]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("orders"));
+  expect(menuLabels("orders")).toEqual(["Open", "Design table"]);
 });

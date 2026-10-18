@@ -3712,7 +3712,7 @@ button.chip[aria-pressed="true"] {
   font: var(--font-body);
   font-variant-numeric: tabular-nums;
 }
-.confirm-nowhere {
+.warning-banner {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -3722,12 +3722,12 @@ button.chip[aria-pressed="true"] {
   background: var(--c-warning-subtle);
   color: var(--c-prod-text);
 }
-.confirm-nowhere p {
+.warning-banner p {
   flex: 1;
   min-width: 260px;
   margin: 0;
 }
-.confirm-nowhere code {
+.warning-banner code {
   font: var(--font-mono-small);
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
@@ -6483,4 +6483,310 @@ button.send-pill:hover {
   height: 100%;
   border-radius: 2px;
   background: var(--c-accent);
+}
+
+/*
+ * Table Designer (5c, frames td1-td4). The inner tabs, counts and row tools share one 36 px
+ * toolbar; the Columns grid is the data grid's table with its Pending Edit marks.
+ */
+.design-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--c-bg-surface);
+}
+.design-view.prod-wash {
+  background: var(--c-prod-wash);
+}
+.design-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 36px;
+  min-width: 0;
+  padding: 0 var(--spacing-xs) 0 var(--spacing-2xs);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  white-space: nowrap;
+}
+.design-toolbar .button-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-text-muted);
+  padding: 0 var(--spacing-sm);
+}
+.design-toolbar .button-quiet:hover:not(:disabled) {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.design-toolbar .button-quiet:disabled {
+  color: var(--c-text-faint);
+  cursor: default;
+}
+.design-tablist {
+  display: flex;
+  align-self: stretch;
+  min-width: 0;
+}
+.design-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--c-text-muted);
+  font: var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.design-tab:hover {
+  color: var(--c-text);
+}
+.design-tab-on {
+  color: var(--c-text);
+  border-bottom-color: var(--c-accent);
+  font: var(--font-body-strong);
+}
+.design-tab-count {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+.design-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.design-scroll {
+  flex: 1;
+  min-height: 0;
+}
+/* The grid takes Tab like the data grid; an inset ring shows it has the keys. */
+.design-scroll:focus {
+  outline: none;
+}
+.design-scroll:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+.design-grid {
+  width: max-content;
+  min-width: 100%;
+}
+.design-grid th.design-fill,
+.design-grid td.design-fill {
+  width: 100%;
+  border-right: 0;
+}
+.design-grid .design-center {
+  text-align: center;
+}
+.design-grid th.design-center .header-static {
+  justify-content: center;
+}
+.design-grid td.design-ui {
+  font: var(--font-body);
+}
+.design-type {
+  color: var(--c-syn-type);
+  font-style: var(--syn-type-style);
+}
+.design-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2xs);
+  vertical-align: middle;
+}
+.design-key-toggle {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-group-gold);
+  cursor: pointer;
+}
+.design-key-toggle:hover:not(:disabled) {
+  background: var(--c-bg-hover);
+}
+.design-key-toggle:disabled {
+  cursor: default;
+}
+.design-fk {
+  display: inline-flex;
+  color: var(--c-text-subtle);
+}
+.design-check {
+  margin: 0;
+  vertical-align: middle;
+  accent-color: var(--c-accent);
+}
+.design-note {
+  flex: none;
+  margin: 0;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* Table Designer, Task 8: the header strip's notes, the Read-only sentence and the SQL island (D20-D22). */
+.design-view {
+  --design-preview-height: 196px;
+  --design-ddl-height: 262px;
+}
+.design-bar-name {
+  width: 200px;
+  flex: none;
+}
+.design-bar-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.design-bar-error {
+  color: var(--c-danger-text);
+}
+.design-readonly {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.design-island {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  height: var(--design-preview-height);
+  min-height: 0;
+  border-top: var(--border-hairline) solid var(--c-border);
+  background: var(--c-bg-surface);
+}
+.design-island.prod-wash {
+  background: var(--c-prod-wash);
+}
+.design-ddl {
+  height: var(--design-ddl-height);
+}
+.design-island-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 36px;
+  min-width: 0;
+  padding: 0 var(--spacing-xs) 0 var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  white-space: nowrap;
+}
+.design-island-title {
+  flex: none;
+  font: var(--font-body-strong);
+}
+.design-island-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.design-island-body {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-sm);
+  min-height: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  overflow: auto;
+}
+.design-island-body .error-text {
+  margin: 0;
+}
+.design-sql {
+  font-family: var(--editor-font-family, var(--font-family-code));
+  font-size: var(--editor-font-size);
+}
+
+/* Table Designer, Task 9: the Indexes and Foreign keys grids, their column pickers and Selects. */
+.design-grid td .select-button {
+  height: 20px;
+  padding: 0 var(--spacing-xs);
+  border-color: transparent;
+  background: transparent;
+}
+.design-grid td .select-button:hover:not(:disabled) {
+  border-color: var(--c-border);
+}
+.column-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2xs);
+  vertical-align: middle;
+}
+.column-picker-chip {
+  gap: 2px;
+  padding-right: 2px;
+  color: var(--c-text);
+  font: var(--grid-cell-font);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.column-picker-remove {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text-subtle);
+  cursor: pointer;
+}
+.column-picker-remove:hover:not(:disabled) {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.column-picker-remove:disabled {
+  cursor: default;
+}
+.column-picker-add .select-value {
+  color: var(--c-text-subtle);
+}
+.design-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2xs);
+}
+.design-name-key {
+  color: var(--c-group-gold);
+}
+.design-grid td.design-muted {
+  color: var(--c-text-subtle);
+}
+.design-grid td.design-row-note {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.design-references {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
 }
