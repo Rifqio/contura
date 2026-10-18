@@ -56,6 +56,10 @@ export interface OneTreeProps {
   onDesignTable?(s: Selection): void;
   /** Starts dropping a table; the App asks first. */
   onDropTable?(connectionId: ConnectionId, path: ObjectPath): void;
+  /** Opens the Export dialog on a table. */
+  onExportTable?(s: Selection): void;
+  /** Opens an Import tab into a table; shown on Read-only Connections too, whose tab says so (Q15). */
+  onImportTable?(s: Selection): void;
   onMoveConnection(id: ConnectionId, group: GroupId | null): void;
   onNewGroup(): void;
   /** Asked for after the tree's own confirmation. */
@@ -554,6 +558,14 @@ export default function OneTree(props: OneTreeProps) {
         if (addItem) items.push(addItem);
         const design = props.onDesignTable;
         if (design) items.push({ key: "design", label: "Design table", icon: <Icon name="edit" />, onSelect: () => design(selection) });
+        const exportTable = props.onExportTable;
+        if (exportTable) {
+          items.push({ key: "export", label: "Export...", icon: <Icon name="export" />, onSelect: () => exportTable(selection) });
+        }
+        const importTable = props.onImportTable;
+        if (importTable) {
+          items.push({ key: "import", label: "Import...", icon: <Icon name="import" />, onSelect: () => importTable(selection) });
+        }
         const drop = props.onDropTable;
         if (drop && !isReadOnly(n.connectionId)) {
           items.push({

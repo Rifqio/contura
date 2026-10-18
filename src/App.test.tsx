@@ -9,7 +9,9 @@ import { EditorView } from "@codemirror/view";
 import App from "./App";
 import { appLang } from "./lang/appLang";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class {} }));
+// The Import tab's Browse... picks this file.
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => "C:\\data\\orders.csv"), save: vi.fn(async () => null) }));
 const closeWindow = vi.hoisted(() => ({
   handler: null as null | ((e: { preventDefault(): void }) => Promise<void>),
   destroy: vi.fn(async () => {}),
@@ -1417,8 +1419,8 @@ test("ctrl_shift_f_on_the_home_tab_focuses_the_home_filter", async () => {
 const ordersDesign = {
   path: { database: "shop", schema: null, name: "orders" },
   columns: [
-    { name: "id", typeSql: "int", nullable: false, defaultSql: null, increment: { kind: "autoIncrement" }, comment: null, generated: false, mysql: null, sqliteAutoincrement: false, collation: null, advanced: false },
-    { name: "status", typeSql: "varchar(16)", nullable: true, defaultSql: null, increment: { kind: "none" }, comment: null, generated: false, mysql: null, sqliteAutoincrement: false, collation: null, advanced: false },
+    { name: "id", typeSql: "int", nullable: false, defaultSql: null, increment: { kind: "autoIncrement" }, comment: null, generated: false, mysql: null, sqliteAutoincrement: false, collation: null, advanced: false, identityAlways: false },
+    { name: "status", typeSql: "varchar(16)", nullable: true, defaultSql: null, increment: { kind: "none" }, comment: null, generated: false, mysql: null, sqliteAutoincrement: false, collation: null, advanced: false, identityAlways: false },
   ],
   indexes: [],
   foreignKeys: [],
@@ -2085,4 +2087,194 @@ test("a_recent_saved_visual_query_opens_as_a_visual_query_tab", async () => {
   expect(await screen.findByRole("tab", { name: "late orders by store", selected: true })).toBeTruthy();
   expect(await screen.findByRole("toolbar", { name: "Visual Query" })).toBeTruthy();
   expect(screen.queryByRole("toolbar", { name: "Query" })).toBeNull();
+}, LOAD_TIMEOUT);
+
+// ---- Import, export and Mermaid (step 7, Task 13) ----
+
+const exportPreview = { header: "", lines: ["id,status", "1,paid"], sheet: null, bytesPerRow: 9, notes: [], queryRead: true };
+const jobRoutes = {
+  table_design: () => ordersDesign,
+  preview_export: () => exportPreview,
+  start_export: () => undefined,
+  cancel_job: () => undefined,
+  list_jobs: () => [],
+};
+
+async function openShopTree(over: Record<string, (a: Record<string, unknown>) => unknown> = {}) {
+  workspaceRoutes({ ...ordersRoutes(shopMy), ...jobRoutes, ...over });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+  await screen.findByRole("treeitem", { name: "orders" });
+}
+
+test("export_from_the_tree_opens_the_export_dialog_on_the_table", async () => {
+  await openShopTree();
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Export..." }));
+  const dialog = await screen.findByRole("dialog", { name: /Export orders/ });
+  // The columns come from the table's design; the count from the tree's estimate.
+  expect(within(dialog).getByText("All 2 columns")).toBeTruthy();
+  expect(callsTo("table_design")).toEqual([{ id: "c2", path: { database: "shop", schema: null, name: "orders" } }]);
+});
+
+test("import_from_the_tree_opens_an_import_tab_and_closes_without_asking_when_nothing_runs", async () => {
+  await openShopTree();
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  expect(await screen.findByRole("tab", { name: "Import into orders", selected: true })).toBeTruthy();
+  // The same table again shows the open tab.
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  expect(screen.getAllByRole("tab", { name: "Import into orders" })).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Close Import into orders" }));
+  await waitFor(() => expect(screen.queryByRole("tab", { name: "Import into orders" })).toBeNull());
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("export_in_the_background_shows_the_status_item_and_a_click_reopens_the_dialog", async () => {
+  await openShopTree();
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Export..." }));
+  const dialog = await screen.findByRole("dialog", { name: /Export orders/ });
+  await waitFor(() => expect(callsTo("preview_export").length).toBeGreaterThan(0));
+  await userEvent.click(within(dialog).getByRole("button", { name: /^Export/ }));
+  await waitFor(() => expect(callsTo("start_export")).toHaveLength(1));
+  // Escape while it runs sends it to the background (Q25).
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Export orders/ })).toBeNull());
+  const item = await screen.findByRole("button", { name: "Exporting orders" });
+  await userEvent.click(item);
+  expect(await screen.findByRole("dialog", { name: /Export orders/ })).toBeTruthy();
+  expect(callsTo("cancel_job")).toEqual([]);
+});
+
+test("new_flow_from_mermaid_opens_from_home", async () => {
+  workspaceRoutes();
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "New flow from Mermaid" }));
+  expect(await screen.findByRole("dialog", { name: /New flow from Mermaid/ })).toBeTruthy();
+});
+
+test("a_restart_drops_import_tabs", async () => {
+  let saved: string | null = null;
+  await openShopTree({
+    save_query_tabs: ({ json }) => {
+      saved = json as string;
+      return null;
+    },
+  });
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  await screen.findByRole("tab", { name: "Import into orders" });
+  await userEvent.keyboard("{Control>}t{/Control}");
+  await screen.findByRole("tab", { name: "Query 1" });
+  await waitFor(() => expect(saved).not.toBeNull());
+  cleanup();
+  workspaceRoutes({ ...ordersRoutes(shopMy), ...jobRoutes, load_query_tabs: () => saved });
+  render(<App />);
+  expect(await screen.findByRole("tab", { name: "Query 1" })).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Import into orders" })).toBeNull();
+});
+
+// ---- Fix round 1 (Q43): leaving with a running import ----
+
+const importSummary = {
+  format: "csv",
+  delimiter: "comma",
+  encoding: "UTF-8",
+  bytes: 64,
+  header: ["id", "status"],
+  rows: [["1", "paid"]],
+  rowsEstimate: { rows: 1, exact: true },
+  sheets: [],
+  conturaBackup: false,
+};
+const importPlan = {
+  columns: [
+    { into: "id", typeSql: "int", fileColumn: 0, note: null, blocks: null, generated: false },
+    { into: "status", typeSql: "varchar(16)", fileColumn: 1, note: null, blocks: null, generated: false },
+  ],
+  preview: [[{ text: "1", problem: null }, { text: "paid", problem: null }]],
+  sampleInsert: "INSERT INTO `orders` (`id`, `status`) VALUES (1, 'paid')",
+  extra: [],
+  shape: { head: "INSERT INTO `orders` (`id`, `status`) VALUES", firstRows: ["(1, 'paid')"], rowsPerStatement: 500, statements: 1, rows: 1 },
+  warnings: [],
+  oneTransaction: true,
+  verdict: { kind: "ok" },
+};
+const importRoutes = {
+  inspect_import_file: () => importSummary,
+  plan_import: () => importPlan,
+  check_import_file: () => "chk-1",
+  // The run never ends: it stays running for the test.
+  start_import: () => undefined,
+};
+
+/** Opens an Import tab into orders and starts a run that keeps running. */
+async function startRunningImport(over: Record<string, (a: Record<string, unknown>) => unknown> = {}) {
+  await openShopTree({ ...importRoutes, ...over });
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  await screen.findByRole("tab", { name: "Import into orders", selected: true });
+  const pane = () => document.querySelector(".work-pane:not([hidden]) .import-tab") as HTMLElement;
+  await userEvent.click(within(pane()).getByRole("button", { name: "Browse..." }));
+  await within(pane()).findByText(/columns, /);
+  await userEvent.click(within(pane()).getByRole("button", { name: "Next" }));
+  await userEvent.click(await within(pane()).findByRole("button", { name: /^Import 1 row/ }));
+  await waitFor(() => expect(callsTo("start_import")).toHaveLength(1));
+}
+
+test("closing_a_running_import_tab_asks_and_keep_running_keeps_it", async () => {
+  await startRunningImport();
+  await userEvent.click(screen.getByRole("button", { name: "Close Import into orders" }));
+  const ask = await screen.findByRole("dialog", { name: "Cancel the import and roll back?" });
+  await userEvent.click(within(ask).getByRole("button", { name: /Keep running/ }));
+  expect(screen.getByRole("tab", { name: "Import into orders" })).toBeTruthy();
+  expect(callsTo("cancel_job")).toEqual([]);
+  await userEvent.click(screen.getByRole("button", { name: "Close Import into orders" }));
+  const again = await screen.findByRole("dialog", { name: "Cancel the import and roll back?" });
+  await userEvent.click(within(again).getByRole("button", { name: "Cancel and roll back" }));
+  await waitFor(() => expect(screen.queryByRole("tab", { name: "Import into orders" })).toBeNull());
+  expect(callsTo("cancel_job")).toEqual([{ job: callsTo("start_import")[0].job }]);
+}, LOAD_TIMEOUT);
+
+test("switching_group_with_a_running_import_asks_and_no_keeps_the_place_q43_i1", async () => {
+  await startRunningImport();
+  // Ctrl+2 is Ungrouped, after KFC.
+  await userEvent.keyboard("{Control>}2{/Control}");
+  const ask = await screen.findByRole("dialog", { name: "Cancel the import and roll back?" });
+  await userEvent.click(within(ask).getByRole("button", { name: /Keep running/ }));
+  expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Import into orders" })).toBeTruthy();
+  expect(callsTo("cancel_job")).toEqual([]);
+}, LOAD_TIMEOUT);
+
+test("a_retargeted_import_tab_takes_the_new_key_and_a_second_one_there_folds_into_it_q43", async () => {
+  const ro = { ...shopMy, id: "c3", name: "shop-ro", readOnly: true };
+  workspaceRoutes({ ...ordersRoutes(shopMy), ...jobRoutes, ...importRoutes, list_connections: () => [shopMy, ro] });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open shop-ro" }));
+  const importFromTree = async () => {
+    fireEvent.contextMenu(await screen.findByRole("treeitem", { name: "orders" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  };
+  const retarget = async () => {
+    const pane = document.querySelector(".work-pane:not([hidden]) .import-tab") as HTMLElement;
+    await userEvent.click(within(pane).getByRole("combobox", { name: "Choose Connection..." }));
+    await userEvent.click(screen.getByRole("option", { name: /KFC Shop/ }));
+  };
+  await importFromTree();
+  await screen.findByRole("tab", { name: "Import into orders, Read-only", selected: true });
+  await retarget();
+  await screen.findByRole("tab", { name: "Import into orders", selected: true });
+  // The Read-only table no longer has a tab: Import... opens a new one.
+  await importFromTree();
+  await screen.findByRole("tab", { name: "Import into orders, Read-only", selected: true });
+  expect(screen.getAllByRole("tab", { name: /^Import into orders/ })).toHaveLength(2);
+  // Choosing KFC Shop again: its tab exists, so that one shows and this one goes.
+  await retarget();
+  await screen.findByRole("tab", { name: "Import into orders", selected: true });
+  expect(screen.getAllByRole("tab", { name: /^Import into orders/ })).toHaveLength(1);
 }, LOAD_TIMEOUT);

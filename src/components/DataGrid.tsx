@@ -64,6 +64,8 @@ import DbMark from "./DbMark";
 import MenuButton, { MenuList, type MenuItem } from "./Menu";
 import { useToast } from "./Toast";
 import ResultTools, { cellText as plainText } from "../query/ResultTools";
+import { useCommandKeys } from "../commands/useCommandKeys";
+import type { ExportOrigin } from "../jobs/exportText";
 import { objectPrefix } from "../objectPath";
 
 /** The table as SQL names it, so the filter is checked as `SELECT * FROM <it> WHERE <filter>`. */
@@ -110,6 +112,10 @@ interface Props {
   rowEstimate?: number | null;
   /** Opens a new, unsaved query tab on this Connection with this SQL, without running it. */
   onOpenQuery?(sql: string): void;
+  /** Opens the Export dialog on this table (the menu's Export..., and Ctrl+E inside the grid). */
+  onExport?(origin: ExportOrigin): void;
+  /** Opens an Import tab into this table; shown on Read-only Connections too (Q15). */
+  onImport?(): void;
   /** Opens the table's design tab (tables only, D15). */
   onDesign?(): void;
   /** Bumped when the table's design changed: the grid loads its columns and page 0 again, with no Pending Edits. */
@@ -222,6 +228,8 @@ export default function DataGrid({
   version = 0,
   notice = null,
   onNoticeDone,
+  onExport,
+  onImport,
 }: Props) {
   const { show: showToast } = useToast();
   const [pageIndex, setPageIndex] = useState(0);
@@ -379,6 +387,28 @@ export default function DataGrid({
   const colPos = (column: number) => shownCols.indexOf(column);
   /** The selected cell is on screen: the header's filter or columns menu has not hidden it. */
   const selShown = !!sel && rowPos(sel.row) >= 0 && colPos(sel.column) >= 0;
+  /**
+   * What Export opens on: the table's columns (those hidden here start off), the applied WHERE and
+   * ORDER BY, and the selected cell's row by its key (D7).
+   */
+  function exportOrigin(): ExportOrigin {
+    const at = sel && selShown ? view[sel.row] : undefined;
+    const selected = at?.kind === "loaded" && keyed ? [rowKey(columns, at.source)] : [];
+    return {
+      kind: "table",
+      path: table,
+      columns: columns.map((c) => c.name),
+      hidden: columns.filter((c) => hidden.has(c.name)).map((c) => c.name),
+      filter,
+      sort,
+      selected,
+      hasPrimaryKey: keyed,
+      rowEstimate,
+      estimated: rowEstimate !== null,
+    };
+  }
+  // Ctrl+E (D21): the focused grid, else the visible one, opens Export.
+  useCommandKeys(onExport && kind === "table" ? { "export.open": () => onExport(exportOrigin()) } : {}, { region: sectionRef });
   // A selection the filter or columns menu hides is dropped, so nothing acts on a cell off screen.
   // The cell menu follows the same rule: it closes when its row or column leaves the screen.
   useEffect(() => {
@@ -1079,6 +1109,8 @@ export default function DataGrid({
             })
           }
           connectionName={connectionName ? `${connectionName}_${table.name}` : table.name}
+          onExport={onExport ? () => onExport(exportOrigin()) : undefined}
+          onImport={onImport}
         />
         <div className={loading ? "progress progress-on" : "progress"} aria-hidden="true">
           <i />

@@ -1,0 +1,14 @@
+flowchart LR
+  A([Order placed]) --> B{Paid?}
+  B -->|yes| C[Send to kitchen]
+  B -->|no| D[/Ask for payment/]
+  D --> B
+  C --> E{{Pack order}}
+  E --> F[(orders)]
+  E --> G([Handed over])
+  subgraph Kitchen
+    C
+    E
+  end
+  style C fill:#f9f
+  classDef hot fill:#f96

@@ -60,10 +60,10 @@ async fn fixture(production: bool, read_only: bool) -> Fixture {
         )
         .unwrap();
     let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
-    let svc = Arc::new(ConnectionService::new(
-        store,
-        Arc::new(MemorySecretStore::new()),
-    ));
+    let svc = Arc::new(
+        ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+            .with_data_dir(common::data_dir()),
+    );
     let saved = svc
         .save(sqlite_input(&file, production, read_only))
         .await
@@ -546,7 +546,8 @@ async fn mysql_partial_failure_is_one_history_entry() {
     let svc = ConnectionService::new(
         AppStore::open(&dir.path().join("app.sqlite")).unwrap(),
         Arc::new(MemorySecretStore::new()),
-    );
+    )
+    .with_data_dir(common::data_dir());
     let id = svc
         .save(ConnectionInput {
             id: None,
@@ -663,7 +664,8 @@ async fn postgres_table_ddl_is_the_servers_own_text() {
     let svc = ConnectionService::new(
         AppStore::open(&dir.path().join("app.sqlite")).unwrap(),
         Arc::new(MemorySecretStore::new()),
-    );
+    )
+    .with_data_dir(common::data_dir());
     let id = svc
         .save(ConnectionInput {
             id: None,
@@ -940,7 +942,8 @@ async fn server_service(
     let svc = ConnectionService::new(
         AppStore::open(&dir.path().join("app.sqlite")).unwrap(),
         Arc::new(MemorySecretStore::new()),
-    );
+    )
+    .with_data_dir(common::data_dir());
     let id = svc
         .save(ConnectionInput {
             id: None,

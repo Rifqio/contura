@@ -1,5 +1,6 @@
 // Messages between the editor side (LangClient) and the language worker.
 import type { DialectKind, SchemaModel } from "../api/types";
+import type { MermaidResult } from "../flow/mermaid";
 import type { LayoutRequest, Positions } from "../diagram/layout";
 import type { Range } from "./sql/analyze";
 import type { SqlCompletionResult } from "./sql/complete";
@@ -63,7 +64,9 @@ export type ToWorker =
   | ({ type: "sqlComplete"; id: number; docId?: string; explicit: boolean; aliasTables?: boolean } & SqlAt)
   | ({ type: "sqlRefactor"; id: number; docId?: string; action: SqlRefactorAction } & SqlAt)
   /** Places the diagram nodes the request has no position for (ruling D14). */
-  | { type: "layout"; id: number; request: LayoutRequest };
+  | { type: "layout"; id: number; request: LayoutRequest }
+  /** Converts a Mermaid flowchart to .flow (Task 12); the dialog waits 150 ms after the last keystroke. */
+  | { type: "mermaid"; id: number; text: string; title: string };
 
 export type FromWorker =
   | { type: "result"; ids: number[]; docId: string; result: ParseResult }
@@ -72,6 +75,7 @@ export type FromWorker =
   | { type: "sqlCompletion"; ids: number[]; result: SqlCompletionResult }
   | { type: "sqlRefactor"; ids: number[]; result: SqlRefactorResult }
   | { type: "layout"; ids: number[]; positions: Positions }
+  | { type: "mermaid"; ids: number[]; result: MermaidResult }
   | { type: "failed"; ids: number[]; message: string };
 
 /** The one key for a table, used by ranges, edits and the canvas layout. */

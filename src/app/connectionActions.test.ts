@@ -44,6 +44,30 @@ describe("connectionActions", () => {
     expect(ok.markClosed).toHaveBeenCalledWith("a");
   });
 
+  it("close_and_delete_ask_about_running_jobs_and_keep_running_keeps_the_connection", async () => {
+    const env = fakeEnv({ confirmJobs: vi.fn(async () => false) });
+    await connectionActions(env).closeFromTree("a");
+    await connectionActions(env).deleteFromTree("a");
+    expect(env.confirmJobs).toHaveBeenCalledWith("a");
+    expect(callsTo("close_connection")).toHaveLength(0);
+    expect(callsTo("delete_connection")).toHaveLength(0);
+
+    const ok = fakeEnv({ confirmJobs: vi.fn(async () => true) });
+    await connectionActions(ok).closeFromTree("a");
+    expect(callsTo("close_connection")).toHaveLength(1);
+  });
+
+  it("a_move_asks_about_running_import_tabs_and_no_keeps_it_q43", async () => {
+    const confirmImports = vi.fn(async () => false);
+    // The imports ask runs as the Pending Edits ask's `then`, so a Discard waits for it.
+    const confirmLeave = vi.fn(async (_keys: string[], opts?: { then?(): Promise<boolean> }) => (opts?.then ? opts.then() : true));
+    const env = fakeEnv({ confirmImports, confirmLeave });
+    await connectionActions(env).moveFromTree("a", "g2");
+    expect(confirmLeave).toHaveBeenCalledWith(["t1"], { then: expect.any(Function) });
+    expect(confirmImports).toHaveBeenCalledWith("a");
+    expect(callsTo("move_connection")).toHaveLength(0);
+  });
+
   it("close_failure_sets_the_notice", async () => {
     routeInvoke({
       close_connection: () => {

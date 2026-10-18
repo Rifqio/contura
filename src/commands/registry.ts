@@ -27,7 +27,9 @@ export type CommandId =
   | "history.toggle"
   | "visualQuery.addTable"
   | "visualQuery.openInEditor"
-  | "diagram.toggle";
+  | "diagram.toggle"
+  | "export.open"
+  | "flow.fromMermaid";
 
 export interface Command {
   id: CommandId;
@@ -69,6 +71,9 @@ export const COMMANDS: readonly Command[] = [
   app("visualQuery.addTable", "Add table", ["Ctrl+Shift+A"]),
   app("visualQuery.openInEditor", "Open the SQL in the editor", ["Ctrl+Shift+E"]),
   app("diagram.toggle", "Show or hide the diagram", ["Ctrl+Shift+D"]),
+  // Step 7 (D21): each table grid and result registers export.open with its region.
+  app("export.open", "Export...", ["Ctrl+E"]),
+  app("flow.fromMermaid", "New flow from Mermaid"),
 ];
 
 const BY_ID = new Map(COMMANDS.map((c) => [c.id, c]));

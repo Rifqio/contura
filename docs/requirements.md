@@ -186,7 +186,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
    - Restyle to DESIGN-NEXT (done before 5c, ADR 0015): Alucard and Dracula, JetBrains Mono, 28 px density, Home with Recent
 6. Visual Query, plus the shared diagram engine and the query diagram and result shape (done: Visual Query, the shared diagram engine and the query diagram, ADR 0017)
    - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams
-7. Import/export, plus Mermaid flowchart import
+7. Import/export, plus Mermaid flowchart import (done: Import and Export, Mermaid flowchart import, the Job service, ADR 0018)
 8. Data Transfer
 9. Backup/Restore
 10. Schema Compare, plus applying a Schema Model to a Connection

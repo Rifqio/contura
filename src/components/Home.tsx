@@ -49,6 +49,8 @@ interface Props {
   onBeforeDeleteGroup?: (id: GroupId) => Promise<boolean>;
   /** A Group was deleted from Home. */
   onGroupDeleted?: (id: GroupId) => void;
+  /** Opens the New flow from Mermaid dialog (D1); without it the button is hidden. */
+  onNewFlowFromMermaid?: () => void;
 }
 
 export function connectionCountText(n: number): string {
@@ -97,6 +99,7 @@ export default function Home({
   onBeforeMove,
   onBeforeDeleteGroup,
   onGroupDeleted,
+  onNewFlowFromMermaid,
 }: Props) {
   const [suggestions, setSuggestions] = useState<SuggestedConnection[]>([]);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
@@ -298,6 +301,12 @@ export default function Home({
                 <Icon name="folder" size={14} />
                 New Group
               </button>
+              {onNewFlowFromMermaid && (
+                <button type="button" className="button" onClick={onNewFlowFromMermaid}>
+                  <Icon name="flow" size={14} />
+                  New flow from Mermaid
+                </button>
+              )}
               <button type="button" className="button button-primary" aria-label="New Connection" onClick={() => setForm({ kind: "connection" })}>
                 <Icon name="plus" size={14} />
                 New Connection

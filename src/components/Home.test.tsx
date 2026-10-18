@@ -282,6 +282,19 @@ test("header_actions_are_filter_new_group_new_connection", () => {
   expect(within(header).queryByRole("button", { name: "New Schema Model" })).toBeNull();
 });
 
+test("new_flow_from_mermaid_sits_beside_new_group", async () => {
+  routeInvoke({ suggested_connections: () => [] });
+  const onNewFlowFromMermaid = vi.fn();
+  renderHome({ onNewFlowFromMermaid });
+  const header = document.querySelector<HTMLElement>("header.home-header")!;
+  const buttons = within(header).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
+  expect(buttons).toEqual(["New Group", "New flow from Mermaid", "New Connection"]);
+  const button = within(header).getByRole("button", { name: "New flow from Mermaid" });
+  expect(button.className).toBe("button");
+  await userEvent.click(button);
+  expect(onNewFlowFromMermaid).toHaveBeenCalledTimes(1);
+});
+
 test("count_line_stays_on_one_line", () => {
   expect(rulesOf(".home-count")).toMatch(/white-space:\s*nowrap/);
   expect(rulesOf(".home-heading")).toMatch(/flex:\s*1 0 auto/);

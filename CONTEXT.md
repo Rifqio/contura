@@ -67,6 +67,10 @@ _Avoid_: Safe mode, locked
 The single-use permission the Core issues once the user confirms the dialog on a Production Connection. It is bound to the Query Session and to the exact text of each writing statement, and expires after 120 seconds. Editing the SQL means asking again.
 _Avoid_: Token, approval
 
+**Job pass**:
+The Confirm pass for a writing Job (an Import or a SQL file import) on a Production Connection. It is bound to the Job's fingerprint: what is written, where, how, and the file's path, size and SHA-256. It is used once; a changed file means asking again (ADR 0018).
+_Avoid_: Import token
+
 ### Querying
 
 **Visual Query**:
@@ -138,6 +142,18 @@ _Avoid_: Diagram, positions file
 **Diagram engine**:
 The one canvas that the Schema Builder, the Visual Query and the query diagram all draw with (`src/diagram/`): card sizes, edges, level of detail, layout and image export (ADR 0017).
 _Avoid_: Canvas library, renderer, React Flow
+
+**Import**:
+Loading a CSV, JSON, Excel or SQL file into a table or database that exists. A writing Job: Read-only refuses it, Production asks once with a Job pass.
+_Avoid_: Dump, load
+
+**Export**:
+Writing a table, a filter, a selected row or a query result to a CSV, JSON, Excel or SQL file. It never changes the database.
+_Avoid_: Dump, download
+
+**Job**:
+A long run with progress and cancel, such as an Export or an Import. It can move to the status bar and keep running (ADR 0018).
+_Avoid_: Task, process
 
 **Data Transfer**:
 Copying a table's structure and/or rows from one database to another, possibly across Dialects.

@@ -219,7 +219,7 @@ pub(crate) enum Command {
 
 /// Stops the statement a session is running, from outside the session's task.
 #[async_trait::async_trait]
-pub(crate) trait Canceller: Send + Sync {
+pub trait Canceller: Send + Sync {
     async fn cancel(&self) -> Result<()>;
 }
 

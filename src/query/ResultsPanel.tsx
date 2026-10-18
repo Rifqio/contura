@@ -3,7 +3,8 @@ import type { DialectKind } from "../api/types";
 import InlineAsk from "../assistant/InlineAsk";
 import { type AskContext, type AskSetup, tablesIn } from "../assistant/context";
 import { hintFor } from "../commands/keymap";
-import { useKeymap } from "../commands/useCommandKeys";
+import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
+import type { ExportOrigin } from "../jobs/exportText";
 import Icon from "../components/Icon";
 import Kbd from "../components/Kbd";
 import { MenuList, type MenuItem } from "../components/Menu";
@@ -51,6 +52,10 @@ interface Props {
   ask?: AskSetup;
   /** One more action in a failed statement's error box. */
   errorAction?: ReactNode;
+  /** The session's database, for a result export. */
+  database?: string | null;
+  /** Opens the Export dialog on the shown result (the menu's Export..., and Ctrl+E here). No Import here (Q16). */
+  onExport?(origin: ExportOrigin): void;
 }
 
 /** After a reconnect ran statement N alone (R43): "Statements 3 and 4 did not run." */
@@ -130,6 +135,8 @@ export default function ResultsPanel({
   onGoTo,
   ask,
   errorAction,
+  database = null,
+  onExport,
 }: Props) {
   const { map } = useKeymap();
   const runKey = hintFor(map, "query.run");
@@ -152,6 +159,26 @@ export default function ResultsPanel({
     () => (rowsState && needle ? rowsState.rows.filter((r) => r.some((c) => cellText(c).toLowerCase().includes(needle))) : rowsState?.rows ?? []),
     [rowsState?.rows, needle],
   );
+  const sectionRef = useRef<HTMLElement>(null);
+  // The statement as it ran, its session's database, and every row this result holds.
+  const resultOrigin = (): ExportOrigin | null =>
+    item && rowsState
+      ? {
+          kind: "result",
+          database,
+          sql: item.sql,
+          columns: rowsState.columns,
+          rows: rowsState.rows,
+          hidden: rowsState.columns.filter((c) => hidden.has(c.name)).map((c) => c.name),
+        }
+      : null;
+  const exportResult = onExport
+    ? () => {
+        const origin = resultOrigin();
+        if (origin) onExport(origin);
+      }
+    : undefined;
+  useCommandKeys(exportResult && rowsState ? { "export.open": exportResult } : {}, { region: sectionRef });
   const copyText = (text: string) => (onCopy ?? ((t: string) => void navigator.clipboard?.writeText(t).catch(() => {})))(text);
 
   let body;
@@ -423,7 +450,7 @@ export default function ResultsPanel({
   };
   const menuItem = tabMenu ? state.items.find((r) => r.id === tabMenu.id) : undefined;
   return (
-    <section className={production ? "results prod-wash" : "results"} aria-label="Results">
+    <section ref={sectionRef} className={production ? "results prod-wash" : "results"} aria-label="Results">
       {item && (
         <div className="results-tabs">
           {/* PR28: Pin and Close live on the result tab: close on hover, Pin in its right-click menu. */}
@@ -503,6 +530,7 @@ export default function ResultsPanel({
                 })
               }
               connectionName={connectionName}
+              onExport={exportResult}
             />
           )}
         </div>

@@ -2,7 +2,7 @@ import { forEachDiagnostic } from "@codemirror/lint";
 import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { LOAD_TIMEOUT, patient } from "../test/load";
+import { LOAD_TIMEOUT, patient, patientFile } from "../test/load";
 import { beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { Cell, ConnectionConfig, Execution } from "../api/types";
 import { LangClient, type WorkerLike } from "../lang/client";
@@ -24,6 +24,8 @@ beforeAll(() => {
   mockEditorDom();
 });
 beforeEach(() => vi.clearAllMocks());
+// Full-suite load stretches the 1s findBy waits (Task 13 follow-up).
+patientFile();
 
 const conn: ConnectionConfig = {
   id: "c1",
@@ -1375,4 +1377,36 @@ test("the_diagram_loads_another_mysql_database_a_statement_names", async () => {
   act(() => release());
   await waitFor(() => expect(within(pane).getByRole("group", { name: "Table old_orders a" }).textContent).toContain("datetime"));
   expect(within(pane).getByRole("group", { name: "Table old_orders a" }).textContent).not.toContain("Loading schema");
+});
+
+test("a_result_export_names_the_database_the_session_is_in_after_use_q43", async () => {
+  routes({
+    execute_sql: ({ sql }) => (/^\s*use\b/i.test(sql as string) ? { outcome: { t: "affected", rows: 0 }, elapsedMs: 1 } : rowsResult(2)),
+    classify_sql: () => "read",
+  });
+  const onExport = vi.fn();
+  const mysql = { ...conn, dialect: "mysql" as const, database: "shop" };
+  render(
+    <ToastProvider>
+      <QueryTab
+        tab={doc("USE `archive`;\nSELECT 1;", { database: "shop" })}
+        connections={[mysql]}
+        openIds={new Set(["c1"])}
+        onChange={() => {}}
+        onSaved={() => {}}
+        historyOpen={false}
+        onToggleHistory={() => {}}
+        editorRef={{ current: null }}
+        onExport={onExport}
+      />
+    </ToastProvider>,
+  );
+  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
+  key(view, "Enter", { ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(2));
+  await screen.findByText(/2 rows in/);
+  await userEvent.click(screen.getByRole("button", { name: "Export" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
+  expect(onExport.mock.calls[0][0]).toMatchObject({ kind: "result", database: "archive", sql: "SELECT 1" });
 });

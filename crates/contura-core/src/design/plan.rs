@@ -1989,14 +1989,7 @@ pub(crate) mod fixtures {
             name: name.into(),
             type_sql: type_sql.into(),
             nullable: true,
-            default_sql: None,
-            increment: Increment::None,
-            comment: None,
-            generated: false,
-            mysql: None,
-            sqlite_autoincrement: false,
-            collation: None,
-            advanced: false,
+            ..TableColumn::default()
         }
     }
 

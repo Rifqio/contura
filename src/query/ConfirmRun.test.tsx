@@ -272,3 +272,101 @@ test("drop_verb_uses_the_danger_button", () => {
   );
   expect(screen.getByRole("button", { name: "Drop on freight-prod" }).className).toContain("button-danger-fill");
 });
+
+const SHAPE = {
+  head: "INSERT INTO billing.products (id, name, price) VALUES",
+  firstRows: ["(1, 'Tea', 2.50)", "(2, 'Cake', 4.00)", "(3, 'Soup', 6.00)", "(4, 'Bread', 3.20)"],
+  rowsPerStatement: 500,
+  statements: 3,
+  rows: 1204,
+};
+
+function setupJob(onShowAll = vi.fn()) {
+  const onRun = vi.fn();
+  const onCancel = vi.fn();
+  render(
+    <ConfirmRun
+      verb="Import"
+      verdict={{ connection: "freight-prod", database: "freight" }}
+      job={{
+        title: "Inserts 1,204 rows into billing.products in 3 statements, in one transaction.",
+        counts: "4 statements write.",
+        shapes: [
+          { kind: "shape", line: 1, shape: SHAPE },
+          { kind: "exact", line: 0, text: "SELECT setval(pg_get_serial_sequence('billing.products', 'id'), max(id)) FROM billing.products" },
+        ],
+        fingerprint: "212 KB, SHA-256 4be0 91c2 ... 7d1f",
+        onShowAll,
+      }}
+      dialect="postgres"
+      onRun={onRun}
+      onCancel={onCancel}
+    />,
+  );
+  return { onRun, onCancel, onShowAll };
+}
+
+test("job_body_shows_summary_shape_fold_exact_and_fingerprint", async () => {
+  const { onShowAll } = setupJob();
+  const dialog = screen.getByRole("dialog");
+  expect(screen.getByText("Inserts 1,204 rows into billing.products in 3 statements, in one transaction.")).toBeTruthy();
+  expect(screen.getByText("4 statements write.")).toBeTruthy();
+  const box = dialog.querySelector(".confirm-shape")!;
+  expect(box.textContent).toContain("Statement 1 of 3, 500 rows each");
+  expect(box.querySelector(".sql-block")!.textContent).toContain("INSERT INTO billing.products (id, name, price) VALUES");
+  expect(box.querySelector(".sql-block")!.textContent).toContain("(4, 'Bread', 3.20)");
+  expect(box.textContent).toContain("496 more rows in this statement, then 2 more statements");
+  await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+  expect(onShowAll).toHaveBeenCalledTimes(1);
+  expect(dialog.querySelector(".confirm-exact .sql-block")!.textContent).toContain("SELECT setval(pg_get_serial_sequence('billing.products', 'id'), max(id)) FROM billing.products");
+  expect(dialog.textContent).toContain(
+    "The file is fingerprinted (212 KB, SHA-256 4be0 91c2 ... 7d1f). If it changes before the run, Contura asks again.",
+  );
+});
+
+test("job_import_verb_title_and_accent_primary_button", () => {
+  setupJob();
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.querySelector("h2")!.textContent).toBe("Import on freight-prod · freight");
+  expect(dialog.querySelector("h2 b")!.textContent).toBe("freight-prod");
+  const button = screen.getByRole("button", { name: "Import on freight-prod" });
+  expect(button.className).toContain("button-primary");
+  expect(button.className).not.toContain("button-prod");
+  expect(dialog.querySelector(".confirm-hint")!.textContent).toBe(
+    "Enter runs only when Import on freight-prod has focus. Press Tab to reach it, or click it.",
+  );
+});
+
+test("job_enter_only_when_the_button_has_focus", async () => {
+  const { onRun } = setupJob();
+  expect(document.activeElement).toBe(screen.getByLabelText("SQL to run, read-only"));
+  await userEvent.keyboard("{Enter}");
+  expect(onRun).not.toHaveBeenCalled();
+  screen.getByRole("button", { name: "Import on freight-prod" }).focus();
+  await userEvent.keyboard("{Enter}");
+  expect(onRun).toHaveBeenCalledTimes(1);
+});
+
+test("job_script_list_interleaves_exact_and_shapes", () => {
+  render(
+    <ConfirmRun
+      verb="Import"
+      verdict={{ connection: "freight-prod", database: "freight" }}
+      job={{
+        title: "Runs 3 statements from dump.sql in freight, in one transaction.",
+        counts: "3 statements: 1 create, 2 insert.",
+        shapes: [
+          { kind: "exact", line: 1, text: "CREATE TABLE t (a int)" },
+          { kind: "shape", line: 2, shape: { head: "INSERT INTO t (a) VALUES", firstRows: ["(1)"], rowsPerStatement: 1, statements: 1, rows: 1 } },
+          { kind: "exact", line: 3, text: "INSERT INTO t SELECT 2" },
+        ],
+      }}
+      onRun={() => {}}
+      onCancel={() => {}}
+    />,
+  );
+  const items = Array.from(screen.getByRole("dialog").querySelectorAll(".confirm-item")).map((e) => (e.classList.contains("confirm-shape") ? "shape" : "exact"));
+  expect(items).toEqual(["exact", "shape", "exact"]);
+  expect(screen.queryByRole("button", { name: "Show all" })).toBeNull();
+  expect(screen.getByRole("dialog").textContent).not.toContain("fingerprinted");
+});

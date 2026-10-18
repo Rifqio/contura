@@ -1,9 +1,187 @@
 import { invoke } from "@tauri-apps/api/core";
 import { expect, test, vi } from "vitest";
-import { connectionTarget, errorText, listSavedQueries, runVisualQuery, shortenPath, visualQuerySql } from "./client";
-import type { ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
+import {
+  connectionTarget,
+  errorText,
+  fileName,
+  flowExists,
+  listSavedQueries,
+  runVisualQuery,
+  shortenPath,
+  visualQuerySql,
+  writeFlowFiles,
+} from "./client";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+test("writeFlowFiles_sends_the_name_flow_and_layout_and_returns_the_path", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce("C:\\data\\diagrams\\orders.flow");
+  const path = await writeFlowFiles("orders", 'diagram flow "orders"\n', '{"version":1}');
+  expect(invoke).toHaveBeenLastCalledWith("write_flow_files", {
+    name: "orders",
+    flow: 'diagram flow "orders"\n',
+    layout: '{"version":1}',
+  });
+  expect(path).toBe("C:\\data\\diagrams\\orders.flow");
+});
+
+test("flowExists_asks_the_core_by_name", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce(true);
+  expect(await flowExists("orders")).toBe(true);
+  expect(invoke).toHaveBeenLastCalledWith("flow_exists", { name: "orders" });
+});
+
+test("fileName_is_the_last_part_of_either_path_style", () => {
+  expect(fileName("C:\\out\\orders.csv")).toBe("orders.csv");
+  expect(fileName("/home/r/orders.csv")).toBe("orders.csv");
+  expect(fileName("orders.csv")).toBe("orders.csv");
+});
+import type { ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
+import type { ExportRequest, ImportRequest, JobEvent, ScriptRequest } from "./types";
+import { DEFAULT_EXPORT_OPTIONS, DEFAULT_IMPORT_OPTIONS } from "./types";
+import * as jobs from "./jobs";
+
+const exportReq: ExportRequest = {
+  connectionId: "c1",
+  source: { kind: "query", database: null, sql: "SELECT 1", columns: [] },
+  format: "csv",
+  options: DEFAULT_EXPORT_OPTIONS,
+  path: "C:\\out\\orders.csv",
+  rowsHint: null,
+};
+const importReq: ImportRequest = {
+  connectionId: "c1",
+  table: { database: "shop", schema: null, name: "orders" },
+  file: "C:\\in\\orders.csv",
+  format: "csv",
+  options: DEFAULT_IMPORT_OPTIONS,
+  mapping: [],
+};
+const scriptReq: ScriptRequest = { connectionId: "c1", database: "shop", path: "C:\\in\\dump.sql", runAsIs: false };
+
+/** The `events` channel of the last call to `cmd`, which forwards to the `onEvent` given. */
+function lastChannel(cmd: string): { onmessage: (e: JobEvent) => void } {
+  const call = vi.mocked(invoke).mock.calls.filter(([c]) => c === cmd).slice(-1)[0];
+  return (call[1] as { events: { onmessage: (e: JobEvent) => void } }).events;
+}
+
+test("jobs_functions_invoke_their_commands_with_the_spec_argument_names", async () => {
+  const mock = vi.mocked(invoke);
+  mock.mockResolvedValue(undefined);
+  const onEvent = vi.fn();
+  const sent = (cmd: string) => {
+    const call = mock.mock.calls.filter(([c]) => c === cmd).slice(-1)[0];
+    const { events, ...rest } = call[1] as Record<string, unknown>;
+    return { rest, hasEvents: events !== undefined };
+  };
+
+  await jobs.previewExport(exportReq);
+  expect(mock).toHaveBeenLastCalledWith("preview_export", { req: exportReq });
+
+  await expect(jobs.startExport("j1", exportReq, true, onEvent)).resolves.toBe("j1");
+  expect(sent("start_export")).toEqual({ rest: { job: "j1", req: exportReq, overwrite: true }, hasEvents: true });
+  const progress: JobEvent = {
+    kind: "progress",
+    phase: "writing",
+    table: null,
+    rowsDone: 1,
+    rowsTotal: 2,
+    bytesDone: 3,
+    bytesTotal: null,
+    statementsDone: 0,
+    fileRow: null,
+  };
+  lastChannel("start_export").onmessage(progress);
+  expect(onEvent).toHaveBeenCalledWith(progress);
+
+  await jobs.inspectImportFile("C:\\in\\orders.csv", null);
+  expect(mock).toHaveBeenLastCalledWith("inspect_import_file", { path: "C:\\in\\orders.csv", format: null });
+  await jobs.planImport(importReq);
+  expect(mock).toHaveBeenLastCalledWith("plan_import", { req: importReq });
+
+  mock.mockResolvedValueOnce("j2");
+  await expect(jobs.checkImportFile(importReq, onEvent)).resolves.toBe("j2");
+  expect(sent("check_import_file")).toEqual({ rest: { req: importReq }, hasEvents: true });
+
+  await jobs.confirmImport(importReq);
+  expect(mock).toHaveBeenLastCalledWith("confirm_import", { req: importReq });
+  await expect(jobs.startImport("j3", importReq, "p1", onEvent)).resolves.toBe("j3");
+  expect(sent("start_import")).toEqual({ rest: { job: "j3", req: importReq, pass: "p1" }, hasEvents: true });
+
+  await jobs.planScript(scriptReq);
+  expect(mock).toHaveBeenLastCalledWith("plan_script", { req: scriptReq });
+  await jobs.scriptStatements("c1", "C:\\in\\dump.sql", 50);
+  expect(mock).toHaveBeenLastCalledWith("script_statements", { connectionId: "c1", path: "C:\\in\\dump.sql", from: 50 });
+  await jobs.scriptStatements("c1", "C:\\in\\dump.sql", 0, true);
+  expect(mock).toHaveBeenLastCalledWith("script_statements", { connectionId: "c1", path: "C:\\in\\dump.sql", from: 0, runAsIs: true });
+  await jobs.confirmScript(scriptReq);
+  expect(mock).toHaveBeenLastCalledWith("confirm_script", { req: scriptReq });
+  await expect(jobs.startScript("j4", scriptReq, null, onEvent)).resolves.toBe("j4");
+  expect(sent("start_script")).toEqual({ rest: { job: "j4", req: scriptReq, pass: null }, hasEvents: true });
+
+  await jobs.cancelJob("j1");
+  expect(mock).toHaveBeenLastCalledWith("cancel_job", { job: "j1" });
+  await jobs.listJobs();
+  expect(mock).toHaveBeenLastCalledWith("list_jobs");
+  await expect(jobs.jobEvents("j1", onEvent)).resolves.toBe("j1");
+  expect(sent("job_events")).toEqual({ rest: { job: "j1" }, hasEvents: true });
+  await jobs.revealInFolder("C:\\out\\orders.csv");
+  expect(mock).toHaveBeenLastCalledWith("reveal_in_folder", { path: "C:\\out\\orders.csv" });
+  await jobs.readTextFile("C:\\in\\flow.mmd");
+  expect(mock).toHaveBeenLastCalledWith("read_text_file", { path: "C:\\in\\flow.mmd" });
+  mock.mockReset();
+});
+
+test("newJobId_makes_a_fresh_uuid", () => {
+  const a = jobs.newJobId();
+  expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(jobs.newJobId()).not.toBe(a);
+});
+
+test("error_text_for_job_errors", () => {
+  const at = { fileRow: 7, line: null, table: "menu_items", statement: 1 };
+  expect(errorText({ kind: "jobFailed", message: { at, message: "Row 7 of the file: n/a is not a number for price." } })).toBe(
+    "Row 7 of the file: n/a is not a number for price.",
+  );
+  expect(errorText({ kind: "fileChanged", message: { file: "menu-oct.csv", confirmed: true } })).toBe(
+    "menu-oct.csv changed after you confirmed. Nothing was imported.",
+  );
+  // Q45 M5: "after you confirmed" only when there was a confirm.
+  expect(errorText({ kind: "fileChanged", message: { file: "menu-oct.csv", confirmed: false } })).toBe(
+    "menu-oct.csv changed while Contura read it. Nothing was imported.",
+  );
+  expect(errorText({ kind: "jobBusy", message: { connection: "kestrel-main" } })).toBe(
+    "Another import is writing to kestrel-main. Wait for it to end.",
+  );
+  expect(errorText({ kind: "fileExists", message: "C:\\out\\orders.csv" })).toBe("orders.csv exists.");
+  expect(errorText({ kind: "fileExists", message: "/home/r/out/orders.csv" })).toBe("orders.csv exists.");
+  expect(errorText({ kind: "readStopped" })).toBe("The read stopped unexpectedly. Nothing more was written.");
+  expect(errorText({ kind: "afterCommit", message: { sql: "ANALYZE t", message: "no such table" } })).toBe(
+    "The rows were committed, but ANALYZE t failed afterwards: no such table.",
+  );
+});
+
+test("error_text_for_file_errors_q45", () => {
+  // A whole sentence from the Core is shown as it is.
+  expect(errorText({ kind: "file", message: "Line 12 is not UTF-8. Save the file as UTF-8." })).toBe(
+    "Line 12 is not UTF-8. Save the file as UTF-8.",
+  );
+  expect(errorText({ kind: "file", message: "Line 3: one row is larger than 16 MB." })).toBe("Line 3: one row is larger than 16 MB.");
+  expect(errorText({ kind: "file", message: "Line 2, column 7: expected value." })).toBe("Line 2, column 7: expected value.");
+  // A file Contura reads gets read advice.
+  expect(errorText({ kind: "file", message: "cannot read C:\\in\\menu.csv: Access is denied. (os error 5)" })).toBe(
+    "Cannot read C:\\in\\menu.csv: Access is denied. (os error 5). Check the file exists and Contura can read it.",
+  );
+  // Writes keep the folder advice.
+  expect(errorText({ kind: "file", message: "cannot write E:\\Exports\\menu_items.csv" })).toBe(
+    "Cannot write E:\\Exports\\menu_items.csv. Check the folder exists and Contura can write to it.",
+  );
+});
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  Channel: class {
+    onmessage: (e: unknown) => void = () => {};
+  },
+}));
 
 test("shortenPath_keeps_file_name", () => {
   expect(shortenPath("C:\\data\\shop.db")).toBe("C:\\data\\shop.db");

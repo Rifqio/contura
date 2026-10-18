@@ -12,6 +12,7 @@ export const col = (name: string, typeSql: string, over: Partial<TableColumn> = 
   sqliteAutoincrement: false,
   collation: null,
   advanced: false,
+  identityAlways: false,
   ...over,
 });
 

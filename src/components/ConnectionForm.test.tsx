@@ -621,3 +621,21 @@ test("safety_is_a_bare_heading_without_a_box", () => {
   expect(rule).not.toMatch(/(^|[^-])border:/);
   expect(rule).not.toMatch(/border-radius/);
 });
+
+test("saving_asks_before_save_first_and_a_no_keeps_the_form_q43", async () => {
+  routeInvoke({ save_connection: () => existing });
+  const onSaved = vi.fn();
+  let answer = false;
+  const beforeSave = vi.fn(async () => answer);
+  render(
+    <ConnectionForm connection={existing} groups={groups} defaultGroupId={null} onSaved={onSaved} onCancel={() => {}} beforeSave={beforeSave} />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(beforeSave).toHaveBeenCalledTimes(1));
+  expect(callsTo("save_connection")).toHaveLength(0);
+  expect(onSaved).not.toHaveBeenCalled();
+  answer = true;
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(callsTo("save_connection")).toHaveLength(1);
+});

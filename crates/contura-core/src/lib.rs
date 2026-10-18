@@ -8,6 +8,7 @@ pub mod dialect;
 pub mod edits;
 pub mod error;
 pub mod explain;
+pub mod jobs;
 pub mod model;
 pub mod model_files;
 pub mod mysql;

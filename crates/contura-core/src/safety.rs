@@ -11,23 +11,24 @@ pub enum StatementClass {
 
 /// Write when any top-level piece of `sql` writes; Read for text with only comments or whitespace.
 pub fn classify(dialect: DialectKind, sql: &str) -> StatementClass {
-    let writes = |pieces: &[Piece]| {
-        pieces
-            .iter()
-            .any(|p| p.forced_write || classify_tokens(dialect, &p.toks) == StatementClass::Write)
+    let writes = |lexed: &Lexed| {
+        lexed.pieces.iter().any(|p| {
+            p.forced_write
+                || p.sealed
+                || classify_tokens(dialect, &p.toks, &lexed.words) == StatementClass::Write
+        })
     };
-    let (pieces, _) = lex(dialect, sql, false);
-    if writes(&pieces) {
+    if writes(&lex(dialect, sql, false)) {
         return StatementClass::Write;
     }
     // Whether a backslash escapes a quote depends on server settings. When it matters, the
     // other reading also counts, unless it leaves a literal open (a syntax error there).
     if sql.contains('\\') {
-        let (mut other, clean) = lex(dialect, sql, true);
+        let mut other = lex(dialect, sql, true);
         // An open literal runs to the end, so it sits in the last piece. The pieces before it
         // were closed by `;` and may already have run, so only that last piece is dropped.
-        if !clean {
-            other.pop();
+        if !other.clean {
+            other.pieces.pop();
         }
         if writes(&other) {
             return StatementClass::Write;
@@ -39,21 +40,21 @@ pub fn classify(dialect: DialectKind, sql: &str) -> StatementClass {
 /// How many non-empty top-level pieces `sql` holds. When a backslash makes the quoting
 /// ambiguous, the reading with more pieces counts.
 pub fn statement_count(dialect: DialectKind, sql: &str) -> usize {
-    let (pieces, _) = lex(dialect, sql, false);
-    let mut count = pieces.len();
+    let mut count = lex(dialect, sql, false).pieces.len();
     if sql.contains('\\') {
-        let (other, clean) = lex(dialect, sql, true);
-        count = count.max(other.len() - usize::from(!clean && !other.is_empty()));
+        let other = lex(dialect, sql, true);
+        let n = other.pieces.len();
+        count = count.max(n - usize::from(!other.clean && n > 0));
     }
     count
 }
 
 /// The first word of the first piece of `sql`, upper-cased; `None` when it has none.
 pub fn leading_word(dialect: DialectKind, sql: &str) -> Option<String> {
-    let (pieces, _) = lex(dialect, sql, false);
-    let toks = &pieces.first()?.toks;
+    let lexed = lex(dialect, sql, false);
+    let toks = &lexed.pieces.first()?.toks;
     toks.iter()
-        .find_map(|t| word(t).map(|(w, _)| w.to_string()))
+        .find_map(|t| word(&lexed.words, t).map(|(w, _)| w.to_string()))
 }
 
 /// Proof that the user confirmed one run; see `ConnectionService::confirm_run`.
@@ -126,10 +127,11 @@ pub fn verdict(
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum Kind {
-    /// Upper-cased bare word, number, variable or dotted name.
-    Word(String),
+    /// Upper-cased bare word, number, variable or dotted name: a byte range of
+    /// `Lexed::words`, so no word owns a `String`.
+    Word(u32, u32),
     Open,
     Close,
     Eq,
@@ -152,23 +154,68 @@ struct Piece {
     toks: Vec<Tok>,
     /// A MySQL `/*! ... */` comment, which the server executes.
     forced_write: bool,
+    /// `classify_tokens` would call the piece a write whatever follows: a token other
+    /// than `(` before the first word, or a first word whose branch always writes. Only
+    /// the first word is kept after that, so a long INSERT holds a few tokens, not one
+    /// per value. Memory only: the class and the counts are the same.
+    sealed: bool,
+    has_word: bool,
+}
+
+struct Lexed {
+    pieces: Vec<Piece>,
+    /// False when a quoted literal was left open.
+    clean: bool,
+    /// The upper-cased text of every kept word, end to end.
+    words: String,
+}
+
+/// First words whose `classify_tokens` branch can give Read; every other first word
+/// gives Write.
+pub(crate) fn may_read(dialect: DialectKind, first: &str) -> bool {
+    matches!(
+        first,
+        "SELECT"
+            | "WITH"
+            | "DESCRIBE"
+            | "DESC"
+            | "COMMIT"
+            | "ROLLBACK"
+            | "SHOW"
+            | "VALUES"
+            | "USE"
+            | "SAVEPOINT"
+            | "RELEASE"
+            | "EXPLAIN"
+            | "BEGIN"
+            | "START"
+            | "SET"
+    ) || dialect == DialectKind::Postgres && matches!(first, "TABLE" | "END")
+        || dialect == DialectKind::Sqlite && first == "PRAGMA"
 }
 
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '$' | '@' | '.')
 }
 
-/// Index just past the closing `quote`, where a doubled quote stays inside and, with
-/// `backslash`, `\x` is skipped, and whether the literal was closed. An unterminated
-/// literal runs to the end of the text.
-fn skip_quoted(chars: &[char], start: usize, quote: char, backslash: bool) -> (usize, bool) {
+/// The character at byte `i` of `s` (a character boundary), if any.
+fn char_at(s: &str, i: usize) -> Option<char> {
+    s.get(i..).and_then(|r| r.chars().next())
+}
+
+/// Byte index just past the closing `quote`, where a doubled quote stays inside and,
+/// with `backslash`, `\x` is skipped, and whether the literal was closed. An
+/// unterminated literal runs to the end of the text.
+fn skip_quoted(sql: &str, start: usize, quote: char, backslash: bool) -> (usize, bool) {
+    let b = sql.as_bytes();
+    let q = quote as u8;
     let mut i = start + 1;
-    while i < chars.len() {
-        let c = chars[i];
-        if backslash && c == '\\' {
-            i += 2;
-        } else if c == quote {
-            if chars.get(i + 1) == Some(&quote) {
+    while i < b.len() {
+        let c = b[i];
+        if backslash && c == b'\\' {
+            i += 1 + char_at(sql, i + 1).map_or(1, char::len_utf8);
+        } else if c == q {
+            if b.get(i + 1) == Some(&q) {
                 i += 2;
             } else {
                 return (i + 1, true);
@@ -177,32 +224,32 @@ fn skip_quoted(chars: &[char], start: usize, quote: char, backslash: bool) -> (u
             i += 1;
         }
     }
-    (chars.len(), false)
+    (b.len(), false)
 }
 
-/// Length of a Postgres dollar-quote opener (`$$` or `$tag$`) at `start`, if there is one.
-fn dollar_tag_len(chars: &[char], start: usize) -> Option<usize> {
+/// Byte length of a Postgres dollar-quote opener (`$$` or `$tag$`) at `start`, if any.
+fn dollar_tag_len(sql: &str, start: usize) -> Option<usize> {
     let mut i = start + 1;
-    if chars.get(i).is_some_and(|c| c.is_alphabetic() || *c == '_') {
-        while chars
-            .get(i)
-            .is_some_and(|c| c.is_alphanumeric() || *c == '_')
-        {
-            i += 1;
+    if char_at(sql, i).is_some_and(|c| c.is_alphabetic() || c == '_') {
+        while let Some(c) = char_at(sql, i).filter(|c| c.is_alphanumeric() || *c == '_') {
+            i += c.len_utf8();
         }
     }
-    (chars.get(i) == Some(&'$')).then(|| i + 1 - start)
+    (char_at(sql, i) == Some('$')).then(|| i + 1 - start)
 }
 
 /// With `flip`, backslash escapes are read the opposite way from the Dialect's default.
-/// The bool is false when a quoted literal was left open.
-fn lex(dialect: DialectKind, sql: &str, flip: bool) -> (Vec<Piece>, bool) {
+/// It walks the text by byte index (every syntax character is ASCII) and decodes a
+/// character only where a Unicode rule needs one, so it holds no copy of the text.
+fn lex(dialect: DialectKind, sql: &str, flip: bool) -> Lexed {
     let mut clean = true;
     let mysql = dialect == DialectKind::MySql;
     let postgres = dialect == DialectKind::Postgres;
     let sqlite = dialect == DialectKind::Sqlite;
-    let chars: Vec<char> = sql.chars().collect();
+    let b = sql.as_bytes();
+    let len = b.len();
     let mut pieces = Vec::new();
+    let mut words = String::new();
     let mut cur = Piece::default();
     let mut depth = 0usize;
     let mut i = 0;
@@ -210,40 +257,37 @@ fn lex(dialect: DialectKind, sql: &str, flip: bool) -> (Vec<Piece>, bool) {
     let mut last_end = 0;
     let mut last_was_e = false;
 
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied();
+    while let Some(c) = char_at(sql, i) {
+        let next = char_at(sql, i + c.len_utf8());
         if c.is_whitespace() {
-            i += 1;
+            i += c.len_utf8();
             continue;
         }
         // MySQL needs whitespace, a control character or the end after `--`.
         let dash_comment = c == '-'
             && next == Some('-')
-            && (!mysql
-                || chars
-                    .get(i + 2)
-                    .is_none_or(|c| c.is_whitespace() || c.is_control()));
+            && (!mysql || char_at(sql, i + 2).is_none_or(|c| c.is_whitespace() || c.is_control()));
         if dash_comment || mysql && c == '#' {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
+            i = b[i..]
+                .iter()
+                .position(|x| *x == b'\n')
+                .map_or(len, |p| i + p);
             continue;
         }
         if c == '/' && next == Some('*') {
             // `/*! */` and MariaDB's `/*M! */` are executed by the server.
-            let executed = chars.get(i + 2) == Some(&'!')
-                || (chars.get(i + 2) == Some(&'M') && chars.get(i + 3) == Some(&'!'));
+            let executed = b.get(i + 2) == Some(&b'!')
+                || (b.get(i + 2) == Some(&b'M') && b.get(i + 3) == Some(&b'!'));
             if mysql && executed {
                 cur.forced_write = true;
             }
             let mut level = 1;
             i += 2;
-            while i < chars.len() && level > 0 {
-                if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+            while i < len && level > 0 {
+                if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
                     level -= 1;
                     i += 2;
-                } else if postgres && chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                } else if postgres && b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
                     level += 1;
                     i += 2;
                 } else {
@@ -287,56 +331,58 @@ fn lex(dialect: DialectKind, sql: &str, flip: bool) -> (Vec<Piece>, bool) {
                 } else {
                     flip || postgres && last_was_e && last_end == i
                 };
-                let (end, closed) = skip_quoted(&chars, i, '\'', escapes);
+                let (end, closed) = skip_quoted(sql, i, '\'', escapes);
                 i = end;
                 clean &= closed;
             }
             '"' => {
-                let (end, closed) = skip_quoted(&chars, i, '"', mysql && !flip);
+                let (end, closed) = skip_quoted(sql, i, '"', mysql && !flip);
                 i = end;
                 clean &= closed;
             }
-            '`' if mysql || sqlite => i = skip_quoted(&chars, i, '`', false).0,
+            '`' if mysql || sqlite => i = skip_quoted(sql, i, '`', false).0,
             '[' if sqlite => {
-                i += 1;
-                while i < chars.len() && chars[i] != ']' {
-                    i += 1;
-                }
-                i = (i + 1).min(chars.len());
+                i = b[i + 1..]
+                    .iter()
+                    .position(|x| *x == b']')
+                    .map_or(len, |p| i + 1 + p + 1);
             }
-            '$' if postgres && dollar_tag_len(&chars, i).is_some() => {
-                let tag = dollar_tag_len(&chars, i).unwrap_or(2);
-                let opener: Vec<char> = chars[i..i + tag].to_vec();
+            '$' if postgres && dollar_tag_len(sql, i).is_some() => {
+                let tag = dollar_tag_len(sql, i).unwrap_or(2);
+                let opener = &sql[i..i + tag];
                 i += tag;
-                while i < chars.len() && !chars[i..].starts_with(&opener) {
-                    i += 1;
-                }
-                i = (i + tag).min(chars.len());
+                i = sql[i..].find(opener).map_or(len, |p| i + p + tag);
             }
             c if is_word_char(c) => {
-                while i < chars.len() && is_word_char(chars[i]) {
-                    i += 1;
+                while let Some(w) = char_at(sql, i).filter(|w| is_word_char(*w)) {
+                    i += w.len_utf8();
                 }
-                let word: String = chars[start..i].iter().collect();
+                let word = &sql[start..i];
                 e_word = word.eq_ignore_ascii_case("e");
-                kind = Kind::Word(word.to_uppercase());
+                // A sealed piece keeps no more words; the first word is always kept.
+                if !cur.sealed || !cur.has_word {
+                    let from = words.len() as u32;
+                    words.push_str(&word.to_uppercase());
+                    kind = Kind::Word(from, words.len() as u32);
+                }
             }
-            _ => i += 1,
+            _ => i += c.len_utf8(),
         }
 
         // `"set_config"(...)` must not slip past the word check by being quoted.
         let quoted_ident =
             (c == '"' && !mysql) || (c == '`' && (mysql || sqlite)) || (c == '[' && sqlite);
         if quoted_ident {
-            let content: String = chars[start + 1..i.saturating_sub(1).max(start + 1)]
-                .iter()
-                .collect();
+            // The text after the opening quote, without its last character.
+            let inner = &sql[start + 1..i];
+            let content = &inner[..inner.char_indices().last().map_or(0, |(j, _)| j)];
             // A Postgres `U&"..."` name can spell `set_config` in escapes, so any one writes.
+            let mut before = sql[..start].chars().rev();
+            let (p1, p2, p3) = (before.next(), before.next(), before.next());
             let unicode_escaped = postgres
-                && start >= 2
-                && chars[start - 1] == '&'
-                && chars[start - 2].eq_ignore_ascii_case(&'u')
-                && (start == 2 || !is_word_char(chars[start - 3]));
+                && p1 == Some('&')
+                && p2.is_some_and(|u| u.eq_ignore_ascii_case(&'u'))
+                && p3.is_none_or(|w| !is_word_char(w));
             if unicode_escaped || content.eq_ignore_ascii_case("set_config") {
                 cur.forced_write = true;
             }
@@ -353,18 +399,33 @@ fn lex(dialect: DialectKind, sql: &str, flip: bool) -> (Vec<Piece>, bool) {
             }
             _ => depth,
         };
-        cur.toks.push(Tok {
-            kind,
-            depth: tok_depth,
-            quoted_name: quoted_ident || (c == '"' && mysql),
-        });
+        let is_word = matches!(kind, Kind::Word(..));
+        if !cur.sealed || is_word && !cur.has_word {
+            cur.toks.push(Tok {
+                kind,
+                depth: tok_depth,
+                quoted_name: quoted_ident || (c == '"' && mysql),
+            });
+        }
+        if !cur.has_word {
+            if let Kind::Word(from, to) = kind {
+                cur.has_word = true;
+                cur.sealed |= !may_read(dialect, &words[from as usize..to as usize]);
+            } else if kind != Kind::Open {
+                cur.sealed = true;
+            }
+        }
         last_end = i;
         last_was_e = e_word;
     }
     if !cur.toks.is_empty() || cur.forced_write {
         pieces.push(cur);
     }
-    (pieces, clean)
+    Lexed {
+        pieces,
+        clean,
+        words,
+    }
 }
 
 /// Last dotted segment without a leading `@`: `@@SESSION.TX_READ_ONLY` becomes `TX_READ_ONLY`.
@@ -372,9 +433,9 @@ fn base_name(w: &str) -> &str {
     w.rsplit('.').next().unwrap_or(w).trim_start_matches('@')
 }
 
-fn word(t: &Tok) -> Option<(&str, usize)> {
-    match &t.kind {
-        Kind::Word(w) => Some((w.as_str(), t.depth)),
+fn word<'w>(words: &'w str, t: &Tok) -> Option<(&'w str, usize)> {
+    match t.kind {
+        Kind::Word(from, to) => Some((&words[from as usize..to as usize], t.depth)),
         _ => None,
     }
 }
@@ -383,16 +444,16 @@ fn has_pair(words: &[&str], a: &str, b: &str) -> bool {
     words.windows(2).any(|w| w[0] == a && w[1] == b)
 }
 
-fn classify_tokens(dialect: DialectKind, toks: &[Tok]) -> StatementClass {
+fn classify_tokens(dialect: DialectKind, toks: &[Tok], wt: &str) -> StatementClass {
     use StatementClass::{Read, Write};
     // Only leading `(` may come before the first word, as in `(SELECT 1) UNION (SELECT 2)`.
-    let Some(start) = toks.iter().position(|t| word(t).is_some()) else {
+    let Some(start) = toks.iter().position(|t| word(wt, t).is_some()) else {
         return Write;
     };
     if toks[..start].iter().any(|t| t.kind != Kind::Open) {
         return Write;
     }
-    let words: Vec<(&str, usize)> = toks[start..].iter().filter_map(word).collect();
+    let words: Vec<(&str, usize)> = toks[start..].iter().filter_map(|t| word(wt, t)).collect();
     let base = words[0].1;
     let top: Vec<&str> = words
         .iter()
@@ -419,12 +480,12 @@ fn classify_tokens(dialect: DialectKind, toks: &[Tok]) -> StatementClass {
             }
         }
         // MySQL's DESC and DESCRIBE are EXPLAIN synonyms, including `DESC ANALYZE <stmt>`.
-        "DESCRIBE" | "DESC" => explain_class(dialect, &toks[start + 1..]),
+        "DESCRIBE" | "DESC" => explain_class(dialect, &toks[start + 1..], wt),
         "COMMIT" | "ROLLBACK" if top.get(1) == Some(&"PREPARED") => Write,
         "SHOW" | "VALUES" | "USE" | "COMMIT" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" => Read,
         "TABLE" | "END" if dialect == DialectKind::Postgres => Read,
         "PRAGMA" if dialect == DialectKind::Sqlite => pragma_class(&toks[start..], &all),
-        "EXPLAIN" => explain_class(dialect, &toks[start + 1..]),
+        "EXPLAIN" => explain_class(dialect, &toks[start + 1..], wt),
         "BEGIN" => {
             if has_pair(&all, "READ", "WRITE") {
                 Write
@@ -439,7 +500,7 @@ fn classify_tokens(dialect: DialectKind, toks: &[Tok]) -> StatementClass {
                 Write
             }
         }
-        "SET" => set_class(dialect, &toks[start..], &all),
+        "SET" => set_class(dialect, &toks[start..], &all, wt),
         _ => Write,
     }
 }
@@ -485,11 +546,11 @@ fn select_class(top: &[&str]) -> StatementClass {
 }
 
 /// `rest` is everything after `EXPLAIN`. Only `ANALYZE` runs the statement.
-fn explain_class(dialect: DialectKind, rest: &[Tok]) -> StatementClass {
+fn explain_class(dialect: DialectKind, rest: &[Tok], wt: &str) -> StatementClass {
     let is_analyze = |w: &str| matches!(w, "ANALYZE" | "ANALYSE");
-    let inner = match rest.first().map(|t| &t.kind) {
-        Some(Kind::Word(w)) if is_analyze(w) => &rest[1..],
-        Some(Kind::Open) => {
+    let inner = match rest.first() {
+        Some(t) if word(wt, t).is_some_and(|(w, _)| is_analyze(w)) => &rest[1..],
+        Some(t) if t.kind == Kind::Open => {
             let open_depth = rest[0].depth;
             let Some(close) = rest
                 .iter()
@@ -499,8 +560,8 @@ fn explain_class(dialect: DialectKind, rest: &[Tok]) -> StatementClass {
                 return StatementClass::Write;
             };
             // A quoted option could be spelled ANALYZE, so any quoted token counts.
-            let analyze = rest[1..close].iter().any(|t| match &t.kind {
-                Kind::Word(w) => is_analyze(w),
+            let analyze = rest[1..close].iter().any(|t| match t.kind {
+                Kind::Word(..) => word(wt, t).is_some_and(|(w, _)| is_analyze(w)),
                 Kind::Other => true,
                 _ => false,
             });
@@ -514,11 +575,9 @@ fn explain_class(dialect: DialectKind, rest: &[Tok]) -> StatementClass {
     let mut inner = inner;
     // Skip `VERBOSE` and MySQL's `FORMAT = TREE` between ANALYZE and the statement.
     loop {
-        match inner.first().map(|t| &t.kind) {
-            Some(Kind::Word(w)) if w == "VERBOSE" => inner = &inner[1..],
-            Some(Kind::Word(w))
-                if w == "FORMAT" && inner.get(1).is_some_and(|t| t.kind == Kind::Eq) =>
-            {
+        match inner.first().and_then(|t| word(wt, t)).map(|(w, _)| w) {
+            Some("VERBOSE") => inner = &inner[1..],
+            Some("FORMAT") if inner.get(1).is_some_and(|t| t.kind == Kind::Eq) => {
                 inner = &inner[(3).min(inner.len())..];
             }
             _ => break,
@@ -527,25 +586,25 @@ fn explain_class(dialect: DialectKind, rest: &[Tok]) -> StatementClass {
     if inner.is_empty() {
         StatementClass::Write
     } else {
-        classify_tokens(dialect, inner)
+        classify_tokens(dialect, inner, wt)
     }
 }
 
 /// Whether a quoted name sits where a SET names its setting: before the `=` or `TO`, in
 /// each assignment. Quoting can spell any setting, `U&"..."` escapes included, so the
 /// name is never read. Postgres sets one setting, so a comma there starts another value.
-fn quoted_setting_name(dialect: DialectKind, toks: &[Tok]) -> bool {
+fn quoted_setting_name(dialect: DialectKind, toks: &[Tok], wt: &str) -> bool {
     let Some(set) = toks.first() else {
         return false;
     };
     let mut in_name = true;
     for t in &toks[1..] {
-        match &t.kind {
+        match t.kind {
             Kind::Comma if t.depth == set.depth && dialect != DialectKind::Postgres => {
                 in_name = true;
             }
             Kind::Eq => in_name = false,
-            Kind::Word(w) if w == "TO" => in_name = false,
+            Kind::Word(..) if word(wt, t).is_some_and(|(w, _)| w == "TO") => in_name = false,
             _ if in_name && t.quoted_name => return true,
             _ => {}
         }
@@ -554,8 +613,8 @@ fn quoted_setting_name(dialect: DialectKind, toks: &[Tok]) -> bool {
 }
 
 /// `toks` starts at `SET`; `all` holds every word of the piece.
-fn set_class(dialect: DialectKind, toks: &[Tok], all: &[&str]) -> StatementClass {
-    if quoted_setting_name(dialect, toks) {
+fn set_class(dialect: DialectKind, toks: &[Tok], all: &[&str], wt: &str) -> StatementClass {
+    if quoted_setting_name(dialect, toks, wt) {
         return StatementClass::Write;
     }
     const PERSISTENT: [&str; 3] = ["GLOBAL", "PERSIST", "PERSIST_ONLY"];
@@ -575,10 +634,7 @@ fn set_class(dialect: DialectKind, toks: &[Tok], all: &[&str]) -> StatementClass
         return StatementClass::Write;
     }
     // `SET GLOBAL x = 1, SESSION y = 2`: the scope word starts each assignment.
-    let scope_word = |i: usize| match &toks[i].kind {
-        Kind::Word(w) => PERSISTENT.contains(&w.as_str()),
-        _ => false,
-    };
+    let scope_word = |i: usize| word(wt, &toks[i]).is_some_and(|(w, _)| PERSISTENT.contains(&w));
     if toks.len() > 1 && scope_word(1) {
         return StatementClass::Write;
     }
@@ -602,9 +658,11 @@ fn set_class(dialect: DialectKind, toks: &[Tok], all: &[&str]) -> StatementClass
     }
 }
 
+/// The 5a classifier case table, shared with the script splitter's tests (D2).
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod cases {
+    use super::StatementClass;
+    use crate::model::DialectKind;
 
     const PG: DialectKind = DialectKind::Postgres;
     const MY: DialectKind = DialectKind::MySql;
@@ -612,7 +670,7 @@ mod tests {
     const R: StatementClass = StatementClass::Read;
     const W: StatementClass = StatementClass::Write;
 
-    const CASES: &[(DialectKind, &str, StatementClass)] = &[
+    pub const CASES: &[(DialectKind, &str, StatementClass)] = &[
         // Postgres
         (PG, "select 1", R),
         (PG, "SELECT 'DELETE FROM x'", R),
@@ -902,6 +960,18 @@ mod tests {
         (SL, "SELECT 'x\\'; DELETE FROM t", W),
         (SL, "frobnicate", W),
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cases::CASES;
+    use super::*;
+
+    const PG: DialectKind = DialectKind::Postgres;
+    const MY: DialectKind = DialectKind::MySql;
+    const SL: DialectKind = DialectKind::Sqlite;
+    const R: StatementClass = StatementClass::Read;
+    const W: StatementClass = StatementClass::Write;
 
     #[test]
     fn statement_count_counts_top_level_pieces() {
@@ -951,7 +1021,57 @@ mod tests {
             assert!(n >= 40, "{d:?} has only {n} rows");
         }
     }
+
+    fn same_as_frozen(d: DialectKind, sql: &str) {
+        use super::frozen_lex as old;
+        assert_eq!(classify(d, sql), old::classify(d, sql), "{d:?}: {sql:?}");
+        assert_eq!(
+            statement_count(d, sql),
+            old::statement_count(d, sql),
+            "{d:?}: {sql:?}"
+        );
+        assert_eq!(
+            leading_word(d, sql),
+            old::leading_word(d, sql),
+            "{d:?}: {sql:?}"
+        );
+    }
+
+    /// Q40: the byte lexer with sealing gives the same answers as the lexer before it,
+    /// on every case text in every Dialect and on seeded joins of them.
+    #[test]
+    fn byte_lexer_matches_the_frozen_lexer() {
+        for (_, sql, _) in CASES {
+            for d in [PG, MY, SL] {
+                same_as_frozen(d, sql);
+            }
+        }
+        let mut seed: u64 = 0x0dd5eed;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+        const JOINS: [&str; 4] = [";", "; ", ";\n", " ;"];
+        for _ in 0..4000 {
+            let n = 1 + next() % 5;
+            let mut sql = String::new();
+            for k in 0..n {
+                if k > 0 {
+                    sql.push_str(JOINS[next() % JOINS.len()]);
+                }
+                sql.push_str(CASES[next() % CASES.len()].1);
+            }
+            for d in [PG, MY, SL] {
+                same_as_frozen(d, &sql);
+            }
+        }
+    }
 }
+
+#[cfg(test)]
+mod frozen_lex;
 
 #[cfg(test)]
 mod verdict_tests {

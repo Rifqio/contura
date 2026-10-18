@@ -444,6 +444,7 @@ pub(crate) async fn table_design_on(
                 .clone()
                 .filter(|c| Some(c) != table_collation.as_ref()),
             advanced: false,
+            identity_always: false,
             mysql: Some(MySqlColumn {
                 charset,
                 collation,

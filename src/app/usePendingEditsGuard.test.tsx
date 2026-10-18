@@ -373,4 +373,102 @@ describe("usePendingEditsGuard", () => {
     });
     expect(closeWindow.destroy).toHaveBeenCalledTimes(1);
   });
+
+  it("a_discard_waits_for_the_next_ask_and_keep_running_keeps_the_edits_q43", async () => {
+    setup();
+    const { c } = control("k");
+    let answer = false;
+    const then = vi.fn(async () => answer);
+    let result: Promise<boolean>;
+    act(() => {
+      result = g.confirmLeave(["k"], { then });
+    });
+    await screen.findByText("Save changes to orders?");
+    await userEvent.click(button("Discard"));
+    expect(await result!).toBe(false);
+    expect(then).toHaveBeenCalledTimes(1);
+    expect(c.discard).not.toHaveBeenCalled();
+
+    answer = true;
+    act(() => {
+      result = g.confirmLeave(["k"], { then });
+    });
+    await screen.findByText("Save changes to orders?");
+    await userEvent.click(button("Discard"));
+    expect(await result!).toBe(true);
+    expect(c.discard).toHaveBeenCalledTimes(1);
+  });
+
+  it("quitting_with_edits_and_a_job_discards_only_after_the_jobs_yes", async () => {
+    closeWindow.destroy.mockClear();
+    const jobs = { running: vi.fn(() => true), confirmStop: vi.fn(async () => false) };
+    const opts: Opts = {
+      tabs: [table("k", "c1", "orders")],
+      connections,
+      savedQueries: [],
+      activate: vi.fn(),
+      onSavedQuerySaved: vi.fn(),
+      onError: vi.fn(),
+      jobsOnClose: jobs,
+    };
+    render(<Harness {...opts} />);
+    await waitFor(() => expect(closeWindow.handler).not.toBeNull());
+    const { c } = control("k");
+    let closing: Promise<void>;
+    act(() => {
+      closing = closeWindow.handler!({ preventDefault: vi.fn() });
+    });
+    await screen.findByText("Save changes to orders?");
+    await userEvent.click(button("Discard"));
+    await act(async () => {
+      await closing!;
+    });
+    expect(jobs.confirmStop).toHaveBeenCalledTimes(1);
+    expect(c.discard).not.toHaveBeenCalled();
+    expect(closeWindow.destroy).not.toHaveBeenCalled();
+  });
+
+  it("quitting_with_a_running_job_asks_the_jobs_guard_q22", async () => {
+    closeWindow.destroy.mockClear();
+    let answer = false;
+    const jobs = { running: vi.fn(() => true), confirmStop: vi.fn(async () => answer) };
+    const opts: Opts = {
+      tabs: [],
+      connections,
+      savedQueries: [],
+      activate: vi.fn(),
+      onSavedQuerySaved: vi.fn(),
+      onError: vi.fn(),
+      jobsOnClose: jobs,
+    };
+    render(<Harness {...opts} />);
+    await waitFor(() => expect(closeWindow.handler).not.toBeNull());
+    const handler = closeWindow.handler!;
+
+    // Keep running: the window stays.
+    const kept = { preventDefault: vi.fn() };
+    await act(async () => {
+      await handler(kept);
+    });
+    expect(kept.preventDefault).toHaveBeenCalledTimes(1);
+    expect(jobs.confirmStop).toHaveBeenCalledTimes(1);
+    expect(closeWindow.destroy).not.toHaveBeenCalled();
+
+    // Cancel the jobs: the guard cancels them, then the window closes.
+    answer = true;
+    const quit = { preventDefault: vi.fn() };
+    await act(async () => {
+      await handler(quit);
+    });
+    expect(closeWindow.destroy).toHaveBeenCalledTimes(1);
+
+    // Nothing running: no ask, the close goes on.
+    jobs.running.mockReturnValue(false);
+    const plain = { preventDefault: vi.fn() };
+    await act(async () => {
+      await handler(plain);
+    });
+    expect(plain.preventDefault).not.toHaveBeenCalled();
+    expect(jobs.confirmStop).toHaveBeenCalledTimes(2);
+  });
 });

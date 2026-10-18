@@ -96,6 +96,9 @@ test("sizes_map_to_classes", () => {
       <Dialog title="E" wide onClose={() => {}}>
         <p>x</p>
       </Dialog>
+      <Dialog title="F" size="large" onClose={() => {}}>
+        <p>x</p>
+      </Dialog>
     </>,
   );
   const names = screen.getAllByRole("dialog").map((d) => d.className);
@@ -105,7 +108,10 @@ test("sizes_map_to_classes", () => {
     "dialog dialog-size-model",
     "dialog dialog-size-wide",
     "dialog dialog-size-wide",
+    "dialog dialog-size-large",
   ]);
+  // The large size is 860 px wide (the export and Mermaid dialogs).
+  expect(appCss).toMatch(/\.dialog-size-large\s*\{\s*width:\s*min\(860px,\s*100%\);/);
 });
 
 test("subtitle_and_icon_render_in_the_header", () => {

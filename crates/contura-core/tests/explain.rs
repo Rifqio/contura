@@ -19,10 +19,10 @@ struct Fixture {
 
 fn service(dir: &tempfile::TempDir) -> Arc<ConnectionService> {
     let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
-    Arc::new(ConnectionService::new(
-        store,
-        Arc::new(MemorySecretStore::new()),
-    ))
+    Arc::new(
+        ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+            .with_data_dir(common::data_dir()),
+    )
 }
 
 async fn sqlite_fixture(production: bool, read_only: bool) -> Fixture {

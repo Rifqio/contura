@@ -18,6 +18,12 @@ fn service() -> (tempfile::TempDir, Arc<MemorySecretStore>, ConnectionService) {
     (dir, secrets, svc)
 }
 
+/// `service()` with a data folder, so it can open a SQLite file (Q45 M3).
+fn lite_service() -> (tempfile::TempDir, Arc<MemorySecretStore>, ConnectionService) {
+    let (dir, secrets, svc) = service();
+    (dir, secrets, svc.with_data_dir(common::data_dir()))
+}
+
 fn input(name: &str, password: PasswordChange) -> ConnectionInput {
     ConnectionInput {
         id: None,
@@ -456,7 +462,7 @@ async fn open_fails_when_deleted_while_connecting() {
 
 #[tokio::test]
 async fn open_returns_the_server_version() {
-    let (dir, _s, svc) = service();
+    let (dir, _s, svc) = lite_service();
     let file = dir.path().join("shop.sqlite");
     rusqlite::Connection::open(&file)
         .unwrap()
@@ -475,6 +481,57 @@ async fn open_returns_the_server_version() {
     // Opening an open Connection still answers with its version.
     assert_eq!(svc.open(saved.id).await.unwrap(), first);
     svc.close(saved.id).await.unwrap();
+}
+
+/// A SQLite Connection can never open Contura's own app.sqlite, or anything else in the
+/// data folder, whether it is tested or opened.
+#[tokio::test]
+async fn sqlite_connection_into_the_data_folder_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_file = dir.path().join("app.sqlite");
+    let store = AppStore::open(&store_file).unwrap();
+    let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+        .with_data_dir(dir.path().to_path_buf());
+    let lite = || ConnectionInput {
+        dialect: DialectKind::Sqlite,
+        file: Some(store_file.clone()),
+        ..input("lite", PasswordChange::Keep)
+    };
+    let refused = |r: Result<String, contura_core::Error>| {
+        assert!(
+            matches!(&r, Err(contura_core::Error::InvalidInput(m))
+                if m == "Choose a SQLite file outside Contura's data folder."),
+            "{r:?}"
+        );
+    };
+    refused(svc.test(lite()).await);
+    let saved = svc.save(lite()).await.unwrap();
+    refused(svc.open(saved.id).await);
+    assert!(!svc.is_open(saved.id));
+}
+
+/// Q45 M3: without a data folder the guard cannot check the file, so it fails closed.
+#[tokio::test]
+async fn sqlite_connection_without_a_data_folder_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()));
+    let lite = || ConnectionInput {
+        dialect: DialectKind::Sqlite,
+        file: Some(dir.path().join("elsewhere").join("shop.sqlite")),
+        ..input("lite", PasswordChange::Keep)
+    };
+    let refused = |r: Result<String, contura_core::Error>| {
+        assert!(
+            matches!(&r, Err(contura_core::Error::InvalidInput(m))
+                if m == "Contura cannot find its data folder, so it cannot open this file."),
+            "{r:?}"
+        );
+    };
+    refused(svc.test(lite()).await);
+    let saved = svc.save(lite()).await.unwrap();
+    refused(svc.open(saved.id).await);
+    assert!(!svc.is_open(saved.id));
 }
 
 #[tokio::test]
@@ -856,7 +913,7 @@ fn sqlite_input(name: &str, file: std::path::PathBuf) -> ConnectionInput {
 
 #[tokio::test]
 async fn opening_a_connection_records_its_time() {
-    let (dir, _s, svc) = service();
+    let (dir, _s, svc) = lite_service();
     let file = dir.path().join("shop.db");
     rusqlite::Connection::open(&file).unwrap();
     let ok = svc.save(sqlite_input("shop", file)).await.unwrap();
@@ -936,7 +993,7 @@ async fn saving_without_a_connection_keeps_the_one_it_opens_on() {
 
 #[tokio::test]
 async fn deleting_a_connection_forgets_its_opened_time() {
-    let (dir, _s, svc) = service();
+    let (dir, _s, svc) = lite_service();
     let file = dir.path().join("shop.db");
     rusqlite::Connection::open(&file).unwrap();
     let c = svc.save(sqlite_input("shop", file)).await.unwrap();

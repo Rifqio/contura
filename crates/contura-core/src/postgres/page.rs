@@ -17,19 +17,24 @@ use crate::model::{
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ColumnKind {
+pub(super) enum ColumnKind {
     Bytes,
     Number,
     Text,
 }
 
-struct Relation {
+/// A table's catalog facts, shared by the grid and the export read.
+pub(super) struct Relation {
     /// `pg_class.relkind`: `r`, `p`, `m`, `v` or `f`.
-    relkind: String,
-    columns: Vec<ColumnInfo>,
-    kinds: Vec<ColumnKind>,
+    pub(super) relkind: String,
+    /// `pg_class.reltuples`: the planner's row estimate, negative when never analyzed.
+    pub(super) reltuples: f64,
+    pub(super) columns: Vec<ColumnInfo>,
+    pub(super) kinds: Vec<ColumnKind>,
     /// Whether `ORDER BY` works on each column's own type.
     sortable: Vec<bool>,
+    /// Each column's base type name (`pg_type.typname`; a domain counts as its base).
+    pub(super) bases: Vec<String>,
 }
 
 impl Relation {
@@ -39,7 +44,7 @@ impl Relation {
 }
 
 const RELATION_SQL: &str = "\
-SELECT c.oid, c.relkind::text \
+SELECT c.oid, c.relkind::text, c.reltuples::float8 \
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
  WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'm', 'v', 'f')";
 
@@ -49,7 +54,8 @@ SELECT c.oid, c.relkind::text \
 /// follows the server's rule for a default btree opclass: an exact match, an
 /// enum, range or multirange, or exactly one binary-coercible match (or one
 /// preferred in the type's category). Domains are judged by their base type,
-/// arrays by their element type. A miss here only costs a sort by text.
+/// arrays by their element type. A miss here only costs a sort by text. The
+/// sixth column is the base type's name, for the export read.
 const COLUMNS_SQL: &str = "\
 SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), \
        EXISTS (SELECT 1 FROM pg_index i \
@@ -65,7 +71,8 @@ SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), \
              JOIN pg_cast c ON c.casttarget = o.opcintype \
              JOIN pg_type p ON p.oid = o.opcintype \
             WHERE m.amname = 'btree' AND o.opcdefault \
-              AND c.castsource = s.oid AND c.castmethod = 'b') \
+              AND c.castsource = s.oid AND c.castmethod = 'b'), \
+       b.typname::text \
   FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid \
   JOIN pg_type b ON b.oid = COALESCE(NULLIF(t.typbasetype, 0), t.oid) \
   JOIN pg_type e ON e.oid = CASE WHEN b.typcategory = 'A' THEN b.typelem ELSE b.oid END \
@@ -83,7 +90,7 @@ fn qualified(schema: &str, name: &str) -> String {
     format!("{}.{}", quote_double(schema), quote_double(name))
 }
 
-async fn relation(client: &Client, schema: &str, name: &str) -> Result<Relation> {
+pub(super) async fn relation(client: &Client, schema: &str, name: &str) -> Result<Relation> {
     let found = client
         .query_opt(RELATION_SQL, &[&schema, &name])
         .await
@@ -91,6 +98,7 @@ async fn relation(client: &Client, schema: &str, name: &str) -> Result<Relation>
         .ok_or_else(|| Error::NotFound(format!("table {name} in {schema}")))?;
     let oid: u32 = found.try_get(0).map_err(query_err)?;
     let relkind: String = found.try_get(1).map_err(query_err)?;
+    let reltuples: f64 = found.try_get(2).map_err(query_err)?;
     let rows = client
         .query(COLUMNS_SQL, &[&oid])
         .await
@@ -98,6 +106,7 @@ async fn relation(client: &Client, schema: &str, name: &str) -> Result<Relation>
     let mut columns = Vec::with_capacity(rows.len());
     let mut kinds = Vec::with_capacity(rows.len());
     let mut sortable = Vec::with_capacity(rows.len());
+    let mut bases = Vec::with_capacity(rows.len());
     for row in &rows {
         columns.push(ColumnInfo {
             name: row.try_get(0).map_err(query_err)?,
@@ -111,13 +120,29 @@ async fn relation(client: &Client, schema: &str, name: &str) -> Result<Relation>
             _ => ColumnKind::Text,
         });
         sortable.push(row.try_get(4).map_err(query_err)?);
+        bases.push(row.try_get(5).map_err(query_err)?);
     }
     Ok(Relation {
         relkind,
+        reltuples,
         columns,
         kinds,
         sortable,
+        bases,
     })
+}
+
+/// One `ORDER BY` term over the alias `t`. Qualified, so a bare name never resolves to a
+/// same-named output column. A type with no ordering (json, xml, point) sorts by its text.
+pub(super) fn order_term(rel: &Relation, column: &str, desc: bool) -> String {
+    let dir = if desc { "DESC" } else { "ASC" };
+    let i = rel
+        .columns
+        .iter()
+        .position(|col| col.name == column)
+        .expect("order_columns returns known columns");
+    let cast = if rel.sortable[i] { "" } else { "::text" };
+    format!("t.{}{cast} {dir}", quote_double(column))
 }
 
 /// Number columns and keys are selected whole. Every other column is cut to
@@ -158,16 +183,7 @@ pub(super) async fn fetch_page(client: &Client, req: &PageRequest) -> Result<Pag
     // with no ordering (json, xml, point) sorts by its text instead.
     let mut order: Vec<String> = order_columns(&rel.columns, req.sort.as_ref())?
         .into_iter()
-        .map(|(c, desc)| {
-            let dir = if desc { "DESC" } else { "ASC" };
-            let i = rel
-                .columns
-                .iter()
-                .position(|col| col.name == c)
-                .expect("order_columns returns known columns");
-            let cast = if rel.sortable[i] { "" } else { "::text" };
-            format!("t.{}{cast} {dir}", quote_double(&c))
-        })
+        .map(|(c, desc)| order_term(&rel, &c, desc))
         .collect();
     if !rel.columns.iter().any(|c| c.is_primary_key) && rel.has_ctid() {
         order.push("t.tableoid ASC".into());

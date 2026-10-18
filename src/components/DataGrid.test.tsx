@@ -690,3 +690,66 @@ test("a_grid_notice_shows_under_the_header", async () => {
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} notice="orders changed. Reload to see its new columns." />);
   expect(await screen.findByText("orders changed. Reload to see its new columns.")).toBeTruthy();
 });
+
+test("export_menu_offers_export_and_import_and_sends_the_table_origin", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  const onExport = vi.fn();
+  const onImport = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={18} onExport={onExport} onImport={onImport} />);
+  await screen.findByText("first");
+  await userEvent.click(screen.getByRole("button", { name: "Export" }));
+  expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Copy as CSV", "Export...Ctrl+E", "Import..."]);
+  await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
+  expect(onExport).toHaveBeenCalledWith({
+    kind: "table",
+    path: table,
+    columns: ["id", "note"],
+    hidden: [],
+    filter: null,
+    sort: null,
+    selected: [],
+    hasPrimaryKey: true,
+    rowEstimate: 18,
+    estimated: true,
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Export" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  expect(onImport).toHaveBeenCalledTimes(1);
+});
+
+test("ctrl_e_exports_with_the_filter_sort_and_selected_row", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  const onExport = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" onExport={onExport} />);
+  await screen.findByText("first");
+  const v = filterView();
+  act(() => v.dispatch({ changes: { from: 0, insert: "id > 0" }, selection: { anchor: 6 } }));
+  fireEvent.keyDown(v.contentDOM, { key: "Enter" });
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await userEvent.click(screen.getByRole("button", { name: "Sort by id" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
+  await screen.findByText("first");
+  const cell = document.querySelector('tr[data-row="0"] td[data-col="1"]') as HTMLElement;
+  fireEvent.mouseDown(cell);
+  fireEvent.keyDown(cell, { key: "e", code: "KeyE", ctrlKey: true });
+  await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
+  expect(onExport.mock.calls[0][0]).toMatchObject({
+    filter: "id > 0",
+    sort: { column: "id", descending: false },
+    selected: [[{ column: "id", value: { t: "number", value: "1" } }]],
+    rowEstimate: null,
+    estimated: false,
+  });
+});
+
+test("a_table_without_a_primary_key_says_so_in_the_origin", async () => {
+  routeInvoke({
+    fetch_page: () => ({ ...page(false), columns: page(false).columns.map((c) => ({ ...c, isPrimaryKey: false })) }),
+  });
+  const onExport = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onExport={onExport} />);
+  await screen.findByText("first");
+  await userEvent.click(screen.getByRole("button", { name: "Export" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
+  expect(onExport.mock.calls[0][0]).toMatchObject({ hasPrimaryKey: false, selected: [] });
+});

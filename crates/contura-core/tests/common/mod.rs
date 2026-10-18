@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod jobs;
 pub mod pg;
 
 use contura_core::model::{ConnectionConfig, DialectKind, SslMode};
@@ -12,6 +13,15 @@ pub struct TestDb {
     pub name: String,
     /// Set by `drop_db`, so `Drop` doesn't drop the database a second time.
     dropped: bool,
+}
+
+/// A data folder no test writes into. A service needs one to open a SQLite file, since
+/// the path guard fails closed without it (Q45 M3); each test's files live in a temp
+/// folder of its own, so they are outside it.
+pub fn data_dir() -> std::path::PathBuf {
+    let d = std::env::temp_dir().join("contura-test-data");
+    std::fs::create_dir_all(&d).unwrap();
+    d
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -108,7 +118,19 @@ impl Drop for TestDb {
                 .enable_all()
                 .build()
                 .expect("runtime");
-            rt.block_on(drop_database(&config, &password, &name))
+            rt.block_on(async {
+                // A connection left open by a failing test can make DROP DATABASE wait;
+                // the test fails rather than hanging.
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    drop_database(&config, &password, &name),
+                )
+                .await
+                {
+                    Ok(r) => r.map_err(|e| e.to_string()),
+                    Err(_) => Err("it did not drop within 30s".to_string()),
+                }
+            })
         });
         match cleanup.join() {
             Ok(Ok(())) => {}

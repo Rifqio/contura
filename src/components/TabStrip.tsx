@@ -31,6 +31,8 @@ export function tabName(t: AnyTab): string {
     case "design":
       // D23: "New table" until it is created.
       return t.target.kind === "alter" ? `${t.target.path.name} design` : "New table";
+    case "import":
+      return `Import into ${t.target.kind === "table" ? t.target.path.name : t.target.database}`;
   }
 }
 
@@ -53,6 +55,8 @@ function iconOf(t: AnyTab): IconName | null {
       return t.selection.kind === "table" ? "table" : t.selection.kind === "view" ? "view" : t.selection.kind === "trigger" ? "trigger" : "routine";
     case "design":
       return "edit";
+    case "import":
+      return "import";
   }
 }
 

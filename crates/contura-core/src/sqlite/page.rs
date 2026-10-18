@@ -18,7 +18,7 @@ use crate::model::{
 const ROWID_KEY: &str = "\u{0}rowid";
 
 /// Columns in declaration order. Works for views too; no rows means no such object.
-fn table_columns(conn: &Connection, path: &ObjectPath) -> Result<Vec<ColumnInfo>> {
+pub(super) fn table_columns(conn: &Connection, path: &ObjectPath) -> Result<Vec<ColumnInfo>> {
     let mut stmt = conn
         .prepare("SELECT name, type, pk FROM pragma_table_info(?1, ?2) ORDER BY cid")
         .map_err(query_err)?;
@@ -43,7 +43,11 @@ fn table_columns(conn: &Connection, path: &ObjectPath) -> Result<Vec<ColumnInfo>
 }
 
 /// True for an ordinary rowid table whose `rowid` is not shadowed by a column.
-fn has_usable_rowid(conn: &Connection, path: &ObjectPath, cols: &[ColumnInfo]) -> Result<bool> {
+pub(super) fn has_usable_rowid(
+    conn: &Connection,
+    path: &ObjectPath,
+    cols: &[ColumnInfo],
+) -> Result<bool> {
     if cols.iter().any(|c| c.name.eq_ignore_ascii_case("rowid")) {
         return Ok(false);
     }
@@ -107,7 +111,7 @@ fn build_select(
 }
 
 /// Shortest text that reads back as the same f64, such as `3.0` or `0.30000000000000004`.
-fn real_text(f: f64) -> String {
+pub(super) fn real_text(f: f64) -> String {
     format!("{f:?}")
 }
 

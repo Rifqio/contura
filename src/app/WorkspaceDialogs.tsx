@@ -37,6 +37,8 @@ interface Props {
   onGroupDeleted(): void;
   /** `edited`: an existing Connection was saved, so its session closed (App: markClosed). */
   onConnectionSaved(saved: ConnectionConfig, edited: boolean): void;
+  /** Before an edited Connection is saved: App asks about its running jobs (Q43); false keeps the form. */
+  beforeConnectionSave?(id: ConnectionId): Promise<boolean>;
   onStartModel(doc: ModelDoc): void;
   onCancelModel(): void;
 }
@@ -57,6 +59,7 @@ export function FormDialogs({
   confirmGroupLeave,
   onGroupDeleted,
   onConnectionSaved,
+  beforeConnectionSave,
 }: FormProps) {
   return (
     <>
@@ -97,6 +100,7 @@ export function FormDialogs({
           duplicateOf={form.duplicateOf}
           groups={groups}
           defaultGroupId={workspaceGroupId}
+          beforeSave={form.connection && beforeConnectionSave ? () => beforeConnectionSave(form.connection!.id) : undefined}
           onSaved={(saved) => {
             onConnectionSaved(saved, !!form.connection);
             onCloseForm();

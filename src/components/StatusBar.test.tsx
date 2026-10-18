@@ -131,3 +131,13 @@ test("right_side_has_utf8_and_a_theme_menu_and_no_gear", async () => {
   await userEvent.click(screen.getByRole("menuitem", { name: "Follow Windows" }));
   expect(onTheme).toHaveBeenCalledWith("system");
 });
+
+test("the_jobs_node_renders_before_the_theme_menu", () => {
+  render(<StatusBar screen={work()} theme="system" onTheme={() => {}} jobs={<button type="button">Exporting orders, 32 percent</button>} />);
+  const bar = screen.getByRole("status");
+  const job = screen.getByRole("button", { name: "Exporting orders, 32 percent" });
+  const theme = screen.getByRole("button", { name: "Theme" });
+  expect(bar.contains(job)).toBe(true);
+  expect(job.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(job.closest("#app-status-slot")).toBeNull();
+});

@@ -78,6 +78,11 @@ export function connectionTarget(c: { dialect: DialectKind; host: string; port: 
   return c.dialect === "sqlite" ? (c.file ?? "") : `${c.host}:${c.port}`;
 }
 
+/** The last part of a Windows or POSIX path. */
+export function fileName(path: string): string {
+  return path.slice(Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
+}
+
 /**
  * Shortens a long file path in the middle, keeping its start and always the
  * whole file name: `C:\Users\rifqi\…\shop.db`. A path within `max` is unchanged.
@@ -175,6 +180,16 @@ export const writeModelFiles = (path: string, dbml: string, layout: string): Pro
   invoke("write_model_files", { path, dbml, layout });
 
 export const writeTextFile = (path: string, text: string): Promise<void> => invoke("write_text_file", { path, text });
+
+/**
+ * Writes diagram `name` as `<name>.flow` and `<name>.flow.layout.json` in Contura's diagrams folder (Q35):
+ * both, or neither if the second fails. Resolves to the `.flow` path.
+ */
+export const writeFlowFiles = (name: string, flow: string, layout: string): Promise<string> =>
+  invoke<string>("write_flow_files", { name, flow, layout });
+
+/** Whether diagram `name` is saved in the diagrams folder already. */
+export const flowExists = (name: string): Promise<boolean> => invoke<boolean>("flow_exists", { name });
 
 export const writeBinaryFile = (path: string, base64: string): Promise<void> =>
   invoke("write_binary_file", { path, base64 });
@@ -441,8 +456,13 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `Could not read or write saved settings: ${e.message}`;
     case "secret":
       return `Could not use Windows Credential Manager: ${e.message}`;
-    case "file":
-      return `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}. Check the folder exists and Contura can write to it.`;
+    case "file": {
+      // A whole sentence (a file's content, Q45) is shown as it is; a read gets read advice.
+      const text = `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}`;
+      if (/[.!?]$/.test(text)) return text;
+      if (e.message.startsWith("cannot read")) return `${text}. Check the file exists and Contura can read it.`;
+      return `${text}. Check the folder exists and Contura can write to it.`;
+    }
     case "cancelled":
       return "The query was cancelled.";
     case "timedOut":
@@ -471,6 +491,20 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       const what = applied ? "The change was applied, but" : "The change was not applied, and";
       return `${what} restoring the connection with ${sql} failed afterwards: ${message}. Reconnect before you go on.`;
     }
+    case "jobFailed":
+      return e.message.message;
+    case "fileChanged":
+      return e.message.confirmed === false
+        ? `${e.message.file} changed while Contura read it. Nothing was imported.`
+        : `${e.message.file} changed after you confirmed. Nothing was imported.`;
+    case "jobBusy":
+      return `Another import is writing to ${e.message.connection}. Wait for it to end.`;
+    case "fileExists":
+      return `${fileName(e.message)} exists.`;
+    case "readStopped":
+      return "The read stopped unexpectedly. Nothing more was written.";
+    case "afterCommit":
+      return `The rows were committed, but ${e.message.sql} failed afterwards: ${e.message.message}.`;
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

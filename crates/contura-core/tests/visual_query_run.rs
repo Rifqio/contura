@@ -33,10 +33,10 @@ impl Live {
         session_db: Option<String>,
     ) -> Live {
         let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
-        let svc = Arc::new(ConnectionService::new(
-            store,
-            Arc::new(MemorySecretStore::new()),
-        ));
+        let svc = Arc::new(
+            ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+                .with_data_dir(common::data_dir()),
+        );
         let kind = input.dialect;
         let saved = svc.save(input).await.unwrap();
         svc.open(saved.id).await.unwrap();

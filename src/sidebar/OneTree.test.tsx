@@ -1189,7 +1189,30 @@ test("read_only_table_row_has_design_but_no_drop", async () => {
   fireEvent.contextMenu(item("orders"));
   expect(menuLabels("orders")).toEqual(["Open", "Design table"]);
 });
+test("table_row_menu_has_export_and_import_after_design_table", async () => {
+  routeMy();
+  const h = { ...handlers(), onDesignTable: vi.fn(), onDropTable: vi.fn(), onExportTable: vi.fn(), onImportTable: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("orders"));
+  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Export...", "Import...", "Drop table..."]);
+  const selection = { connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } };
+  await userEvent.click(screen.getByRole("menuitem", { name: "Export..." }));
+  expect(h.onExportTable).toHaveBeenCalledWith(selection);
+  fireEvent.contextMenu(item("orders"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  expect(h.onImportTable).toHaveBeenCalledWith(selection);
+});
 
+test("read_only_table_row_still_offers_import_q15", async () => {
+  routeMy();
+  const h = { ...handlers(), onDesignTable: vi.fn(), onDropTable: vi.fn(), onExportTable: vi.fn(), onImportTable: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop", { readOnly: true })]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("orders"));
+  // Q15: the Import tab itself shows the Read-only state; Drop stays hidden.
+  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Export...", "Import..."]);
+});
 
 test("connection_menu_offers_new_visual_query_open_or_closed", async () => {
   routeMy();

@@ -4,7 +4,9 @@ pub(crate) mod page;
 pub mod quote;
 mod session;
 mod snapshot;
+mod source;
 mod sql_schema;
+mod writer;
 
 use std::time::Duration;
 
@@ -367,6 +369,35 @@ impl Dialect for MySqlDialect {
         let outcome = run_design(&mut conn, plan, &parts, self.read_only).await;
         let _ = conn.disconnect().await;
         browse_result(outcome, self.read_only)
+    }
+
+    async fn open_row_source(
+        &self,
+        req: &crate::jobs::source::SourceRequest,
+    ) -> Result<Box<dyn crate::jobs::source::RowSource>> {
+        source::open(self.opts.clone(), self.pool.clone(), self.read_only, req).await
+    }
+
+    async fn table_storage(&self, path: &ObjectPath) -> Result<crate::jobs::source::TableStorage> {
+        browse_result(
+            source::table_storage(&self.pool, path).await,
+            self.read_only,
+        )
+    }
+
+    async fn open_bulk_writer(
+        &self,
+        database: Option<&str>,
+        setup: &crate::jobs::writer::WriterSetup,
+    ) -> Result<Box<dyn crate::jobs::writer::BulkWriter>> {
+        writer::open(
+            self.opts.clone(),
+            self.pool.clone(),
+            self.read_only,
+            database,
+            setup,
+        )
+        .await
     }
 
     async fn disconnect(&self) -> Result<()> {

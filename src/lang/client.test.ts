@@ -77,3 +77,27 @@ test("lang_client_sql_shape_resolves_with_the_shape_or_the_problem", async () =>
   expect(await client.sqlShape({ ...q, text: "DELETE FROM stores WHERE id = 1" })).toEqual({ kind: "notRead", verb: "DELETE" });
   client.dispose();
 });
+
+test("lang_client_mermaid_posts_the_message_and_resolves_with_the_result", async () => {
+  const sent: ToWorker[] = [];
+  let handler: (m: ToWorker) => void = () => {};
+  const client = new LangClient(() => {
+    const fake: WorkerLike = {
+      onmessage: null,
+      onerror: null,
+      postMessage: (m) => {
+        sent.push(m);
+        handler(m);
+      },
+      terminate: () => {},
+    };
+    handler = createHandler((m) => fake.onmessage?.({ data: m }), 0);
+    return fake;
+  });
+  const result = await client.mermaid("flowchart LR\n  A --> B", "Two steps");
+  expect(sent).toEqual([{ type: "mermaid", id: 1, text: "flowchart LR\n  A --> B", title: "Two steps" }]);
+  expect(result.direction).toBe("LR");
+  expect(result.nodes).toBe(2);
+  expect(result.flow.startsWith('diagram flow "Two steps"\n')).toBe(true);
+  client.dispose();
+});

@@ -321,6 +321,7 @@ pub(crate) fn table_design(conn: &Connection, path: &ObjectPath) -> Result<Table
             sqlite_autoincrement: rowid_alias && autoincrement,
             collation: collation_of(&name),
             advanced: false,
+            identity_always: false,
             name,
         });
     }

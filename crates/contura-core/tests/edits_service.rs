@@ -34,10 +34,10 @@ async fn fixture(production: bool, read_only: bool) -> Fixture {
         )
         .unwrap();
     let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
-    let svc = Arc::new(ConnectionService::new(
-        store,
-        Arc::new(MemorySecretStore::new()),
-    ));
+    let svc = Arc::new(
+        ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+            .with_data_dir(common::data_dir()),
+    );
     let saved = svc
         .save(ConnectionInput {
             id: None,
@@ -441,7 +441,8 @@ async fn production_save_on_mysql() {
     let svc = ConnectionService::new(
         AppStore::open(&dir.path().join("app.sqlite")).unwrap(),
         Arc::new(MemorySecretStore::new()),
-    );
+    )
+    .with_data_dir(common::data_dir());
     let saved = svc
         .save(ConnectionInput {
             id: None,

@@ -2,6 +2,8 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { errorText, writeTextFile } from "../api/client";
 import type { Cell, ResultColumn } from "../api/types";
+import { hintFor } from "../commands/keymap";
+import { useKeymap } from "../commands/useCommandKeys";
 import Icon from "../components/Icon";
 import Menu from "../components/Menu";
 import { useToast } from "../components/Toast";
@@ -15,6 +17,10 @@ interface Props {
   hidden: ReadonlySet<string>;
   onToggleColumn(name: string): void;
   connectionName?: string;
+  /** Opens the Export dialog; with it, the menu offers Export... in place of Save as CSV.... */
+  onExport?(): void;
+  /** Opens an Import tab into the grid's table (never given on a query result, Q16). */
+  onImport?(): void;
 }
 
 export const cellText = (c: Cell): string => (c.t === "null" ? "" : c.t === "bytes" ? c.previewHex : c.value);
@@ -71,8 +77,19 @@ function Popover({ label, on, icon, children }: { label: string; on?: boolean; i
 }
 
 /** Filter, columns and export for a result's rows, as icon buttons with their popovers. */
-export default function ResultTools({ columns, rows, filter, onFilter, hidden, onToggleColumn, connectionName }: Props) {
+export default function ResultTools({
+  columns,
+  rows,
+  filter,
+  onFilter,
+  hidden,
+  onToggleColumn,
+  connectionName,
+  onExport,
+  onImport,
+}: Props) {
   const { show } = useToast();
+  const exportKey = hintFor(useKeymap().map, "export.open") ?? undefined;
   const shown = columns.filter((c) => !hidden.has(c.name));
   const exported = () => rows.map((r) => r.filter((_, i) => !hidden.has(columns[i].name)));
   const csv = () => toCsv(shown, exported());
@@ -138,7 +155,11 @@ export default function ResultTools({ columns, rows, filter, onFilter, hidden, o
         label="Export"
         items={[
           { key: "copy", label: "Copy as CSV", icon: <Icon name="copy" size={14} />, onSelect: () => void copy() },
-          { key: "save", label: "Save as CSV...", icon: <Icon name="save" size={14} />, onSelect: () => void saveFile() },
+          // The Export dialog covers saving a CSV, so Save as CSV... shows only without it.
+          onExport
+            ? { key: "export", label: "Export...", icon: <Icon name="export" size={14} />, shortcut: exportKey, onSelect: onExport }
+            : { key: "save", label: "Save as CSV...", icon: <Icon name="save" size={14} />, onSelect: () => void saveFile() },
+          ...(onImport ? [{ key: "import", label: "Import...", icon: <Icon name="import" size={14} />, onSelect: onImport }] : []),
         ]}
         trigger={(p) => (
           <button type="button" className="icon-button" aria-label="Export" title="Export" {...p}>

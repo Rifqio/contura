@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { DialectKind, Group, RunVerdict } from "../api/types";
+import type { ConfirmItem, DialectKind, Group, InsertShape, RunVerdict } from "../api/types";
 import DbMark from "../components/DbMark";
+import Icon from "../components/Icon";
 import Dialog from "../components/Dialog";
 import GroupBadge from "../components/GroupBadge";
 import SafetyTag from "../components/SafetyTag";
@@ -9,8 +10,27 @@ import WarningBanner from "../components/WarningBanner";
 
 type Ask = Extract<RunVerdict, { kind: "needsConfirmation" }>;
 
-interface Props {
-  verdict: Ask;
+/** One item of a job confirmation: a statement shown exactly, or an INSERT shown as its shape. */
+export type ConfirmShape = ConfirmItem;
+
+/** The job mode (Q14): a bulk import or SQL file described once, instead of every statement. */
+export interface ConfirmJob {
+  /** The first line, such as "Inserts 1,204 rows into billing.products in 3 statements, in one transaction." */
+  title: string;
+  /** Every item in file order: shapes and exact statements interleaved. */
+  shapes: ConfirmShape[];
+  /** The count line under the title, such as "4 statements write." */
+  counts: string;
+  /** "212 KB, SHA-256 4be0 91c2 ... 7d1f": the fingerprint banner names it. */
+  fingerprint?: string | null;
+  /** Show all under a shape's first rows. */
+  onShowAll?(): void;
+}
+
+/** The editor's mode needs every statement; the job mode only the Connection and database. */
+type Mode = { verdict: Ask; job?: undefined } | { verdict: Pick<Ask, "connection" | "database">; job: ConfirmJob };
+
+type Props = Mode & {
   /** An UPDATE or DELETE without WHERE among the statements, by index; its warning sits at the top. */
   noWhere?: { index: number; verb: "UPDATE" | "DELETE"; table: string } | null;
   onRun(): void;
@@ -18,7 +38,7 @@ interface Props {
   /** Offered beside the no-WHERE warning when given. */
   onAddWhere?(): void;
   /** "Save" for Pending Edits, "Apply" for a design, "Drop" for a table drop: the title and button say it. */
-  verb?: "Run" | "Save" | "Apply" | "Drop";
+  verb?: "Run" | "Save" | "Apply" | "Drop" | "Import";
   /** Plan warnings, one banner each, above the count line. */
   warnings?: string[];
   /** The Connection's database, for the mark before the title. */
@@ -27,9 +47,66 @@ interface Props {
   group?: Group | null;
   /** Rows the statement without WHERE would change, when known; the warning says "about N rows". */
   rowEstimate?: number | null;
+};
+
+const DOES: Record<NonNullable<Props["verb"]>, string> = { Run: "runs", Save: "saves", Apply: "applies", Drop: "drops", Import: "runs" };
+
+/** Under a shape's first rows: "496 more rows in this statement, then 2 more statements"; null when nothing is left out. */
+export function foldText(shape: InsertShape): string | null {
+  const n = (v: number) => v.toLocaleString("en-US");
+  const inFirst = Math.min(shape.rowsPerStatement, shape.rows);
+  const rows = Math.max(0, inFirst - shape.firstRows.length);
+  const statements = Math.max(0, shape.statements - 1);
+  const parts = [
+    ...(rows > 0 ? [`${n(rows)} ${rows === 1 ? "more row" : "more rows"} in this statement`] : []),
+    ...(statements > 0 ? [`${n(statements)} ${statements === 1 ? "more statement" : "more statements"}`] : []),
+  ];
+  if (parts.length === 0) return null;
+  return parts.length === 2 ? `${parts[0]}, then ${parts[1]}` : parts[0];
 }
 
-const DOES: Record<NonNullable<Props["verb"]>, string> = { Run: "runs", Save: "saves", Apply: "applies", Drop: "drops" };
+function shapeHead(rowsPerStatement: number, statements: number, rows: number): string {
+  const n = (v: number) => v.toLocaleString("en-US");
+  if (statements <= 1) return `1 statement, ${n(rows)} ${rows === 1 ? "row" : "rows"}`;
+  return `Statement 1 of ${n(statements)}, ${n(rowsPerStatement)} ${rowsPerStatement === 1 ? "row" : "rows"} each`;
+}
+
+/** The job body: each item exactly, or as its shape box with the fold line. */
+function JobItems({ job, dialect }: { job: ConfirmJob; dialect: DialectKind }) {
+  return (
+    <>
+      {job.shapes.map((item, i) => {
+        if (item.kind === "exact") {
+          const lines = item.text.split("\n").length;
+          return (
+            <div key={i} className="confirm-item confirm-exact">
+              <SqlBlock sql={item.text} dialect={dialect} marks={[{ firstLine: 1, lastLine: lines, tag: "writes", band: "prod" }]} />
+            </div>
+          );
+        }
+        const { shape } = item;
+        const sql = [shape.head, ...shape.firstRows.map((r, j) => `  ${r}${j < shape.firstRows.length - 1 ? "," : ""}`)].join("\n");
+        const fold = foldText(shape);
+        return (
+          <div key={i} className="confirm-item confirm-shape">
+            <p className="confirm-shape-head">{shapeHead(shape.rowsPerStatement, shape.statements, shape.rows)}</p>
+            <SqlBlock sql={sql} dialect={dialect} marks={[{ firstLine: 1, lastLine: shape.firstRows.length + 1, tag: "writes", band: "prod" }]} />
+            {fold && (
+              <p className="confirm-fold">
+                <span>{fold}</span>
+                {job.onShowAll && (
+                  <button type="button" className="button button-small button-ghost" onClick={job.onShowAll}>
+                    Show all
+                  </button>
+                )}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
 
 /** "2 of 3 statements write.", "1 of 2 statements writes.", "1 of 1 statement writes." */
 function countText(writes: number, total: number): string {
@@ -42,6 +119,7 @@ function countText(writes: number, total: number): string {
  */
 export default function ConfirmRun({
   verdict,
+  job,
   noWhere = null,
   onRun,
   onCancel,
@@ -60,7 +138,9 @@ export default function ConfirmRun({
   // each statement's first line its tag.
   const marks: SqlMark[] = [];
   let next = 1;
-  const sql = verdict.statements
+  const statements = "statements" in verdict ? verdict.statements : [];
+  const writes = "writes" in verdict ? verdict.writes : 0;
+  const sql = statements
     .map((s) => {
       const lines = s.text.split("\n").length;
       const write = s.class === "write";
@@ -119,13 +199,33 @@ export default function ConfirmRun({
         {warnings.map((w, i) => (
           <WarningBanner key={i}>{w}</WarningBanner>
         ))}
-        <p className="confirm-count">
-          {countText(verdict.writes, verdict.statements.length)}
-          {verb === "Save" && " They run in one transaction."}
-        </p>
-        <div className="confirm-sql" tabIndex={0} data-autofocus aria-label="SQL to run, read-only">
-          <SqlBlock sql={sql} dialect={dialect ?? "postgres"} marks={marks} />
-        </div>
+        {job ? (
+          <>
+            <p className="confirm-job-title">{job.title}</p>
+            <p className="confirm-count">{job.counts}</p>
+            <div className="confirm-sql confirm-job" tabIndex={0} data-autofocus aria-label="SQL to run, read-only">
+              <JobItems job={job} dialect={dialect ?? "postgres"} />
+            </div>
+            {job.fingerprint && (
+              <p className="confirm-fingerprint">
+                <Icon name="info" />
+                <span>
+                  The file is fingerprinted ({job.fingerprint}). If it changes before the run, Contura asks again.
+                </span>
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="confirm-count">
+              {countText(writes, statements.length)}
+              {verb === "Save" && " They run in one transaction."}
+            </p>
+            <div className="confirm-sql" tabIndex={0} data-autofocus aria-label="SQL to run, read-only">
+              <SqlBlock sql={sql} dialect={dialect ?? "postgres"} marks={marks} />
+            </div>
+          </>
+        )}
         <p className="confirm-hint">
           {runFocused ? `Enter ${does} now.` : `Enter ${does} only when ${runLabel} has focus. Press Tab to reach it, or click it.`}
         </p>

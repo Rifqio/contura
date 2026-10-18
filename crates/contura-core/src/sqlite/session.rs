@@ -15,7 +15,7 @@ use crate::query::{
     or_cancelled,
 };
 
-struct Interrupt(rusqlite::InterruptHandle);
+pub(super) struct Interrupt(pub(super) rusqlite::InterruptHandle);
 
 #[async_trait::async_trait]
 impl Canceller for Interrupt {

@@ -145,8 +145,11 @@ pub async fn fetch_full_value(
 pub struct DataDir(pub PathBuf);
 
 #[tauri::command]
-pub fn read_model_files(path: PathBuf) -> Result<contura_core::model_files::ModelFiles, Error> {
-    contura_core::model_files::read_model_files(&path)
+pub fn read_model_files(
+    data: State<'_, DataDir>,
+    path: PathBuf,
+) -> Result<contura_core::model_files::ModelFiles, Error> {
+    contura_core::model_files::read_model_files(&path, &data.0)
 }
 
 #[tauri::command]
@@ -162,6 +165,24 @@ pub fn write_model_files(
 #[tauri::command]
 pub fn write_text_file(data: State<'_, DataDir>, path: PathBuf, text: String) -> Result<(), Error> {
     contura_core::model_files::write_text_file(&path, &text, &data.0)
+}
+
+/// Writes diagram `name` and its layout file together in `<data>\diagrams` (D1, Q35);
+/// returns the `.flow` path.
+#[tauri::command]
+pub fn write_flow_files(
+    data: State<'_, DataDir>,
+    name: String,
+    flow: String,
+    layout: String,
+) -> Result<PathBuf, Error> {
+    contura_core::model_files::write_flow_files(&name, &flow, &layout, &data.0)
+}
+
+/// Whether diagram `name` is saved already, so the UI can ask before replacing it.
+#[tauri::command]
+pub fn flow_exists(data: State<'_, DataDir>, name: String) -> Result<bool, Error> {
+    contura_core::model_files::flow_exists(&name, &data.0)
 }
 
 #[tauri::command]
@@ -318,7 +339,13 @@ pub fn save_keymap(service: Service<'_>, overrides: KeymapOverrides) -> Result<(
 }
 
 #[tauri::command]
-pub fn create_sqlite_database(path: PathBuf) -> Result<(), Error> {
+pub fn create_sqlite_database(data: State<'_, DataDir>, path: PathBuf) -> Result<(), Error> {
+    // A new database never goes into Contura's data folder, beside app.sqlite (Q33).
+    contura_core::jobs::paths::check_user_path(
+        &path,
+        &data.0,
+        contura_core::jobs::paths::PathUse::Database,
+    )?;
     contura_core::sqlite::create_database(&path)
 }
 

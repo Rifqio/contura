@@ -20,7 +20,13 @@ mod introspect;
 mod page;
 mod session;
 mod snapshot;
+mod source;
 mod sql_schema;
+mod writer;
+
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub use source::fetches_for_test;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_DATABASE: &str = "postgres";
@@ -579,6 +585,28 @@ impl Dialect for PostgresDialect {
             run_design(&client, plan, &parts, self.read_only).await,
             self.read_only,
         )
+    }
+
+    async fn open_row_source(
+        &self,
+        req: &crate::jobs::source::SourceRequest,
+    ) -> Result<Box<dyn crate::jobs::source::RowSource>> {
+        let database = match req {
+            crate::jobs::source::SourceRequest::Table { path, .. } => path.database.clone(),
+            crate::jobs::source::SourceRequest::Query { database, .. } => database
+                .clone()
+                .unwrap_or_else(|| self.default_database.clone()),
+        };
+        source::open(self.settings.clone(), database, self.read_only, req).await
+    }
+
+    async fn open_bulk_writer(
+        &self,
+        database: Option<&str>,
+        setup: &crate::jobs::writer::WriterSetup,
+    ) -> Result<Box<dyn crate::jobs::writer::BulkWriter>> {
+        let database = database.unwrap_or(&self.default_database);
+        writer::open(&self.settings, database, self.read_only, setup).await
     }
 
     async fn disconnect(&self) -> Result<()> {

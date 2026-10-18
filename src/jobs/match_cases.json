@@ -1,0 +1,66 @@
+[
+  {
+    "file": ["id", "name", "price"],
+    "targets": [
+      { "name": "id", "type": "integer", "nullable": false, "generated": false },
+      { "name": "name", "type": "text", "nullable": false, "generated": false },
+      { "name": "price", "type": "numeric(10,2)", "nullable": true, "generated": false }
+    ],
+    "expected": ["id", "name", "price"]
+  },
+  {
+    "file": ["Unit Price", "SKU", "created-at", "is_active"],
+    "targets": [
+      { "name": "unit_price", "type": "numeric", "nullable": true, "generated": false },
+      { "name": "sku", "type": "varchar(32)", "nullable": false, "generated": false },
+      { "name": "createdAt", "type": "timestamp", "nullable": true, "generated": false },
+      { "name": "IsActive", "type": "boolean", "nullable": true, "generated": false }
+    ],
+    "expected": ["unit_price", "sku", "createdAt", "IsActive"]
+  },
+  {
+    "file": ["sku", "colour", "notes"],
+    "targets": [
+      { "name": "sku", "type": "text", "nullable": false, "generated": false },
+      { "name": "color", "type": "text", "nullable": true, "generated": false }
+    ],
+    "expected": ["sku", null, null]
+  },
+  {
+    "file": ["id", "total", "price"],
+    "targets": [
+      { "name": "id", "type": "integer", "nullable": false, "generated": true },
+      { "name": "total", "type": "numeric", "nullable": true, "generated": true },
+      { "name": "price", "type": "numeric", "nullable": true, "generated": false }
+    ],
+    "expected": [null, null, "price"]
+  },
+  {
+    "file": ["Column 1", "name", "name (2)", "name"],
+    "targets": [
+      { "name": "name", "type": "text", "nullable": true, "generated": false }
+    ],
+    "expected": [null, "name", null, null]
+  },
+  {
+    "file": ["unit_price", "Unit Price"],
+    "targets": [
+      { "name": "unitprice", "type": "numeric", "nullable": true, "generated": false }
+    ],
+    "expected": ["unitprice", null]
+  },
+  {
+    "file": ["qty"],
+    "targets": [
+      { "name": "QTY", "type": "smallint", "nullable": false, "generated": false }
+    ],
+    "expected": ["QTY"]
+  },
+  {
+    "file": [],
+    "targets": [
+      { "name": "id", "type": "integer", "nullable": false, "generated": false }
+    ],
+    "expected": []
+  }
+]

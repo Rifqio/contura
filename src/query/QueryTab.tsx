@@ -1,4 +1,5 @@
 import { useToast } from "../components/Toast";
+import type { ExportOrigin } from "../jobs/exportText";
 import { type MutableRefObject, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -96,10 +97,19 @@ interface Props {
   onOpenStatus?(id: ConnectionId, status: ConnectionOpenStatus | null): void;
   /** Edit Connection... from a failed open: the app shows the Connection's form. */
   onEditConnection?(id: ConnectionId): void;
+  /** Export... on a result (and Ctrl+E in the results): the app opens the Export dialog on this tab's Connection. */
+  onExport?(origin: ExportOrigin): void;
   /** The Groups, so the confirm dialog shows the Connection's Group square. */
   groups?: Group[];
   /** The server's row estimate of a table, when the tree has it: the no-WHERE warning says "about N rows". */
   rowEstimate?(connectionId: ConnectionId, path: ObjectPath): number | null;
+}
+
+/** The database a MySQL `USE name` statement moves the session to, else null. */
+export function usedDatabase(sql: string): string | null {
+  const m = /^\s*use\s+(?:`((?:[^`]|``)+)`|([\p{L}\p{N}_$]+))\s*;?\s*$/iu.exec(sql);
+  if (!m) return null;
+  return m[1] !== undefined ? m[1].replace(/``/g, "`") : m[2];
 }
 
 /**
@@ -216,6 +226,7 @@ export default function QueryTab({
   onOpenStatus,
   onEditConnection,
   rowEstimate,
+  onExport,
 }: Props) {
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
   const isOpen = !!connection && openIds.has(connection.id);
@@ -324,8 +335,12 @@ export default function QueryTab({
     schemaState: !live ? ("none" as const) : schemaLoad === "loaded" ? ("loaded" as const) : schemaLoad === "loading" ? ("loading" as const) : ("none" as const),
   };
 
+  /** The database a MySQL `USE` moved this session to; null while it is still the tab's (Q43). */
+  const [sessionDb, setSessionDb] = useState<string | null>(null);
+
   // One session per tab, opened on the tab's Connection and database.
   useEffect(() => {
+    setSessionDb(null);
     if (!connection || !isOpen) {
       // No open follows from here, so a later open must not run the reconnect's statement.
       rerun.current = null;
@@ -403,6 +418,8 @@ export default function QueryTab({
           settleExternal(o.t === "rows" ? { ran: true, rows: o.rows.length, ...(o.hasMore ? { more: true } : {}) } : { ran: true, rows: o.rows });
         }
         dispatch({ type: "done", id, outcome: ex.outcome, ms: ex.elapsedMs });
+        const used = connection?.dialect === "mysql" ? usedDatabase(stmt.text) : null;
+        if (used) setSessionDb(used);
         if (DDL.test(stmt.text) && connection) lang?.schemas.invalidate(connection.id);
         onRan?.();
       },
@@ -1025,6 +1042,8 @@ export default function QueryTab({
             }}
             onGoTo={(from, to) => editorRef.current?.select(from, to)}
             ask={askSetup}
+            database={dialect === "sqlite" ? null : (sessionDb ?? tab.database)}
+            onExport={onExport}
           />
         )}
       </div>

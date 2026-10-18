@@ -17,6 +17,8 @@ use crate::dialect::{Dialect, connect};
 use crate::edits::{self, EditSet, PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::explain::{Plan, explain_sql, plan_from_rows};
+use crate::jobs::paths::{PathUse, check_user_path};
+use crate::jobs::{FileIdentity, JobService};
 use crate::model::{
     Cell, ConnectionConfig, ConnectionId, DialectKind, EditorPrefs, GROUP_IMAGE_MAX, Group,
     GroupColor, GroupId, KeymapOverrides, ObjectPath, PageRequest, RowHeight, SslMode, UiPrefs,
@@ -34,6 +36,10 @@ use crate::store::AppStore;
 use crate::suggest::{SuggestedConnection, laragon_suggestions};
 use crate::visual_query::{self, ColumnTypes, VisualQuery, VqPreview, VqRun};
 use std::time::{Duration, Instant};
+
+mod export;
+mod import;
+mod script;
 
 const LAST_GROUP_KEY: &str = "last_group";
 const UI_PREFS_KEY: &str = "ui_prefs";
@@ -131,8 +137,10 @@ fn remove_if_present(path: &std::path::Path) -> Result<()> {
 /// Owns the saved Connections, Groups and the open sessions. The store lock is
 /// never held across an `.await`.
 pub struct ConnectionService {
-    store: Mutex<AppStore>,
+    store: Arc<Mutex<AppStore>>,
     secrets: Arc<dyn SecretStore>,
+    /// The import and export jobs (D3); it shares the store for history entries.
+    jobs: Arc<JobService>,
     sessions: RwLock<HashMap<ConnectionId, Arc<dyn Dialect>>>,
     /// Bumped whenever a Connection is saved, deleted or closed, so an `open`
     /// that was connecting meanwhile can tell its settings went stale.
@@ -164,6 +172,9 @@ pub enum PassScope {
     Edits(ConnectionId, ObjectPath),
     /// A design of one table: the table changed, created or dropped.
     Design(ConnectionId, ObjectPath),
+    /// One import or script job on a Connection, bound to its fingerprint (D5): the
+    /// request, the mapping, the template and the file, exactly as confirmed.
+    Job(ConnectionId, [u8; 32]),
 }
 
 /// The statements a save would run and what running them needs.
@@ -253,8 +264,10 @@ fn poisoned() -> Error {
 
 impl ConnectionService {
     pub fn new(store: AppStore, secrets: Arc<dyn SecretStore>) -> Self {
+        let store = Arc::new(Mutex::new(store));
         let svc = Self {
-            store: Mutex::new(store),
+            jobs: Arc::new(JobService::new(store.clone())),
+            store,
             secrets,
             sessions: RwLock::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
@@ -314,6 +327,32 @@ impl ConnectionService {
         }
     }
 
+    /// Connects through the data-folder guard: a SQLite Connection can never open
+    /// app.sqlite or any other file in Contura's data folder (Q33). Every connection the
+    /// service makes from a config goes through here.
+    async fn connect_checked(
+        &self,
+        config: &ConnectionConfig,
+        password: Option<&str>,
+    ) -> Result<Arc<dyn Dialect>> {
+        if config.dialect == DialectKind::Sqlite
+            && let Some(file) = &config.file
+        {
+            // Without the data folder the guard cannot check the file: it fails closed.
+            let data = self.data_dir.as_deref().ok_or_else(|| {
+                Error::InvalidInput(
+                    "Contura cannot find its data folder, so it cannot open this file.".into(),
+                )
+            })?;
+            check_user_path(file, data, PathUse::Database)?;
+        }
+        connect(config, password).await
+    }
+
+    pub fn jobs(&self) -> &Arc<JobService> {
+        &self.jobs
+    }
+
     fn store(&self) -> Result<MutexGuard<'_, AppStore>> {
         self.store.lock().map_err(|_| poisoned())
     }
@@ -343,9 +382,10 @@ impl ConnectionService {
     }
 
     /// Bumps the generation first, so an in-flight `open` discards its session.
-    /// The Connection's query sessions close too.
+    /// The Connection's query sessions close too, and its jobs are cancelled.
     async fn close_session(&self, id: ConnectionId) -> Result<()> {
         self.bump_generation(id)?;
+        self.jobs.cancel_on(id).await;
         let handles: Vec<Arc<SessionHandle>> = {
             let mut qs = self.query_sessions.lock().map_err(|_| poisoned())?;
             let mine: Vec<QuerySessionId> = qs
@@ -406,6 +446,65 @@ impl ConnectionService {
             },
         );
         Ok(id)
+    }
+
+    /// A Production pass for one job (D5): it covers exactly the job whose fingerprint is
+    /// `fingerprint`, once, for a limited time, and replaces the job's earlier pass. The
+    /// file it was confirmed for is kept with the Job service, so start can tell a file
+    /// that changed since.
+    pub(crate) fn issue_job_pass(
+        &self,
+        id: ConnectionId,
+        fingerprint: [u8; 32],
+        file: Option<FileIdentity>,
+    ) -> Result<PassId> {
+        let scope = PassScope::Job(id, fingerprint);
+        // The passes `issue_pass` drops (this job's earlier one, and expired ones) take
+        // their confirmed files with them.
+        let now = Instant::now();
+        let dropped: Vec<PassId> = self
+            .passes
+            .lock()
+            .map_err(|_| poisoned())?
+            .iter()
+            .filter(|(_, p)| p.scope == scope || p.expires <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        let pass = self.issue_pass(scope, &[])?;
+        for old in dropped {
+            self.jobs.forget_file(old);
+        }
+        if let Some(file) = file {
+            self.jobs.confirm_file(pass, file);
+        }
+        Ok(pass)
+    }
+
+    /// Applies Read-only and Production to a job before anything opens (D5). A plain
+    /// Connection needs nothing. A Read-only one is refused as `ReadOnly(0)`, whatever
+    /// the job holds and even when it is also Production. A Production one needs an
+    /// unexpired pass issued for exactly `Job(config.id, fingerprint)`, and uses it up;
+    /// any other pass, or none, is `NeedsConfirmation` and leaves the pass as it was.
+    pub(crate) fn authorize_job(
+        &self,
+        config: &ConnectionConfig,
+        fingerprint: [u8; 32],
+        pass: Option<PassId>,
+    ) -> Result<()> {
+        if config.read_only {
+            return Err(Error::ReadOnly(0));
+        }
+        if !config.production {
+            return Ok(());
+        }
+        let pass = pass.ok_or(Error::NeedsConfirmation)?;
+        let mut passes = self.passes.lock().map_err(|_| poisoned())?;
+        let p = passes.get(&pass).ok_or(Error::NeedsConfirmation)?;
+        if p.scope != PassScope::Job(config.id, fingerprint) || p.expires <= Instant::now() {
+            return Err(Error::NeedsConfirmation);
+        }
+        passes.remove(&pass);
+        Ok(())
     }
 
     /// What running these statements on the session needs: nothing, a block or a confirmation.
@@ -902,7 +1001,7 @@ impl ConnectionService {
             PasswordChange::Set { value } => Some(value.clone()),
             PasswordChange::Clear => None,
         };
-        let dialect = connect(&config, password.as_deref()).await?;
+        let dialect = self.connect_checked(&config, password.as_deref()).await?;
         let version = dialect.server_version().await;
         dialect.disconnect().await.ok();
         version
@@ -938,7 +1037,7 @@ impl ConnectionService {
             .find(|c| c.id == id)
             .ok_or_else(|| Error::NotFound("connection not found".into()))?;
         let password = self.secrets.get(id)?;
-        let session = connect(&config, password.as_deref()).await?;
+        let session = self.connect_checked(&config, password.as_deref()).await?;
         let version = match session.server_version().await {
             Ok(v) => v,
             Err(e) => {
@@ -1554,6 +1653,15 @@ impl ConnectionService {
         self.query_session(s)?.1.close_result().await
     }
 
+    /// Stops every running query and job, such as when the app quits (Q22), waiting at
+    /// most `wait` for the servers. Every job's cancel flag is set before anything waits.
+    pub async fn stop_everything(&self, wait: Duration) {
+        let _ = tokio::time::timeout(wait, async {
+            tokio::join!(self.jobs().cancel_all(), self.cancel_all_queries());
+        })
+        .await;
+    }
+
     /// Stops every running query, such as when the app closes. Sessions stay open.
     pub async fn cancel_all_queries(&self) {
         let busy: Vec<Arc<SessionHandle>> = match self.query_sessions.lock() {
@@ -1838,5 +1946,183 @@ mod design_history_tests {
             entry.error.as_deref(),
             Some("restoring the connection with PRAGMA foreign_keys = ON failed: disk I/O error")
         );
+    }
+}
+
+#[cfg(test)]
+mod job_pass_tests {
+    use super::*;
+    use crate::secrets::MemorySecretStore;
+
+    fn service() -> (tempfile::TempDir, ConnectionService) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+        let svc = ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+            .with_data_dir(crate::jobs::paths::outside_data());
+        (dir, svc)
+    }
+
+    fn config(production: bool, read_only: bool) -> ConnectionConfig {
+        ConnectionConfig {
+            id: Uuid::new_v4(),
+            name: "prod".into(),
+            dialect: DialectKind::Postgres,
+            host: "127.0.0.1".into(),
+            port: 5432,
+            user: "u".into(),
+            database: None,
+            ssl: crate::model::SslMode::Disable,
+            group_id: None,
+            file: None,
+            query_timeout_secs: None,
+            ai_access: Default::default(),
+            production,
+            read_only,
+        }
+    }
+
+    const FP: [u8; 32] = [7; 32];
+
+    fn file() -> FileIdentity {
+        FileIdentity {
+            path: PathBuf::from("C:/data/orders.csv"),
+            bytes: 10,
+            sha256: "ab".repeat(32),
+        }
+    }
+
+    #[test]
+    fn plain_connection_needs_no_pass() {
+        let (_d, svc) = service();
+        assert!(svc.authorize_job(&config(false, false), FP, None).is_ok());
+    }
+
+    #[test]
+    fn job_pass_works_once() {
+        let (_d, svc) = service();
+        let c = config(true, false);
+        assert!(matches!(
+            svc.authorize_job(&c, FP, None),
+            Err(Error::NeedsConfirmation)
+        ));
+        let pass = svc.issue_job_pass(c.id, FP, Some(file())).unwrap();
+        assert_eq!(svc.jobs.confirmed_file(pass), Some(file()));
+        svc.authorize_job(&c, FP, Some(pass)).unwrap();
+        assert!(matches!(
+            svc.authorize_job(&c, FP, Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+    }
+
+    #[test]
+    fn job_pass_expires() {
+        let (_d, svc) = service();
+        svc.set_pass_ttl_for_test(Duration::ZERO);
+        let c = config(true, false);
+        let pass = svc.issue_job_pass(c.id, FP, None).unwrap();
+        assert!(matches!(
+            svc.authorize_job(&c, FP, Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+    }
+
+    #[test]
+    fn job_pass_other_fingerprint_refused() {
+        let (_d, svc) = service();
+        let c = config(true, false);
+        let pass = svc.issue_job_pass(c.id, FP, None).unwrap();
+        assert!(matches!(
+            svc.authorize_job(&c, [8; 32], Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+        // Another Connection with the same fingerprint is refused too.
+        let other = config(true, false);
+        assert!(matches!(
+            svc.authorize_job(&other, FP, Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+        // A refusal leaves the pass for the job it was issued for.
+        svc.authorize_job(&c, FP, Some(pass)).unwrap();
+    }
+
+    #[test]
+    fn a_new_job_pass_replaces_the_earlier_one() {
+        let (_d, svc) = service();
+        let c = config(true, false);
+        let first = svc.issue_job_pass(c.id, FP, Some(file())).unwrap();
+        let second = svc.issue_job_pass(c.id, FP, None).unwrap();
+        assert_eq!(
+            svc.jobs.confirmed_file(first),
+            None,
+            "the replaced pass's file"
+        );
+        assert!(matches!(
+            svc.authorize_job(&c, FP, Some(first)),
+            Err(Error::NeedsConfirmation)
+        ));
+        svc.authorize_job(&c, FP, Some(second)).unwrap();
+    }
+
+    #[test]
+    fn job_pass_never_covers_query_edits_design_and_reverse() {
+        let (_d, svc) = service();
+        let c = config(true, false);
+        let path = ObjectPath {
+            database: "shop".into(),
+            schema: Some("public".into()),
+            name: "orders".into(),
+        };
+        let write = vec!["DELETE FROM orders".to_string()];
+        let session = Uuid::new_v4();
+
+        // A Job pass covers no Query, Edits or Design run...
+        let job = svc.issue_job_pass(c.id, FP, None).unwrap();
+        for scope in [
+            PassScope::Query(session),
+            PassScope::Edits(c.id, path.clone()),
+            PassScope::Design(c.id, path.clone()),
+        ] {
+            assert!(
+                matches!(
+                    svc.authorize(&scope, &c, &write, Some(job)),
+                    Err(Error::NeedsConfirmation)
+                ),
+                "{scope:?}"
+            );
+        }
+        // ...and is still there for its own job.
+        svc.authorize_job(&c, FP, Some(job)).unwrap();
+
+        // No Query, Edits or Design pass covers a job.
+        for scope in [
+            PassScope::Query(session),
+            PassScope::Edits(c.id, path.clone()),
+            PassScope::Design(c.id, path.clone()),
+        ] {
+            let pass = svc.issue_pass(scope.clone(), &write).unwrap();
+            assert!(
+                matches!(
+                    svc.authorize_job(&c, FP, Some(pass)),
+                    Err(Error::NeedsConfirmation)
+                ),
+                "{scope:?}"
+            );
+            svc.authorize(&scope, &c, &write, Some(pass)).unwrap();
+        }
+    }
+
+    #[test]
+    fn read_only_wins_over_production() {
+        let (_d, svc) = service();
+        let c = config(true, true);
+        let pass = svc.issue_job_pass(c.id, FP, None).unwrap();
+        assert!(matches!(
+            svc.authorize_job(&c, FP, Some(pass)),
+            Err(Error::ReadOnly(0))
+        ));
+        assert!(matches!(
+            svc.authorize_job(&config(false, true), FP, None),
+            Err(Error::ReadOnly(0))
+        ));
     }
 }

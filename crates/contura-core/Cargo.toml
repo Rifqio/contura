@@ -9,7 +9,7 @@ name = "contura_core"
 [dependencies]
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
@@ -22,6 +22,13 @@ tokio-postgres = "0.7"
 futures-util = { version = "0.3", default-features = false }
 tokio-postgres-rustls = "0.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+csv = "1"
+sha2 = "0.10"
+rust_xlsxwriter = { version = "0.100", features = ["constant_memory"] }
+calamine = "0.36"
+same-file = "1"
+# The zip calamine reads with, for the unpacked-size check before it opens a workbook.
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

@@ -36,7 +36,7 @@ pub struct TableDesign {
     pub sqlite: Option<SqliteExtras>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TableColumn {
     pub name: String,
@@ -64,11 +64,16 @@ pub struct TableColumn {
     /// dropped; `unsupported` names it as `column <name> (<attributes>)`.
     #[serde(default)]
     pub advanced: bool,
+    /// PostgreSQL `GENERATED ALWAYS AS IDENTITY` (D6): an INSERT that gives the column a
+    /// value needs `OVERRIDING SYSTEM VALUE`. False for BY DEFAULT and on other Dialects.
+    #[serde(default)]
+    pub identity_always: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Increment {
+    #[default]
     None,
     /// MySQL `AUTO_INCREMENT`; on SQLite the single INTEGER primary key (the rowid alias).
     AutoIncrement,

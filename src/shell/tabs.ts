@@ -1,6 +1,7 @@
 // The window's tab model (PR5): Home, Settings and Schema Model tabs belong to the window and
 // survive a Group change; query and table tabs belong to the place.
 import type { ConnectionId, GroupId, ObjectKind, ObjectPath, VisualQuery } from "../api/types";
+import type { ImportTarget } from "../jobs/importModel";
 import type { QueryTabDoc } from "../query/QueryTab";
 import type { ModelDoc } from "../schema/SchemaBuilder";
 import { objectKey } from "../objectPath";
@@ -43,7 +44,16 @@ export type WorkTab =
   | { kind: "design"; key: string; connectionId: ConnectionId; target: DesignTabTarget }
   | { kind: "query"; doc: QueryTabDoc }
   | { kind: "visual"; doc: VisualTabDoc }
-  | { kind: "savedQueries" };
+  | { kind: "savedQueries" }
+  /** An Import tab; never saved in place drafts, so a restart drops it (D20). */
+  | {
+      kind: "import";
+      key: string;
+      /** Stays the same when the key changes (Choose Connection..., a SQL file), so the tab keeps its state. */
+      uid?: string;
+      connectionId: ConnectionId;
+      target: ImportTarget;
+    };
 
 /** A tab of the window. */
 export type WindowTab =
@@ -70,6 +80,7 @@ export function tabKey(t: AnyTab): string {
       return "savedQueries";
     case "object":
     case "design":
+    case "import":
       return t.key;
   }
 }
@@ -77,6 +88,13 @@ export function tabKey(t: AnyTab): string {
 /** The key of a table's design tab; never the same as the table tab's `objectKey`. */
 export function designKey(connectionId: ConnectionId, path: ObjectPath): string {
   return `design\u0000${objectKey(connectionId, "table", path)}`;
+}
+
+/** The key of an Import tab, from where it was opened; a later target change keeps it. */
+export function importKey(connectionId: ConnectionId, target: ImportTarget): string {
+  return target.kind === "table"
+    ? `import\u0000${objectKey(connectionId, "table", target.path)}`
+    : `import\u0000${connectionId}\u0000database\u0000${target.database}`;
 }
 
 /** The key of a New table tab. */
@@ -103,6 +121,7 @@ export function tabConnectionId(t: AnyTab): ConnectionId | null {
     case "object":
       return t.selection.connectionId;
     case "design":
+    case "import":
       return t.connectionId;
     default:
       return null;

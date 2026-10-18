@@ -46,6 +46,8 @@ interface Props {
   defaultGroupId: GroupId | null;
   onSaved: (saved: ConnectionConfig) => void;
   onCancel: () => void;
+  /** Asked right before an edit is saved (saving closes the session, so jobs on it end); false keeps the form. */
+  beforeSave?: () => Promise<boolean>;
 }
 
 type SslChoice = SslMode["mode"];
@@ -66,7 +68,7 @@ function isExistingFileRefusal(e: unknown): boolean {
   return isCommandError(e) && e.kind === "invalidInput" && e.message.startsWith("a file already exists");
 }
 
-export default function ConnectionForm({ connection, prefill, duplicateOf, groups, defaultGroupId, onSaved, onCancel }: Props) {
+export default function ConnectionForm({ connection, prefill, duplicateOf, groups, defaultGroupId, onSaved, onCancel, beforeSave }: Props) {
   const id = useId();
   const editing = connection !== undefined;
   /** Where the stored settings come from: the Connection being edited, or the one duplicated. */
@@ -264,6 +266,10 @@ export default function ConnectionForm({ connection, prefill, duplicateOf, group
     setBusy("save");
     setResult(null);
     try {
+      if (beforeSave && !(await beforeSave())) {
+        setBusy(null);
+        return;
+      }
       onSaved(await saveConnection(value));
     } catch (err) {
       setResult({ ok: false, text: errorText(err, value.dialect) });

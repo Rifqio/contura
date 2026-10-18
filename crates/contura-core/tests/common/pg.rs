@@ -123,7 +123,19 @@ impl Drop for PgTestDb {
                 .enable_all()
                 .build()
                 .expect("runtime");
-            rt.block_on(drop_database(&config, &password, &name))
+            rt.block_on(async {
+                // A connection left open by a failing test can make DROP DATABASE wait;
+                // the test fails rather than hanging.
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    drop_database(&config, &password, &name),
+                )
+                .await
+                {
+                    Ok(r) => r.map_err(|e| e.to_string()),
+                    Err(_) => Err("it did not drop within 30s".to_string()),
+                }
+            })
         });
         match cleanup.join() {
             Ok(Ok(())) => {}

@@ -433,6 +433,8 @@ pub(super) async fn table_design(
             sqlite_autoincrement: false,
             collation: row.get(7),
             advanced: false,
+            // `a` ALWAYS, `d` BY DEFAULT.
+            identity_always: identity == "a",
         });
     }
 

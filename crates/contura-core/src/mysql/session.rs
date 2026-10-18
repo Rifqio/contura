@@ -22,9 +22,9 @@ use crate::query::{
 /// The character set number MySQL gives binary strings and BLOBs.
 const BINARY_CHARSET: u16 = 63;
 
-struct Kill {
-    pool: Pool,
-    id: u32,
+pub(super) struct Kill {
+    pub(super) pool: Pool,
+    pub(super) id: u32,
 }
 
 #[async_trait::async_trait]
@@ -111,7 +111,7 @@ async fn actor(
     }
 }
 
-fn type_name(c: &Column) -> &'static str {
+pub(super) fn type_name(c: &Column) -> &'static str {
     let binary = c.character_set() == BINARY_CHARSET;
     match c.column_type() {
         ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => "decimal",
@@ -161,7 +161,7 @@ fn type_name(c: &Column) -> &'static str {
     }
 }
 
-const NUMERIC: &[&str] = &[
+pub(super) const NUMERIC: &[&str] = &[
     "decimal",
     "tinyint",
     "smallint",
@@ -173,7 +173,7 @@ const NUMERIC: &[&str] = &[
     "year",
 ];
 /// Shown as hex: binary strings, BLOBs, and BIT, which the text protocol sends as raw bytes.
-const BYTES: &[&str] = &["varbinary", "binary", "blob", "bit", "geometry"];
+pub(super) const BYTES: &[&str] = &["varbinary", "binary", "blob", "bit", "geometry"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {

@@ -2163,6 +2163,10 @@ button.group-card-name:hover {
   width: min(760px, 100%);
 }
 
+.dialog-size-large {
+  width: min(860px, 100%);
+}
+
 .dialog:focus-visible {
   outline: none;
 }

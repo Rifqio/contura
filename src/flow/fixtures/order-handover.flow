@@ -1,0 +1,20 @@
+diagram flow "Order handover"
+
+Order placed [start]
+Paid? [decision]
+Ask for payment [io]
+orders [step, icon: database]
+Handed over [end]
+
+Kitchen {
+  Send to kitchen [step]
+  Pack order [step]
+}
+
+Order placed > Paid?
+Paid? > Send to kitchen: yes
+Paid? > Ask for payment: no
+Ask for payment > Paid?
+Send to kitchen > Pack order
+Pack order > orders
+Pack order > Handed over

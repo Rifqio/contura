@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::design::{DesignOutcome, DesignPlan, TableDesign};
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::Result;
+use crate::jobs::source::{RowSource, SourceRequest, TableStorage};
+use crate::jobs::writer::{BulkWriter, WriterSetup};
 use crate::model::{
     ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
     Page, PageRequest, SchemaInfo,
@@ -51,6 +53,28 @@ pub trait Dialect: Send + Sync {
     /// whatever happened. A `CopyOnly` plan is refused before any statement. `Err`
     /// means the connection failed, or the server refused on a Read-only Connection.
     async fn apply_design(&self, database: &str, plan: &DesignPlan) -> Result<DesignOutcome>;
+    /// Starts an export read: full values in chunks of up to 1,000 rows or 8 MB, from one
+    /// consistent snapshot on a connection of its own. A producer task (SQLite: a thread)
+    /// reads ahead through a channel of 2 chunks; dropping the source closes the channel
+    /// and the connection. A filter must keep the SELECT one statement, and a `Query`
+    /// must be one statement the classifier calls Read; both are `InvalidInput` otherwise.
+    async fn open_row_source(&self, req: &SourceRequest) -> Result<Box<dyn RowSource>>;
+    /// How the table keeps its rows. MySQL reads its engine (`information_schema.TABLES`);
+    /// SQLite its journal mode. Others are transactional with no engine.
+    async fn table_storage(&self, path: &ObjectPath) -> Result<TableStorage> {
+        let _ = path;
+        Ok(TableStorage::default())
+    }
+    /// Opens a connection of its own for a job's writes, with the same Read-only backstop
+    /// as a query session, runs `setup.before` on it and hands it over. MySQL sets
+    /// `utf8mb4` and selects `database`; PostgreSQL signs in to `database` (or the default
+    /// one); SQLite opens the file for writing on a thread of its own and ignores
+    /// `database`. Never call this for a job `authorize_job` has not let through.
+    async fn open_bulk_writer(
+        &self,
+        database: Option<&str>,
+        setup: &WriterSetup,
+    ) -> Result<Box<dyn BulkWriter>>;
     async fn disconnect(&self) -> Result<()>;
 }
 

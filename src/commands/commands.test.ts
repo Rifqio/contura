@@ -337,6 +337,22 @@ describe("KeymapProvider", () => {
   });
 });
 
+test("export_and_mermaid_are_app_commands_and_ctrl_e_has_no_clash", () => {
+  const map = resolveKeymap({});
+  expect(COMMANDS.find((x) => x.id === "export.open")).toMatchObject({
+    title: "Export...",
+    keys: ["Ctrl+E"],
+    scope: "app",
+  });
+  expect(COMMANDS.find((x) => x.id === "flow.fromMermaid")).toMatchObject({
+    title: "New flow from Mermaid",
+    keys: [],
+    scope: "app",
+  });
+  expect(findClash(map, "export.open", "Ctrl+E")).toBeNull();
+  expect(hintFor(map, "export.open")).toBe("Ctrl+E");
+});
+
 test("visual_query_keys_are_app_commands_without_a_clash", () => {
   const map = resolveKeymap({});
   const want = [

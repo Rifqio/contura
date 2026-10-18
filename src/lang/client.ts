@@ -1,6 +1,7 @@
 // The editor side of the language engine. It talks to one worker and restarts it if it crashes.
 import type { DialectKind } from "../api/types";
 import type { LayoutRequest, Positions } from "../diagram/layout";
+import type { MermaidResult } from "../flow/mermaid";
 import type {
   Diagnostic,
   FromWorker,
@@ -131,6 +132,11 @@ export class LangClient {
   /** Places the diagram nodes the request has no position for, in the worker (ruling D14). */
   layout(request: LayoutRequest): Promise<Positions> {
     return this.ask((id) => ({ type: "layout", id, request }));
+  }
+
+  /** Converts a Mermaid flowchart to .flow; `title` is used when the front matter has none. */
+  mermaid(text: string, title: string): Promise<MermaidResult> {
+    return this.ask((id) => ({ type: "mermaid", id, text, title }));
   }
 
   private ask<R>(message: (id: number) => ToWorker): Promise<R> {

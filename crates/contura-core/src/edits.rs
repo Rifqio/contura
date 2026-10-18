@@ -105,7 +105,7 @@ fn column<'a>(columns: &'a [ColumnInfo], name: &str) -> Result<&'a ColumnInfo> {
 }
 
 /// `[+-]digits[.digits][(e|E)[+-]digits]`, nothing else.
-fn is_number(s: &str) -> bool {
+pub(crate) fn is_number(s: &str) -> bool {
     fn digits(s: &str) -> Option<&str> {
         let rest = s.trim_start_matches(|c: char| c.is_ascii_digit());
         (rest.len() < s.len()).then_some(rest)
@@ -171,7 +171,11 @@ fn term(kind: DialectKind, name: &str, cell: &Cell) -> Result<String> {
     }
 }
 
-fn key_terms(kind: DialectKind, columns: &[ColumnInfo], key: &[KeyPart]) -> Result<Vec<String>> {
+pub(crate) fn key_terms(
+    kind: DialectKind,
+    columns: &[ColumnInfo],
+    key: &[KeyPart],
+) -> Result<Vec<String>> {
     check_key(columns, key)?;
     key.iter()
         .map(|part| {
@@ -181,6 +185,51 @@ fn key_terms(kind: DialectKind, columns: &[ColumnInfo], key: &[KeyPart]) -> Resu
             term(kind, &part.column, &part.value)
         })
         .collect()
+}
+
+/// `(k1, k2) IN ((v1, v2), (v3, v4))` selecting the rows of `keys`, under the same rules as
+/// `key_terms`: each key names exactly the primary key, no value is NULL, cut text and
+/// binary values are refused. One key column is written `k IN (v1, v2)`. SQLite takes row
+/// values on the right of IN only from a subquery, so it gets `(k1, k2) IN (VALUES ...)`.
+pub(crate) fn key_in_clause(
+    kind: DialectKind,
+    columns: &[ColumnInfo],
+    keys: &[Vec<KeyPart>],
+) -> Result<String> {
+    let Some(first) = keys.first() else {
+        return Err(Error::InvalidInput("choose the rows to read".into()));
+    };
+    let names: Vec<&str> = first.iter().map(|p| p.column.as_str()).collect();
+    let mut tuples = Vec::with_capacity(keys.len());
+    for key in keys {
+        key_terms(kind, columns, key)?;
+        let values = names
+            .iter()
+            .map(|name| {
+                let part = key
+                    .iter()
+                    .find(|p| p.column == *name)
+                    .expect("key_terms checked every key names the primary key");
+                cell_literal(kind, &part.value)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        tuples.push(values);
+    }
+    let idents: Vec<String> = names.iter().map(|n| sql_ident(kind, n)).collect();
+    if idents.len() == 1 {
+        let values: Vec<&str> = tuples.iter().map(|t| t[0].as_str()).collect();
+        return Ok(format!("{} IN ({})", idents[0], values.join(", ")));
+    }
+    let rows: Vec<String> = tuples
+        .iter()
+        .map(|t| format!("({})", t.join(", ")))
+        .collect();
+    let list = if kind == DialectKind::Sqlite {
+        format!("VALUES {}", rows.join(", "))
+    } else {
+        rows.join(", ")
+    };
+    Ok(format!("({}) IN ({list})", idents.join(", ")))
 }
 
 fn plan_delete(
@@ -318,6 +367,73 @@ mod tests {
 
     fn nv(v: &str) -> NewValue {
         NewValue::Text { value: v.into() }
+    }
+
+    #[test]
+    fn key_in_clause_per_dialect() {
+        let cols = [
+            col("a", "int", true),
+            col("b", "text", true),
+            col("v", "text", false),
+        ];
+        let keys = vec![
+            vec![key("a", num("1")), key("b", text("x"))],
+            // Another order of the same parts is written in the first key's order.
+            vec![key("b", text("it's")), key("a", num("2"))],
+        ];
+        assert_eq!(
+            key_in_clause(DialectKind::Postgres, &cols, &keys).unwrap(),
+            "(\"a\", \"b\") IN ((1, 'x'), (2, 'it''s'))"
+        );
+        assert_eq!(
+            key_in_clause(DialectKind::MySql, &cols, &keys).unwrap(),
+            "(`a`, `b`) IN ((1, 'x'), (2, 'it''s'))"
+        );
+        assert_eq!(
+            key_in_clause(DialectKind::Sqlite, &cols, &keys).unwrap(),
+            "(\"a\", \"b\") IN (VALUES (1, 'x'), (2, 'it''s'))"
+        );
+        let one = [col("id", "int", true), col("v", "text", false)];
+        assert_eq!(
+            key_in_clause(
+                DialectKind::Sqlite,
+                &one,
+                &[vec![key("id", num("3"))], vec![key("id", num("5"))]]
+            )
+            .unwrap(),
+            "\"id\" IN (3, 5)"
+        );
+    }
+
+    #[test]
+    fn key_in_clause_refuses_what_key_terms_refuses() {
+        let cols = [col("a", "int", true), col("b", "text", true)];
+        let k = DialectKind::Postgres;
+        assert!(matches!(
+            key_in_clause(k, &cols, &[]),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            key_in_clause(k, &cols, &[vec![key("a", num("1"))]]),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            key_in_clause(k, &cols, &[vec![key("a", num("1")), key("b", Cell::Null)]]),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            key_in_clause(
+                k,
+                &cols,
+                &[vec![key("a", num("1); DROP")), key("b", text("x"))]]
+            ),
+            Err(Error::InvalidInput(_))
+        ));
+        let no_pk = [col("a", "int", false)];
+        assert!(matches!(
+            key_in_clause(k, &no_pk, &[vec![key("a", num("1"))]]),
+            Err(Error::NoPrimaryKey)
+        ));
     }
 
     fn path(kind: DialectKind) -> ObjectPath {

@@ -6,8 +6,11 @@ interface Props {
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
-  /** DN 10.12 widths: confirm 420, form 560 (the default), model 640, wide 760 for previews and long values. */
-  size?: "confirm" | "form" | "model" | "wide";
+  /**
+   * DN 10.12 widths: confirm 420, form 560 (the default), model 640, wide 760 for previews and
+   * long values, large 860 for the export and Mermaid dialogs.
+   */
+  size?: "confirm" | "form" | "model" | "wide" | "large";
   /** The same as `size="wide"`. */
   wide?: boolean;
   /** An extra class on the panel, for a dialog with its own width. */

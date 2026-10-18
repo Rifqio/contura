@@ -1,5 +1,6 @@
 mod commands;
 mod fatal;
+mod job_commands;
 mod paths;
 mod window_size;
 
@@ -10,6 +11,9 @@ use contura_core::connections::ConnectionService;
 use contura_core::secrets::{self, KeyringSecretStore};
 use contura_core::store::AppStore;
 use tauri::{Manager, RunEvent, WebviewWindowBuilder, window::Color};
+
+/// The longest quitting waits for running queries and jobs to stop.
+const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -57,6 +61,8 @@ pub fn run() {
             commands::read_model_files,
             commands::write_model_files,
             commands::write_text_file,
+            commands::write_flow_files,
+            commands::flow_exists,
             commands::write_binary_file,
             commands::list_groups,
             commands::save_group,
@@ -116,6 +122,22 @@ pub fn run() {
             commands::save_ai_thread,
             commands::delete_ai_thread,
             commands::clear_ai_threads,
+            job_commands::preview_export,
+            job_commands::start_export,
+            job_commands::inspect_import_file,
+            job_commands::plan_import,
+            job_commands::check_import_file,
+            job_commands::confirm_import,
+            job_commands::start_import,
+            job_commands::plan_script,
+            job_commands::script_statements,
+            job_commands::confirm_script,
+            job_commands::start_script,
+            job_commands::cancel_job,
+            job_commands::list_jobs,
+            job_commands::job_events,
+            job_commands::reveal_in_folder,
+            job_commands::read_text_file,
         ])
         .build(tauri::generate_context!());
     let app = match result {
@@ -131,11 +153,12 @@ pub fn run() {
     };
     app.run(|handle, event| {
         // Closing the app drops the query connections, but a server only notices
-        // when it next writes: stop running queries first so they do not commit.
+        // when it next writes: stop running queries and jobs first so they do not
+        // commit (Q22). Quitting never waits on a server longer than EXIT_WAIT.
         if let RunEvent::ExitRequested { .. } = event
             && let Some(service) = handle.try_state::<ConnectionService>()
         {
-            tauri::async_runtime::block_on(service.cancel_all_queries());
+            tauri::async_runtime::block_on(service.stop_everything(EXIT_WAIT));
         }
     });
 }

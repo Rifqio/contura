@@ -1,6 +1,14 @@
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
-import { errorText, forgetRecent, listConnections, listGroups, setLastGroup } from "./api/client";
-import type { ConnectionConfig, ConnectionId, Group, GroupId, ObjectPath, RecentItem, SavedQuery } from "./api/types";
+import { errorText, forgetRecent, listConnections, listGroups, setLastGroup, tableDesign } from "./api/client";
+import type { ConnectionConfig, ConnectionId, Group, GroupId, JobId, ObjectPath, RecentItem, SavedQuery } from "./api/types";
+import { useJobsGuard } from "./app/useJobsGuard";
+import MermaidImportDialog from "./flow/MermaidImportDialog";
+import ExportDialog from "./jobs/ExportDialog";
+import { type ExportOrigin, originFromJob } from "./jobs/exportText";
+import ImportTab from "./jobs/ImportTab";
+import type { ImportTarget } from "./jobs/importModel";
+import JobStatusItem from "./jobs/JobStatusItem";
+import { JobsProvider, useJobs } from "./jobs/useJobs";
 import DataGrid from "./components/DataGrid";
 import { GroupImagesProvider, useGroupImageCache } from "./components/GroupBadge";
 import GroupSwitcher, { menuPlaces } from "./components/GroupSwitcher";
@@ -51,6 +59,7 @@ import {
   type WindowTab,
   type WorkTab,
   designKey,
+  importKey,
   newDesignKey,
   objectTabOf,
   tabConnectionId,
@@ -72,7 +81,9 @@ export default function App() {
     <PrefsProvider>
       <KeymapProvider>
         <ToastProvider>
-          <Workspace />
+          <JobsProvider>
+            <Workspace />
+          </JobsProvider>
         </ToastProvider>
       </KeymapProvider>
     </PrefsProvider>
@@ -87,11 +98,13 @@ function Workspace() {
   const [place, setPlace] = useState<Place>({ kind: "ungrouped" });
   // One language worker and one schema index for every query tab, for the app's lifetime.
   const lang = appLang();
+  const jobs = useJobs();
+  const jobsGuard = useJobsGuard({ jobs, connections });
   const { openIds, versions, openStatus, setStatus, openTracked, markOpened, markClosed, lost } = useConnectionLifecycle({
     connections,
     onClosed: (id) => {
       lang.schemas.dropConnection(id);
-      removeTabs((t) => objectTabOf(t)?.connectionId === id);
+      removeTabs((t) => objectTabOf(t)?.connectionId === id || (t.kind === "import" && t.connectionId === id));
     },
     onLost: () => setNotice("That Connection is not open any more. Open it again to continue."),
   });
@@ -198,7 +211,8 @@ function Workspace() {
     if (activeId !== null && !isHere(activeId)) setActiveId(null);
     const away = (t: WorkTab) => {
       const o = objectTabOf(t);
-      return !!o && !isHere(o.connectionId);
+      // Import tabs leave with their Connection too (its delete and move asked first).
+      return (!!o && !isHere(o.connectionId)) || (t.kind === "import" && !isHere(t.connectionId));
     };
     if (tabs.some(away)) removeTabs(away);
   }, [connections, place, activeId, tabs]);
@@ -213,18 +227,169 @@ function Workspace() {
       onError: setNotice,
       // The tab is mounted (hidden or not) and knows its SQL: it saves itself.
       saveVisual: (doc) => visualControl(doc.id).current?.save() ?? Promise.resolve(false),
+      // Q22: quitting while a job runs asks, and a yes cancels the jobs before the window goes.
+      jobsOnClose: { running: jobsGuard.running, confirmStop: () => jobsGuard.confirmStop() },
     });
   /** Home's ask about Pending Edits: each table shows while it is asked about, then Home comes back. */
-  async function askFromHome(keys: string[]): Promise<boolean> {
-    if (!keys.some(isDirty)) return true;
-    const ok = await confirmLeave(keys);
+  async function askFromHome(keys: string[], then?: () => Promise<boolean>): Promise<boolean> {
+    if (!keys.some(isDirty)) return then ? then() : true;
+    // With `then` (a move's running imports), a Discard waits for its answer.
+    const ok = await confirmLeave(keys, then ? { then } : undefined);
     showHome();
     return ok;
   }
 
   /** Edit Connection from any path: saving the form closes the Connection's session, so its grids' edits are asked about first. */
   async function editConnection(c: ConnectionConfig) {
+    // Its running jobs are asked about when the form saves (Q43), since saving ends them.
     if (await confirmLeave(tableKeys(c.id))) setForm({ kind: "connection", connection: c });
+  }
+
+  // ---- Export dialog, Import tabs and New flow from Mermaid (step 7) ----
+  /** The open Export dialog: its Connection and origin, or a running job it shows again (`attach`). */
+  const [exporting, setExporting] = useState<{
+    connectionId: ConnectionId;
+    origin: ExportOrigin;
+    attach?: JobId;
+    seq: number;
+  } | null>(null);
+  /** The origin each export job was started from, so the status bar can open its dialog again. */
+  const exportOrigins = useRef(new Map<JobId, { connectionId: ConnectionId; origin: ExportOrigin }>());
+  const [mermaidOpen, setMermaidOpen] = useState(false);
+  /** The job each Import tab started last, by tab key (its `onJob`). */
+  const [importJobs, setImportJobs] = useState<ReadonlyMap<string, JobId>>(new Map());
+  const importJobsRef = useRef(importJobs);
+  importJobsRef.current = importJobs;
+  const jobsNow = useRef(jobs.jobs);
+  jobsNow.current = jobs.jobs;
+
+  function openExport(connectionId: ConnectionId, origin: ExportOrigin) {
+    setExporting((e) => ({ connectionId, origin, seq: (e?.seq ?? 0) + 1 }));
+  }
+
+  // A job the open dialog starts is tied to its origin, for Run in the background and the status bar.
+  useEffect(() => {
+    if (exporting && !exporting.attach) {
+      for (const j of jobs.jobs) {
+        if (j.kind === "export" && !exportOrigins.current.has(j.id) && j.connectionId === exporting.connectionId) {
+          exportOrigins.current.set(j.id, { connectionId: exporting.connectionId, origin: exporting.origin });
+        }
+      }
+    }
+    const live = new Set(jobs.jobs.map((j) => j.id));
+    for (const id of [...exportOrigins.current.keys()]) if (!live.has(id)) exportOrigins.current.delete(id);
+  }, [jobs.jobs, exporting]);
+
+  /** Export... on a tree row: the columns and key come from the table's design. */
+  async function exportTable(s: Selection) {
+    try {
+      const design = await tableDesign(s.connectionId, s.path);
+      const estimate = tree.estimate(s.connectionId, s.path);
+      openExport(s.connectionId, {
+        kind: "table",
+        path: s.path,
+        columns: design.columns.map((c) => c.name),
+        filter: null,
+        sort: null,
+        selected: [],
+        hasPrimaryKey: design.indexes.some((i) => i.primary),
+        rowEstimate: estimate,
+        estimated: estimate !== null,
+      });
+    } catch (e) {
+      toast.show({ kind: "error", text: errorText(e, connections.find((c) => c.id === s.connectionId)?.dialect) });
+    }
+  }
+
+  /** Opens an Import tab into a table or a database, or shows the one open already. */
+  function openImport(connectionId: ConnectionId, target: ImportTarget) {
+    const key = importKey(connectionId, target);
+    setTabs((all) =>
+      all.some((t) => t.kind === "import" && t.key === key)
+        ? all
+        : [...all, { kind: "import", key, uid: newId(), connectionId, target }],
+    );
+    setActiveKey(key);
+  }
+
+  /**
+   * Choose Connection... or a SQL file: the tab takes the key of its new Connection and target, so a
+   * later Import... finds it (Q43). When a tab is open there already, that one shows and this one goes.
+   */
+  function updateImport(key: string, change: { connectionId?: ConnectionId; target?: ImportTarget }) {
+    const tab = tabsRef.current.find((t) => t.kind === "import" && t.key === key);
+    if (!tab || tab.kind !== "import") return;
+    const next = { ...tab, ...change };
+    const nextKey = importKey(next.connectionId, next.target);
+    if (nextKey === key) {
+      setTabs((all) => all.map((t) => (t.kind === "import" && t.key === key ? next : t)));
+      return;
+    }
+    if (tabsRef.current.some((t) => t.kind === "import" && t.key === nextKey)) {
+      setTabs((all) => all.filter((t) => !(t.kind === "import" && t.key === key)));
+      setActiveKey(nextKey);
+      return;
+    }
+    setTabs((all) => all.map((t) => (t.kind === "import" && t.key === key ? { ...next, key: nextKey } : t)));
+    setActiveKey((k) => (k === key ? nextKey : k));
+    setImportJobs((m) => {
+      const id = m.get(key);
+      if (id === undefined) return m;
+      const moved = new Map(m);
+      moved.delete(key);
+      moved.set(nextKey, id);
+      return moved;
+    });
+  }
+
+  // A closed Import tab lets go of its job, and an ended import no tab holds is dismissed.
+  useEffect(() => {
+    const open = new Set(tabs.flatMap((t) => (t.kind === "import" ? [t.key] : [])));
+    if ([...importJobs.keys()].some((k) => !open.has(k))) {
+      setImportJobs((m) => new Map([...m].filter(([k]) => open.has(k))));
+      return;
+    }
+    const held = new Set(importJobs.values());
+    for (const j of jobs.jobs) {
+      if ((j.kind === "import" || j.kind === "scriptImport") && j.done !== null && !held.has(j.id)) jobs.dismiss(j.id);
+    }
+  }, [tabs, importJobs, jobs.jobs]);
+
+  /** The job an Import tab started, while it may still run. */
+  function importJobOf(key: string): JobId | null {
+    return importJobsRef.current.get(key) ?? null;
+  }
+
+  /**
+   * Before the place's tabs go (another Group or place, or a Connection moving away): each running
+   * Import tab asks "Cancel the import and roll back?"; a No keeps everything (Q43).
+   */
+  async function confirmImportsLeave(only?: ConnectionId): Promise<boolean> {
+    for (const [key, id] of importJobsRef.current) {
+      const tab = tabsRef.current.find((t) => t.kind === "import" && t.key === key);
+      if (!tab || tab.kind !== "import" || (only !== undefined && tab.connectionId !== only)) continue;
+      if (!jobsNow.current.some((j) => j.id === id && j.done === null)) continue;
+      setActiveKey(key);
+      if (!(await jobsGuard.confirmCloseImport(id))) return false;
+    }
+    return true;
+  }
+
+  /** The status bar's job item: an export opens its dialog again; an import shows its tab. */
+  function openJob(id: JobId) {
+    const job = jobs.jobs.find((j) => j.id === id);
+    if (!job) return;
+    if (job.kind === "export") {
+      // Without its kept origin (a reload), the job's label is enough for the running view.
+      const from = exportOrigins.current.get(id) ?? { connectionId: job.connectionId, origin: originFromJob(job.label) };
+      setExporting((e) => ({ ...from, attach: id, seq: (e?.seq ?? 0) + 1 }));
+      return;
+    }
+    const held = [...importJobs].find(([, j]) => j === id)?.[0];
+    const tab =
+      tabsRef.current.find((t) => t.kind === "import" && t.key === held) ??
+      tabsRef.current.find((t) => t.kind === "import" && t.connectionId === job.connectionId);
+    if (tab) setActiveKey(tabKey(tab));
   }
 
   /** A New table tab its create turned into a design tab: its key then, or null when it closed instead. */
@@ -235,6 +400,8 @@ function Workspace() {
     const tab = [...tabs, ...windowTabs].find((t) => tabKey(t) === key);
     if (!tab) return;
     if (objectTabOf(tab) && !(await confirmLeave([key]))) return;
+    // A running import asks to cancel and roll back; one with only a mapping closes at once.
+    if (tab.kind === "import" && !(await jobsGuard.confirmCloseImport(importJobOf(key)))) return;
     // A New table created through the ask's Apply is its table's design tab now: that tab closes (M2).
     const created = createdTabs.current.get(key);
     if (created !== undefined) {
@@ -535,6 +702,7 @@ function Workspace() {
     "group.open.7": () => openPlaceAt(7),
     "group.open.8": () => openPlaceAt(8),
     "group.open.9": () => openPlaceAt(9),
+    "flow.fromMermaid": () => setMermaidOpen(true),
   });
 
   const askGroupId = place.kind === "group" ? place.groupId : null;
@@ -591,7 +759,8 @@ function Workspace() {
       showPlace();
       return true;
     }
-    if (!(await leaveAll())) return false;
+    // Discards wait for the import ask: a No there keeps the place and its edits.
+    if (!(await leaveAll({ then: () => confirmImportsLeave() }))) return false;
     goTo(next);
     if (remember) {
       try {
@@ -628,7 +797,7 @@ function Workspace() {
     const target = placeOf(c);
     if (placeKey(target) === placeKey(placeNow.current)) showPlace();
     else {
-      if (!(await leaveAll())) return "stayed";
+      if (!(await leaveAll({ then: () => confirmImportsLeave() }))) return "stayed";
       goTo(target);
     }
     setActiveId(id);
@@ -689,6 +858,8 @@ function Workspace() {
     newQuery: (id) => newQuery(id),
     setNotice,
     historyCleared: () => setHistoryRefresh((n) => n + 1),
+    confirmJobs: (id) => jobsGuard.confirmStop(id),
+    confirmImports: (id) => confirmImportsLeave(id),
   });
 
   if (startup.s === "loading") return <LaunchScreen step={step} startedAt={startedAt} />;
@@ -806,6 +977,8 @@ function Workspace() {
               onNewTable={newTable}
               onDesignTable={(s) => openDesign(s.connectionId, s.path)}
               onDropTable={(id, path) => void tableDrop.drop(id, path)}
+              onExportTable={(s) => void exportTable(s)}
+              onImportTable={(s) => openImport(s.connectionId, { kind: "table", path: s.path })}
               onMoveConnection={(id, to) => void actions.moveFromTree(id, to)}
               onNewGroup={() => setForm({ kind: "newGroup" })}
               onClearHistory={(id) => void actions.clearHistoryFromTree(id)}
@@ -840,8 +1013,9 @@ function Workspace() {
                 openedTimes,
                 onRecentChanged: loadRecent,
                 onShowAllHistory: showAllHistory,
+                onNewFlowFromMermaid: () => setMermaidOpen(true),
                 onChanged: reload,
-                onBeforeMove: (id) => askFromHome(tableKeys(id)),
+                onBeforeMove: (id) => askFromHome(tableKeys(id), () => confirmImportsLeave(id)),
                 onBeforeDeleteGroup: (id) => askFromHome(groupTableKeys(id)),
                 onGroupDeleted: (id) => {
                   // The place's Group is gone: the window moves to Ungrouped, Home still showing.
@@ -893,6 +1067,8 @@ function Workspace() {
                     rowEstimate={s.kind === "table" ? tree.estimate(s.connectionId, s.path) : null}
                     onOpenQuery={(sql) => newQuery(s.connectionId, sql, s.path.database)}
                     onDesign={s.kind === "table" ? () => openDesign(s.connectionId, s.path) : undefined}
+                    onExport={s.kind === "table" ? (origin) => openExport(s.connectionId, origin) : undefined}
+                    onImport={s.kind === "table" ? () => openImport(s.connectionId, { kind: "table", path: s.path }) : undefined}
                     version={gridVersions[t.key] ?? 0}
                     notice={gridNotices[t.key] ?? null}
                     onNoticeDone={() => forgetNotice(t.key)}
@@ -963,6 +1139,9 @@ function Workspace() {
                       const c = connections.find((x) => x.id === id);
                       if (c) void editConnection(c);
                     }}
+                    onExport={(origin) => {
+                      if (t.doc.connectionId) openExport(t.doc.connectionId, origin);
+                    }}
                     rowEstimate={tree.estimate}
                     onChange={updateDoc}
                     onSaved={savedOne}
@@ -1032,6 +1211,28 @@ function Workspace() {
                 </div>
               );
             })}
+            {/* Import tabs stay mounted while hidden, so a running import keeps its view. */}
+            {tabs.map((t) => {
+              if (t.kind !== "import") return null;
+              const c = connections.find((x) => x.id === t.connectionId);
+              if (!c) return null;
+              const key = t.key;
+              return (
+                <div key={t.uid ?? key} className="work-pane" hidden={key !== activeKey}>
+                  <ImportTab
+                    connection={c}
+                    group={c.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
+                    target={t.target}
+                    visible={key === activeKey}
+                    writable={inPlace}
+                    onRetarget={(id) => updateImport(key, { connectionId: id })}
+                    onTargetChange={(target) => updateImport(key, { target })}
+                    onOpenTable={(path) => openObject({ connectionId: c.id, kind: "table", path })}
+                    onJob={(id) => setImportJobs((m) => new Map(m).set(key, id))}
+                  />
+                </div>
+              );
+            })}
             {!current && !activeWindow && (
               <WorkEmpty
                 lastConnection={lastUsed}
@@ -1081,7 +1282,19 @@ function Workspace() {
         </div>
       </div>
 
-      <StatusBar screen={statusScreen} theme={theme.choice} onTheme={theme.choose} />
+      <StatusBar
+        screen={statusScreen}
+        theme={theme.choice}
+        onTheme={theme.choose}
+        jobs={
+          <JobStatusItem
+            jobs={jobs.jobs}
+            onOpen={openJob}
+            onEnded={jobs.dismiss}
+            dialectOf={(id) => connections.find((c) => c.id === id)?.dialect}
+          />
+        }
+      />
 
       <FormDialogs
         form={form}
@@ -1093,6 +1306,7 @@ function Workspace() {
         onCloseForm={() => setForm({ kind: "none" })}
         reload={reload}
         confirmGroupLeave={(id) => confirmLeave(groupTableKeys(id))}
+        beforeConnectionSave={(id) => jobsGuard.confirmStop(id)}
         onGroupDeleted={() => {
           // The Group is gone: the window moves to Ungrouped and shows Home.
           void enterPlace({ kind: "ungrouped" }).then((moved) => moved && showHome());
@@ -1103,6 +1317,31 @@ function Workspace() {
         }}
       />
       {leaveDialog}
+      {jobsGuard.dialog}
+      {exporting &&
+        (() => {
+          const c = connections.find((x) => x.id === exporting.connectionId);
+          if (!c) return null;
+          return (
+            <ExportDialog
+              key={exporting.seq}
+              connection={c}
+              group={c.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
+              origin={exporting.origin}
+              attach={exporting.attach}
+              onClose={() => setExporting(null)}
+            />
+          );
+        })()}
+      {mermaidOpen && (
+        <MermaidImportDialog
+          groups={groups}
+          defaultGroup={workspaceGroupId}
+          lang={lang.client}
+          onClose={() => setMermaidOpen(false)}
+          onCreated={() => setMermaidOpen(false)}
+        />
+      )}
       {tableDrop.dialog}
       <StartModelDialog
         modelStart={modelStart}

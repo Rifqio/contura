@@ -1,0 +1,367 @@
+/* jobs: import (Lane D, Q18). The Import tab and the Production job body of ConfirmRun. Colours are tokens only. */
+
+.import-tab {
+  display: grid;
+  grid-template-rows: auto auto auto auto 1fr auto;
+  height: 100%;
+  min-height: 0;
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+}
+.import-tab.prod-wash {
+  background: var(--c-prod-wash);
+}
+
+.import-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  font: var(--font-body);
+}
+.import-into {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.import-conn {
+  font: var(--font-body-strong);
+}
+.import-target {
+  overflow: hidden;
+  color: var(--c-text-muted);
+  font: var(--font-mono-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-steps {
+  display: flex;
+  gap: var(--spacing-lg);
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  list-style: none;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.import-step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.import-step-n {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 50%;
+  font: var(--font-micro);
+}
+.import-step-now {
+  color: var(--c-text);
+  font-weight: 600;
+}
+.import-step-now .import-step-n {
+  border-color: transparent;
+  background: var(--button-primary-background);
+  color: var(--button-primary-text);
+}
+
+.import-tab > .warning-banner,
+.import-tab > .import-banner {
+  margin: 0 var(--spacing-md) var(--spacing-sm);
+}
+
+.import-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) 10px;
+  border-radius: var(--rounded-md);
+  background: var(--c-info-subtle);
+  color: var(--c-info-text);
+}
+.import-banner p {
+  margin: 0;
+}
+.import-banner-danger {
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+}
+.import-banner-ok {
+  background: var(--c-success-subtle);
+  color: var(--c-success-text);
+}
+
+.import-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.import-options {
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  overflow: auto;
+  border-right: var(--border-hairline) solid var(--c-border-subtle);
+}
+.import-hint {
+  font-variant-numeric: tabular-nums;
+}
+
+.import-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--spacing-md);
+  overflow: auto;
+}
+
+.import-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.import-section-head h3 {
+  margin: 0;
+  font: var(--font-body-strong);
+}
+.import-section-head .button {
+  margin-left: auto;
+}
+
+.import-mapping {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--font-body);
+}
+.import-mapping th,
+.import-mapping td {
+  padding: var(--spacing-2xs) var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  text-align: left;
+  vertical-align: middle;
+}
+.import-mapping thead th {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.import-mapping-file,
+.import-mapping-first,
+.import-mapping-type {
+  font: var(--font-mono-small);
+}
+.import-mapping tbody th {
+  font-weight: 400;
+}
+.import-mapping-type,
+.import-mapping-note {
+  color: var(--c-text-subtle);
+}
+.import-mapping-into .select {
+  min-width: 160px;
+}
+.import-mapping-off .import-mapping-file,
+.import-mapping-off .import-mapping-first,
+.import-null {
+  color: var(--c-text-subtle);
+}
+
+.import-preview {
+  display: flex;
+  min-height: 160px;
+  max-height: 360px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-md);
+  overflow: hidden;
+}
+.import-cell-problem {
+  box-shadow: inset 0 0 0 1px var(--c-danger-solid);
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+}
+
+.import-summary {
+  margin: 0;
+  font: var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.script-list {
+  display: grid;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.script-statement-note {
+  margin: 0 0 var(--spacing-2xs);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.script-statement-refuse .script-statement-note {
+  color: var(--c-danger-text);
+}
+.script-statement-skip .sql-block,
+.script-statement-refuse .sql-block {
+  opacity: 0.6;
+}
+.script-count {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin: var(--spacing-sm) 0 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+.import-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.import-foot-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.import-foot-text p {
+  margin: 0;
+}
+
+.import-run {
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-md);
+  max-width: 760px;
+  padding: var(--spacing-lg) var(--spacing-md);
+  overflow: auto;
+}
+.import-bar {
+  height: 6px;
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-active);
+  overflow: hidden;
+}
+.import-bar span {
+  display: block;
+  height: 100%;
+  background: var(--c-accent);
+}
+.import-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xl);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.import-stats dt {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.import-stats dd {
+  margin: 0;
+  font: var(--font-body-strong);
+}
+.import-end-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.import-end-ok {
+  color: var(--c-success-text);
+}
+.import-end-failed {
+  color: var(--c-danger-text);
+}
+.import-end-title {
+  margin: 0;
+  font: var(--font-subtitle);
+}
+.import-end-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+.import-skipped h3 {
+  margin: 0 0 var(--spacing-xs);
+  font: var(--font-body-strong);
+}
+.import-skipped table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--font-small);
+}
+.import-skipped th,
+.import-skipped td {
+  padding: var(--spacing-2xs) var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  text-align: left;
+}
+.import-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.import-sample-body {
+  display: grid;
+  gap: var(--spacing-sm);
+}
+.import-sample-body p {
+  margin: 0;
+}
+.import-sample {
+  max-height: 420px;
+  overflow: auto;
+  border-radius: var(--rounded-md);
+}
+.import-sample:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+}
+
+/* ConfirmRun's job body (Q14): the shape boxes, the fold line and the fingerprint banner. */
+.confirm-job-title {
+  margin: 0;
+  font: var(--font-body-strong);
+}
+.confirm-job {
+  display: grid;
+  gap: var(--spacing-sm);
+}
+.confirm-shape {
+  display: grid;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+}
+.confirm-shape-head,
+.confirm-fold {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+.confirm-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.confirm-fingerprint {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  margin: 0;
+  padding: var(--spacing-sm) 10px;
+  border-radius: var(--rounded-md);
+  background: var(--c-info-subtle);
+  color: var(--c-info-text);
+}

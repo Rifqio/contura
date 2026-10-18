@@ -358,3 +358,41 @@ test("not_run_statements_show_their_own_editor_lines", () => {
   expect(gutters).toEqual(["2", "5"]);
   expect(document.querySelector(".query-error-notrun")?.textContent).toContain("SELECT 3;");
 });
+
+test("export_menu_has_export_without_import_and_sends_the_result_origin_q16", async () => {
+  const onExport = vi.fn();
+  panel(four(), { onExport, database: "kfc" });
+  await userEvent.click(screen.getByRole("button", { name: "Export" }));
+  expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Copy as CSV", "Export...Ctrl+E"]);
+  await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
+  const s = four();
+  const st = s.items[s.active].state as Extract<RunnerState["items"][number]["state"], { s: "rows" }>;
+  expect(onExport).toHaveBeenCalledWith({
+    kind: "result",
+    database: "kfc",
+    sql: s.items[s.active].sql,
+    columns: st.columns,
+    rows: st.rows,
+    hidden: [],
+  });
+});
+
+test("ctrl_e_in_the_results_opens_export", async () => {
+  const onExport = vi.fn();
+  panel(four(), { onExport, database: null });
+  const tab = screen.getAllByRole("tab")[0];
+  tab.focus();
+  fireEvent.keyDown(tab, { key: "e", code: "KeyE", ctrlKey: true });
+  expect(onExport).toHaveBeenCalledTimes(1);
+  expect(onExport.mock.calls[0][0]).toMatchObject({ kind: "result", database: null });
+});
+
+test("the_result_origin_names_the_hidden_columns", async () => {
+  const onExport = vi.fn();
+  panel(four(), { onExport });
+  await userEvent.click(screen.getByRole("button", { name: "Columns" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "name" }));
+  await userEvent.click(screen.getByRole("button", { name: "Export" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
+  expect(onExport.mock.calls[0][0]).toMatchObject({ kind: "result", hidden: ["name"] });
+});

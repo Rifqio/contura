@@ -231,7 +231,19 @@ export type CommandError =
    * A design's closing statement `sql`, which restores the connection, failed. `applied`:
    * the change itself was applied, so the table differs from the one loaded.
    */
-  | { kind: "designRestoreFailed"; message: { applied: boolean; sql: string; message: string } };
+  | { kind: "designRestoreFailed"; message: { applied: boolean; sql: string; message: string } }
+  /** An import or export stopped at `at`; `message` names the place and the fix. */
+  | { kind: "jobFailed"; message: { at: JobPosition; message: string } }
+  /** The file of a confirmed Production import changed before the run. */
+  | { kind: "fileChanged"; message: { file: string; confirmed: boolean } }
+  /** A second writing job on one Connection (by name). */
+  | { kind: "jobBusy"; message: { connection: string } }
+  /** The export target exists; the message is its path. */
+  | { kind: "fileExists"; message: string }
+  /** An export read ended without finishing; the file was not kept. */
+  | { kind: "readStopped"; message?: undefined }
+  /** A writer's COMMIT succeeded, then a closing statement `sql` failed; the rows are in. */
+  | { kind: "afterCommit"; message: { sql: string; message: string } };
 
 /** One table as the server holds it, for the Table Designer. */
 export interface TableDesign {
@@ -265,6 +277,8 @@ export interface TableColumn {
   collation: string | null;
   /** MySQL: the column may only be renamed or dropped. */
   advanced: boolean;
+  /** PostgreSQL `GENERATED ALWAYS AS IDENTITY`; false elsewhere. */
+  identityAlways: boolean;
 }
 
 export interface MySqlColumn {
@@ -910,4 +924,304 @@ export interface VqPreview {
 export interface VqRun {
   sql: string;
   execution: Execution;
+}
+
+// Import and export jobs (step 7). Paths are strings, u64 values are numbers, and
+// SHA-256 values travel as lowercase hex strings.
+
+export type JobId = string;
+export type JobKind = "export" | "import" | "scriptImport" | "check";
+export type Format = "csv" | "json" | "xlsx" | "sql";
+export type Delimiter = "comma" | "semicolon" | "tab";
+export type NullText = "emptyCell" | "nullWord";
+export type BinaryText = "hex" | "base64";
+export type JsonLayout = "lines" | "array";
+export type SqlTableName = "asSource" | "unqualified";
+export type EmptyAs = "null" | "emptyText";
+export type OnError = "stop" | "skip";
+export type CommitMode = { kind: "once" } | { kind: "every"; rows: number };
+
+export interface ExportOptions {
+  delimiter: Delimiter;
+  nullAs: NullText;
+  header: boolean;
+  bom: boolean;
+  binary: BinaryText;
+  jsonLayout: JsonLayout;
+  freezeHeader: boolean;
+  rowsPerStatement: number;
+  tableName: SqlTableName;
+}
+
+/** The Core's defaults: a field left out of a request reads as these. */
+export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
+  delimiter: "comma",
+  nullAs: "emptyCell",
+  header: true,
+  bom: false,
+  binary: "hex",
+  jsonLayout: "lines",
+  freezeHeader: true,
+  rowsPerStatement: 500,
+  tableName: "asSource",
+};
+
+/** An empty `columns` list means all columns, in table order. */
+export type ExportSource =
+  | {
+      kind: "table";
+      path: ObjectPath;
+      columns: string[];
+      filter: string | null;
+      sort: SortSpec | null;
+      /** Selected rows by key; empty means every row. */
+      keys: KeyPart[][];
+    }
+  /** `columns`: the output columns to keep, in order (the result panel's shown ones); empty keeps them all. */
+  | { kind: "query"; database: string | null; sql: string; columns: string[] }
+  /** The rows a result already shows (D16). */
+  | { kind: "rows"; columns: ResultColumn[]; rows: Cell[][] };
+
+export interface ExportRequest {
+  connectionId: ConnectionId;
+  source: ExportSource;
+  format: Format;
+  options: ExportOptions;
+  path: string;
+  rowsHint: number | null;
+}
+
+export interface ExportPreview {
+  lines: string[];
+  sheet: string[][] | null;
+  encoding: string;
+  bytesPerRow: number;
+  sampleRows: number;
+  notes: string[];
+  /** False when the statement does not only read (D16): offer "Rows shown" alone. */
+  queryRead: boolean;
+}
+
+export interface ImportOptions {
+  /** null sniffs it from the file. */
+  delimiter: Delimiter | null;
+  header: boolean;
+  emptyAs: EmptyAs;
+  onError: OnError;
+  commit: CommitMode;
+  sheet: string | null;
+  /** "Read the text NULL as NULL" (Q31), CSV and Excel only; off by default. */
+  nullWord?: boolean;
+}
+
+export const DEFAULT_IMPORT_OPTIONS: ImportOptions = {
+  delimiter: null,
+  header: true,
+  emptyAs: "null",
+  onError: "stop",
+  commit: { kind: "once" },
+  sheet: null,
+  nullWord: false,
+};
+
+/** One file column and the table column it goes into; `into: null` leaves it out. */
+export interface ColumnMap {
+  fileColumn: number;
+  into: string | null;
+  byHand: boolean;
+}
+
+export interface ImportRequest {
+  connectionId: ConnectionId;
+  table: ObjectPath;
+  file: string;
+  format: Format;
+  options: ImportOptions;
+  /** Empty means match by name. */
+  mapping: ColumnMap[];
+}
+
+/** Rust `jobs::types::RowCount`; renamed here, where `RowCount` is a Drop's bounded count. */
+export interface FileRowCount {
+  rows: number;
+  exact: boolean;
+}
+
+export interface FileSummary {
+  format: Format;
+  delimiter: Delimiter | null;
+  /** "UTF-8" or "UTF-8 with BOM". */
+  encoding: string;
+  bytes: number;
+  header: string[];
+  /** The first 20 rows as text; null is an empty unquoted cell. */
+  rows: (string | null)[][];
+  rowsEstimate: FileRowCount;
+  sheets: string[];
+  conturaBackup: boolean;
+}
+
+export interface PlannedColumn {
+  into: string;
+  typeSql: string;
+  fileColumn: number | null;
+  note: string | null;
+  blocks: string | null;
+  /** Filled by the database: never offered as an Into column. */
+  generated: boolean;
+}
+
+export interface PreviewCell {
+  text: string | null;
+  problem: string | null;
+}
+
+export interface InsertShape {
+  head: string;
+  /** The first 4 rows of the first statement. */
+  firstRows: string[];
+  rowsPerStatement: number;
+  statements: number;
+  rows: number;
+}
+
+export type JobVerdict =
+  | { kind: "ok" }
+  | { kind: "readOnly"; connection: string }
+  | {
+      kind: "needsConfirmation";
+      connection: string;
+      database: string | null;
+      fingerprint: string;
+      fileBytes: number;
+      fileSha256: string;
+    }
+  | { kind: "blocked"; reasons: string[] };
+
+export interface ImportPlan {
+  columns: PlannedColumn[];
+  preview: PreviewCell[][];
+  sampleInsert: string;
+  extra: string[];
+  shape: InsertShape;
+  warnings: string[];
+  verdict: JobVerdict;
+  /** Q28: the whole import runs in one transaction (false for MyISAM and Commit every N). Absent: read from the options and warnings. */
+  oneTransaction?: boolean;
+}
+
+export type ScriptAction = { kind: "run" } | { kind: "skip"; reason: string } | { kind: "refuse"; reason: string };
+export type StatementKind = "create" | "insert" | "other";
+
+export interface ScriptStatement {
+  index: number;
+  line: number;
+  text: string;
+  class: StatementClass;
+  kind: StatementKind;
+  action: ScriptAction;
+  /** Q12: it would be skipped and runs because Run as is is ticked. */
+  runAsIs?: boolean;
+}
+
+export interface ScriptRequest {
+  connectionId: ConnectionId;
+  database: string | null;
+  path: string;
+  runAsIs: boolean;
+}
+
+export type ConfirmItem =
+  | { kind: "exact"; line: number; text: string }
+  | { kind: "shape"; line: number; shape: InsertShape };
+
+export interface ScriptPlan {
+  statements: number;
+  creates: number;
+  inserts: number;
+  skipped: ScriptStatement[];
+  refused: ScriptStatement[];
+  ownTransactions: boolean;
+  hasDdl: boolean;
+  conturaBackup: boolean;
+  /** The first 50 statements. */
+  first: ScriptStatement[];
+  /** The first 200 items of the Production confirmation. */
+  confirm: ConfirmItem[];
+  confirmMore: number;
+  bytes: number;
+  sha256: string;
+  verdict: JobVerdict;
+  /** Q28: the script runs in one transaction (false for its own transactions and MySQL DDL). Absent: read from the plan. */
+  oneTransaction?: boolean;
+  /** Skipped statements past the 1,000 that `skipped` holds. */
+  skippedMore?: number;
+  /** Refused statements past the 1,000 that `refused` holds. */
+  refusedMore?: number;
+}
+
+export type JobPhase = "checking" | "reading" | "writing" | "committing" | "rollingBack";
+
+export interface CellProblem {
+  fileRow: number;
+  column: string;
+  message: string;
+}
+
+export interface CheckReport {
+  rows: number;
+  failing: number;
+  /** The first 20 problems. */
+  first: CellProblem[];
+  sha256: string;
+}
+
+export interface JobReport {
+  kind: JobKind;
+  rowsRead: number;
+  rowsWritten: number;
+  statements: number;
+  skipped: number;
+  warnings: string[];
+  elapsedMs: number;
+  file: string | null;
+  bytes: number;
+  committed: number;
+  check: CheckReport | null;
+}
+
+export type JobEvent =
+  | {
+      kind: "progress";
+      phase: JobPhase;
+      table: string | null;
+      rowsDone: number;
+      rowsTotal: number | null;
+      bytesDone: number;
+      bytesTotal: number | null;
+      statementsDone: number;
+      fileRow: number | null;
+    }
+  | { kind: "warning"; message: string }
+  | { kind: "rowSkipped"; fileRow: number; column: string | null; message: string }
+  | { kind: "finished"; report: JobReport }
+  /** Q27: `rowsCommitted` rows stay in the database after the stop; absent means 0. */
+  | { kind: "failed"; error: CommandError; rowsCommitted?: number };
+
+export interface JobSummary {
+  id: JobId;
+  kind: JobKind;
+  connectionId: ConnectionId;
+  /** Such as "Exporting orders". */
+  label: string;
+  percent: number | null;
+  startedAtMs: number;
+}
+
+/** Where a job stopped: a file row or line, a table, a statement number. */
+export interface JobPosition {
+  fileRow: number | null;
+  line: number | null;
+  table: string | null;
+  statement: number | null;
 }

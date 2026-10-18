@@ -2,7 +2,18 @@ import { expect, test } from "vitest";
 import { EMPTY_LAYOUT } from "../schema/layout";
 import type { ModelDoc } from "../schema/SchemaBuilder";
 import { objectKey } from "../objectPath";
-import { afterClose, designKey, newDesignKey, stripOrder, tabConnectionId, tabKey, type WindowTab, type WorkTab } from "./tabs";
+import {
+  afterClose,
+  designKey,
+  importKey,
+  newDesignKey,
+  objectTabOf,
+  stripOrder,
+  tabConnectionId,
+  tabKey,
+  type WindowTab,
+  type WorkTab,
+} from "./tabs";
 
 const query = (id: string): WorkTab => ({
   kind: "query",
@@ -65,6 +76,18 @@ test("a_design_tab_is_keyed_apart_from_its_table", () => {
   expect(key).not.toBe(objectKey("c1", "table", path));
   expect(key).toBe(`design\u0000${objectKey("c1", "table", path)}`);
   expect(newDesignKey("n1")).toBe("design\u0000new\u0000n1");
+});
+
+test("an_import_tab_is_keyed_by_its_connection_and_target", () => {
+  const path = { database: "shop", schema: "public", name: "menu_items" };
+  const key = importKey("c1", { kind: "table", path });
+  expect(key).toBe(`import\u0000${objectKey("c1", "table", path)}`);
+  expect(importKey("c1", { kind: "database", database: "shop" })).toBe("import\u0000c1\u0000database\u0000shop");
+  const tab: WorkTab = { kind: "import", key, connectionId: "c1", target: { kind: "table", path } };
+  expect(tabKey(tab)).toBe(key);
+  expect(tabConnectionId(tab)).toBe("c1");
+  // Not a Pending Edits tab: it is never asked about by the grid guard.
+  expect(objectTabOf(tab)).toBeNull();
 });
 
 test("a_visual_tab_is_keyed_by_its_doc_and_names_its_connection", () => {

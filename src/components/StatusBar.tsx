@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { DIALECT_LABEL } from "../api/client";
 import type { ConnectionConfig, ThemeChoice } from "../api/types";
 import DbMark from "./DbMark";
@@ -15,6 +16,8 @@ interface Props {
   screen: StatusScreen;
   theme: ThemeChoice;
   onTheme(c: ThemeChoice): void;
+  /** The running jobs item (D22), shown before the theme menu. */
+  jobs?: ReactNode;
 }
 
 function Left({ screen }: { screen: StatusScreen }) {
@@ -75,13 +78,14 @@ function Left({ screen }: { screen: StatusScreen }) {
  * The window's status bar. A visible query or table tab renders its own status (rows, time, position or
  * Pending Edits) into `#app-status-slot`.
  */
-export default function StatusBar({ screen, theme, onTheme }: Props) {
+export default function StatusBar({ screen, theme, onTheme, jobs }: Props) {
   return (
     <footer className="app-status" role="status">
       <Left screen={screen} />
       {/* The query status (Ln, Col changes on every key) is not announced; the left segment is. */}
       <span id="app-status-slot" className="app-status-slot" aria-live="off" />
       <span className="spacer" />
+      {jobs}
       <span>UTF-8</span>
       <ThemeMenu value={theme} onChange={onTheme} />
     </footer>

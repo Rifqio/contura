@@ -54,6 +54,14 @@ pub(super) fn session_err(e: tokio_postgres::Error, read_only: bool) -> Error {
     }
 }
 
+/// Sends the server a cancel request for whatever `client` is running.
+pub(super) fn canceller(client: &Client, tls: Option<MakeRustlsConnect>) -> Arc<dyn Canceller> {
+    Arc::new(PgCancel {
+        token: client.cancel_token(),
+        tls,
+    })
+}
+
 pub(super) fn spawn(
     client: Client,
     tls: Option<MakeRustlsConnect>,

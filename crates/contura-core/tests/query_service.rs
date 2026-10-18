@@ -31,10 +31,10 @@ async fn fixture_with(timeout: Option<u32>, production: bool, read_only: bool) -
         .execute_batch("CREATE TABLE t(a INTEGER); INSERT INTO t VALUES (1), (2);")
         .unwrap();
     let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
-    let svc = Arc::new(ConnectionService::new(
-        store,
-        Arc::new(MemorySecretStore::new()),
-    ));
+    let svc = Arc::new(
+        ConnectionService::new(store, Arc::new(MemorySecretStore::new()))
+            .with_data_dir(common::data_dir()),
+    );
     let saved = svc
         .save(ConnectionInput {
             id: None,
@@ -726,7 +726,8 @@ async fn prepare_run_dialog_falls_back_to_the_configured_database() {
     let svc = ConnectionService::new(
         AppStore::open(&dir.path().join("app.sqlite")).unwrap(),
         Arc::new(MemorySecretStore::new()),
-    );
+    )
+    .with_data_dir(common::data_dir());
     let saved = svc
         .save(ConnectionInput {
             id: None,
@@ -825,7 +826,8 @@ async fn history_is_pruned_when_the_service_starts() {
     let svc = ConnectionService::new(
         AppStore::open(&f._dir.path().join("app.sqlite")).unwrap(),
         Arc::new(MemorySecretStore::new()),
-    );
+    )
+    .with_data_dir(common::data_dir());
     let left: Vec<String> = svc
         .query_history(Some(f.id), all())
         .unwrap()

@@ -1,6 +1,9 @@
 use serde::Serialize;
 
+use std::path::PathBuf;
+
 use crate::ai::AiError;
+use crate::jobs::types::JobPosition;
 use crate::model::KeyPart;
 
 #[derive(thiserror::Error, Debug, Serialize)]
@@ -67,9 +70,43 @@ pub enum Error {
         sql: String,
         message: String,
     },
+    /// An import or export stopped at `at`; `message` names the place and the fix.
+    #[error("{message}")]
+    JobFailed { at: JobPosition, message: String },
+    /// An import's file changed before anything was kept: after the Production confirm
+    /// (`confirmed`), or, on any other Connection, while Contura read it.
+    #[error("{}", file_changed_text(file, *confirmed))]
+    FileChanged {
+        file: String,
+        #[serde(default)]
+        confirmed: bool,
+    },
+    /// A second writing job on one Connection (by name).
+    #[error("Another import is writing to {connection}. Wait for it to end.")]
+    JobBusy { connection: String },
+    /// An export target exists and the request did not say to replace it.
+    #[error("{} exists", .0.display())]
+    FileExists(PathBuf),
+    /// An export read ended without its end mark (its producer panicked or was dropped).
+    /// The text is whole, so it is shown as it is.
+    #[error("The read stopped unexpectedly. Nothing more was written.")]
+    ReadStopped,
+    /// A writer's COMMIT succeeded, then one of its setup's `after` statements, `sql`,
+    /// failed with the server's `message`. The committed rows are in.
+    #[error("The rows were committed, but {sql} failed afterwards: {message}")]
+    AfterCommit { sql: String, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// "after you confirmed" only when there was a confirm to speak of: on Production (Q45).
+fn file_changed_text(file: &str, confirmed: bool) -> String {
+    if confirmed {
+        format!("{file} changed after you confirmed. Nothing was imported.")
+    } else {
+        format!("{file} changed while Contura read it. Nothing was imported.")
+    }
+}
 
 /// Browse code maps a server's read-only refusal to `ReadOnlyRefused` wherever it
 /// happens. A Connection that is not Read-only must not say it is, so there it
@@ -92,6 +129,18 @@ mod tests {
         assert_eq!(
             Error::ValueTooLarge(17_825_792).to_string(),
             "value is 17825792 bytes, over the 16 MiB limit"
+        );
+    }
+
+    #[test]
+    fn read_stopped_is_its_own_sentence() {
+        assert_eq!(
+            Error::ReadStopped.to_string(),
+            "The read stopped unexpectedly. Nothing more was written."
+        );
+        assert_eq!(
+            serde_json::to_value(Error::ReadStopped).unwrap(),
+            serde_json::json!({"kind":"readStopped"})
         );
     }
 
@@ -207,6 +256,80 @@ mod tests {
             }),
             serde_json::json!({"kind":"designRestoreFailed","message":{"applied":true,
                 "sql":"PRAGMA foreign_keys = ON","message":"disk I/O error"}})
+        );
+    }
+
+    #[test]
+    fn job_errors_shape() {
+        let json = |e: Error| serde_json::to_value(e).unwrap();
+        let failed = Error::JobFailed {
+            at: JobPosition {
+                file_row: Some(7),
+                line: None,
+                table: Some("menu_items".into()),
+                statement: Some(1),
+            },
+            message: "Row 7 of the file: n/a is not a number for price.".into(),
+        };
+        assert_eq!(
+            failed.to_string(),
+            "Row 7 of the file: n/a is not a number for price."
+        );
+        assert_eq!(
+            json(failed),
+            serde_json::json!({"kind":"jobFailed","message":{
+                "at":{"fileRow":7,"line":null,"table":"menu_items","statement":1},
+                "message":"Row 7 of the file: n/a is not a number for price."}})
+        );
+        let changed = Error::FileChanged {
+            file: "menu-oct.csv".into(),
+            confirmed: true,
+        };
+        assert_eq!(
+            changed.to_string(),
+            "menu-oct.csv changed after you confirmed. Nothing was imported."
+        );
+        assert_eq!(
+            json(changed),
+            serde_json::json!({"kind":"fileChanged","message":{"file":"menu-oct.csv","confirmed":true}})
+        );
+        // Q45 M5: with no confirm, the text does not speak of one.
+        let changed = Error::FileChanged {
+            file: "menu-oct.csv".into(),
+            confirmed: false,
+        };
+        assert_eq!(
+            changed.to_string(),
+            "menu-oct.csv changed while Contura read it. Nothing was imported."
+        );
+        let after = Error::AfterCommit {
+            sql: "ANALYZE t".into(),
+            message: "no such table".into(),
+        };
+        assert_eq!(
+            after.to_string(),
+            "The rows were committed, but ANALYZE t failed afterwards: no such table"
+        );
+        assert_eq!(
+            json(after),
+            serde_json::json!({"kind":"afterCommit","message":{"sql":"ANALYZE t","message":"no such table"}})
+        );
+        let busy = Error::JobBusy {
+            connection: "kestrel-main".into(),
+        };
+        assert_eq!(
+            busy.to_string(),
+            "Another import is writing to kestrel-main. Wait for it to end."
+        );
+        assert_eq!(
+            json(busy),
+            serde_json::json!({"kind":"jobBusy","message":{"connection":"kestrel-main"}})
+        );
+        let exists = Error::FileExists(PathBuf::from("C:/out/orders.csv"));
+        assert_eq!(exists.to_string(), "C:/out/orders.csv exists");
+        assert_eq!(
+            json(exists),
+            serde_json::json!({"kind":"fileExists","message":"C:/out/orders.csv"})
         );
     }
 

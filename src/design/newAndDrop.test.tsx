@@ -60,6 +60,7 @@ const ordersDesign = {
       sqliteAutoincrement: false,
       collation: null,
       advanced: false,
+      identityAlways: false,
     },
   ],
   indexes: [],

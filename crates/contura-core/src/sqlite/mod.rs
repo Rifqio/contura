@@ -2,8 +2,10 @@ mod introspect;
 mod page;
 mod session;
 pub(crate) mod snapshot;
+mod source;
 mod sql_schema;
 pub(crate) mod tokens;
+mod writer;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -473,6 +475,35 @@ impl Dialect for SqliteDialect {
         // `after` statement, so nothing else uses the connection in between.
         self.run(move |c| run_design(c, &plan, &parts, read_only))
             .await
+    }
+
+    async fn open_row_source(
+        &self,
+        req: &crate::jobs::source::SourceRequest,
+    ) -> Result<Box<dyn crate::jobs::source::RowSource>> {
+        source::open(self.path.clone(), req).await
+    }
+
+    async fn table_storage(&self, path: &ObjectPath) -> Result<crate::jobs::source::TableStorage> {
+        let database = path.database.clone();
+        let wal = self
+            .run(move |c| source::journal_is_wal(c, &database))
+            .await?;
+        Ok(crate::jobs::source::TableStorage {
+            transactional: true,
+            engine: None,
+            sqlite_wal: Some(wal),
+        })
+    }
+
+    async fn open_bulk_writer(
+        &self,
+        database: Option<&str>,
+        setup: &crate::jobs::writer::WriterSetup,
+    ) -> Result<Box<dyn crate::jobs::writer::BulkWriter>> {
+        // A SQLite Connection is one file: `database` names nothing more to open.
+        let _ = database;
+        writer::open(self.path.clone(), self.read_only, setup.clone()).await
     }
 
     async fn disconnect(&self) -> Result<()> {

@@ -320,6 +320,28 @@ test("design_tabs_read_table_design_or_new_table_with_the_edit_icon", () => {
   expect(iconsIn(fresh, [...KINDS, "edit"])).toEqual(["edit"]);
 });
 
+test("import_tabs_read_import_into_with_the_import_icon_and_chips", () => {
+  const path = { database: "shop", schema: "public", name: "menu_items" };
+  const into: WorkTab = { kind: "import", key: "import\u0000t", connectionId: "c1", target: { kind: "table", path } };
+  const script: WorkTab = { kind: "import", key: "import\u0000d", connectionId: "c2", target: { kind: "database", database: "shop" } };
+  const readOnly = { ...prod, id: "c2", name: "replica", production: false, readOnly: true };
+  render(
+    <TabStrip
+      tabs={[into, script]}
+      active={into.key}
+      connections={[prod, readOnly]}
+      onSelect={() => {}}
+      onClose={() => {}}
+      onNew={() => {}}
+    />,
+  );
+  const tab = screen.getByRole("tab", { name: "Import into menu_items, Production" });
+  expect(iconsIn(tab, [...KINDS, "import"])).toEqual(["import"]);
+  expect(within(tab).getByText("PROD")).toBeTruthy();
+  const db = screen.getByRole("tab", { name: "Import into shop, Read-only" });
+  expect(iconsIn(db, [...KINDS, "import"])).toEqual(["import"]);
+});
+
 const vqModel = (tables: string[] = []) => ({
   version: 1,
   database: "shop",

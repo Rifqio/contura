@@ -1,0 +1,422 @@
+/* jobs: export. The Export dialog (frame 7.1), its running frame and the status bar job item. */
+
+.export-dialog .mono {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+}
+
+.export-title-name {
+  font-weight: 400;
+}
+
+.export-subtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-keys {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.export-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding-top: 0;
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  min-height: 0;
+}
+
+.export-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  min-width: 0;
+  padding: var(--spacing-xs) 28px var(--spacing-xs) 0;
+}
+
+.export-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.export-step-head,
+.export-preview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin: 0;
+  color: var(--c-text);
+  font: var(--font-body-strong);
+}
+
+.export-step-num {
+  display: grid;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: var(--rounded-full);
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-text);
+  font: var(--font-label);
+  font-weight: 600;
+}
+
+.export-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 28px;
+}
+
+.export-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 24px;
+}
+
+.export-choice-off {
+  color: var(--c-text-subtle);
+}
+
+.export-count,
+.export-hint,
+.export-summary,
+.export-preview-sub {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-preview-sub {
+  font-weight: 400;
+}
+
+.export-columns {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: 2px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+.export-file {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.export-file .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.export-hint.mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-more {
+  display: flex;
+  flex-direction: column;
+}
+
+.export-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 32px;
+  padding: 0 10px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+  color: var(--c-text);
+  font: var(--font-body);
+  text-align: left;
+}
+
+.export-more-toggle:hover {
+  background: var(--c-bg-hover);
+}
+
+.export-more-on {
+  border-radius: var(--rounded-md) var(--rounded-md) 0 0;
+}
+
+.export-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-more-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--spacing-md);
+  border: var(--border-hairline) solid var(--c-border);
+  border-top: 0;
+  border-radius: 0 0 var(--rounded-md) var(--rounded-md);
+}
+
+.export-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: var(--spacing-xs) 0 var(--spacing-xs) 28px;
+  border-left: var(--border-hairline) solid var(--c-border-subtle);
+}
+
+.export-box {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+
+.export-box-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+
+.export-box-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-lines {
+  margin: 0;
+  padding: 6px 10px;
+  overflow-x: auto;
+  color: var(--c-text);
+  font: var(--font-mono-small);
+  line-height: 18px;
+  white-space: pre;
+}
+
+.export-sheet-wrap {
+  max-height: 200px;
+  overflow: auto;
+}
+
+.export-sheet {
+  border-collapse: separate;
+  border-spacing: 0;
+  font: var(--font-mono-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-sheet th,
+.export-sheet td {
+  height: 28px;
+  padding: 0 var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.export-sheet th {
+  background: var(--c-bg-panel);
+  font-weight: 600;
+}
+
+.export-size {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px var(--spacing-md);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+}
+
+.export-size b {
+  font: var(--font-title);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) 10px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+  color: var(--c-text);
+  font: var(--font-small);
+}
+
+.export-banner > .icon {
+  flex: none;
+  color: var(--c-text-muted);
+}
+
+.export-banner-prod {
+  border-color: transparent;
+  background: var(--c-prod-subtle);
+}
+
+.export-banner-prod > .icon {
+  color: var(--c-prod-text);
+}
+
+.export-error {
+  margin: 0;
+  color: var(--c-danger-text);
+  font: var(--font-small);
+}
+
+.export-keys > .export-error {
+  padding: 0 var(--spacing-lg) var(--spacing-md);
+}
+
+/* The running frame (560 px). */
+.export-running {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding-top: 0;
+}
+
+.export-running-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.export-running-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.export-running-percent {
+  flex: none;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--c-border);
+}
+
+.export-bar > b {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--c-accent);
+  transition: width var(--motion-base) linear;
+}
+
+.export-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-xs) var(--spacing-lg);
+  margin: 0;
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-facts dt {
+  color: var(--c-text-subtle);
+}
+
+.export-facts dd {
+  margin: 0;
+  color: var(--c-text);
+}
+
+/* Choose...: portalled beside the dialog so nothing clips it. */
+.export-chooser {
+  position: fixed;
+  z-index: 310;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  max-height: 320px;
+  padding: var(--spacing-xs);
+  overflow: auto;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-raised);
+  box-shadow: var(--shadow-1);
+}
+
+.export-chooser-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 28px;
+  padding: 0 var(--spacing-xs) 0 var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+}
+
+.export-chooser-row:hover {
+  background: var(--c-bg-hover);
+}
+
+.export-chooser-name {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+/* The status bar job item. */
+.job-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  min-width: 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
+.job-status:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+
+.job-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

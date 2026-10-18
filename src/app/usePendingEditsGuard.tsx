@@ -7,6 +7,11 @@ import UnsavedEdits, { designBody, tableBody } from "../components/UnsavedEdits"
 import type { QueryTabDoc } from "../query/QueryTab";
 import { type AnyTab, type VisualTabDoc, type WorkTab, isUnsaved, objectTabOf, tabKey } from "../shell/tabs";
 
+export interface LeaveOpts {
+  /** The next ask after the Pending Edits (running jobs); a Discard applies only when it says yes. */
+  then?(): Promise<boolean>;
+}
+
 export interface PendingEditsGuard {
   dirtyKeys: ReadonlySet<string>;
   gridControl(key: string): MutableRefObject<GridControl | null>;
@@ -17,9 +22,13 @@ export interface PendingEditsGuard {
   tableKeys(only?: ConnectionId): string[];
   /** The same tabs of a Group's Connections. */
   groupTableKeys(groupId: GroupId): string[];
-  /** Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is cancelled. */
-  confirmLeave(keys: string[]): Promise<boolean>;
-  leaveAll(): Promise<boolean>;
+  /**
+   * Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is
+   * cancelled. With `then`, a Discard waits: `then` runs once every grid is answered (the jobs ask),
+   * and the discards apply only when it says yes, so a later No keeps the edits (Q43).
+   */
+  confirmLeave(keys: string[], opts?: LeaveOpts): Promise<boolean>;
+  leaveAll(opts?: LeaveOpts): Promise<boolean>;
   /**
    * A tab whose Saved Query text or Visual Query model differs from what was saved (`isUnsaved`)
    * asks Save, Discard or Cancel before it closes (PR22); false when cancelled or the save failed.
@@ -42,8 +51,15 @@ export function usePendingEditsGuard(opts: {
   onError(text: string): void;
   /** Saves a Visual Query from the ask; true when it saved. Without it, Save keeps the tab open. */
   saveVisual?(doc: VisualTabDoc): Promise<boolean>;
+  /**
+   * Running jobs (useJobsGuard): quitting while one runs asks after the Pending Edits, and a yes
+   * cancels them before the window goes (Q22).
+   */
+  jobsOnClose?: { running(): boolean; confirmStop(): Promise<boolean> };
 }): PendingEditsGuard {
   const { tabs, connections, savedQueries } = opts;
+  const jobsOnClose = useRef(opts.jobsOnClose);
+  jobsOnClose.current = opts.jobsOnClose;
 
   // ---- Pending Edits in table tabs and unapplied designs: ask before they are closed or left ----
   const [dirtyGrids, setDirtyGrids] = useState<ReadonlySet<string>>(new Set());
@@ -108,9 +124,9 @@ export function usePendingEditsGuard(opts: {
   }
 
   /** Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is cancelled. */
-  function confirmLeave(keys: string[]): Promise<boolean> {
+  function confirmLeave(keys: string[], leave?: LeaveOpts): Promise<boolean> {
     // One ask at a time: a later request waits for the open one, then checks again.
-    const run = leaveQueue.current.then(() => askLeave(keys));
+    const run = leaveQueue.current.then(() => askLeave(keys, leave));
     leaveQueue.current = run.then(
       () => {},
       () => {},
@@ -119,7 +135,29 @@ export function usePendingEditsGuard(opts: {
   }
   const leaveQueue = useRef<Promise<void>>(Promise.resolve());
 
-  async function askLeave(keys: string[]): Promise<boolean> {
+  /** The Discards held back while a `then` ask is still to come, by grid key. */
+  const deferred = useRef<string[] | null>(null);
+
+  async function askLeave(keys: string[], leave?: LeaveOpts): Promise<boolean> {
+    deferred.current = leave?.then ? [] : null;
+    try {
+      if (!(await askEach(keys))) return false;
+      if (!leave?.then) return true;
+      const held = deferred.current ?? [];
+      deferred.current = null;
+      if (!(await leave.then())) return false;
+      let ok = true;
+      for (const key of held) {
+        if (gridControl(key).current?.discard() ?? true) markDirty(key, false);
+        else ok = false;
+      }
+      return ok;
+    } finally {
+      deferred.current = null;
+    }
+  }
+
+  async function askEach(keys: string[]): Promise<boolean> {
     for (const key of keys) {
       if (!isDirty(key)) continue;
       const raw = tabsRef.current.find((t) => objectTabOf(t)?.key === key);
@@ -141,7 +179,7 @@ export function usePendingEditsGuard(opts: {
         setLeaveAsk({ key, title, body, production, verb, busy: false, resolve }),
       );
       if (!ok) return false;
-      markDirty(key, false);
+      if (!deferred.current?.includes(key)) markDirty(key, false);
     }
     return true;
   }
@@ -180,7 +218,7 @@ export function usePendingEditsGuard(opts: {
   }
   const confirmLeaveRef = useRef(confirmLeave);
   confirmLeaveRef.current = confirmLeave;
-  const leaveAll = () => confirmLeave(tableKeys());
+  const leaveAll = (leave?: LeaveOpts) => confirmLeave(tableKeys(), leave);
   /** The table and design tabs of a Group's Connections. */
   const groupTableKeys = (groupId: GroupId) => {
     const ids = new Set(connections.filter((c) => c.groupId === groupId).map((c) => c.id));
@@ -200,9 +238,17 @@ export function usePendingEditsGuard(opts: {
         const w = getCurrentWindow();
         return w.onCloseRequested(async (event) => {
           const keys = tableKeys();
-          if (!keys.some(isDirty)) return;
+          const dirty = keys.some(isDirty);
+          const jobs = jobsOnClose.current;
+          const running = jobs?.running() ?? false;
+          if (!dirty && !running) return;
           event.preventDefault();
-          if (await confirmLeaveRef.current(keys)) await w.destroy();
+          // Q43: with Pending Edits, the jobs ask comes before any Discard is applied.
+          const jobsAsk = running && jobs ? { then: () => jobs.confirmStop() } : undefined;
+          if (dirty) {
+            if (!(await confirmLeaveRef.current(keys, jobsAsk))) return;
+          } else if (jobsAsk && !(await jobsAsk.then())) return;
+          await w.destroy();
         });
       })
       .then((stop) => {
@@ -252,7 +298,11 @@ export function usePendingEditsGuard(opts: {
         }}
         onDiscard={() => {
           // Refused while a save or Apply runs: the tab, Group or Connection stays, as on Cancel.
-          const ok = leaveAsk.doc || leaveAsk.visual ? true : (gridControl(leaveAsk.key).current?.discard() ?? true);
+          const grid = !leaveAsk.doc && !leaveAsk.visual;
+          let ok = true;
+          // A Discard waiting for the next ask is held; it applies once that ask says yes.
+          if (grid && deferred.current) deferred.current.push(leaveAsk.key);
+          else if (grid) ok = gridControl(leaveAsk.key).current?.discard() ?? true;
           setLeaveAsk(null);
           leaveAsk.resolve(ok);
         }}

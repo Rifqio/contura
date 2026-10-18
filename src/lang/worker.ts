@@ -1,8 +1,9 @@
 // The language worker: parses DBML about 120 ms after the last edit, checks
 // SQL and draws its query shape about 150 ms after, and answers SQL completion and refactors at once,
-// all off the UI thread. It also lays out diagrams, loading dagre on first use.
+// all off the UI thread. It also lays out diagrams, loading dagre on first use, and converts Mermaid to .flow.
 import type { SchemaModel } from "../api/types";
 import { layoutMissing } from "../diagram/layout";
+import { mermaidToFlow } from "../flow/mermaid";
 import { inspectDbml } from "./dbml/inspect";
 import { parseDbml } from "./dbml/parse";
 import type { FromWorker, ToWorker } from "./protocol";
@@ -74,6 +75,13 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
       case "sqlRefactor":
         try {
           post({ type: "sqlRefactor", ids: [m.id], result: sql.refactor(m) });
+        } catch (e) {
+          fail([m.id], e);
+        }
+        return;
+      case "mermaid":
+        try {
+          post({ type: "mermaid", ids: [m.id], result: mermaidToFlow(m.text, m.title) });
         } catch (e) {
           fail([m.id], e);
         }
