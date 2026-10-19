@@ -1,0 +1,23 @@
+diagram flow "Order flow"
+
+Order placed [start]
+Paid? [decision]
+Ask for payment [io, table: shop.payments]
+Handed over [end]
+
+Kitchen {
+  Cook [step, color: warning]
+  Packing {
+    Pack order [subprocess]
+    Label bag
+  }
+}
+
+// a chain and every flowchart arrow
+Order placed > Paid?
+Paid? > Cook: yes
+Paid? > Ask for payment: no
+Ask for payment --> Paid?
+Cook > Pack order > Label bag
+Label bag - Handed over
+Kitchen <> Ask for payment: questions

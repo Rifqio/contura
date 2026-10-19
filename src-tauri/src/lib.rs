@@ -1,3 +1,4 @@
+mod browser;
 mod commands;
 mod fatal;
 mod job_commands;
@@ -61,8 +62,18 @@ pub fn run() {
             commands::read_model_files,
             commands::write_model_files,
             commands::write_text_file,
-            commands::write_flow_files,
-            commands::flow_exists,
+            commands::list_diagrams,
+            commands::read_diagram,
+            commands::list_flow_table_links,
+            commands::write_diagram,
+            commands::write_diagram_layout,
+            commands::delete_diagram,
+            commands::rename_diagram,
+            commands::save_diagram_copy,
+            commands::icon_index,
+            commands::icon_sets,
+            commands::icon,
+            commands::open_url,
             commands::write_binary_file,
             commands::list_groups,
             commands::save_group,
@@ -91,6 +102,11 @@ pub fn run() {
             commands::apply_edits,
             commands::table_design,
             commands::table_ddl,
+            commands::lineage,
+            commands::view_dependencies,
+            commands::read_lineage_layout,
+            commands::write_lineage_layout,
+            commands::delete_lineage_layout,
             commands::plan_design,
             commands::confirm_design,
             commands::apply_design,

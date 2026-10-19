@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef, type MutableRefObject } from "react";
 import { expect, test, vi } from "vitest";
@@ -12,6 +12,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import type { DesignTabTarget } from "../shell/tabs";
 import { LOAD_TIMEOUT, patient } from "../test/load";
+import { holdTimers } from "../test/timers";
 import { ORDERS } from "./fixtures";
 import TableDesigner from "./TableDesigner";
 
@@ -245,6 +246,9 @@ test("ctrl_s_while_a_cell_is_being_edited_keeps_the_edit_and_shows_its_plan_befo
 test("an_apply_click_within_the_preview_wait_shows_the_plan_and_runs_nothing", async () => {
   setup({}, { plan_design: echoPlan });
   await screen.findByRole("tab", { name: "Columns 5" });
+  // The preview's 200ms wait ends only once Apply's plan is on screen. On a busy machine it could end while
+  // Apply's plan was still on its way, and then both plan, which this test is not about.
+  const previewWait = holdTimers(200);
   fireEvent.doubleClick(cell("total", "type"));
   const box = screen.getByRole("combobox", { name: "Cell value" });
   fireEvent.change(box, { target: { value: "int" } });
@@ -254,7 +258,8 @@ test("an_apply_click_within_the_preview_wait_shows_the_plan_and_runs_nothing", a
   expect(await screen.findByText("The preview changed. Check it and Apply again.")).toBeTruthy();
   await waitFor(() => expect(previewSql()).toContain("MODIFY `total` int"));
   expect(callsTo("apply_design")).toHaveLength(0);
-  await new Promise((r) => setTimeout(r, 300));
+  expect(previewWait.count()).toBeGreaterThan(0);
+  act(() => previewWait.release());
   // The preview's own wait does not plan again what Apply already showed.
   expect(callsTo("plan_design")).toHaveLength(1);
   await userEvent.click(applyButton());

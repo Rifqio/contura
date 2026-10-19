@@ -123,11 +123,29 @@ const PATHS = {
   // Lucide arrow-left-right and grip-vertical (ISC): Swap sides, and a row's drag handle.
   swap: "M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4",
   grip: `${circle(9, 5, 1)}${circle(9, 12, 1)}${circle(9, 19, 1)}${circle(15, 5, 1)}${circle(15, 12, 1)}${circle(15, 19, 1)}`,
+  // Diagram nodes (frame 6+.2): an outside party and the cube for an unknown icon. User and box are Lucide.
+  user: `M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2${circle(12, 7, 4)}`,
+  cube: "M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.3 7 12 12l8.7-5M12 22V12",
+  // Lineage (frame 6+.1): ban marks a key that stops a delete; arrow-left is Lucide's (ISC).
+  ban: `${circle(12, 12, 10)}M4.9 4.9l14.2 14.2`,
+  arrowLeft: "M19 12H5M12 19l-7-7 7-7",
+  // The flow tool bar (frames 6+.2, 6+.4, 6+.5).
+  square: "M5 5h14v14H5z",
+  diamond: "M12 3l9 9-9 9-9-9z",
+  io: "M7 5h13l-3 14H4z",
+  pill: "M8 7h8a5 5 0 0 1 0 10H8A5 5 0 0 1 8 7z",
+  boxPlus: "M16 6.5 10 3 4 6.5v7l6 3.5 6-3.5zM4 6.5l6 3.5 6-3.5M10 10v7M19 15v6M16 18h6",
+  cards: "M4 6h16v12H4zM4 10h16",
+  classic: "M20 6H4v12h16M8 6v12",
+  tidy: "M4 6h6v5H4zM14 13h6v5h-6zM10 8.5h2a2 2 0 0 1 2 2v5",
 } as const;
 
 export type IconName = keyof typeof PATHS;
 
 export type IconSize = 14 | 16 | 20;
+
+/** An icon's path data on its 24 px grid, for exports that draw it as a plain SVG path. */
+export const iconPath = (name: IconName): string => PATHS[name];
 
 const strokeFor = (size: IconSize) => (size === 14 ? 1.75 : 1.5);
 

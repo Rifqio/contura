@@ -6,6 +6,7 @@ import {
   afterClose,
   designKey,
   importKey,
+  lineageKey,
   newDesignKey,
   objectTabOf,
   stripOrder,
@@ -76,6 +77,18 @@ test("a_design_tab_is_keyed_apart_from_its_table", () => {
   expect(key).not.toBe(objectKey("c1", "table", path));
   expect(key).toBe(`design\u0000${objectKey("c1", "table", path)}`);
   expect(newDesignKey("n1")).toBe("design\u0000new\u0000n1");
+});
+
+test("a_lineage_tab_is_keyed_apart_from_its_table_and_design", () => {
+  const path = { database: "shop", schema: "public", name: "orders" };
+  const key = lineageKey("c1", path);
+  expect(key).toBe(`lineage\u0000${objectKey("c1", "table", path)}`);
+  expect(key).not.toBe(designKey("c1", path));
+  const tab: WorkTab = { kind: "lineage", key, connectionId: "c1", path };
+  expect(tabKey(tab)).toBe(key);
+  expect(tabConnectionId(tab)).toBe("c1");
+  // Read only: never asked about by the Pending Edits guard.
+  expect(objectTabOf(tab)).toBeNull();
 });
 
 test("an_import_tab_is_keyed_by_its_connection_and_target", () => {

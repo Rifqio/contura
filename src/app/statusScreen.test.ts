@@ -76,6 +76,10 @@ describe("statusScreenFor", () => {
     });
   });
 
+  it("a_diagram_shows_its_file_name", () => {
+    expect(statusScreenFor(input({ activeWindow: { kind: "flow", name: "checkout" } }))).toEqual({ kind: "flow", name: "checkout", fileName: "checkout.flow" });
+  });
+
   it("workspace_follows_the_tree_branch_while_the_tree_has_focus", () => {
     const s = statusScreenFor(input({ treeBranch: "b", current: queryTab("a"), activeId: "c" }));
     expect(s).toMatchObject({ kind: "workspace", connection: b });

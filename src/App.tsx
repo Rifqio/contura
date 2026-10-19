@@ -1,11 +1,15 @@
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
-import { errorText, forgetRecent, listConnections, listGroups, setLastGroup, tableDesign } from "./api/client";
-import type { ConnectionConfig, ConnectionId, Group, GroupId, JobId, ObjectPath, RecentItem, SavedQuery } from "./api/types";
+import { errorText, forgetRecent, listConnections, listDiagrams, listGroups, setLastGroup, tableDesign } from "./api/client";
+import type { ConnectionConfig, ConnectionId, DiagramEntry, Group, GroupId, JobId, ObjectPath, RecentItem, SavedQuery } from "./api/types";
 import { useJobsGuard } from "./app/useJobsGuard";
+import { useDiagramFileActions } from "./flow/diagramFileActions";
+import { focusFlowText } from "./flow/focusFlowText";
 import MermaidImportDialog from "./flow/MermaidImportDialog";
+import NewDiagramSheet from "./flow/NewDiagramSheet";
 import ExportDialog from "./jobs/ExportDialog";
 import { type ExportOrigin, originFromJob } from "./jobs/exportText";
 import ImportTab from "./jobs/ImportTab";
+import LineageTab from "./lineage/LineageTab";
 import type { ImportTarget } from "./jobs/importModel";
 import JobStatusItem from "./jobs/JobStatusItem";
 import { JobsProvider, useJobs } from "./jobs/useJobs";
@@ -60,6 +64,7 @@ import {
   type WorkTab,
   designKey,
   importKey,
+  lineageKey,
   newDesignKey,
   objectTabOf,
   tabConnectionId,
@@ -104,7 +109,9 @@ function Workspace() {
     connections,
     onClosed: (id) => {
       lang.schemas.dropConnection(id);
-      removeTabs((t) => objectTabOf(t)?.connectionId === id || (t.kind === "import" && t.connectionId === id));
+      removeTabs(
+        (t) => objectTabOf(t)?.connectionId === id || ((t.kind === "import" || t.kind === "lineage") && t.connectionId === id),
+      );
     },
     onLost: () => setNotice("That Connection is not open any more. Open it again to continue."),
   });
@@ -128,6 +135,8 @@ function Workspace() {
     openSavedDoc,
     openVisualDoc,
     openSchemaTab,
+    openFlowTab,
+    renameFlowTab,
     schemaClose,
     schemaCloseFor,
   } = useWorkspaceTabs();
@@ -211,13 +220,13 @@ function Workspace() {
     if (activeId !== null && !isHere(activeId)) setActiveId(null);
     const away = (t: WorkTab) => {
       const o = objectTabOf(t);
-      // Import tabs leave with their Connection too (its delete and move asked first).
-      return (!!o && !isHere(o.connectionId)) || (t.kind === "import" && !isHere(t.connectionId));
+      // Import and lineage tabs leave with their Connection too (its delete and move asked first).
+      return (!!o && !isHere(o.connectionId)) || ((t.kind === "import" || t.kind === "lineage") && !isHere(t.connectionId));
     };
     if (tabs.some(away)) removeTabs(away);
   }, [connections, place, activeId, tabs]);
 
-  const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseUnsaved, dialog: leaveDialog } =
+  const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseUnsaved, confirmCloseFlow, dialog: leaveDialog } =
     usePendingEditsGuard({
       tabs,
       connections,
@@ -410,6 +419,7 @@ function Workspace() {
       return;
     }
     if (!(await confirmCloseUnsaved(tab))) return;
+    if (tab.kind === "flow" && !(await confirmCloseFlow(tab.name))) return;
     const builderClose = tab.kind === "schema" ? schemaCloseFor(tab.id) : null;
     if (builderClose) builderClose();
     else dropTab(key);
@@ -448,6 +458,13 @@ function Workspace() {
         ? all
         : [...all, { kind: "design", key, connectionId, target: { kind: "alter", path } }],
     );
+    setActiveKey(key);
+  }
+
+  /** Opens a table's lineage tab, or shows the one open already (step 6+). */
+  function openLineage(connectionId: ConnectionId, path: ObjectPath) {
+    const key = lineageKey(connectionId, path);
+    setTabs((all) => (all.some((t) => t.kind === "lineage" && t.key === key) ? all : [...all, { kind: "lineage", key, connectionId, path }]));
     setActiveKey(key);
   }
 
@@ -683,6 +700,33 @@ function Workspace() {
   const activeWindow = windowTabs.find((t) => tabKey(t) === activeKey);
   const settingsActive = activeWindow?.kind === "settings";
   const dataFolder = useDataFolder(settingsActive);
+
+  // ---- Diagrams (step 6+): the New diagram sheet, Recent's diagrams and each diagram's file actions ----
+  const [newDiagramOpen, setNewDiagramOpen] = useState(false);
+  const [diagrams, setDiagrams] = useState<DiagramEntry[]>([]);
+  const loadDiagrams = () => {
+    listDiagrams().then(setDiagrams, () => {});
+  };
+  // Home's Recent reads the folder each time Home shows, so saves made in diagram tabs are counted.
+  useEffect(() => {
+    if (activeKey === "home") loadDiagrams();
+  }, [activeKey]);
+  /** The open tab of diagram `name`; names are not case-sensitive on Windows. */
+  const flowTabOf = (name: string) => windowTabs.find((t) => t.kind === "flow" && t.name.toLowerCase() === name.toLowerCase());
+  const diagramFiles = useDiagramFileActions({
+    tabOf: (name) => {
+      const tab = flowTabOf(name);
+      return tab?.kind === "flow" ? tab.name : null;
+    },
+    confirmClose: (tab) => confirmCloseFlow(tab),
+    dropTab: (tab) => dropTab(`flow:${tab}`),
+    openTab: (name) => openFlowTab(name),
+    renameTab: (from, to) => renameFlowTab(from, to),
+    onChanged: loadDiagrams,
+  });
+  const diagramActions = { rename: diagramFiles.rename, saveCopy: (name: string) => void diagramFiles.saveCopy(name), remove: diagramFiles.remove };
+  /** The diagram tab on top, for the file commands. */
+  const activeDiagram = activeWindow?.kind === "flow" ? activeWindow.name : null;
   // The app's command keys; the rest of the registry is wired as each command arrives.
   useCommandKeys({
     // A new query tab, on the active Connection.
@@ -703,6 +747,16 @@ function Workspace() {
     "group.open.8": () => openPlaceAt(8),
     "group.open.9": () => openPlaceAt(9),
     "flow.fromMermaid": () => setMermaidOpen(true),
+    "flow.new": () => setNewDiagramOpen(true),
+    "flow.saveCopy": () => {
+      if (activeDiagram) void diagramFiles.saveCopy(activeDiagram);
+    },
+    "flow.rename": () => {
+      if (activeDiagram) diagramFiles.rename(activeDiagram);
+    },
+    "flow.delete": () => {
+      if (activeDiagram) diagramFiles.remove(activeDiagram);
+    },
   });
 
   const askGroupId = place.kind === "group" ? place.groupId : null;
@@ -936,6 +990,8 @@ function Workspace() {
           onNew={() => newQuery(activeId)}
           onNewVisual={() => visualTarget && newVisualQuery(visualTarget.id, visualTarget.database)}
           newVisualReady={visualTarget !== null}
+          onNewDiagram={() => setNewDiagramOpen(true)}
+          diagramActions={diagramActions}
         />
       </TitleBar>
 
@@ -976,6 +1032,7 @@ function Workspace() {
               onNewSchemaModel={(connectionId, database, schema) => setModelStart({ initial: { connectionId, database, schema } })}
               onNewTable={newTable}
               onDesignTable={(s) => openDesign(s.connectionId, s.path)}
+              onShowLineage={(s) => openLineage(s.connectionId, s.path)}
               onDropTable={(id, path) => void tableDrop.drop(id, path)}
               onExportTable={(s) => void exportTable(s)}
               onImportTable={(s) => openImport(s.connectionId, { kind: "table", path: s.path })}
@@ -1013,7 +1070,10 @@ function Workspace() {
                 openedTimes,
                 onRecentChanged: loadRecent,
                 onShowAllHistory: showAllHistory,
-                onNewFlowFromMermaid: () => setMermaidOpen(true),
+                onNewDiagram: () => setNewDiagramOpen(true),
+                diagrams,
+                onOpenDiagram: (name) => openFlowTab(name),
+                diagramActions,
                 onChanged: reload,
                 onBeforeMove: (id) => askFromHome(tableKeys(id), () => confirmImportsLeave(id)),
                 onBeforeDeleteGroup: (id) => askFromHome(groupTableKeys(id)),
@@ -1067,6 +1127,7 @@ function Workspace() {
                     rowEstimate={s.kind === "table" ? tree.estimate(s.connectionId, s.path) : null}
                     onOpenQuery={(sql) => newQuery(s.connectionId, sql, s.path.database)}
                     onDesign={s.kind === "table" ? () => openDesign(s.connectionId, s.path) : undefined}
+                    onLineage={s.kind === "table" ? () => openLineage(s.connectionId, s.path) : undefined}
                     onExport={s.kind === "table" ? (origin) => openExport(s.connectionId, origin) : undefined}
                     onImport={s.kind === "table" ? () => openImport(s.connectionId, { kind: "table", path: s.path }) : undefined}
                     version={gridVersions[t.key] ?? 0}
@@ -1100,6 +1161,24 @@ function Workspace() {
                     onApplied={(path, kind) => designApplied(t.key, c.id, path, kind)}
                     onDrop={(path) => void tableDrop.drop(c.id, path)}
                     lang={lang}
+                  />
+                </div>
+              );
+            })}
+            {/* Lineage tabs stay mounted while hidden, so their drawing and panel survive a tab switch. */}
+            {tabs.map((t) => {
+              if (t.kind !== "lineage") return null;
+              const c = connections.find((x) => x.id === t.connectionId);
+              if (!c) return null;
+              return (
+                <div key={t.key} className="work-pane" hidden={t.key !== activeKey}>
+                  <LineageTab
+                    connection={c}
+                    path={t.path}
+                    onOpenTable={(path) => openObject({ connectionId: c.id, kind: "table", path })}
+                    onAddForeignKey={(path) => openDesign(c.id, path)}
+                    onOpenView={(path) => openObject({ connectionId: c.id, kind: "view", path })}
+                    onOpenDiagram={(name) => openFlowTab(name)}
                   />
                 </div>
               );
@@ -1339,9 +1418,36 @@ function Workspace() {
           defaultGroup={workspaceGroupId}
           lang={lang.client}
           onClose={() => setMermaidOpen(false)}
-          onCreated={() => setMermaidOpen(false)}
+          beforeReplace={diagramFiles.beforeReplace}
+          onCreated={(name) => {
+            setMermaidOpen(false);
+            // The flow is saved in the diagrams folder by name: open it in its tab.
+            openFlowTab(name);
+            loadDiagrams();
+          }}
         />
       )}
+      {newDiagramOpen && (
+        <NewDiagramSheet
+          onClose={() => setNewDiagramOpen(false)}
+          beforeReplace={diagramFiles.beforeReplace}
+          onCreated={(name) => {
+            setNewDiagramOpen(false);
+            openFlowTab(name);
+            focusFlowText(name);
+            loadDiagrams();
+          }}
+          onMermaid={() => {
+            setNewDiagramOpen(false);
+            setMermaidOpen(true);
+          }}
+          onOpenDiagram={(name) => {
+            setNewDiagramOpen(false);
+            openFlowTab(name);
+          }}
+        />
+      )}
+      {diagramFiles.dialog}
       {tableDrop.dialog}
       <StartModelDialog
         modelStart={modelStart}

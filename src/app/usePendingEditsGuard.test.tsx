@@ -6,6 +6,7 @@ import type { GridControl } from "../components/DataGrid";
 import type { QueryTabDoc } from "../query/QueryTab";
 import type { WorkTab } from "../shell/tabs";
 import { callsTo, routeInvoke } from "../test/invoke";
+import { registerFlow, updateFlow } from "../flow/flowRegistry";
 import { type PendingEditsGuard, usePendingEditsGuard } from "./usePendingEditsGuard";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -470,5 +471,101 @@ describe("usePendingEditsGuard", () => {
     });
     expect(plain.preventDefault).not.toHaveBeenCalled();
     expect(jobs.confirmStop).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("diagram saves on close (P16 I3)", () => {
+  afterEach(() => {
+    closeWindow.handler = null;
+    closeWindow.destroy.mockClear();
+  });
+
+  it("closing_a_diagram_whose_save_failed_retries_then_asks", async () => {
+    setup([]);
+    const flush = vi.fn<() => Promise<boolean>>().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const off = registerFlow("checkout", { save: "failed", message: "disk full", line: null, col: null, errors: 0, flush });
+    try {
+      let result: Promise<boolean>;
+      act(() => {
+        result = g.confirmCloseFlow("checkout");
+      });
+      // The close tries the save again first; it fails, so it asks.
+      await screen.findByText("Save changes to checkout.flow?");
+      expect(flush).toHaveBeenCalledTimes(1);
+      await userEvent.click(button("Save"));
+      expect(await result!).toBe(true);
+      expect(flush).toHaveBeenCalledTimes(2);
+      // Saved: no ask.
+      updateFlow("checkout", { save: "saved" });
+      let again: boolean | undefined;
+      await act(async () => {
+        again = await g.confirmCloseFlow("checkout");
+      });
+      expect(again).toBe(true);
+      // Failed again: Cancel keeps the tab, Discard closes it.
+      updateFlow("checkout", { save: "failed" });
+      flush.mockResolvedValue(false);
+      let kept: Promise<boolean>;
+      act(() => {
+        kept = g.confirmCloseFlow("checkout");
+      });
+      await screen.findByText("Save changes to checkout.flow?");
+      await userEvent.click(button("Cancel"));
+      expect(await kept!).toBe(false);
+      let gone: Promise<boolean>;
+      act(() => {
+        gone = g.confirmCloseFlow("checkout");
+      });
+      await screen.findByText("Save changes to checkout.flow?");
+      await userEvent.click(button("Discard"));
+      expect(await gone!).toBe(true);
+    } finally {
+      off();
+    }
+  });
+
+  it("closing_a_diagram_while_its_file_is_moved_or_deleted_says_so", async () => {
+    setup([]);
+    // A rename or delete holds the writes: the flush cannot write yet.
+    const flush = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+    const off = registerFlow("checkout", { save: "waiting", line: null, col: null, errors: 0, flush, isHeld: () => true });
+    try {
+      let result: Promise<boolean>;
+      act(() => {
+        result = g.confirmCloseFlow("checkout");
+      });
+      await screen.findByText("Save changes to checkout.flow?");
+      expect(screen.getByText(/Contura is still moving or deleting this file\. Try again in a moment\./)).toBeTruthy();
+      expect(screen.queryByText(/could not be saved/)).toBeNull();
+      await userEvent.click(button("Cancel"));
+      expect(await result!).toBe(false);
+    } finally {
+      off();
+    }
+  });
+
+  it("quitting_waits_for_a_diagram_save_still_to_come", async () => {
+    setup([]);
+    await waitFor(() => expect(closeWindow.handler).not.toBeNull());
+    let finish!: (ok: boolean) => void;
+    const flush = vi.fn(() => new Promise<boolean>((r) => (finish = r)));
+    const off = registerFlow("checkout", { save: "waiting", line: null, col: null, errors: 0, flush });
+    try {
+      const event = { preventDefault: vi.fn() };
+      let closing: Promise<void>;
+      act(() => {
+        closing = closeWindow.handler!(event);
+      });
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(flush).toHaveBeenCalledTimes(1));
+      expect(closeWindow.destroy).not.toHaveBeenCalled();
+      await act(async () => {
+        finish(true);
+        await closing!;
+      });
+      expect(closeWindow.destroy).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
   });
 });

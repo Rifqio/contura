@@ -1,6 +1,7 @@
 import type { ComponentProps, MutableRefObject } from "react";
 import type { ConnectionConfig, GroupId } from "../api/types";
 import Home from "../components/Home";
+import FlowTab from "../flow/FlowTab";
 import SchemaBuilder from "../schema/SchemaBuilder";
 import SettingsView from "../settings/SettingsView";
 import { type SettingsSection, type WindowTab, tabKey } from "../shell/tabs";
@@ -28,7 +29,7 @@ interface Props {
   };
 }
 
-/** The window tabs (Home, Settings, Schema Models) as panes of the work area. */
+/** The window tabs (Home, Settings, Schema Models, diagrams) as panes of the work area. */
 export default function WindowPanes({ windowTabs, activeKey, home, settings, schema }: Props) {
   return (
     <>
@@ -53,6 +54,13 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
                 connections={settings.connections}
                 onConnectionSaved={() => settings.onConnectionSaved()}
               />
+            </div>
+          );
+        }
+        if (t.kind === "flow") {
+          return (
+            <div key={key} className="work-pane schema-main" data-flow-name={t.name} hidden={key !== activeKey}>
+              <FlowTab name={t.name} />
             </div>
           );
         }

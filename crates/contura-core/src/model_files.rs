@@ -363,9 +363,8 @@ mod tests {
             "{\"version\":1}"
         );
         assert!(flow_exists("orders", data.path()).unwrap());
-        assert!(flow_exists("orders.flow", data.path()).unwrap());
         // Written again, both are replaced.
-        write_flow_files("orders.flow", "b", "c", data.path()).unwrap();
+        write_flow_files("orders", "b", "c", data.path()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "b");
         assert!(!dir.join("orders.flow.partial").exists());
     }

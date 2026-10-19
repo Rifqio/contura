@@ -1,6 +1,9 @@
 import type { ConnectionId, RecentItem } from "../api/types";
 import { agoShort } from "../format/units";
 
+/** At most this many rows in Recent, diagrams counted; mirrors RECENT_LIMIT in crates/contura-core/src/recent.rs. */
+export const RECENT_LIMIT = 50;
+
 export type DayLabel = "Today" | "Yesterday" | "Earlier this week" | "Earlier";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -40,9 +43,14 @@ const ORDER: DayLabel[] = ["Today", "Yesterday", "Earlier this week", "Earlier"]
 
 /** The items by day, in list order within each day; a day with no items is left out. */
 export function recentSections(items: RecentItem[], now: Date): { label: DayLabel; items: RecentItem[] }[] {
-  const byDay = new Map<DayLabel, RecentItem[]>();
+  return sectionsBy(items, (i) => i.openedAtMs, now);
+}
+
+/** Any rows by day, by the time `at` gives each, in list order within each day. */
+export function sectionsBy<T>(items: T[], at: (item: T) => number, now: Date): { label: DayLabel; items: T[] }[] {
+  const byDay = new Map<DayLabel, T[]>();
   for (const item of items) {
-    const day = dayOf(item.openedAtMs, now);
+    const day = dayOf(at(item), now);
     byDay.set(day, [...(byDay.get(day) ?? []), item]);
   }
   return ORDER.flatMap((label) => {

@@ -129,3 +129,29 @@ test("escape_closes", async () => {
   await userEvent.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalled();
 });
+
+test("dragging_a_handle_snaps_to_a_node_edge_and_alt_drags_freely", () => {
+  const { dialog } = setup();
+  const handle = dialog.querySelector(".publish-handle-e") as HTMLElement;
+  const preview = dialog.querySelector(".publish-preview") as HTMLElement;
+  // The preview shows the 1132 x 220 frame at 472 / 1132 px per unit; 187 px left puts the right edge 3.5 units
+  // past the stores card's right edge (616), within the 8 px reach.
+  const k = 472 / 1132;
+  const dx = -Math.round((1068 - 619.5) * k);
+  fireEvent.pointerDown(handle, { clientX: 500, clientY: 100, pointerId: 1 });
+  fireEvent.pointerMove(preview, { clientX: 500 + dx, clientY: 100, pointerId: 1 });
+  fireEvent.pointerUp(preview, { pointerId: 1 });
+  expect(within(dialog).getByText("680 x 220")).toBeTruthy();
+  // Alt turns snapping off.
+  fireEvent.pointerDown(handle, { clientX: 500, clientY: 100, pointerId: 1 });
+  fireEvent.pointerMove(preview, { clientX: 500 + 2, clientY: 100, pointerId: 1, altKey: true });
+  fireEvent.pointerUp(preview, { pointerId: 1 });
+  expect(within(dialog).queryByText("680 x 220")).toBeNull();
+  expect(within(dialog).getByText("685 x 220")).toBeTruthy();
+});
+
+test("selected_nodes_is_off_when_no_selected_node_is_in_the_scene", () => {
+  // A node selected in the text but not yet placed is not drawn, so it is not in the scene.
+  const { dialog } = setup(["not-placed"]);
+  expect((within(dialog).getByRole("radio", { name: "Selected nodes" }) as HTMLButtonElement).disabled).toBe(true);
+});

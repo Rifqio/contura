@@ -1,0 +1,17 @@
+diagram dfd "Checkout"
+
+// Gane-Sarson, as the direction spec draws it
+Customer [entity]
+Checkout [process, id: 1]
+Orders [store, id: D1, table: shop.orders]
+Card network [entity] // the bank side
+
+Payments [icon: bank] {
+  Charge card [process, id: 2]
+}
+
+Customer > Checkout: order details
+Checkout > Orders: new order
+Checkout > Charge card: amount
+Orders --> Checkout: stock level
+Charge card <> Card network: authorise

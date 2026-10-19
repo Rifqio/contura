@@ -101,3 +101,259 @@ test("lang_client_mermaid_posts_the_message_and_resolves_with_the_result", async
   expect(result.flow.startsWith('diagram flow "Two steps"\n')).toBe(true);
   client.dispose();
 });
+
+const flowResults = (posts: FromWorker[]) =>
+  posts.map((p) => {
+    if (p.type !== "flowResult") throw new Error(`expected a flow result, got ${p.type}`);
+    return p;
+  });
+
+test("flow_parse_is_answered_after_the_debounce_and_keeps_the_last_good_doc", async () => {
+  vi.useFakeTimers();
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 120);
+  handle({ type: "flowParse", id: 1, docId: "f", text: 'diagram flow "F"\nA\nB\nA > B\n' });
+  await vi.advanceTimersByTimeAsync(130);
+  handle({ type: "flowParse", id: 2, docId: "f", text: 'diagram flow "F"\nA\nB\nA > C\n' });
+  handle({ type: "flowParse", id: 3, docId: "f", text: 'diagram flow "F"\nA\nB\nA > Cc\n' });
+  await vi.advanceTimersByTimeAsync(100);
+  expect(posts).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(30);
+  const [good, bad] = flowResults(posts);
+  expect(good.ids).toEqual([1]);
+  expect(good.result.doc?.links).toEqual([{ from: "A", to: "B", arrow: ">" }]);
+  expect(bad.ids).toEqual([2, 3]);
+  expect(bad.result.doc).toBeNull();
+  expect(bad.result.problems.map((p) => p.message)).toEqual(["Cc is not defined."]);
+  expect(bad.result.lastValid).toEqual(good.result.doc);
+  expect(bad.result.version).toBeGreaterThan(good.result.version);
+});
+
+test("flow_result_sends_only_the_doc_problems_and_last_good_doc", () => {
+  const posts: FromWorker[] = [];
+  createHandler((m) => posts.push(m), 0)({ type: "flowParse", id: 1, docId: "f", text: 'diagram flow "F"\nA\n' });
+  const [r] = flowResults(posts);
+  expect(Object.keys(r.result).sort()).toEqual(["doc", "kind", "lastValid", "problems", "version"]);
+});
+
+test("flow_spans_come_from_the_worker_for_the_current_version_only", () => {
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 0);
+  const text = 'diagram flow "F"\nKitchen {\n  Cook\n}\nCook > Kitchen: plate\n';
+  handle({ type: "flowParse", id: 1, docId: "f", text });
+  const v1 = flowResults(posts)[0].result.version;
+  handle({ type: "flowSpans", id: 2, docId: "f", version: v1, keys: ["node:Cook", "link:0", "node:Nobody"], names: ["Cook", "Kitchen"] });
+  const answer = posts[1];
+  if (answer.type !== "flowSpans") throw new Error("expected spans");
+  if (answer.result.stale) throw new Error("expected current spans");
+  const node = answer.result.spans["node:Cook"];
+  expect(node && text.slice(node.from, node.to)).toBe("Cook");
+  const label = answer.result.spans["link:0"]?.label;
+  expect(label && text.slice(label.from, label.to)).toBe("plate");
+  expect(answer.result.spans["node:Nobody"]).toBeNull();
+  expect(answer.result.lineOf).toEqual({ Cook: 3, Kitchen: 2 });
+  // A newer text makes the old version stale, so an edit planned on it is refused.
+  handle({ type: "flowParse", id: 3, docId: "f", text: `${text}// more\n` });
+  handle({ type: "flowSpans", id: 4, docId: "f", version: v1, keys: ["node:Cook"], names: [] });
+  const stale = posts[3];
+  expect(stale.type === "flowSpans" && stale.result).toEqual({ stale: true });
+  handle({ type: "flowSpans", id: 5, docId: "unknown", version: 1, keys: [], names: [] });
+  const none = posts[4];
+  expect(none.type === "flowSpans" && none.result).toEqual({ stale: true });
+});
+
+test("closing_a_flow_answers_the_parse_still_waiting_and_drops_later_ones", async () => {
+  vi.useFakeTimers();
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 120);
+  handle({ type: "flowParse", id: 9, docId: "g", text: 'diagram flow "G"\nA\n' });
+  handle({ type: "flowClose", docId: "g" });
+  expect(posts.map((p) => [p.type, p.ids])).toEqual([["flowResult", [9]]]);
+  // A keystroke still in flight after the close does not bring the doc back.
+  handle({ type: "flowParse", id: 10, docId: "g", text: 'diagram flow "G"\nA\n' });
+  await vi.advanceTimersByTimeAsync(200);
+  expect(posts.map((p) => [p.type, p.ids])).toEqual([
+    ["flowResult", [9]],
+    ["failed", [10]],
+  ]);
+  handle({ type: "flowSpans", id: 11, docId: "g", version: 1, keys: [], names: [] });
+  expect(posts[2].type === "flowSpans" && posts[2].result).toEqual({ stale: true });
+  // Opening it again starts afresh.
+  handle({ type: "flowOpen", docId: "g" });
+  handle({ type: "flowParse", id: 12, docId: "g", text: "nope" });
+  await vi.advanceTimersByTimeAsync(130);
+  const after = posts[3];
+  if (after.type !== "flowResult") throw new Error("expected a flow result");
+  expect(after.result.lastValid).toBeNull();
+});
+
+test("a_ten_thousand_deep_file_keeps_the_last_good_drawing", () => {
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 0);
+  handle({ type: "flowParse", id: 1, docId: "deep", text: 'diagram flow "D"\nA\n' });
+  const opens = Array.from({ length: 10_000 }, (_, i) => `G${i} {`).join("\n");
+  const deep = `diagram flow "D"\n${opens}\nA\n${"}\n".repeat(10_000)}`;
+  handle({ type: "flowParse", id: 2, docId: "deep", text: deep });
+  const [good, bad] = flowResults(posts);
+  expect(bad.result.doc).toBeNull();
+  expect(bad.result.problems[0].message).toBe("Groups nest at most 20 deep.");
+  expect(bad.result.lastValid).toEqual(good.result.doc);
+});
+
+test("lang_client_flow_resolves_with_the_parse_and_its_spans", async () => {
+  let handler: (m: ToWorker) => void = () => {};
+  const client = new LangClient(() => {
+    const fake: WorkerLike = { onmessage: null, onerror: null, postMessage: (m) => handler(m), terminate: () => {} };
+    handler = createHandler((m) => fake.onmessage?.({ data: m }), 0);
+    return fake;
+  });
+  const text = 'diagram cloud "C"\nA [icon: aws-s3]\n';
+  const r = await client.flow("d", text);
+  expect(r.kind).toBe("cloud");
+  expect(r.doc?.nodes).toEqual([{ name: "A", kind: "service", attrs: { icon: "aws-s3" } }]);
+  // The doc is the last good one while it is there, so it is sent once.
+  expect(r.lastValid).toBeNull();
+  const spans = await client.flowSpans("d", r.version, ["node:A"], ["A"]);
+  if (spans.stale) throw new Error("expected spans");
+  expect(spans.lineOf).toEqual({ A: 2 });
+  expect(spans.spans["node:A"]?.values?.icon).toEqual({ from: text.indexOf("aws-s3"), to: text.indexOf("aws-s3") + 6 });
+  client.closeFlow("d");
+  client.openFlow("d");
+  client.dispose();
+});
+
+
+test("flow_edits_run_in_the_worker_on_the_version_they_were_planned_on", () => {
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 0);
+  // The text has an error (Missing is not defined), and edits still work on it.
+  const text = 'diagram dfd "E"\nCustomer [entity]\nCustomer > Missing\n';
+  handle({ type: "flowParse", id: 1, docId: "e", text });
+  const v1 = flowResults(posts)[0].result.version;
+  handle({ type: "flowEdit", id: 2, docId: "e", version: v1, edit: { op: "addNode", name: "Customer", kind: "process", unique: true } });
+  const answer = posts[1];
+  if (answer.type !== "flowEdit" || answer.result.stale) throw new Error("expected edits");
+  expect(answer.result.name).toBe("Customer 2");
+  expect(answer.result.edits).toEqual([{ from: text.indexOf("Customer >"), to: text.indexOf("Customer >"), insert: "Customer 2 [process]\n" }]);
+  handle({ type: "flowParse", id: 3, docId: "e", text: `${text}// more\n` });
+  handle({ type: "flowEdit", id: 4, docId: "e", version: v1, edit: { op: "deleteNode", name: "Customer" } });
+  const stale = posts[3];
+  expect(stale.type === "flowEdit" && stale.result).toEqual({ stale: true });
+  handle({ type: "flowEdit", id: 5, docId: "nobody", version: 1, edit: { op: "deleteNode", name: "Customer" } });
+  expect(posts[4].type === "flowEdit" && posts[4].result).toEqual({ stale: true });
+});
+
+test("flow_spans_answer_names_like_proto_as_plain_names", () => {
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 0);
+  handle({ type: "flowParse", id: 1, docId: "p", text: 'diagram flow "P"\n__proto__\nconstructor\n' });
+  const v = flowResults(posts)[0].result.version;
+  handle({ type: "flowSpans", id: 2, docId: "p", version: v, keys: [], names: ["__proto__", "constructor", "toString"] });
+  const answer = posts[1];
+  if (answer.type !== "flowSpans" || answer.result.stale) throw new Error("expected spans");
+  expect(answer.result.lineOf.__proto__).toBe(2);
+  expect(answer.result.lineOf.constructor).toBe(3);
+  expect(answer.result.lineOf.toString).toBeNull();
+});
+
+test("flow_completion_uses_the_worker_names_and_icons", async () => {
+  let handler: (m: ToWorker) => void = () => {};
+  const client = new LangClient(() => {
+    const fake: WorkerLike = { onmessage: null, onerror: null, postMessage: (m) => handler(m), terminate: () => {} };
+    handler = createHandler((m) => fake.onmessage?.({ data: m }), 0);
+    return fake;
+  });
+  client.setFlowIcons(["users", "aws-s3"]);
+  const text = 'diagram cloud "C"\nStore [icon: aws-s3]\nWeb [icon: ';
+  await client.flow("c", text);
+  const icons = await client.completeFlow("c", text, text.length);
+  expect(icons.items.map((i) => i.label)).toEqual(["aws-s3", "users"]);
+  // A text the worker has not parsed yet is read as it is.
+  const typed = `${text}users]\nWeb > `;
+  const names = await client.completeFlow("c", typed, typed.length);
+  expect(names.items.map((i) => i.label)).toEqual(["Store", "Web"]);
+  const r = await client.flow("c", `${typed}Store\n`);
+  const edit = await client.flowEdit("c", r.version, { op: "renameNode", old: "Web", next: "Site" });
+  if (edit.stale) throw new Error("expected edits");
+  expect(edit.edits.map((e) => e.insert)).toEqual(["Site", "Site"]);
+  client.dispose();
+});
+
+test("flow_result_sends_last_valid_only_while_the_doc_is_null", () => {
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 0);
+  handle({ type: "flowParse", id: 1, docId: "lv", text: 'diagram flow "F"\nA\n' });
+  handle({ type: "flowParse", id: 2, docId: "lv", text: 'diagram flow "F"\nA > Nope\n' });
+  const [good, bad] = flowResults(posts);
+  expect(good.result.doc).not.toBeNull();
+  expect(good.result.lastValid).toBeNull();
+  expect(bad.result.doc).toBeNull();
+  expect(bad.result.lastValid).toEqual(good.result.doc);
+});
+
+test("requests_planned_on_a_version_are_stale_while_a_newer_parse_waits_and_flush_it", async () => {
+  vi.useFakeTimers();
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(structuredClone(m)), 120);
+  const t1 = 'diagram dfd "D"\nA [entity]\nB [process]\n';
+  handle({ type: "flowParse", id: 1, docId: "d", text: t1 });
+  await vi.advanceTimersByTimeAsync(130);
+  const v1 = flowResults(posts)[0].result.version;
+  // Typing at the top: the editor holds t2 and its parse waits out the debounce.
+  const t2 = 'diagram dfd "D"\n// typed\nA [entity]\nB [process]\n';
+  handle({ type: "flowParse", id: 2, docId: "d", text: t2 });
+  handle({ type: "flowEdit", id: 3, docId: "d", version: v1, edit: { op: "deleteNode", name: "B" } });
+  // The waiting parse ran at once (so the next try is current), then the edit was refused.
+  expect(posts.slice(1).map((p) => [p.type, p.ids])).toEqual([
+    ["flowResult", [2]],
+    ["flowEdit", [3]],
+  ]);
+  const refused = posts[2];
+  expect(refused.type === "flowEdit" && refused.result).toEqual({ stale: true });
+  const v2 = flowResults(posts.filter((p) => p.type === "flowResult"))[1].result.version;
+  handle({ type: "flowEdit", id: 4, docId: "d", version: v2, edit: { op: "deleteNode", name: "B" } });
+  const ok = posts[3];
+  if (ok.type !== "flowEdit" || ok.result.stale) throw new Error("expected edits");
+  const e = ok.result.edits[0];
+  expect(t2.slice(0, e.from) + e.insert + t2.slice(e.to)).toBe('diagram dfd "D"\n// typed\nA [entity]\n');
+
+  // Spans and completion behave the same.
+  const t3 = `${t2}C [store]\n`;
+  handle({ type: "flowParse", id: 5, docId: "d", text: t3 });
+  handle({ type: "flowSpans", id: 6, docId: "d", version: v2, keys: ["node:B"], names: ["B"] });
+  expect(posts.slice(4).map((p) => p.type)).toEqual(["flowResult", "flowSpans"]);
+  expect(posts[5].type === "flowSpans" && posts[5].result).toEqual({ stale: true });
+  const t4 = `${t3}A > `;
+  handle({ type: "flowParse", id: 7, docId: "d", text: t4 });
+  handle({ type: "flowComplete", id: 8, docId: "d", text: t4, pos: t4.length });
+  expect(posts.slice(6).map((p) => p.type)).toEqual(["flowResult", "flowCompletion"]);
+  expect(posts[7].type === "flowCompletion" && posts[7].result.stale).toBe(true);
+  handle({ type: "flowComplete", id: 9, docId: "d", text: t4, pos: t4.length });
+  const names = posts[8];
+  if (names.type !== "flowCompletion") throw new Error("expected completion");
+  expect(names.result.stale).toBeUndefined();
+  expect(names.result.items.map((i) => i.label)).toEqual(["A", "B", "C"]);
+  // Nothing was left waiting.
+  await vi.advanceTimersByTimeAsync(200);
+  expect(posts).toHaveLength(9);
+});
+
+test("a_batch_of_flow_edits_is_one_edit_list_all_or_nothing", () => {
+  const posts: FromWorker[] = [];
+  const handle = createHandler((m) => posts.push(m), 0);
+  const text = 'diagram dfd "B"\r\nA [entity]\r\nB [process]\r\nC [store]\r\nD [store]\r\nA > B\r\nB > C\r\nC > D\r\n';
+  handle({ type: "flowParse", id: 1, docId: "b", text });
+  const v = flowResults(posts)[0].result.version;
+  const del = (name: string) => ({ op: "deleteNode" as const, name });
+  handle({ type: "flowEdit", id: 2, docId: "b", version: v, edit: { op: "batch", ops: [del("A"), del("C"), del("D")] } });
+  const answer = posts[posts.length - 1];
+  if (answer.type !== "flowEdit" || answer.result.stale) throw new Error("expected edits");
+  // One edit, against the version it was planned on.
+  expect(answer.result.edits).toHaveLength(1);
+  const e = answer.result.edits[0];
+  expect(text.slice(0, e.from) + e.insert + text.slice(e.to)).toBe('diagram dfd "B"\r\nB [process]\r\n');
+  // One op that does not apply refuses the whole batch.
+  handle({ type: "flowEdit", id: 3, docId: "b", version: v, edit: { op: "batch", ops: [del("A"), del("Nobody")] } });
+  const refused = posts[posts.length - 1];
+  expect(refused.type === "flowEdit" && refused.result).toEqual({ stale: false, edits: [] });
+});

@@ -1,0 +1,407 @@
+/*
+  Drawn diagram nodes (step 6+): data flow (Modern and Classic), flowchart and cloud service (frames 6+.2,
+  6+.4, 6+.5). Tokens only (ADR 0008): each node sets --fnode-fill and --fnode-stroke to its kind's pair
+  (NODE_TOKENS). Durations are the motion tokens, which reduced motion turns into 0 ms; nothing loops.
+  Selection is never animated: the ring is an ::after border or an outline, which no transition names,
+  so it comes and goes at once, and a selected node keeps the full transition list for a delete.
+*/
+
+.fnode {
+  position: relative;
+  box-sizing: border-box;
+  color: var(--c-text);
+  font: var(--font-body);
+  white-space: nowrap;
+  transition:
+    border-color var(--motion-fast) var(--ease-enter),
+    box-shadow var(--motion-base) var(--ease-enter),
+    opacity var(--motion-base) var(--ease-exit),
+    transform var(--motion-base) var(--ease-exit);
+}
+/* Coming in (a new node letting go of its fade) eases on the enter curve; only a node leaving uses the exit curve. */
+.fnode:not(.fnode-leaving) {
+  transition:
+    border-color var(--motion-fast) var(--ease-enter),
+    box-shadow var(--motion-base) var(--ease-enter),
+    opacity var(--motion-base) var(--ease-enter),
+    transform var(--motion-base) var(--ease-enter);
+}
+/* The selection ring: 2 px accent over the node's own 1 px edge, the frame's 1 px edge plus 1 px ring. */
+.fnode-selected::after {
+  position: absolute;
+  inset: -1px;
+  z-index: 1;
+  box-sizing: border-box;
+  border: 2px solid var(--c-accent);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+}
+.fnode-dfd.fnode-classic.fnode-selected::after,
+.fnode-service.fnode-selected::after {
+  content: none;
+}
+.fnode-name {
+  font: var(--font-body-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fnode-id {
+  color: var(--c-text-muted);
+  font: var(--font-mono-micro);
+}
+.fnode-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* Ports: four round dots, shown on hover or selection; they fade in. */
+.fnode-port {
+  position: absolute;
+  z-index: 2;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  box-sizing: border-box;
+  border: 2px solid var(--c-accent);
+  border-radius: var(--rounded-full);
+  background: var(--c-bg-surface);
+  cursor: crosshair;
+  animation: fnode-port-in var(--motion-base) var(--ease-enter);
+  transition: transform var(--motion-fast) var(--ease-enter);
+}
+.fnode-port.fnode-port-out {
+  opacity: 0;
+  transition: opacity var(--motion-base) var(--ease-exit);
+}
+.fnode-port:hover {
+  transform: scale(1.25);
+}
+.fnode-port[data-side="r"] {
+  top: 50%;
+  left: 100%;
+}
+.fnode-port[data-side="l"] {
+  top: 50%;
+  left: 0;
+}
+.fnode-port[data-side="t"] {
+  top: 0;
+  left: 50%;
+}
+.fnode-port[data-side="b"] {
+  top: 100%;
+  left: 50%;
+}
+@keyframes fnode-port-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Canvas states used while editing: lifted while dragged, fading in from 96 percent, fading out. */
+.fnode-lifted {
+  z-index: 5;
+  box-shadow: var(--shadow-1);
+}
+.fnode-entering {
+  opacity: 0;
+  transform: scale(0.96);
+}
+.fnode-leaving {
+  opacity: 0;
+  transform: scale(0.98);
+}
+
+/* Far out: a plain block in the stroke colour. */
+.fnode-block {
+  min-width: 96px;
+  min-height: 40px;
+  border-radius: var(--rounded-sm);
+  background: var(--fnode-stroke);
+}
+
+/* Zoomed out, and in fast mode: a 100 x 48 name box in the kind's colours, as the engine's cards. */
+.fnode-box {
+  display: flex;
+  align-items: center;
+  width: 100px;
+  height: 48px;
+  padding: 0 var(--spacing-sm);
+  border: 1px solid var(--fnode-stroke);
+  border-radius: var(--rounded-md);
+  background: var(--fnode-fill);
+}
+.fnode-box .fnode-name {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+/* Data flow, Modern: an 8 px pastel card. A store has a dashed right edge; an outside party a double edge. */
+.fnode-dfd.fnode-modern {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  min-width: 168px;
+  padding: 0 var(--spacing-md) 0 var(--spacing-sm);
+  border: 1px solid color-mix(in srgb, var(--fnode-stroke) 55%, transparent);
+  border-radius: var(--rounded-lg);
+  background: var(--fnode-fill);
+}
+.fnode-dfd.fnode-modern:hover {
+  border-color: var(--fnode-stroke);
+}
+.fnode-dfd.fnode-modern .fnode-tile {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid color-mix(in srgb, var(--fnode-stroke) 40%, transparent);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  color: var(--fnode-stroke);
+}
+.fnode-dfd.fnode-modern .fnode-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.fnode-dfd.fnode-modern .fnode-id {
+  margin-left: auto;
+  padding-left: var(--spacing-md);
+}
+.fnode-dfd.fnode-modern.fnode-store {
+  border-right-style: dashed;
+  border-radius: var(--rounded-lg) 2px 2px var(--rounded-lg);
+}
+.fnode-dfd.fnode-modern.fnode-external {
+  outline: 1px solid color-mix(in srgb, var(--fnode-stroke) 55%, transparent);
+  outline-offset: 2px;
+}
+.fnode-dfd.fnode-modern.fnode-selected {
+  outline: none;
+}
+
+/* Data flow, Classic: the textbook Gane-Sarson shapes. */
+.fnode-dfd.fnode-classic {
+  border: 1px solid var(--fnode-stroke);
+}
+/* Classic selection as the frame and the schema card draw it: a 2 px outline 5 px outside. */
+.fnode-dfd.fnode-classic.fnode-selected {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 5px;
+}
+.fnode-dfd.fnode-classic.fnode-process {
+  display: flex;
+  flex-direction: column;
+  width: 156px;
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.fnode-classic.fnode-process .fnode-band {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--spacing-sm);
+  border-bottom: 1px solid var(--fnode-stroke);
+  border-radius: 5px 5px 0 0;
+  background: var(--fnode-fill);
+  color: var(--fnode-stroke);
+}
+.fnode-classic.fnode-process > .fnode-name {
+  padding: 9px 10px 10px;
+}
+.fnode-dfd.fnode-classic.fnode-store {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  border-right: 0;
+  border-radius: var(--rounded-md) 0 0 var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.fnode-classic.fnode-store > .fnode-id {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  border-right: 1px solid var(--fnode-stroke);
+  border-radius: 5px 0 0 5px;
+  background: var(--fnode-fill);
+}
+.fnode-classic.fnode-store > .fnode-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px 0 10px;
+}
+.fnode-dfd.fnode-classic.fnode-external {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 40px;
+  padding: 0 14px 0 var(--spacing-md);
+  border-top-width: 3px;
+  border-left-width: 3px;
+  border-radius: var(--rounded-md);
+  background: var(--fnode-fill);
+}
+.fnode-classic.fnode-external > .icon {
+  color: var(--c-text-subtle);
+}
+
+/* Flowchart: pills, the step family, a slanted io and the one amber diamond. */
+.fnode-flowchart {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--fnode-stroke);
+  background: var(--fnode-fill);
+  text-align: center;
+}
+.fnode-flowchart .fnode-text {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fnode-flowchart .fnode-name {
+  font: var(--font-body);
+}
+.fnode-start,
+.fnode-end {
+  height: 36px;
+  padding: 0 18px;
+  border-radius: var(--rounded-full);
+}
+.fnode-step,
+.fnode-subprocess {
+  width: 150px;
+  height: 44px;
+  padding: 0 var(--spacing-sm);
+  border-radius: var(--rounded-md);
+}
+.fnode-subprocess {
+  padding: 0 14px;
+  box-shadow: inset 7px 0 0 -6px var(--fnode-stroke), inset -7px 0 0 -6px var(--fnode-stroke);
+}
+.fnode-io,
+.fnode-decision {
+  border: 0;
+  background: none;
+}
+.fnode-io {
+  width: 150px;
+  height: 44px;
+}
+.fnode-decision {
+  width: 116px;
+  height: 116px;
+}
+.fnode-io::before,
+.fnode-decision::before {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--fnode-stroke);
+  background: var(--fnode-fill);
+  content: "";
+}
+.fnode-io::before {
+  inset: 0;
+  border-radius: var(--rounded-xs);
+  transform: skewX(-14deg);
+}
+.fnode-decision::before {
+  top: 18px;
+  left: 18px;
+  width: 80px;
+  height: 80px;
+  border-radius: var(--rounded-md);
+  transform: rotate(45deg);
+}
+.fnode-decision .fnode-text {
+  max-width: 84px;
+  white-space: normal;
+}
+.fnode-decision .fnode-name {
+  font: var(--font-small);
+}
+/* The ring follows the slant and the diamond. */
+.fnode-io.fnode-selected::after {
+  border-radius: var(--rounded-xs);
+  transform: skewX(-14deg);
+}
+.fnode-decision.fnode-selected::after {
+  inset: auto;
+  top: 17px;
+  left: 17px;
+  width: 82px;
+  height: 82px;
+  border-radius: var(--rounded-md);
+  transform: rotate(45deg);
+}
+.fnode-link {
+  color: var(--fnode-stroke);
+}
+
+/* Cloud: a 48 px icon tile with the name under it. */
+.fnode-service {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 104px;
+  font: var(--font-small);
+  text-align: center;
+}
+.fnode-service .fnode-tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  box-sizing: border-box;
+  border: 1px solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background-color: var(--c-node-icon-tile);
+  transition: border-color var(--motion-fast) var(--ease-enter);
+}
+.fnode-service:hover .fnode-tile {
+  border-color: var(--fnode-stroke);
+}
+.fnode-service .fnode-tile img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+/* A provider icon is its own coloured square: no plate, no border, drawn at the tile's full 48 px. */
+.fnode-service .fnode-tile-bare {
+  border-color: transparent;
+  background-color: transparent;
+}
+.fnode-service .fnode-tile-bare img {
+  width: 48px;
+  height: 48px;
+}
+.fnode-service .fnode-tile-unknown {
+  border: 1px dashed var(--c-border-strong);
+  background-color: var(--c-bg-surface);
+  color: var(--c-text-subtle);
+}
+.fnode-service .fnode-name {
+  max-width: 100%;
+  font: var(--font-small);
+}
+.fnode-service.fnode-selected .fnode-tile::after {
+  position: absolute;
+  inset: -1px;
+  box-sizing: border-box;
+  border: 2px solid var(--c-accent);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+}

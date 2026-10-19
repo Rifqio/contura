@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { agoShort, durationText } from "./units";
+import { agoShort, agoText, durationText } from "./units";
 
 test("durationText_picks_the_compact_unit", () => {
   expect(durationText(38)).toBe("38ms");
@@ -19,4 +19,12 @@ test("durationText_rounds_before_choosing_the_unit", () => {
   expect(durationText(999.6)).toBe("1.0s");
   expect(durationText(9960)).toBe("10s");
   expect(durationText(59_600)).toBe("1m");
+});
+
+test("ago_text_says_ago_with_compact_units_and_days", () => {
+  expect(agoText(20_000)).toBe("now");
+  expect(agoText(12 * 60_000)).toBe("12m ago");
+  expect(agoText(2 * 3_600_000)).toBe("2h ago");
+  expect(agoText(26 * 3_600_000)).toBe("1d ago");
+  expect(agoText(3 * 86_400_000 + 5)).toBe("3d ago");
 });

@@ -3,6 +3,7 @@ import { KFC_MODEL } from "../../lang/dbml/fixtures";
 import { exportSvg, schemaScene } from "../../schema/exportSvg";
 import type { Layout } from "../../schema/layout";
 import { CARD_WIDTH } from "../metrics";
+import { NODE_TOKENS } from "../types";
 import { exportPalette, type ExportPalette } from "./palette";
 import { type Scene, sceneBounds } from "./scene";
 import { sceneToSvg } from "./svg";
@@ -16,11 +17,16 @@ const PALETTE: ExportPalette = {
   type: "#060606",
   keyword: "#070707",
   nodes: {
+    ...(Object.fromEntries(Object.keys(NODE_TOKENS).map((k) => [k, { fill: "#0e0e0e", stroke: "#0f0f0f" }])) as ExportPalette["nodes"]),
     table: { fill: "#0a0a0a", stroke: "#0b0b0b" },
     view: { fill: "#0c0c0c", stroke: "#0d0d0d" },
     derived: { fill: "#0c0c0c", stroke: "#0d0d0d" },
     result: { fill: "#0c0c0c", stroke: "#0d0d0d" },
   },
+  iconTile: "#101010",
+  group: "#111111",
+  groupTint: "#121212",
+  strongBorder: "#131313",
 };
 
 const SCENE: Scene = {
@@ -66,6 +72,22 @@ test("scene_svg_uses_token_values", () => {
   const hexes = svg.match(/#[0-9a-f]{3,8}\b/gi) ?? [];
   expect(hexes.filter((h) => !allowed.has(h))).toEqual([]);
   expect(svg).toContain(">Made with Contura<");
+});
+
+test("palette_follows_the_drawn_kinds_and_the_icon_tile", () => {
+  style = document.createElement("style");
+  style.textContent =
+    ".theme-light{--c-node-enum-fill:#311111;--c-node-enum-stroke:#321111;--c-node-datastore-fill:#331111;--c-node-datastore-stroke:#341111;--c-node-icon-tile:#351111}" +
+    ".theme-dark{--c-node-enum-fill:#411111;--c-node-enum-stroke:#421111;--c-node-datastore-fill:#431111;--c-node-datastore-stroke:#441111;--c-node-icon-tile:#451111}";
+  document.head.appendChild(style);
+  const light = exportPalette("light");
+  expect(Object.keys(light.nodes).sort()).toEqual(Object.keys(NODE_TOKENS).sort());
+  expect(light.nodes.decision).toEqual({ fill: "#311111", stroke: "#321111" });
+  expect(light.nodes.store).toEqual({ fill: "#331111", stroke: "#341111" });
+  expect(light.iconTile).toBe("#351111");
+  const dark = exportPalette("dark");
+  expect(dark.nodes.decision).toEqual({ fill: "#411111", stroke: "#421111" });
+  expect(dark.iconTile).toBe("#451111");
 });
 
 test("no_foreign_object", () => {

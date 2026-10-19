@@ -31,16 +31,18 @@ export function statusScreenFor(s: StatusInput): StatusScreen {
     ? { kind: "home", connections: connections.length, open: connections.filter((c) => openIds.has(c.id)).length }
     : activeWindow?.kind === "settings"
       ? { kind: "settings", dataFolder, version }
-      : activeWindow?.kind === "schema"
-        ? {
-            kind: "schema",
-            fileName: activeWindow.doc.path ? fileName(activeWindow.doc.path) : "Untitled.dbml",
-            appliedTo: null,
-          }
-        : {
-            kind: "workspace",
-            connection: statusConnection,
-            open: !!statusConnection && openIds.has(statusConnection.id),
-            serverVersion: statusConnection ? (versions.get(statusConnection.id) ?? null) : null,
-          };
+      : activeWindow?.kind === "flow"
+        ? { kind: "flow", name: activeWindow.name, fileName: `${activeWindow.name}.flow` }
+        : activeWindow?.kind === "schema"
+          ? {
+              kind: "schema",
+              fileName: activeWindow.doc.path ? fileName(activeWindow.doc.path) : "Untitled.dbml",
+              appliedTo: null,
+            }
+          : {
+              kind: "workspace",
+              connection: statusConnection,
+              open: !!statusConnection && openIds.has(statusConnection.id),
+              serverVersion: statusConnection ? (versions.get(statusConnection.id) ?? null) : null,
+            };
 }

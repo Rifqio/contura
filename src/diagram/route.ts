@@ -1,0 +1,115 @@
+// Square-cornered routing for drawn diagrams (spec 6+ section 3 "Lines", the motion artifact's `route`):
+// leave the side facing the other node, run square, and round each corner by up to 8 px.
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface RouteOptions {
+  /** Corner radius; 8 px by default, clamped on short runs. */
+  radius?: number;
+  /** `b` is the pointer while drawing a flow: run from the side facing it straight to its top-left corner. */
+  toPoint?: boolean;
+}
+
+export interface Route {
+  /** SVG path data. */
+  d: string;
+  /** The middle of the middle run, where a label chip sits. */
+  mid: Point;
+  /** Where the line ends, for the arrowhead. */
+  end: Point;
+  /** The corners of the route before rounding, first to last (an export redraws them with `roundedPath`). */
+  points: Point[];
+}
+
+/** Side by side only with this much room between the boxes; closer than that the line runs vertically. */
+const SIDE_GAP = 24;
+
+const f = (n: number) => String(Math.round(n * 100) / 100 + 0);
+
+/** Within this distance two coordinates are the same line, so a fractional jog never curls into a corner. */
+const SAME = 0.5;
+
+/**
+ * Snaps a coordinate within half a pixel of the point before it onto that point's line, then drops repeated
+ * points and points in the middle of a straight run.
+ */
+function simplify(points: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const q of points) {
+    const last = out[out.length - 1];
+    const p = last ? { x: Math.abs(q.x - last.x) <= SAME ? last.x : q.x, y: Math.abs(q.y - last.y) <= SAME ? last.y : q.y } : q;
+    if (last && p.x === last.x && p.y === last.y) continue;
+    const prev = out[out.length - 2];
+    if (prev && last && ((prev.x === last.x && last.x === p.x) || (prev.y === last.y && last.y === p.y))) out.pop();
+    out.push(p);
+  }
+  return out;
+}
+
+/** A polyline with each corner rounded by up to `r`, never more than half of either run beside it. */
+function rounded(points: Point[], r: number): string {
+  const p = simplify(points);
+  let d = `M ${f(p[0].x)} ${f(p[0].y)}`;
+  for (let i = 1; i < p.length - 1; i++) {
+    const a = p[i - 1];
+    const b = p[i];
+    const c = p[i + 1];
+    const r1 = Math.min(r, Math.hypot(b.x - a.x, b.y - a.y) / 2, Math.hypot(c.x - b.x, c.y - b.y) / 2);
+    const u = { x: Math.sign(a.x - b.x), y: Math.sign(a.y - b.y) };
+    const v = { x: Math.sign(c.x - b.x), y: Math.sign(c.y - b.y) };
+    d += ` L ${f(b.x + u.x * r1)} ${f(b.y + u.y * r1)} Q ${f(b.x)} ${f(b.y)} ${f(b.x + v.x * r1)} ${f(b.y + v.y * r1)}`;
+  }
+  const z = p[p.length - 1];
+  return p.length > 1 ? `${d} L ${f(z.x)} ${f(z.y)}` : d;
+}
+
+/** SVG path data for a square route through `points`, each corner rounded by up to `r` (8 px by default). */
+export function roundedPath(points: Point[], r = 8): string {
+  return points.length === 0 ? "" : rounded(points, r);
+}
+
+/** Horizontal, vertical, horizontal: from `s` across to the middle, along, then on to `e`. */
+const hvh = (s: Point, e: Point): Point[] => {
+  const mx = (s.x + e.x) / 2;
+  return [s, { x: mx, y: s.y }, { x: mx, y: e.y }, e];
+};
+/** Vertical, horizontal, vertical. */
+const vhv = (s: Point, e: Point): Point[] => {
+  const my = (s.y + e.y) / 2;
+  return [s, { x: s.x, y: my }, { x: e.x, y: my }, e];
+};
+
+/** The square route from box `a` to box `b` (or to the pointer with `toPoint`). */
+export function routeOrthogonal(a: Rect, b: Rect, opts: RouteOptions = {}): Route {
+  const acy = a.y + a.h / 2;
+  const acx = a.x + a.w / 2;
+  let pts: Point[];
+  if (opts.toPoint) {
+    const e = { x: b.x, y: b.y };
+    pts = hvh(e.x < a.x ? { x: a.x, y: acy } : { x: a.x + a.w, y: acy }, e);
+  } else if (b.x >= a.x + a.w + SIDE_GAP) {
+    pts = hvh({ x: a.x + a.w, y: acy }, { x: b.x, y: b.y + b.h / 2 });
+  } else if (b.x + b.w <= a.x - SIDE_GAP) {
+    pts = hvh({ x: a.x, y: acy }, { x: b.x + b.w, y: b.y + b.h / 2 });
+  } else if (b.y >= a.y) {
+    pts = vhv({ x: acx, y: a.y + a.h }, { x: b.x + b.w / 2, y: b.y });
+  } else {
+    pts = vhv({ x: acx, y: a.y }, { x: b.x + b.w / 2, y: b.y + b.h });
+  }
+  return {
+    d: rounded(pts, opts.radius ?? 8),
+    mid: { x: (pts[1].x + pts[2].x) / 2, y: (pts[1].y + pts[2].y) / 2 },
+    end: pts[3],
+    points: simplify(pts),
+  };
+}

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { connectionTarget, DIALECT_LABEL, errorText, moveConnection, shortenPath, suggestedConnections } from "../api/client";
-import type { ConnectionConfig, ConnectionId, Group, GroupId, RecentItem, SuggestedConnection } from "../api/types";
+import type { ConnectionConfig, ConnectionId, DiagramEntry, Group, GroupId, RecentItem, SuggestedConnection } from "../api/types";
 import { hintFor } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
+import type { DiagramMenuActions } from "../flow/DiagramMenu";
 import { lastOpened, lastOpenedText } from "../home/recent";
 import RecentColumn from "../home/RecentColumn";
 import ConnectionForm from "./ConnectionForm";
@@ -49,8 +50,13 @@ interface Props {
   onBeforeDeleteGroup?: (id: GroupId) => Promise<boolean>;
   /** A Group was deleted from Home. */
   onGroupDeleted?: (id: GroupId) => void;
-  /** Opens the New flow from Mermaid dialog (D1); without it the button is hidden. */
-  onNewFlowFromMermaid?: () => void;
+  /** Opens the New diagram sheet (frame 6+.6); without it the button is hidden. */
+  onNewDiagram?: () => void;
+  /** The diagrams folder, newest first, for the Recent column. */
+  diagrams?: DiagramEntry[];
+  onOpenDiagram?: (name: string) => void;
+  /** A diagram row's right-click menu in Recent. */
+  diagramActions?: DiagramMenuActions;
 }
 
 export function connectionCountText(n: number): string {
@@ -99,7 +105,10 @@ export default function Home({
   onBeforeMove,
   onBeforeDeleteGroup,
   onGroupDeleted,
-  onNewFlowFromMermaid,
+  onNewDiagram,
+  diagrams,
+  onOpenDiagram,
+  diagramActions,
 }: Props) {
   const [suggestions, setSuggestions] = useState<SuggestedConnection[]>([]);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
@@ -124,6 +133,7 @@ export default function Home({
   const keys = useKeymap().map;
   const filterKey = hintFor(keys, "tree.filter");
   const newConnectionKey = hintFor(keys, "connection.new");
+  const newDiagramKey = hintFor(keys, "flow.new");
   const empty = groups.length === 0 && connections.length === 0;
 
   // Filter (Ctrl+Shift+F) moves into the filter, while Home is the tab on screen; otherwise the tree's filter takes it.
@@ -301,10 +311,11 @@ export default function Home({
                 <Icon name="folder" size={14} />
                 New Group
               </button>
-              {onNewFlowFromMermaid && (
-                <button type="button" className="button" onClick={onNewFlowFromMermaid}>
+              {onNewDiagram && (
+                <button type="button" className="button" aria-label="New diagram" onClick={onNewDiagram}>
                   <Icon name="flow" size={14} />
-                  New flow from Mermaid
+                  New diagram
+                  {newDiagramKey && <Kbd keys={newDiagramKey} />}
                 </button>
               )}
               <button type="button" className="button button-primary" aria-label="New Connection" onClick={() => setForm({ kind: "connection" })}>
@@ -400,12 +411,15 @@ export default function Home({
         )}
       </div>
 
-      {!empty && <RecentColumn
+      {(!empty || (diagrams?.length ?? 0) > 0) && <RecentColumn
           items={recent}
           connections={connections}
           openIds={openIds}
           now={now}
           onOpen={onOpenRecent}
+          diagrams={diagrams}
+          onOpenDiagram={onOpenDiagram}
+          diagramActions={diagramActions}
           onClear={onRecentChanged}
           onShowAllHistory={onShowAllHistory}
         />}

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { nextQueryName, parseDrafts, placeKey, serializeDrafts } from "../query/drafts";
@@ -6,6 +6,7 @@ import type { QueryTabDoc } from "../query/QueryTab";
 import { EMPTY_LAYOUT } from "../schema/layout";
 import type { AnyTab, VisualTabDoc } from "../shell/tabs";
 import { parseVisualDrafts } from "../visualquery/drafts";
+import { registerFlow, updateFlow } from "../flow/flowRegistry";
 import Icon, { type IconName } from "./Icon";
 import TabStrip, { type WorkTab } from "./TabStrip";
 
@@ -342,6 +343,14 @@ test("import_tabs_read_import_into_with_the_import_icon_and_chips", () => {
   expect(iconsIn(db, [...KINDS, "import"])).toEqual(["import"]);
 });
 
+test("a_lineage_tab_reads_table_lineage_with_the_flow_icon", () => {
+  const path = { database: "shop", schema: "public", name: "orders" };
+  const tab: WorkTab = { kind: "lineage", key: "lineage\u0000o", connectionId: "c1", path };
+  render(<TabStrip tabs={[tab]} active={tab.key} connections={[prod]} onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
+  const el = screen.getByRole("tab", { name: "orders lineage, Production" });
+  expect(iconsIn(el, [...KINDS, "flow"])).toEqual(["flow"]);
+});
+
 const vqModel = (tables: string[] = []) => ({
   version: 1,
   database: "shop",
@@ -426,4 +435,43 @@ test("a_visual_draft_round_trips_and_an_old_draft_has_none", () => {
   // A removed Connection is null and still restores (P10).
   const removed = { ...doc, id: "v3", connectionId: null };
   expect(parseVisualDrafts(serializeDrafts([], [removed]))).toEqual([removed]);
+});
+
+test("a_diagram_tab_marks_a_save_still_to_come_or_failed", () => {
+  const off = registerFlow("strip-demo", { save: "saved", line: null, col: null, errors: 0, flush: async () => true });
+  try {
+    render(<TabStrip tabs={[{ kind: "flow", name: "strip-demo" }]} active="flow:strip-demo" connections={[]} onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
+    expect(screen.getByRole("tab", { name: "strip-demo.flow" })).toBeTruthy();
+    act(() => updateFlow("strip-demo", { save: "waiting" }));
+    const tab = screen.getByRole("tab", { name: "strip-demo.flow, unsaved changes" });
+    expect(within(tab).getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
+    act(() => updateFlow("strip-demo", { save: "failed", message: "disk full" }));
+    expect(screen.getByRole("tab", { name: "strip-demo.flow, unsaved changes" })).toBeTruthy();
+  } finally {
+    off();
+  }
+});
+
+test("the_chevron_menu_offers_new_diagram_with_its_key", async () => {
+  const onNewDiagram = vi.fn();
+  render(<TabStrip tabs={[]} active={null} onSelect={() => {}} onClose={() => {}} onNew={() => {}} onNewVisual={() => {}} onNewDiagram={onNewDiagram} />);
+  await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
+  const menu = screen.getByRole("menu", { name: "More new tabs" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["New query", "New Visual Query", "New diagram"]);
+  expect(within(within(menu).getByRole("menuitem", { name: "New diagram" })).getByText("Ctrl+Alt+N")).toBeTruthy();
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "New diagram" }));
+  expect(onNewDiagram).toHaveBeenCalledTimes(1);
+});
+
+test("a_diagram_tab_has_its_file_actions_on_right_click", async () => {
+  const actions = { rename: vi.fn(), saveCopy: vi.fn(), remove: vi.fn() };
+  render(
+    <TabStrip tabs={[{ kind: "flow", name: "checkout" }]} active="flow:checkout" onSelect={() => {}} onClose={() => {}} onNew={() => {}} diagramActions={actions} />,
+  );
+  fireEvent.contextMenu(screen.getByRole("tab", { name: "checkout.flow" }));
+  const menu = screen.getByRole("menu", { name: "checkout.flow" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Rename...", "Save a copy as...", "Delete..."]);
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Save a copy as..." }));
+  expect(actions.saveCopy).toHaveBeenCalledWith("checkout");
+  expect(screen.queryByRole("menu", { name: "checkout.flow" })).toBeNull();
 });

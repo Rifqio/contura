@@ -1168,6 +1168,17 @@ test("table_row_menu_has_open_design_and_drop", async () => {
   expect(h.onDropTable).toHaveBeenCalledWith("a", path);
   // The row count stays on the right; no hover buttons on table rows.
   expect(within(item("orders")).queryByRole("button")).toBeNull();
+});
+
+test("table_row_menu_shows_lineage", async () => {
+  routeMy();
+  const h = { ...handlers(), onDesignTable: vi.fn(), onShowLineage: vi.fn() };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await findItem("orders");
+  fireEvent.contextMenu(item("orders"));
+  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Show lineage"]);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Show lineage" }));
+  expect(h.onShowLineage).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } });
   expect(within(item("orders")).getByText("18,402")).toBeTruthy();
 });
 

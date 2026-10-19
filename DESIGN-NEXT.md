@@ -82,6 +82,7 @@ Names are CSS custom properties, set on `:root` (light) and `:root[data-theme="d
 | `--c-group-{slot}` / `-tint` | Group initial-square fill; tint is reserved for user-coloured diagram areas and nodes |
 | `--c-gmk-ink` | The initial letter on a Group square |
 | `--c-node-{kind}-stroke` / `-fill` | Diagram node kinds |
+| `--c-node-icon-tile` | The tile behind a cloud service icon; light in both themes, because general and brand icons draw black |
 | `--c-syn-*`, `--syn-kw-weight`, `--syn-type-style` | Syntax highlighting |
 | `--c-tree-guide` / `--c-tree-guide-strong` | Tree indent guides; the strong one marks the level holding the selection |
 | `--db-mysql` / `--db-pg` / `--db-sqlite` | Database brand marks (open state) |
@@ -166,6 +167,7 @@ Sources: the Dracula spec (draculatheme.com/spec), Alucard Classic: background `
   --c-node-queue-fill: #ffeef8;
   --c-node-external-stroke: #868686;
   --c-node-external-fill: #f1f4f6;
+  --c-node-icon-tile: #fffbeb;
   --c-syn-keyword: #a3144d;
   --c-syn-function: #14710a;
   --c-syn-string: #846e15;
@@ -266,6 +268,7 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --c-node-queue-fill: #341f2d;
   --c-node-external-stroke: #989898;
   --c-node-external-fill: #252728;
+  --c-node-icon-tile: #f8f8f2;
   --c-syn-keyword: #ff79c6;
   --c-syn-function: #50fa7b;
   --c-syn-string: #f1fa8c;
@@ -655,10 +658,11 @@ The same rule applies in the tree, the Home cards, the Recent list (by the item'
 ### 10.8 Flow diagram (`.flow`, Gane-Sarson)
 - Text pane 420 px: strip "Flow", notation chip "Gane-Sarson", "Unsaved", more; editor; Problems block (UI small 600 "Problems" + count chip; each problem in `--c-danger-text` with an alert icon, naming the line, the problem and the fix: "Line 27: refunds is not defined. Add `refunds [store, id: D4]` or send the flow to orders, products or invoices.").
 - `.flow` syntax is line based: header `diagram dfd "Order fulfilment"`; nodes `Customer [entity]`, `Take order [process, id: 1.0]`, `orders [store, id: D1, table: orders]`; groups `Kestrel Foods order system { ... }`; edges `A > B: label`, `A <> B: label`, `A --> B`. Highlighting per 3.6; an undefined name gets the error squiggle, is listed in Problems, and its edge is left off the canvas.
-- Shapes: process 128 x 96, 6 px radius, `--c-node-service-*`, a 24 px id band on top in Code micro (`1.0`); data store 150 x 36, open on the right, 36 px id cell (`D1`); external entity 48 px high, `--c-node-external-*`, heavy top-left edge (`box-shadow: inset 3px 3px 0` in the stroke colour).
+- Shapes (Classic, frame 6+.2): process 156 px wide, 6 px radius, `--c-node-service-*`, a 24 px id band on top in Code micro (`1.0`), then the name; data store 40 px high, open on the right, 40 px id cell (`D1`) kept even before it has an id; external entity 40 px high, `--c-node-external-*`, heavy top-left edge (3 px top and left border in the stroke colour). Selected: a 2 px `--c-accent` outline 5 px outside, as the schema card, shown at once.
 - Area (group of nodes): 10 px radius, 1 px dashed `--group` stroke, fill `--group-tint` at 70 percent, label top-left: 16 px Group square and the name in UI small 600.
 - Edges 1.5 px `--c-text-subtle` with 6 px filled arrows; labels on a `--c-bg-canvas` pill, UI small `--c-text-muted`.
 - Toolbar: Select, + Process, Store, Entity, divider, selection summary ("3.0 Bill customer selected"), Publish.
+- Drawn diagram kinds (step 6+) use the existing node pairs: process `service`, store `datastore`, outside party, start and end `external`, step, io and subprocess `table`, the decision `enum`, a cloud service `service` with its icon on `--c-node-icon-tile`. The Modern look is an 8 px card; Classic draws the shapes above.
 
 ### 10.9 Publish image dialog
 - 760 px dialog (level 2). Header 52 px: image icon 20 px, "Publish image" (Title), file name UI small, close (`Esc`).

@@ -155,101 +155,222 @@
   font: var(--font-small);
 }
 
-/* The .flow shapes. Each node sets --flow-fill and --flow-stroke from its kind's tokens. */
-.flow-node {
+.mermaid-notes-more {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* ---------- New diagram sheet (frame 6+.6) ---------- */
+.dialog.new-diagram {
+  width: min(1000px, 100%);
+}
+.new-diagram-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 288px;
+  gap: 28px;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--spacing-lg) 28px;
+}
+.new-diagram-main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.new-diagram-kinds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.new-diagram-kind {
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  box-sizing: border-box;
-  padding: 0 var(--spacing-sm);
-  border: 1px solid var(--flow-stroke);
-  border-radius: 4px;
-  background: var(--flow-fill);
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-surface);
   color: var(--c-text);
-  font: var(--font-small);
-  font-weight: 500;
-  text-align: center;
+  text-align: left;
+  cursor: pointer;
 }
-.flow-node-start,
-.flow-node-end {
-  border-radius: 999px;
+.new-diagram-kind:hover {
+  border-color: var(--c-border-strong);
 }
-.flow-node-subprocess {
-  border: 3px double var(--flow-stroke);
+.new-diagram-kind.is-on {
+  outline: 2px solid var(--c-accent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--c-accent-subtle) 35%, var(--c-bg-surface));
 }
-/* The diamond and the parallelogram draw their outline in SVG behind the name. */
-.flow-node-decision,
-.flow-node-io {
-  border: 0;
-  background: none;
+.new-diagram-kind:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: var(--focus-ring-offset);
 }
-.flow-node-outline {
+.new-diagram-check {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--rounded-full);
+  background: var(--c-accent);
+  color: var(--on-accent);
+}
+.new-diagram-preview {
+  position: relative;
+  height: 150px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--c-border-subtle);
+  background-color: var(--c-bg-canvas);
+  background-image: radial-gradient(var(--c-border) 1px, transparent 1.2px);
+  background-size: 16px 16px;
+  pointer-events: none;
+}
+/* The scene is drawn at full size and scaled, so the nodes are the canvas's own. */
+.new-diagram-scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 380px;
+  height: 270px;
+  transform: scale(0.55);
+  transform-origin: top left;
+}
+.new-diagram-at {
+  position: absolute;
+}
+.new-diagram-edges {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   overflow: visible;
 }
-.flow-node-outline polygon {
-  fill: var(--flow-fill);
-  stroke: var(--flow-stroke);
-  stroke-width: 1px;
+.new-diagram-edges path {
+  fill: none;
+  stroke: var(--c-text-subtle);
+  stroke-width: 2;
 }
-.flow-node-name {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.new-diagram-area {
+  position: absolute;
+  top: 24px;
+  left: 112px;
+  width: 248px;
+  height: 220px;
+  border: 1.5px dashed var(--c-border-strong);
+  border-radius: var(--rounded-lg);
 }
-.flow-node-icon {
-  flex: none;
-  color: var(--flow-stroke);
-}
-.flow-node-block {
-  border: 0;
-  border-radius: 4px;
-  background: var(--flow-stroke);
-}
-.flow-node-selected {
-  outline: 2px solid var(--c-accent);
-  outline-offset: 3px;
-}
-/* Frame 7.3 draws a group as a dashed box with its name, no fill. */
-.flow-group {
-  width: 100%;
-  height: 100%;
-  box-sizing: border-box;
-  border: 1px dashed var(--c-border-strong);
-  border-radius: 8px;
-  pointer-events: none;
-}
-.flow-group-name {
+.new-diagram-area span {
   position: absolute;
   top: 6px;
   left: 10px;
   color: var(--c-text-muted);
   font: var(--font-small);
-  font-weight: 600;
 }
-.flow-link.flow-link-dashed .react-flow__edge-path {
-  stroke-dasharray: 5 4;
+.new-diagram-kind-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 12px;
 }
-.flow-link-label {
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--c-bg-canvas);
-  color: var(--c-text-muted);
+.new-diagram-kind-title {
+  font: var(--font-body-strong);
+}
+.new-diagram-kind-sub {
+  color: var(--c-text-subtle);
   font: var(--font-small);
+}
+.new-diagram-form {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: var(--spacing-sm) 10px;
+  align-items: center;
+}
+.new-diagram-name {
+  display: contents;
+}
+.new-diagram-hint,
+.new-diagram-form .new-diagram-message {
+  grid-column: 2;
+}
+.new-diagram-hint {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.new-diagram-message {
+  color: var(--c-danger-text);
+  font: var(--font-small);
+}
+.new-diagram-alt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+}
+.new-diagram-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  /* The divider runs the full height of the body. */
+  margin: calc(-1 * var(--spacing-lg)) 0;
+  padding: var(--spacing-lg) 0 var(--spacing-lg) 28px;
+  border-left: 1px solid var(--c-border-subtle);
+}
+.new-diagram-aside-title {
+  color: var(--c-text-muted);
+  font: var(--font-label);
+}
+.new-diagram-empty {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.new-diagram-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.new-diagram-recent-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--spacing-sm);
+  align-items: center;
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--spacing-sm);
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: none;
+  color: var(--c-text-subtle);
+  text-align: left;
+  cursor: pointer;
+}
+.new-diagram-recent-row:hover {
+  background: var(--c-bg-hover);
+}
+.new-diagram-recent-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.new-diagram-recent-name {
+  overflow: hidden;
+  color: var(--c-text);
+  font: var(--font-mono-small);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mermaid-notes-more {
-  color: var(--c-text-subtle);
+.new-diagram-recent-meta {
   font: var(--font-small);
 }

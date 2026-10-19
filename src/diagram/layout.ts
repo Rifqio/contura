@@ -51,27 +51,37 @@ const BELOW_PLACED = 400;
 
 /** Places only the nodes `existing` lacks, with dagre (loaded on first use); placed nodes keep their positions. */
 export async function layoutMissing(req: LayoutRequest): Promise<Positions> {
-  const missing = req.nodes.filter((n) => !req.existing[n.id]);
+  // Own keys only: a node named constructor or __proto__ is a plain name, never an inherited value.
+  const has = (id: string) => Object.prototype.hasOwnProperty.call(req.existing, id);
+  const missing = req.nodes.filter((n) => !has(n.id));
   if (missing.length === 0) return req.existing;
   const { default: dagre } = await import("@dagrejs/dagre");
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: req.rankdir, nodesep: NODE_SEP, ranksep: RANK_SEP });
   g.setDefaultEdgeLabel(() => ({}));
-  for (const n of req.nodes) g.setNode(n.id, { width: n.w, height: n.h });
-  for (const e of req.edges) if (g.hasNode(e.from) && g.hasNode(e.to)) g.setEdge(e.from, e.to);
+  // dagre keys plain objects by id, so a name such as __proto__ would break it: it sees numbered ids only.
+  const key = new Map<string, string>();
+  req.nodes.forEach((n, i) => key.set(n.id, `n${i}`));
+  for (const n of req.nodes) g.setNode(key.get(n.id)!, { width: n.w, height: n.h });
+  for (const e of req.edges) {
+    const a = key.get(e.from);
+    const b = key.get(e.to);
+    if (a && b) g.setEdge(a, b);
+  }
   dagre.layout(g);
 
-  const out: Positions = { ...req.existing };
+  const out = Object.create(null) as Positions;
+  for (const k of Object.keys(req.existing)) out[k] = req.existing[k];
   const placed = Object.values(req.existing);
   const offsetY = placed.length ? Math.max(...placed.map((p) => p.y)) + BELOW_PLACED : 0;
   const size = new Map(req.nodes.map((n) => [n.id, n]));
   for (const n of missing) {
-    const d = g.node(n.id);
+    const d = g.node(key.get(n.id)!);
     out[n.id] = { x: Math.round(d.x - n.w / 2), y: Math.round(d.y - n.h / 2 + offsetY) };
   }
 
   const pin = req.pin;
-  if (pin && size.has(pin) && !req.existing[pin]) {
+  if (pin && size.has(pin) && !has(pin)) {
     const axis = req.rankdir === "LR" ? "x" : "y";
     const extent = (id: string) => (axis === "x" ? size.get(id)?.w : size.get(id)?.h) ?? 0;
     const others = Object.keys(out).filter((id) => id !== pin);

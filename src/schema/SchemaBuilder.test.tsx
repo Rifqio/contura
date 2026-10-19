@@ -11,6 +11,7 @@ import { mockEditorDom } from "../test/editor";
 import { mockReactFlowDom } from "../test/reactFlow";
 import tauriConf from "../../src-tauri/tauri.conf.json?raw";
 import { svgImageUrl } from "./exportPng";
+import { NODE_TOKENS, type NodeKind } from "../diagram/types";
 import { exportPalette } from "./exportPalette";
 import { exportSvg } from "./exportSvg";
 import { CARD_WIDTH } from "./layout";
@@ -209,7 +210,11 @@ test("svg_export_has_no_literal_colours", () => {
     border: "#070707",
     type: "#060606",
     keyword: "#090909",
-    nodes: { table: node, view: node, derived: node, result: node },
+    nodes: Object.fromEntries(Object.keys(NODE_TOKENS).map((k) => [k, node])) as Record<NodeKind, typeof node>,
+    iconTile: "#0a0a0a",
+    group: "#0a0a0a",
+    groupTint: "#0a0a0a",
+    strongBorder: "#0a0a0a",
   };
   const svg = exportSvg(
     KFC_MODEL,

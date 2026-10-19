@@ -706,6 +706,61 @@ impl ConnectionService {
         self.session(id).await?.table_design(&path).await
     }
 
+    /// The tables around `path`, `depth` steps each way (0 is All, up to 300 tables, at
+    /// most 10s), from catalog details only: one key read and one light column read per
+    /// database or schema reached, and no row is read (B2, P6).
+    pub async fn lineage(
+        &self,
+        id: ConnectionId,
+        path: ObjectPath,
+        depth: u8,
+        direction: crate::lineage::Direction,
+    ) -> Result<crate::lineage::Lineage> {
+        let fold = self.config(id)?.dialect == DialectKind::Sqlite;
+        let source = crate::lineage::DialectKeys(self.session(id).await?);
+        crate::lineage::walk(
+            &source,
+            path,
+            depth,
+            direction,
+            fold,
+            crate::lineage::DEADLINE,
+        )
+        .await
+    }
+
+    /// Lineage's Views source: the views the catalog records as reading `path`, at most
+    /// `MAX_VIEWS` (one catalog read, bound parameters, no rows). `catalog` is false when
+    /// the server keeps no such record (SQLite, MySQL before 8.0.13).
+    pub async fn view_dependencies(
+        &self,
+        id: ConnectionId,
+        path: ObjectPath,
+    ) -> Result<crate::lineage::ViewDependencies> {
+        use crate::lineage::{MAX_VIEWS, ViewDependencies};
+        let found = self
+            .session(id)
+            .await?
+            .view_dependencies(&path, MAX_VIEWS + 1)
+            .await?;
+        Ok(match found {
+            None => ViewDependencies {
+                catalog: false,
+                views: Vec::new(),
+                capped: false,
+            },
+            Some(mut views) => {
+                let capped = views.len() > MAX_VIEWS;
+                views.truncate(MAX_VIEWS);
+                ViewDependencies {
+                    catalog: true,
+                    views,
+                    capped,
+                }
+            }
+        })
+    }
+
     /// The table's CREATE statements for copying, as the server holds the table (D14).
     pub async fn table_ddl(&self, id: ConnectionId, path: ObjectPath) -> Result<String> {
         self.session(id).await?.table_ddl(&path).await

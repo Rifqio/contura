@@ -6,8 +6,8 @@ import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { errorText, flowExists, writeFlowFiles } from "../api/client";
-import { readTextFile, revealInFolder } from "../api/jobs";
+import { errorText, isCommandError, writeDiagram } from "../api/client";
+import { readTextFile } from "../api/jobs";
 import type { Group, GroupId } from "../api/types";
 import Dialog from "../components/Dialog";
 import GroupBadge from "../components/GroupBadge";
@@ -27,8 +27,10 @@ interface Props {
   defaultGroup: GroupId | null;
   lang: LangClient;
   onClose(): void;
-  /** Called with the saved .flow path, in the diagrams folder. */
-  onCreated(path: string): void;
+  /** Called with the saved diagram's name; it is kept in the diagrams folder. */
+  onCreated(name: string): void;
+  /** Runs before a Replace writes over diagram `name`: its open tab goes first (ruling P19). */
+  beforeReplace?(name: string): void | Promise<void>;
 }
 
 /** The preview redraws this long after the last keystroke. */
@@ -67,7 +69,7 @@ function leftOutLine(lines: number[]): string | null {
   return `Lines ${list} are left out until they can be read. The rest is drawn.`;
 }
 
-export default function MermaidImportDialog({ groups, defaultGroup, lang, onClose, onCreated }: Props) {
+export default function MermaidImportDialog({ groups, defaultGroup, lang, onClose, onCreated, beforeReplace }: Props) {
   const toast = useToast();
   const [text, setText] = useState("");
   const [name, setName] = useState(DEFAULT_NAME);
@@ -77,7 +79,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   const [result, setResult] = useState<MermaidResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  /** The file name being asked about: "<name>.flow exists. Replace it?" */
+  /** The file name being asked about: "<name>.flow already exists. Replace it?" */
   const [asking, setAsking] = useState<string | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -188,20 +190,15 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
       const fresh = await lang.mermaid(text, title);
       setResult(fresh);
       if (fresh.errors.length > 0 || fresh.nodes === 0) return;
-      if (!replace && (await flowExists(flowName))) {
-        setAsking(fileName);
-        return;
-      }
-      // One Core call writes the .flow and its layout file together in the diagrams folder.
-      const path = await writeFlowFiles(flowName, fresh.flow, flowLayoutJson(fresh.direction, group === "" ? null : group));
-      toast.show({
-        kind: "success",
-        text: `Created ${path.split(/[\\/]/).pop()}`,
-        action: { label: "Open folder", run: () => void revealInFolder(path).catch(() => {}) },
-      });
-      onCreated(path);
+      // One Core call writes the .flow and its layout file together in the diagrams folder, by name; a taken
+      // name is refused unless this is the Replace answer.
+      if (replace) await beforeReplace?.(flowName);
+      await writeDiagram(flowName, fresh.flow, flowLayoutJson(fresh.direction, group === "" ? null : group), replace);
+      toast.show({ kind: "success", text: `Created ${flowName}.flow` });
+      onCreated(flowName);
     } catch (e) {
-      setMessage(errorText(e));
+      if (isCommandError(e) && e.kind === "diagramExists") setAsking(`${e.message.name}.flow`);
+      else setMessage(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -321,7 +318,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
       </div>
       {asking ? (
         <footer className="dialog-footer">
-          <span className="mermaid-message" role="alert">{`${asking} exists. Replace it?`}</span>
+          <span className="mermaid-message" role="alert">{`${asking} already exists. Replace it?`}</span>
           <span className="spacer" />
           <button type="button" className="button" onClick={() => setAsking(null)}>
             Cancel

@@ -16,7 +16,7 @@ use crate::schema_model::{
     SchemaModel, SmColumn, SmEndpoint, SmIndex, SmRef, SmTable, parse_sql_default,
 };
 
-fn rule(r: String) -> Option<String> {
+pub(super) fn rule(r: String) -> Option<String> {
     (r != "NO ACTION").then_some(r)
 }
 

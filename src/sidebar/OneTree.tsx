@@ -54,6 +54,8 @@ export interface OneTreeProps {
   onNewTable?(connectionId: ConnectionId, database: string, schema: string | null): void;
   /** Opens a table's design tab. */
   onDesignTable?(s: Selection): void;
+  /** Opens a table's lineage tab (step 6+). */
+  onShowLineage?(s: Selection): void;
   /** Starts dropping a table; the App asks first. */
   onDropTable?(connectionId: ConnectionId, path: ObjectPath): void;
   /** Opens the Export dialog on a table. */
@@ -558,6 +560,8 @@ export default function OneTree(props: OneTreeProps) {
         if (addItem) items.push(addItem);
         const design = props.onDesignTable;
         if (design) items.push({ key: "design", label: "Design table", icon: <Icon name="edit" />, onSelect: () => design(selection) });
+        const lineage = props.onShowLineage;
+        if (lineage) items.push({ key: "lineage", label: "Show lineage", icon: <Icon name="flow" />, onSelect: () => lineage(selection) });
         const exportTable = props.onExportTable;
         if (exportTable) {
           items.push({ key: "export", label: "Export...", icon: <Icon name="export" />, onSelect: () => exportTable(selection) });

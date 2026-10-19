@@ -9,13 +9,21 @@ export async function exportPng(svg: string, scale: 1 | 2 | 3 = 2): Promise<Blob
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(img.width * scale);
   canvas.height = Math.ceil(img.height * scale);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("this system cannot draw the image");
-  ctx.scale(scale, scale);
-  ctx.drawImage(img, 0, 0);
-  return await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("the image could not be encoded"))), "image/png"),
-  );
+  try {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("this system cannot draw the image");
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    return await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("the image could not be encoded"))), "image/png"),
+    );
+  } finally {
+    // Let go of the pixels and the SVG at once, not when the collector gets to them: a 3x export of a large
+    // diagram is tens of MB (ADR 0003).
+    canvas.width = 0;
+    canvas.height = 0;
+    img.src = "";
+  }
 }
 
 export async function blobToBase64(blob: Blob): Promise<string> {

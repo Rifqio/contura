@@ -243,7 +243,9 @@ export type CommandError =
   /** An export read ended without finishing; the file was not kept. */
   | { kind: "readStopped"; message?: undefined }
   /** A writer's COMMIT succeeded, then a closing statement `sql` failed; the rows are in. */
-  | { kind: "afterCommit"; message: { sql: string; message: string } };
+  | { kind: "afterCommit"; message: { sql: string; message: string } }
+  /** Diagram `name` is saved already and the save did not say to replace it. */
+  | { kind: "diagramExists"; message: { name: string } };
 
 /** One table as the server holds it, for the Table Designer. */
 export interface TableDesign {
@@ -490,6 +492,138 @@ export interface EditOutcome {
 export interface ModelFiles {
   dbml: string;
   layout: string | null;
+}
+
+// Diagrams: mirrors crates/contura-core/src/diagrams.rs.
+
+export type DiagramKind = "dfd" | "flow" | "cloud" | "unknown";
+
+/** One diagram in Contura's diagrams folder, from its file's first line. */
+export interface DiagramEntry {
+  /** The name as typed: the file name without `.flow`. */
+  name: string;
+  kind: DiagramKind;
+  /** The quoted title on the first line, or the name when there is none. */
+  title: string;
+  /** When the `.flow` file last changed, in milliseconds since 1970. */
+  modifiedMs: number;
+}
+
+/** A diagram's `.flow` text and, when it exists, its layout file. */
+export interface DiagramFiles {
+  text: string;
+  layout: string | null;
+}
+
+// Icons: mirrors crates/contura-core/src/icons.rs.
+
+/** One name in the packed icon sets; aliases such as `aws-s3` are entries of their own. */
+export interface IconEntry {
+  name: string;
+  /** The set's id: aws, azure, gcp, k8s, lucide or simple. */
+  set: string;
+  title: string;
+  /** A brand logo's own licence and where it is from, when it has one. */
+  licence: string | null;
+}
+
+/** A packed icon set as Icon credits lists it. */
+export interface IconSet {
+  id: string;
+  title: string;
+  licence: string;
+  source: string;
+  note: string;
+  /** The licence text that travels with the copies, where the set has one. */
+  notice: string;
+}
+
+// Lineage: mirrors crates/contura-core/src/lineage.rs.
+
+export type LineageDirection = "both" | "uses" | "usedBy";
+
+/** Steps each way: 1, 2 or 3 from the strip, 0 for All. The Core takes 0..=255. */
+export type LineageDepth = number;
+
+/** A depth the Core accepts: a whole number from 0 to 255. */
+export function clampDepth(depth: LineageDepth): number {
+  return Number.isFinite(depth) ? Math.min(255, Math.max(0, Math.trunc(depth))) : 0;
+}
+
+export interface LineageColumn {
+  name: string;
+  /** The type as the server writes it. */
+  ty: string;
+  pk: boolean;
+  fk: boolean;
+  nullable: boolean;
+}
+
+export interface LineageTable {
+  path: ObjectPath;
+  /** The key columns, Foreign Key columns and columns a link points to, in table order. */
+  columns: LineageColumn[];
+  /** Every column of the table. */
+  columnCount: number;
+  /** Steps from the center: negative for tables it uses, positive for tables using it. */
+  distance: number;
+  /** Why the table's details could not be read; the card then holds only the columns its known keys name. */
+  unreadable: string | null;
+}
+
+/** One Foreign Key: `from` holds the key, `to` is the table it points to. */
+export interface LineageLink {
+  from: ObjectPath;
+  fromColumns: string[];
+  to: ObjectPath;
+  toColumns: string[];
+  /** Upper case, such as `CASCADE`; null for the Dialect's default. */
+  onDelete: string | null;
+  onUpdate: string | null;
+  /** A key column can be empty. */
+  nullable: boolean;
+}
+
+export interface Lineage {
+  center: ObjectPath;
+  /** The center first, then the rest in the order they were reached. */
+  tables: LineageTable[];
+  /** Every Foreign Key between two of `tables`, once each. */
+  links: LineageLink[];
+  /** More than 300 tables were in reach, or reading stopped after 10s. */
+  truncated: boolean;
+}
+
+export type FlowTableAccess = "reads" | "writes" | "both";
+
+/** A diagram node with a `table:`, and how the diagram's flow lines meet it. */
+export interface FlowTableLink {
+  /** The diagram name: the file name without `.flow`. */
+  file: string;
+  node: string;
+  /** The node's kind as written; `step` for an unkinded flowchart node, `node` elsewhere. */
+  kind: string;
+  /** The `table:` value as written, such as `shop.orders`. */
+  table: string;
+  access: FlowTableAccess;
+  /** The process or step nodes on the other end of its lines, each once, at most 20. */
+  processes: FlowProcess[];
+}
+
+/** A process or step that meets a `table:` node: a line into the node writes, one out of it reads. */
+export interface FlowProcess {
+  node: string;
+  access: FlowTableAccess;
+}
+
+/** The views that read a table, as the catalog records them. */
+export interface ViewDependencies {
+  /** The server keeps such a record (PostgreSQL, MySQL 8.0.13+); when false, match names instead. */
+  catalog: boolean;
+  /** At most 200. */
+  views: ObjectPath[];
+  /** More than 200 views read the table. */
+  capped: boolean;
 }
 
 // Schema Model: mirrors crates/contura-core/src/schema_model.rs.

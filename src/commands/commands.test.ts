@@ -366,3 +366,18 @@ test("visual_query_keys_are_app_commands_without_a_clash", () => {
     expect(findClash(map, id, key)).toBeNull();
   }
 });
+
+test("diagram_file_commands_and_ctrl_alt_n_has_no_clash", () => {
+  const map = resolveKeymap({});
+  const want = [
+    ["flow.new", "New diagram", ["Ctrl+Alt+N"]],
+    ["flow.saveCopy", "Save a copy as...", []],
+    ["flow.rename", "Rename diagram", []],
+    ["flow.delete", "Delete diagram", []],
+  ] as const;
+  for (const [id, title, keys] of want) {
+    expect(COMMANDS.find((x) => x.id === id)).toMatchObject({ title, keys, scope: "app" });
+  }
+  expect(findClash(map, "flow.new", "Ctrl+Alt+N")).toBeNull();
+  expect(hintFor(map, "flow.new")).toBe("Ctrl+Alt+N");
+});

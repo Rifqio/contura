@@ -7,6 +7,9 @@ import "./styles/app.css";
 import "./styles/export.css";
 import "./styles/import.css";
 import "./styles/flow.css";
+import "./styles/flow-canvas.css";
+import "./styles/lineage.css";
+import "./styles/flow-tab.css";
 import { applyStoredTheme } from "./theme/theme";
 
 // Paint the saved theme before the first render, so the window never flashes the other one.

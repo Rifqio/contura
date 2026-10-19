@@ -118,6 +118,31 @@ describe("tabsReducer", () => {
     expect(next.activeKey).toBe("schema:m2");
   });
 
+  it("open_flow_adds_a_diagram_tab_once_per_name", () => {
+    const s = state({ windowTabs: [{ kind: "home" }], activeKey: "home" });
+    const a = tabsReducer(s, { type: "openFlow", name: "checkout" });
+    expect(a.windowTabs).toEqual([{ kind: "home" }, { kind: "flow", name: "checkout" }]);
+    expect(a.activeKey).toBe("flow:checkout");
+    // Opened again, the same tab is shown.
+    const b = tabsReducer({ ...a, activeKey: "home" }, { type: "openFlow", name: "checkout" });
+    expect(b.windowTabs).toBe(a.windowTabs);
+    expect(b.activeKey).toBe("flow:checkout");
+    // Windows names are not case-sensitive: Checkout is the same file, so the same tab.
+    const c = tabsReducer({ ...a, activeKey: "home" }, { type: "openFlow", name: "Checkout" });
+    expect(c.windowTabs).toBe(a.windowTabs);
+    expect(c.activeKey).toBe("flow:checkout");
+  });
+
+  it("rename_flow_swaps_the_diagram_tab_in_place_and_keeps_it_active", () => {
+    const s = state({ windowTabs: [{ kind: "home" }, { kind: "flow", name: "checkout" }, { kind: "flow", name: "refunds" }], activeKey: "flow:checkout" });
+    const a = tabsReducer(s, { type: "renameFlow", from: "checkout", to: "payments" });
+    expect(a.windowTabs).toEqual([{ kind: "home" }, { kind: "flow", name: "payments" }, { kind: "flow", name: "refunds" }]);
+    expect(a.activeKey).toBe("flow:payments");
+    // Another tab active: it stays active.
+    const b = tabsReducer({ ...s, activeKey: "home" }, { type: "renameFlow", from: "checkout", to: "payments" });
+    expect(b.activeKey).toBe("home");
+  });
+
   it("set_actions_take_values_or_updaters_and_keep_the_state_when_unchanged", () => {
     const s = state();
     const tabs = [query("q")];

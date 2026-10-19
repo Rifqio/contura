@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConnectionConfig, Group } from "../api/types";
 import { hintFor, withHint } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
+import { type DiagramMenuActions, diagramMenuItems, PlacedMenu, type PlacedMenuState } from "../flow/DiagramMenu";
+import { useUnsavedFlows } from "../flow/flowRegistry";
 import { type AnyTab, isUnsaved, tabConnectionId, tabKey } from "../shell/tabs";
 import DbMark from "./DbMark";
 import { groupStyle } from "./GroupBadge";
@@ -21,6 +23,8 @@ export function tabName(t: AnyTab): string {
       return "Settings";
     case "schema":
       return t.doc.path ? basename(t.doc.path) : "untitled.dbml";
+    case "flow":
+      return `${t.name}.flow`;
     case "query":
     case "visual":
       return t.doc.name;
@@ -33,6 +37,8 @@ export function tabName(t: AnyTab): string {
       return t.target.kind === "alter" ? `${t.target.path.name} design` : "New table";
     case "import":
       return `Import into ${t.target.kind === "table" ? t.target.path.name : t.target.database}`;
+    case "lineage":
+      return `${t.path.name} lineage`;
   }
 }
 
@@ -45,6 +51,8 @@ function iconOf(t: AnyTab): IconName | null {
       return "gear";
     case "schema":
       return "layers";
+    case "flow":
+      return "flow";
     case "query":
       return null;
     case "visual":
@@ -57,6 +65,8 @@ function iconOf(t: AnyTab): IconName | null {
       return "edit";
     case "import":
       return "import";
+    case "lineage":
+      return "flow";
   }
 }
 
@@ -72,6 +82,10 @@ interface Props {
   onNewVisual?(): void;
   /** False while no Connection is open: New Visual Query is off and says why. */
   newVisualReady?: boolean;
+  /** The chevron menu's New diagram (frame 6+.6). */
+  onNewDiagram?(): void;
+  /** A diagram tab's right-click menu: Rename, Save a copy as, Delete. */
+  diagramActions?: DiagramMenuActions;
   /** Lets a query tab show the Production or Read-only mark of its Connection. */
   connections?: ConnectionConfig[];
   /** Table and design tabs (by key) with Pending Edits or an unapplied design. */
@@ -89,11 +103,16 @@ export default function TabStrip({
   onNew,
   onNewVisual,
   newVisualReady = true,
+  onNewDiagram,
+  diagramActions,
   connections = [],
   dirtyKeys,
   groups = [],
 }: Props) {
   const { map } = useKeymap();
+  /** Diagram tabs whose save is still to come or failed. */
+  const unsavedFlows = useUnsavedFlows();
+  const [menu, setMenu] = useState<PlacedMenuState | null>(null);
   const keys = tabs.map(tabKey);
   const list = useRef<HTMLDivElement>(null);
   // NF1: the strip scrolls without a bar; the active tab is brought into view when it is picked or opened.
@@ -135,7 +154,8 @@ export default function TabStrip({
           const on = key === active;
           const name = tabName(t);
           const isSaved = (t.kind === "query" || t.kind === "visual") && t.doc.savedId !== null;
-          const dirty = isUnsaved(t) || ((t.kind === "object" || t.kind === "design") && !!dirtyKeys?.has(t.key));
+          const dirty =
+            isUnsaved(t) || ((t.kind === "object" || t.kind === "design") && !!dirtyKeys?.has(t.key)) || (t.kind === "flow" && unsavedFlows.has(t.name));
           const cid = tabConnectionId(t);
           const owner = cid === null ? undefined : connections.find((c) => c.id === cid);
           // R8: the chip shows PROD; the spoken name keeps the word.
@@ -166,6 +186,14 @@ export default function TabStrip({
                 e.preventDefault();
                 onClose(key);
               }}
+              onContextMenu={
+                t.kind === "flow" && diagramActions
+                  ? (e) => {
+                      e.preventDefault();
+                      setMenu({ x: e.clientX, y: e.clientY, label: `${t.name}.flow`, items: diagramMenuItems(t.name, diagramActions) });
+                    }
+                  : undefined
+              }
             >
               <button
                 type="button"
@@ -222,9 +250,13 @@ export default function TabStrip({
               title: newVisualReady ? undefined : "Open a Connection first",
               onSelect: onNewVisual,
             },
+            ...(onNewDiagram
+              ? [{ key: "diagram", label: "New diagram", icon: <Icon name="flow" />, shortcut: hintFor(map, "flow.new") ?? undefined, onSelect: onNewDiagram }]
+              : []),
           ]}
         />
       )}
+      {menu && <PlacedMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );
 }

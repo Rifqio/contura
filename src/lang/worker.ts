@@ -1,19 +1,24 @@
 // The language worker: parses DBML about 120 ms after the last edit, checks
 // SQL and draws its query shape about 150 ms after, and answers SQL completion and refactors at once,
-// all off the UI thread. It also lays out diagrams, loading dagre on first use, and converts Mermaid to .flow.
+// all off the UI thread. It also lays out diagrams, loading dagre on first use, converts Mermaid to .flow,
+// and parses .flow text on the same debounce as DBML.
 import type { SchemaModel } from "../api/types";
 import { layoutMissing } from "../diagram/layout";
 import { mermaidToFlow } from "../flow/mermaid";
 import { inspectDbml } from "./dbml/inspect";
 import { parseDbml } from "./dbml/parse";
+import { createFlowService } from "./flow/service";
 import type { FromWorker, ToWorker } from "./protocol";
 import { createSqlService } from "./sql/service";
 
-type Debounced = Extract<ToWorker, { type: "update" } | { type: "sqlAnalyze" } | { type: "sqlShape" }>;
+type Debounced = Extract<ToWorker, { type: "update" } | { type: "sqlAnalyze" } | { type: "sqlShape" } | { type: "flowParse" }>;
 
 /** Handles messages from the client; `debounceMs` 0 runs everything synchronously (tests). */
 export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, sqlDebounceMs = debounceMs === 0 ? 0 : 150): (m: ToWorker) => void {
   const lastValid = new Map<string, SchemaModel>();
+  const flow = createFlowService();
+  /** The newest flowParse waiting out its debounce, per document. */
+  const waitingFlow = new Map<string, Extract<ToWorker, { type: "flowParse" }>>();
   const pending = new Map<string, { ids: number[]; timer: ReturnType<typeof setTimeout> | null }>();
   const sql = createSqlService();
 
@@ -21,6 +26,12 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
 
   function run(m: Debounced, ids: number[]) {
     try {
+      if (m.type === "flowParse") {
+        pending.delete(`flow:${m.docId}`);
+        waitingFlow.delete(m.docId);
+        post({ type: "flowResult", ids, docId: m.docId, result: flow.parse(m.docId, m.text) });
+        return;
+      }
       if (m.type === "sqlShape") {
         pending.delete(`shape:${m.docId}`);
         post({ type: "sqlShape", ids, result: sql.shape(m.docId, m.text, m.dialect, m.schemaKey, m.schemaState, m.pos) });
@@ -53,6 +64,17 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
     }
     entry.timer = setTimeout(() => run(m, entry.ids), ms);
     pending.set(key, entry);
+    if (m.type === "flowParse") waitingFlow.set(m.docId, m);
+  }
+
+  /** Runs the parse still waiting for `docId` at once; true when there was one. */
+  function flushFlow(docId: string): boolean {
+    const entry = pending.get(`flow:${docId}`);
+    const m = waitingFlow.get(docId);
+    if (!entry || !m) return false;
+    if (entry.timer) clearTimeout(entry.timer);
+    run(m, entry.ids);
+    return true;
   }
 
   return (m) => {
@@ -63,6 +85,44 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         return debounce(m, `sql:${m.docId}`, sqlDebounceMs);
       case "sqlShape":
         return debounce(m, `shape:${m.docId}`, sqlDebounceMs);
+      case "flowParse":
+        if (flow.isClosed(m.docId)) return fail([m.id], new Error("This diagram is closed."));
+        return debounce(m, `flow:${m.docId}`, debounceMs);
+      case "flowOpen":
+        return flow.open(m.docId);
+      case "flowSpans":
+        // A newer text still waiting out its debounce makes any version stale (ruling P8). Parsing it now means
+        // the caller's next try is current.
+        if (flushFlow(m.docId)) return post({ type: "flowSpans", ids: [m.id], result: { stale: true } });
+        try {
+          post({ type: "flowSpans", ids: [m.id], result: flow.spans(m.docId, m.version, m.keys, m.names) });
+        } catch (e) {
+          fail([m.id], e);
+        }
+        return;
+      case "flowEdit":
+        if (flushFlow(m.docId)) return post({ type: "flowEdit", ids: [m.id], result: { stale: true } });
+        try {
+          post({ type: "flowEdit", ids: [m.id], result: flow.edit(m.docId, m.version, m.edit) });
+        } catch (e) {
+          fail([m.id], e);
+        }
+        return;
+      case "flowComplete":
+        if (flushFlow(m.docId)) return post({ type: "flowCompletion", ids: [m.id], result: { from: m.pos, items: [], stale: true } });
+        try {
+          post({ type: "flowCompletion", ids: [m.id], result: flow.complete(m.docId, m.text, m.pos) });
+        } catch (e) {
+          fail([m.id], e);
+        }
+        return;
+      case "flowIcons":
+        return flow.setIcons(m.names);
+      case "flowClose":
+        // A parse still waiting is answered now, so its caller never hangs; then the doc is forgotten.
+        flushFlow(m.docId);
+        flow.close(m.docId);
+        return;
       case "sqlSchema":
         return sql.setSchema(m.key, m.schema);
       case "sqlComplete":

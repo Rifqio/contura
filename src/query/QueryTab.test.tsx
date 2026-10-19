@@ -103,10 +103,20 @@ function setup(d: QueryTabDoc, open = true, extra: Partial<Parameters<typeof Que
 const key = (view: EditorView, k: string, mods: Partial<KeyboardEventInit> = {}) =>
   fireEvent.keyDown(view.contentDOM, { key: k, ...mods });
 
+/**
+ * The tab's session is open, not only asked for. `open_query_session` is called on mount, but the session
+ * lands a render later; under load that render can come after the test moved on, and a Run pressed before it
+ * does nothing. The Run button turns enabled in the same render that sets the session.
+ */
+async function sessionOpen() {
+  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Run Ctrl\+Enter/ }).hasAttribute("disabled")).toBe(false));
+}
+
 test("run_current_executes_only_the_statement_being_typed", async () => {
   routes();
   const { view } = setup(doc("SELECT 1;\nSELECT 2;"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().dispatch({ selection: { anchor: 3 } }));
   key(view(), "Enter", { ctrlKey: true });
   await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
@@ -122,7 +132,7 @@ test("run_all_runs_in_order_and_stops_at_the_first_error", async () => {
     },
   });
   const { view } = setup(doc("SELECT 1;\nSELECT bad;\nSELECT 3;"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   await waitFor(() => expect(document.querySelector(".query-error-message")?.textContent).toBe('column "bad" does not exist'));
   expect(callsTo("execute_sql").map((c) => c.sql)).toEqual(["SELECT 1", "SELECT bad"]);
@@ -132,7 +142,7 @@ test("run_all_runs_in_order_and_stops_at_the_first_error", async () => {
 test("update_without_where_asks_first", async () => {
   routes({ execute_sql: () => ({ outcome: { t: "affected", rows: 12 }, elapsedMs: 3 }) });
   const { view } = setup(doc("UPDATE sales.orders SET status = 'x'"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   expect(await screen.findByText(/UPDATE without WHERE changes every row in/)).toBeTruthy();
   expect(screen.getByText("sales.orders")).toBeTruthy();
@@ -156,7 +166,7 @@ test("update_without_where_asks_first", async () => {
 test("escape_cancels_a_running_query", async () => {
   routes({ execute_sql: () => new Promise(() => {}), cancel_query: () => null });
   const { view } = setup(doc("SELECT pg_sleep(30)"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   expect(await screen.findByText("Running")).toBeTruthy();
   key(view(), "Escape");
@@ -169,7 +179,7 @@ test("fetch_next_appends_rows", async () => {
     fetch_more_rows: () => ({ rows: rowsOf(1000, 1001), hasMore: false }),
   });
   const { view } = setup(doc("SELECT * FROM sales.orders"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await userEvent.click(await screen.findByRole("button", { name: "Fetch next 1,000" }));
   expect(await screen.findByText(/^2,000 rows in /)).toBeTruthy();
@@ -233,7 +243,7 @@ test("after_the_save_query_dialog_focus_is_back_in_the_editor_and_runs_reach_the
   });
   const onRan = vi.fn();
   const { view, rerenderCurrent } = setup(doc("SELECT 1"), true, { onRan });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().focus());
   await userEvent.keyboard("{Control>}s{/Control}");
   await userEvent.type(await screen.findByLabelText("Name"), "late shipments by carrier");
@@ -399,7 +409,7 @@ test("the_tab_opens_and_closes_its_session", async () => {
 test("run_all_reads_the_editor_not_a_stale_prop", async () => {
   routes();
   const { view } = setup(doc("SELECT 1;"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   // The parent has not re-rendered with the new text yet.
   act(() => view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: "SELECT 7;\nSELECT 8;" } }));
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
@@ -415,7 +425,7 @@ test("a_new_session_drops_the_rest_of_a_run_and_pickers_lock_while_running", asy
     execute_sql: () => new Promise<Execution>((r) => (release = r)),
   });
   const { view, rerender } = setup(doc("SELECT 1;\nSELECT 2;"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
   expect((screen.getByRole("button", { name: /KFC Postgres/ }) as HTMLButtonElement).disabled).toBe(true);
@@ -440,7 +450,7 @@ test("a_new_session_drops_the_rest_of_a_run_and_pickers_lock_while_running", asy
 test("closing_an_open_result_releases_it_on_the_server", async () => {
   routes({ execute_sql: () => rowsResult(1000, true), close_query_result: () => null });
   const { view } = setup(doc("SELECT * FROM sales.orders"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await screen.findByText(/^First 1,000 rows in /);
   await userEvent.click(document.querySelector<HTMLElement>(".result-tab-close[aria-label='Close Result 1']")!);
@@ -477,7 +487,7 @@ test("ddl_success_reloads_the_schema_for_the_tab", async () => {
   routes({ sql_schema: () => KFC_SCHEMA, execute_sql: () => ({ outcome: { t: "affected", rows: 0 }, elapsedMs: 2 }) });
   const { view } = setup(doc("CREATE TABLE t (id int)"), true, { lang: withLang() });
   await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(1));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(2));
 });
@@ -486,7 +496,7 @@ test("ddl_after_a_comment_still_reloads_the_schema", async () => {
   routes({ sql_schema: () => KFC_SCHEMA, execute_sql: () => ({ outcome: { t: "affected", rows: 0 }, elapsedMs: 2 }) });
   const { view } = setup(doc("-- a new table\n/* for stock */ CREATE TABLE t (id int)"), true, { lang: withLang() });
   await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(1));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   await waitFor(() => expect(callsTo("sql_schema")).toHaveLength(2));
 });
@@ -551,7 +561,7 @@ const setupProd = (text: string) => setup(doc(text), true, { connections: [prod]
 test("run_button_confirms_then_runs_all_with_the_pass", async () => {
   productionRoutes();
   const { view } = setupProd("SELECT 1;\nSELECT 2;\nUPDATE t SET a = 1 WHERE id = 1;");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   const dialog = await screen.findByRole("dialog");
   expect(dialog.textContent).toContain("1 of 3 statements writes.");
@@ -574,7 +584,7 @@ test("run_button_confirms_then_runs_all_with_the_pass", async () => {
 test("escape_cancels_and_runs_nothing", async () => {
   productionRoutes();
   const { view } = setupProd("UPDATE t SET a = 1 WHERE id = 1");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await screen.findByRole("dialog");
   await userEvent.keyboard("{Escape}");
@@ -587,7 +597,7 @@ test("escape_cancels_and_runs_nothing", async () => {
 test("no_where_on_production_is_one_dialog_with_add_where", async () => {
   productionRoutes();
   const { view } = setupProd("UPDATE sales.orders SET status = 'x'");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await screen.findByRole("dialog");
   expect(screen.getAllByRole("dialog")).toHaveLength(1);
@@ -606,7 +616,7 @@ test("no_where_warning_gets_the_row_estimate_of_its_table", async () => {
   productionRoutes();
   const rowEstimate = vi.fn(() => 412960);
   const { view } = setup(doc("UPDATE sales.orders SET status = 'x'"), true, { connections: [prod], rowEstimate });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await screen.findByRole("dialog");
   expect(screen.getByRole("alert").textContent).toContain(
@@ -618,7 +628,7 @@ test("no_where_warning_gets_the_row_estimate_of_its_table", async () => {
 test("confirming_a_no_where_write_on_production_runs_it_without_a_second_ask", async () => {
   productionRoutes();
   const { view } = setupProd("UPDATE sales.orders SET status = 'x'");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await userEvent.click(await screen.findByRole("button", { name: "Run on KFC Postgres" }));
   await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
@@ -629,7 +639,7 @@ test("confirming_a_no_where_write_on_production_runs_it_without_a_second_ask", a
 test("non_production_keeps_the_old_no_where_confirm", async () => {
   routes({ execute_sql: () => ({ outcome: { t: "affected", rows: 12 }, elapsedMs: 3 }) });
   const { view } = setup(doc("UPDATE sales.orders SET status = 'x'"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   expect(await screen.findByRole("alertdialog", { name: "Confirm UPDATE without WHERE" })).toBeTruthy();
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -639,7 +649,7 @@ test("non_production_keeps_the_old_no_where_confirm", async () => {
 test("reads_on_production_run_without_dialog", async () => {
   productionRoutes({ execute_sql: () => rowsResult(1) });
   const { view } = setupProd("SELECT 1");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
   expect(callsTo("execute_sql")[0]).toEqual({ session: "s1", sql: "SELECT 1", pass: null });
@@ -650,7 +660,7 @@ test("reads_on_production_run_without_dialog", async () => {
 test("edited_sql_asks_again", async () => {
   productionRoutes();
   const { view } = setupProd("UPDATE t SET a = 1 WHERE id = 1");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await userEvent.click(await screen.findByRole("button", { name: "Run on KFC Postgres" }));
   await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
@@ -674,7 +684,7 @@ test("an_expired_pass_stops_the_run_and_asks_again_for_the_rest", async () => {
     },
   });
   const { view } = setupProd("UPDATE t SET a = 1 WHERE id = 1;\nUPDATE t SET a = 2 WHERE id = 2;\nSELECT 3;");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   await userEvent.click(await screen.findByRole("button", { name: "Run on KFC Postgres" }));
   await waitFor(() => expect(callsTo("prepare_run")).toHaveLength(2));
@@ -699,7 +709,7 @@ test("continuing_after_an_expired_pass_keeps_the_results_that_ran", async () => 
     },
   });
   const { view } = setupProd("UPDATE t SET a = 1 WHERE id = 1;\nUPDATE t SET a = 2 WHERE id = 2;\nSELECT 3;");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   await userEvent.click(await screen.findByRole("button", { name: "Run on KFC Postgres" }));
   await screen.findByRole("dialog");
@@ -717,7 +727,7 @@ test("continuing_after_an_expired_pass_keeps_the_results_that_ran", async () => 
 test("add_where_does_nothing_when_the_statement_was_edited", async () => {
   routes({ execute_sql: () => ({ outcome: { t: "affected", rows: 12 }, elapsedMs: 3 }) });
   const { view } = setup(doc("UPDATE sales.orders SET status = 'x'"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await screen.findByRole("alertdialog");
   act(() => view().dispatch({ changes: { from: 0, to: 6, insert: "DELETE FROM" } }));
@@ -749,7 +759,7 @@ test("production_panes_carry_the_wash", async () => {
 test("writing_statement_on_production_gets_band_and_note", async () => {
   productionRoutes();
   const { view } = setupFreight("UPDATE orders SET status = 'x'");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().dispatch({ selection: { anchor: 3 } }));
   const note = await waitFor(() => {
     const n = document.querySelector(".cm-prod-write-note");
@@ -773,7 +783,7 @@ test("writing_statement_on_production_gets_band_and_note", async () => {
 test("reading_statement_gets_neither", async () => {
   productionRoutes();
   const { view } = setupFreight("SELECT 1");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().dispatch({ selection: { anchor: 3 } }));
   await waitFor(() => expect(callsTo("classify_sql").length).toBeGreaterThan(0));
   await new Promise((r) => setTimeout(r, 20));
@@ -792,7 +802,7 @@ test("read_only_writing_statement_shows_note_and_disables_run", async () => {
   routes();
   const text = "SELECT 1;\nUPDATE t SET a = 1 WHERE id = 1;";
   const { view } = setupRo(text);
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().dispatch({ selection: { anchor: text.indexOf("SET") } }));
   const note = await waitFor(() => {
     const n = document.querySelector(".cm-blocked-note");
@@ -821,7 +831,7 @@ test("read_only_writing_statement_shows_note_and_disables_run", async () => {
 test("read_only_reads_run_normally", async () => {
   routes();
   const { view } = setupRo("SELECT 1");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().dispatch({ selection: { anchor: 3 } }));
   await waitFor(() => expect(callsTo("classify_sql").length).toBeGreaterThan(0));
   await new Promise((r) => setTimeout(r, 20));
@@ -836,7 +846,7 @@ test("read_only_reads_run_normally", async () => {
 test("run_all_disabled_when_any_statement_writes", async () => {
   routes();
   const { view } = setupRo("SELECT 1;\nDELETE FROM t WHERE id = 1;");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().dispatch({ selection: { anchor: 3 } }));
   await waitFor(() => expect(runAllButton().disabled).toBe(true));
   expect(runAllButton().title).toBe("This Connection is Read-only");
@@ -850,7 +860,7 @@ test("server_refusal_message", async () => {
     },
   });
   const { view } = setupRo("SELECT refresh_customer_totals()");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   expect(await screen.findByText("The server refused a write: this Connection is Read-only")).toBeTruthy();
   expect(
@@ -863,7 +873,7 @@ test("server_refusal_message", async () => {
 test("a_read_only_verdict_runs_nothing_and_says_why", async () => {
   routes({ prepare_run: () => ({ kind: "readOnly", statement: 0 }) });
   const { view } = setup(doc("UPDATE t SET a = 1 WHERE id = 1"), true, { connections: [{ ...conn, readOnly: true }] });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   expect((await screen.findByRole("alert")).textContent).toContain("Read-only Connection");
   expect(callsTo("execute_sql")).toHaveLength(0);
@@ -877,7 +887,7 @@ test("status_shows_rows_ms_and_position_in_ui_font", async () => {
   document.body.appendChild(slot);
   try {
     const { view } = setup(doc("SELECT 1"), true, { visible: true });
-    await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+    await sessionOpen();
     key(view(), "Enter", { ctrlKey: true });
     await waitFor(() => expect(slot.textContent).toContain("200 rows"));
     const texts = Array.from(slot.querySelectorAll(".query-status > span")).map((s) => s.textContent);
@@ -896,7 +906,7 @@ const PLAN = { nodes: [{ label: "Seq Scan on orders", object: "orders", rows: 12
 test("explain_runs_the_current_statement_and_opens_a_plan_tab", async () => {
   routes({ explain_statement: () => PLAN });
   const { view } = setup(doc("SELECT 1;\nSELECT * FROM orders;"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   act(() => view().dispatch({ selection: { anchor: 14 } }));
   await userEvent.click(screen.getByRole("button", { name: /Explain/ }));
   await waitFor(() => expect(callsTo("explain_statement")).toHaveLength(1));
@@ -909,7 +919,7 @@ test("explain_runs_the_current_statement_and_opens_a_plan_tab", async () => {
 test("explain_on_a_production_write_never_runs_or_confirms", async () => {
   productionRoutes({ explain_statement: () => PLAN });
   setupProd("UPDATE t SET a = 1");
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   await userEvent.click(screen.getByRole("button", { name: /Explain/ }));
   await waitFor(() => expect(callsTo("explain_statement")).toHaveLength(1));
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -925,7 +935,7 @@ test("explain_refusal_shows_as_an_error", async () => {
     },
   });
   setup(doc("CREATE TABLE x (a int)"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   await userEvent.click(screen.getByRole("button", { name: /Explain/ }));
   expect(await screen.findByText(/Explain does not cover/)).toBeTruthy();
 });
@@ -933,7 +943,7 @@ test("explain_refusal_shows_as_an_error", async () => {
 test("explain_over_an_open_result_closes_it_on_the_server_first", async () => {
   routes({ execute_sql: () => rowsResult(1000, true), close_query_result: () => null, explain_statement: () => PLAN });
   const { view } = setup(doc("SELECT * FROM sales.orders"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await screen.findByText(/^First 1,000 rows in /);
   await userEvent.click(screen.getByRole("button", { name: /Explain/ }));
@@ -968,7 +978,7 @@ test("reconnect_reopens_the_connection_and_tells_the_app", async () => {
   });
   const onConnectionOpened = vi.fn();
   const { view } = setup(doc("SELECT 1"), true, { onConnectionOpened });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   const button = await screen.findByRole("button", { name: /Reconnect and run statement 1/ });
   drop = false;
@@ -990,7 +1000,7 @@ const externalRun = (extra: Partial<Parameters<typeof QueryTab>[0]> = {}) => {
 test("an_outside_run_resolves_with_the_row_count_when_it_ran", async () => {
   routes({ execute_sql: () => rowsResult(8) });
   const runRef = externalRun();
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   let outcome: Promise<{ ran: boolean; rows?: number }>;
   await act(async () => {
     outcome = runRef.current!("SELECT n FROM t");
@@ -1003,7 +1013,7 @@ test(
   patient(async () => {
     productionRoutes();
     const runRef = externalRun({ connections: [prod] });
-    await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+    await sessionOpen();
     let outcome: Promise<{ ran: boolean; rows?: number }>;
     await act(async () => {
       outcome = runRef.current!("UPDATE t SET a = 1 WHERE id = 1");
@@ -1019,7 +1029,7 @@ test(
 test("an_outside_run_on_production_resolves_ran_after_the_dialog_is_confirmed", async () => {
   productionRoutes({ execute_sql: () => ({ outcome: { t: "affected", rows: 3 }, elapsedMs: 2 }) });
   const runRef = externalRun({ connections: [prod] });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   let outcome: Promise<{ ran: boolean; rows?: number }>;
   await act(async () => {
     outcome = runRef.current!("UPDATE t SET a = 1 WHERE id = 1");
@@ -1031,7 +1041,7 @@ test("an_outside_run_on_production_resolves_ran_after_the_dialog_is_confirmed", 
 test("an_outside_run_blocked_by_read_only_resolves_not_ran", async () => {
   routes({ prepare_run: () => ({ kind: "readOnly", statement: "UPDATE t SET a = 1" }) });
   const runRef = externalRun();
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   let outcome: Promise<{ ran: boolean; rows?: number }>;
   await act(async () => {
     outcome = runRef.current!("UPDATE t SET a = 1");
@@ -1066,7 +1076,7 @@ test("cancelled_open_that_finishes_is_closed_and_a_second_open_waits", async () 
 test("an_outside_run_splits_its_statements_so_a_delete_without_where_asks", async () => {
   routes();
   const runRef = externalRun();
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   let outcome: Promise<{ ran: boolean; rows?: number }>;
   await act(async () => {
     outcome = runRef.current!("DELETE FROM orders;\nSELECT * FROM x WHERE id = 1");
@@ -1082,7 +1092,7 @@ test("an_outside_run_splits_its_statements_so_a_delete_without_where_asks", asyn
 test("an_outside_run_of_several_statements_runs_each_and_counts_the_last", async () => {
   routes({ execute_sql: ({ sql }) => (sql === "SELECT 1" ? rowsResult(1) : rowsResult(3)) });
   const runRef = externalRun();
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   let outcome: Promise<{ ran: boolean; rows?: number }>;
   await act(async () => {
     outcome = runRef.current!("SELECT 1;\nSELECT n FROM t;");
@@ -1094,7 +1104,7 @@ test("an_outside_run_of_several_statements_runs_each_and_counts_the_last", async
 test("an_outside_run_with_more_rows_than_the_first_page_says_so", async () => {
   routes({ execute_sql: () => rowsResult(200, true) });
   const runRef = externalRun();
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   let outcome: Promise<{ ran: boolean; rows?: number; more?: boolean }>;
   await act(async () => {
     outcome = runRef.current!("SELECT n FROM t");
@@ -1112,7 +1122,7 @@ test("reconnect_runs_only_the_failed_statement_and_keeps_the_numbers", async () 
     },
   });
   const { view } = setup(doc("SELECT 1;\nSELECT 2;\nSELECT 3;"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   const button = await screen.findByRole("button", { name: /Reconnect and run statement 2/ });
   drop = false;
@@ -1135,7 +1145,7 @@ test("reconnect_rerun_that_fails_again_keeps_statement_n_and_its_not_run_list", 
     },
   });
   const { view } = setup(doc("SELECT 1;\nSELECT 2;\nSELECT 3;"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   const button = await screen.findByRole("button", { name: /Reconnect and run statement 2/ });
   drop = false;
@@ -1178,7 +1188,7 @@ test("a_failed_reconnect_session_does_not_run_later_on_another_database", async 
     </ToastProvider>
   );
   const { rerender } = render(ui("kfc_shop"));
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
   key(view, "Enter", { ctrlKey: true });
   await userEvent.click(await screen.findByRole("button", { name: /Reconnect and run statement 1/ }));
@@ -1225,7 +1235,7 @@ test("a_reconnect_rerun_is_dropped_when_the_connection_is_not_open_so_a_later_op
   });
   const { rerender } = render(ui(["c1"]));
   rerenderRef = rerender;
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
   key(view, "Enter", { ctrlKey: true });
   await userEvent.click(await screen.findByRole("button", { name: /Reconnect and run statement 1/ }));
@@ -1303,7 +1313,7 @@ test("ctrl_shift_d_opens_the_query_diagram_beside_the_editor_and_closes_it_again
   const lang = withLang();
   const asked = vi.spyOn(lang.client, "sqlShape");
   const { view, rerenderCurrent } = setup(doc(DIAGRAM_SQL), true, { lang, visible: true });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   const diagramButton = () => screen.getByRole("button", { name: /^Diagram/ });
   expect(diagramButton().getAttribute("aria-pressed")).toBe("false");
   expect(screen.queryByRole("region", { name: "Query diagram" })).toBeNull();
@@ -1342,7 +1352,7 @@ test("the_diagram_button_opens_the_pane_and_a_selected_card_bands_its_lines_in_t
   routes({ sql_schema: () => KFC_SCHEMA });
   const lang = withLang();
   setup(doc(DIAGRAM_SQL), true, { lang, visible: true });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   await userEvent.click(screen.getByRole("button", { name: /^Diagram/ }));
   const pane = await screen.findByRole("region", { name: "Query diagram" });
   const card = await within(pane).findByRole("group", { name: "Table stores s" });
@@ -1367,7 +1377,7 @@ test("the_diagram_loads_another_mysql_database_a_statement_names", async () => {
   });
   const lang = withLang();
   setup(doc("SELECT a.placed_at FROM archive.old_orders a", { database: "shop" }), true, { lang, connections: [mysql], visible: true });
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   await userEvent.click(screen.getByRole("button", { name: /^Diagram/ }));
   const pane = await screen.findByRole("region", { name: "Query diagram" });
   await waitFor(() => expect(callsTo("sql_schema")).toContainEqual({ id: "c1", database: "archive" }));
@@ -1401,7 +1411,7 @@ test("a_result_export_names_the_database_the_session_is_in_after_use_q43", async
       />
     </ToastProvider>,
   );
-  await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
+  await sessionOpen();
   const view = EditorView.findFromDOM(document.querySelector(".cm-editor") as HTMLElement)!;
   key(view, "Enter", { ctrlKey: true, shiftKey: true });
   await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(2));

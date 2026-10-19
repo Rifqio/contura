@@ -167,22 +167,111 @@ pub fn write_text_file(data: State<'_, DataDir>, path: PathBuf, text: String) ->
     contura_core::model_files::write_text_file(&path, &text, &data.0)
 }
 
-/// Writes diagram `name` and its layout file together in `<data>\diagrams` (D1, Q35);
-/// returns the `.flow` path.
+/// Every diagram in `<data>\diagrams`, newest first (step 6+).
 #[tauri::command]
-pub fn write_flow_files(
+pub fn list_diagrams(
     data: State<'_, DataDir>,
-    name: String,
-    flow: String,
-    layout: String,
-) -> Result<PathBuf, Error> {
-    contura_core::model_files::write_flow_files(&name, &flow, &layout, &data.0)
+) -> Result<Vec<contura_core::diagrams::DiagramEntry>, Error> {
+    contura_core::diagrams::list_diagrams(&data.0)
 }
 
-/// Whether diagram `name` is saved already, so the UI can ask before replacing it.
+/// Every node with a `table:` in the diagrams folder, and whether it reads or writes (B2),
+/// off the main thread: it reads every `.flow` file (P6).
 #[tauri::command]
-pub fn flow_exists(data: State<'_, DataDir>, name: String) -> Result<bool, Error> {
-    contura_core::model_files::flow_exists(&name, &data.0)
+pub async fn list_flow_table_links(
+    data: State<'_, DataDir>,
+) -> Result<Vec<contura_core::lineage::FlowTableLink>, Error> {
+    let dir = data.0.clone();
+    tauri::async_runtime::spawn_blocking(move || contura_core::lineage::list_flow_table_links(&dir))
+        .await
+        .map_err(|e| Error::File(format!("cannot read the diagrams folder: {e}")))?
+}
+
+/// Every packed icon name with its set and title (C1b). Async, off the main thread; a
+/// damaged pack is an error, never a panic (P9).
+#[tauri::command]
+pub async fn icon_index() -> Result<Vec<contura_core::icons::IconEntry>, Error> {
+    contura_core::icons::icon_index()
+}
+
+/// The packed icon sets with their licences and source links, for Icon credits.
+#[tauri::command]
+pub async fn icon_sets() -> Result<Vec<contura_core::icons::IconSet>, Error> {
+    contura_core::icons::icon_sets()
+}
+
+/// Icon `name`'s SVG text, unchanged and checked again as it is served; the UI shows it
+/// only as an image (P7, P9).
+#[tauri::command]
+pub async fn icon(name: String) -> Result<String, Error> {
+    contura_core::icons::icon(&name)
+}
+
+/// Both files of diagram `name`, off the main thread; a file over 5 MB is refused (P24 M4).
+#[tauri::command]
+pub async fn read_diagram(
+    data: State<'_, DataDir>,
+    name: String,
+) -> Result<contura_core::diagrams::DiagramFiles, Error> {
+    let dir = data.0.clone();
+    tauri::async_runtime::spawn_blocking(move || contura_core::diagrams::read_diagram(&dir, &name))
+        .await
+        .map_err(|e| Error::File(format!("cannot read the diagram: {e}")))?
+}
+
+/// Saves diagram `name`; without `overwrite`, a taken name is `DiagramExists`.
+///
+/// Kept sync on purpose, like `write_diagram_layout` and `rename_diagram`: sync commands run in
+/// the order they were sent, so a save already sent lands before a later rename or replace
+/// (P24 M2; the UI also waits for it).
+#[tauri::command]
+pub fn write_diagram(
+    data: State<'_, DataDir>,
+    name: String,
+    text: String,
+    layout: String,
+    overwrite: bool,
+) -> Result<(), Error> {
+    contura_core::diagrams::write_diagram(&data.0, &name, &text, &layout, overwrite)
+}
+
+/// Saves only the layout file of diagram `name` (moves, Classic, the direction); the `.flow` is
+/// left as it is, and a missing `.flow` is refused (P24 I1). Sync, as `write_diagram` is.
+#[tauri::command]
+pub fn write_diagram_layout(
+    data: State<'_, DataDir>,
+    name: String,
+    layout: String,
+) -> Result<(), Error> {
+    contura_core::diagrams::write_diagram_layout(&data.0, &name, &layout)
+}
+
+/// Moves both files of diagram `name` to the Recycle Bin, off the main thread: the shell
+/// call blocks and starts COM, which stays out of the webview's thread (P4).
+#[tauri::command]
+pub async fn delete_diagram(data: State<'_, DataDir>, name: String) -> Result<(), Error> {
+    let dir = data.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        contura_core::diagrams::delete_diagram(&dir, &name)
+    })
+    .await
+    .map_err(|e| Error::File(format!("cannot move the diagram to the Recycle Bin: {e}")))?
+}
+
+#[tauri::command]
+pub fn rename_diagram(data: State<'_, DataDir>, from: String, to: String) -> Result<(), Error> {
+    contura_core::diagrams::rename_diagram(&data.0, &from, &to)
+}
+
+/// "Save a copy as...": both files at `path`, outside Contura's data folder.
+#[tauri::command]
+pub fn save_diagram_copy(
+    data: State<'_, DataDir>,
+    text: String,
+    layout: String,
+    path: PathBuf,
+) -> Result<(), Error> {
+    contura_core::diagrams::save_diagram_copy(&text, &layout, &path, &data.0)
 }
 
 #[tauri::command]
@@ -451,6 +540,79 @@ pub async fn table_design(
     service.table_design(id, path).await
 }
 
+/// The tables around `path` from catalog details; a `depth` of 0 is All (B2).
+#[tauri::command]
+pub async fn lineage(
+    service: Service<'_>,
+    id: ConnectionId,
+    path: ObjectPath,
+    depth: u8,
+    direction: contura_core::lineage::Direction,
+) -> Result<contura_core::lineage::Lineage, Error> {
+    service.lineage(id, path, depth, direction).await
+}
+
+/// The views the catalog records as reading `path`, at most 200, off the main thread; on
+/// SQLite and older MySQL `catalog` is false and the UI matches names instead.
+#[tauri::command]
+pub async fn view_dependencies(
+    service: Service<'_>,
+    id: ConnectionId,
+    path: ObjectPath,
+) -> Result<contura_core::lineage::ViewDependencies, Error> {
+    service.view_dependencies(id, path).await
+}
+
+fn layout_join_err(e: tauri::Error) -> Error {
+    Error::File(format!("cannot reach the lineage layout: {e}"))
+}
+
+/// The moved cards of `path`'s lineage, or null when none are saved.
+#[tauri::command]
+pub async fn read_lineage_layout(
+    data: State<'_, DataDir>,
+    id: ConnectionId,
+    path: ObjectPath,
+) -> Result<Option<String>, Error> {
+    let dir = data.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        contura_core::lineage::read_lineage_layout(&dir, id, &path)
+    })
+    .await
+    .map_err(layout_join_err)?
+}
+
+/// Saves the moved cards of `path`'s lineage in `<data>\diagrams\.lineage`.
+#[tauri::command]
+pub async fn write_lineage_layout(
+    data: State<'_, DataDir>,
+    id: ConnectionId,
+    path: ObjectPath,
+    layout: String,
+) -> Result<(), Error> {
+    let dir = data.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        contura_core::lineage::write_lineage_layout(&dir, id, &path, &layout)
+    })
+    .await
+    .map_err(layout_join_err)?
+}
+
+/// Reset: removes the saved layout of `path`'s lineage.
+#[tauri::command]
+pub async fn delete_lineage_layout(
+    data: State<'_, DataDir>,
+    id: ConnectionId,
+    path: ObjectPath,
+) -> Result<(), Error> {
+    let dir = data.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        contura_core::lineage::delete_lineage_layout(&dir, id, &path)
+    })
+    .await
+    .map_err(layout_join_err)?
+}
+
 #[tauri::command]
 pub async fn table_ddl(
     service: Service<'_>,
@@ -659,4 +821,14 @@ pub fn ai_ask(
     request: AiRequest,
 ) -> Result<AiAnswer, Error> {
     ai.ask(group_id, &request)
+}
+
+/// Opens an https link (an icon set's source in Icon credits) in the system browser. The
+/// address is checked again here: https only, no user name or password (P9).
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), Error> {
+    let url = contura_core::links::safe_https_url(&url)?;
+    tauri::async_runtime::spawn_blocking(move || crate::browser::open(&url))
+        .await
+        .map_err(|e| Error::File(format!("The browser didn't open: {e}")))?
 }

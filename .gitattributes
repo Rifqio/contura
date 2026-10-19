@@ -1,0 +1,5 @@
+# Test fixtures keep LF on every checkout, so tests read the same bytes on Windows.
+*.flow text eol=lf
+*.mmd text eol=lf
+crates/contura-core/tests/fixtures/** text eol=lf
+src/**/fixtures/** text eol=lf

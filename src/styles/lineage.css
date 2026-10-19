@@ -1,0 +1,497 @@
+/* The lineage tab (spec 6+ section 5, frame 6+.1). Tokens only; the cards are the step 6 table card at 214 px. */
+.lineage-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--c-bg-surface);
+}
+.lineage-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: var(--strip-height);
+  padding: 0 var(--spacing-sm);
+  white-space: nowrap;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.lineage-toolbar-label,
+.lineage-toolbar-hint,
+.lineage-toolbar-note {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.lineage-toolbar-note {
+  margin-left: var(--spacing-sm);
+  color: var(--c-warning-text);
+}
+.lineage-toolbar-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lineage-toolbar-spacer {
+  flex: 1;
+}
+.lineage-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.lineage-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: var(--c-bg-canvas);
+}
+
+/* Cards: PK and FK marks, the type right-aligned, "?" when the column can be empty, the driving row tinted. */
+.lineage-card .table-card-column.lineage-row {
+  grid-template-columns: 24px 1fr auto;
+  padding: 0 10px 0 6px;
+}
+.lineage-mark {
+  justify-self: start;
+  padding: 0 3px;
+  border-radius: var(--rounded-xs);
+  font: var(--font-mono-micro);
+  font-weight: 600;
+}
+.lineage-mark-pk {
+  color: var(--c-group-gold);
+  border: var(--border-hairline) solid currentColor;
+}
+.lineage-mark-fk {
+  color: var(--c-text-subtle);
+  border: var(--border-hairline) solid currentColor;
+}
+.lineage-col-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lineage-col-type {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text-subtle);
+  font-style: italic;
+}
+.lineage-row.lineage-drive {
+  background: color-mix(in srgb, var(--c-accent-subtle) 60%, transparent);
+}
+.lineage-more,
+.lineage-unreadable {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px 0 36px;
+  color: var(--c-text-subtle);
+}
+.lineage-unreadable {
+  color: var(--c-danger-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The table in the middle: a 2 px accent outline 5 px out. */
+.lineage-center .table-card {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 5px;
+}
+
+/* A diagram or view below the table: a dashed card in the service stroke. */
+.lineage-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 214px;
+  height: 56px;
+  box-sizing: border-box;
+  padding: var(--spacing-sm) 10px;
+  background: var(--c-bg-surface);
+  border: var(--border-hairline) dashed var(--c-node-service-stroke);
+  border-radius: var(--rounded-md);
+  font: var(--font-small);
+}
+.lineage-ref-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--c-text-subtle);
+}
+.lineage-ref-file .icon {
+  color: var(--c-node-service-stroke);
+}
+.lineage-ref-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--font-body-strong);
+}
+
+/* Lines: thin and subtle; the marked one in the accent; diagram and view lines dashed. */
+.diagram-canvas .lineage-edge .react-flow__edge-path {
+  stroke: var(--c-text-subtle);
+  stroke-width: 1.5;
+}
+.diagram-canvas .lineage-edge-ref .react-flow__edge-path {
+  stroke-dasharray: 5 4;
+}
+.diagram-canvas .lineage-edge-hot .react-flow__edge-path {
+  stroke: var(--c-accent);
+  stroke-width: 2;
+}
+
+/* Side panel: 344 px; each group on its own surface. */
+.lineage-panel {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: 344px;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--c-bg-panel);
+  border-left: var(--border-hairline) solid var(--c-border-subtle);
+}
+.lineage-panel-strip {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  height: var(--strip-height);
+  box-sizing: border-box;
+  padding: 0 12px;
+  line-height: var(--strip-height);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.lineage-panel-title {
+  font: var(--font-body-strong);
+  line-height: inherit;
+}
+.lineage-panel-where {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  line-height: inherit;
+}
+.lineage-warning {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin: 12px;
+  padding: 10px 12px 12px;
+  border-radius: var(--rounded-md);
+  background: var(--c-warning-subtle);
+}
+.lineage-warning-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font: var(--font-body-strong);
+}
+.lineage-warning-title .icon {
+  color: var(--c-warning-text);
+}
+.lineage-warning ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--font-small);
+}
+.lineage-warning li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  color: var(--c-text);
+}
+.lineage-warning li .icon {
+  flex: none;
+  margin-top: 2px;
+}
+.lineage-warning-block {
+  color: var(--c-warning-text);
+}
+.lineage-warning-cascade {
+  color: var(--c-danger-text);
+}
+.lineage-group {
+  margin: 0 12px var(--spacing-sm);
+  overflow: hidden;
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.lineage-warning + .lineage-group,
+.lineage-panel-strip + .lineage-group {
+  margin-top: 12px;
+}
+.lineage-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 30px;
+  padding: 0 10px;
+  font: var(--font-small);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--c-bg-active) 60%, var(--c-bg-surface));
+}
+.lineage-group-head em {
+  margin-left: auto;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.lineage-group-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--rounded-xs);
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+}
+.lineage-group-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lineage-group .lineage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 10px 7px;
+}
+.lineage-group .lineage-row + .lineage-row {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.lineage-group .lineage-row-hot {
+  background: color-mix(in srgb, var(--c-accent-subtle) 55%, var(--c-bg-surface));
+  box-shadow: inset 2px 0 0 var(--c-accent);
+}
+.lineage-row-sentence {
+  font: var(--font-small);
+  font-weight: 600;
+}
+.lineage-row-update {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.lineage-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+.lineage-group code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+}
+.lineage-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-xs);
+  height: 20px;
+  padding: 0 7px 0 5px;
+  border-radius: var(--rounded-sm);
+  font: var(--font-micro);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.lineage-tag-blocks {
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+}
+.lineage-tag-cascade {
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+}
+.lineage-tag-info {
+  background: var(--c-bg-active);
+  color: var(--c-text-muted);
+}
+.lineage-ref-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.lineage-ref-icon {
+  flex: none;
+  color: var(--c-node-service-stroke);
+}
+.lineage-ref-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.lineage-open {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-accent-text);
+  font: var(--font-small);
+  cursor: pointer;
+}
+
+/* States: each is a piece of the real canvas, not a caption over an empty box. */
+.lineage-state {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: var(--spacing-md);
+}
+.lineage-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+}
+.lineage-loading-cards {
+  display: flex;
+  align-items: center;
+  gap: 34px;
+}
+.lineage-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 86px;
+  padding: 9px 8px;
+  box-sizing: border-box;
+  border: var(--border-hairline) dashed var(--c-border-strong);
+  border-radius: var(--rounded-md);
+  background: color-mix(in srgb, var(--c-bg-surface) 70%, transparent);
+  opacity: 0.7;
+}
+.lineage-skel i {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--c-bg-active);
+}
+.lineage-skel i:first-child {
+  width: 70%;
+  height: 8px;
+}
+.lineage-loadline {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.lineage-nothing {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 44px 20px;
+}
+.lineage-nothing-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 360px;
+}
+.lineage-nothing-note h4 {
+  margin: 0;
+  font: var(--font-subtitle);
+}
+.lineage-nothing-note p {
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.lineage-nothing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--spacing-xs);
+}
+.lineage-error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  max-width: 560px;
+  padding: 10px 12px 12px;
+  border-radius: var(--rounded-md);
+  background: var(--c-danger-subtle);
+}
+.lineage-error-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font: var(--font-body-strong);
+}
+.lineage-error-title .icon {
+  color: var(--c-danger-text);
+}
+.lineage-error p {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.lineage-raw {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 34px 7px 8px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+}
+.lineage-raw b {
+  color: var(--c-text-subtle);
+  font: var(--font-micro);
+  font-weight: 600;
+}
+.lineage-raw code {
+  color: var(--c-text);
+  font: var(--font-mono-micro);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lineage-raw-copy {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 24px;
+  height: 22px;
+}
+.lineage-error-actions {
+  display: flex;
+  gap: 6px;
+}
+.lineage-retry {
+  border: var(--border-hairline) solid var(--c-border);
+  background: var(--c-bg-surface);
+}
+/* Under the warning: why the list may be incomplete, and SQLite's switch. Under a group: what was not checked. */
+.lineage-warning-note,
+.lineage-group-note {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.lineage-group-note {
+  padding: 6px 10px 7px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.lineage-nothing-note p + p {
+  margin-top: var(--spacing-xs);
+}

@@ -29,7 +29,11 @@ export type CommandId =
   | "visualQuery.openInEditor"
   | "diagram.toggle"
   | "export.open"
-  | "flow.fromMermaid";
+  | "flow.fromMermaid"
+  | "flow.new"
+  | "flow.saveCopy"
+  | "flow.rename"
+  | "flow.delete";
 
 export interface Command {
   id: CommandId;
@@ -74,6 +78,11 @@ export const COMMANDS: readonly Command[] = [
   // Step 7 (D21): each table grid and result registers export.open with its region.
   app("export.open", "Export...", ["Ctrl+E"]),
   app("flow.fromMermaid", "New flow from Mermaid"),
+  // Step 6+: the New diagram sheet, and the open diagram's file actions.
+  app("flow.new", "New diagram", ["Ctrl+Alt+N"]),
+  app("flow.saveCopy", "Save a copy as..."),
+  app("flow.rename", "Rename diagram"),
+  app("flow.delete", "Delete diagram"),
 ];
 
 const BY_ID = new Map(COMMANDS.map((c) => [c.id, c]));

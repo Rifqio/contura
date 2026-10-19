@@ -1,6 +1,6 @@
 // Mermaid flowchart to .flow: Contura's own small converter (spec, "Mermaid to .flow mapping"), run in the
 // language worker. One way: the Mermaid text is not kept. A line it cannot read is left out and named.
-import { type FlowDoc, type FlowGroup, type FlowKind, type FlowLink, needsQuotes, writeFlow } from "./flowModel";
+import { type FlowDoc, type FlowGroup, type FlowKind, type FlowLink, type FlowNode, needsQuotes, writeFlow } from "./flowModel";
 
 export type MermaidNote = { line: number; text: string };
 
@@ -359,7 +359,7 @@ export function mermaidToFlow(text: string, title: string): MermaidResult {
   const errors: MermaidNote[] = [];
   const refuse = (line: number, message: string): MermaidResult => ({
     flow: "",
-    doc: { title, comments: [], nodes: [], links: [], groups: [] },
+    doc: { kind: "flow", title, comments: [], nodes: [], links: [], groups: [] },
     direction: "TB",
     notes: [],
     errors: [{ line, text: message }],
@@ -575,7 +575,8 @@ export function mermaidToFlow(text: string, title: string): MermaidResult {
     }
     if (n.unknownShape) note(n.line, `the shape ${n.unknownShape} is not a .flow shape. ${name} became a step.`);
     if (needsQuotes(name)) note(n.line, `${name} has characters .flow reserves, so it is written in quotes.`);
-    return icon ? { name, kind, icon } : { name, kind };
+    const node: FlowNode = { name, kind, attrs: icon ? { icon } : {} };
+    return node;
   });
 
   const toFlowGroup = (g: RawGroup): FlowGroup => ({ name: g.name, nodes: g.nodes.map(nameOf), groups: g.groups.map(toFlowGroup) });
@@ -586,7 +587,7 @@ export function mermaidToFlow(text: string, title: string): MermaidResult {
     return out;
   });
 
-  const doc: FlowDoc = { title, comments, nodes: flowNodes, links, groups: roots.map(toFlowGroup) };
+  const doc: FlowDoc = { kind: "flow", title, comments, nodes: flowNodes, links, groups: roots.map(toFlowGroup) };
   notes.sort((a, b) => a.line - b.line);
   errors.sort((a, b) => a.line - b.line);
   return { flow: writeFlow(doc), doc, direction, notes, errors, nodes: flowNodes.length, links: links.length };

@@ -41,7 +41,7 @@ fn ref_name(name: String, table: &str) -> Option<String> {
 }
 
 /// InnoDB treats RESTRICT and NO ACTION alike, and both are the default.
-fn rule(r: String) -> Option<String> {
+pub(super) fn rule(r: String) -> Option<String> {
     (r != "NO ACTION" && r != "RESTRICT").then_some(r)
 }
 

@@ -1,0 +1,24 @@
+diagram flow "Names \"in\" quotes \\ and more"
+
+// every name here needs quotes
+//
+
+"Step [1]" [start]
+"a > b"
+"C:\\temp"
+"x -- y" [step, icon: database]
+" padded "
+"-" [end, color: "warning, soft"]
+"Say \"hi\""
+"a: b" [io, table: "shop.weird//name"]
+
+"{group}" {
+  "Pay // now"
+}
+
+"Step [1]" > "a > b" > "C:\\temp"
+"C:\\temp" > "x -- y": "says \"ok\""
+"x -- y" --> " padded ": "  spaced  "
+" padded " <> "-": "half // way"
+"Say \"hi\"" - "a: b": plain > text: still label
+"a: b" > "Pay // now"

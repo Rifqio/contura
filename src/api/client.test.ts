@@ -4,30 +4,11 @@ import {
   connectionTarget,
   errorText,
   fileName,
-  flowExists,
   listSavedQueries,
   runVisualQuery,
   shortenPath,
   visualQuerySql,
-  writeFlowFiles,
 } from "./client";
-
-test("writeFlowFiles_sends_the_name_flow_and_layout_and_returns_the_path", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce("C:\\data\\diagrams\\orders.flow");
-  const path = await writeFlowFiles("orders", 'diagram flow "orders"\n', '{"version":1}');
-  expect(invoke).toHaveBeenLastCalledWith("write_flow_files", {
-    name: "orders",
-    flow: 'diagram flow "orders"\n',
-    layout: '{"version":1}',
-  });
-  expect(path).toBe("C:\\data\\diagrams\\orders.flow");
-});
-
-test("flowExists_asks_the_core_by_name", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce(true);
-  expect(await flowExists("orders")).toBe(true);
-  expect(invoke).toHaveBeenLastCalledWith("flow_exists", { name: "orders" });
-});
 
 test("fileName_is_the_last_part_of_either_path_style", () => {
   expect(fileName("C:\\out\\orders.csv")).toBe("orders.csv");

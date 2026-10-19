@@ -7,11 +7,14 @@ const WAIT = 8000;
 
 /** Longer findBy/waitFor and test limits for every test in the calling file. */
 export function patientFile() {
+  // Each test takes its limit when it is collected, so the limit is set now, before the file's `test` calls.
+  // Set in beforeAll it came after collection and never applied: tests still died at the default 5000ms.
+  // Vitest resets the config after the file.
+  vi.setConfig({ testTimeout: LOAD_TIMEOUT });
   let before = getConfig().asyncUtilTimeout;
   beforeAll(() => {
     before = getConfig().asyncUtilTimeout;
     configure({ asyncUtilTimeout: WAIT });
-    vi.setConfig({ testTimeout: LOAD_TIMEOUT });
   });
   afterAll(() => configure({ asyncUtilTimeout: before }));
 }

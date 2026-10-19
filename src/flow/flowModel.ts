@@ -1,87 +1,68 @@
-// The smallest part of the .flow language (A2) that Mermaid import needs (ruling D1): the types and the writer.
-// A2's parser must keep reading what this writes, in the grammar of the direction spec.
+// The .flow writer. The types and the quoting rule live with the parser in src/lang/flow/model.ts;
+// the parser reads everything this writes (ruling P2).
+import {
+  type DiagramKind,
+  type FlowDoc,
+  type FlowGroup,
+  type FlowLink,
+  type FlowNode,
+  flowLabel,
+  flowName,
+  flowValue,
+  MAX_GROUP_DEPTH,
+  quote,
+} from "../lang/flow/model";
 
-export type FlowKind = "start" | "end" | "step" | "decision" | "io" | "subprocess";
+export type { DiagramKind, FlowArrow, FlowDoc, FlowGroup, FlowKind, FlowLink, FlowNode, FlowNodeKind } from "../lang/flow/model";
+export { flowName, needsQuotes } from "../lang/flow/model";
 
-export interface FlowNode {
-  name: string;
-  kind: FlowKind;
-  icon?: string;
+function nodeLine(n: FlowNode, kind: DiagramKind): string {
+  // A cloud node is always a service, so its kind is left unsaid.
+  const parts = kind === "cloud" && n.kind === "service" ? [] : [n.kind as string];
+  for (const [key, value] of Object.entries(n.attrs)) parts.push(`${key}: ${flowValue(value)}`);
+  return parts.length ? `${flowName(n.name)} [${parts.join(", ")}]` : flowName(n.name);
 }
 
-export interface FlowLink {
-  from: string;
-  to: string;
-  /** `>` one way, `-` no arrow, `-->` dashed, `<>` both ways. */
-  arrow: ">" | "-" | "-->" | "<>";
-  label?: string;
-  /** Written on the same line as the link before it (`A > B > C`); set only when neither has a label. */
-  chained?: boolean;
-}
+/** Two spaces per level, no deeper than the parser allows, so a doc built in code cannot make the text huge. */
+const indentAt = (depth: number) => "  ".repeat(Math.min(depth, MAX_GROUP_DEPTH));
 
-export interface FlowGroup {
-  name: string;
-  /** Node names, in the order they are written. */
-  nodes: string[];
-  groups: FlowGroup[];
-}
-
-export interface FlowDoc {
-  title: string;
-  /** `//` comments, written after the first line; `line` is where they came from. */
-  comments: { line: number; text: string }[];
-  /** Every node, grouped or not; the ones in no group are written first, in this order. */
-  nodes: FlowNode[];
-  links: FlowLink[];
-  groups: FlowGroup[];
-}
-
-/**
- * Text .flow reads as syntax inside a name: brackets, braces, `:`, `>`, `<`, quotes, a backslash, a `//`
- * comment, a lone `-` (the no-arrow link) and `--` (the dashed link). A2's parser must read the same rule.
- */
-const RESERVED = /[[\]{}:><"\\]|\/\/|(^|\s)-(\s|$)|--/;
-
-/** True when the name has to be written in double quotes. */
-export function needsQuotes(name: string): boolean {
-  return RESERVED.test(name) || name !== name.trim() || name === "";
-}
-
-/** Double quotes, with `\` written `\\` and `"` written `\"`. */
-const quote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-
-/** A node or group name as .flow writes it. */
-export function flowName(name: string): string {
-  return needsQuotes(name) ? quote(name) : name;
-}
-
-/** A link label runs to the end of the line, so only a comment mark, a quote or a backslash needs quotes. */
-function flowLabel(label: string): string {
-  return /\/\/|["\\]/.test(label) || label !== label.trim() ? quote(label) : label;
-}
-
-function nodeLine(n: FlowNode): string {
-  return `${flowName(n.name)} [${n.icon ? `${n.kind}, icon: ${n.icon}` : n.kind}]`;
-}
-
-/** Recursive: the Mermaid converter caps nesting at 20 (MAX_GROUP_DEPTH), so the stack stays small. */
-function groupLines(g: FlowGroup, byName: Map<string, FlowNode>, indent: string): string[] {
-  const inner = `${indent}  `;
-  const body = g.nodes.flatMap((name) => {
-    const n = byName.get(name);
-    return n ? [inner + nodeLine(n)] : [];
-  });
-  for (const child of g.groups) {
-    if (body.length) body.push("");
-    body.push(...groupLines(child, byName, inner));
+/** A group and everything in it, walked with a stack (never recursion), a blank line before each inner group. */
+function groupLines(root: FlowGroup, byName: Map<string, FlowNode>, kind: DiagramKind): string[] {
+  const lines: string[] = [];
+  type Frame = { g: FlowGroup; depth: number; child: number; body: boolean };
+  const open = (g: FlowGroup, depth: number): Frame => {
+    const icon = g.icon !== undefined ? ` [icon: ${flowValue(g.icon)}]` : "";
+    lines.push(`${indentAt(depth)}${flowName(g.name)}${icon} {`);
+    let body = false;
+    for (const name of g.nodes) {
+      const n = byName.get(name);
+      if (!n) continue;
+      lines.push(indentAt(depth + 1) + nodeLine(n, kind));
+      body = true;
+    }
+    return { g, depth, child: 0, body };
+  };
+  const stack = [open(root, 0)];
+  while (stack.length) {
+    const f = stack[stack.length - 1];
+    if (f.child < f.g.groups.length) {
+      const child = f.g.groups[f.child++];
+      if (f.body) lines.push("");
+      f.body = true;
+      stack.push(open(child, f.depth + 1));
+    } else {
+      lines.push(`${indentAt(f.depth)}}`);
+      stack.pop();
+    }
   }
-  return [`${indent}${flowName(g.name)} {`, ...body, `${indent}}`];
+  return lines;
 }
 
 function grouped(groups: FlowGroup[], into: Set<string>) {
-  for (const g of groups) {
+  const stack = [...groups];
+  for (let g = stack.pop(); g; g = stack.pop()) {
     for (const n of g.nodes) into.add(n);
-    grouped(g.groups, into);
+    stack.push(...g.groups);
   }
 }
 
@@ -107,11 +88,13 @@ export function writeFlow(doc: FlowDoc): string {
   const byName = new Map(doc.nodes.map((n) => [n.name, n]));
   const inGroups = new Set<string>();
   grouped(doc.groups, inGroups);
-  const parts: string[][] = [[`diagram flow ${quote(doc.title)}`]];
-  if (doc.comments.length) parts.push(doc.comments.map((c) => (c.text ? `// ${c.text}` : "//")));
-  const loose = doc.nodes.filter((n) => !inGroups.has(n.name)).map(nodeLine);
+  const parts: string[][] = [[`diagram ${doc.kind} ${quote(doc.title)}`]];
+  // A comment ends at the line end, so a line break inside one becomes a space.
+  const comment = (text: string) => text.replace(/[\r\n]+/g, " ");
+  if (doc.comments.length) parts.push(doc.comments.map((c) => (c.text ? `// ${comment(c.text)}` : "//")));
+  const loose = doc.nodes.filter((n) => !inGroups.has(n.name)).map((n) => nodeLine(n, doc.kind));
   if (loose.length) parts.push(loose);
-  for (const g of doc.groups) parts.push(groupLines(g, byName, ""));
+  for (const g of doc.groups) parts.push(groupLines(g, byName, doc.kind));
   if (doc.links.length) parts.push(linkLines(doc.links));
   return `${parts.map((p) => p.join("\n")).join("\n\n")}\n`;
 }

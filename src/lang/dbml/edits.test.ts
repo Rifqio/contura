@@ -1,4 +1,4 @@
-﻿import { expect, test } from "vitest";
+import { expect, test } from "vitest";
 import type { TextEdit } from "../protocol";
 import {
   addColumn,

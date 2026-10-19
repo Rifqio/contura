@@ -3,6 +3,7 @@ import "@xyflow/react/dist/style.css";
 import {
   Background,
   BackgroundVariant,
+  type ConnectionLineComponent,
   ConnectionMode,
   type Edge,
   type EdgeTypes,
@@ -14,6 +15,7 @@ import {
   ReactFlow,
   type ReactFlowInstance,
   ReactFlowProvider,
+  SelectionMode,
   getViewportForBounds,
   useConnection,
   useNodesState,
@@ -27,6 +29,8 @@ import { ConnectableContext } from "./CardFrame";
 import { DetailContext, GRID_FROM, detailFor } from "./detail";
 import { EdgeMarkers, OrthogonalEdge, StraightEdge } from "./edges";
 import { CARD_WIDTH } from "./metrics";
+import { applyLive, drawsTheSame, type LivePositions, restoreBase } from "./livePositions";
+import { motionMs } from "./motion";
 import type { Port } from "./types";
 
 export type PortRef = { nodeId: string; column: string };
@@ -56,11 +60,37 @@ export interface DiagramCanvasProps {
   /** Every frame of a card drag, for clients whose edges follow the cards live. */
   onDrag?(id: string, x: number, y: number): void;
   onSelect?(ids: string[]): void;
+  /** Selects these nodes from outside (a text line clicked), each time the list changes; the canvas's own picks still report through onSelect. */
+  selection?: readonly string[];
   /** Something dragged in from outside the canvas (the database tree) was dropped at a flow position. */
   onDropObject?(data: DataTransfer, at: { x: number; y: number }): void;
   onInit?(instance: ReactFlowInstance): void;
   /** Toolbar overlays and banners, drawn over the canvas. */
   children?: ReactNode;
+  /**
+   * False: a dragged card follows the pointer exactly and the client snaps it on release (the drawn diagrams'
+   * landing cell). By default a dragged card jumps from grid cell to grid cell.
+   */
+  snapWhileDragging?: boolean;
+  /** A drag from a port released where no port takes it; `at` in flow coordinates. Esc-cancelled drags never call it. */
+  onConnectRelease?(from: Port, at: { x: number; y: number }): void;
+  /** Draws the line of a drag from a port in place of React Flow's own. */
+  connectionLineComponent?: ConnectionLineComponent;
+  /** Drawn inside the flow, so React Flow's ViewportPortal can place things in flow coordinates. */
+  overlay?: ReactNode;
+  onEdgeDoubleClick?(id: string): void;
+  /** A click on the minimap moves the view there in one smooth step (zoom to fit's duration). */
+  minimapJump?: boolean;
+  /**
+   * Dragging empty canvas draws a selection box (nodes join as it touches them); Space + drag or the middle
+   * button pans; the wheel pans and Ctrl + wheel zooms around the pointer.
+   */
+  boxSelect?: boolean;
+  /**
+   * Positions for some nodes this frame, over `nodes` (a glide): each frame touches only these nodes. When it
+   * goes back to null or undefined, those nodes are drawn as `nodes` says again.
+   */
+  livePositions?: LivePositions | null;
 }
 
 /** Refit this long after the last window resize. */
@@ -76,8 +106,6 @@ export function columnOfHandle(handleId: string | null | undefined): string {
   const at = handleId.lastIndexOf(":");
   return at < 0 ? handleId : handleId.slice(0, at);
 }
-
-const reducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
  * Fits the view once, as soon as the pane has a size, and again after a window resize. Every node
@@ -106,7 +134,7 @@ function ViewControls({ nodes, fitRef }: { nodes: Node[]; fitRef: MutableRefObje
       y1 = Math.max(y1, n.position.y + (n.initialHeight ?? 0));
     }
     const viewport = getViewportForBounds({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, w, h, minZoom, Math.min(1, maxZoom), 0.1);
-    void setViewport(viewport, { duration: reducedMotion() ? 0 : 240 });
+    void setViewport(viewport, { duration: motionMs("fit") });
     return true;
   }, [nodes, store, setViewport]);
 
@@ -132,11 +160,11 @@ function ViewControls({ nodes, fitRef }: { nodes: Node[]; fitRef: MutableRefObje
 
   return (
     <Panel position="bottom-right" className="canvas-zoom" role="group" aria-label="Zoom">
-      <button type="button" className="icon-button" aria-label="Zoom out" title="Zoom out" onClick={() => void zoomOut({ duration: 150 })}>
+      <button type="button" className="icon-button" aria-label="Zoom out" title="Zoom out" onClick={() => void zoomOut({ duration: motionMs("fit") })}>
         <Icon name="minus" size={14} />
       </button>
       <span className="canvas-zoom-percent">{Math.round(zoom * 100)}%</span>
-      <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in" onClick={() => void zoomIn({ duration: 150 })}>
+      <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in" onClick={() => void zoomIn({ duration: motionMs("fit") })}>
         <Icon name="plus" size={14} />
       </button>
       <span className="canvas-zoom-divider" aria-hidden="true" />
@@ -220,23 +248,64 @@ const isTyping = (t: EventTarget | null) =>
 
 function Flow(props: DiagramCanvasProps) {
   const { readOnly, onConnectPorts, onDragOver, onDragCancel, connectionMode, onMove, onDrag, onSelect, onDropObject, onInit, nodeTypes, edgeTypes, children } = props;
+  const { snapWhileDragging = true, onConnectRelease, connectionLineComponent, overlay, onEdgeDoubleClick, minimapJump, boxSelect } = props;
   const fast = detailFor(1, props.nodes.length).fast;
   const detail = useStore((s) => detailFor(s.transform[2], props.nodes.length).detail);
   const detailValue = useMemo(() => ({ detail, fast }), [detail, fast]);
   const connectable = !readOnly && !fast && !!onConnectPorts;
-  const { zoomIn, zoomOut, screenToFlowPosition } = useReactFlow();
+  const { zoomIn, zoomOut, screenToFlowPosition, setCenter, getZoom } = useReactFlow();
   const fitRef = useRef<() => boolean>(() => false);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(props.nodes);
-  // New nodes keep what is selected: an edit made on a card must not drop its outline.
+  const selectionRef = useRef(props.selection);
+  selectionRef.current = props.selection;
+  // New nodes keep what is selected: an edit made on a card must not drop its outline. With `selection`, that
+  // list is the selected set, so a node selected before it is drawn shows its ring once it arrives.
   useEffect(
     () =>
       setNodes((prev) => {
-        const picked = new Set(prev.filter((p) => p.selected).map((p) => p.id));
-        return props.nodes.map((n) => ({ ...n, selected: picked.has(n.id) || undefined }));
+        const outside = selectionRef.current;
+        const picked = new Set(outside ?? prev.filter((p) => p.selected).map((p) => p.id));
+        // A node that draws the same keeps its measured size: React Flow draws every node it has not measured,
+        // so dropping the sizes on each change drew all 2,000 nodes of a large diagram for a frame instead of the
+        // visible ones. A node whose content changed is measured again, so its ports are found where they are now.
+        const before = new Map(prev.map((p) => [p.id, p]));
+        return props.nodes.map((n) => {
+          const p = before.get(n.id);
+          const measured = n.measured ?? (p && drawsTheSame(p, n) ? p.measured : undefined);
+          return { ...n, ...(measured ? { measured } : {}), selected: picked.has(n.id) || undefined };
+        });
       }),
     [props.nodes, setNodes],
   );
+
+  // A glide: each frame replaces only the gliding nodes; at its end they are drawn from the props again.
+  const live = props.livePositions ?? null;
+  const liveKeys = useRef<Set<string>>(new Set());
+  const baseNodes = useRef(props.nodes);
+  baseNodes.current = props.nodes;
+  useEffect(() => {
+    if (live) {
+      for (const k of Object.keys(live)) liveKeys.current.add(k);
+      setNodes((prev) => applyLive(prev, live));
+      return;
+    }
+    const keys = liveKeys.current;
+    if (keys.size === 0) return;
+    liveKeys.current = new Set();
+    setNodes((prev) => restoreBase(prev, baseNodes.current, keys));
+  }, [live, setNodes]);
+
+  // A selection made outside the canvas: only a changed list moves it, so a pick on the canvas is not undone.
+  const selectionKey = props.selection ? props.selection.join("\u0000") : null;
+  useEffect(() => {
+    const ids = selectionRef.current;
+    if (!ids) return;
+    const want = new Set(ids);
+    setNodes((prev) =>
+      prev.some((n) => !!n.selected !== want.has(n.id)) ? prev.map((n) => ({ ...n, selected: want.has(n.id) || undefined })) : prev,
+    );
+  }, [selectionKey, setNodes]);
 
   // Zoomed out the column ports are gone: edges end on the box sides; fast mode draws them straight.
   const edges = useMemo(
@@ -247,6 +316,12 @@ function Flow(props: DiagramCanvasProps) {
     [props.edges, detail, fast],
   );
   const allEdgeTypes = useMemo<EdgeTypes>(() => ({ orthogonal: OrthogonalEdge, straight: StraightEdge, ...edgeTypes }), [edgeTypes]);
+
+  // One handler for the canvas's life: React Flow reports the selection again whenever this function changes,
+  // and a fresh one each render would report a stale pick back over a selection made outside (`selection`).
+  const selectRef = useRef(onSelect);
+  selectRef.current = onSelect;
+  const onSelectionChange = useCallback(({ nodes: picked }: { nodes: Node[] }) => selectRef.current?.(picked.map((n) => n.id)), []);
 
   const cancelled = useRef(false);
   const onConnectStart = useCallback(() => {
@@ -259,13 +334,18 @@ function Flow(props: DiagramCanvasProps) {
         cancelled.current = false;
         return;
       }
+      if (onConnectRelease && state.fromHandle && (!state.isValid || !state.toHandle)) {
+        const p = "changedTouches" in event ? event.changedTouches[0] : event;
+        if (p) onConnectRelease({ node: state.fromHandle.nodeId, port: columnOfHandle(state.fromHandle.id) }, screenToFlowPosition({ x: p.clientX, y: p.clientY }));
+        return;
+      }
       if (!onConnectPorts || !state.isValid || !state.fromHandle || !state.toHandle) return;
       const a = { node: state.fromHandle.nodeId, port: columnOfHandle(state.fromHandle.id) };
       const b = { node: state.toHandle.nodeId, port: columnOfHandle(state.toHandle.id) };
       const [from, to] = state.fromHandle.type === "target" ? [b, a] : [a, b];
       onConnectPorts(from, to, event.shiftKey);
     },
-    [onConnectPorts],
+    [onConnectPorts, onConnectRelease, screenToFlowPosition],
   );
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -275,10 +355,10 @@ function Flow(props: DiagramCanvasProps) {
       fitRef.current();
     } else if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=" || e.code === "NumpadAdd")) {
       e.preventDefault();
-      void zoomIn({ duration: 150 });
+      void zoomIn({ duration: motionMs("fit") });
     } else if ((e.ctrlKey || e.metaKey) && (e.key === "-" || e.code === "NumpadSubtract")) {
       e.preventDefault();
-      void zoomOut({ duration: 150 });
+      void zoomOut({ duration: motionMs("fit") });
     }
   };
 
@@ -322,19 +402,29 @@ function Flow(props: DiagramCanvasProps) {
             connectionMode={connectionMode === "loose" ? ConnectionMode.Loose : ConnectionMode.Strict}
             // Removal goes through the client's model (its own Delete); Backspace never drops a card here.
             deleteKeyCode={null}
-            onSelectionChange={onSelect && (({ nodes: picked }) => onSelect(picked.map((n) => n.id)))}
+            onSelectionChange={onSelect ? onSelectionChange : undefined}
             nodesDraggable={!readOnly}
             nodesConnectable={connectable}
-            snapToGrid={!readOnly}
+            snapToGrid={!readOnly && snapWhileDragging}
             snapGrid={[GRID, GRID]}
             onlyRenderVisibleElements
+            connectionLineComponent={connectionLineComponent}
+            onEdgeDoubleClick={onEdgeDoubleClick && ((_, edge) => onEdgeDoubleClick(edge.id))}
+            {...(boxSelect ? { selectionOnDrag: true, selectionMode: SelectionMode.Partial, panOnDrag: [1], panOnScroll: true } : {})}
             minZoom={MIN_ZOOM}
             proOptions={{ hideAttribution: true }}
           >
             <ViewControls nodes={props.nodes} fitRef={fitRef} />
             <SnapGrid />
             <ColumnDrag onDragOver={onDragOver} onDragCancel={onDragCancel} cancelled={cancelled} />
-            <MiniMap pannable zoomable ariaLabel="Overview" style={{ width: 200, height: 140 }} />
+            <MiniMap
+              pannable
+              zoomable
+              ariaLabel="Overview"
+              style={{ width: 200, height: 140 }}
+              onClick={minimapJump ? (_, at) => void setCenter(at.x, at.y, { zoom: getZoom(), duration: motionMs("fit") }) : undefined}
+            />
+            {overlay}
           </ReactFlow>
         </ConnectableContext.Provider>
       </DetailContext.Provider>

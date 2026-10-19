@@ -66,7 +66,7 @@ describe("shapes", () => {
 
   test("cylinder_is_a_step_with_the_database_icon", () => {
     const r = conv("A[(orders)]");
-    expect(node(r, "orders")).toEqual({ name: "orders", kind: "step", icon: "database" });
+    expect(node(r, "orders")).toEqual({ name: "orders", kind: "step", attrs: { icon: "database" } });
     expect(notes(r)).toEqual(["Line 2: the cylinder [( )] became a step with the database icon."]);
   });
 
@@ -97,7 +97,7 @@ describe("shapes", () => {
     expect(node(r, "Read")?.kind).toBe("io");
     expect(node(r, "Sub")?.kind).toBe("subprocess");
     expect(node(r, "Plain")?.kind).toBe("step");
-    expect(node(r, "db")).toEqual({ name: "db", kind: "step", icon: "database" });
+    expect(node(r, "db")).toEqual({ name: "db", kind: "step", attrs: { icon: "database" } });
     expect(node(r, "F")?.kind).toBe("step");
     expect(node(r, "Done")?.kind).toBe("end");
     expect(notes(r)).toEqual([
@@ -338,12 +338,13 @@ describe("errors", () => {
 
 test("write_flow_writes_header_nodes_groups_and_links", () => {
   const doc: FlowDoc = {
+    kind: "flow",
     title: 'Say "hi"',
     comments: [],
     nodes: [
-      { name: "a", kind: "start" },
-      { name: " padded", kind: "io" },
-      { name: "b//c", kind: "subprocess" },
+      { name: "a", kind: "start", attrs: {} },
+      { name: " padded", kind: "io", attrs: {} },
+      { name: "b//c", kind: "subprocess", attrs: {} },
     ],
     links: [{ from: "a", to: " padded", arrow: "<>", label: "both" }],
     groups: [{ name: "G", nodes: ["b//c"], groups: [] }],
@@ -479,11 +480,12 @@ describe("round trip", () => {
   test("every_name_reads_back_the_same_from_node_and_link_lines", () => {
     for (const name of NAMES) {
       const doc: FlowDoc = {
+        kind: "flow",
         title: name,
         comments: [],
         nodes: [
-          { name, kind: "step" },
-          { name: "other", kind: "step" },
+          { name, kind: "step", attrs: {} },
+          { name: "other", kind: "step", attrs: {} },
         ],
         links: [{ from: name, to: "other", arrow: "-" }],
         groups: [],
@@ -497,7 +499,7 @@ describe("round trip", () => {
 
   test("labels_with_comment_marks_or_quotes_are_quoted", () => {
     const link = (label: string): FlowLink => ({ from: "a", to: "b", arrow: ">", label });
-    const doc = (label: string): FlowDoc => ({ title: "T", comments: [], nodes: [], links: [link(label)], groups: [] });
+    const doc = (label: string): FlowDoc => ({ kind: "flow", title: "T", comments: [], nodes: [], links: [link(label)], groups: [] });
     expect(writeFlow(doc("see http://x"))).toContain('a > b: "see http://x"\n');
     expect(writeFlow(doc('say "yes"'))).toContain('a > b: "say \\"yes\\""\n');
     expect(writeFlow(doc("plain - label"))).toContain("a > b: plain - label\n");
@@ -509,12 +511,13 @@ describe("round trip", () => {
 
   test("the_exact_quoting", () => {
     const doc: FlowDoc = {
+      kind: "flow",
       title: "T",
       comments: [],
       nodes: [
-        { name: "Login - SSO", kind: "step" },
-        { name: "C:\\", kind: "io" },
-        { name: "a-b", kind: "step" },
+        { name: "Login - SSO", kind: "step", attrs: {} },
+        { name: "C:\\", kind: "io", attrs: {} },
+        { name: "a-b", kind: "step", attrs: {} },
       ],
       links: [],
       groups: [],

@@ -87,6 +87,45 @@ export function conditionText(p: VqJoin["on"][number], leftAlias: string, rightA
   return `${rightAlias}.${p.rightColumn} = ${leftAlias}.${p.leftColumn}`;
 }
 
+/**
+ * The badge that has focus, by Join id and canvas. React Flow draws an edge again (a new button) when the
+ * cards around it change, such as when a pick's preview lands; the new badge takes focus back if it fell
+ * to the page with the old one. Focus moved elsewhere on purpose forgets it.
+ */
+let focusedBadge: { id: string; flow: Element | null } | null = null;
+
+/** The badge kept for focus, for tests. */
+export const focusedBadgeNow = () => focusedBadge;
+
+/** Forgets the badge once its whole canvas is gone (the tab closed), so the detached canvas is not kept. */
+function forgetIfCanvasGone() {
+  if (focusedBadge && !focusedBadge.flow?.isConnected) focusedBadge = null;
+}
+
+const badgeRef = (id: string) => (el: HTMLButtonElement | null) => {
+  // A badge leaving: checked once React has finished removing, when a closed canvas is detached.
+  if (!el) {
+    if (focusedBadge?.id === id) queueMicrotask(forgetIfCanvasGone);
+    return;
+  }
+  if (!focusedBadge || focusedBadge.id !== id || focusedBadge.flow !== el.closest(".react-flow")) return;
+  const now = document.activeElement;
+  if (!now || now === document.body) el.focus();
+};
+
+function onBadgeFocus(e: React.FocusEvent<HTMLButtonElement>, id: string) {
+  focusedBadge = { id, flow: e.currentTarget.closest(".react-flow") };
+}
+
+function onBadgeBlur(e: React.FocusEvent<HTMLButtonElement>) {
+  const el = e.currentTarget;
+  // Still on the page: the user moved focus away. Gone with its edge: kept for the badge drawn next.
+  queueMicrotask(() => {
+    if (el.isConnected && focusedBadge?.flow === el.closest(".react-flow")) focusedBadge = null;
+    else forgetIfCanvasGone();
+  });
+}
+
 /** Edge type `join`. */
 export default function JoinEdge(props: EdgeProps) {
   const actions = useContext(JoinActionsContext);
@@ -118,6 +157,9 @@ export default function JoinEdge(props: EdgeProps) {
           data-join={join.id}
           title={danger ?? title}
           aria-haspopup="dialog"
+          ref={badgeRef(join.id)}
+          onFocus={(e) => onBadgeFocus(e, join.id)}
+          onBlur={onBadgeBlur}
           onClick={(e) => actions?.open(join.id, e.currentTarget.getBoundingClientRect())}
         >
           {pending ? null : <VennMark kind={join.kind} />}

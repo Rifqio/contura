@@ -65,48 +65,99 @@ fn reserved_on_windows(stem: &str) -> bool {
             let rest: Vec<char> = chars.collect();
             (head == "COM" || head == "LPT")
                 && rest.len() == 1
-                && matches!(rest[0], '1'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
+                && matches!(rest[0], '0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
         }
     }
 }
 
-/// The file name of diagram `name` in the diagrams folder: `<name>.flow`. The name may
-/// end in `.flow` already. A name with a path separator, `..`, a character Windows does
-/// not allow in a file name, or a reserved Windows name is refused (Q35).
+/// The one refusal for a diagram name the rule does not allow (step 6+ spec, P1).
+pub const DIAGRAM_NAME_REFUSAL: &str =
+    r#"Use a name without \ / : * ? " < > | and under 120 characters."#;
+
+/// The longest diagram name, in characters, without the `.flow` extension.
+pub const DIAGRAM_NAME_MAX: usize = 120;
+
+/// The longest diagram name in UTF-8 bytes, so `<name>.flow.layout.json` and its partial
+/// and moved-aside spellings stay inside a file name's 255 UTF-16 units (P4).
+pub const DIAGRAM_NAME_MAX_BYTES: usize = 200;
+
+/// The file name of diagram `name` in the diagrams folder: `<name>.flow`. The Core adds
+/// the extension. An empty name, one over 120 characters or 200 UTF-8 bytes, one ending in
+/// `.flow` (any case), one with a path separator, `..`, a character Windows does not allow
+/// in a file name, or a reserved Windows name is refused with `DIAGRAM_NAME_REFUSAL`
+/// (Q35, P1, P4).
 pub fn flow_file_name(name: &str) -> Result<String> {
-    let base = match name.len().checked_sub(5) {
-        Some(at) if name.is_char_boundary(at) && name[at..].eq_ignore_ascii_case(".flow") => {
-            &name[..at]
-        }
-        _ => name,
-    };
-    if base.trim().is_empty() {
-        return Err(Error::InvalidInput("Give the diagram a name.".into()));
-    }
     let bad_char = |c: char| c.is_control() || r#"\/:*?"<>|"#.contains(c);
-    if base.contains("..") || base.chars().any(bad_char) {
-        return Err(Error::InvalidInput(
-            r#"A diagram name cannot hold \ / : * ? " < > | or two dots in a row."#.into(),
-        ));
+    let has_flow_extension = name.len() >= 5
+        && name.is_char_boundary(name.len() - 5)
+        && name[name.len() - 5..].eq_ignore_ascii_case(".flow");
+    let stem = name.split('.').next().unwrap_or(name);
+    if name.trim().is_empty()
+        || name.chars().count() > DIAGRAM_NAME_MAX
+        || name.len() > DIAGRAM_NAME_MAX_BYTES
+        || has_flow_extension
+        || name.contains("..")
+        || name.chars().any(bad_char)
+        || reserved_on_windows(stem)
+    {
+        return Err(Error::InvalidInput(DIAGRAM_NAME_REFUSAL.into()));
     }
-    let stem = base.split('.').next().unwrap_or(base);
-    if reserved_on_windows(stem) {
-        return Err(Error::InvalidInput(format!(
-            "Windows keeps the name {} for itself. Choose another diagram name.",
-            stem.trim_end()
-        )));
+    Ok(format!("{name}.flow"))
+}
+
+/// The folder inside `<data>\diagrams` that holds lineage's moved-card layouts (spec 6+
+/// section 5): one `<hash>.layout.json` per Connection and table.
+pub const LINEAGE_DIR: &str = ".lineage";
+
+/// The hex digits of a lineage layout file's name, before `.layout.json`.
+pub const LINEAGE_HASH_LEN: usize = 32;
+
+/// A lineage layout file name: 32 lower-case hex digits and `.layout.json`, nothing else.
+pub fn is_lineage_layout_name(name: &str) -> bool {
+    name.strip_suffix(".layout.json").is_some_and(|stem| {
+        stem.len() == LINEAGE_HASH_LEN
+            && stem
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+/// A lineage layout file directly in `<data>\diagrams\.lineage`, which must be a real
+/// folder (not a link or junction) inside the diagrams folder, compared by file identity.
+fn check_lineage_layout_path(parent: &Path, name: &str, data_dir: &Path) -> Result<()> {
+    let refuse = || Error::InvalidInput(FLOW_REFUSAL.into());
+    if !is_lineage_layout_name(name) || parent.file_name() != Some(LINEAGE_DIR.as_ref()) {
+        return Err(refuse());
     }
-    Ok(format!("{base}.flow"))
+    let Some(grand) = parent.parent() else {
+        return Err(refuse());
+    };
+    let real_dir = std::fs::symlink_metadata(parent)
+        .is_ok_and(|m| m.file_type().is_dir() && !m.file_type().is_symlink());
+    if !real_dir {
+        return Err(refuse());
+    }
+    let Ok(diagrams) = same_file::Handle::from_path(data_dir.join(DIAGRAMS_DIR)) else {
+        return Err(refuse());
+    };
+    match same_file::Handle::from_path(grand) {
+        Ok(h) if h == diagrams => Ok(()),
+        _ => Err(refuse()),
+    }
 }
 
 /// Q35: a `.flow` file or its layout file directly in `<data>\diagrams`, with a name
-/// `flow_file_name` accepts. The folder is compared by file identity, like the data folder.
+/// `flow_file_name` accepts, or a lineage layout file in its `.lineage` folder. The folder
+/// is compared by file identity, like the data folder.
 fn check_flow_path(path: &Path, data_dir: &Path) -> Result<()> {
     let refuse = || Error::InvalidInput(FLOW_REFUSAL.into());
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(refuse());
     };
     let name = name.to_str().ok_or_else(refuse)?;
+    if parent.file_name() == Some(LINEAGE_DIR.as_ref()) {
+        return check_lineage_layout_path(parent, name, data_dir);
+    }
     let flow = name.strip_suffix(".layout.json").unwrap_or(name);
     let Some(base) = flow.strip_suffix(".flow") else {
         return Err(refuse());
@@ -890,23 +941,46 @@ mod tests {
             flow_file_name("Order handover").unwrap(),
             "Order handover.flow"
         );
-        // The extension is optional.
-        assert_eq!(flow_file_name("orders.flow").unwrap(), "orders.flow");
-        assert_eq!(flow_file_name("orders.FLOW").unwrap(), "orders.flow");
+        // The Core adds the extension; a name that has one already is refused (P4).
+        assert_eq!(flow_file_name("orders.flows").unwrap(), "orders.flows.flow");
         for bad in [
-            "", "  ", ".flow", "a/b", r"a\b", "..", "a..b", "../x", "c:x", "a*b", "a?b", "a|b",
-            "a<b", "a>b", "a\"b", "a\u{1}b",
+            "",
+            "  ",
+            ".flow",
+            "a/b",
+            r"a\b",
+            "..",
+            "a..b",
+            "../x",
+            "c:x",
+            "a*b",
+            "a?b",
+            "a|b",
+            "a<b",
+            "a>b",
+            "a\"b",
+            "a\u{1}b",
+            "orders.flow",
+            "orders.FLOW",
+            "a.flow.flow",
         ] {
-            assert!(
-                matches!(flow_file_name(bad), Err(Error::InvalidInput(_))),
-                "{bad:?}"
-            );
+            match flow_file_name(bad) {
+                Err(Error::InvalidInput(m)) => assert_eq!(m, DIAGRAM_NAME_REFUSAL, "{bad:?}"),
+                other => panic!("{bad:?}: {other:?}"),
+            }
         }
+        // At most 120 characters and at most 200 bytes of UTF-8.
+        let at_most = "a".repeat(DIAGRAM_NAME_MAX);
+        assert!(flow_file_name(&at_most).is_ok());
+        assert!(flow_file_name(&format!("{at_most}a")).is_err());
+        let wide = "\u{e9}".repeat(100);
+        assert!(flow_file_name(&wide).is_ok());
+        assert!(flow_file_name(&format!("{wide}\u{e9}")).is_err());
         for reserved in [
-            "CON", "con", "Nul", "aux.flow", "PRN", "COM1", "lpt9", "com1.x", "NUL ",
+            "CON", "con", "Nul", "aux.x", "PRN", "COM0", "COM1", "lpt0", "lpt9", "com1.x", "NUL ",
         ] {
             match flow_file_name(reserved) {
-                Err(Error::InvalidInput(m)) => assert!(m.contains("Windows"), "{reserved}: {m}"),
+                Err(Error::InvalidInput(m)) => assert_eq!(m, DIAGRAM_NAME_REFUSAL, "{reserved}"),
                 other => panic!("{reserved}: {other:?}"),
             }
         }

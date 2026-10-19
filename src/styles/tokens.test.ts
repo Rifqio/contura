@@ -49,9 +49,9 @@ const media = () =>
 test("light_and_dark_blocks_equal_dn_section_3", () => {
   const dnLight = dnBlock("### 3.2 Light: Alucard");
   const dnDark = dnBlock("### 3.3 Dark: Dracula");
-  expect(dnLight.size).toBe(91);
+  expect(dnLight.size).toBe(92);
   // Dracula alone carries the brighter comment colour (PR33).
-  expect(dnDark.size).toBe(92);
+  expect(dnDark.size).toBe(93);
   expect(Object.fromEntries(light())).toEqual(Object.fromEntries(dnLight));
   expect(Object.fromEntries(dark())).toEqual(Object.fromEntries(dnDark));
 });
@@ -89,5 +89,23 @@ test("brighter_comment_token_matches_dn", () => {
     for (const part of selector.split(",").map((x) => x.trim())) {
       expect(part).toMatch(/data-theme="dark"|:not\(\[data-theme="light"\]\)|\.theme-dark/);
     }
+  }
+});
+
+/** Relative luminance of a #rrggbb colour (WCAG 2.x). */
+function luminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+test("node_icon_tile_is_light_in_both_themes", () => {
+  // Lucide and Simple Icons draw black inside an <img>, so a service tile stays light under Dracula too.
+  for (const block of [light(), dark(), media()]) {
+    const tile = block.get("--c-node-icon-tile");
+    expect(tile).toMatch(/^#[0-9a-f]{6}$/);
+    expect(luminance(tile as string)).toBeGreaterThan(0.85);
   }
 });

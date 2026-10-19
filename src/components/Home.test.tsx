@@ -282,17 +282,18 @@ test("header_actions_are_filter_new_group_new_connection", () => {
   expect(within(header).queryByRole("button", { name: "New Schema Model" })).toBeNull();
 });
 
-test("new_flow_from_mermaid_sits_beside_new_group", async () => {
+test("new_diagram_sits_beside_new_group_with_its_key", async () => {
   routeInvoke({ suggested_connections: () => [] });
-  const onNewFlowFromMermaid = vi.fn();
-  renderHome({ onNewFlowFromMermaid });
+  const onNewDiagram = vi.fn();
+  renderHome({ onNewDiagram });
   const header = document.querySelector<HTMLElement>("header.home-header")!;
   const buttons = within(header).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
-  expect(buttons).toEqual(["New Group", "New flow from Mermaid", "New Connection"]);
-  const button = within(header).getByRole("button", { name: "New flow from Mermaid" });
+  expect(buttons).toEqual(["New Group", "New diagram", "New Connection"]);
+  const button = within(header).getByRole("button", { name: "New diagram" });
   expect(button.className).toBe("button");
+  expect(within(button).getByText("Ctrl+Alt+N")).toBeTruthy();
   await userEvent.click(button);
-  expect(onNewFlowFromMermaid).toHaveBeenCalledTimes(1);
+  expect(onNewDiagram).toHaveBeenCalledTimes(1);
 });
 
 test("count_line_stays_on_one_line", () => {

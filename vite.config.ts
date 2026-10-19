@@ -13,8 +13,9 @@ export default defineConfig(() => ({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    // Vitest empties CSS by default; the styles tests read tokens.css, fonts.css and app.css as text.
-    css: { include: [/tokens\.css/, /fonts\.css/, /app\.css/] },
+    // Vitest empties CSS by default; the styles tests read tokens.css, fonts.css, app.css, flow.css,
+    // flow-canvas.css, flow-tab.css and lineage.css as text.
+    css: { include: [/tokens\.css/, /fonts\.css/, /app\.css/, /styles[\\/]flow\.css/, /flow-canvas\.css/, /flow-tab\.css/, /lineage\.css/] },
     // Timing tests run alone through `npm run test:perf` (vitest.perf.config.ts).
     exclude: [...configDefaults.exclude, ".claude/**", "**/*.perf.test.ts"],
   },

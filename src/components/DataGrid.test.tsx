@@ -644,6 +644,24 @@ test("design_table_shows_on_a_table_with_on_design_and_not_on_a_view", async () 
   expect(screen.queryByRole("button", { name: "Design table" })).toBeNull();
 });
 
+test("show_lineage_sits_after_design_on_a_table_only", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  const onLineage = vi.fn();
+  const { unmount } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onDesign={() => {}} onLineage={onLineage} />);
+  await screen.findByText("first");
+  const strip = within(screen.getByRole("toolbar", { name: "Table" }));
+  const names = strip.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
+  expect(names.indexOf("Show lineage")).toBe(names.indexOf("Design table") + 1);
+  const button = strip.getByRole("button", { name: "Show lineage" });
+  expect(button.getAttribute("title")).toBe("Show lineage");
+  await userEvent.click(button);
+  expect(onLineage).toHaveBeenCalledTimes(1);
+  unmount();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} kind="view" onLineage={onLineage} />);
+  await screen.findByText("first");
+  expect(screen.queryByRole("button", { name: "Show lineage" })).toBeNull();
+});
+
 // ---- After a design apply (step 5c, Task 11) ----
 
 test("a_new_version_reloads_columns_and_page_0_with_no_pending_edits", async () => {

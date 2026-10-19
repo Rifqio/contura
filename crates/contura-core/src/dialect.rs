@@ -5,6 +5,7 @@ use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::Result;
 use crate::jobs::source::{RowSource, SourceRequest, TableStorage};
 use crate::jobs::writer::{BulkWriter, WriterSetup};
+use crate::lineage::{KeyEdge, KeyTable};
 use crate::model::{
     ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
     Page, PageRequest, SchemaInfo,
@@ -31,6 +32,28 @@ pub trait Dialect: Send + Sync {
     /// Reads one table for the Table Designer, with the real names of its indexes and
     /// keys. Read only. `NotFound` with the table's name when there is no such table.
     async fn table_design(&self, path: &ObjectPath) -> Result<TableDesign>;
+    /// Lineage (B2, P6): every Foreign Key held by a table of one database (MySQL, SQLite)
+    /// or schema (PostgreSQL) or pointing into it, in one catalog read. No row data.
+    async fn key_edges(&self, database: &str, schema: Option<&str>) -> Result<Vec<KeyEdge>>;
+    /// Lineage: the columns, types, nullability and primary key parts of `tables` in one
+    /// database or schema, in one catalog read. A table that is not there is left out.
+    async fn key_tables(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        tables: &[String],
+    ) -> Result<Vec<KeyTable>>;
+    /// Lineage's Views source: the views the catalog records as reading `table`, by schema
+    /// (or database) and name, at most `limit`. `None` when the server keeps no such record
+    /// (SQLite, MySQL before 8.0.13); the UI then falls back to a name match. Catalog only.
+    async fn view_dependencies(
+        &self,
+        table: &ObjectPath,
+        limit: usize,
+    ) -> Result<Option<Vec<ObjectPath>>> {
+        let _ = (table, limit);
+        Ok(None)
+    }
     /// The table's CREATE statements for copying, as the server holds the table (D14).
     /// MySQL and SQLite keep the text; PostgreSQL writes it from its catalog.
     async fn table_ddl(&self, path: &ObjectPath) -> Result<String> {

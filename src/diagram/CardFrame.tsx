@@ -3,9 +3,9 @@ import { Handle, Position } from "@xyflow/react";
 import { createContext, type CSSProperties, type ReactNode, useContext } from "react";
 import Icon, { type IconName } from "../components/Icon";
 import { useDetail } from "./detail";
-import { NODE_TOKENS, type NodeKind } from "./types";
+import { type CardKind, NODE_TOKENS } from "./types";
 
-const KIND_ICON: Record<NodeKind, IconName> = { table: "table", view: "view", derived: "layers", result: "columns" };
+const KIND_ICON: Record<CardKind, IconName> = { table: "table", view: "view", derived: "layers", result: "columns" };
 
 /** False while the canvas takes no new connections (read only, fast mode, or no handler). */
 export const ConnectableContext = createContext(true);
@@ -37,13 +37,15 @@ function SelBox() {
 }
 
 export interface CardFrameProps {
-  kind: NodeKind;
+  kind: CardKind;
   title: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
   /** The column rows (`li`), drawn only in full detail. */
   rows: ReactNode;
   count: number;
+  /** Shown in place of `count`: "?" when the count is not known, "" to show none (a card still loading). */
+  countLabel?: string;
   selected: boolean;
   width?: number;
   /** The card's accessible name, at every level of detail ("Table stores"). */
@@ -55,7 +57,7 @@ export interface CardFrameProps {
   dashed?: boolean;
 }
 
-export default function CardFrame({ kind, title, subtitle, actions, rows, count, selected, width, label, name, tone, dashed }: CardFrameProps) {
+export default function CardFrame({ kind, title, subtitle, actions, rows, count, countLabel, selected, width, label, name, tone, dashed }: CardFrameProps) {
   const { detail } = useDetail();
   const tokens = NODE_TOKENS[kind];
   const style = { "--card-fill": `var(${tokens.fill})`, "--card-stroke": `var(${tokens.stroke})` } as CSSProperties;
@@ -80,9 +82,11 @@ export default function CardFrame({ kind, title, subtitle, actions, rows, count,
     return (
       <div className={`card-box${marks}`} role="group" aria-label={label} style={style}>
         <span className="card-box-name">{name ?? title}</span>
-        <span className="card-box-count">
-          {count} {count === 1 ? "column" : "columns"}
-        </span>
+        {countLabel !== "" && (
+          <span className="card-box-count">
+            {countLabel ?? count} {countLabel === undefined && count === 1 ? "column" : "columns"}
+          </span>
+        )}
         {anchors}
         {selected && <SelBox />}
       </div>
@@ -96,7 +100,7 @@ export default function CardFrame({ kind, title, subtitle, actions, rows, count,
         {title}
         {subtitle != null && <span className="table-card-schema">{subtitle}</span>}
         <span className="table-card-spacer" />
-        <span className="table-card-count">{count}</span>
+        {countLabel !== "" && <span className="table-card-count">{countLabel ?? count}</span>}
         {actions}
       </div>
       <ul className="table-card-columns">{rows}</ul>

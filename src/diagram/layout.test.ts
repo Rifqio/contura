@@ -79,3 +79,21 @@ test("unreadable_layout_is_empty", () => {
     nodes: { b: { x: 1, y: 2 } },
   });
 });
+
+test("names_like_constructor_and___proto___are_placed_as_plain_names", async () => {
+  // An own key, as JSON gives it.
+  const existing = JSON.parse('{"toString":{"x":1,"y":2}}') as Record<string, { x: number; y: number }>;
+  const out = await layoutMissing({
+    nodes: [node("constructor"), node("__proto__"), node("toString")],
+    edges: [{ from: "constructor", to: "__proto__" }],
+    existing,
+    rankdir: "LR",
+  });
+  expect(Object.keys(out).sort()).toEqual(["__proto__", "constructor", "toString"]);
+  expect(Object.prototype.hasOwnProperty.call(out, "__proto__")).toBe(true);
+  expect(typeof out.constructor).toBe("object");
+  expect(out.toString).toEqual({ x: 1, y: 2 });
+  // A plain object as `existing` (what the worker receives) does not count inherited keys as placed.
+  const plain = await layoutMissing({ nodes: [node("constructor")], edges: [], existing: {}, rankdir: "LR" });
+  expect(Object.prototype.hasOwnProperty.call(plain, "constructor")).toBe(true);
+});

@@ -27,6 +27,12 @@ sha2 = "0.10"
 rust_xlsxwriter = { version = "0.100", features = ["constant_memory"] }
 calamine = "0.36"
 same-file = "1"
+# Deleting a diagram moves its files to the Recycle Bin.
+trash = "5"
+# Inflates one packed icon at a time (step 6+); already in the tree through zip.
+flate2 = "1"
+# Checks a link before Contura opens it in the system browser; already in the tree.
+url = "2"
 # The zip calamine reads with, for the unpacked-size check before it opens a workbook.
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 

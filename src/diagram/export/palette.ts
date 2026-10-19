@@ -1,6 +1,6 @@
 // Export colours are read from the tokens at export time, never written as literals (ADR 0008),
 // so an image follows the theme the user picks in the Publish dialog, whatever the window shows.
-import { NODE_TOKENS, type NodeKind } from "../types";
+import { ICON_TILE_TOKEN, NODE_TOKENS, type NodeKind } from "../types";
 
 export type ExportTheme = "light" | "dark";
 
@@ -13,6 +13,13 @@ export interface ExportPalette {
   type: string;
   keyword: string;
   nodes: Record<NodeKind, { fill: string; stroke: string }>;
+  /** The light tile behind a cloud service icon. */
+  iconTile: string;
+  /** A drawn diagram's group area: its edge and its tint. */
+  group: string;
+  groupTint: string;
+  /** The dashed tile of an icon the pack does not have. */
+  strongBorder: string;
 }
 
 /** Reads the tokens from a hidden `.theme-light` or `.theme-dark` element, so a dark window can still export Alucard colours. */
@@ -36,6 +43,10 @@ export function exportPalette(theme: ExportTheme = "light"): ExportPalette {
       type: read("--c-syn-type"),
       keyword: read("--c-syn-keyword"),
       nodes,
+      iconTile: read(ICON_TILE_TOKEN),
+      group: read("--c-group-teal"),
+      groupTint: read("--c-group-teal-tint"),
+      strongBorder: read("--c-border-strong"),
     };
   } finally {
     probe.remove();

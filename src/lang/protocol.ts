@@ -1,6 +1,7 @@
 // Messages between the editor side (LangClient) and the language worker.
 import type { DialectKind, SchemaModel } from "../api/types";
 import type { MermaidResult } from "../flow/mermaid";
+import type { FlowCompleteAnswer, FlowEditAnswer, FlowRequestOp, FlowResult, FlowSpansResult } from "./flow/service";
 import type { LayoutRequest, Positions } from "../diagram/layout";
 import type { Range } from "./sql/analyze";
 import type { SqlCompletionResult } from "./sql/complete";
@@ -43,6 +44,10 @@ export type ParseResult = {
   ranges: Ranges;
 };
 
+export type { FlowBatchOp, FlowCompleteAnswer, FlowEditAnswer, FlowRequestOp, FlowResult, FlowSpansResult } from "./flow/service";
+export type { FlowCompletionResult } from "./flow/complete";
+export type { FlowEditOp } from "./flow/edits";
+
 export type SqlRefactorAction = "expandStar" | "rename" | "definition" | "params";
 
 export type SqlRefactorResult =
@@ -66,7 +71,21 @@ export type ToWorker =
   /** Places the diagram nodes the request has no position for (ruling D14). */
   | { type: "layout"; id: number; request: LayoutRequest }
   /** Converts a Mermaid flowchart to .flow (Task 12); the dialog waits 150 ms after the last keystroke. */
-  | { type: "mermaid"; id: number; text: string; title: string };
+  | { type: "mermaid"; id: number; text: string; title: string }
+  /** Parses .flow text, debounced as the DBML path is. */
+  | { type: "flowParse"; id: number; docId: string; text: string }
+  /** The flow tab closed: forget its text, ranges and last good doc, and drop parses that arrive later. */
+  | { type: "flowClose"; docId: string }
+  /** A flow tab opened again under a closed id. */
+  | { type: "flowOpen"; docId: string }
+  /** Source ranges of the parse with `version`; refused as stale when the text has changed since. */
+  | { type: "flowSpans"; id: number; docId: string; version: number; keys: string[]; names: string[] }
+  /** A canvas action as text edits against the parse with `version`; refused as stale when the text has changed. */
+  | { type: "flowEdit"; id: number; docId: string; version: number; edit: FlowRequestOp }
+  /** Completion at `pos` in a .flow text. */
+  | { type: "flowComplete"; id: number; docId: string; text: string; pos: number }
+  /** Every icon name, for completion after `icon:`. */
+  | { type: "flowIcons"; names: string[] };
 
 export type FromWorker =
   | { type: "result"; ids: number[]; docId: string; result: ParseResult }
@@ -76,6 +95,10 @@ export type FromWorker =
   | { type: "sqlRefactor"; ids: number[]; result: SqlRefactorResult }
   | { type: "layout"; ids: number[]; positions: Positions }
   | { type: "mermaid"; ids: number[]; result: MermaidResult }
+  | { type: "flowResult"; ids: number[]; docId: string; result: FlowResult }
+  | { type: "flowSpans"; ids: number[]; result: FlowSpansResult }
+  | { type: "flowEdit"; ids: number[]; result: FlowEditAnswer }
+  | { type: "flowCompletion"; ids: number[]; result: FlowCompleteAnswer }
   | { type: "failed"; ids: number[]; message: string };
 
 /** The one key for a table, used by ranges, edits and the canvas layout. */

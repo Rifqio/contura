@@ -140,8 +140,26 @@ The canvas positions of a Schema Model's tables, saved beside the DBML file beca
 _Avoid_: Diagram, positions file
 
 **Diagram engine**:
-The one canvas that the Schema Builder, the Visual Query and the query diagram all draw with (`src/diagram/`): card sizes, edges, level of detail, layout and image export (ADR 0017).
+The one canvas that the Schema Builder, the Visual Query, the query diagram, Diagrams and Lineage all draw with (`src/diagram/`): card sizes, edges, level of detail, layout, motion and image export (ADR 0017, ADR 0019).
 _Avoid_: Canvas library, renderer, React Flow
+
+### Diagrams
+
+**Diagram**:
+A drawing the user writes and draws in a diagram tab: a data flow diagram, a flowchart or a cloud architecture diagram. It is a `.flow` file plus its layout file in Contura's diagrams folder, named by the user; Publish and Save a copy as are the only ways it leaves that folder (ADR 0019).
+_Avoid_: Chart, drawing file, model, Schema Model
+
+**.flow**:
+The small text language a Diagram is written in: a first line `diagram dfd|flow|cloud "<title>"`, then nodes with `[kind, key: value]`, links (`>`, `<>`, `-`, `-->`, and `..>` in cloud), groups in braces and `//` comments. The text is the diagram; the canvas edits it through text edits, and moves go only to the layout file.
+_Avoid_: DSL, Mermaid, script
+
+**Lineage**:
+A read-only drawing of one table's Foreign Keys both ways, with the Diagrams and views that read or write it, and a panel that says in plain sentences what each key does and what deleting a row would block or delete. It reads catalog details only, never rows.
+_Avoid_: Dependency graph, ER diagram, impact analysis
+
+**Icon pack**:
+The cloud and general icon sets packed into the app (`icons.bin`): AWS, Azure, Google Cloud, Kubernetes, Lucide and a chosen set of Simple Icons brand logos. Icons load one at a time, are shown only as images, never changed, and credited in Icon credits.
+_Avoid_: Icon font, sprite, stencils
 
 **Import**:
 Loading a CSV, JSON, Excel or SQL file into a table or database that exists. A writing Job: Read-only refuses it, Production asks once with a Job pass.

@@ -4,6 +4,11 @@ import type { LayoutRequest, Positions } from "../diagram/layout";
 import type { MermaidResult } from "../flow/mermaid";
 import type {
   Diagnostic,
+  FlowCompleteAnswer,
+  FlowEditAnswer,
+  FlowRequestOp,
+  FlowResult,
+  FlowSpansResult,
   FromWorker,
   ParseResult,
   SqlAt,
@@ -51,6 +56,8 @@ export class LangClient {
   private pending = new Map<number, Pending>();
   /** Every schema sent, so a restarted worker gets them again. */
   private schemas = new Map<string, SqlSchema>();
+  /** The icon names sent, so a restarted worker gets them again. */
+  private flowIcons: string[] | null = null;
   private restartListeners = new Set<() => void>();
   private disposed = false;
 
@@ -72,6 +79,7 @@ export class LangClient {
     for (const p of waiting) p.reject(new Error("engine restarted"));
     this.worker = this.start();
     for (const [key, schema] of this.schemas) this.worker.postMessage({ type: "sqlSchema", key, schema });
+    if (this.flowIcons) this.worker.postMessage({ type: "flowIcons", names: this.flowIcons });
     for (const l of this.restartListeners) l();
   }
 
@@ -137,6 +145,42 @@ export class LangClient {
   /** Converts a Mermaid flowchart to .flow; `title` is used when the front matter has none. */
   mermaid(text: string, title: string): Promise<MermaidResult> {
     return this.ask((id) => ({ type: "mermaid", id, text, title }));
+  }
+
+  /** Parses .flow text; earlier calls for the same document resolve with the newest result. */
+  flow(docId: string, text: string): Promise<FlowResult> {
+    return this.ask((id) => ({ type: "flowParse", id, docId, text }));
+  }
+
+  /** Source ranges and lines from the parse with `version`; `{ stale: true }` once the text has changed. */
+  flowSpans(docId: string, version: number, keys: string[], names: string[]): Promise<FlowSpansResult> {
+    return this.ask((id) => ({ type: "flowSpans", id, docId, version, keys, names }));
+  }
+
+  /** A canvas action as text edits on the text of `version`; `{ stale: true }` once the text has changed. */
+  flowEdit(docId: string, version: number, edit: FlowRequestOp): Promise<FlowEditAnswer> {
+    return this.ask((id) => ({ type: "flowEdit", id, docId, version, edit }));
+  }
+
+  /** Completion at `pos` in a .flow text, worked out in the worker; `stale` asks the caller to ask once more. */
+  completeFlow(docId: string, text: string, pos: number): Promise<FlowCompleteAnswer> {
+    return this.ask((id) => ({ type: "flowComplete", id, docId, text, pos }));
+  }
+
+  /** Every icon name, for completion after `icon:`; kept and sent again if the worker restarts. */
+  setFlowIcons(names: string[]) {
+    this.flowIcons = names;
+    if (!this.disposed) this.worker.postMessage({ type: "flowIcons", names });
+  }
+
+  /** A flow tab opened under an id that was closed before. */
+  openFlow(docId: string) {
+    if (!this.disposed) this.worker.postMessage({ type: "flowOpen", docId });
+  }
+
+  /** The flow tab closed: the worker forgets its text and last good drawing, and drops later parses for it. */
+  closeFlow(docId: string) {
+    if (!this.disposed) this.worker.postMessage({ type: "flowClose", docId });
   }
 
   private ask<R>(message: (id: number) => ToWorker): Promise<R> {

@@ -12,7 +12,7 @@ use crate::schema_model::{
     SchemaModel, SmColumn, SmEndpoint, SmEnum, SmIndex, SmRef, SmTable, parse_sql_default,
 };
 
-fn rule(code: &str) -> Option<String> {
+pub(super) fn rule(code: &str) -> Option<String> {
     match code {
         "r" => Some("RESTRICT"),
         "c" => Some("CASCADE"),

@@ -1,0 +1,725 @@
+/*
+  The diagram tab (frames 6+.2 to 6+.5): the .flow text island (420 px) beside the drawing island, the
+  floating tool bar with its notched hints, the stale banner, the empty flow's card, group areas and the
+  line chips. Tokens only (ADR 0008); durations are the motion tokens, which reduced motion turns into 0.
+  Only the floating bar and menus carry a shadow here.
+*/
+
+.flow-tab {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.flow-pane-text {
+  flex: none;
+  width: 420px;
+}
+.flow-pane-draw {
+  flex: 1;
+  background: var(--c-bg-panel);
+}
+.flow-strip {
+  gap: var(--spacing-sm);
+  white-space: nowrap;
+}
+.flow-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.flow-save-failed {
+  overflow: hidden;
+  color: var(--c-danger-text);
+  text-overflow: ellipsis;
+}
+.flow-quiet {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* The text. */
+.flow-editor,
+.flow-editor .cm-editor {
+  height: 100%;
+}
+.flow-editor .cm-scroller {
+  font: var(--font-code-editor);
+}
+/* The selected node's line; it comes in over the band duration, never on a loop. */
+.flow-editor .cm-flow-band {
+  background: var(--c-accent-subtle);
+  transition: background-color var(--motion-base) var(--ease-enter);
+}
+
+/* Problems (frame 6+.3): what is wrong, the line chip, and the fixes. */
+.flow-problems {
+  flex: none;
+  max-height: 40%;
+  overflow: auto;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-problem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--c-danger-solid);
+  background: var(--c-danger-subtle);
+}
+.flow-problem + .flow-problem {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-problem.is-hint {
+  border-left-color: var(--c-info-solid);
+  background: var(--c-info-subtle);
+}
+.flow-problem-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--font-small);
+}
+.flow-problem-head > .icon {
+  flex: none;
+  color: var(--c-danger-text);
+}
+.flow-problem.is-hint .flow-problem-head > .icon {
+  color: var(--c-info-text);
+}
+.flow-problem-head strong {
+  flex: 1;
+  min-width: 0;
+  font: var(--font-body-strong);
+}
+.flow-line-chip {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-active);
+  color: var(--c-text-muted);
+  font: var(--font-mono-micro);
+  cursor: pointer;
+}
+.flow-line-chip:hover {
+  color: var(--c-text);
+}
+.flow-fixes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.flow-fix {
+  height: 24px;
+  padding: 0 var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-small);
+  cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-enter);
+}
+.flow-fix:hover {
+  border-color: var(--c-accent);
+}
+.flow-problem-count {
+  color: var(--c-danger-text);
+}
+
+/* The drawing's strip: the selection chip, the direction switch, Icon credits and Publish. */
+.flow-selchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-active);
+  font: var(--font-small);
+  font-weight: 600;
+}
+.flow-selchip-id {
+  color: var(--c-text-muted);
+  font: var(--font-mono-micro);
+}
+.flow-rename {
+  width: 220px;
+  height: 26px;
+}
+.flow-seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-active);
+}
+.flow-seg-button {
+  height: 22px;
+  padding: 0 var(--spacing-sm);
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  cursor: pointer;
+}
+.flow-seg-button[aria-pressed="true"] {
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+/* The canvas. */
+.flow-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 0 0 7px 7px;
+  overflow: hidden;
+}
+.flow-canvas .diagram-canvas {
+  width: 100%;
+  height: 100%;
+}
+/* An error keeps the last good drawing, faded behind the banner. */
+.flow-canvas.is-stale .react-flow__node,
+.flow-canvas.is-stale .react-flow__edge,
+.flow-canvas.is-stale .flow-chip {
+  opacity: 0.45;
+}
+.flow-stale {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: var(--border-hairline) solid var(--c-warning-solid);
+  border-radius: var(--rounded-md);
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+  font: var(--font-small);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+/* The floating tool bar, centred at the top of the canvas. */
+.flow-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-surface);
+  box-shadow: var(--shadow-menu);
+  transform: translateX(-50%);
+}
+.flow-toolbar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--c-border-subtle);
+}
+.flow-twin {
+  display: inline-flex;
+  gap: 2px;
+}
+.flow-tool {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--rounded-md);
+  background: transparent;
+  color: var(--c-text-muted);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+.flow-tool:hover:not(:disabled) {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.flow-tool[aria-pressed="true"] {
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-text);
+}
+.flow-tool:disabled {
+  color: var(--c-text-faint);
+  cursor: default;
+}
+/* The notched hint under a tool: its name and key. */
+.flow-hint {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-text);
+  color: var(--c-bg-surface);
+  font: var(--font-small);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.flow-hint::before {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background: var(--c-text);
+  content: "";
+  transform: translateX(-50%) rotate(45deg);
+}
+.flow-hint .kbd {
+  height: 16px;
+  padding: 0 4px;
+  border: 0;
+  background: color-mix(in srgb, var(--c-bg-surface) 20%, transparent);
+  color: inherit;
+}
+.flow-tool:hover .flow-hint,
+.flow-tool:focus-visible .flow-hint {
+  display: inline-flex;
+}
+
+/* A new, empty flow: the dashed "Add the first node" card under the bar. */
+.flow-first-node {
+  position: absolute;
+  top: 104px;
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 var(--spacing-md) 0 var(--spacing-sm);
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  text-align: left;
+  transform: translateX(-50%);
+  cursor: pointer;
+}
+.flow-first-node:hover {
+  border-color: var(--c-accent);
+}
+.flow-first-node-tile {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--rounded-md);
+  color: var(--c-text-subtle);
+}
+.flow-first-node-text {
+  display: flex;
+  flex-direction: column;
+}
+.flow-first-node-text strong {
+  font: var(--font-body-strong);
+}
+.flow-first-node-text small {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* A group: a tinted area behind its nodes, named at the top left (frames 6+.2, 6+.5). */
+.flow-area {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--c-group-teal);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--c-group-teal-tint) 70%, transparent);
+  pointer-events: none;
+}
+/* The canvas takes focus back from a closed picker so its keys work; its nodes show their own focus. */
+.flow-canvas:focus {
+  outline: none;
+}
+/* A group with no icon of its own: a 16 px square in the group colour before its label. */
+.flow-area-swatch {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--c-group-teal);
+}
+/* A group inside a group: a solid edge over the outer one's dashed edge (frame 6+.5). */
+.flow-area.is-inner {
+  border-style: solid;
+}
+.flow-area-name {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-weight: 600;
+}
+.flow-area-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+/* A cloud service's lines and ports meet its 48 px tile, centred over the name (the node is 104 px wide). */
+.react-flow__node-service .react-flow__handle.fnode-handle[data-side="r"] {
+  top: 24px;
+  right: calc(50% - 24px);
+}
+.react-flow__node-service .react-flow__handle.fnode-handle[data-side="l"] {
+  top: 24px;
+  left: calc(50% - 24px);
+}
+.react-flow__node-service .react-flow__handle.fnode-handle[data-side="t"] {
+  top: 0;
+}
+.react-flow__node-service .react-flow__handle.fnode-handle[data-side="b"] {
+  top: 48px;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+}
+
+/* Lines: the engine's stroke; dashed and dotted kinds; labels on 6 px-radius chips. */
+.flow-line.flow-line-dashed .react-flow__edge-path {
+  stroke-dasharray: 5 4;
+}
+.flow-line.flow-line-dotted .react-flow__edge-path {
+  stroke-dasharray: 1 4;
+  stroke-linecap: round;
+}
+.flow-chip {
+  position: absolute;
+  padding: 1px 6px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: 6px;
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The handles sit on the round ports and take the drag; the ports draw the dot. */
+.react-flow__handle.fnode-handle {
+  z-index: 3;
+  width: 12px;
+  height: 12px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+}
+
+/* A hovered fix, shown in grey where it would go (frame 6+.3). */
+.flow-editor .cm-flow-ghost {
+  color: var(--c-text-faint);
+  font-style: italic;
+  white-space: pre;
+}
+.flow-editor .cm-flow-ghost-old {
+  color: var(--c-text-faint);
+  text-decoration: line-through;
+}
+.flow-problem-why {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+/* Why the last canvas action did nothing. */
+.flow-notice {
+  overflow: hidden;
+  color: var(--c-warning-text);
+  font: var(--font-small);
+  text-overflow: ellipsis;
+}
+/* Under the empty flow's card: the line to type instead. */
+.flow-first-node-line {
+  position: absolute;
+  top: 172px;
+  left: 50%;
+  z-index: 5;
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.flow-first-node-line code {
+  font: var(--font-mono-small);
+}
+
+/*
+  Editing on the canvas (spec section 4, the motion design). Things under the pointer follow it with no easing;
+  only the lock ring, the hot group, the menu, the pull-back and the note fade, each on its motion token, and
+  none of them loops. Reduced motion turns every token into 0 ms.
+*/
+
+/* A dragged node lifts: the one node on the canvas with a shadow. */
+.flow-canvas .react-flow__node.dragging .fnode {
+  box-shadow: var(--shadow-menu);
+}
+/* The dashed 16 px landing cell and the accent guides. */
+.flow-ghost {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed var(--c-accent);
+  border-radius: var(--rounded-lg);
+  background: color-mix(in srgb, var(--c-accent-subtle) 25%, transparent);
+  pointer-events: none;
+}
+.flow-guide {
+  position: absolute;
+  background: var(--c-accent);
+  pointer-events: none;
+}
+/* The group a dragged node would join: its edge turns accent and solid. */
+.flow-group-hot {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--c-accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--c-accent-subtle) 40%, transparent);
+  pointer-events: none;
+  animation: flow-fade-in var(--motion-fast) var(--ease-enter);
+}
+@keyframes flow-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A flow being drawn: dashed accent to the pointer; locked onto a node it turns solid and rings the node. */
+.react-flow__connectionline .flow-drawing-line,
+.flow-pending {
+  fill: none;
+  stroke: var(--c-accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.react-flow__connectionline .flow-drawing.is-locked .flow-drawing-line {
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+.flow-lock-ring {
+  fill: none;
+  stroke: var(--c-accent);
+  stroke-width: 2;
+  animation: flow-fade-in var(--motion-fast) var(--ease-enter);
+}
+.flow-overlay-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+/* Pulling back into its port, the line leaves on the exit curve. */
+.flow-pending.is-pulling {
+  opacity: 0.6;
+}
+
+/* The label box on a new flow (frame 6+.3): Enter keeps, Esc leaves it unlabelled. */
+.flow-label-box {
+  position: absolute;
+  z-index: 8;
+  box-sizing: border-box;
+  width: 170px;
+  height: 24px;
+  padding: 0 var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-accent);
+  border-radius: 6px;
+  outline: none;
+  background: var(--c-bg-surface);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 25%, transparent);
+  color: var(--c-text);
+  font: var(--font-small);
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+  animation: flow-fade-in var(--motion-base) var(--ease-enter);
+}
+
+/* A line to a node being deleted fades out with it. */
+.flow-canvas .react-flow__edge.is-leaving,
+.flow-chip.is-leaving {
+  opacity: 0;
+  transition: opacity var(--motion-base) var(--ease-exit);
+}
+
+/* "Add and connect" at the end of a flow released on empty canvas. */
+.flow-quick > .menu {
+  position: relative;
+  top: 0;
+  left: 0;
+  min-width: 180px;
+}
+
+/* The canvas's short note ("Moved Checkout back"), bottom centre over the drawing. */
+.flow-toast {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  z-index: 7;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: var(--c-text);
+  color: var(--c-bg-surface);
+  font: var(--font-small);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: flow-fade-in var(--motion-slow) var(--ease-enter);
+}
+
+/* The flow just drawn stays in accent while its label box is open (motion design, frame 6+.3). */
+.flow-canvas .react-flow__edge.is-new .react-flow__edge-path {
+  stroke: var(--c-accent);
+  stroke-width: 2;
+}
+/* The node a drawn flow is locked onto lifts, the one thing under the drag with a shadow (frame 6+.3). */
+.flow-canvas .react-flow__node.is-drop-target .fnode {
+  box-shadow: var(--shadow-menu);
+}
+
+/* The icon picker (frame 6+.5): a search over every set and the matches in a 4-column grid, the best one
+   highlighted. A menu-level popover, placed on the window, never inside the clipped canvas. */
+.icon-picker {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  width: 292px;
+  max-height: 360px;
+  box-sizing: border-box;
+  padding: var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-raised);
+  box-shadow: var(--shadow-menu);
+  animation: menu-in var(--motion-base) var(--ease-enter);
+}
+.icon-picker-search {
+  height: 28px;
+  font: var(--font-mono-small);
+}
+.icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-sm);
+  overflow-y: auto;
+}
+.icon-picker-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-width: 0;
+  padding: var(--spacing-xs) 0;
+  border-radius: var(--rounded-md);
+  color: var(--c-text-subtle);
+  cursor: pointer;
+}
+.icon-picker-item.is-active {
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-text);
+}
+.icon-picker-tile {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  box-sizing: border-box;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background-color: var(--c-node-icon-tile);
+}
+.icon-picker-tile.is-bare {
+  border-color: transparent;
+  background-color: transparent;
+}
+.icon-picker-tile img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.icon-picker-tile.is-bare img {
+  width: 32px;
+  height: 32px;
+}
+.icon-picker-name {
+  max-width: 100%;
+  overflow: hidden;
+  font: var(--font-mono-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.icon-picker-note {
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-xs);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+
+/* Icon credits: each set, its licence and its source; licence text as plain text. */
+.icon-credits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--spacing-md) var(--spacing-lg) var(--spacing-lg);
+}
+.icon-credits-set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+.icon-credits-set h3 {
+  margin: 0;
+  font: var(--font-body-strong);
+}
+.icon-credits-set p {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.icon-credits-source {
+  font: var(--font-mono-small);
+  overflow-wrap: anywhere;
+}
+.icon-credits-notice {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--spacing-sm);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-canvas);
+  color: var(--c-text-muted);
+  font: var(--font-mono-small);
+  white-space: pre-wrap;
+}

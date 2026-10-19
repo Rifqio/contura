@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { DIALECT_LABEL } from "../api/client";
 import type { ConnectionConfig, ThemeChoice } from "../api/types";
+import { useFlowEntry } from "../flow/flowRegistry";
 import DbMark from "./DbMark";
 import Icon from "./Icon";
 import { ThemeMenu } from "./ThemeSwitch";
@@ -10,6 +11,7 @@ export type StatusScreen =
   | { kind: "home"; connections: number; open: number }
   | { kind: "settings"; dataFolder: string; version: string }
   | { kind: "schema"; fileName: string; appliedTo: string | null }
+  | { kind: "flow"; name: string; fileName: string }
   | { kind: "workspace"; connection: ConnectionConfig | null; open: boolean; serverVersion: string | null };
 
 interface Props {
@@ -18,6 +20,18 @@ interface Props {
   onTheme(c: ThemeChoice): void;
   /** The running jobs item (D22), shown before the theme menu. */
   jobs?: ReactNode;
+}
+
+/** A diagram, as frames 6+.2 and 6+.3: the file, where you are typing, and its errors. */
+function FlowStatus({ name, fileName }: { name: string; fileName: string }) {
+  const entry = useFlowEntry(name);
+  return (
+    <>
+      <span className="app-status-name">{fileName}</span>
+      {entry?.line != null && entry.col != null && <span>{`Ln ${entry.line}, Col ${entry.col}`}</span>}
+      {!!entry?.errors && <span>{`${entry.errors} ${entry.errors === 1 ? "problem" : "problems"}`}</span>}
+    </>
+  );
 }
 
 function Left({ screen }: { screen: StatusScreen }) {
@@ -45,6 +59,8 @@ function Left({ screen }: { screen: StatusScreen }) {
           <span>Layout saved beside the file</span>
         </>
       );
+    case "flow":
+      return <FlowStatus name={screen.name} fileName={screen.fileName} />;
     case "workspace": {
       const { connection, open, serverVersion } = screen;
       if (!connection) return <span>No Connection open</span>;

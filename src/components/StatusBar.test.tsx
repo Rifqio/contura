@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { registerFlow, updateFlow } from "../flow/flowRegistry";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { ConnectionConfig } from "../api/types";
@@ -58,6 +59,23 @@ test("schema_shows_model_file_applied_and_layout_note", () => {
   const { bar } = renderBar({ kind: "schema", fileName: "kestrel_orders.dbml", appliedTo: null });
   for (const t of ["Schema Model", "kestrel_orders.dbml", "Not applied to a Connection", "Layout saved beside the file"]) {
     expect(bar.textContent).toContain(t);
+  }
+});
+
+test("a_diagram_shows_its_file_name", () => {
+  const { bar } = renderBar({ kind: "flow", name: "checkout", fileName: "checkout.flow" });
+  expect(bar.textContent).toContain("checkout.flow");
+});
+
+test("a_diagram_shows_where_you_are_typing_and_its_problems_as_the_frame", () => {
+  const off = registerFlow("status-demo", { save: "saved", line: 4, col: 9, errors: 1, flush: async () => true });
+  try {
+    const { bar } = renderBar({ kind: "flow", name: "status-demo", fileName: "status-demo.flow" });
+    for (const t of ["status-demo.flow", "Ln 4, Col 9", "1 problem"]) expect(bar.textContent).toContain(t);
+    act(() => updateFlow("status-demo", { errors: 0 }));
+    expect(bar.textContent).not.toContain("problem");
+  } finally {
+    off();
   }
 });
 

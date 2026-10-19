@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { ConnectionConfig, RecentItem } from "../api/types";
@@ -119,4 +119,79 @@ test("show_all_history_is_the_last_row", async () => {
   expect(column.lastElementChild).toBe(all);
   await userEvent.click(all);
   expect(onShowAllHistory).toHaveBeenCalled();
+});
+
+const diagrams = [
+  { name: "fulfilment", kind: "dfd" as const, title: "Fulfilment", modifiedMs: now.getTime() - 2 * 3_600_000 },
+  { name: "refund-policy", kind: "flow" as const, title: "Refund policy", modifiedMs: new Date(2026, 9, 14, 9, 5).getTime() },
+];
+
+test("diagrams_sit_in_recent_by_day_with_their_kind_and_compact_time", async () => {
+  const onOpenDiagram = vi.fn();
+  render(
+    <RecentColumn
+      items={[orders, revenue]}
+      diagrams={diagrams}
+      connections={connections}
+      openIds={new Set()}
+      now={now}
+      onOpen={() => {}}
+      onOpenDiagram={onOpenDiagram}
+      onClear={() => {}}
+      onShowAllHistory={() => {}}
+    />,
+  );
+  const today = screen.getByRole("region", { name: "Today" });
+  // Newest first: the diagram saved 2h ago, then the table opened 12m ago comes before it.
+  const rows = within(today).getAllByRole("button");
+  expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["public.orders, Table on kfc-prod, Production, 12m", "fulfilment.flow, Data flow, 2h"]);
+  const row = within(today).getByRole("button", { name: "fulfilment.flow, Data flow, 2h" });
+  expect(within(row).getByText("fulfilment.flow")).toBeTruthy();
+  expect(within(row).getByText("Data flow")).toBeTruthy();
+  expect(within(row).getByText("2h")).toBeTruthy();
+  await userEvent.click(row);
+  expect(onOpenDiagram).toHaveBeenCalledWith("fulfilment");
+  const yesterday = screen.getByRole("region", { name: "Yesterday" });
+  expect(within(yesterday).getByRole("button", { name: "refund-policy.flow, Flowchart, 09:05" })).toBeTruthy();
+});
+
+test("a_diagram_row_has_its_file_actions_on_right_click", async () => {
+  const actions = { rename: vi.fn(), saveCopy: vi.fn(), remove: vi.fn() };
+  render(
+    <RecentColumn
+      items={[]}
+      diagrams={diagrams}
+      connections={connections}
+      openIds={new Set()}
+      now={now}
+      onOpen={() => {}}
+      onOpenDiagram={() => {}}
+      diagramActions={actions}
+      onClear={() => {}}
+      onShowAllHistory={() => {}}
+    />,
+  );
+  const row = screen.getByRole("button", { name: "fulfilment.flow, Data flow, 2h" });
+  fireEvent.contextMenu(row);
+  const menu = screen.getByRole("menu", { name: "fulfilment.flow" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Open", "Rename...", "Save a copy as...", "Delete..."]);
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete..." }));
+  expect(actions.remove).toHaveBeenCalledWith("fulfilment");
+  fireEvent.contextMenu(row);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Save a copy as..." }));
+  expect(actions.saveCopy).toHaveBeenCalledWith("fulfilment");
+  fireEvent.contextMenu(row);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Rename..." }));
+  expect(actions.rename).toHaveBeenCalledWith("fulfilment");
+});
+
+test("recent_holds_at_most_fifty_rows_with_diagrams_counted", () => {
+  const many = Array.from({ length: 60 }, (_, i) => ({ name: `d${i}`, kind: "dfd" as const, title: `d${i}`, modifiedMs: now.getTime() - (i + 1) * 60_000 }));
+  render(
+    <RecentColumn items={[orders]} diagrams={many} connections={connections} openIds={new Set()} now={now} onOpen={() => {}} onClear={() => {}} onShowAllHistory={() => {}} />,
+  );
+  const rows = screen.getAllByRole("button").filter((b) => b.classList.contains("recent-item"));
+  expect(rows).toHaveLength(50);
+  // Newest first: the table opened 12m ago is still in.
+  expect(rows.some((r) => r.getAttribute("aria-label")?.startsWith("public.orders"))).toBe(true);
 });

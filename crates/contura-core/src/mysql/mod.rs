@@ -1,5 +1,6 @@
 mod full_value;
 mod introspect;
+mod keys;
 pub(crate) mod page;
 pub mod quote;
 mod session;
@@ -322,6 +323,37 @@ impl Dialect for MySqlDialect {
     async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
         browse_result(
             snapshot::table_design(&self.pool, path).await,
+            self.read_only,
+        )
+    }
+
+    async fn key_edges(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<crate::lineage::KeyEdge>> {
+        browse_result(keys::key_edges(&self.pool, database).await, self.read_only)
+    }
+
+    async fn key_tables(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        tables: &[String],
+    ) -> Result<Vec<crate::lineage::KeyTable>> {
+        browse_result(
+            keys::key_tables(&self.pool, database, tables).await,
+            self.read_only,
+        )
+    }
+
+    async fn view_dependencies(
+        &self,
+        table: &ObjectPath,
+        limit: usize,
+    ) -> Result<Option<Vec<ObjectPath>>> {
+        browse_result(
+            keys::view_dependencies(&self.pool, table, limit).await,
             self.read_only,
         )
     }

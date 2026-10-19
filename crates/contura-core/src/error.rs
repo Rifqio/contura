@@ -95,6 +95,9 @@ pub enum Error {
     /// failed with the server's `message`. The committed rows are in.
     #[error("The rows were committed, but {sql} failed afterwards: {message}")]
     AfterCommit { sql: String, message: String },
+    /// A diagram `name` is saved already and the request did not say to replace it.
+    #[error("{name}.flow already exists.")]
+    DiagramExists { name: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

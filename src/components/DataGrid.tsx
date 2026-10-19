@@ -118,6 +118,8 @@ interface Props {
   onImport?(): void;
   /** Opens the table's design tab (tables only, D15). */
   onDesign?(): void;
+  /** Opens the table's lineage tab (tables only, step 6+). */
+  onLineage?(): void;
   /** Bumped when the table's design changed: the grid loads its columns and page 0 again, with no Pending Edits. */
   version?: number;
   /** A line under the header from the owner, such as a design change not loaded yet. */
@@ -225,6 +227,7 @@ export default function DataGrid({
   rowEstimate = null,
   onOpenQuery,
   onDesign,
+  onLineage,
   version = 0,
   notice = null,
   onNoticeDone,
@@ -1068,6 +1071,11 @@ export default function DataGrid({
         {onDesign && kind === "table" && (
           <button type="button" className="icon-button" aria-label="Design table" title="Design table" onClick={onDesign}>
             <Icon name="edit" size={14} />
+          </button>
+        )}
+        {onLineage && kind === "table" && (
+          <button type="button" className="icon-button" aria-label="Show lineage" title="Show lineage" onClick={onLineage}>
+            <Icon name="flow" size={14} />
           </button>
         )}
         {editable && page && (

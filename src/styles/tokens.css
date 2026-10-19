@@ -88,6 +88,7 @@
   --c-node-queue-fill: #ffeef8;
   --c-node-external-stroke: #868686;
   --c-node-external-fill: #f1f4f6;
+  --c-node-icon-tile: #fffbeb;
   --c-syn-keyword: #a3144d;
   --c-syn-function: #14710a;
   --c-syn-string: #846e15;
@@ -187,6 +188,7 @@
   --c-node-queue-fill: #341f2d;
   --c-node-external-stroke: #989898;
   --c-node-external-fill: #252728;
+  --c-node-icon-tile: #f8f8f2;
   --c-syn-keyword: #ff79c6;
   --c-syn-function: #50fa7b;
   --c-syn-string: #f1fa8c;
@@ -289,6 +291,7 @@
     --c-node-queue-fill: #341f2d;
     --c-node-external-stroke: #989898;
     --c-node-external-fill: #252728;
+    --c-node-icon-tile: #f8f8f2;
     --c-syn-keyword: #ff79c6;
     --c-syn-function: #50fa7b;
     --c-syn-string: #f1fa8c;
@@ -539,4 +542,11 @@
     --motion-slow: 0ms;
     --motion-canvas: 0ms;
   }
+}
+/* The app's own reduced-motion preference (setReducedMotionPref in src/diagram/motion.ts). */
+:root[data-reduced-motion] {
+  --motion-fast: 0ms;
+  --motion-base: 0ms;
+  --motion-slow: 0ms;
+  --motion-canvas: 0ms;
 }

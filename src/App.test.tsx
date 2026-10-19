@@ -62,8 +62,13 @@ test("startup opens last group when it exists, otherwise home", async () => {
   expect(await screen.findByRole("tab", { name: "Late deliveries", selected: true })).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "Home" })).toBeNull();
   expect(screen.queryByRole("heading", { name: "Home" })).toBeNull();
-  cleanup();
+});
 
+// Each start is its own test: three full app starts in one test passed the time limit on a busy machine.
+const kfcOnly = [{ id: "g1", name: "KFC", color: "red" }];
+
+test("startup_opens_home_in_the_last_group_when_it_restores_no_tabs", async () => {
+  const groups = kfcOnly;
   // The last Group restores no tabs: Home opens there (PR6).
   route({
     list_groups: () => groups,
@@ -75,8 +80,10 @@ test("startup opens last group when it exists, otherwise home", async () => {
   expect(await screen.findByRole("tab", { name: "Home", selected: true })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Home" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
-  cleanup();
+});
 
+test("startup_falls_back_to_home_when_the_last_group_no_longer_exists", async () => {
+  const groups = kfcOnly;
   // A remembered Group that no longer exists falls back to Home in Ungrouped.
   route({
     list_groups: () => groups,
@@ -2149,11 +2156,19 @@ test("export_in_the_background_shows_the_status_item_and_a_click_reopens_the_dia
   expect(callsTo("cancel_job")).toEqual([]);
 });
 
-test("new_flow_from_mermaid_opens_from_home", async () => {
-  workspaceRoutes();
+test("new_diagram_opens_from_home_and_with_ctrl_alt_n_and_leads_to_mermaid", async () => {
+  workspaceRoutes({ list_diagrams: () => [] });
   render(<App />);
-  await userEvent.click(await screen.findByRole("button", { name: "New flow from Mermaid" }));
+  await userEvent.click(await screen.findByRole("button", { name: "New diagram" }));
+  const sheet = await screen.findByRole("dialog", { name: "New diagram" });
+  await userEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull());
+  await userEvent.keyboard("{Control>}{Alt>}n{/Alt}{/Control}");
+  const again = await screen.findByRole("dialog", { name: "New diagram" });
+  // The sheet's Mermaid way in swaps it for the step 7 dialog.
+  await userEvent.click(within(again).getByRole("button", { name: "Flow from Mermaid..." }));
   expect(await screen.findByRole("dialog", { name: /New flow from Mermaid/ })).toBeTruthy();
+  expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull();
 });
 
 test("a_restart_drops_import_tabs", async () => {

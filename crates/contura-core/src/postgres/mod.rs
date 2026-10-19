@@ -17,6 +17,7 @@ use crate::model::{
 
 mod ddl;
 mod introspect;
+mod keys;
 mod page;
 mod session;
 mod snapshot;
@@ -539,6 +540,47 @@ impl Dialect for PostgresDialect {
             snapshot::table_design(&client, schema, path).await,
             self.read_only,
         )
+    }
+
+    async fn key_edges(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<crate::lineage::KeyEdge>> {
+        let schema = snapshot::require_schema(schema)?;
+        let client = self.client(database).await?;
+        browse_result(
+            keys::key_edges(&client, database, schema).await,
+            self.read_only,
+        )
+    }
+
+    async fn key_tables(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        tables: &[String],
+    ) -> Result<Vec<crate::lineage::KeyTable>> {
+        let schema = snapshot::require_schema(schema)?;
+        let client = self.client(database).await?;
+        browse_result(
+            keys::key_tables(&client, database, schema, tables).await,
+            self.read_only,
+        )
+    }
+
+    async fn view_dependencies(
+        &self,
+        table: &ObjectPath,
+        limit: usize,
+    ) -> Result<Option<Vec<ObjectPath>>> {
+        let schema = snapshot::require_schema(table.schema.as_deref())?;
+        let client = self.client(&table.database).await?;
+        browse_result(
+            keys::view_dependencies(&client, table, schema, limit).await,
+            self.read_only,
+        )
+        .map(Some)
     }
 
     async fn table_ddl(&self, path: &ObjectPath) -> Result<String> {

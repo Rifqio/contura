@@ -185,7 +185,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 5. Pending Edits, Table Designer, Production and Read-only Connections (5a done: Production and Read-only Connections, ADR 0013; 5b done: Pending Edits, ADR 0014; 5c done: Table Designer, ADR 0016)
    - Restyle to DESIGN-NEXT (done before 5c, ADR 0015): Alucard and Dracula, JetBrains Mono, 28 px density, Home with Recent
 6. Visual Query, plus the shared diagram engine and the query diagram and result shape (done: Visual Query, the shared diagram engine and the query diagram, ADR 0017)
-   - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams
+   - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams (done: Lineage, the flow language, Diagrams with the icon pack, and Publish for every kind, ADR 0019)
 7. Import/export, plus Mermaid flowchart import (done: Import and Export, Mermaid flowchart import, the Job service, ADR 0018)
 8. Data Transfer
 9. Backup/Restore

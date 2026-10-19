@@ -4,6 +4,7 @@ import { errorText, saveSavedQuery } from "../api/client";
 import type { ConnectionConfig, ConnectionId, GroupId, SavedQuery } from "../api/types";
 import type { GridControl } from "../components/DataGrid";
 import UnsavedEdits, { designBody, tableBody } from "../components/UnsavedEdits";
+import { flowEntry, unsavedFlows } from "../flow/flowRegistry";
 import type { QueryTabDoc } from "../query/QueryTab";
 import { type AnyTab, type VisualTabDoc, type WorkTab, isUnsaved, objectTabOf, tabKey } from "../shell/tabs";
 
@@ -35,9 +36,17 @@ export interface PendingEditsGuard {
    * Every other tab closes at once.
    */
   confirmCloseUnsaved(tab: AnyTab): Promise<boolean>;
+  /**
+   * A diagram tab closing: a save still to come or one that failed is written now; when that fails, asks
+   * Save (try again), Discard (close without it) or Cancel. False when cancelled or the retry failed.
+   */
+  confirmCloseFlow(name: string): Promise<boolean>;
   /** The Unsaved Edits dialog while an ask is open, else null. */
   dialog: ReactNode;
 }
+
+/** Why a diagram cannot be saved yet while a rename or delete of its file runs (P24 M8). */
+const FLOW_HELD = "Contura is still moving or deleting this file. Try again in a moment.";
 
 export function usePendingEditsGuard(opts: {
   tabs: WorkTab[];
@@ -77,6 +86,8 @@ export function usePendingEditsGuard(opts: {
     doc?: QueryTabDoc;
     /** A saved Visual Query's model. */
     visual?: VisualTabDoc;
+    /** A diagram whose save failed, by name. */
+    flow?: string;
     busy: boolean;
     resolve(ok: boolean): void;
   } | null>(null);
@@ -216,6 +227,44 @@ export function usePendingEditsGuard(opts: {
     );
     return run;
   }
+  /** A diagram closing writes what is waiting; a failed write asks before the edits are dropped. */
+  function confirmCloseFlow(name: string): Promise<boolean> {
+    const run = leaveQueue.current.then(async () => {
+      const entry = flowEntry(name);
+      if (!entry || entry.save === "saved") return true;
+      let ok = false;
+      try {
+        ok = await entry.flush();
+      } catch {
+        ok = false;
+      }
+      if (ok) return true;
+      opts.activate(`flow:${name}`);
+      const message = flowEntry(name)?.message;
+      // A rename or delete of the file holds its writes: say that, not a failure with no reason.
+      const body = flowEntry(name)?.isHeld?.() ? (
+        <span>
+          {FLOW_HELD} Discard closes the diagram without the last changes.
+        </span>
+      ) : (
+        <span>
+          {message ? `The last changes could not be saved: ${message}` : "The last changes could not be saved."} Discard closes the diagram
+          without them.
+        </span>
+      );
+      return new Promise<boolean>((resolve) =>
+        setLeaveAsk({ key: `flow:${name}`, title: `Save changes to ${name}.flow?`, body, production: false, verb: "Save", flow: name, busy: false, resolve }),
+      );
+    });
+    leaveQueue.current = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
+  const confirmCloseFlowRef = useRef(confirmCloseFlow);
+  confirmCloseFlowRef.current = confirmCloseFlow;
+
   const confirmLeaveRef = useRef(confirmLeave);
   confirmLeaveRef.current = confirmLeave;
   const leaveAll = (leave?: LeaveOpts) => confirmLeave(tableKeys(), leave);
@@ -241,8 +290,11 @@ export function usePendingEditsGuard(opts: {
           const dirty = keys.some(isDirty);
           const jobs = jobsOnClose.current;
           const running = jobs?.running() ?? false;
-          if (!dirty && !running) return;
+          const flows = unsavedFlows();
+          if (!dirty && !running && flows.length === 0) return;
           event.preventDefault();
+          // Diagrams save on their own: a save still to come is written (and waited for) before the window goes.
+          for (const name of flows) if (!(await confirmCloseFlowRef.current(name))) return;
           // Q43: with Pending Edits, the jobs ask comes before any Discard is applied.
           const jobsAsk = running && jobs ? { then: () => jobs.confirmStop() } : undefined;
           if (dirty) {
@@ -274,7 +326,17 @@ export function usePendingEditsGuard(opts: {
           const ask = leaveAsk;
           setLeaveAsk({ ...ask, busy: true });
           let ok: boolean;
-          if (ask.visual) {
+          if (ask.flow) {
+            try {
+              ok = (await flowEntry(ask.flow)?.flush()) ?? true;
+            } catch {
+              ok = false;
+            }
+            if (!ok) {
+              const entry = flowEntry(ask.flow);
+              opts.onError(entry?.isHeld?.() ? FLOW_HELD : (entry?.message ?? `${ask.flow}.flow could not be saved.`));
+            }
+          } else if (ask.visual) {
             try {
               ok = (await opts.saveVisual?.(ask.visual)) ?? false;
             } catch (e) {
@@ -298,7 +360,9 @@ export function usePendingEditsGuard(opts: {
         }}
         onDiscard={() => {
           // Refused while a save or Apply runs: the tab, Group or Connection stays, as on Cancel.
-          const grid = !leaveAsk.doc && !leaveAsk.visual;
+          const grid = !leaveAsk.doc && !leaveAsk.visual && !leaveAsk.flow;
+          // Discard means discard: the diagram tab writes nothing more, not even when it closes.
+          if (leaveAsk.flow) flowEntry(leaveAsk.flow)?.discard?.();
           let ok = true;
           // A Discard waiting for the next ask is held; it applies once that ask says yes.
           if (grid && deferred.current) deferred.current.push(leaveAsk.key);
@@ -323,6 +387,7 @@ export function usePendingEditsGuard(opts: {
     confirmLeave,
     leaveAll,
     confirmCloseUnsaved,
+    confirmCloseFlow,
     dialog,
   };
 }

@@ -6,6 +6,7 @@ import CardFrame, { Ports } from "./CardFrame";
 import DiagramCanvas from "./DiagramCanvas";
 import { detailFor } from "./detail";
 import { JoinBadge, OrthogonalEdge } from "./edges";
+import { setReducedMotionPref } from "./motion";
 import { cardHeight, CARD_WIDTH } from "./metrics";
 import type { Port } from "./types";
 
@@ -121,6 +122,36 @@ test("shift_1_fits_and_ctrl_plus_minus_zoom", async () => {
   await waitFor(() => expect(percent()).toBe("100%"));
   fireEvent.keyDown(root, { key: "+", code: "Equal", ctrlKey: true, shiftKey: true });
   await waitFor(() => expect(Number(percent()!.replace("%", ""))).toBeGreaterThan(100));
+});
+
+test("zoom_buttons_and_keys_jump_under_reduced_motion", async () => {
+  // The app preference alone, with the system setting off: zoom in and out are instant, as DESIGN-NEXT 8 says.
+  vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+  setReducedMotionPref(true);
+  try {
+    const { container } = renderCanvas([card("stores", 0)]);
+    await waitFor(() => expect(percent()).toBe("100%"));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    });
+    expect(Number(percent()!.replace("%", ""))).toBeGreaterThan(100);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    });
+    expect(percent()).toBe("100%");
+    const root = container.querySelector(".diagram-canvas") as HTMLElement;
+    act(() => {
+      fireEvent.keyDown(root, { key: "-", code: "Minus", ctrlKey: true });
+    });
+    expect(Number(percent()!.replace("%", ""))).toBeLessThan(100);
+    act(() => {
+      fireEvent.keyDown(root, { key: "+", code: "Equal", ctrlKey: true, shiftKey: true });
+    });
+    expect(percent()).toBe("100%");
+  } finally {
+    setReducedMotionPref(false);
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }));
+  }
 });
 
 test("the_canvas_has_its_fixed_parts", () => {

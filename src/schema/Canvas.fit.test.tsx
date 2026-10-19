@@ -1,13 +1,21 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeAll, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import { setReducedMotionPref } from "../diagram/motion";
+import { patientFile } from "../test/load";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { parseDbml } from "../lang/dbml/parse";
 import Canvas from "./Canvas";
 
 // No React Flow mocks here: the real useNodesInitialized and fitView run.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+// 24 real cards: a busy machine stretches the first draw well past a second.
+patientFile();
 
 beforeAll(mockReactFlowDom);
+// The fit and the zoom buttons move the view at once, so a view read after them is where they end. With the
+// 240ms animation a busy machine could read it part way, and a fixed wait could not tell.
+beforeAll(() => setReducedMotionPref(true));
+afterAll(() => setReducedMotionPref(false));
 
 const scaleOf = (el: Element | null) => Number(/scale\(([\d.]+)\)/.exec((el as HTMLElement | null)?.style.transform ?? "")?.[1] ?? NaN);
 
@@ -30,12 +38,10 @@ test("a_model_bigger_than_the_pane_is_fitted_on_open", async () => {
   const { rerender } = render(view());
   const viewport = () => document.querySelector(".react-flow__viewport");
   await waitFor(() => expect(scaleOf(viewport())).toBeLessThan(0.5));
-  const settle = () => new Promise((done) => setTimeout(done, 300));
-  await settle(); // the fit animates for 240 ms
   const fitted = (viewport() as HTMLElement).style.transform;
   // An edit later (here, one more table) keeps the view where it is: the fit runs once.
   rerender(view(parseDbml(`${text}\nTable extra {\n  id integer\n}\n`, "postgres").model!));
-  await settle();
+  await new Promise((done) => setTimeout(done, 300));
   expect((viewport() as HTMLElement).style.transform).toBe(fitted);
 });
 
@@ -47,17 +53,13 @@ test("refits_after_a_window_resize", async () => {
     </div>,
   );
   const viewport = () => (document.querySelector(".react-flow__viewport") as HTMLElement).style.transform;
-  const settle = (ms = 400) => new Promise((done) => setTimeout(done, ms));
   await waitFor(() => expect(scaleOf(document.querySelector(".react-flow__viewport"))).toBeLessThan(0.5));
-  await settle();
   const fitted = viewport();
   // The user zooms in; then the window is resized.
   fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-  await settle();
-  expect(viewport()).not.toBe(fitted);
+  await waitFor(() => expect(viewport()).not.toBe(fitted));
   fireEvent(window, new Event("resize"));
   // Debounced: nothing has moved yet.
   expect(viewport()).not.toBe(fitted);
-  await settle(600);
-  expect(viewport()).toBe(fitted);
+  await waitFor(() => expect(viewport()).toBe(fitted));
 });

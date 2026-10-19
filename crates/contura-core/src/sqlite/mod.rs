@@ -1,4 +1,5 @@
 mod introspect;
+mod keys;
 mod page;
 mod session;
 pub(crate) mod snapshot;
@@ -439,6 +440,27 @@ impl Dialect for SqliteDialect {
     async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
         let path = path.clone();
         self.run(move |c| snapshot::table_design(c, &path)).await
+    }
+
+    async fn key_edges(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<crate::lineage::KeyEdge>> {
+        let database = database.to_string();
+        self.run(move |c| keys::key_edges(c, &database)).await
+    }
+
+    async fn key_tables(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        tables: &[String],
+    ) -> Result<Vec<crate::lineage::KeyTable>> {
+        let database = database.to_string();
+        let tables = tables.to_vec();
+        self.run(move |c| keys::key_tables(c, &database, &tables))
+            .await
     }
 
     async fn sql_schema(&self, database: &str) -> Result<crate::sql_schema::SqlSchema> {

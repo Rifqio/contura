@@ -10,7 +10,8 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import flowCss from "../styles/flow.css?raw";
 import { mockReactFlowDom } from "../test/reactFlow";
-import { FLOW_NODE_TYPES } from "./FlowShapes";
+import { FLOW_NODE_TYPES } from "./flowNodes";
+import flowTabCss from "../styles/flow-tab.css?raw";
 import flowFixture from "./fixtures/order-handover.flow?raw";
 import mmdFixture from "./fixtures/order-handover.mmd?raw";
 import MermaidImportDialog from "./MermaidImportDialog";
@@ -29,20 +30,20 @@ const MMD = lf(mmdFixture);
 const FLOW = lf(flowFixture);
 const GROUPS: Group[] = [{ id: "g-kes", name: "Kestrel Foods", color: "teal", hasImage: false }];
 
-function setup() {
+function setup(beforeReplace?: (name: string) => void) {
   const onClose = vi.fn();
   const onCreated = vi.fn();
   const lang = new LangClient(fakeWorker);
   render(
     <ToastProvider>
-      <MermaidImportDialog groups={GROUPS} defaultGroup={null} lang={lang} onClose={onClose} onCreated={onCreated} />
+      <MermaidImportDialog groups={GROUPS} defaultGroup={null} lang={lang} onClose={onClose} onCreated={onCreated} beforeReplace={beforeReplace} />
     </ToastProvider>,
   );
   const dialog = screen.getByRole("dialog", { name: "New flow from Mermaid" });
   const view = () => EditorView.findFromDOM(dialog.querySelector(".cm-editor") as HTMLElement)!;
   const paste = (text: string) => act(() => view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: text } }));
   const create = () => within(dialog).getByRole("button", { name: /Create flow/ }) as HTMLButtonElement;
-  const nodes = () => dialog.querySelectorAll(".flow-node");
+  const nodes = () => dialog.querySelectorAll(".fnode");
   return { dialog, view, paste, create, nodes, onClose, onCreated };
 }
 
@@ -109,16 +110,16 @@ test("ctrl_o_opens_a_mmd_file_into_the_editor_and_names_the_flow", async () => {
   expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("order-handover.flow");
 });
 
-const SAVED = "C:\\Users\\r\\AppData\\Roaming\\Contura\\diagrams\\order-handover.flow";
-
-async function readyToCreate(exists: boolean) {
+async function readyToCreate(exists: boolean | "refuse", beforeReplace?: (name: string) => void) {
   routeInvoke({
     write_text_file: () => undefined,
-    flow_exists: () => exists,
-    write_flow_files: () => SAVED,
-    reveal_in_folder: () => undefined,
+    write_diagram: (a) => {
+      if (exists === "refuse") throw { kind: "invalidInput", message: RULE };
+      if (exists && !a.overwrite) throw { kind: "diagramExists", message: { name: "order-handover" } };
+      return undefined;
+    },
   });
-  const s = setup();
+  const s = setup(beforeReplace);
   const name = within(s.dialog).getByRole("textbox", { name: "Name" });
   await userEvent.clear(name);
   await userEvent.type(name, "order-handover.flow");
@@ -129,60 +130,96 @@ async function readyToCreate(exists: boolean) {
   return s;
 }
 
+const RULE = 'Use a name without \\ / : * ? " < > | and under 120 characters.';
 const LAYOUT = `${JSON.stringify({ version: 1, direction: "LR", group: "g-kes", nodes: {} }, null, 2)}\n`;
 
-test("create_flow_sends_the_name_only_shows_the_toast_and_reports_the_path", async () => {
+test("create_flow_saves_by_name_in_the_diagrams_folder_and_reports_the_name", async () => {
   const plugin = await import("@tauri-apps/plugin-dialog");
   const { dialog, onCreated } = await readyToCreate(false);
   fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
-  await waitFor(() => expect(onCreated).toHaveBeenCalledWith(SAVED));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("order-handover"));
   // Q35: no Save dialog; the Core keeps it in the diagrams folder.
   expect(plugin.save).not.toHaveBeenCalled();
-  expect(callsTo("flow_exists")).toEqual([{ name: "order-handover" }]);
-  // Both files in one Core call, under PathUse::Flow (Task 12 I1).
+  // Both files in one Core call by name, through writeDiagram (step 7 finding I1).
   expect(callsTo("write_text_file")).toEqual([]);
-  expect(callsTo("write_flow_files")).toEqual([{ name: "order-handover", flow: FLOW, layout: LAYOUT }]);
+  expect(callsTo("write_diagram")).toEqual([{ name: "order-handover", text: FLOW, layout: LAYOUT, overwrite: false }]);
   expect(screen.getByText("Created order-handover.flow")).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "Open folder" }));
-  expect(callsTo("reveal_in_folder")).toEqual([{ path: SAVED }]);
 });
 
 test("an_existing_name_asks_before_replacing", async () => {
   const { dialog, onCreated } = await readyToCreate(true);
   await userEvent.click(within(dialog).getByRole("button", { name: /^Create flow/ }));
-  expect(await within(dialog).findByText("order-handover.flow exists. Replace it?")).toBeTruthy();
-  expect(callsTo("write_flow_files")).toEqual([]);
+  expect(await within(dialog).findByText("order-handover.flow already exists. Replace it?")).toBeTruthy();
+  expect(callsTo("write_diagram").map((c) => c.overwrite)).toEqual([false]);
   // Cancel keeps the dialog and writes nothing.
   await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  expect(within(dialog).queryByText("order-handover.flow exists. Replace it?")).toBeNull();
-  expect(callsTo("write_flow_files")).toEqual([]);
+  expect(within(dialog).queryByText("order-handover.flow already exists. Replace it?")).toBeNull();
   expect(onCreated).not.toHaveBeenCalled();
   // Asked again, Replace writes it.
   await userEvent.click(within(dialog).getByRole("button", { name: /^Create flow/ }));
   await userEvent.click(await within(dialog).findByRole("button", { name: "Replace" }));
-  await waitFor(() => expect(onCreated).toHaveBeenCalledWith(SAVED));
-  expect(callsTo("write_flow_files")).toEqual([{ name: "order-handover", flow: FLOW, layout: LAYOUT }]);
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("order-handover"));
+  expect(callsTo("write_diagram").map((c) => c.overwrite)).toEqual([false, false, true]);
+  expect(callsTo("write_diagram")[2]).toEqual({ name: "order-handover", text: FLOW, layout: LAYOUT, overwrite: true });
 });
 
-test("flow_shapes_draw_with_tokens_only", () => {
-  const kinds = ["step", "decision", "start", "end", "io", "subprocess"] as const;
+test("replace_lets_the_open_tab_go_before_the_write", async () => {
+  const order: string[] = [];
+  const { dialog, onCreated } = await readyToCreate(true, (n) => order.push(`before ${n}`));
+  await userEvent.click(within(dialog).getByRole("button", { name: /^Create flow/ }));
+  await userEvent.click(await within(dialog).findByRole("button", { name: "Replace" }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("order-handover"));
+  expect(order).toEqual(["before order-handover"]);
+});
+
+test("a_name_the_rule_refuses_shows_the_rule_verbatim", async () => {
+  const { dialog, onCreated } = await readyToCreate("refuse");
+  await userEvent.click(within(dialog).getByRole("button", { name: /^Create flow/ }));
+  expect((await within(dialog).findByRole("alert")).textContent).toBe(RULE);
+  expect(onCreated).not.toHaveBeenCalled();
+});
+
+test("flow_nodes_draw_with_tokens_only_and_a_handle_at_each_port", () => {
+  const kinds = [
+    ["flowchart", "step"],
+    ["flowchart", "decision"],
+    ["flowchart", "start"],
+    ["flowchart", "end"],
+    ["flowchart", "io"],
+    ["flowchart", "subprocess"],
+    ["dfd", "process"],
+    ["dfd", "store"],
+    ["dfd", "external"],
+    ["service", "service"],
+  ] as const;
   const { container } = render(
     <ReactFlowProvider>
-      {kinds.map((kind) => {
-        const Shape = FLOW_NODE_TYPES[kind];
-        return <Shape key={kind} {...({ id: kind, data: { name: kind, kind, direction: "LR" }, selected: false } as unknown as NodeProps)} />;
+      {kinds.map(([family, kind]) => {
+        const Shape = FLOW_NODE_TYPES[family];
+        return <Shape key={kind} {...({ id: kind, data: { name: kind, kind, look: "modern" }, selected: false } as unknown as NodeProps)} />;
       })}
       {(() => {
-        const G = FLOW_NODE_TYPES.group;
+        const G = FLOW_NODE_TYPES.area;
         return <G {...({ id: "g", data: { name: "Kitchen" }, selected: false } as unknown as NodeProps)} />;
       })()}
     </ReactFlowProvider>,
   );
-  expect(container.querySelectorAll(".flow-node")).toHaveLength(6);
-  expect(container.querySelector(".flow-group")).toBeTruthy();
+  expect(container.querySelectorAll(".fnode")).toHaveLength(10);
+  expect(container.querySelector('.flow-area[aria-label="Group Kitchen"]')).toBeTruthy();
+  // Each node has a handle where each of its round ports shows (data-side r, l, t, b).
+  const sides = [...container.querySelectorAll(".react-flow__handle.fnode-handle")].map((h) => h.getAttribute("data-side"));
+  expect(sides).toHaveLength(40);
+  expect(new Set(sides)).toEqual(new Set(["r", "l", "t", "b"]));
+  // The node types are memo wrappers, so a canvas re-render does not redraw every node.
+  for (const t of Object.values(FLOW_NODE_TYPES)) expect((t as unknown as { $$typeof: symbol }).$$typeof).toBe(Symbol.for("react.memo"));
   expect(container.innerHTML.match(/#(?:[0-9a-f]{6}|[0-9a-f]{3})(?![\w-])/gi) ?? []).toEqual([]);
   expect(container.innerHTML).toContain("var(--c-node-");
-  expect(flowCss.match(/#(?:[0-9a-f]{6}|[0-9a-f]{3})(?![\w-])/gi) ?? []).toEqual([]);
+  // Both sheets are read for real (vitest's CSS include), so the checks below are not empty.
+  expect(flowCss.length).toBeGreaterThan(0);
+  expect(flowTabCss.length).toBeGreaterThan(0);
+  for (const css of [flowCss, flowTabCss]) expect(css.match(/#(?:[0-9a-f]{6}|[0-9a-f]{3})(?![\w-])/gi) ?? []).toEqual([]);
+  // No literal durations: motion comes from the tokens, which reduced motion turns into 0.
+  expect(flowTabCss.match(/\b\d+m?s\b/g) ?? []).toEqual([]);
 });
 
 test("two_unreadable_lines_are_both_named_under_the_preview", async () => {

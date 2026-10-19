@@ -1,4 +1,4 @@
-// The window's tab model (PR5): Home, Settings and Schema Model tabs belong to the window and
+// The window's tab model (PR5): Home, Settings, Schema Model and diagram tabs belong to the window and
 // survive a Group change; query and table tabs belong to the place.
 import type { ConnectionId, GroupId, ObjectKind, ObjectPath, VisualQuery } from "../api/types";
 import type { ImportTarget } from "../jobs/importModel";
@@ -53,14 +53,18 @@ export type WorkTab =
       uid?: string;
       connectionId: ConnectionId;
       target: ImportTarget;
-    };
+    }
+  /** A table's lineage (step 6+): read only, so never saved in place drafts. */
+  | { kind: "lineage"; key: string; connectionId: ConnectionId; path: ObjectPath };
 
 /** A tab of the window. */
 export type WindowTab =
   | { kind: "home" }
   /** `seq` counts the requests, so asking for the section shown last moves there again. */
   | { kind: "settings"; section: SettingsSection; seq?: number }
-  | { kind: "schema"; id: string; doc: ModelDoc };
+  | { kind: "schema"; id: string; doc: ModelDoc }
+  /** A diagram, `<name>.flow` in Contura's diagrams folder; one tab per name. */
+  | { kind: "flow"; name: string };
 
 export type AnyTab = WorkTab | WindowTab;
 
@@ -72,6 +76,8 @@ export function tabKey(t: AnyTab): string {
       return "settings";
     case "schema":
       return `schema:${t.id}`;
+    case "flow":
+      return `flow:${t.name}`;
     case "query":
       return `query:${t.doc.id}`;
     case "visual":
@@ -81,6 +87,7 @@ export function tabKey(t: AnyTab): string {
     case "object":
     case "design":
     case "import":
+    case "lineage":
       return t.key;
   }
 }
@@ -95,6 +102,11 @@ export function importKey(connectionId: ConnectionId, target: ImportTarget): str
   return target.kind === "table"
     ? `import\u0000${objectKey(connectionId, "table", target.path)}`
     : `import\u0000${connectionId}\u0000database\u0000${target.database}`;
+}
+
+/** The key of a table's lineage tab. */
+export function lineageKey(connectionId: ConnectionId, path: ObjectPath): string {
+  return `lineage\u0000${objectKey(connectionId, "table", path)}`;
 }
 
 /** The key of a New table tab. */
@@ -122,6 +134,7 @@ export function tabConnectionId(t: AnyTab): ConnectionId | null {
       return t.selection.connectionId;
     case "design":
     case "import":
+    case "lineage":
       return t.connectionId;
     default:
       return null;

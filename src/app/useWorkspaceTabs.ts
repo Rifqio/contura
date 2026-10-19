@@ -86,6 +86,15 @@ export function useWorkspaceTabs() {
     dispatch({ type: "openSchema", tab });
   }
 
+  /** Opens diagram `name` in its tab, or shows the tab it already has. */
+  function openFlowTab(name: string) {
+    dispatch({ type: "openFlow", name });
+  }
+
+  function renameFlowTab(from: string, to: string) {
+    dispatch({ type: "renameFlow", from, to });
+  }
+
   // Kept for handlers and effects: layout effects run after each commit and before any event or passive effect reads them.
   const allTabs: AnyTab[] = stripOrder(windowTabs, tabs);
   useLayoutEffect(() => {
@@ -110,6 +119,8 @@ export function useWorkspaceTabs() {
     openSavedDoc,
     openVisualDoc,
     openSchemaTab,
+    openFlowTab,
+    renameFlowTab,
     schemaClose,
     schemaCloseFor,
   };

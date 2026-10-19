@@ -22,7 +22,11 @@ export type TabsAction =
   /** Shows the tab of the same saved Visual Query (a restored draft included), else adds `doc`. */
   | { type: "openVisual"; doc: VisualTabDoc }
   /** Shows the tab of the same file, else adds `tab`. */
-  | { type: "openSchema"; tab: SchemaTab };
+  | { type: "openSchema"; tab: SchemaTab }
+  /** Shows the tab of diagram `name`, else adds one. */
+  | { type: "openFlow"; name: string }
+  /** Puts diagram `to` in the place of the tab of diagram `from` (a rename); active stays active. */
+  | { type: "renameFlow"; from: string; to: string };
 
 function apply<T>(prev: T, next: SetStateAction<T>): T {
   return typeof next === "function" ? (next as (p: T) => T)(prev) : next;
@@ -72,6 +76,22 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const open = tab.doc.path ? w.find((t) => t.kind === "schema" && t.doc.path === tab.doc.path) : undefined;
       if (open) return { ...state, activeKey: tabKey(open) };
       return { ...state, windowTabs: [...w, tab], activeKey: tabKey(tab) };
+    }
+    case "openFlow": {
+      // Windows names are not case-sensitive: Checkout and checkout are one file, so one tab.
+      const want = action.name.toLowerCase();
+      const open = state.windowTabs.find((t) => t.kind === "flow" && t.name.toLowerCase() === want);
+      if (open) return { ...state, activeKey: tabKey(open) };
+      const tab: WindowTab = { kind: "flow", name: action.name };
+      return { ...state, windowTabs: [...state.windowTabs, tab], activeKey: tabKey(tab) };
+    }
+    case "renameFlow": {
+      const at = state.windowTabs.findIndex((t) => t.kind === "flow" && t.name === action.from);
+      if (at < 0) return state;
+      const old = state.windowTabs[at];
+      const tab: WindowTab = { kind: "flow", name: action.to };
+      const windowTabs = state.windowTabs.map((t, i) => (i === at ? tab : t));
+      return { ...state, windowTabs, activeKey: state.activeKey === tabKey(old) ? tabKey(tab) : state.activeKey };
     }
   }
 }

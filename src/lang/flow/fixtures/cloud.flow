@@ -1,0 +1,19 @@
+diagram cloud "Shop on AWS"
+
+Users [icon: users]
+
+AWS [icon: aws-cloud] {
+  Gateway [icon: aws-api-gateway]
+  VPC [icon: aws-vpc] {
+    Orders API [icon: aws-lambda]
+    Data {
+      Orders table [icon: aws-dynamodb, table: shop.orders]
+    }
+  }
+  Receipts [icon: aws-s3]
+}
+
+Users > Gateway > Orders API: HTTPS
+Orders API <> Orders table
+Orders API - Receipts: PUT
+Orders API ..> Users: assumes a signed-in user

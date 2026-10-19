@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
@@ -7,10 +7,11 @@ import { ToastProvider } from "../components/Toast";
 import { LangClient } from "../lang/client";
 import { SchemaCache } from "../lang/sql/schemaCache";
 import type { VisualTabDoc } from "../shell/tabs";
-import { routeInvoke } from "../test/invoke";
+import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import { patientFile } from "../test/load";
 import { mockReactFlowDom } from "../test/reactFlow";
+import { focusedBadgeNow } from "./JoinEdge";
 import { placeBeside } from "./JoinPopover";
 import { emptyQuery } from "./model";
 import VisualQueryTab, { type VisualQueryTabProps } from "./VisualQueryTab";
@@ -437,9 +438,14 @@ test("a_pick_gives_focus_back_to_the_badge", async () => {
   makeLang(SHOP);
   render(<Harness initial={docWith({ ...ORDERS_STORES, joins: [PENDING] })} />);
   await openBadge("j1");
+  const previews = callsTo("visual_query_sql").length;
   fireEvent.keyDown(screen.getByRole("dialog", { name: "orders links to stores twice" }), { key: "1" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await waitFor(() => expect(badge("j1")?.textContent).toBe("Inner"));
+  // The picked Join's preview lands 120ms later and draws its edge again: the badge keeps focus through that.
+  // Checked only before it, the test passed or failed by how fast the machine was.
+  await waitFor(() => expect(callsTo("visual_query_sql").length).toBeGreaterThan(previews));
+  await act(() => new Promise((r) => setTimeout(r, 0)));
   expect(document.activeElement).toBe(badge("j1"));
 });
 
@@ -530,4 +536,19 @@ test("a_wheel_over_the_canvas_closes_the_popover", async () => {
   await openBadge("j1");
   fireEvent.wheel(canvasRoot(), { deltaY: 40 });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("closing_the_tab_with_a_focused_badge_lets_its_canvas_go", async () => {
+  makeLang(SHOP);
+  const { unmount } = render(<Harness initial={docWith({ ...ORDERS_STORES, joins: [FK_JOIN] })} />);
+  await ready();
+  await waitFor(() => {
+    badge("j1")!.focus();
+    expect(document.activeElement).toBe(badge("j1"));
+  });
+  expect(focusedBadgeNow()?.id).toBe("j1");
+  // The tab closes while its badge has focus: nothing keeps the detached canvas.
+  unmount();
+  await act(() => new Promise((r) => setTimeout(r, 0)));
+  expect(focusedBadgeNow()).toBeNull();
 });

@@ -9,7 +9,7 @@ import Segmented from "../../components/Segmented";
 import Switch from "../../components/Switch";
 import { exportPalette, type ExportTheme } from "./palette";
 import { blobToBase64, exportPng, svgImageUrl } from "./png";
-import { type Box, type Scene, sceneBounds } from "./scene";
+import { type Box, type Scene, sceneBounds, sceneEdges } from "./scene";
 import { sceneToSvg, svgFrame } from "./svg";
 
 type Preset = "whole" | "screen" | "selected";
@@ -24,6 +24,8 @@ const PREVIEW_W = 472;
 const PREVIEW_H = 308;
 /** The smallest crop, in scene units. */
 const MIN_CROP = 16;
+/** How near, in screen px, a crop edge must come to a node or group edge to snap onto it. */
+const SNAP_PX = 8;
 /** Bytes per output pixel a diagram PNG takes, roughly: flat colours compress well. */
 const PNG_BYTES_PER_PIXEL = 0.11;
 
@@ -85,7 +87,54 @@ function dragCrop(start: Box, handle: Handle | "move", dx: number, dy: number, r
   return { x: Math.max(region.x, Math.min(x, right - w)), y: Math.max(region.y, Math.min(y, bottom - h)), w, h };
 }
 
-export default function PublishDialog({ scene, fileName, selected, onScreen, onClose, onSaved }: Props) {
+/**
+ * The crop with its dragged edges on the nearest node or group edge within `reach` scene units, so nothing is cut
+ * in half (direction spec, Publish). A moved box keeps its size and takes the smaller of its two snaps per axis.
+ */
+export function snapCrop(box: Box, handle: Handle | "move", scene: Scene, reach: number): Box {
+  const { xs, ys } = sceneEdges(scene);
+  /** The shift that puts `v` on the nearest edge in reach, or null. */
+  const pull = (v: number, list: number[]): number | null => {
+    let best: number | null = null;
+    for (const t of list) if (Math.abs(t - v) <= reach && (best === null || Math.abs(t - v) < Math.abs(best))) best = t - v;
+    return best;
+  };
+  let x0 = box.x;
+  let y0 = box.y;
+  let x1 = box.x + box.w;
+  let y1 = box.y + box.h;
+  if (handle === "move") {
+    const pick = (a: number | null, b: number | null) => (a === null ? (b ?? 0) : b === null || Math.abs(a) <= Math.abs(b) ? a : b);
+    const dx = pick(pull(x0, xs), pull(x1, xs));
+    const dy = pick(pull(y0, ys), pull(y1, ys));
+    return { ...box, x: box.x + dx, y: box.y + dy };
+  }
+  if (handle.includes("w")) x0 += pull(x0, xs) ?? 0;
+  if (handle.includes("e")) x1 += pull(x1, xs) ?? 0;
+  if (handle.includes("n")) y0 += pull(y0, ys) ?? 0;
+  if (handle.includes("s")) y1 += pull(y1, ys) ?? 0;
+  if (x1 - x0 < MIN_CROP || y1 - y0 < MIN_CROP) return box;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** `box` kept inside `region`, keeping its size where it fits. */
+function inside(box: Box, region: Box): Box {
+  const w = Math.min(box.w, region.w);
+  const h = Math.min(box.h, region.h);
+  return {
+    x: Math.min(Math.max(box.x, region.x), region.x + region.w - w),
+    y: Math.min(Math.max(box.y, region.y), region.y + region.h - h),
+    w,
+    h,
+  };
+}
+
+export default function PublishDialog({ scene, fileName, selected: chosen, onScreen, onClose, onSaved }: Props) {
+  // Only selected nodes the scene draws count: one selected in the text but not yet placed is not in it.
+  const selected = useMemo(() => {
+    const drawn = new Set(scene.nodes.map((n) => n.id));
+    return chosen.filter((id) => drawn.has(id));
+  }, [scene, chosen]);
   const [preset, setPreset] = useState<Preset>("whole");
   const [aspect, setAspect] = useState<Aspect>("free");
   const [format, setFormat] = useState<Format>("png");
@@ -139,7 +188,9 @@ export default function PublishDialog({ scene, fileName, selected, onScreen, onC
     const d = drag.current;
     if (!d) return;
     const ratio = RATIO[aspect] ?? (e.shiftKey ? d.start.w / d.start.h : null);
-    setCrop(dragCrop(d.start, d.handle, (e.clientX - d.x) / k, (e.clientY - d.y) / k, region, ratio));
+    const next = dragCrop(d.start, d.handle, (e.clientX - d.x) / k, (e.clientY - d.y) / k, region, ratio);
+    // Edges snap to nodes and groups; Alt turns it off, and a kept shape is not bent by a snap.
+    setCrop(e.altKey || ratio !== null ? next : inside(snapCrop(next, d.handle, scene, SNAP_PX / k), region));
   }
   const endDrag = () => {
     drag.current = null;

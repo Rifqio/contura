@@ -17,3 +17,11 @@ export function agoShort(ms: number, _now: Date): string {
   if (ago < 3_600_000) return `${Math.floor(ago / 60_000)}m`;
   return `${Math.floor(ago / 3_600_000)}h`;
 }
+
+/** How long ago with the word: `now`, `12m ago`, `2h ago`, `3d ago`. `ms` is the time elapsed since. */
+export function agoText(ms: number): string {
+  const ago = Math.max(0, ms);
+  if (ago < 60_000) return "now";
+  if (ago < 86_400_000) return `${agoShort(ago, new Date())} ago`;
+  return `${Math.floor(ago / 86_400_000)}d ago`;
+}

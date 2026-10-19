@@ -35,6 +35,15 @@ import type {
   SuggestedConnection,
   UiPrefs,
   ModelFiles,
+  DiagramEntry,
+  DiagramFiles,
+  FlowTableLink,
+  IconEntry,
+  IconSet,
+  Lineage,
+  LineageDepth,
+  LineageDirection,
+  ViewDependencies,
   SchemaModel,
   SqlSchema,
   Execution,
@@ -61,6 +70,7 @@ import type {
   VqPreview,
   VqRun,
 } from "./types";
+import { clampDepth } from "./types";
 
 export const DIALECT_LABEL: Record<DialectKind, string> = {
   mysql: "MySQL",
@@ -181,15 +191,44 @@ export const writeModelFiles = (path: string, dbml: string, layout: string): Pro
 
 export const writeTextFile = (path: string, text: string): Promise<void> => invoke("write_text_file", { path, text });
 
-/**
- * Writes diagram `name` as `<name>.flow` and `<name>.flow.layout.json` in Contura's diagrams folder (Q35):
- * both, or neither if the second fails. Resolves to the `.flow` path.
- */
-export const writeFlowFiles = (name: string, flow: string, layout: string): Promise<string> =>
-  invoke<string>("write_flow_files", { name, flow, layout });
+/** Every diagram in Contura's diagrams folder, newest first. */
+export const listDiagrams = (): Promise<DiagramEntry[]> => invoke<DiagramEntry[]>("list_diagrams");
 
-/** Whether diagram `name` is saved in the diagrams folder already. */
-export const flowExists = (name: string): Promise<boolean> => invoke<boolean>("flow_exists", { name });
+export const readDiagram = (name: string): Promise<DiagramFiles> => invoke<DiagramFiles>("read_diagram", { name });
+
+/** Every diagram node with a `table:`, and whether the diagram reads or writes it. */
+export const listFlowTableLinks = (): Promise<FlowTableLink[]> => invoke<FlowTableLink[]>("list_flow_table_links");
+
+/** Every packed icon name with its set and title. */
+export const iconIndex = (): Promise<IconEntry[]> => invoke<IconEntry[]>("icon_index");
+
+/** The packed icon sets with their licences and source links, for Icon credits. */
+export const iconSets = (): Promise<IconSet[]> => invoke<IconSet[]>("icon_sets");
+
+/** Opens an https link in the system browser; the Core checks it again (https only, no user name or password). */
+export const openUrl = (url: string): Promise<void> => invoke<void>("open_url", { url });
+
+/** Icon `name`'s SVG text, unchanged. Show it only as an image (`src/flow/icons.ts`), never as markup. */
+export const icon = (name: string): Promise<string> => invoke<string>("icon", { name });
+
+/** Saves diagram `name`; without `overwrite`, a taken name rejects with `diagramExists`. */
+export const writeDiagram = (name: string, text: string, layout: string, overwrite: boolean): Promise<void> =>
+  invoke("write_diagram", { name, text, layout, overwrite });
+
+/**
+ * Saves only diagram `name`'s layout file (moves, Classic, the direction): the `.flow` is left as it is, so an
+ * edit made outside Contura survives. Rejects with `notFound` when the `.flow` is gone; nothing is recreated.
+ */
+export const writeDiagramLayout = (name: string, layout: string): Promise<void> => invoke("write_diagram_layout", { name, layout });
+
+/** Moves both files of diagram `name` to the Recycle Bin. */
+export const deleteDiagram = (name: string): Promise<void> => invoke("delete_diagram", { name });
+
+export const renameDiagram = (from: string, to: string): Promise<void> => invoke("rename_diagram", { from, to });
+
+/** "Save a copy as...": `path` and `<path>.layout.json`, outside Contura's data folder. */
+export const saveDiagramCopy = (text: string, layout: string, path: string): Promise<void> =>
+  invoke("save_diagram_copy", { text, layout, path });
 
 export const writeBinaryFile = (path: string, base64: string): Promise<void> =>
   invoke("write_binary_file", { path, base64 });
@@ -282,6 +321,29 @@ export const applyEdits = (id: ConnectionId, edits: EditSet, pass: PassId | null
 /** One table as the Table Designer loads it. */
 export const tableDesign = (id: ConnectionId, path: ObjectPath): Promise<TableDesign> =>
   invoke("table_design", { id, path });
+
+/** The tables around `path` from catalog details; a `depth` of 0 is All (up to 300 tables, at most 10s). */
+export const lineage = (
+  id: ConnectionId,
+  path: ObjectPath,
+  depth: LineageDepth,
+  direction: LineageDirection,
+): Promise<Lineage> => invoke("lineage", { id, path, depth: clampDepth(depth), direction });
+
+/** The views the catalog records as reading `path`, at most 200; `catalog` is false on SQLite and older MySQL. */
+export const viewDependencies = (id: ConnectionId, path: ObjectPath): Promise<ViewDependencies> =>
+  invoke("view_dependencies", { id, path });
+
+/** The saved moved-card layout of `path`'s lineage, or null when there is none. */
+export const readLineageLayout = (id: ConnectionId, path: ObjectPath): Promise<string | null> =>
+  invoke("read_lineage_layout", { id, path });
+
+/** Saves the moved-card layout of `path`'s lineage in Contura's diagrams folder. */
+export const writeLineageLayout = (id: ConnectionId, path: ObjectPath, layout: string): Promise<void> =>
+  invoke("write_lineage_layout", { id, path, layout });
+
+/** Removes the saved layout of `path`'s lineage. */
+export const deleteLineageLayout = (id: ConnectionId, path: ObjectPath): Promise<void> => invoke("delete_lineage_layout", { id, path });
 
 /** The table's CREATE statement for copying; on PostgreSQL built from its design. */
 export const tableDdl = (id: ConnectionId, path: ObjectPath): Promise<string> => invoke("table_ddl", { id, path });
@@ -505,6 +567,8 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return "The read stopped unexpectedly. Nothing more was written.";
     case "afterCommit":
       return `The rows were committed, but ${e.message.sql} failed afterwards: ${e.message.message}.`;
+    case "diagramExists":
+      return `${e.message.name}.flow already exists.`;
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };
