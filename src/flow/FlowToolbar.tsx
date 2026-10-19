@@ -3,7 +3,8 @@
 // notched hint on hover.
 import Icon, { type IconName } from "../components/Icon";
 import Kbd from "../components/Kbd";
-import type { DiagramKind, FlowNodeKind } from "../lang/flow/model";
+import { type DiagramKind, FIXED_KINDS, type FlowNodeKind } from "../lang/flow/model";
+import ShapePicker, { type Shape } from "./ShapePicker";
 import type { NodeLook } from "./nodes/parts";
 
 /** One add tool: what it adds, its hint and its key. `kind: "terminal"` adds a start, or an end once there is one. */
@@ -31,6 +32,31 @@ export const ADD_TOOLS: Record<DiagramKind, AddTool[]> = {
   cloud: [
     { label: "Add a service", key: "N", icon: "boxPlus", kind: "service", base: "Service" },
     { label: "Group", key: "G", icon: "square", kind: "group", base: "Group" },
+  ],
+  // Step 12, item 19: the newer kinds' main shapes; the Shape picker lists them all.
+  er: [
+    { label: "Add entity", key: "E", icon: "table", kind: "entity", base: "table" },
+    { label: "Add weak entity", key: "W", icon: "layers", kind: "weak", base: "detail" },
+  ],
+  sequence: [
+    { label: "Add participant", key: "P", icon: "square", kind: "participant", base: "Participant" },
+    { label: "Add actor", key: "A", icon: "user", kind: "actor", base: "Actor" },
+  ],
+  state: [
+    { label: "Add state", key: "S", icon: "pill", kind: "state", base: "State" },
+    { label: "Add choice", key: "C", icon: "diamond", kind: "choice", base: "Choice" },
+    { label: "Add fork", key: "F", icon: "minus", kind: "fork", base: "Fork" },
+  ],
+  class: [
+    { label: "Add class", key: "C", icon: "cube", kind: "class", base: "Class" },
+    { label: "Add interface", key: "I", icon: "cards", kind: "interface", base: "Interface" },
+    { label: "Add enum", key: "E", icon: "list", kind: "enum", base: "Enum" },
+  ],
+  mindmap: [{ label: "Add topic", key: "T", icon: "pill", kind: "topic", base: "Topic" }],
+  timeline: [
+    { label: "Add event", key: "E", icon: "pill", kind: "event", base: "Event" },
+    { label: "Add milestone", key: "M", icon: "diamond", kind: "milestone", base: "Milestone" },
+    { label: "Add period", key: "P", icon: "minus", kind: "period", base: "Period" },
   ],
 };
 
@@ -85,9 +111,11 @@ interface Props {
   onTidy(): void;
   /** Two or more nodes are selected: Tidy lays out only them. */
   tidySelection?: boolean;
+  /** A shape picked in the Shapes list (step 12): its tool, or its line written into the text. */
+  onShape?(shape: Shape): void;
 }
 
-export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySelection }: Props) {
+export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySelection, onShape }: Props) {
   return (
     <div className="flow-toolbar nodrag nopan" role="toolbar" aria-label="Diagram tools">
       <Tool label="Select" icon="select" pressed />
@@ -96,6 +124,7 @@ export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySel
         // Group puts the selected services in a new group.
         <Tool key={t.label} label={t.label} icon={t.icon} shortcut={t.key} onClick={() => onAdd(t)} />
       ))}
+      {onShape && <ShapePicker kind={kind} onPick={onShape} />}
       <span className="flow-toolbar-divider" aria-hidden="true" />
       {kind === "dfd" && (
         <span className="flow-twin" role="group" aria-label="Node look">
@@ -103,7 +132,7 @@ export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySel
           <Tool label="Textbook shapes (Gane-Sarson)" icon="classic" pressed={look === "classic"} onClick={() => onLook("classic")} />
         </span>
       )}
-      <Tool label="Tidy" hint={tidySelection ? "Tidy selection" : "Tidy"} icon="tidy" onClick={onTidy} />
+      {!FIXED_KINDS.has(kind) && <Tool label="Tidy" hint={tidySelection ? "Tidy selection" : "Tidy"} icon="tidy" onClick={onTidy} />}
     </div>
   );
 }

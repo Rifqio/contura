@@ -1,12 +1,11 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ThemeChoice } from "../api/types";
 import Icon from "./Icon";
-import Menu, { type MenuItem } from "./Menu";
 
 const CHOICES: { value: ThemeChoice; label: string }[] = [
   { value: "system", label: "System" },
-  { value: "light", label: "Alucard" },
-  { value: "dark", label: "Dracula" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
 ];
 
 interface Props {
@@ -14,7 +13,7 @@ interface Props {
   onChange(c: ThemeChoice): void;
 }
 
-/** System, Alucard or Dracula, as a segmented radio group. Arrow keys move the choice. */
+/** System, Light or Dark, as a segmented radio group. Arrow keys move the choice. */
 export default function ThemeSwitch({ value, onChange }: Props) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -53,31 +52,50 @@ export default function ThemeSwitch({ value, onChange }: Props) {
   );
 }
 
-const MENU: { value: ThemeChoice; label: string }[] = [
-  { value: "dark", label: "Dracula" },
-  { value: "light", label: "Alucard" },
-  { value: "system", label: "Follow Windows" },
-];
+/** Windows is in dark mode (or no preference is known: Dark is Contura's default). */
+function systemDark(): boolean {
+  try {
+    const q = window.matchMedia?.("(prefers-color-scheme: light)");
+    return !q?.matches;
+  } catch {
+    return true;
+  }
+}
 
-/** The status bar's theme button (a sun) and its menu: Dracula, Alucard, Follow Windows. */
-export function ThemeMenu({ value, onChange }: Props) {
-  const items: MenuItem[] = MENU.map((m) => ({
-    key: m.value,
-    label: m.label,
-    current: m.value === value,
-    onSelect: () => onChange(m.value),
-  }));
+/** The theme drawn now: the choice, or what Windows uses when the choice is to follow it. */
+export function shownTheme(value: ThemeChoice, dark = systemDark()): "dark" | "light" {
+  return value === "system" ? (dark ? "dark" : "light") : value;
+}
+
+/**
+ * Item 15: the status bar's theme toggle, one icon. Dark (the default) shows a moon; a click switches to Light,
+ * which shows a sun, and back. The themes are called Dark and Light, never by their palette names.
+ */
+export function ThemeToggle({ value, onChange }: Props) {
+  const [dark, setDark] = useState(systemDark);
+  useEffect(() => {
+    if (value !== "system") return;
+    let q: MediaQueryList | undefined;
+    try {
+      q = window.matchMedia?.("(prefers-color-scheme: light)");
+    } catch {
+      return;
+    }
+    const on = () => setDark(systemDark());
+    q?.addEventListener?.("change", on);
+    return () => q?.removeEventListener?.("change", on);
+  }, [value]);
+  const shown = shownTheme(value, dark);
+  const label = shown === "dark" ? "Dark theme. Switch to Light" : "Light theme. Switch to Dark";
   return (
-    <Menu
-      label="Theme"
-      align="end"
-      compact
-      items={items}
-      trigger={(props) => (
-        <button type="button" className="icon-button app-status-button" aria-label="Theme" title="Theme" {...props}>
-          <Icon name="sun" size={14} />
-        </button>
-      )}
-    />
+    <button
+      type="button"
+      className="icon-button app-status-button theme-toggle"
+      aria-label={label}
+      title={label}
+      onClick={() => onChange(shown === "dark" ? "light" : "dark")}
+    >
+      <Icon key={shown} name={shown === "dark" ? "moon" : "sun"} size={14} className="theme-toggle-icon" />
+    </button>
   );
 }

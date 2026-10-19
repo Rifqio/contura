@@ -30,23 +30,33 @@ function setup(over: Record<string, (a: Record<string, unknown>) => unknown> = {
   return { dialog, name, calls };
 }
 
-test("three_kind_cards_and_the_selected_one_has_the_outline_and_check", async () => {
+test("every_kind_card_and_the_selected_one_has_the_outline_and_check", async () => {
   const { dialog } = setup();
   const group = within(dialog).getByRole("radiogroup", { name: "Kind" });
   const cards = within(group).getAllByRole("radio");
-  expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["Data flow", "Flowchart", "Cloud architecture"]);
+  expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual([
+    "Data flow",
+    "Flowchart",
+    "Cloud architecture",
+    "Entity relationship",
+    "Sequence",
+    "State",
+    "Class",
+    "Mind map",
+    "Timeline",
+  ]);
   expect(within(cards[0]).getByText("Processes, data stores and outside parties. Stores can link to tables.")).toBeTruthy();
   expect(within(cards[1]).getByText("Steps, decisions, input and output, start and end.")).toBeTruthy();
   expect(within(cards[2]).getByText("Services as provider icons, grouped by network or layer.")).toBeTruthy();
   // Data flow is picked first: the outline class and the check sit on that card only.
-  expect(cards.map((c) => c.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+  expect(cards.map((c) => c.getAttribute("aria-checked")).slice(0, 3)).toEqual(["true", "false", "false"]);
   expect(cards[0].classList.contains("is-on")).toBe(true);
   expect(dialog.querySelectorAll(".new-diagram-check")).toHaveLength(1);
   expect(cards[0].querySelector(".new-diagram-check")).toBeTruthy();
   // Each card draws a preview.
   for (const c of cards) expect(c.querySelector(".new-diagram-preview")).toBeTruthy();
   await userEvent.click(cards[1]);
-  expect(cards.map((c) => c.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+  expect(cards.map((c) => c.getAttribute("aria-checked")).slice(0, 3)).toEqual(["false", "true", "false"]);
   expect(cards[1].querySelector(".new-diagram-check")).toBeTruthy();
   expect(cards[0].classList.contains("is-on")).toBe(false);
   expect(within(dialog).getByText("The kind is the first line of the file, so you can change it later.")).toBeTruthy();
@@ -134,7 +144,7 @@ test("recent_diagrams_list_with_their_kind_and_compact_time", async () => {
 
 test("flow_from_mermaid_opens_the_mermaid_dialog", async () => {
   const { dialog, calls } = setup();
-  expect(within(dialog).getByText("Have a Mermaid flowchart already?")).toBeTruthy();
+  expect(within(dialog).getByText("Have a Mermaid diagram already?")).toBeTruthy();
   await userEvent.click(within(dialog).getByRole("button", { name: "Flow from Mermaid..." }));
   expect(calls.mermaid).toHaveBeenCalledTimes(1);
 });
@@ -180,4 +190,23 @@ test("replace_runs_before_replace_first", async () => {
   await userEvent.click(await within(dialog).findByRole("button", { name: "Replace" }));
   await waitFor(() => expect(created).toHaveBeenCalledWith("checkout"));
   expect(order).toEqual(["write false", "before checkout", "write true"]);
+});
+
+test("item_19_find_a_kind_by_a_word_or_a_group_and_create_names_the_kind", async () => {
+  const { dialog, name } = setup();
+  const kinds = () => within(within(dialog).getByRole("radiogroup", { name: "Kind" })).queryAllByRole("radio").map((c) => c.getAttribute("aria-label"));
+  await userEvent.click(within(dialog).getByRole("radio", { name: "Planning" }));
+  expect(kinds()).toEqual(["Mind map", "Timeline"]);
+  await userEvent.click(within(dialog).getByRole("radio", { name: "All" }));
+  await userEvent.type(within(dialog).getByRole("searchbox", { name: "Find a kind" }), "who calls");
+  expect(kinds()).toEqual(["Sequence"]);
+  await userEvent.clear(within(dialog).getByRole("searchbox", { name: "Find a kind" }));
+  await userEvent.type(within(dialog).getByRole("searchbox", { name: "Find a kind" }), "zzz");
+  expect(within(dialog).getByText("No kind matches. Try another word.")).toBeTruthy();
+  await userEvent.clear(within(dialog).getByRole("searchbox", { name: "Find a kind" }));
+  await userEvent.click(within(dialog).getByRole("radio", { name: "Sequence" }));
+  await userEvent.type(name, "pay");
+  await userEvent.click(within(dialog).getByRole("button", { name: /^Create sequence/ }));
+  await waitFor(() => expect(callsTo("write_diagram")).toHaveLength(1));
+  expect(callsTo("write_diagram")[0]).toMatchObject({ name: "pay", text: 'diagram sequence "pay"\n' });
 });

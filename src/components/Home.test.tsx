@@ -7,6 +7,10 @@ import App from "../App";
 import Home from "./Home";
 import appCss from "../styles/app.css?raw";
 
+/** The tab strip's New query button (the feature bar has its own, item 16). */
+const stripNew = () => screen.getAllByRole("button", { name: "New query" }).find((b) => b.closest(".tab-strip")) ?? (() => { throw new Error("no New query in the tab strip"); })();
+
+
 /** The body of the rule whose selector is exactly `selector`. */
 function rulesOf(selector: string): string {
   const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -439,12 +443,34 @@ test("show_all_history_uses_the_places_active_query_tab_not_the_last", async () 
   });
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "Open Ungrouped" }));
-  await userEvent.click(await screen.findByRole("button", { name: "New query" }));
-  await userEvent.click(screen.getByRole("button", { name: "New query" }));
+  await userEvent.click((await waitFor(stripNew)));
+  await userEvent.click(stripNew());
   await userEvent.click(await screen.findByRole("tab", { name: "Query 1" }));
   await userEvent.click(screen.getByRole("tab", { name: "Home" }));
   await userEvent.click(await screen.findByRole("button", { name: "Show all history" }));
   expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Query 2", selected: false })).toBeTruthy();
   expect((await screen.findByRole("radio", { name: "All" })).getAttribute("aria-checked")).toBe("true");
+});
+
+test("item_11_a_dragged_connection_lifts_out_and_settles_into_its_new_group", async () => {
+  const onChanged = vi.fn();
+  routeInvoke({ suggested_connections: () => [], move_connection: () => ({ ...conn("c2", "laragon", "g2") }) });
+  renderHome({
+    connections: [conn("a", "kfc-prod", "g1"), conn("c2", "laragon", null)],
+    groups: [{ id: "g1", name: "KFC", color: "teal", hasImage: false }, { id: "g2", name: "Orbit", color: "teal", hasImage: false }],
+    onChanged,
+  });
+  // A new, empty Group says what to do with it.
+  const orbit = screen.getByRole("region", { name: "Orbit" });
+  expect(orbit.textContent).toContain("Drag a Connection here to add it to Orbit.");
+  const row = within(screen.getByRole("region", { name: "Ungrouped" })).getByRole("listitem");
+  const dataTransfer = { setData: () => {}, getData: () => "", effectAllowed: "", dropEffect: "", types: ["text/plain"] };
+  fireEvent.dragStart(row, { dataTransfer });
+  expect(row.className).toContain("is-dragging");
+  fireEvent.dragOver(orbit, { dataTransfer });
+  expect(orbit.className).toContain("group-card-drop");
+  fireEvent.drop(orbit, { dataTransfer });
+  await waitFor(() => expect(callsTo("move_connection")).toEqual([{ id: "c2", groupId: "g2" }]));
+  expect(orbit.className).not.toContain("group-card-drop");
 });

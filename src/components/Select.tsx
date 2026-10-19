@@ -224,6 +224,7 @@ export default function Select<V extends string>({ value, options, onChange, lab
             ref={list}
             id={`${id}-list`}
             className="select-list"
+            data-sublayer
             role="listbox"
             aria-label={label}
             style={place ?? { visibility: "hidden" }}

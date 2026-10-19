@@ -5,7 +5,15 @@
 import { type ConnectionLineComponentProps, type InternalNode, useStore } from "@xyflow/react";
 import { useEffect } from "react";
 import { routeOrthogonal } from "../../diagram/route";
-import { type Box, linkBox, magnetTarget, type Point, portAt } from "./geometry";
+import { type Box, linkBox, magnetTarget, type Point, portAt, type Side } from "./geometry";
+
+const SIDE_OF: Record<string, Side> = { right: "r", left: "l", top: "t", bottom: "b" };
+
+/** The side of the pressed port: its handle id (r, l, t, b), else the handle's position. */
+export function pressedSide(handleId: string | null | undefined, position: string): Side {
+  if (handleId === "r" || handleId === "l" || handleId === "t" || handleId === "b") return handleId;
+  return SIDE_OF[position] ?? "r";
+}
 
 /** Where lines meet the node: its box, or a cloud service's 48 px tile. */
 function boxOf(n: InternalNode): Box {
@@ -47,16 +55,18 @@ function useLift(id: string | null) {
 
 /** The connection line, with `onDraw` told where it is each frame. Made once per tab, so React Flow keeps one component. */
 export function makeConnectionLine(onDraw: (draw: DrawState) => void) {
-  return function FlowConnectionLine({ fromNode, pointer }: ConnectionLineComponentProps) {
+  return function FlowConnectionLine({ fromNode, fromHandle, fromPosition, pointer }: ConnectionLineComponentProps) {
     const lookup = useStore((s) => s.nodeLookup);
     const from = boxOf(fromNode);
     const lock = magnetTarget(pointer, targetsOf(lookup, fromNode.id));
     const target = lock ? lookup.get(lock.id) : undefined;
     const to = target ? boxOf(target) : null;
-    const route = to ? routeOrthogonal(from, to) : routeOrthogonal(from, { x: pointer.x, y: pointer.y, w: 0, h: 0 }, { toPoint: true });
+    // The line always leaves from the port that was pressed (item 18), to the pointer or the locked port.
+    const end = to && lock ? portAt(to, lock.side) : { x: pointer.x, y: pointer.y };
+    const route = routeOrthogonal(from, { x: end.x, y: end.y, w: 0, h: 0 }, { toPoint: true, from: pressedSide(fromHandle?.id, fromPosition) });
     const lockId = to && lock ? lock.id : null;
     useLift(lockId);
-    useEffect(() => onDraw({ fromId: fromNode.id, from, end: to && lock ? portAt(to, lock.side) : { x: pointer.x, y: pointer.y }, lock: lockId }));
+    useEffect(() => onDraw({ fromId: fromNode.id, from, end, lock: lockId }));
     return (
       <g className={to ? "flow-drawing is-locked" : "flow-drawing"}>
         <path className="flow-drawing-line" d={route.d} fill="none" />

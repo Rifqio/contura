@@ -5,6 +5,12 @@ export const DIAGRAM_KIND_WORD: Record<DiagramKind, string> = {
   dfd: "Data flow",
   flow: "Flowchart",
   cloud: "Cloud",
+  er: "Entity relationship",
+  sequence: "Sequence",
+  state: "State",
+  class: "Class",
+  mindmap: "Mind map",
+  timeline: "Timeline",
   unknown: "Diagram",
 };
 

@@ -504,7 +504,7 @@ export interface ModelFiles {
 
 // Diagrams: mirrors crates/contura-core/src/diagrams.rs.
 
-export type DiagramKind = "dfd" | "flow" | "cloud" | "unknown";
+export type DiagramKind = "dfd" | "flow" | "cloud" | "er" | "sequence" | "state" | "class" | "mindmap" | "timeline" | "unknown";
 
 /** One diagram in Contura's diagrams folder, from its file's first line. */
 export interface DiagramEntry {

@@ -45,9 +45,9 @@ describe("the first line", () => {
     expect(r.doc).toBeNull();
     expect(r.problems).toHaveLength(1);
     const p = r.problems[0];
-    expect(p).toMatchObject({ line: 1, severity: "error", message: "The first line must say diagram dfd, diagram flow or diagram cloud." });
+    expect(p).toMatchObject({ line: 1, severity: "error", message: MESSAGES.firstLine });
     expect(at(text, p.from, p.to)).toBe("dfx");
-    expect(p.fixes.map((f) => f.title)).toEqual(["Make it diagram dfd", "Make it diagram flow", "Make it diagram cloud"]);
+    expect(p.fixes.map((f) => f.title).slice(0, 3)).toEqual(["Make it diagram dfd", "Make it diagram flow", "Make it diagram cloud"]);
     expect(parseFlow(apply(text, p.fixes[1].edits)).doc?.kind).toBe("flow");
   });
 
@@ -389,7 +389,7 @@ describe("problems, verbatim, with their fixes", () => {
   });
 
   test("a kind from another diagram lists the right ones", () => {
-    expect(errors(lines('diagram flow "F"', "A [store]"))[0].message).toBe('Unknown kind "store". Use start, end, step, decision, io or subprocess.');
+    expect(errors(lines('diagram flow "F"', "A [store]"))[0].message).toBe('Unknown kind "store". Use start, end, step, decision, io, subprocess, document or database.');
     expect(errors(lines('diagram cloud "C"', "A [process]"))[0].message).toBe("A cloud node takes an icon, not a kind, for example [icon: aws-s3].");
   });
 
@@ -408,7 +408,7 @@ describe("problems, verbatim, with their fixes", () => {
   });
 
   test("The first line must say", () => {
-    expect(parseFlow("hello\n").problems[0].message).toBe("The first line must say diagram dfd, diagram flow or diagram cloud.");
+    expect(parseFlow("hello\n").problems[0].message).toBe(MESSAGES.firstLine);
   });
 
   test("a decision needs a label on each way out, as a hint", () => {

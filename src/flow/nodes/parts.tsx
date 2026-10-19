@@ -16,6 +16,8 @@ export interface NodeBaseProps {
   selected: boolean;
   /** Fading in after an add, or out before a delete (motion design, 120 ms). */
   state?: NodeState;
+  /** Item 21: the size it was resized to on the canvas. */
+  sized?: { w: number; h: number };
 }
 
 /** A node fading in from 96 percent after an add, or fading out before a delete. */
@@ -64,8 +66,8 @@ function useHoverPorts() {
 
 interface ShellProps {
   kind: DrawnKind;
-  /** `dfd`, `flowchart` or `service`: which family's rules in flow-canvas.css apply. */
-  family: "dfd" | "flowchart" | "service";
+  /** `dfd`, `flowchart`, `service` or `kind` (the step 12 shapes): which family's rules in flow-canvas.css apply. */
+  family: "dfd" | "flowchart" | "service" | "kind";
   look: NodeLook;
   selected: boolean;
   /** The accessible name, at every level of detail ("Process Checkout"). */
@@ -73,6 +75,8 @@ interface ShellProps {
   /** The plain name the zoomed-out box shows. */
   name: string;
   state?: NodeState;
+  /** Resized on the canvas: drawn at this size (item 21). */
+  sized?: { w: number; h: number };
   /** The full node; a function places the ports itself (a service puts them on its 48 px tile). */
   children: ReactNode | ((ports: ReactNode) => ReactNode);
 }
@@ -81,14 +85,16 @@ interface ShellProps {
  * The node's outer box, at the engine's levels of detail: the full node, a name box zoomed out and in fast
  * mode (over 300 nodes), and a plain block in the stroke colour further out. Fast mode has no ports or hover.
  */
-export function NodeShell({ kind, family, look, selected, label, name, state, children }: ShellProps) {
+export function NodeShell({ kind, family, look, selected, label, name, state, sized, children }: ShellProps) {
   const { detail, fast } = useDetail();
   const hover = useHoverPorts();
-  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "");
+  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "") + (sized ? " fnode-sized" : "");
+  // The node itself takes the size, not React Flow's wrapper, which stays measured from it.
+  const box: CSSProperties = sized ? { ...kindStyle(kind), width: sized.w, height: sized.h } : kindStyle(kind);
   // Zoomed out the node drops its family and look classes, so no shape rule (diamond, slant, pill) applies.
   const cls = detail === "full" ? `fnode fnode-${family} fnode-${kind} fnode-${look}${sel}` : `fnode fnode-${detail}${sel}`;
   if (detail === "block") {
-    return <div className={cls} role="group" aria-label={label} data-kind={kind} style={kindStyle(kind)} />;
+    return <div className={cls} role="group" aria-label={label} data-kind={kind} style={box} />;
   }
   const showPorts = !fast && (selected || hover.state !== "off");
   const ports = showPorts ? <Ports out={!selected && hover.state === "out"} /> : null;
@@ -99,7 +105,7 @@ export function NodeShell({ kind, family, look, selected, label, name, state, ch
       role="group"
       aria-label={label}
       data-kind={kind}
-      style={kindStyle(kind)}
+      style={box}
       onPointerEnter={fast ? undefined : hover.enter}
       onPointerLeave={fast ? undefined : hover.leave}
     >

@@ -2,6 +2,7 @@
 import { type DragEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { Aggregate, ColumnRef, VisualQuery, VqProblem, VqSort } from "../api/types";
 import Icon from "../components/Icon";
+import Kbd from "../components/Kbd";
 import Select from "../components/Select";
 import Switch from "../components/Switch";
 import { addSort, autoGroupBy, editSort, moveOutput, removeSort, setAggregate, setGroupBy, setOutputName, toggleColumn } from "./model";
@@ -54,6 +55,8 @@ function OutputName({ value, placeholder, label, onCommit }: { value: string | n
     if (!editing.current) setDraft(value ?? "");
   }, [value]);
   const commit = () => {
+    // Item 32: only a name the user typed is kept; leaving an untouched field never writes one.
+    if (!editing.current) return;
     editing.current = false;
     const v = draft.trim();
     if (v !== (value ?? "")) onCommit(v === "" ? null : v);
@@ -127,7 +130,8 @@ export default function ColumnsPanel({ model, outputs, problems, tableColumns, o
       .filter((c) => !manual?.some((m) => m.table === t.id && m.column === c))
       .map((c) => ({ value: `${t.id}\u0000${c}`, label: `${t.alias}.${c}` })),
   );
-  const columnProblems = problems.filter((p) => p.target.kind === "columns");
+  // Item 30: with nothing ticked, the empty state says what to do; the Core's "Tick at least one column." is not said again.
+  const columnProblems = problems.filter((p) => p.target.kind === "columns" && !(model.columns.length === 0 && p.message === "Tick at least one column."));
   // The Core names no GROUP BY row, so its problems are matched by their words: a row with no column
   // is said under that row, the others under the section.
   const isRowProblem = (m: string) => m.startsWith("A GROUP BY row has no column");
@@ -138,8 +142,12 @@ export default function ColumnsPanel({ model, outputs, problems, tableColumns, o
     <div className="vq-columns">
       {model.columns.length === 0 ? (
         <div className="vq-panel-empty">
-          <p className="vq-panel-empty-title">No columns yet</p>
-          <p>Tick columns on the cards. They show up here in the order you tick them.</p>
+          <Icon name="check" size={20} className="vq-panel-empty-icon" />
+          <p className="vq-panel-empty-title">Tick a column to start</p>
+          <p>Tick columns on the cards above. They become the result, in the order you tick them.</p>
+          <p className="vq-panel-empty-keys">
+            <Kbd keys="Space" /> ticks the column you are on
+          </p>
         </div>
       ) : (
         <table className="vq-grid">

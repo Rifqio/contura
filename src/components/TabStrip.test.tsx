@@ -4,7 +4,8 @@ import { expect, test, vi } from "vitest";
 import { nextQueryName, parseDrafts, placeKey, serializeDrafts } from "../query/drafts";
 import type { QueryTabDoc } from "../query/QueryTab";
 import { EMPTY_LAYOUT } from "../schema/layout";
-import type { AnyTab, VisualTabDoc } from "../shell/tabs";
+import { type AnyTab, moveTab, tabKey, type VisualTabDoc } from "../shell/tabs";
+import { useState } from "react";
 import { parseVisualDrafts } from "../visualquery/drafts";
 import { registerFlow, updateFlow } from "../flow/flowRegistry";
 import Icon, { type IconName } from "./Icon";
@@ -403,7 +404,7 @@ test("the_chevron_menu_offers_new_query_and_new_visual_query", async () => {
   const onNewVisual = vi.fn();
   const { rerender } = render(<TabStrip tabs={[]} active={null} onSelect={() => {}} onClose={() => {}} onNew={onNew} onNewVisual={onNewVisual} />);
   await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
-  const menu = screen.getByRole("menu", { name: "More new tabs" });
+  const menu = screen.getByRole("menu", { name: "New tab" });
   expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["New query", "New Visual Query"]);
   await userEvent.click(within(menu).getByRole("menuitem", { name: "New Visual Query" }));
   expect(onNewVisual).toHaveBeenCalledTimes(1);
@@ -415,8 +416,18 @@ test("the_chevron_menu_offers_new_query_and_new_visual_query", async () => {
   rerender(<TabStrip tabs={[]} active={null} onSelect={() => {}} onClose={() => {}} onNew={onNew} onNewVisual={onNewVisual} newVisualReady={false} />);
   await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
   const off = screen.getByRole("menuitem", { name: "New Visual Query" }) as HTMLButtonElement;
-  expect(off.disabled).toBe(true);
+  expect(off.getAttribute("aria-disabled")).toBe("true");
   expect(off.title).toBe("Open a Connection first");
+  // The arrow keys reach it, so the reason can be read; Enter on it does nothing.
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "New query" }));
+  await userEvent.keyboard("{ArrowDown}");
+  expect(document.activeElement).toBe(off);
+  expect(off.getAttribute("aria-description")).toBe("Open a Connection first");
+  await userEvent.keyboard("{Enter}");
+  expect(onNewVisual).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("menu", { name: "New tab" })).toBeTruthy();
+  await userEvent.click(off);
+  expect(onNewVisual).toHaveBeenCalledTimes(1);
 });
 
 test("a_visual_draft_round_trips_and_an_old_draft_has_none", () => {
@@ -456,7 +467,7 @@ test("the_chevron_menu_offers_new_diagram_with_its_key", async () => {
   const onNewDiagram = vi.fn();
   render(<TabStrip tabs={[]} active={null} onSelect={() => {}} onClose={() => {}} onNew={() => {}} onNewVisual={() => {}} onNewDiagram={onNewDiagram} />);
   await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
-  const menu = screen.getByRole("menu", { name: "More new tabs" });
+  const menu = screen.getByRole("menu", { name: "New tab" });
   expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["New query", "New Visual Query", "New diagram"]);
   expect(within(within(menu).getByRole("menuitem", { name: "New diagram" })).getByText("Ctrl+Alt+N")).toBeTruthy();
   await userEvent.click(within(menu).getByRole("menuitem", { name: "New diagram" }));
@@ -474,4 +485,113 @@ test("a_diagram_tab_has_its_file_actions_on_right_click", async () => {
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Save a copy as..." }));
   expect(actions.saveCopy).toHaveBeenCalledWith("checkout");
   expect(screen.queryByRole("menu", { name: "checkout.flow" })).toBeNull();
+});
+
+test("item_34_the_new_tab_menu_draws_large_icon_tiles_with_a_line_each_and_closes_on_escape", async () => {
+  render(
+    <TabStrip tabs={[]} active={null} onSelect={() => {}} onClose={() => {}} onNew={() => {}} onNewVisual={() => {}} onNewDiagram={() => {}} onNewModel={() => {}} newQueryWhere="On kestrel-main, shop" />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "More new tabs" }));
+  const menu = screen.getByRole("menu", { name: "New tab" });
+  expect(within(menu).getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["Write", "Draw"]);
+  const query = within(menu).getByRole("menuitem", { name: "New query" });
+  expect(query.querySelector(".new-tab-tile svg.feature-icon")?.getAttribute("data-feature")).toBe("query");
+  expect(query.querySelector(".new-tab-tile svg")?.getAttribute("width")).toBe("28");
+  expect(query.textContent).toContain("On kestrel-main, shop");
+  expect(within(menu).getByRole("menuitem", { name: "New Schema Model" }).querySelector("svg")?.getAttribute("data-feature")).toBe("model");
+  // The first row has focus; arrows move; Escape closes.
+  expect(document.activeElement).toBe(query);
+  await userEvent.keyboard("{ArrowDown}");
+  expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "New Visual Query" }));
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("menu", { name: "New tab" })).toBeNull();
+});
+
+test("item_7_dragging_a_tab_past_its_neighbours_reorders_and_a_short_press_does_not", async () => {
+  const q = (id: string) => ({ kind: "query" as const, doc: { id, name: id, text: "", connectionId: null, database: null, savedId: null, savedText: null } });
+  const onReorder = vi.fn();
+  const onSelect = vi.fn();
+  render(<TabStrip tabs={[{ kind: "home" }, q("a"), q("b"), q("c")]} active="query:a" onSelect={onSelect} onClose={() => {}} onNew={() => {}} onReorder={onReorder} />);
+  // Lay the tabs out 100 px wide, 6 px apart.
+  const tabsEl = [...document.querySelectorAll<HTMLElement>(".work-tab")];
+  tabsEl.forEach((el, i) => {
+    el.getBoundingClientRect = () => ({ left: i * 106, width: 100, right: i * 106 + 100, top: 0, bottom: 32, height: 32, x: i * 106, y: 0, toJSON() {} }) as DOMRect;
+  });
+  const a = tabsEl[1];
+  // A short press is a click, never a move.
+  fireEvent.pointerDown(a, { button: 0, clientX: 150 });
+  fireEvent.pointerMove(window, { clientX: 152 });
+  fireEvent.pointerUp(window, { clientX: 152 });
+  expect(onReorder).not.toHaveBeenCalled();
+  // Dragged right past b's middle: b slides left by a's width, and the drop puts a after b.
+  fireEvent.pointerDown(a, { button: 0, clientX: 150 });
+  fireEvent.pointerMove(window, { clientX: 260 });
+  expect(a.style.transform).toBe("translateX(110px)");
+  expect(tabsEl[2].style.transform).toBe("translateX(-106px)");
+  fireEvent.pointerUp(window, { clientX: 260 });
+  expect(onReorder).toHaveBeenCalledWith("query:a", "query:b");
+  // Home never moves.
+  fireEvent.pointerDown(tabsEl[0], { button: 0, clientX: 50 });
+  fireEvent.pointerMove(window, { clientX: 300 });
+  fireEvent.pointerUp(window, { clientX: 300 });
+  expect(onReorder).toHaveBeenCalledTimes(1);
+});
+
+test("item_7_alt_arrows_move_the_focused_tab_within_its_part_of_the_strip", async () => {
+  const q = (id: string) => ({ kind: "query" as const, doc: { id, name: id, text: "", connectionId: null, database: null, savedId: null, savedText: null } });
+  const flow = { kind: "flow" as const, name: "d" };
+  const onSelect = vi.fn();
+  function Strip() {
+    const [tabs, setTabs] = useState<AnyTab[]>([{ kind: "home" }, q("a"), q("b"), flow]);
+    return (
+      <TabStrip tabs={tabs} active="query:a" onSelect={onSelect} onClose={() => {}} onNew={() => {}} onReorder={(from, to) => setTabs((t) => moveTab(t, from, to))} />
+    );
+  }
+  render(<Strip />);
+  const order = () => [...document.querySelectorAll<HTMLElement>(".work-tab")].map((el) => el.dataset.key);
+  screen.getByRole("tab", { name: "a" }).focus();
+  await userEvent.keyboard("{Alt>}{ArrowRight}{/Alt}");
+  expect(order()).toEqual(["home", "query:b", "query:a", tabKey(flow)]);
+  // Focus stays on the moved tab.
+  expect(document.activeElement).toBe(screen.getByRole("tab", { name: "a" }));
+  // A place tab never crosses into the window tabs, nor past Home.
+  await userEvent.keyboard("{Alt>}{ArrowRight}{/Alt}");
+  expect(order()).toEqual(["home", "query:b", "query:a", tabKey(flow)]);
+  await userEvent.keyboard("{Alt>}{ArrowLeft}{/Alt}{Alt>}{ArrowLeft}{/Alt}");
+  expect(order()).toEqual(["home", "query:a", "query:b", tabKey(flow)]);
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+test("item_7_the_click_that_ends_a_drag_does_not_select_the_tab", () => {
+  const q = (id: string) => ({ kind: "query" as const, doc: { id, name: id, text: "", connectionId: null, database: null, savedId: null, savedText: null } });
+  const onSelect = vi.fn();
+  render(<TabStrip tabs={[q("a"), q("b")]} active="query:b" onSelect={onSelect} onClose={() => {}} onNew={() => {}} onReorder={() => {}} />);
+  const a = document.querySelector<HTMLElement>(".work-tab") as HTMLElement;
+  const button = within(a).getByRole("tab", { name: "a" });
+  fireEvent.pointerDown(button, { button: 0, clientX: 50 });
+  fireEvent.pointerMove(window, { clientX: 200 });
+  fireEvent.pointerUp(window, { clientX: 200 });
+  fireEvent.click(button);
+  expect(onSelect).not.toHaveBeenCalled();
+  // A plain click after it selects as before.
+  fireEvent.pointerDown(button, { button: 0, clientX: 50 });
+  fireEvent.pointerUp(window, { clientX: 50 });
+  fireEvent.click(button);
+  expect(onSelect).toHaveBeenCalledWith("query:a");
+});
+
+test("item_1_a_preview_tab_is_italic_and_a_double_click_keeps_it", () => {
+  const onKeep = vi.fn();
+  const preview = {
+    kind: "object" as const,
+    key: "c1:table:shop..orders",
+    preview: true,
+    selection: { connectionId: "c1", kind: "table" as const, path: { database: "shop", schema: null, name: "orders" } },
+  };
+  render(<TabStrip tabs={[preview]} active={preview.key} onSelect={() => {}} onClose={() => {}} onNew={() => {}} onKeep={onKeep} />);
+  const tab = document.querySelector(".work-tab") as HTMLElement;
+  expect(tab.className).toContain("work-tab-preview");
+  expect(screen.getByRole("tab", { name: "orders" }).getAttribute("title")).toBe("orders. Preview: the next table you open replaces it. Double-click to keep it.");
+  fireEvent.doubleClick(tab);
+  expect(onKeep).toHaveBeenCalledWith(preview.key);
 });

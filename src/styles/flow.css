@@ -374,3 +374,53 @@
 .new-diagram-recent-meta {
   font: var(--font-small);
 }
+
+/* Step 12, item 19 (frame NewDiagram): find a kind by a word or by group; the kind word beside each title. */
+.new-diagram-find {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.new-diagram-search {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+.new-diagram-search .icon {
+  position: absolute;
+  left: 8px;
+  color: var(--c-text-subtle);
+  pointer-events: none;
+}
+.new-diagram-search .input {
+  width: 100%;
+  padding-left: 28px;
+}
+.new-diagram-none {
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-body);
+}
+.new-diagram-kind-word {
+  margin-left: 4px;
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.new-diagram-kind {
+  transition:
+    border-color var(--motion-fast) var(--ease-enter),
+    background-color var(--motion-fast) var(--ease-enter),
+    transform var(--motion-fast) var(--ease-enter);
+}
+.new-diagram-kind:active {
+  transform: translateY(1px);
+}
+.new-diagram-kind .new-diagram-preview .fnode-kind,
+.new-diagram-at > div > .fnode {
+  width: 100%;
+  height: 100%;
+}

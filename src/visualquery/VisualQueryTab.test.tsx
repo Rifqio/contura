@@ -13,8 +13,15 @@ import { patientFile } from "../test/load";
 import { mockReactFlowDom } from "../test/reactFlow";
 import Finder, { type FinderTable } from "./Finder";
 import { emptyQuery } from "./model";
-import { type QueryCardData, queryCardHeight } from "./QueryCard";
+import { fitWidth, type QueryCardData, queryCardHeight } from "./QueryCard";
 import VisualQueryTab, { type VisualQueryTabProps, joinBrings, pairsSentence, warningLines } from "./VisualQueryTab";
+
+/** Item 30: the SQL is a tab of the bottom panel; this shows it. */
+async function showSql() {
+  await userEvent.click(screen.getByRole("tab", { name: "SQL" }));
+  return screen.findByRole("region", { name: "SQL" });
+}
+
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -150,10 +157,13 @@ test("empty_state_explains_and_runs_nothing", async () => {
   // The finder sits in place, with its key.
   const finder = screen.getByRole("searchbox", { name: "Find a table" });
   expect(finder.closest(".vq-finder")?.querySelector(".kbd")?.textContent).toBe("Ctrl+Shift+A");
-  expect(screen.getByText("No columns yet")).toBeTruthy();
-  expect(screen.getByText("Tick columns on the cards. They show up here in the order you tick them.")).toBeTruthy();
-  expect(screen.getByText("The SQL appears here once a table is on the canvas.")).toBeTruthy();
+  expect(screen.getByText("Tick a column to start")).toBeTruthy();
+  expect(screen.getByText("Tick columns on the cards above. They become the result, in the order you tick them.")).toBeTruthy();
+  // Said once: the Columns tab says what to do; the SQL tab only says when it will show.
+  expect(screen.queryByText("Tick at least one column.")).toBeNull();
   expect((within(strip()).getByRole("button", { name: /^Run/ }) as HTMLButtonElement).disabled).toBe(true);
+  await showSql();
+  expect(screen.getByText("The SQL appears here once a table is on the canvas.")).toBeTruthy();
   expect((screen.getByRole("button", { name: /^Open in editor/ }) as HTMLButtonElement).disabled).toBe(true);
   expect(within(strip()).getByText("No tables")).toBeTruthy();
   expect(screen.getByText("Tables on other Connections are not listed. Data Transfer copies between Connections.")).toBeTruthy();
@@ -324,11 +334,12 @@ test("space_ticks_a_column_and_the_sql_follows_120ms_later", async () => {
   expect((box as HTMLInputElement).checked).toBe(true);
   // Not at once: the pane waits 120ms after the last change.
   expect(callsTo("visual_query_sql")).toHaveLength(before);
-  const pane = screen.getByRole("region", { name: "SQL" });
+  const pane = await showSql();
   await waitFor(() => expect(within(pane).getByRole("group", { name: "Generated SQL" }).textContent).toContain("SELECT o.id"));
   expect(callsTo("visual_query_sql")).toHaveLength(before + 1);
   expect((callsTo("visual_query_sql")[before].query as VisualQuery).columns).toEqual([{ table: "t1", column: "id", alias: null, aggregate: null }]);
   // The panel lists it.
+  await userEvent.click(screen.getByRole("tab", { name: /^Columns/ }));
   expect(within(screen.getByRole("tabpanel", { name: /Columns/ })).getByText("o.id")).toBeTruthy();
 });
 
@@ -388,7 +399,7 @@ test("a_selected_card_bands_its_lines_and_a_banded_line_selects_its_card", async
       })}
     />,
   );
-  const pane = await screen.findByRole("region", { name: "SQL" });
+  const pane = await showSql();
   await waitFor(() => expect(pane.textContent).toContain("JOIN stores s"));
   const lines = () => [...pane.querySelectorAll(".sql-block-line")];
   const node = (id: string) => document.querySelector(`.react-flow__node[data-id="${id}"]`) as HTMLElement;
@@ -408,7 +419,11 @@ test("production_washes_the_canvas_the_panel_and_the_sql_pane", async () => {
   render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} connection={{ ...kestrel, production: true }} />);
   await cardEl("Table orders o");
   const washed = [...document.querySelectorAll(".prod-wash")];
-  expect(washed.map((el) => el.getAttribute("data-part"))).toEqual(["canvas", "panel", "sql"]);
+  expect(washed.map((el) => el.getAttribute("data-part"))).toEqual(["canvas", "panel"]);
+  // The SQL tab draws its own surface over the panel, so it carries the wash itself.
+  const pane = await showSql();
+  expect(pane.getAttribute("data-part")).toBe("sql");
+  expect(pane.className).toContain("prod-wash");
 });
 
 test("a_removed_connection_is_said_and_one_of_the_same_dialect_can_take_over", async () => {
@@ -453,7 +468,7 @@ test("delete_inside_a_cards_more_menu_does_not_remove_the_card", async () => {
   render(<Harness initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 300)] })} />);
   const stores = await cardEl("Table stores s");
   await userEvent.click(within(stores).getByRole("button", { name: "More for stores" }));
-  const item = await screen.findByRole("menuitem", { name: "Start FROM here" });
+  const item = await screen.findByRole("menuitem", { name: "Start the query from stores" });
   fireEvent.keyDown(item, { key: "Delete" });
   expect(screen.getByRole("group", { name: "Table stores s" })).toBeTruthy();
   // Delete on the card itself still removes it.
@@ -507,4 +522,123 @@ test("the_finder_draws_only_the_rows_in_view_of_a_large_schema", async () => {
   // A search narrows the rows to the matches.
   await userEvent.type(search, "table_1234");
   expect(within(list).getAllByRole("option").map((o) => o.querySelector(".vq-finder-name")?.textContent)).toEqual(["table_1234"]);
+});
+
+test("item_27_28_the_card_menu_explains_its_rows_and_closes_on_escape_or_a_press_outside", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 300)] })} />);
+  const orders = await cardEl("Table orders o");
+  // The first card is the root: its row is off and says why; nothing in the menu holds focus.
+  await userEvent.click(within(orders).getByRole("button", { name: "More for orders" }));
+  const root = await screen.findByRole("menuitem", { name: "Start the query from orders" });
+  expect(root).toHaveProperty("disabled", true);
+  expect(root.textContent).toContain("It is first after FROM already.");
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu", { name: "orders actions" })).toBeNull());
+  // A press on the canvas closes it too.
+  const stores = await cardEl("Table stores s");
+  await userEvent.click(within(stores).getByRole("button", { name: "More for stores" }));
+  const start = await screen.findByRole("menuitem", { name: "Start the query from stores" });
+  expect(start.textContent).toContain("Puts it first after FROM. The Joins follow from it.");
+  fireEvent.pointerDown(document.querySelector(".react-flow__pane") ?? document.body);
+  await waitFor(() => expect(screen.queryByRole("menu", { name: "stores actions" })).toBeNull());
+});
+
+test("item_26_27_right_click_on_a_card_opens_its_menu_and_tick_every_column_ticks_them", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "stores", "s")] })} />);
+  const stores = await cardEl("Table stores s");
+  const box = (c: string) => within(stores).getByRole("checkbox", { name: `s.${c}` }) as HTMLInputElement;
+  await waitFor(() => expect(box("city")).toBeTruthy());
+  fireEvent.contextMenu(stores, { clientX: 40, clientY: 50 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Tick every column" }));
+  await waitFor(() => expect(["id", "name", "city"].map((c) => box(c).checked)).toEqual([true, true, true]));
+  fireEvent.contextMenu(stores, { clientX: 40, clientY: 50 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Untick every column" }));
+  await waitFor(() => expect(["id", "name", "city"].map((c) => box(c).checked)).toEqual([false, false, false]));
+});
+
+test("item_29_picking_a_table_closes_the_floating_finder_and_a_press_outside_closes_it", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
+  await cardEl("Table orders o");
+  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
+  const over = await screen.findByRole("dialog", { name: "Add table" });
+  await userEvent.click(await within(over).findByRole("option", { name: /stores/ }));
+  expect(await cardEl("Table stores s")).toBeTruthy();
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
+  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
+  await screen.findByRole("dialog", { name: "Add table" });
+  fireEvent.pointerDown(document.querySelector(".react-flow__pane") ?? document.body);
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
+  // Escape closes it with focus anywhere.
+  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
+  await screen.findByRole("dialog", { name: "Add table" });
+  (document.activeElement as HTMLElement | null)?.blur();
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
+});
+
+test("item_25_the_selected_cards_corner_handles_drag_its_width", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
+  const orders = await cardEl("Table orders o");
+  fireEvent.click(document.querySelector('.react-flow__node[data-id="t1"]') as HTMLElement);
+  const se = await waitFor(() => {
+    const h = orders.querySelector('.selbox i[data-corner="se"]');
+    expect(h).toBeTruthy();
+    return h as HTMLElement;
+  });
+  fireEvent.pointerDown(se, { button: 0, clientX: 100, pointerId: 1 });
+  fireEvent.pointerMove(se, { clientX: 160, pointerId: 1 });
+  expect(orders.style.width).toBe("276px");
+  fireEvent.pointerUp(se, { clientX: 160, pointerId: 1 });
+  await waitFor(() => expect((screen.getByRole("group", { name: "Table orders o" }) as HTMLElement).style.width).toBe("276px"));
+});
+
+test("item_32_a_card_is_wide_enough_for_its_names_and_ticking_writes_no_output_name", async () => {
+  const base = { columns: [{ name: "id", type: "int", pk: true }], home: "shop" };
+  expect(fitWidth({ ...base, table: card("t1", "orders", "o") })).toBe(216);
+  const long = fitWidth({ ...base, table: { ...card("t1", "blog_images_archive", "bia"), schema: "jrp-cms" } });
+  expect(long).toBeGreaterThan(216);
+  expect(long).toBeLessThanOrEqual(480);
+
+  const changes: VisualTabDoc[] = [];
+  render(<Harness initial={docWith({ tables: [card("t1", "stores", "s")] })} onChange={(d) => changes.push(d)} />);
+  const stores = await cardEl("Table stores s");
+  await userEvent.click(await within(stores).findByRole("checkbox", { name: "s.city" }));
+  await waitFor(() => expect(changes.length).toBeGreaterThan(0));
+  expect(changes[changes.length - 1].model.columns).toEqual([{ table: "t1", column: "city", alias: null, aggregate: null }]);
+});
+
+test("item_26_right_click_on_the_canvas_opens_its_menu_without_paste_and_clear_can_be_undone", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 300)] })} />);
+  await cardEl("Table orders o");
+  const pane = document.querySelector(".react-flow__pane") as HTMLElement;
+  fireEvent.contextMenu(pane, { clientX: 500, clientY: 300 });
+  const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+    "Add table...",
+    "Select all",
+    "Tidy",
+    "Zoom to fit",
+    "Show the SQL",
+    "Open in editor",
+    "Clear the canvas",
+  ]);
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Clear the canvas" }));
+  await waitFor(() => expect(screen.queryByRole("group", { name: "Table orders o" })).toBeNull());
+  await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+  expect(await cardEl("Table orders o")).toBeTruthy();
+  // Add table... opens the finder.
+  fireEvent.contextMenu(document.querySelector(".react-flow__pane") as HTMLElement, { clientX: 500, clientY: 300 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Add table..." }));
+  expect(await screen.findByRole("dialog", { name: "Add table" })).toBeTruthy();
+});
+
+test("item_24_a_table_dragged_over_the_canvas_rings_it_and_dropping_adds_it", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
+  await cardEl("Table orders o");
+  const drop = dropOf({ connectionId: "c1", kind: "table", path: { database: "shop", schema: null, name: "stores" } });
+  fireEvent.dragOver(canvas(), drop);
+  expect(canvas().className).toContain("is-drop-target");
+  fireEvent.drop(canvas(), drop);
+  expect(canvas().className).not.toContain("is-drop-target");
+  expect(await cardEl("Table stores s")).toBeTruthy();
 });

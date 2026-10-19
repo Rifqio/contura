@@ -409,3 +409,21 @@ fn read_refuses_a_file_over_the_cap() {
         usize::try_from(READ_MAX).unwrap()
     );
 }
+
+#[test]
+fn head_reads_the_step_12_kinds() {
+    for (word, kind) in [
+        ("er", DiagramKind::Er),
+        ("sequence", DiagramKind::Sequence),
+        ("state", DiagramKind::State),
+        ("class", DiagramKind::Class),
+        ("mindmap", DiagramKind::Mindmap),
+        ("timeline", DiagramKind::Timeline),
+    ] {
+        let line = format!("diagram {word} \"Plan\"\n");
+        let (k, title) = diagram_head(line.as_bytes());
+        assert_eq!(k, kind, "{word}");
+        assert_eq!(title.as_deref(), Some("Plan"));
+    }
+    assert_eq!(diagram_head(&b"diagram gantt \"x\"\n"[..]).0, DiagramKind::Unknown);
+}

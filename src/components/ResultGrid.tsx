@@ -322,14 +322,17 @@ export default function ResultGrid({
               </th>
               {columns.map((c, ci) => {
                 const sorted = sort?.column === c.name ? (sort.descending ? "descending" : "ascending") : "none";
-                // One line: name, type hint, then a slot that keeps room for the sort icon,
+                // The key icon, the name over its type, then a slot that keeps room for the sort icon,
                 // so sorting never widens the label past its column.
                 const name = (
                   <span className="header-label">
                     {c.isPrimaryKey && <Icon name="key" className="key-icon" size={14} />}
                     {c.isForeignKey && !c.isPrimaryKey && <Icon name="link" className="fk-icon" size={14} />}
-                    <span className="header-name">{c.name}</span>
-                    <span className="type-hint">{c.typeName}</span>
+                    {/* The name, and its type on a line under it, so "name text" never reads as one label. */}
+                    <span className="header-text">
+                      <span className="header-name">{c.name}</span>
+                      <span className="type-hint">{c.typeName}</span>
+                    </span>
                     {onSort && (
                       <span className="sort-slot">
                         {sorted !== "none" && (
@@ -344,6 +347,7 @@ export default function ResultGrid({
                     key={`${ci}:${c.name}`}
                     scope="col"
                     aria-sort={onSort ? sorted : undefined}
+                    aria-label={`${c.name}, ${c.typeName}`}
                     className={c.numeric ? "align-end" : undefined}
                   >
                     {onSort ? (

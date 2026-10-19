@@ -18,6 +18,8 @@ export interface RouteOptions {
   radius?: number;
   /** `b` is the pointer while drawing a flow: run from the side facing it straight to its top-left corner. */
   toPoint?: boolean;
+  /** The side the line must leave `a` from (the port that was pressed while drawing a flow, item 18). */
+  from?: "r" | "l" | "t" | "b";
 }
 
 export interface Route {
@@ -89,12 +91,35 @@ const vhv = (s: Point, e: Point): Point[] => {
   return [s, { x: s.x, y: my }, { x: e.x, y: my }, e];
 };
 
+/** Clear of the node before a line turns back past the side it left from. */
+const STUB = 16;
+
+/** Out of side `side` of `a` to the point `e`: straight on when `e` lies beyond that side, else out a stub and around. */
+function fromSide(a: Rect, side: "r" | "l" | "t" | "b", e: Point): Point[] {
+  const acy = a.y + a.h / 2;
+  const acx = a.x + a.w / 2;
+  if (side === "r" || side === "l") {
+    const dir = side === "r" ? 1 : -1;
+    const s = { x: side === "r" ? a.x + a.w : a.x, y: acy };
+    if ((e.x - s.x) * dir >= STUB) return hvh(s, e);
+    const sx = s.x + dir * STUB;
+    return [s, { x: sx, y: s.y }, { x: sx, y: e.y }, e];
+  }
+  const dir = side === "b" ? 1 : -1;
+  const s = { x: acx, y: side === "b" ? a.y + a.h : a.y };
+  if ((e.y - s.y) * dir >= STUB) return vhv(s, e);
+  const sy = s.y + dir * STUB;
+  return [s, { x: s.x, y: sy }, { x: e.x, y: sy }, e];
+}
+
 /** The square route from box `a` to box `b` (or to the pointer with `toPoint`). */
 export function routeOrthogonal(a: Rect, b: Rect, opts: RouteOptions = {}): Route {
   const acy = a.y + a.h / 2;
   const acx = a.x + a.w / 2;
   let pts: Point[];
-  if (opts.toPoint) {
+  if (opts.toPoint && opts.from) {
+    pts = fromSide(a, opts.from, { x: b.x, y: b.y });
+  } else if (opts.toPoint) {
     const e = { x: b.x, y: b.y };
     pts = hvh(e.x < a.x ? { x: a.x, y: acy } : { x: a.x + a.w, y: acy }, e);
   } else if (b.x >= a.x + a.w + SIDE_GAP) {

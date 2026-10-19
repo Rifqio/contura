@@ -9,6 +9,7 @@ import { type EditorCommands, editorCommandKeymap } from "../commands/editorKeym
 import type { CommandId } from "../commands/registry";
 import { useKeymap } from "../commands/useCommandKeys";
 import { LangClient } from "../lang/client";
+import { insertionLine } from "../lang/insertionLine";
 import { completeDbml } from "../lang/dbml/complete";
 import { renameColumn, renameTable } from "../lang/dbml/edits";
 import { DBML_TEMPLATES } from "../lang/dbml/templates";
@@ -203,6 +204,7 @@ export default function DbmlEditor({
         doc: value,
         extensions: [
           lineNumbers(),
+          insertionLine(),
           bandField,
           changedLinesGutter(savedValue),
           lintGutter(),

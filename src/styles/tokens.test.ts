@@ -49,9 +49,9 @@ const media = () =>
 test("light_and_dark_blocks_equal_dn_section_3", () => {
   const dnLight = dnBlock("### 3.2 Light: Alucard");
   const dnDark = dnBlock("### 3.3 Dark: Dracula");
-  expect(dnLight.size).toBe(92);
+  expect(dnLight.size).toBe(96);
   // Dracula alone carries the brighter comment colour (PR33).
-  expect(dnDark.size).toBe(93);
+  expect(dnDark.size).toBe(97);
   expect(Object.fromEntries(light())).toEqual(Object.fromEntries(dnLight));
   expect(Object.fromEntries(dark())).toEqual(Object.fromEntries(dnDark));
 });

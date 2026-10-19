@@ -174,6 +174,7 @@ export default function Icon({ name, className, size = 16 }: { name: IconName; c
   return (
     <svg
       className={className ? `icon ${className}` : "icon"}
+      data-icon={name}
       viewBox="0 0 24 24"
       width={size}
       height={size}

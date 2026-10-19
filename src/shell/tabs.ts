@@ -36,11 +36,34 @@ export type VisualTabDoc = {
   model: VisualQuery;
   savedId: string | null;
   savedJson: string | null;
+  /** Card widths dragged on the canvas, by table id (item 25); kept with the draft, not in the saved query. */
+  widths?: Record<string, number>;
 };
+
+/**
+ * Item 1: where a table opens. A tab already open for it is shown. Otherwise a single click (`newTab` false)
+ * takes the place of the preview tab, if there is one with nothing unsaved, and is the preview itself; a double
+ * click opens a tab that stays (and keeps the preview tab it was in).
+ */
+export function placeObject(tabs: WorkTab[], selection: Selection, key: string, newTab: boolean, dirty: ReadonlySet<string>): WorkTab[] {
+  const at = tabs.findIndex((t) => t.kind === "object" && t.key === key);
+  if (at >= 0) {
+    const t = tabs[at];
+    // A double click on the preview's own table keeps it.
+    if (newTab && t.kind === "object" && t.preview) return tabs.map((x, i) => (i === at ? { ...t, preview: false } : x));
+    return tabs;
+  }
+  const tab: WorkTab = { kind: "object", key, selection, preview: !newTab };
+  if (newTab) return [...tabs, tab];
+  const preview = tabs.findIndex((t) => t.kind === "object" && t.preview && !dirty.has(t.key));
+  if (preview < 0) return [...tabs, tab];
+  return tabs.map((t, i) => (i === preview ? tab : t));
+}
 
 /** A tab of the place; the Saved Queries list is one, since Saved Queries are listed beside the place's Connections. */
 export type WorkTab =
-  | { kind: "object"; key: string; selection: Selection }
+  /** `preview`: opened with a single click; the next single-click open replaces it (item 1). */
+  | { kind: "object"; key: string; selection: Selection; preview?: boolean }
   | { kind: "design"; key: string; connectionId: ConnectionId; target: DesignTabTarget }
   | { kind: "query"; doc: QueryTabDoc }
   | { kind: "visual"; doc: VisualTabDoc }
@@ -228,6 +251,29 @@ export function stripOrder(windowTabs: WindowTab[], placeTabs: WorkTab[]): AnyTa
   const home = windowTabs.filter((t) => t.kind === "home");
   const rest = windowTabs.filter((t) => t.kind !== "home");
   return [...home, ...placeTabs, ...rest];
+}
+
+/**
+ * Item 7: moves the tab `from` to where `to` is, in one list: dragged right it lands after `to`, dragged left
+ * before it. Unknown keys leave the list as it is.
+ */
+export function moveTab<T extends AnyTab>(list: T[], from: string, to: string): T[] {
+  const a = list.findIndex((t) => tabKey(t) === from);
+  const b = list.findIndex((t) => tabKey(t) === to);
+  if (a < 0 || b < 0 || a === b) return list;
+  const next = [...list];
+  const [moved] = next.splice(a, 1);
+  next.splice(b, 0, moved);
+  return next;
+}
+
+/** Which part of the strip a tab is in; a tab moves only inside its own (Home stays first). */
+/** Every window tab kind but Home; a Record so a new window kind fails to compile until it is listed here. */
+const WINDOW_KINDS: Record<Exclude<WindowTab["kind"], "home">, true> = { settings: true, schema: true, flow: true, transfer: true, compare: true };
+
+export function stripSegment(t: AnyTab): "home" | "place" | "window" {
+  if (t.kind === "home") return "home";
+  return Object.prototype.hasOwnProperty.call(WINDOW_KINDS, t.kind) ? "window" : "place";
 }
 
 /** The tab active once `closing` goes: the same one if another closes, else its right neighbour, else its left. */

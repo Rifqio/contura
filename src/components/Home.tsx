@@ -117,6 +117,9 @@ export default function Home({
   const [moveError, setMoveError] = useState<string | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);
   const dragging = useRef<ConnectionConfig | null>(null);
+  /** Item 11: the row being dragged (drawn lifted out) and the row that just landed in its new Group (it settles in). */
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [landed, setLanded] = useState<string | null>(null);
   const filterBox = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
 
@@ -158,6 +161,7 @@ export default function Home({
     if (onBeforeMove && !(await onBeforeMove(c.id))) return;
     try {
       await moveConnection(c.id, to);
+      setLanded(c.id);
       onChanged();
     } catch (e) {
       setMoveError(errorText(e));
@@ -195,6 +199,7 @@ export default function Home({
         setDropOn(null);
         const c = dragging.current;
         dragging.current = null;
+        setDraggingId(null);
         if (c && c.groupId !== to) void move(c, to);
       },
     };
@@ -208,11 +213,15 @@ export default function Home({
     return (
       <li
         key={c.id}
-        className="list-row"
+        className={["list-row", draggingId === c.id && "is-dragging", landed === c.id && "is-landed"].filter(Boolean).join(" ")}
         title={label}
         draggable
+        onAnimationEnd={() => {
+          if (landed === c.id) setLanded(null);
+        }}
         onDragStart={(e) => {
           dragging.current = c;
+          setDraggingId(c.id);
           try {
             e.dataTransfer.setData("text/plain", c.id);
             e.dataTransfer.effectAllowed = "move";
@@ -222,6 +231,7 @@ export default function Home({
         }}
         onDragEnd={() => {
           dragging.current = null;
+          setDraggingId(null);
           setDropOn(null);
         }}
       >
@@ -395,10 +405,12 @@ export default function Home({
                           )}
                         />
                       </header>
-                      {card.rows.length > 0 && (
+                      {card.rows.length > 0 ? (
                         <ul className="group-card-rows" aria-label={`${card.name} Connections`}>
                           {card.rows.map(row)}
                         </ul>
+                      ) : (
+                        card.group && !query && <p className="group-card-empty">Drag a Connection here to add it to {card.name}.</p>
                       )}
                     </section>
                   );

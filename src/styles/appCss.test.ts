@@ -52,6 +52,8 @@ const FAINT_ALLOWED = [
   /\.cell-null/,
   /empty-icon|\.empty-state/,
   /\.tree-guide/,
+  // The column type under its name (user decision 2026-10-19); the name above it carries the meaning.
+  /\.header-text \.type-hint/,
 ];
 
 test("faint_text_only_on_the_allowed_selectors", () => {
@@ -168,9 +170,11 @@ test("selection_uses_the_theme_colour", () => {
 test("compact_density_sets_24", () => {
   expect(bodyIn(tokensCss, ":root")).toMatch(/--row-h:\s*28px/);
   expect(bodyIn(tokensCss, ':root[data-density="compact"]')).toMatch(/--row-h:\s*24px/);
-  for (const t of ["--grid-cell-height", "--grid-header-height", "--tree-row-height", "--menu-item-height"]) {
+  for (const t of ["--grid-cell-height", "--tree-row-height", "--menu-item-height"]) {
     expect(tokensCss).toMatch(new RegExp(`${t}:\\s*var\\(--row-h\\)`));
   }
+  // The grid header follows the density too, with room for the type line.
+  expect(tokensCss).toMatch(/--grid-header-height:\s*calc\(var\(--row-h\) \+ 10px\)/);
 });
 
 test("tabs_are_at_most_220px", () => {

@@ -106,3 +106,37 @@ test("every_corner_turns_square_on_fractional_inputs", () => {
     }
   }
 });
+
+test("item_18_drawing_leaves_the_pressed_side_even_when_the_pointer_is_behind_it", () => {
+  // Right port pressed, pointer down and to the left: out 16 px to the right, then around to the pointer.
+  const r = routeOrthogonal(A, { x: -60, y: 80, w: 0, h: 0 }, { toPoint: true, from: "r" });
+  expect(r.points[0]).toEqual({ x: 100, y: 20 });
+  expect(r.points[1]).toEqual({ x: 116, y: 20 });
+  expect(r.end).toEqual({ x: -60, y: 80 });
+});
+
+test("item_18_each_port_starts_its_own_side", () => {
+  const p = { x: 300, y: 300, w: 0, h: 0 };
+  expect(routeOrthogonal(A, p, { toPoint: true, from: "l" }).points[0]).toEqual({ x: 0, y: 20 });
+  expect(routeOrthogonal(A, p, { toPoint: true, from: "t" }).points[0]).toEqual({ x: 50, y: 0 });
+  expect(routeOrthogonal(A, p, { toPoint: true, from: "b" }).points[0]).toEqual({ x: 50, y: 40 });
+  expect(routeOrthogonal(A, p, { toPoint: true, from: "r" }).points[0]).toEqual({ x: 100, y: 20 });
+});
+
+test("item_31_a_badge_moves_off_the_cards_to_the_longest_clear_run", async () => {
+  const { clearBadgeSpot, pathPoints } = await import("./edges");
+  const d = "M 100 20 L 150 20 Q 158 20 158 28 L 158 200 Q 158 208 150 208 L 20 208";
+  expect(pathPoints(d)).toEqual([
+    { x: 100, y: 20 },
+    { x: 150, y: 20 },
+    { x: 158, y: 28 },
+    { x: 158, y: 200 },
+    { x: 150, y: 208 },
+    { x: 20, y: 208 },
+  ]);
+  // The midpoint is clear: it stays.
+  expect(clearBadgeSpot(d, { x: 158, y: 114 }, [])).toEqual({ x: 158, y: 114 });
+  // A card covers the midpoint: the badge goes to the longest run the cards leave clear.
+  const card = { x: 120, y: 60, w: 200, h: 100 };
+  expect(clearBadgeSpot(d, { x: 158, y: 114 }, [card])).toEqual({ x: 85, y: 208 });
+});

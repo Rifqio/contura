@@ -16,7 +16,7 @@ const DFD = 'diagram dfd "Checkout"\nCustomer [entity]\nCharge card [process, id
 describe("completeFlow", () => {
   test("after [ it lists the kinds for the diagram kind, then the attribute keys", () => {
     expect(at(`${DFD}Refunds [|`).labels).toEqual(["entity", "process", "store", "id", "icon", "color", "table"]);
-    expect(at('diagram flow "A"\nCook [|').labels).toEqual(["start", "end", "step", "decision", "io", "subprocess", "id", "icon", "color", "table"]);
+    expect(at('diagram flow "A"\nCook [|').labels).toEqual(["start", "end", "step", "decision", "io", "subprocess", "document", "database", "id", "icon", "color", "table"]);
     // A cloud node takes an icon, not a kind.
     expect(at('diagram cloud "A"\nQueue [|').labels).toEqual(["icon", "id", "color", "table"]);
   });
@@ -76,8 +76,8 @@ describe("completeFlow", () => {
   });
 
   test("the first line offers the diagram kinds", () => {
-    expect(at("diagram |").labels).toEqual(["dfd", "flow", "cloud"]);
-    expect(at("// notes\ndiagram cl|").labels).toEqual(["cloud"]);
+    expect(at("diagram |").labels).toEqual(["dfd", "flow", "cloud", "er", "sequence", "state", "class", "mindmap", "timeline"]);
+    expect(at("// notes\ndiagram cl|").labels).toEqual(["cloud", "class"]);
   });
 
   test("nothing in a comment, a label or a quoted value", () => {

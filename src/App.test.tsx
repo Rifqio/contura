@@ -9,6 +9,10 @@ import { EditorView } from "@codemirror/view";
 import App from "./App";
 import { appLang } from "./lang/appLang";
 
+/** The tab strip's New query button (the feature bar has its own, item 16). */
+const stripNew = () => screen.getAllByRole("button", { name: "New query" }).find((b) => b.closest(".tab-strip")) ?? (() => { throw new Error("no New query in the tab strip"); })();
+
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class {} }));
 // The Import tab's Browse... picks this file.
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => "C:\\data\\orders.csv"), save: vi.fn(async () => null) }));
@@ -163,7 +167,7 @@ test("ctrl_t_opens_numbered_query_tabs_and_closing_activates_a_neighbour", async
   await screen.findByRole("button", { name: "Switch Group, current KFC" });
   await userEvent.keyboard("{Control>}t{/Control}");
   expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "New query" }));
+  await userEvent.click(stripNew());
   expect(await screen.findByRole("tab", { name: "Query 2", selected: true })).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Close Query 2" }));
   expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
@@ -674,16 +678,16 @@ function recentRoutes(over: Record<string, (a: Record<string, unknown>) => unkno
   });
 }
 
-test("opening_a_table_records_it_as_recent", async () => {
+test("item_12_opening_a_table_adds_nothing_to_recent", async () => {
   recentRoutes();
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
   // The default database opens with its Tables when the Connection opens.
   await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
-  await waitFor(() => expect(callsTo("record_recent")).toEqual([{ target: ordersTarget, connectionId: "c1" }]));
-  // The list is read again after each record.
-  await waitFor(() => expect(callsTo("recent_items").length).toBeGreaterThanOrEqual(2));
+  await waitFor(() => expect(document.querySelector('tr[data-row="0"]')).not.toBeNull());
+  // Browsing is not history: only saving data or applying a design lists the table (item 12).
+  expect(callsTo("record_recent")).toEqual([]);
 });
 
 test("a_recent_table_on_home_opens_its_tab", async () => {
@@ -847,13 +851,13 @@ test("home_is_a_tab_that_closes_like_any_tab", async () => {
   const home = await screen.findByRole("tab", { name: "Home", selected: true });
   expect(home).toBeTruthy();
   // C1: the strip and its "+" are there on Home.
-  expect(screen.getByRole("button", { name: "New query" })).toBeTruthy();
+  expect(stripNew()).toBeTruthy();
   await userEvent.click(within(strip()).getByRole("button", { name: "Close Home" }));
   await waitFor(() => expect(screen.queryByRole("heading", { name: "Home" })).toBeNull());
   expect(screen.queryByRole("tab", { name: "Home" })).toBeNull();
   // The place shows: its sidebar and the empty work area.
   expect(screen.getByRole("complementary", { name: "Ungrouped Connections" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "New query" })).toBeTruthy();
+  expect(stripNew()).toBeTruthy();
 });
 
 test("home_opens_from_the_switcher_and_ctrl_shift_h", async () => {
@@ -939,7 +943,7 @@ test("schema_builder_is_a_tab_with_the_strip_present", async () => {
   await userEvent.click(screen.getByRole("button", { name: /^Create blank model/ }));
   expect(await screen.findByRole("tab", { name: "untitled.dbml", selected: true })).toBeTruthy();
   expect(tabNames()).toEqual(["Home", "untitled.dbml"]);
-  expect(screen.getByRole("button", { name: "New query" })).toBeTruthy();
+  expect(stripNew()).toBeTruthy();
   const work = document.querySelector("main.work") as HTMLElement;
   expect(work.querySelector(".schema-main")).not.toBeNull();
   expect(await screen.findByRole("region", { name: "Schema Model schema" })).toBeTruthy();
@@ -1455,7 +1459,7 @@ async function openOrders(over: Record<string, (a: Record<string, unknown>) => u
   await screen.findByRole("tab", { name: "orders", selected: true });
 }
 const designButton = () =>
-  within(document.querySelector(".work-pane:not([hidden]) .table-header") as HTMLElement).getByRole("button", { name: "Design table" });
+  within(document.querySelector(".work-pane:not([hidden]) .table-header") as HTMLElement).getByRole("button", { name: "Edit structure" });
 
 test("design_table_opens_one_design_tab_beside_the_table", async () => {
   await openOrders();
@@ -1645,7 +1649,7 @@ test("read_only_shows_neither_new_table_nor_drop_table", async () => {
   await userEvent.keyboard("{Escape}");
   fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
   const menu = screen.getByRole("menu", { name: "orders" });
-  expect(within(menu).getByRole("menuitem", { name: "Design table" })).toBeTruthy();
+  expect(within(menu).getByRole("menuitem", { name: "Edit structure" })).toBeTruthy();
   expect(within(menu).queryByRole("menuitem", { name: "Drop table..." })).toBeNull();
 });
 
@@ -1958,6 +1962,8 @@ test("open_in_editor_makes_a_plain_query_tab_with_the_generated_sql_and_leaves_t
   });
   render(<App />);
   expect(await screen.findByRole("tab", { name: "Late deliveries", selected: true })).toBeTruthy();
+  // The SQL is a tab of the Visual Query's bottom panel (item 30).
+  await userEvent.click(await screen.findByRole("tab", { name: "SQL" }));
   const pane = await screen.findByRole("region", { name: "SQL" });
   await waitFor(() => expect((within(pane).getByRole("button", { name: /Open in editor/ }) as HTMLButtonElement).disabled).toBe(false));
   await userEvent.keyboard("{Control>}{Shift>}e{/Shift}{/Control}");
@@ -2293,3 +2299,31 @@ test("a_retargeted_import_tab_takes_the_new_key_and_a_second_one_there_folds_int
   await screen.findByRole("tab", { name: "Import into orders", selected: true });
   expect(screen.getAllByRole("tab", { name: /^Import into orders/ })).toHaveLength(1);
 }, LOAD_TIMEOUT);
+
+test("item_13_the_title_bars_home_button_goes_home_from_anywhere", async () => {
+  workspaceRoutes();
+  render(<App />);
+  await closeHome();
+  expect(screen.queryByRole("heading", { name: "Home" })).toBeNull();
+  const home = document.querySelector(".title-bar .title-home") as HTMLElement;
+  expect(home.textContent).toBe("Home");
+  expect(home.getAttribute("title")).toBe("Home (Ctrl+Shift+H)");
+  await userEvent.click(home);
+  expect(await screen.findByRole("heading", { name: "Home" })).toBeTruthy();
+  expect(home.getAttribute("aria-current")).toBe("page");
+  // The feature bar is under the title bar on every screen.
+  expect(screen.getByRole("toolbar", { name: "Features" })).toBeTruthy();
+});
+
+test("item_8_a_new_query_opens_on_the_database_used_last", async () => {
+  recentRoutes({ list_databases: () => ["shop", "hc_backend"], save_query_tabs: () => null });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: "hc_backend" }));
+  await userEvent.click(stripNew());
+  await waitFor(() => {
+    const saved = callsTo("save_query_tabs").map((a) => JSON.parse(a.json as string) as { tabs: { database: string | null }[] });
+    expect(saved.some((s) => s.tabs.some((t) => t.database === "hc_backend"))).toBe(true);
+  });
+});

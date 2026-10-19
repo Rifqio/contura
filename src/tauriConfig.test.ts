@@ -27,3 +27,10 @@ test("the_main_window_has_a_minimum_size", () => {
   expect(main.height).toBeGreaterThanOrEqual(main.minHeight);
   expect(libRs).toMatch(/WebviewWindowBuilder::from_config\(\s*app,/);
 });
+
+test("item_11_24_html_drag_and_drop_reaches_the_page", () => {
+  // With Tauri's own drag and drop handler on, WebView2 on Windows never fires the page's dragover and
+  // drop: Connections could not be dragged into Groups on Home, nor tables from the tree to a canvas.
+  const main = conf.app.windows.find((w: { label: string }) => w.label === "main");
+  expect(main.dragDropEnabled).toBe(false);
+});

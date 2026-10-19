@@ -1,5 +1,3 @@
-import { currentCompletions } from "@codemirror/autocomplete";
-import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -49,24 +47,51 @@ test("requests page 0 then page 1 on next", async () => {
   expect(callsTo("fetch_page")[0]).toEqual({ id: "c1", request: { table, page: 0, sort: null, filter: null } });
 });
 
-const filterView = () => EditorView.findFromDOM(document.querySelector(".grid-filter .cm-editor") as HTMLElement)!;
+/** Item 2: builds a filter in the Add filter form: column, condition, value, then Add filter. */
+async function addFilter(column: string, condition: string, value: string | null) {
+  await userEvent.click(screen.getByRole("button", { name: "Add filter" }));
+  const form = screen.getByRole("dialog", { name: "Add filter" });
+  await userEvent.click(within(form).getByRole("combobox", { name: "Column" }));
+  await userEvent.click(screen.getByRole("option", { name: new RegExp(`^${column}`) }));
+  await userEvent.click(within(form).getByRole("combobox", { name: "Condition" }));
+  await userEvent.click(screen.getByRole("option", { name: condition }));
+  if (value !== null) {
+    const box = within(form).getByRole("textbox", { name: "Value" });
+    await userEvent.clear(box);
+    await userEvent.type(box, value);
+  }
+  await userEvent.click(within(form).getByRole("button", { name: /^Add filter/ }));
+}
 
-test("filter_box_applies_on_enter_and_clears_on_escape", async () => {
+test("item_2_a_filter_built_in_words_fetches_its_where_and_its_chip_removes_it", async () => {
   routeInvoke({ fetch_page: () => page(false) });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />);
   await screen.findByText("first");
-  const v = filterView();
-  act(() => v.dispatch({ changes: { from: 0, insert: "id > 5" }, selection: { anchor: 6 } }));
-  fireEvent.keyDown(v.contentDOM, { key: "Enter" });
+  // No SQL boxes in the header.
+  expect(screen.queryByRole("textbox", { name: "Order by" })).toBeNull();
+  expect(document.querySelector(".grid-filter")).toBeNull();
+  expect(within(screen.getByRole("toolbar", { name: "Filter and sort" })).getByText("All rows")).toBeTruthy();
+  await addFilter("id", "is more than", "5");
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
-  expect(callsTo("fetch_page")[1]).toMatchObject({ request: { page: 0, filter: "id > 5" } });
-  fireEvent.keyDown(v.contentDOM, { key: "Escape" });
+  expect(callsTo("fetch_page")[1]).toMatchObject({ request: { page: 0, filter: "`id` > 5" } });
+  await userEvent.click(screen.getByRole("button", { name: "Remove filter: id is more than 5" }));
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
   expect(callsTo("fetch_page")[2]).toMatchObject({ request: { filter: null } });
-  expect(v.state.doc.toString()).toBe("");
 });
 
-test("a_filter_error_offers_clear_filter", async () => {
+test("item_2_a_value_that_does_not_fit_says_why_and_adds_nothing", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />);
+  await screen.findByText("first");
+  await addFilter("id", "is at least", "five");
+  expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Enter a number, such as 500 or 12.5.");
+  expect(callsTo("fetch_page")).toHaveLength(1);
+  // Escape closes the form.
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add filter" })).toBeNull());
+});
+
+test("a_filter_error_offers_clear_filters", async () => {
   routeInvoke({
     fetch_page: ({ request }) => {
       if ((request as { filter: string | null }).filter) throw { kind: "query", message: "Unknown column 'nope'" };
@@ -75,26 +100,9 @@ test("a_filter_error_offers_clear_filter", async () => {
   });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />);
   await screen.findByText("first");
-  const v = filterView();
-  act(() => v.dispatch({ changes: { from: 0, insert: "nope = 1" } }));
-  fireEvent.keyDown(v.contentDOM, { key: "Enter" });
-  await userEvent.click(await screen.findByRole("button", { name: "Clear filter" }));
+  await addFilter("note", "contains", "x");
+  await userEvent.click(await screen.findByRole("button", { name: "Clear filters" }));
   expect(await screen.findByText("first")).toBeTruthy();
-});
-
-test("filter_completes_the_table_columns", async () => {
-  routeInvoke({ fetch_page: () => page(false), sql_schema: () => KFC_SCHEMA });
-  const client = new LangClient(() => fakeWorker());
-  const lang = { client, schemas: new SchemaCache(client) };
-  const orders = { database: "kfc", schema: "sales", name: "orders" };
-  render(<DataGrid connectionId="c1" table={orders} onClose={() => {}} dialect="postgres" lang={lang} />);
-  await waitFor(() => expect(lang.schemas.state("c1", "kfc")).toBe("loaded"));
-  const v = filterView();
-  act(() => {
-    v.dispatch({ changes: { from: 0, insert: "sta" }, selection: { anchor: 3 }, userEvent: "input.type" });
-  });
-  await waitFor(() => expect(currentCompletions(v.state).map((c) => c.label)).toContain("status"));
-  expect(currentCompletions(v.state).map((c) => c.label)).not.toContain("code");
 });
 
 test("grid_shows_read_only_lock", async () => {
@@ -246,11 +254,12 @@ test("the next page after scrolling starts at its first row", async () => {
   expect((document.querySelector(".grid-scroll") as HTMLElement).scrollTop).toBe(0);
 });
 
-test("row_and_header_height_are_28", () => {
+test("rows_are_28_and_the_header_grows_for_the_type_line", () => {
   const css = tokensCss.replace(/\/\*[\s\S]*?\*\//g, "");
   expect(css).toMatch(/--row-h:\s*28px;/);
   expect(css).toMatch(/--grid-cell-height:\s*var\(--row-h\);/);
-  expect(css).toMatch(/--grid-header-height:\s*var\(--row-h\);/);
+  // The name over its type takes two lines: 38 px (user decision 2026-10-19).
+  expect(css).toMatch(/--grid-header-height:\s*calc\(var\(--row-h\) \+ 10px\);/);
 });
 
 /** jsdom has no layout: give headers, the gutter and the scroll box widths; change them through the result. */
@@ -357,15 +366,15 @@ test("a_dragged_column_keeps_its_width_and_never_goes_under_its_header", async (
 });
 
 test("a_column_is_never_fitted_narrower_than_its_whole_header", async () => {
-  // The label box is clipped to 50 px, but the name needs 120 and the type hint 40:
-  // the column takes all of it plus the 16 px of padding, so no name is cut ("stat...").
+  // The label box is clipped to 50 px, but the name needs 120 and the type hint under it 40:
+  // the column takes the wider line plus the 16 px of padding, so no name is cut ("stat...").
   const sizes = stubWidths(49);
   sizes.name = 120;
   sizes.hint = 40;
   routeInvoke({ fetch_page: () => page(false) });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
   await screen.findByText("first");
-  await waitFor(() => expect(colWidths()).toEqual(["48px", "176px", "176px"]));
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "136px", "136px"]));
 });
 
 test("widths_are_measured_again_once_the_fonts_load", async () => {
@@ -432,42 +441,11 @@ test("a row rendered after scrolling opens its own full value", async () => {
   });
 });
 
-test("ctrl_i_in_the_filter_asks_about_the_filter_text", async () => {
-  routeInvoke({
-    fetch_page: () => page(false),
-    ai_settings: () => ({
-      settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
-      groupOverride: false,
-      keySaved: false,
-      keyLast4: null,
-    }),
-  });
-  const ask = {
-    groupId: null,
-    inlineAsk: true,
-    errorAsk: true,
-    onOpenSettings: () => {},
-    connection: { id: "c1", name: "Shop", dialect: "mysql" as const, database: "shop", access: "schemaQuery" as const },
-  };
-  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" ask={ask} />);
-  await screen.findByText("first");
-  const v = filterView();
-  act(() => v.dispatch({ changes: { from: 0, insert: "status = 'refunded'" }, selection: { anchor: 3 } }));
-  fireEvent.keyDown(v.contentDOM, { key: "i", ctrlKey: true });
-  expect(screen.getByRole("button", { name: "Write a WHERE for this filter" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Show exactly" }));
-  expect(document.querySelector("pre.payload")!.textContent).toContain("Filter (orders): status = 'refunded'");
-  fireEvent.keyDown(screen.getByRole("textbox", { name: "Question" }), { key: "Escape" });
-  expect(screen.queryByRole("dialog", { name: "Ask AI" })).toBeNull();
-  expect(document.activeElement).toBe(v.contentDOM);
-});
-
 // ---- Task 19: table data as designed (frames j and i) ----
 
 const pgOrders = { database: "shop", schema: "public", name: "orders" };
 const header = () => document.querySelector(".table-header") as HTMLElement;
 const footer = () => document.querySelector(".table-foot") as HTMLElement;
-const orderBy = () => screen.getByRole("textbox", { name: "Order by" }) as HTMLInputElement;
 const cell = (row: number, col: number) => document.querySelector(`tr[data-row="${row}"] td[data-col="${col}"]`) as HTMLElement;
 
 async function editFirst(value = "lost") {
@@ -477,63 +455,60 @@ async function editFirst(value = "lost") {
   fireEvent.keyDown(box, { key: "Enter" });
 }
 
-test("one_header_strip_with_inline_where_and_order_by", async () => {
+test("item_5_one_header_strip_names_the_table_and_holds_its_tools", async () => {
   routeInvoke({ fetch_page: () => page(true) });
   render(
-    <DataGrid connectionId="c1" table={pgOrders} onClose={() => {}} dialect="postgres" production connectionName="freight-prod" onOpenQuery={() => {}} />,
+    <DataGrid
+      connectionId="c1"
+      table={pgOrders}
+      onClose={() => {}}
+      dialect="postgres"
+      production
+      connectionName="freight-prod"
+      rowEstimate={90412}
+      onOpenQuery={() => {}}
+      onDesign={() => {}}
+    />,
   );
   await screen.findByText("first");
   expect(document.querySelectorAll(".table-header")).toHaveLength(1);
   const strip = within(header());
-  expect(header().getAttribute("role")).toBe("toolbar");
-  expect(strip.getByRole("button", { name: /freight-prod/ }).getAttribute("aria-haspopup")).toBe("menu");
+  expect(strip.getByText("freight-prod")).toBeTruthy();
   expect(strip.getByText("PRODUCTION").className).toContain("production-label");
   const name = strip.getByRole("heading", { level: 2 });
   expect(name.textContent).toBe("public.orders");
-  expect(name.className).toContain("table-header-name");
-  // WHERE and ORDER BY sit inline in the strip, each with its keyword label.
-  expect(header().querySelector(".grid-filter .cm-editor")).not.toBeNull();
-  expect(header().querySelector(".grid-filter-label")!.textContent).toBe("WHERE");
-  expect(header().contains(orderBy())).toBe(true);
-  expect(header().querySelector(".order-by-label")!.textContent).toBe("ORDER BY");
-  const names = strip.getAllByRole("button").map((b) => b.getAttribute("aria-label")).filter(Boolean);
-  expect(names.slice(-6)).toEqual(["Reload", "Add row", "Delete row", "Filter rows", "Columns", "Export"]);
-  // No title row and no range in the header.
-  expect(header().textContent).not.toMatch(/\d+ to \d+/);
-  expect(document.querySelector(".toolbar-title")).toBeNull();
+  expect(strip.getByText("90,412 rows")).toBeTruthy();
+  // No SQL in the header: the filters and sort are the strip under it.
+  expect(header().querySelector(".cm-editor")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Order by" })).toBeNull();
+  const names = strip.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
+  expect(names).toEqual(["Reload", "Add row", "Delete row", "Edit structure", "Table"]);
+  expect(screen.getByRole("toolbar", { name: "Filter and sort" })).toBeTruthy();
 });
 
-test("order_by_sorts_by_one_column", async () => {
+test("item_2_the_sort_chip_reads_in_words_flips_and_clears", async () => {
   routeInvoke({ fetch_page: () => page(false) });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
   await screen.findByText("first");
-  await userEvent.type(orderBy(), "NOTE desc{Enter}");
+  const bar = within(screen.getByRole("toolbar", { name: "Filter and sort" }));
+  // A header click sorts, and the chip says how.
+  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
-  await userEvent.clear(orderBy());
-  await userEvent.type(orderBy(), "id asc{Enter}");
+  await userEvent.click(bar.getByRole("button", { name: "Sort by note, A to Z. Select to reverse." }));
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
-  await userEvent.clear(orderBy());
-  await userEvent.type(orderBy(), "{Enter}");
+  expect(bar.getByRole("button", { name: "Sort by note, Z to A. Select to reverse." })).toBeTruthy();
+  await userEvent.click(bar.getByRole("button", { name: "Remove sort" }));
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(4));
+  // The Sort form picks a column and a direction.
+  await userEvent.click(bar.getByRole("button", { name: "Sort" }));
+  const form = screen.getByRole("dialog", { name: "Sort" });
+  await userEvent.click(within(form).getByRole("combobox", { name: "Sort column" }));
+  await userEvent.click(screen.getByRole("option", { name: /^id/ }));
+  await userEvent.click(within(form).getByRole("radio", { name: "largest first" }));
+  await userEvent.click(within(form).getByRole("button", { name: /^Sort/ }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(5));
   const sorts = callsTo("fetch_page").map((a) => (a.request as { sort: unknown }).sort);
-  expect(sorts).toEqual([null, { column: "note", descending: true }, { column: "id", descending: false }, null]);
-  // A header click writes its sort into the field.
-  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
-  await waitFor(() => expect(orderBy().value).toBe("note"));
-  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
-  await waitFor(() => expect(orderBy().value).toBe("note DESC"));
-});
-
-test("order_by_explains_what_it_takes", async () => {
-  routeInvoke({ fetch_page: () => page(false) });
-  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} readOnly />);
-  await screen.findByText("first");
-  await userEvent.type(orderBy(), "id, note{Enter}");
-  expect(screen.getByRole("status").textContent).toBe("Sort by one column, such as total DESC.");
-  await userEvent.clear(orderBy());
-  await userEvent.type(orderBy(), "id sideways{Enter}");
-  expect(screen.getByRole("status").textContent).toBe("Sort by one column, such as total DESC.");
-  expect(callsTo("fetch_page")).toHaveLength(1);
+  expect(sorts).toEqual([null, { column: "note", descending: false }, { column: "note", descending: true }, null, { column: "id", descending: true }]);
 });
 
 test("footer_shows_range_pager_and_context_line", async () => {
@@ -626,40 +601,35 @@ test("edited_cell_tooltip", async () => {
   expect(cell(0, 0).title).toBe("");
 });
 
-test("design_table_shows_on_a_table_with_on_design_and_not_on_a_view", async () => {
+test("item_5_edit_structure_shows_on_a_table_with_on_design_and_not_on_a_view", async () => {
   routeInvoke({ fetch_page: () => page(false) });
   const onDesign = vi.fn();
   const { unmount } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onDesign={onDesign} />);
   await screen.findByText("first");
-  const strip = within(screen.getByRole("toolbar", { name: "Table" }));
-  const names = strip.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
-  expect(names.indexOf("Design table")).toBe(names.indexOf("Reload") + 1);
-  const button = strip.getByRole("button", { name: "Design table" });
-  expect(button.getAttribute("title")).toBe("Design table");
+  const button = within(screen.getByRole("toolbar", { name: "Table" })).getByRole("button", { name: "Edit structure" });
+  expect(button.getAttribute("title")).toBe("Change columns, keys and indexes");
+  expect(button.querySelector("svg.feature-icon")?.getAttribute("data-feature")).toBe("designer");
   await userEvent.click(button);
   expect(onDesign).toHaveBeenCalledTimes(1);
   unmount();
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} kind="view" onDesign={onDesign} />);
   await screen.findByText("first");
-  expect(screen.queryByRole("button", { name: "Design table" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit structure" })).toBeNull();
 });
 
-test("show_lineage_sits_after_design_on_a_table_only", async () => {
+test("item_5_the_table_menu_holds_lineage_on_a_table_only", async () => {
   routeInvoke({ fetch_page: () => page(false) });
   const onLineage = vi.fn();
-  const { unmount } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onDesign={() => {}} onLineage={onLineage} />);
+  const { unmount } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onLineage={onLineage} />);
   await screen.findByText("first");
-  const strip = within(screen.getByRole("toolbar", { name: "Table" }));
-  const names = strip.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
-  expect(names.indexOf("Show lineage")).toBe(names.indexOf("Design table") + 1);
-  const button = strip.getByRole("button", { name: "Show lineage" });
-  expect(button.getAttribute("title")).toBe("Show lineage");
-  await userEvent.click(button);
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Show lineage" }));
   expect(onLineage).toHaveBeenCalledTimes(1);
   unmount();
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} kind="view" onLineage={onLineage} />);
   await screen.findByText("first");
-  expect(screen.queryByRole("button", { name: "Show lineage" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  expect(screen.queryByRole("menuitem", { name: "Show lineage" })).toBeNull();
 });
 
 // ---- After a design apply (step 5c, Task 11) ----
@@ -709,15 +679,24 @@ test("a_grid_notice_shows_under_the_header", async () => {
   expect(await screen.findByText("orders changed. Reload to see its new columns.")).toBeTruthy();
 });
 
-test("export_menu_offers_export_and_import_and_sends_the_table_origin", async () => {
+test("item_5_the_table_menu_offers_export_and_import_and_sends_the_table_origin", async () => {
   routeInvoke({ fetch_page: () => page(false) });
   const onExport = vi.fn();
   const onImport = vi.fn();
-  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={18} onExport={onExport} onImport={onImport} />);
+  const onTransfer = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={18} onExport={onExport} onImport={onImport} onTransfer={onTransfer} onOpenQuery={() => {}} />);
   await screen.findByText("first");
-  await userEvent.click(screen.getByRole("button", { name: "Export" }));
-  expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Copy as CSV", "Export...Ctrl+E", "Import..."]);
-  await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  expect(screen.getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+    "Open as a query",
+    "Copy rows as CSV",
+    "Export rows...",
+    "Import into orders...",
+    "Copy to another Connection...",
+    "Columns",
+    "Copy name",
+  ]);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Export rows..." }));
   expect(onExport).toHaveBeenCalledWith({
     kind: "table",
     path: table,
@@ -730,9 +709,12 @@ test("export_menu_offers_export_and_import_and_sends_the_table_origin", async ()
     rowEstimate: 18,
     estimated: true,
   });
-  await userEvent.click(screen.getByRole("button", { name: "Export" }));
-  await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Import into orders..." }));
   expect(onImport).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Copy to another Connection..." }));
+  expect(onTransfer).toHaveBeenCalledTimes(1);
 });
 
 test("ctrl_e_exports_with_the_filter_sort_and_selected_row", async () => {
@@ -740,9 +722,7 @@ test("ctrl_e_exports_with_the_filter_sort_and_selected_row", async () => {
   const onExport = vi.fn();
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" onExport={onExport} />);
   await screen.findByText("first");
-  const v = filterView();
-  act(() => v.dispatch({ changes: { from: 0, insert: "id > 0" }, selection: { anchor: 6 } }));
-  fireEvent.keyDown(v.contentDOM, { key: "Enter" });
+  await addFilter("id", "is more than", "0");
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
   await userEvent.click(screen.getByRole("button", { name: "Sort by id" }));
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
@@ -752,7 +732,7 @@ test("ctrl_e_exports_with_the_filter_sort_and_selected_row", async () => {
   fireEvent.keyDown(cell, { key: "e", code: "KeyE", ctrlKey: true });
   await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
   expect(onExport.mock.calls[0][0]).toMatchObject({
-    filter: "id > 0",
+    filter: "`id` > 0",
     sort: { column: "id", descending: false },
     selected: [[{ column: "id", value: { t: "number", value: "1" } }]],
     rowEstimate: null,
@@ -767,7 +747,35 @@ test("a_table_without_a_primary_key_says_so_in_the_origin", async () => {
   const onExport = vi.fn();
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onExport={onExport} />);
   await screen.findByText("first");
-  await userEvent.click(screen.getByRole("button", { name: "Export" }));
-  await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Export rows..." }));
   expect(onExport.mock.calls[0][0]).toMatchObject({ hasPrimaryKey: false, selected: [] });
+});
+
+test("item_10_an_empty_table_offers_the_first_row_and_ways_to_bring_rows_in", async () => {
+  routeInvoke({ fetch_page: () => ({ ...page(false), rows: [] }) });
+  const onImport = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onImport={onImport} onTransfer={() => {}} production connectionName="freight-prod" />);
+  await waitFor(() => expect(document.querySelector(".grid-empty")).not.toBeNull());
+  const box = document.querySelector(".grid-empty") as HTMLElement;
+  expect(within(box).getByRole("heading", { name: "orders has no rows yet" })).toBeTruthy();
+  expect(box.textContent).toContain("Saving on freight-prod shows the SQL and asks you to confirm.");
+  await userEvent.click(within(box).getByRole("button", { name: /Import a file/ }));
+  expect(onImport).toHaveBeenCalledTimes(1);
+  await userEvent.click(within(box).getByRole("button", { name: /Add row/ }));
+  // The new row waits as a Pending Edit, and the empty state goes.
+  expect(await screen.findByRole("region", { name: "Pending Edits" })).toBeTruthy();
+  expect(document.querySelector(".grid-empty")).toBeNull();
+});
+
+test("a_header_shows_the_name_over_its_type_and_names_both", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  const th = screen.getByRole("columnheader", { name: "note, varchar(80)" });
+  const lines = th.querySelector(".header-text")!;
+  expect([...lines.children].map((c) => [c.className, c.textContent])).toEqual([
+    ["header-name", "note"],
+    ["type-hint", "varchar(80)"],
+  ]);
 });

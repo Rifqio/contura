@@ -4,7 +4,7 @@ import type { ConnectionConfig, ThemeChoice } from "../api/types";
 import { useFlowEntry } from "../flow/flowRegistry";
 import DbMark from "./DbMark";
 import Icon from "./Icon";
-import { ThemeMenu } from "./ThemeSwitch";
+import { ThemeToggle } from "./ThemeSwitch";
 
 /** What the left side says: each screen of the window has its own status. */
 export type StatusScreen =
@@ -103,7 +103,7 @@ export default function StatusBar({ screen, theme, onTheme, jobs }: Props) {
       <span className="spacer" />
       {jobs}
       <span>UTF-8</span>
-      <ThemeMenu value={theme} onChange={onTheme} />
+      <ThemeToggle value={theme} onChange={onTheme} />
     </footer>
   );
 }

@@ -32,6 +32,7 @@ import { kbdElement } from "../components/Kbd";
 import { useKeymap } from "../commands/useCommandKeys";
 import { iconElement } from "../components/Icon";
 import type { LangClient } from "../lang/client";
+import { insertionLine } from "../lang/insertionLine";
 import type { Diagnostic, TextEdit } from "../lang/protocol";
 import { findTable } from "../lang/sql/analyze";
 import type { SqlCompletion } from "../lang/sql/complete";
@@ -754,6 +755,7 @@ export default function SqlEditor({
         doc: value,
         extensions: [
           oneLine ? [] : [lineNumbers(), lintGutter(), highlightActiveLineGutter()],
+          insertionLine(),
           oneLine
             ? EditorState.transactionFilter.of((tr) => {
                 if (!tr.docChanged || tr.newDoc.lines === 1) return tr;

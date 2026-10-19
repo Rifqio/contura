@@ -5,6 +5,7 @@ import { hintFor } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
 import DbMark from "../components/DbMark";
 import Dialog from "../components/Dialog";
+import FeatureIcon from "../components/FeatureIcon";
 import Icon, { type IconName } from "../components/Icon";
 import Kbd from "../components/Kbd";
 import { MenuList, type MenuItem } from "../components/Menu";
@@ -33,7 +34,10 @@ export interface OneTreeProps {
   selected: Selection | null;
   /** Load state and open nodes, from `useTreeData` (the App also reads row estimates from it). */
   tree: TreeData;
-  onSelectObject(s: Selection): void;
+  /** Opens an object: a single click into the preview tab, a double click (`newTab`) into a tab that stays (item 1). */
+  onSelectObject(s: Selection, opts?: { newTab?: boolean }): void;
+  /** A row in a database took focus or was clicked: the database used last on that Connection (item 8). */
+  onUseDatabase?(connectionId: ConnectionId, database: string): void;
   /** Opens a closed Connection; a returned promise keeps its row busy until it settles. */
   onOpenConnection(id: ConnectionId): void | Promise<unknown>;
   onCloseConnection(id: ConnectionId): void;
@@ -114,6 +118,21 @@ function samePath(a: ObjectPath, b: ObjectPath) {
 }
 
 /** The Connection a row belongs to; null for Saved Queries. */
+/** The database a row is in (item 8): a new query from here opens on it. */
+export function databaseOf(node: TreeNode): string | null {
+  switch (node.kind) {
+    case "database":
+      return node.name;
+    case "schema":
+    case "folder":
+      return node.database;
+    case "object":
+      return node.path.database;
+    default:
+      return null;
+  }
+}
+
 function branchOf(node: TreeNode): ConnectionId | null {
   switch (node.kind) {
     case "connection":
@@ -482,11 +501,11 @@ export default function OneTree(props: OneTreeProps) {
     const items: MenuItem[] = [];
     const backup = props.onBackup;
     if (backup && backUp) {
-      items.push({ key: "backup", label: "Back up...", icon: <Icon name="save" />, onSelect: () => backup({ connectionId, database, schema }) });
+      items.push({ key: "backup", label: "Back up...", icon: <FeatureIcon name="backup" size={16} />, onSelect: () => backup({ connectionId, database, schema }) });
     }
     const restore = props.onRestore;
     if (restore) {
-      items.push({ key: "restore", label: "Restore...", icon: <Icon name="history" />, onSelect: () => restore({ connectionId, database, schema }) });
+      items.push({ key: "restore", label: "Restore...", icon: <FeatureIcon name="restore" size={16} />, onSelect: () => restore({ connectionId, database, schema }) });
     }
     return items;
   }
@@ -548,7 +567,7 @@ export default function OneTree(props: OneTreeProps) {
           items.push({
             key: "transfer",
             label: "Transfer data...",
-            icon: <Icon name="swap" />,
+            icon: <FeatureIcon name="transfer" size={16} />,
             onSelect: () => transfer({ connectionId: n.connectionId, database: n.name, schema: null, table: null }),
           });
         }
@@ -556,7 +575,7 @@ export default function OneTree(props: OneTreeProps) {
         if (compare) {
           // PostgreSQL compares one schema: its database row starts from public.
           const schema = c?.dialect === "postgres" ? "public" : null;
-          items.push({ key: "compare", label: "Schema Compare", icon: <Icon name="columns" />, onSelect: () => compare({ connectionId: n.connectionId, database: n.name, schema }) });
+          items.push({ key: "compare", label: "Schema Compare", icon: <FeatureIcon name="compare" size={16} />, onSelect: () => compare({ connectionId: n.connectionId, database: n.name, schema }) });
         }
         items.push(...backupItems(n.connectionId, n.name, null, c?.dialect !== "postgres"));
         return { label: n.name, items };
@@ -588,7 +607,7 @@ export default function OneTree(props: OneTreeProps) {
                   {
                     key: "compare",
                     label: "Schema Compare",
-                    icon: <Icon name="columns" />,
+                    icon: <FeatureIcon name="compare" size={16} />,
                     onSelect: () => props.onCompare?.({ connectionId: n.connectionId, database: n.database, schema: n.name }),
                   },
                 ]
@@ -608,7 +627,7 @@ export default function OneTree(props: OneTreeProps) {
             ? {
                 key: "add-visual",
                 label: "Add to Visual Query",
-                icon: <Icon name="visualQuery" />,
+                icon: <FeatureIcon name="vquery" size={16} />,
                 onSelect: () => add({ connectionId: n.connectionId, kind: n.objectKind, path: n.path }),
               }
             : null;
@@ -616,20 +635,21 @@ export default function OneTree(props: OneTreeProps) {
         if (n.objectKind !== "table") return null;
         const selection: Selection = { connectionId: n.connectionId, kind: "table", path: n.path };
         const items: MenuItem[] = [
-          { key: "open", label: "Open", icon: <Icon name="table" />, onSelect: () => onSelectObject(selection) },
+          { key: "open", label: "Open", icon: <FeatureIcon name="table" size={16} />, onSelect: () => onSelectObject(selection, { newTab: true }) },
         ];
         if (addItem) items.push(addItem);
         const design = props.onDesignTable;
-        if (design) items.push({ key: "design", label: "Design table", icon: <Icon name="edit" />, onSelect: () => design(selection) });
+        // Item 5: called what it does, as on the table's own strip.
+        if (design) items.push({ key: "design", label: "Edit structure", icon: <FeatureIcon name="designer" size={16} />, onSelect: () => design(selection) });
         const lineage = props.onShowLineage;
-        if (lineage) items.push({ key: "lineage", label: "Show lineage", icon: <Icon name="flow" />, onSelect: () => lineage(selection) });
+        if (lineage) items.push({ key: "lineage", label: "Show lineage", icon: <FeatureIcon name="diagram" size={16} />, onSelect: () => lineage(selection) });
         const exportTable = props.onExportTable;
         if (exportTable) {
-          items.push({ key: "export", label: "Export...", icon: <Icon name="export" />, onSelect: () => exportTable(selection) });
+          items.push({ key: "export", label: "Export...", icon: <FeatureIcon name="export" size={16} />, onSelect: () => exportTable(selection) });
         }
         const importTable = props.onImportTable;
         if (importTable) {
-          items.push({ key: "import", label: "Import...", icon: <Icon name="import" />, onSelect: () => importTable(selection) });
+          items.push({ key: "import", label: "Import...", icon: <FeatureIcon name="import" size={16} />, onSelect: () => importTable(selection) });
         }
         const transfer = props.onTransfer;
         if (transfer) {
@@ -749,6 +769,8 @@ export default function OneTree(props: OneTreeProps) {
       e.preventDefault();
       const n = currentRow.node;
       if (n.kind === "connection" && n.state !== "open") openConnection(n.connection);
+      // Enter is the double click's key: the object opens in a tab that stays, and a preview of it is kept (item 1).
+      else if (n.kind === "object") onSelectObject({ connectionId: n.connectionId, kind: n.objectKind, path: n.path }, { newTab: true });
       else activate(currentRow);
     } else if (e.key === "Delete" && currentRow.node.kind === "connection") {
       e.preventDefault();
@@ -1015,6 +1037,9 @@ export default function OneTree(props: OneTreeProps) {
           if (e.target !== e.currentTarget) return;
           setFocusId(n.id);
           tell(branchOf(n));
+          const db = databaseOf(n);
+          const cid = branchOf(n);
+          if (db !== null && cid !== null) props.onUseDatabase?.(cid, db);
         }}
         onClick={() => {
           setFocusId(n.id);
@@ -1024,6 +1049,7 @@ export default function OneTree(props: OneTreeProps) {
         }}
         onDoubleClick={() => {
           if (n.kind === "connection" && n.state === "closed") openConnection(n.connection);
+          else if (n.kind === "object") onSelectObject({ connectionId: n.connectionId, kind: n.objectKind, path: n.path }, { newTab: true });
         }}
         onContextMenu={(e) => {
           if (!menuFor(row)) return;

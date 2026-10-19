@@ -7,12 +7,13 @@ import { routeOrthogonal } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
 import type { FlowArrow, FlowDoc, FlowGroup } from "../lang/flow/model";
 import { drawnKind, familyOf, groupBoxes, nodeSize } from "./flowNodes";
+import { fixedLayout } from "./kindLayout";
 import { iconPlate, loadIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import type { NodeLook } from "./nodes/parts";
 
-/** The kind in words, as the Modern card's second line says it. */
-const WORDS: Record<DrawnKind, string> = {
+/** The kind in words, as the Modern card's second line says it (the step 12 shapes name theirs in KIND_WORD). */
+const WORDS: Partial<Record<DrawnKind, string>> = {
   process: "Process",
   store: "Data store",
   external: "Outside party",
@@ -27,7 +28,25 @@ const WORDS: Record<DrawnKind, string> = {
 
 const LINE: Partial<Record<FlowArrow, SceneEdge["line"]>> = { "-->": "dashed", "..>": "dotted" };
 /** `>` and `-->` one way, `<>` both ways; `-` and the cloud's dotted "assumes" line have no head (frame 6+.5). */
-const HEADS: Record<FlowArrow, NonNullable<SceneEdge["heads"]>> = { ">": "end", "-->": "end", "<>": "both", "-": "none", "..>": "none" };
+const HEADS: Record<FlowArrow, NonNullable<SceneEdge["heads"]>> = {
+  ">": "end",
+  "-->": "end",
+  "<>": "both",
+  "-": "none",
+  "..>": "none",
+  // Step 12: a message has its head; the ER ends and the class marks are left out of the export's lines.
+  "->": "end",
+  "--": "none",
+  "1--*": "none",
+  "*--1": "none",
+  "1--1": "none",
+  "*--*": "none",
+  "<|--": "start",
+  "*--": "none",
+};
+
+/** The step 12 cards export as table cards with their rows. */
+const CARD_KINDS: ReadonlySet<DrawnKind> = new Set(["erTable", "erWeak", "class", "interface", "enum"]);
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
@@ -86,23 +105,31 @@ export async function loadSceneIcons(names: string[]): Promise<Map<string, strin
 }
 
 /** The scene of `doc` at `positions`; a node without a place is left out, as the canvas leaves it out. */
-export function flowScene(doc: FlowDoc, positions: Positions, look: NodeLook, icons: ReadonlyMap<string, string>): Scene {
+export function flowScene(doc: FlowDoc, given: Positions, look: NodeLook, icons: ReadonlyMap<string, string>): Scene {
   const placed = new Map<string, { x: number; y: number; w: number; h: number }>();
   const types = new Map<string, string>();
   const nodes: SceneNode[] = [];
+  // A sequence, mind map or timeline is placed from its text, as the canvas places it.
+  const fixed = fixedLayout(doc, (n) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, n.name, n.attrs.id, n));
+  const positions = fixed ? fixed.positions : given;
   for (const n of doc.nodes) {
     if (!own(positions, n.name)) continue;
-    const kind = drawnKind(n.kind);
+    const kind = drawnKind(n.kind, doc.kind, n.name);
     const p = positions[n.name];
-    const size = nodeSize(kind, look, n.name, n.attrs.id);
+    const size = fixed?.sizes.get(n.name) ?? nodeSize(kind, look, n.name, n.attrs.id, n);
     placed.set(n.name, { x: p.x, y: p.y, ...size });
     types.set(n.name, familyOf(kind));
-    const node: SceneNode = { id: n.name, kind, x: p.x, y: p.y, w: size.w, h: size.h, title: n.name, rows: [], look };
+    if (CARD_KINDS.has(kind)) {
+      nodes.push({ id: n.name, kind: "table", x: p.x, y: p.y, w: size.w, h: size.h, title: n.name, rows: (n.rows ?? []).map((r) => ({ left: r })) });
+      continue;
+    }
+    const node: SceneNode = { id: n.name, kind, x: p.x, y: p.y, w: size.w, h: size.h, title: n.kind === "note" ? (n.text ?? n.name) : n.name, rows: [], look };
     if (n.attrs.id !== undefined) node.tag = n.attrs.id;
     if (n.attrs.table !== undefined) {
       node.sub = n.attrs.table;
       node.linked = true;
     } else if (familyOf(kind) === "dfd") node.sub = WORDS[kind];
+    else if (n.date) node.sub = n.until ? `${n.date} to ${n.until}` : n.date;
     if (kind === "service") {
       const name = n.attrs.icon;
       if (name) {

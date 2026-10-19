@@ -2,6 +2,7 @@
 // costs one pass. It runs in the language worker, returns problems with fixes, and never throws on odd text.
 import type { QuickFix } from "../protocol";
 import {
+  ARROWS,
   ATTR_KEYS,
   DIAGRAM_KINDS,
   type DiagramKind,
@@ -14,6 +15,10 @@ import {
   flowName,
   KINDS,
   MAX_GROUP_DEPTH,
+  NOTE_KINDS,
+  nodeStatement,
+  STATE_END,
+  STATE_START,
 } from "./model";
 import { FIX_TITLES, type FlowProblem, MESSAGES, nearestNames, nearWord } from "./problems";
 
@@ -62,6 +67,11 @@ export type FlowParse = {
   parentOf(name: string): string | null | undefined;
   /** Names defined more than once (each is already a problem). */
   readonly definedTwice: ReadonlySet<string>;
+  /**
+   * Step 12: the lines that belong to a node besides its own (an ER entity's column lines, a class's member
+   * lines), and in each the range of the node's name, so a delete takes them and a rename follows.
+   */
+  rowsOf(name: string): readonly { line: FlowRange; name: FlowRange }[];
 };
 
 // Packed spans: `[from, to, ...parts]`, each part a from/to pair, -1 where the element has no such part.
@@ -170,6 +180,23 @@ class Parser {
   private compareBudget = 100_000;
   private nearCache = new Map<string, string[]>();
   private candidates: { name: string; lower: string; band: number }[] | null = null;
+  // ----- step 12 kinds
+  /** Each node's own extra lines (ER columns, class members). */
+  private rows = new Map<string, { line: FlowRange; name: FlowRange }[]>();
+  /** Sequence frames: the open ones, and those closed. */
+  private frameStack: { label: string; kind: string; from: number; depth: number; at: number; nameTo: number; line: number }[] = [];
+  private frames: NonNullable<FlowDoc["frames"]> = [];
+  private openActs = new Map<string, number>();
+  private activations: NonNullable<FlowDoc["activations"]> = [];
+  /** Timeline sections and the one items go in now. */
+  private sections: string[] = [];
+  private section: string | undefined;
+  /** Mind map: the open path from the root down, by depth. */
+  private mindPath: { name: string; depth: number }[] = [];
+  private treeLinks: FlowLink[] = [];
+  private notes = 0;
+  /** Where `[*]` was used: as a start, an end, or both. */
+  private stateMarks = { start: false, end: false };
 
   constructor(text: string, opts: FlowParseOptions) {
     this.s = text;
@@ -234,6 +261,7 @@ class Parser {
       links: this.links,
       parentOf,
       definedTwice: this.twice,
+      rowsOf: (name: string) => this.rows.get(name) ?? [],
       // Built on first read: the worker answers line questions from `defs`, so most parses never build these.
       get lineOf() {
         if (!lines) {
@@ -302,8 +330,8 @@ class Parser {
         return true;
       case 47: // a // comment
         return j + 1 < e && s.charCodeAt(j + 1) === 47;
-      case 45: // -- anywhere, or a lone -
-        if (j + 1 < e && s.charCodeAt(j + 1) === 45) return true;
+      case 45: // -- anywhere, -> (a sequence message), or a lone -
+        if (j + 1 < e && (s.charCodeAt(j + 1) === 45 || s.charCodeAt(j + 1) === 62)) return true;
         return (j === 0 || isWs(s.charCodeAt(j - 1))) && (j + 1 >= e || isWs(s.charCodeAt(j + 1)));
       case 46: // the ..> arrow
         return j + 2 < e && s.charCodeAt(j + 1) === 46 && s.charCodeAt(j + 2) === 62;
@@ -332,6 +360,8 @@ class Parser {
 
   /** A name at `p`: null when there is none, BAD when its quote never closes (the problem is recorded). */
   private name(p: number, e: number): Token | null | typeof BAD {
+    // A state diagram's start and end marker.
+    if (this.kind === "state" && this.s.startsWith("[*]", p) && p + 3 <= e) return { value: "[*]", from: p, to: p + 3 };
     if (p < e && this.s.charCodeAt(p) === 34) {
       const q = this.quoted(p, e);
       if (!q) {
@@ -350,14 +380,47 @@ class Parser {
     const s = this.s;
     if (q >= e) return null;
     const c = s.charCodeAt(q);
+    const at = (i: number) => (q + i < e ? s.charCodeAt(q + i) : -1);
+    const endsAt = (i: number) => q + i >= e || isWs(s.charCodeAt(q + i));
     if (c === 62) return ">";
-    if (c === 60) return q + 1 < e && s.charCodeAt(q + 1) === 62 ? "<>" : null;
+    if (c === 60) {
+      if (at(1) === 62) return "<>";
+      // <|-- inheritance (class).
+      return at(1) === 124 && at(2) === 45 && at(3) === 45 ? "<|--" : null;
+    }
     if (c === 45) {
-      if (q + 2 < e && s.charCodeAt(q + 1) === 45 && s.charCodeAt(q + 2) === 62) return "-->";
-      return q + 1 >= e || isWs(s.charCodeAt(q + 1)) ? "-" : null;
+      if (at(1) === 45 && at(2) === 62) return "-->";
+      if (at(1) === 62) return "->";
+      if (at(1) === 45) {
+        // --, and --* or --1 when a multiplicity follows (an ER line's far end).
+        if ((at(2) === 42 || at(2) === 49) && endsAt(3)) return null;
+        return endsAt(2) ? "--" : null;
+      }
+      return endsAt(1) ? "-" : null;
+    }
+    // 1--*, *--1, 1--1, *--* (ER) and *-- (composition): the near multiplicity was split off the name before it.
+    if ((c === 49 || c === 42) && at(1) === 45 && at(2) === 45) {
+      const far = at(3);
+      if ((far === 42 || far === 49) && endsAt(4)) return `${c === 49 ? "1" : "*"}--${far === 49 ? "1" : "*"}` as FlowArrow;
+      if (c === 42 && endsAt(3)) return "*--";
+      return null;
     }
     if (c === 46) return q + 2 < e && s.charCodeAt(q + 1) === 46 && s.charCodeAt(q + 2) === 62 ? "..>" : null;
     return null;
+  }
+
+  /**
+   * An ER or class line writes its near multiplicity against the name before it (`customers 1--* invoices`), and
+   * the name lexer stops only at the `--`: the `1` or `*` is split back off the name here.
+   */
+  private splitLead(t: Token, e: number): { token: Token; q: number } {
+    const s = this.s;
+    const q = this.ws(t.to, e);
+    if (!(this.kind === "er" || this.kind === "class") || s.charCodeAt(q) !== 45 || s.charCodeAt(q + 1) !== 45) return { token: t, q };
+    const last = s.charCodeAt(t.to - 1);
+    if (t.to - t.from < 3 || !(last === 49 || last === 42) || !isWs(s.charCodeAt(t.to - 2))) return { token: t, q };
+    const to = this.trimBack(t.to - 1, t.from);
+    return { token: { value: s.slice(t.from, to), from: t.from, to }, q: t.to - 1 };
   }
 
   private comment(p: number, e: number) {
@@ -390,7 +453,201 @@ class Parser {
       if (this.diagramLine(p, e)) return;
     }
     if (this.s.charCodeAt(p) === 125) return this.close(p, e);
+    if (this.kindStatement(a, p, e)) return;
     this.nameStatement(p, e);
+  }
+
+  // ----- step 12 kinds: the statements that start with a word
+
+  /** The lowercase word at `p` and where the text after it starts; null when no letter starts there. */
+  private word(p: number, e: number): { word: string; to: number } | null {
+    const s = this.s;
+    let j = p;
+    while (j < e) {
+      const c = s.charCodeAt(j);
+      if (!((c >= 97 && c <= 122) || (c >= 65 && c <= 90))) break;
+      j++;
+    }
+    return j > p ? { word: s.slice(p, j), to: j } : null;
+  }
+
+  /** The rest of the line as text (quoted or bare, a comment after it read off); null with nothing there. */
+  private restText(p: number, e: number): { value: string; from: number; to: number } | null | typeof BAD {
+    const s = this.s;
+    const r = this.ws(p, e);
+    if (r < e && s.charCodeAt(r) === 34) {
+      const q = this.quoted(r, e);
+      if (!q) {
+        this.error(r, this.trimBack(e, r), MESSAGES.textQuote);
+        return BAD;
+      }
+      this.end(q.end, e);
+      return { value: q.value, from: r, to: q.end };
+    }
+    let j = r;
+    while (j < e && !this.isComment(j, e)) j++;
+    const to = this.trimBack(j, r);
+    if (j < e) this.comment(j, e);
+    return to > r ? { value: s.slice(r, to), from: r, to } : null;
+  }
+
+  /** Handles the statements a kind starts with a word; false leaves the line to the name statement. */
+  private kindStatement(lineFrom: number, p: number, e: number): boolean {
+    const k = this.kind;
+    if (!k) return false;
+    const s = this.s;
+    const w = this.word(p, e);
+    const after = w ? this.ws(w.to, e) : p;
+    const spaced = !!w && w.to < e && isWs(s.charCodeAt(w.to));
+    // note: text (the shared note).
+    if (w && w.word === "note" && NOTE_KINDS.has(k) && after < e && s.charCodeAt(after) === 58) {
+      const text = this.restText(after + 1, e);
+      if (text === BAD) return true;
+      const name = `Note ${++this.notes}`;
+      const range = text ?? { from: after + 1, to: after + 1 };
+      this.defs.set(name, this.line);
+      this.pushNode({ name, kind: "note", attrs: {}, text: text?.value ?? "" }, { from: p, to: range.to }, range);
+      return true;
+    }
+    if (k === "sequence" && w && spaced) {
+      if (w.word === "participant" || w.word === "actor") return this.declared(p, after, e, w.word);
+      if (w.word === "activate" || w.word === "deactivate") {
+        const t = this.name(after, e);
+        if (t === BAD) return true;
+        if (!t) {
+          this.error(p, this.lineEnd(p, e), MESSAGES.needsName);
+          return true;
+        }
+        if (w.word === "activate") this.openActs.set(t.value, this.links.length);
+        else {
+          const from = this.openActs.get(t.value);
+          if (from !== undefined) {
+            this.openActs.delete(t.value);
+            this.activations.push({ name: t.value, from, to: this.links.length - 1 });
+          }
+        }
+        this.end(t.to, e);
+        return true;
+      }
+      if (w.word === "loop" || w.word === "alt" || w.word === "opt" || w.word === "par" || w.word === "critical") {
+        let j = after;
+        while (j < e && s.charCodeAt(j) !== 123 && !this.isComment(j, e)) j++;
+        if (j >= e || s.charCodeAt(j) !== 123) {
+          this.error(p, this.lineEnd(p, e), MESSAGES.frameNeedsBrace);
+          return true;
+        }
+        const label = s.slice(after, this.trimBack(j, after)).trim();
+        this.frameStack.push({ label: label ? `${w.word} ${label}` : w.word, kind: w.word, from: this.links.length, depth: this.frameStack.length, at: p, nameTo: j, line: this.line });
+        this.end(j + 1, e);
+        return true;
+      }
+    }
+    if (k === "class" && w && spaced && (w.word === "class" || w.word === "interface" || w.word === "enum")) return this.declared(p, after, e, w.word);
+    if (k === "mindmap" && w && spaced && w.word === "root") {
+      if (!this.declared(p, after, e, "root")) return true;
+      const root = [...this.defs.keys()].pop();
+      if (root !== undefined) this.mindPath = [{ name: root, depth: 0 }];
+      return true;
+    }
+    if (k === "timeline") {
+      if (w && spaced && w.word === "section") {
+        const text = this.restText(after, e);
+        if (text && text !== BAD) {
+          this.section = text.value;
+          this.sections.push(text.value);
+        } else if (!text) this.error(p, this.lineEnd(p, e), MESSAGES.needsName);
+        return true;
+      }
+      if (w && spaced && w.word === "milestone") return this.declared(p, after, e, "milestone");
+      return this.dated(p, e);
+    }
+    void lineFrom;
+    return false;
+  }
+
+  /** A node declared by its leading word: `participant App`, `class Invoice`, `milestone v1.0`, `root Plan`. */
+  private declared(p: number, at: number, e: number, kind: FlowNodeKind): boolean {
+    const t = this.name(at, e);
+    if (t === BAD) return true;
+    if (!t) {
+      this.error(p, this.lineEnd(p, e), MESSAGES.needsName);
+      return true;
+    }
+    if (!this.define(t)) return true;
+    const node: FlowNode = { name: t.value, kind, attrs: {} };
+    if (kind === "root") node.depth = 0;
+    if (this.kind === "timeline" && this.section !== undefined) node.section = this.section;
+    this.pushNode(node, { from: p, to: t.to }, t);
+    this.end(t.to, e);
+    return true;
+  }
+
+  /** A timeline item: `2026-10-19: Docs ready`, or a period `2026-09 to 2026-10: Data transfer`. */
+  private dated(p: number, e: number): boolean {
+    const s = this.s;
+    const dateAt = (q: number): { value: string; to: number } | null => {
+      let j = q;
+      while (j < e && ((s.charCodeAt(j) >= 48 && s.charCodeAt(j) <= 57) || s.charCodeAt(j) === 45)) j++;
+      return j > q ? { value: s.slice(q, j), to: j } : null;
+    };
+    const first = dateAt(p);
+    if (!first) {
+      this.error(p, this.lineEnd(p, e), MESSAGES.timelineLine);
+      return true;
+    }
+    const good = (d: string) => /^\d{4}(-\d{2}(-\d{2})?)?$/.test(d);
+    if (!good(first.value)) {
+      this.error(p, first.to, MESSAGES.badDate);
+      return true;
+    }
+    let q = this.ws(first.to, e);
+    let until: string | undefined;
+    if (s.startsWith("to", q) && q + 2 < e && isWs(s.charCodeAt(q + 2))) {
+      const r = this.ws(q + 2, e);
+      const second = dateAt(r);
+      if (!second || !good(second.value)) {
+        this.error(r, second ? second.to : this.lineEnd(r, e), MESSAGES.badDate);
+        return true;
+      }
+      until = second.value;
+      q = this.ws(second.to, e);
+    }
+    if (q >= e || s.charCodeAt(q) !== 58) {
+      this.error(p, this.lineEnd(p, e), MESSAGES.needsColon);
+      return true;
+    }
+    const t = this.name(this.ws(q + 1, e), e);
+    if (t === BAD) return true;
+    if (!t) {
+      this.error(p, this.lineEnd(p, e), MESSAGES.needsName);
+      return true;
+    }
+    if (!this.define(t)) return true;
+    const node: FlowNode = { name: t.value, kind: until ? "period" : "event", attrs: {}, date: first.value };
+    if (until) node.until = until;
+    if (this.section !== undefined) node.section = this.section;
+    this.pushNode(node, { from: p, to: t.to }, t);
+    this.end(t.to, e);
+    return true;
+  }
+
+  /** Adds a node made by a step 12 statement, with its span (NODE_PARTS: name, attrs, kind). */
+  private pushNode(node: FlowNode, span: FlowRange, name: FlowRange) {
+    const group = this.stack[this.stack.length - 1];
+    if (group) group.nodes.push(node.name);
+    this.nodes.push({ node, grouped: !!group });
+    this.byName.set(node.name, node);
+    this.packed.set(`node:${node.name}`, [span.from, span.to, name.from, name.to, -1, -1, -1, -1]);
+  }
+
+  /** An extra line of a node (an ER column, a class member). */
+  private addRow(owner: string, text: string, line: FlowRange, name: FlowRange) {
+    const n = this.byName.get(owner);
+    if (!n) return;
+    (n.rows ??= []).push(text);
+    const list = this.rows.get(owner) ?? [];
+    list.push({ line, name });
+    this.rows.set(owner, list);
   }
 
   private diagramLine(p: number, e: number): boolean {
@@ -462,6 +719,12 @@ class Parser {
   }
 
   private close(p: number, e: number) {
+    const f = this.kind === "sequence" ? this.frameStack.pop() : undefined;
+    if (f) {
+      this.frames.push({ label: f.label, kind: f.kind, from: f.from, to: this.links.length - 1, depth: f.depth });
+      this.end(p + 1, e);
+      return;
+    }
     const g = this.stack.pop();
     if (!g) {
       this.error(p, p + 1, MESSAGES.strayClose, () => [{ title: FIX_TITLES.remove, edits: [{ from: p, to: p + 1, insert: "" }] }]);
@@ -477,16 +740,47 @@ class Parser {
   }
 
   private nameStatement(p: number, e: number) {
-    const first = this.name(p, e);
-    if (first === BAD) return;
-    if (!first) {
+    const named = this.name(p, e);
+    if (named === BAD) return;
+    if (!named) {
       this.error(p, this.lineEnd(p, e), MESSAGES.needsName);
       return;
     }
-    const q = this.ws(first.to, e);
+    const { token: first, q } = this.splitLead(named, e);
     const arrow = this.arrow(q, e);
     if (arrow) return this.link(first, q, arrow, e);
     const c = q < e ? this.s.charCodeAt(q) : -1;
+    // A class member: `Invoice : + send()`.
+    if (this.kind === "class" && c === 58) {
+      const text = this.restText(q + 1, e);
+      if (text === BAD) return;
+      const owner = this.byName.get(first.value);
+      if (!owner || !(owner.kind === "class" || owner.kind === "interface" || owner.kind === "enum")) {
+        this.error(first.from, first.to, MESSAGES.noClass(first.value));
+        return;
+      }
+      this.addRow(first.value, text?.value ?? "", { from: first.from, to: text?.to ?? q + 1 }, first);
+      return;
+    }
+    // An ER column: `customers.email text`.
+    if (this.kind === "er" && c !== 91 && c !== 123) {
+      const dot = first.value.indexOf(".");
+      if (dot > 0 && !this.defs.has(first.value)) {
+        const owner = first.value.slice(0, dot);
+        const n = this.byName.get(owner);
+        if (!n || !(n.kind === "entity" || n.kind === "weak")) {
+          this.error(first.from, first.from + dot, MESSAGES.noEntity(owner));
+          return;
+        }
+        this.addRow(owner, first.value.slice(dot + 1).trim(), { from: first.from, to: first.to }, { from: first.from, to: first.from + dot });
+        this.end(q, e);
+        return;
+      }
+    }
+    if (this.kind === "timeline") {
+      this.error(p, this.lineEnd(p, e), MESSAGES.timelineLine);
+      return;
+    }
     if (c === 91) {
       const attrs = this.attrs(q, e);
       const r = this.ws(attrs.to, e);
@@ -626,7 +920,17 @@ class Parser {
         );
         return "process";
       }
-      return dk === "cloud" ? "service" : "step";
+      if (dk === "cloud") return "service";
+      if (dk === "er") return "entity";
+      if (dk === "state") return "state";
+      if (dk === "sequence") return "participant";
+      if (dk === "class") return "class";
+      if (dk === "mindmap") return "topic";
+      return "step";
+    }
+    if (dk && KINDS[dk].length === 0) {
+      this.error(word.from, word.to, MESSAGES.bracketKinds(dk), () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(word)] }]);
+      return dk === "sequence" ? "participant" : dk === "class" ? "class" : dk === "mindmap" ? "topic" : "event";
     }
     if (dk === "cloud") {
       if (word.value !== "service") this.error(word.from, word.to, MESSAGES.cloudKind, () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(word)] }]);
@@ -665,6 +969,7 @@ class Parser {
     const kind = this.nodeKind(t, attrs);
     if (!this.define(t)) return;
     const node: FlowNode = { name: t.value, kind, attrs: attrs ? attrs.attrs : {} };
+    if (this.kind === "mindmap") this.mindTopic(node, t.from);
     const group = this.stack[this.stack.length - 1];
     if (group) group.nodes.push(t.value);
     this.nodes.push({ node, grouped: !!group });
@@ -676,6 +981,19 @@ class Parser {
       this.values.set(key, attrs.values);
       this.checkIcon(attrs.attrs.icon, attrs.values.icon);
     }
+  }
+
+  /** A mind map topic: its depth from the indent (two spaces a level), and the branch from its parent. */
+  private mindTopic(node: FlowNode, at: number) {
+    const s = this.s;
+    let indent = 0;
+    for (let j = this.lineStartOf(at); j < at; j++) indent += s.charCodeAt(j) === 9 ? 2 : 1;
+    const depth = Math.max(1, Math.floor(indent / 2));
+    node.depth = depth;
+    while (this.mindPath.length && this.mindPath[this.mindPath.length - 1].depth >= depth) this.mindPath.pop();
+    const parent = this.mindPath[this.mindPath.length - 1];
+    if (parent) this.treeLinks.push({ from: parent.name, to: node.name, arrow: "-", tree: true });
+    this.mindPath.push({ name: node.name, depth });
   }
 
   private openGroup(t: Token, attrs: Attrs | null, brace: number, e: number) {
@@ -709,14 +1027,15 @@ class Parser {
     while (arrow) {
       arrows.push({ arrow, from: q, to: q + arrow.length });
       const r = this.ws(q + arrow.length, e);
-      const next = this.name(r, e);
-      if (next === BAD) return;
-      if (!next) {
+      const read = this.name(r, e);
+      if (read === BAD) return;
+      if (!read) {
         this.error(q, q + arrow.length, MESSAGES.noTarget(arrow));
         return;
       }
-      names.push(next);
-      q = this.ws(next.to, e);
+      const split = this.splitLead(read, e);
+      names.push(split.token);
+      q = split.q;
       arrow = this.arrow(q, e);
     }
     let label: string | undefined;
@@ -750,13 +1069,26 @@ class Parser {
     }
     const last = arrows.length - 1;
     const line = { from: first.from, to: stop };
+    const dk = this.kind;
+    if (dk === "timeline") {
+      this.error(first.from, stop, MESSAGES.noLines);
+      return;
+    }
     arrows.forEach((a, k) => {
-      if (a.arrow === "..>" && this.kind !== "cloud") {
+      if (a.arrow === "..>" && (dk === "dfd" || dk === "flow")) {
         this.error(a.from, a.to, MESSAGES.dotted, () => [{ title: FIX_TITLES.use("-->"), edits: [{ from: a.from, to: a.to, insert: "-->" }] }]);
+      } else if (dk && !ARROWS[dk].includes(a.arrow)) {
+        const use = ARROWS[dk][0];
+        this.error(a.from, a.to, MESSAGES.arrowKind(a.arrow, dk, use), () => [{ title: FIX_TITLES.use(use), edits: [{ from: a.from, to: a.to, insert: use }] }]);
       }
       const from = names[k];
       const to = names[k + 1];
-      const link: FlowLink = { from: from.value, to: to.value, arrow: a.arrow };
+      // A state diagram's [*] is the start before the arrow and the end after it.
+      const fromName = from.value === "[*]" && dk === "state" ? STATE_START : from.value;
+      const toName = to.value === "[*]" && dk === "state" ? STATE_END : to.value;
+      if (fromName === STATE_START) this.stateMarks.start = true;
+      if (toName === STATE_END) this.stateMarks.end = true;
+      const link: FlowLink = { from: fromName, to: toName, arrow: a.arrow };
       const labelled = k === last && label !== undefined;
       if (labelled) link.label = label;
       if (k > 0 && !labelled) link.chained = true;
@@ -782,12 +1114,31 @@ class Parser {
       const span = g.repeated ? undefined : this.packed.get(`group:${g.name}`);
       if (span) span[1] = this.trimBack(s.length, g.from);
     }
+    for (const f of this.frameStack) {
+      this.error(f.at, f.nameTo, MESSAGES.unclosedFrame(f.label), () => [{ title: FIX_TITLES.closeGroup, edits: [{ from: s.length, to: s.length, insert: s.endsWith("\n") ? "}\n" : "\n}\n" }] }], f.line);
+    }
+    for (const [name, from] of this.openActs) this.activations.push({ name, from, to: this.links.length - 1 });
+    // A sequence names its participants by using them (a declared one keeps its place and kind).
+    if (this.kind === "sequence") {
+      this.links.forEach((l, i) => {
+        for (const name of [l.from, l.to]) {
+          if (this.defs.has(name)) continue;
+          this.defs.set(name, this.linkLines[i]);
+          const node: FlowNode = { name, kind: "participant", attrs: {} };
+          this.nodes.push({ node, grouped: false });
+          this.byName.set(name, node);
+        }
+      });
+    }
+    if (this.kind === "mindmap" && this.nodes.length > 0 && !this.nodes.some((n) => n.node.kind === "root")) {
+      this.problem("hint", 0, 0, MESSAGES.noRoot, () => [], 1);
+    }
     this.links.forEach((l, i) => {
       const p = this.linkPacked[i];
       const line = this.linkLines[i];
       for (const end of ["from", "to"] as const) {
         const name = end === "from" ? l.from : l.to;
-        if (this.defs.has(name)) continue;
+        if (this.defs.has(name) || name === STATE_START || name === STATE_END) continue;
         const u: Use = { name, from: p[end === "from" ? 2 : 4], to: p[end === "from" ? 3 : 5], line, end, other: end === "from" ? l.to : l.from };
         this.error(u.from, u.to, MESSAGES.notDefined(name), () => this.undefinedFixes(u), line);
       }
@@ -827,6 +1178,10 @@ class Parser {
   /** The kind a missing name is added as: in a data flow, a store when a process sends to it, an entity when it sends. */
   private addKind(u: Use): FlowNodeKind {
     if (this.kind === "cloud") return "service";
+    if (this.kind === "er") return "entity";
+    if (this.kind === "state") return "state";
+    if (this.kind === "class") return "class";
+    if (this.kind === "mindmap") return "topic";
     if (this.kind !== "dfd") return "step";
     const other = this.byName.get(u.other)?.kind;
     if (other === "store" || other === "entity") return "process";
@@ -835,6 +1190,7 @@ class Parser {
 
   private addLine(name: string, kind: FlowNodeKind): string {
     if (kind === "service") return flowName(name);
+    if (this.kind !== "dfd" && this.kind !== "flow") return nodeStatement(this.kind, { name, kind, attrs: {} });
     if (kind === "store" || kind === "process") {
       const pattern = kind === "store" ? /^D(\d+)$/ : /^(\d+)$/;
       let max = 0;
@@ -864,7 +1220,17 @@ class Parser {
       into.push(group);
       for (let i = g.groups.length - 1; i >= 0; i--) stack.push({ g: g.groups[i], into: group.groups });
     }
-    return { kind, title: this.title, comments: this.comments, nodes, links: this.links, groups };
+    if (kind === "state") {
+      if (this.stateMarks.end) nodes.unshift({ name: STATE_END, kind: "end", attrs: {} });
+      if (this.stateMarks.start) nodes.unshift({ name: STATE_START, kind: "start", attrs: {} });
+    }
+    const doc: FlowDoc = { kind, title: this.title, comments: this.comments, nodes, links: this.treeLinks.length ? [...this.links, ...this.treeLinks] : this.links, groups };
+    if (kind === "sequence") {
+      doc.frames = this.frames;
+      doc.activations = this.activations;
+    }
+    if (kind === "timeline") doc.sections = this.sections;
+    return doc;
   }
 }
 

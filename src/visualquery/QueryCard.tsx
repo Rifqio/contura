@@ -4,8 +4,9 @@ import { createContext, type KeyboardEvent, useContext, useRef, useState } from 
 import { createPortal } from "react-dom";
 import type { Aggregate, VqTable } from "../api/types";
 import Icon from "../components/Icon";
-import { MenuList } from "../components/Menu";
-import CardFrame, { Ports } from "../diagram/CardFrame";
+import { type MenuItem, MenuList } from "../components/Menu";
+import { useDismiss } from "../components/useDismiss";
+import CardFrame, { MAX_CARD_WIDTH, Ports } from "../diagram/CardFrame";
 import { CARD_ROW, CARD_WIDTH, cardHeight } from "../diagram/metrics";
 
 /** Over this many columns a card shows only ticked, key and joined ones until it is expanded. */
@@ -40,6 +41,8 @@ export type QueryCardData = {
   problems: string[];
   expanded: boolean;
   root: boolean;
+  /** The card's width when it was dragged (item 25), else the engine's 216 px. */
+  width?: number;
   /** Columns of a Join the server's error points into, marked danger until the next change. */
   dangerColumns?: string[];
 };
@@ -58,6 +61,12 @@ export interface CardActions {
   expand(tableId: string): void;
   /** Loads the card's schema again after it failed. */
   retry(tableId: string): void;
+  /** A width drag ended: the card's new width and how far its left edge moved. */
+  resize(tableId: string, width: number, shift: number): void;
+  /** Ticks every column of the card not ticked yet, in the card's order. */
+  tickAll(tableId: string, columns: string[]): void;
+  /** Unticks every column of the card. */
+  untickAll(tableId: string): void;
   /** J on a column row: a list of the other cards' columns to join it to. */
   joinFrom(tableId: string, column: string, anchor: DOMRect): void;
 }
@@ -87,6 +96,24 @@ export function queryCardHeight(d: QueryCardData): number {
   const note = d.state === "missing" || d.state === "failed" || (d.state === "ok" && d.lone);
   const notes = (note ? 1 : 0) + d.problems.length + (more > 0 ? 1 : 0);
   return cardHeight(rows.length) + notes * CARD_ROW;
+}
+
+/** Code small (12 px JetBrains Mono) and Code micro (11 px) advance widths, and UI small's average. */
+const MONO = 7.2;
+const MONO_MICRO = 6.6;
+const UI_SMALL = 6.5;
+
+/**
+ * The width a card needs to show its table name, alias and column names whole (item 32: Contura never
+ * shortens a name on its own). The engine's 216 px at least, 480 px at most; a dragged width wins over it.
+ */
+export function fitWidth(d: Pick<QueryCardData, "table" | "columns" | "home">): number {
+  const schema = Math.min((d.table.schema ?? d.home).length, 14) * UI_SMALL;
+  // Padding, icon, gaps, count and the two 24 px buttons, then the name and alias.
+  const header = 126 + (d.table.name.length + d.table.alias.length) * MONO + schema;
+  // Check box, key mark, gaps and padding, then the column name and its type.
+  const rows = Math.max(0, ...d.columns.map((c) => 70 + c.name.length * MONO + (c.type ?? "").length * MONO_MICRO));
+  return Math.round(Math.min(MAX_CARD_WIDTH, Math.max(CARD_WIDTH, header, rows)));
 }
 
 /** The alias: mono and subtle, edited on double-click; Enter keeps, Esc cancels. */
@@ -133,13 +160,51 @@ function Alias({ value, name, onCommit }: { value: string; name: string; onCommi
   );
 }
 
-function CardMenu({ name, root, onRoot }: { name: string; root: boolean; onRoot(): void }) {
-  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+/** Where the card's menu is open: under its More button, or where it was right-clicked (item 26). */
+type MenuAt = { x: number; y: number; from: "button" | "pointer" };
+
+/** The card's actions (frame VisualQuery, card menu): each row says what it does (item 27). */
+function CardMenu({
+  name,
+  root,
+  at,
+  setAt,
+  onRoot,
+  onTickAll,
+  onUntickAll,
+  onRemove,
+}: {
+  name: string;
+  root: boolean;
+  at: MenuAt | null;
+  setAt(at: MenuAt | null): void;
+  onRoot(): void;
+  onTickAll(): void;
+  onUntickAll(): void;
+  onRemove(): void;
+}) {
   const button = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const close = () => {
+    const from = at?.from;
     setAt(null);
-    button.current?.focus();
+    if (from === "button") button.current?.focus();
   };
+  // Item 28: a press outside or Escape closes it, wherever focus is.
+  useDismiss(at !== null, [menu, button], close);
+  const items: MenuItem[] = [
+    {
+      key: "root",
+      label: `Start the query from ${name}`,
+      description: root ? "It is first after FROM already. The Joins follow from it." : "Puts it first after FROM. The Joins follow from it.",
+      icon: <Icon name="chevronRight" />,
+      disabled: root,
+      onSelect: onRoot,
+    },
+    { key: "tick", label: "Tick every column", icon: <Icon name="check" />, separatorBefore: true, onSelect: onTickAll },
+    { key: "untick", label: "Untick every column", icon: <Icon name="close" />, onSelect: onUntickAll },
+    { key: "remove", label: "Remove from the query", icon: <Icon name="trash" />, shortcut: "Delete", danger: true, separatorBefore: true, onSelect: onRemove },
+  ];
   return (
     <>
       <button
@@ -152,7 +217,7 @@ function CardMenu({ name, root, onRoot }: { name: string; root: boolean; onRoot(
         onClick={() => {
           if (at) return close();
           const box = button.current?.getBoundingClientRect();
-          setAt({ x: box?.left ?? 0, y: box?.bottom ?? 0 });
+          setAt({ x: box?.left ?? 0, y: box?.bottom ?? 0, from: "button" });
         }}
       >
         <Icon name="moreHorizontal" size={14} />
@@ -160,12 +225,8 @@ function CardMenu({ name, root, onRoot }: { name: string; root: boolean; onRoot(
       {/* Portalled: a menu never sits inside the clipped canvas. */}
       {at &&
         createPortal(
-          <div className="tree-menu" style={{ left: at.x, top: at.y }}>
-            <MenuList
-              label={name}
-              onClose={close}
-              items={[{ key: "root", label: "Start FROM here", icon: <Icon name="arrowRight" />, disabled: root, onSelect: onRoot }]}
-            />
+          <div ref={menu} className="tree-menu vq-card-menu" style={{ left: at.x, top: at.y }}>
+            <MenuList label={`${name} actions`} onClose={close} items={items} />
           </div>,
           document.body,
         )}
@@ -179,6 +240,7 @@ export default function QueryCard({ data, selected }: NodeProps & { data: QueryC
   const { table, kind, ticked, joined, state, lone, problems } = data;
   const { rows, more } = shownColumns(data);
   const tone = state === "missing" ? "danger" : lone ? "warning" : undefined;
+  const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
 
   const onRowKey = (column: string) => (e: KeyboardEvent<HTMLLIElement>) => {
     if (e.target !== e.currentTarget) return;
@@ -210,7 +272,16 @@ export default function QueryCard({ data, selected }: NodeProps & { data: QueryC
   const actions = (
     <>
       {state === "loading" && <span className="chip chip-neutral vq-card-loading">Loading schema</span>}
-      <CardMenu name={table.name} root={data.root} onRoot={() => act?.setRoot(table.id)} />
+      <CardMenu
+        name={table.name}
+        root={data.root}
+        at={menuAt}
+        setAt={setMenuAt}
+        onRoot={() => act?.setRoot(table.id)}
+        onTickAll={() => act?.tickAll(table.id, data.columns.map((c) => c.name))}
+        onUntickAll={() => act?.untickAll(table.id)}
+        onRemove={() => act?.remove(table.id)}
+      />
       <button
         type="button"
         className="icon-button nodrag"
@@ -297,7 +368,16 @@ export default function QueryCard({ data, selected }: NodeProps & { data: QueryC
   );
 
   return (
-    <div className="vq-card" onKeyDown={onCardKey}>
+    <div
+      className="vq-card"
+      onKeyDown={onCardKey}
+      onContextMenu={(e) => {
+        // Item 26: right-click on a card opens its own menu, not the canvas's.
+        e.preventDefault();
+        e.stopPropagation();
+        setMenuAt({ x: e.clientX, y: e.clientY, from: "pointer" });
+      }}
+    >
       <CardFrame
         kind={kind}
         label={`${kind === "view" ? "View" : "Table"} ${table.name} ${table.alias}`}
@@ -308,7 +388,8 @@ export default function QueryCard({ data, selected }: NodeProps & { data: QueryC
         rows={lines}
         count={data.columns.length}
         selected={!!selected}
-        width={CARD_WIDTH}
+        width={data.width ?? fitWidth(data)}
+        onResize={(w, shift) => act?.resize(table.id, w, shift)}
         tone={tone}
         dashed={tone === "warning"}
       />

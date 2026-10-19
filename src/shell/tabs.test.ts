@@ -7,12 +7,16 @@ import {
   designKey,
   importKey,
   lineageKey,
+  moveTab,
   newDesignKey,
   objectTabOf,
+  placeObject,
   stripOrder,
+  stripSegment,
   tabConnectionId,
   tabKey,
   type WindowTab,
+  type AnyTab,
   type WorkTab,
 } from "./tabs";
 
@@ -121,4 +125,42 @@ test("a_visual_tab_is_keyed_by_its_doc_and_names_its_connection", () => {
   expect(tabConnectionId(query("q1"))).toBeNull();
   expect(tabConnectionId(table)).toBe("c1");
   expect(tabConnectionId(home)).toBeNull();
+});
+
+const tableSel = (name: string) => ({ connectionId: "c1", kind: "table" as const, path: { database: "shop", schema: null, name } });
+const keyOf = (name: string) => objectKey("c1", "table", tableSel(name).path);
+
+test("item_1_a_single_click_reuses_the_preview_tab_and_a_double_click_keeps_its_own", () => {
+  let tabs: WorkTab[] = [query("q1")];
+  tabs = placeObject(tabs, tableSel("orders"), keyOf("orders"), false, new Set());
+  tabs = placeObject(tabs, tableSel("stores"), keyOf("stores"), false, new Set());
+  // One preview tab, in the same place: stores took orders' place.
+  expect(tabs.map(tabKey)).toEqual(["query:q1", keyOf("stores")]);
+  // A double click on the previewed table keeps it; the next click opens a new preview beside it.
+  tabs = placeObject(tabs, tableSel("stores"), keyOf("stores"), true, new Set());
+  tabs = placeObject(tabs, tableSel("menu"), keyOf("menu"), false, new Set());
+  expect(tabs.map(tabKey)).toEqual(["query:q1", keyOf("stores"), keyOf("menu")]);
+  // A preview with Pending Edits is never replaced.
+  tabs = placeObject(tabs, tableSel("items"), keyOf("items"), false, new Set([keyOf("menu")]));
+  expect(tabs.map(tabKey)).toEqual(["query:q1", keyOf("stores"), keyOf("menu"), keyOf("items")]);
+  // A double click opens a tab of its own even when a preview exists.
+  tabs = placeObject(tabs, tableSel("x"), keyOf("x"), true, new Set());
+  expect(tabs.map(tabKey)).toHaveLength(5);
+});
+
+test("item_7_move_tab_lands_after_when_dragged_right_and_before_when_dragged_left", () => {
+  const list = [query("a"), query("b"), query("c"), query("d")];
+  expect(moveTab(list, "query:a", "query:c").map(tabKey)).toEqual(["query:b", "query:c", "query:a", "query:d"]);
+  expect(moveTab(list, "query:d", "query:b").map(tabKey)).toEqual(["query:a", "query:d", "query:b", "query:c"]);
+  expect(moveTab(list, "query:a", "nope")).toBe(list);
+  expect(stripSegment({ kind: "home" })).toBe("home");
+  expect(stripSegment({ kind: "flow", name: "x" })).toBe("window");
+  expect(stripSegment(query("a"))).toBe("place");
+});
+
+test("a_compare_tab_drags_with_the_window_tabs", () => {
+  const compare = { kind: "compare", id: "c1", seed: { source: null, target: null }, title: "a to b", connectionId: null } as unknown as AnyTab;
+  expect(stripSegment(compare)).toBe("window");
+  expect(stripSegment({ kind: "transfer", id: "t", seed: {}, title: "", dirty: false } as unknown as AnyTab)).toBe("window");
+  expect(stripSegment({ kind: "settings", section: "general" } as unknown as AnyTab)).toBe("window");
 });

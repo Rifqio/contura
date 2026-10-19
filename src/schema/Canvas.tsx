@@ -6,7 +6,9 @@ import type { SchemaModel, SmEndpoint } from "../api/types";
 import { addRef, addTable, fkTargetWarning } from "../lang/dbml/edits";
 import { tableKey } from "../lang/protocol";
 import { MANY_MARKER, ONE_MARKER } from "./EdgeMarkers";
-import DiagramCanvas from "../diagram/DiagramCanvas";
+import DiagramCanvas, { type CanvasMenuAt } from "../diagram/DiagramCanvas";
+import type { MenuItem } from "../components/Menu";
+import { PlacedMenu, type PlacedMenuState } from "../flow/DiagramMenu";
 import type { LayoutRequest, Positions } from "../diagram/layout";
 import { CARD_WIDTH, cardHeight } from "../diagram/metrics";
 import type { Port } from "../diagram/types";
@@ -195,6 +197,19 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
     [],
   );
 
+  /** Item 20: the canvas's own right-click menu, with the strip's actions. */
+  const [menu, setMenu] = useState<PlacedMenuState | null>(null);
+  const openMenu = (at: CanvasMenuAt) => {
+    const items: MenuItem[] = [
+      { key: "add", label: "Add table", icon: <Icon name="table" />, disabled: blocked, onSelect: addNewTable },
+      { key: "arrange", label: "Arrange", icon: <Icon name="arrange" />, disabled: blocked || model.tables.length === 0, onSelect: () => void arrange() },
+      { key: "fit", label: "Zoom to fit", icon: <Icon name="fit" />, shortcut: "Shift+1", onSelect: at.fit },
+      ...(onShowText ? [{ key: "text", label: "Show DBML", icon: <Icon name="fileCode" />, separatorBefore: true, onSelect: onShowText }] : []),
+      { key: "publish", label: "Publish image...", icon: <Icon name="image" />, separatorBefore: !onShowText, disabled: !onPublish, onSelect: () => onPublish?.(onScreen()) },
+    ];
+    setMenu({ x: at.screen.x, y: at.screen.y, label: "Canvas actions", items });
+  };
+
   const addNewTable = () => {
     const used = new Set(model.tables.map((t) => t.name));
     let name = "new_table";
@@ -302,8 +317,10 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
           onDrag={onDrag}
           onConnectPorts={blocked ? undefined : onConnectPorts}
           onSelect={onSelect}
+          onContextMenu={openMenu}
         />
       </div>
+      {menu && <PlacedMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );
 }

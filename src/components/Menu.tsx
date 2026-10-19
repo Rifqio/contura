@@ -10,6 +10,8 @@ export interface MenuItem {
   shortcut?: string;
   /** Quiet text in the right column, where a shortcut would go. */
   hint?: string;
+  /** A second line under the label that says what the action does (a 48 px row). */
+  description?: string;
   /** Makes the row a non-interactive group heading showing this text. */
   heading?: string;
   /** The chosen row of a choice menu: the selected-row look, no check mark. */
@@ -118,7 +120,14 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
         ) : item.hint ? (
           <span className="menu-hint">{item.hint}</span>
         ) : null;
-        const cls = ["menu-item", item.danger ? "menu-item-danger" : "", item.current ? "menu-item-current" : ""].filter(Boolean).join(" ");
+        const cls = [
+          "menu-item",
+          item.danger ? "menu-item-danger" : "",
+          item.current ? "menu-item-current" : "",
+          item.description ? "menu-item-described" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
         return (
           <div key={item.key} role="none" className={item.submenu ? "menu-sub-anchor" : undefined}>
             {item.separatorBefore && <hr className="menu-separator" />}
@@ -131,6 +140,7 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
                 else rows.current.delete(item.key);
               }}
               aria-label={item.label}
+              aria-description={item.description}
               aria-current={item.current ? "true" : undefined}
               aria-haspopup={item.submenu ? "menu" : undefined}
               aria-expanded={item.submenu ? open : undefined}
@@ -156,7 +166,14 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
               }}
             >
               <span className="menu-icon">{item.checked ? <Icon name="check" size={14} /> : item.icon}</span>
-              <span className="menu-label">{item.label}</span>
+              {item.description ? (
+                <span className="menu-label">
+                  <span className="menu-label-line">{item.label}</span>
+                  <span className="menu-description">{item.description}</span>
+                </span>
+              ) : (
+                <span className="menu-label">{item.label}</span>
+              )}
               {right}
             </button>
             {open && item.submenu && (

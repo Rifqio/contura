@@ -15,6 +15,27 @@ export type FlowProblem = {
   fixes: QuickFix[];
 };
 
+/** The kind in words, inside a sentence. */
+const KIND_WORDS: Record<DiagramKind, string> = {
+  dfd: "data flow",
+  flow: "flowchart",
+  cloud: "cloud",
+  er: "entity relationship",
+  sequence: "sequence",
+  state: "state",
+  class: "class",
+  mindmap: "mind map",
+  timeline: "timeline",
+};
+
+/** How the kinds without bracket words are written. */
+const LEADING: Partial<Record<DiagramKind, string>> = {
+  sequence: "Start the line with participant or actor.",
+  class: "Start the line with class, interface or enum.",
+  mindmap: "Indent a topic under its parent instead.",
+  timeline: "Start the line with a date or milestone.",
+};
+
 /** "a, b or c". */
 function either(words: readonly string[]): string {
   return words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
@@ -22,7 +43,19 @@ function either(words: readonly string[]): string {
 
 
 export const MESSAGES = {
-  firstLine: "The first line must say diagram dfd, diagram flow or diagram cloud.",
+  firstLine: "The first line must say diagram and a kind, such as diagram dfd, diagram flow or diagram sequence.",
+  arrowKind: (arrow: string, kind: DiagramKind, use: string) => `A ${KIND_WORDS[kind]} diagram does not draw ${arrow}. Use ${use}.`,
+  noLines: "A timeline has no lines between items: its order comes from the dates.",
+  bracketKinds: (kind: DiagramKind) => `A ${KIND_WORDS[kind]} diagram takes no kind in brackets. ${LEADING[kind] ?? ""}`.trim(),
+  badDate: "Write the date as YYYY-MM-DD, YYYY-MM or YYYY, for example 2026-10-19.",
+  timelineLine: "A timeline line starts with a date, milestone or section, for example 2026-10-19: Release.",
+  needsColon: "Put a colon after the date, then the name, for example 2026-10-19: Release.",
+  noFrame: "This } closes no frame.",
+  frameNeedsBrace: "A frame ends its first line with {, for example loop retry 3 times {.",
+  unclosedFrame: (label: string) => `${label} has no closing }.`,
+  noEntity: (name: string) => `${name} is not an entity. Add ${name} [entity] first.`,
+  noClass: (name: string) => `${name} is not a class. Add class ${name} first.`,
+  noRoot: "A mind map starts with its central idea, for example root Q4 plan.",
   dfdNeedsKind: "A data flow node needs a kind: entity, process or store.",
   decisionLabels: "A decision needs a label on each way out, for example yes and no.",
   cloudKind: "A cloud node takes an icon, not a kind, for example [icon: aws-s3].",

@@ -71,21 +71,20 @@ test("theme_cards_with_previews_and_follow_windows", async () => {
   renderWithProviders(<AppearanceSection />);
   const group = screen.getByRole("radiogroup", { name: "Theme" });
   const radios = within(group).getAllByRole("radio");
-  expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual(["Dracula", "Alucard", "Follow Windows"]);
-  await waitFor(() => expect((within(group).getByRole("radio", { name: "Dracula" }) as HTMLInputElement).checked).toBe(true));
+  expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual(["Dark", "Light", "Follow Windows"]);
+  await waitFor(() => expect((within(group).getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true));
 
   // Each card draws real code in its own theme's tokens; Follow Windows shows both.
   const card = (name: string) => within(group).getByRole("radio", { name }).closest(".theme-card") as HTMLElement;
-  expect(card("Dracula").querySelectorAll(".theme-dark .theme-preview-code")).toHaveLength(1);
-  expect(card("Dracula").querySelector(".theme-light")).toBeNull();
-  expect(card("Alucard").querySelectorAll(".theme-light .theme-preview-code")).toHaveLength(1);
+  expect(card("Dark").querySelectorAll(".theme-dark .theme-preview-code")).toHaveLength(1);
+  expect(card("Dark").querySelector(".theme-light")).toBeNull();
+  expect(card("Light").querySelectorAll(".theme-light .theme-preview-code")).toHaveLength(1);
   expect(card("Follow Windows").querySelectorAll(".theme-light, .theme-dark")).toHaveLength(2);
-  expect(card("Dracula").textContent).toContain("SELECT count(*)");
-  expect(card("Dracula").textContent).toContain("Dark");
-  expect(card("Alucard").textContent).toContain("Light");
-  expect(screen.getByText("Follow Windows uses Alucard in light mode and Dracula in dark mode.")).toBeTruthy();
+  expect(card("Dark").textContent).toContain("SELECT count(*)");
+  expect(card("Dark").textContent).not.toMatch(/Dracula|Alucard/);
+  expect(screen.getByText("Follow Windows uses Light when Windows is light and Dark when it is dark.")).toBeTruthy();
 
-  await userEvent.click(within(group).getByRole("radio", { name: "Alucard" }));
+  await userEvent.click(within(group).getByRole("radio", { name: "Light" }));
   await waitFor(() => expect(lastPrefs()?.theme).toBe("light"));
   await userEvent.click(within(group).getByRole("radio", { name: "Follow Windows" }));
   await waitFor(() => expect(lastPrefs()?.theme).toBe("system"));

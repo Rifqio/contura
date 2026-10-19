@@ -786,6 +786,17 @@ export default function TableDesigner({
   const reason = readOnly ? null : (problem ?? (copyOnly ? COPY_ONLY : null));
   const wash = connection.production ? " prod-wash" : "";
 
+  /** The full-width Add row under each grid (frame Designer, `.addrow`): the toolbar's Add, where the list ends. */
+  const addRow = canEdit ? (
+    <button type="button" className="design-addrow" onClick={add}>
+      <span className="design-addrow-plus" aria-hidden="true">
+        <Icon name="plus" size={14} />
+      </span>
+      {ADD_LABEL[tab]}
+      <span className="design-addrow-key">Ctrl+N</span>
+    </button>
+  ) : null;
+
   return (
     <section
       className={["design-view", connection.production && "prod-wash"].filter(Boolean).join(" ")}
@@ -825,7 +836,8 @@ export default function TableDesigner({
               className={tab === t ? "design-tab design-tab-on" : "design-tab"}
               onClick={() => switchTab(t)}
             >
-              {tabNames[t]} <span className="design-tab-count">{counts[t]}</span>
+              {/* Item 6: the count is its own item after a gap, so it never runs into the name ("Columns 5"). */}
+              <span className="design-tab-name">{tabNames[t]}</span> <span className="design-tab-count">{counts[t]}</span>
             </button>
           ))}
         </div>
@@ -910,6 +922,7 @@ export default function TableDesigner({
                   void apply();
                 }}
               />
+              {addRow}
             </div>
           )}
           {rowTab && (
@@ -948,6 +961,7 @@ export default function TableDesigner({
                   }}
                 />
               )}
+              {addRow}
             </div>
           )}
           {rowTab === "foreignKeys" && schemaState === "failed" && !readOnly && (

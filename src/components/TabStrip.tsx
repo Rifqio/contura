@@ -4,11 +4,11 @@ import { hintFor, withHint } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
 import { type DiagramMenuActions, diagramMenuItems, PlacedMenu, type PlacedMenuState } from "../flow/DiagramMenu";
 import { useUnsavedFlows } from "../flow/flowRegistry";
-import { type AnyTab, isUnsaved, tabConnectionId, tabKey } from "../shell/tabs";
+import { type AnyTab, isUnsaved, stripSegment, tabConnectionId, tabKey } from "../shell/tabs";
 import DbMark from "./DbMark";
 import { groupStyle } from "./GroupBadge";
 import Icon, { type IconName } from "./Icon";
-import Menu from "./Menu";
+import NewTabMenu, { type NewTabSection } from "./NewTabMenu";
 import SafetyTag from "./SafetyTag";
 
 export type { Selection, WorkTab } from "../shell/tabs";
@@ -99,6 +99,179 @@ interface Props {
   dirtyKeys?: ReadonlySet<string>;
   /** Lets a tab draw in its Connection's Group hue. */
   groups?: Group[];
+  /** Item 7: a tab dragged along the strip and dropped where `to` was. */
+  onReorder?(from: string, to: string): void;
+  /** A double click on a preview tab keeps it (item 1). */
+  onKeep?(key: string): void;
+  /** The new tab menu's New Schema Model (item 34). */
+  onNewModel?(): void;
+  /** Where New query opens, for its line in the new tab menu ("On kestrel-main, shop"). */
+  newQueryWhere?: string | null;
+}
+
+/** Starts a drag after this many pixels, so a click never moves a tab. */
+const DRAG_PX = 5;
+/** The gap between tabs (DN 10.2). */
+const TAB_GAP = 6;
+
+interface DragState {
+  key: string;
+  dx: number;
+  /** The tab whose place it takes on drop, or null while it is still in its own. */
+  to: string | null;
+}
+
+/**
+ * Item 7: tabs move along the strip as Chrome's do. The dragged tab follows the pointer; the tabs it passes slide
+ * over by its width (120 ms); on release the list is reordered. A tab moves only among its own part of the strip.
+ */
+function useTabDrag(tabs: AnyTab[], onReorder?: (from: string, to: string) => void) {
+  const [state, setState] = useState<DragState | null>(null);
+  const [settling, setSettling] = useState(false);
+  const boxes = useRef<{ key: string; left: number; width: number; seg: string }[]>([]);
+  /** A drag just ended: the click that its release brings must not select the tab. */
+  const dragged = useRef(false);
+
+  function down(e: React.PointerEvent<HTMLElement>, key: string) {
+    dragged.current = false;
+    if (!onReorder || e.button !== 0) return;
+    if ((e.target as HTMLElement).closest(".work-tab-close")) return;
+    const tab = tabs.find((t) => tabKey(t) === key);
+    if (!tab || stripSegment(tab) === "home") return;
+    const strip = e.currentTarget.parentElement;
+    const seg = stripSegment(tab);
+    boxes.current = Array.from(strip?.querySelectorAll<HTMLElement>(".work-tab") ?? []).map((el) => {
+      const r = el.getBoundingClientRect();
+      const t = tabs.find((x) => tabKey(x) === el.dataset.key);
+      return { key: el.dataset.key ?? "", left: r.left, width: r.width, seg: t ? stripSegment(t) : "" };
+    });
+    const startX = e.clientX;
+    let started = false;
+    let last: DragState | null = null;
+    const me = boxes.current.find((b) => b.key === key);
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      if (!started && Math.abs(dx) < DRAG_PX) return;
+      started = true;
+      const mine = boxes.current.filter((b) => b.seg === seg);
+      const from = mine.findIndex((b) => b.key === key);
+      const centre = (me?.left ?? 0) + (me?.width ?? 0) / 2 + dx;
+      let to: string | null = null;
+      mine.forEach((b, i) => {
+        const mid = b.left + b.width / 2;
+        if (i > from && centre > mid) to = b.key;
+        if (i < from && centre < mid && to === null) to = b.key;
+      });
+      last = { key, dx, to };
+      setState(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (!started) return;
+      dragged.current = true;
+      const done = last;
+      // The moved tabs take their new places at once: no slide back from where they were shifted to.
+      setSettling(true);
+      setState(null);
+      if (done?.to) onReorder?.(done.key, done.to);
+      requestAnimationFrame(() => requestAnimationFrame(() => setSettling(false)));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  /** The shift of each tab while a drag runs: the dragged one with the pointer, the passed ones by its width. */
+  function styleOf(key: string): React.CSSProperties | undefined {
+    if (!state) return undefined;
+    if (key === state.key) return { transform: `translateX(${state.dx}px)` };
+    if (state.to === null) return undefined;
+    const all = boxes.current;
+    const from = all.findIndex((b) => b.key === state.key);
+    const to = all.findIndex((b) => b.key === state.to);
+    const at = all.findIndex((b) => b.key === key);
+    const width = (all[from]?.width ?? 0) + TAB_GAP;
+    if (to > from && at > from && at <= to) return { transform: `translateX(${-width}px)` };
+    if (to < from && at < from && at >= to) return { transform: `translateX(${width}px)` };
+    return undefined;
+  }
+
+  /** True once for the click that ends a drag. */
+  function endedDrag(): boolean {
+    const was = dragged.current;
+    dragged.current = false;
+    return was;
+  }
+
+  /** Alt+Left and Alt+Right: the keyboard's way to move a tab one place within its own part of the strip. */
+  function step(key: string, by: -1 | 1): boolean {
+    if (!onReorder) return false;
+    const tab = tabs.find((t) => tabKey(t) === key);
+    if (!tab || stripSegment(tab) === "home") return false;
+    const seg = stripSegment(tab);
+    const mine = tabs.filter((t) => stripSegment(t) === seg).map(tabKey);
+    const to = mine[mine.indexOf(key) + by];
+    if (to === undefined) return false;
+    onReorder(key, to);
+    return true;
+  }
+
+  return { state, settling, down, styleOf, endedDrag, step };
+}
+
+/** The new tab menu's two sections (frame NewTab): Write and Draw. */
+function newTabSections(o: {
+  map: ReturnType<typeof useKeymap>["map"];
+  onNew(): void;
+  onNewVisual(): void;
+  newVisualReady: boolean;
+  onNewDiagram?(): void;
+  onNewModel?(): void;
+  newQueryWhere: string | null;
+}): NewTabSection[] {
+  const draw: NewTabSection["items"] = [
+    ...(o.onNewDiagram
+      ? [
+          {
+            key: "diagram",
+            icon: "diagram" as const,
+            label: "New diagram",
+            description: "A .flow file: data flow, flowchart, cloud",
+            shortcut: hintFor(o.map, "flow.new"),
+            onSelect: o.onNewDiagram,
+          },
+        ]
+      : []),
+    ...(o.onNewModel
+      ? [{ key: "model", icon: "model" as const, label: "New Schema Model", description: "Design tables in DBML before they exist", onSelect: o.onNewModel }]
+      : []),
+  ];
+  return [
+    {
+      title: "Write",
+      items: [
+        {
+          key: "query",
+          icon: "query",
+          label: "New query",
+          description: o.newQueryWhere ?? "A blank SQL editor",
+          shortcut: hintFor(o.map, "query.new"),
+          onSelect: o.onNew,
+        },
+        {
+          key: "visual",
+          icon: "vquery",
+          label: "New Visual Query",
+          description: "Pick tables and columns, see the SQL",
+          disabledWhy: o.newVisualReady ? null : "Open a Connection first",
+          onSelect: o.onNewVisual,
+        },
+      ],
+    },
+    ...(draw.length > 0 ? [{ title: "Draw", items: draw }] : []),
+  ];
 }
 
 /** The open tabs of the window and its place, in the title bar. Ctrl+W closes, Ctrl+Tab and Ctrl+Shift+Tab move. */
@@ -115,13 +288,29 @@ export default function TabStrip({
   connections = [],
   dirtyKeys,
   groups = [],
+  onNewModel,
+  newQueryWhere = null,
+  onKeep,
+  onReorder,
 }: Props) {
+  const drag = useTabDrag(tabs, onReorder);
+  const [newMenu, setNewMenu] = useState(false);
+  const more = useRef<HTMLButtonElement>(null);
   const { map } = useKeymap();
   /** Diagram tabs whose save is still to come or failed. */
   const unsavedFlows = useUnsavedFlows();
   const [menu, setMenu] = useState<PlacedMenuState | null>(null);
   const keys = tabs.map(tabKey);
   const list = useRef<HTMLDivElement>(null);
+  /** The tab moved by Alt+Left or Alt+Right keeps focus in its new place. */
+  const refocus = useRef<string | null>(null);
+  useEffect(() => {
+    const key = refocus.current;
+    if (key === null) return;
+    refocus.current = null;
+    const el = Array.from(list.current?.querySelectorAll<HTMLElement>(".work-tab") ?? []).find((t) => t.dataset.key === key);
+    el?.querySelector<HTMLElement>(".work-tab-button")?.focus();
+  }, [tabs]);
   // NF1: the strip scrolls without a bar; the active tab is brought into view when it is picked or opened.
   useEffect(() => {
     if (active === null) return;
@@ -177,13 +366,30 @@ export default function TabStrip({
           const group = owner?.groupId ? groups.find((g) => g.id === owner.groupId) : undefined;
           const icon = iconOf(t);
           // A Saved Query's tab shows no kind word; its tooltip says what it is and where it opens.
-          const tip = isSaved && owner ? `${name}, Saved Query on ${owner.name}` : name;
+          const tip =
+            isSaved && owner
+              ? `${name}, Saved Query on ${owner.name}`
+              : t.kind === "object" && t.preview
+                ? `${name}. Preview: the next table you open replaces it. Double-click to keep it.`
+                : name;
           return (
             <div
               key={key}
               data-key={key}
-              className={on ? "work-tab work-tab-on" : "work-tab"}
-              style={groupStyle(group?.color)}
+              className={[
+                "work-tab",
+                on && "work-tab-on",
+                t.kind === "object" && t.preview && "work-tab-preview",
+                drag.state?.key === key && "work-tab-dragging",
+                drag.settling && "work-tab-settling",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              style={{ ...groupStyle(group?.color), ...drag.styleOf(key) }}
+              onPointerDown={(e) => drag.down(e, key)}
+              onDoubleClick={() => {
+                if (t.kind === "object" && t.preview) onKeep?.(key);
+              }}
               // A middle click closes the tab under the pointer; holding it down must not start autoscroll.
               onMouseDown={(e) => {
                 if (e.button === 1) e.preventDefault();
@@ -209,7 +415,17 @@ export default function TabStrip({
                 aria-label={label}
                 className="work-tab-button"
                 title={tip}
-                onClick={() => onSelect(key)}
+                onClick={() => {
+                  if (!drag.endedDrag()) onSelect(key);
+                }}
+                onKeyDown={(e) => {
+                  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+                  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                  if (drag.step(key, e.key === "ArrowLeft" ? -1 : 1)) {
+                    e.preventDefault();
+                    refocus.current = key;
+                  }
+                }}
               >
                 {icon && <Icon name={icon} size={14} />}
                 {(t.kind === "query" || t.kind === "visual") && owner && <DbMark dialect={owner.dialect} open size={14} label={null} />}
@@ -238,30 +454,39 @@ export default function TabStrip({
         <Icon name="plus" />
       </button>
       {onNewVisual && (
-        // D10: the other kinds of new tab, beside New query.
-        <Menu
-          label="More new tabs"
-          align="end"
-          trigger={(p) => (
-            <button type="button" {...p} className="icon-button tab-strip-more" aria-label="More new tabs" title="More new tabs">
-              <Icon name="chevronDown" size={14} />
-            </button>
+        // D10 and item 34: the kinds of new tab, beside New query, each with its large feature icon.
+        <>
+          <button
+            ref={more}
+            type="button"
+            className="icon-button tab-strip-more"
+            aria-label="More new tabs"
+            title="More new tabs"
+            aria-haspopup="menu"
+            aria-expanded={newMenu}
+            onClick={() => setNewMenu((o) => !o)}
+          >
+            <Icon name="chevronDown" size={14} />
+          </button>
+          {newMenu && (
+            <NewTabMenu
+              anchor={more}
+              onClose={() => {
+                setNewMenu(false);
+                more.current?.focus();
+              }}
+              sections={newTabSections({
+                map,
+                onNew,
+                onNewVisual,
+                newVisualReady,
+                onNewDiagram,
+                onNewModel,
+                newQueryWhere,
+              })}
+            />
           )}
-          items={[
-            { key: "query", label: "New query", icon: <Icon name="fileQuery" />, shortcut: hintFor(map, "query.new") ?? undefined, onSelect: onNew },
-            {
-              key: "visual",
-              label: "New Visual Query",
-              icon: <Icon name="visualQuery" />,
-              disabled: !newVisualReady,
-              title: newVisualReady ? undefined : "Open a Connection first",
-              onSelect: onNewVisual,
-            },
-            ...(onNewDiagram
-              ? [{ key: "diagram", label: "New diagram", icon: <Icon name="flow" />, shortcut: hintFor(map, "flow.new") ?? undefined, onSelect: onNewDiagram }]
-              : []),
-          ]}
-        />
+        </>
       )}
       {menu && <PlacedMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>

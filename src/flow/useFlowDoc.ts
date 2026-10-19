@@ -103,6 +103,8 @@ export interface FlowDocApi {
   place(positions: Positions, override?: boolean): void;
   setStyle(style: NodeLook): void;
   setDirection(direction: FlowDirection): void;
+  /** Item 21: a node resized on the canvas: its new box (a left or top handle moves it too); kept in the layout file. */
+  resize(name: string, box: { x: number; y: number; w: number; h: number }): void;
   /** The 1-based line each name is defined on in the current text, or null when the text has changed since. */
   linesOf(names: string[]): Promise<Record<string, number | null> | null>;
   /** Parses the editor's text again, as when the worker learns something new (the icon names). */
@@ -201,7 +203,14 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       nodes = emptyPositions();
       for (const n of cur.result.doc.nodes) if (Object.prototype.hasOwnProperty.call(l.nodes, n.name)) nodes[n.name] = l.nodes[n.name];
     }
-    return { text, textEdited, layout: serializeFlowLayout({ ...l, nodes }), edited };
+    // Sizes follow the same rule as positions.
+    let sizes = l.sizes;
+    if (cur?.result.doc && sizes) {
+      const kept: Record<string, { w: number; h: number }> = {};
+      for (const n of cur.result.doc.nodes) if (Object.prototype.hasOwnProperty.call(sizes, n.name)) kept[n.name] = sizes[n.name];
+      sizes = kept;
+    }
+    return { text, textEdited, layout: serializeFlowLayout({ ...l, nodes, sizes }), edited };
   }, []);
 
   /** Writes the layout now, with the text when it was edited; true once it is on disk. */
@@ -607,6 +616,18 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [setLayout, scheduleSave],
   );
 
+  const resize = useCallback(
+    (name: string, box: { x: number; y: number; w: number; h: number }) => {
+      const l = layoutRef.current;
+      const nodes = emptyPositions();
+      Object.assign(nodes, l.nodes, { [name]: { x: box.x, y: box.y } });
+      const sizes = Object.assign(Object.create(null) as Record<string, { w: number; h: number }>, l.sizes, { [name]: { w: box.w, h: box.h } });
+      setLayout({ ...l, nodes, sizes });
+      scheduleSave();
+    },
+    [setLayout, scheduleSave],
+  );
+
   const setDirection = useCallback(
     (direction: FlowDirection) => {
       if (direction === layoutRef.current.direction) return;
@@ -655,6 +676,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     move,
     place,
     setStyle,
+    resize,
     setDirection,
     linesOf,
     reparse,

@@ -52,18 +52,20 @@ import {
   undo,
 } from "../edits/pending";
 import { cellText, cellValue, type DisplayRow, displayRows, hasKey, parsePaste } from "../edits/gridRows";
-import CellEditor from "./CellEditor";
+import CellEditor, { type LargeEditor } from "./CellEditor";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
-import InlineAsk from "../assistant/InlineAsk";
 import type { AskContext, AskKit } from "../assistant/context";
-import SqlEditor, { type AskSelection, type SqlEditorApi } from "../query/SqlEditor";
+import FilterBar from "../grid/FilterBar";
+import { filtersSql, type RowFilter, valueKind } from "../grid/rowFilters";
+import FeatureIcon from "./FeatureIcon";
+import Kbd from "./Kbd";
 import ResultGrid from "./ResultGrid";
 import Icon from "./Icon";
 import DbMark from "./DbMark";
 import MenuButton, { MenuList, type MenuItem } from "./Menu";
 import { useToast } from "./Toast";
-import ResultTools, { cellText as plainText } from "../query/ResultTools";
+import { toCsv } from "../query/ResultTools";
 import { useCommandKeys } from "../commands/useCommandKeys";
 import type { ExportOrigin } from "../jobs/exportText";
 import { objectPrefix } from "../objectPath";
@@ -90,8 +92,10 @@ interface Props {
   dialect?: DialectKind;
   /** Completion and checks in the filter box. */
   lang?: { client: LangClient; schemas: SchemaCache };
-  /** Ctrl+I in the filter box asks AI; absent, it does nothing. */
+  /** Kept for the owner's call; the filter is built in words now (item 2), so there is no SQL box to ask about. */
   ask?: AskKit & { connection: AskContext["connection"] };
+  /** Opens a Data Transfer from this table (the Table menu's Copy to another Connection...). */
+  onTransfer?(): void;
   /** The Connection is Read-only: a lock in the header corner says cells can't be edited. */
   readOnly?: boolean;
   /** Views are shown but never edited. */
@@ -126,6 +130,8 @@ interface Props {
   notice?: string | null;
   /** The rows were reloaded with no Pending Edits, so the owner's notice is answered. */
   onNoticeDone?(): void;
+  /** Pending Edits were saved: a meaningful change, so the owner may list the table in Recent (item 12). */
+  onSaved?(): void;
 }
 
 export interface GridControl {
@@ -148,30 +154,10 @@ const PASTE_KEY_NOTE = "Pasting can't change key columns.";
 const PASTE_DELETED_NOTE = "Deleted rows can't be edited. Revert the row first.";
 const PROD_SAVE_NOTE = "Saving runs on Production and asks you to confirm the SQL first.";
 const READ_ONLY_FOOT = "Read-only Connection: cells cannot be edited";
-const ORDER_NOTE = "Sort by one column, such as total DESC.";
 
 /** "Saving runs the 3 statements in one transaction.": Save writes one statement per changed row. */
 function savingText(n: number): string {
   return n === 1 ? "Saving runs 1 statement in one transaction." : `Saving runs the ${n.toLocaleString("en-US")} statements in one transaction.`;
-}
-
-/** The ORDER BY field's text for a sort: `total` or `total DESC`. */
-function sortText(s: SortSpec | null): string {
-  return s ? `${s.column}${s.descending ? " DESC" : ""}` : "";
-}
-
-/** PR30: one column with an optional ASC or DESC; null when the text is anything else. */
-export function parseOrderBy(text: string, columns: ColumnInfo[]): { sort: SortSpec | null } | null {
-  const t = text.trim();
-  if (t === "") return { sort: null };
-  const m = /^("(?:[^"]|"")+"|`(?:[^`]|``)+`|[\p{L}_][\p{L}\p{N}_$]*)(?:\s+(asc|desc))?$/iu.exec(t);
-  if (!m) return null;
-  const raw = m[1];
-  const quoted = raw[0] === '"' || raw[0] === "`";
-  const name = quoted ? raw.slice(1, -1).replace(raw[0] === '"' ? /""/g : /``/g, raw[0]) : raw;
-  // A bare name matches its column whatever its case; a quoted one is taken as written.
-  const column = quoted ? name : (columns.find((c) => c.name.toLowerCase() === name.toLowerCase())?.name ?? name);
-  return { sort: { column, descending: m[2]?.toLowerCase() === "desc" } };
 }
 
 /** The table as the header names it: `public.orders` with a schema, else `shop.orders`. */
@@ -181,7 +167,11 @@ function shortName(t: ObjectPath): string {
 
 type Spot = { row: number; column: number };
 /** `old` is the full old value of a cut-short cell, loaded before the editor opened. */
-type Editing = Spot & { initial: string; multiline: boolean; old?: Cell };
+/** `large`: the larger editor under the cell (item 4), for long or many-line values and on Shift+F2. */
+type Editing = Spot & { initial: string; multiline: boolean; old?: Cell; large?: boolean };
+
+/** Item 4: a value this long (or with a line break) opens in the larger editor, so it can be read while edited. */
+const LONG_VALUE = 48;
 
 const fullText = (value: string): Cell => ({
   t: "text",
@@ -204,6 +194,78 @@ function rowKey(columns: ColumnInfo[], row: Page["rows"][number]): KeyPart[] {
 }
 
 /**
+ * Item 10 (frame Table, "Empty table"): what an empty page says. A table with no rows offers the first row and
+ * the two ways to bring rows in; filters that match nothing offer to clear them; a page past the end goes back.
+ */
+function EmptyRows(p: {
+  table: string;
+  firstPage: boolean;
+  filtered: boolean;
+  canAdd: boolean;
+  production: boolean;
+  connectionName: string | null;
+  onAdd(): void;
+  onClear(): void;
+  onImport?: () => void;
+  onTransfer?: () => void;
+}) {
+  if (!p.firstPage) return <p className="state-panel muted">No more rows. Go back a page.</p>;
+  if (p.filtered) {
+    return (
+      <div className="grid-empty" role="status">
+        <Icon name="filter" size={20} className="grid-empty-icon" />
+        <h3 className="grid-empty-title">No rows match the filters</h3>
+        <p className="grid-empty-text">Change a filter, or clear them to see every row of {p.table}.</p>
+        <div className="grid-empty-actions">
+          <button type="button" className="button button-primary" onClick={p.onClear}>
+            Clear filters
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid-empty" role="status">
+      <span className="grid-empty-tile" aria-hidden="true">
+        <FeatureIcon name="table" size={28} />
+      </span>
+      <h3 className="grid-empty-title">{p.table} has no rows yet</h3>
+      <p className="grid-empty-text">
+        {p.canAdd ? "The columns above are ready. Add the first row here, or bring rows in from a file or another Connection." : "Nothing has been added to it yet."}
+      </p>
+      {p.canAdd && (
+        <div className="grid-empty-actions">
+          <button type="button" className="button button-primary" onClick={p.onAdd}>
+            <Icon name="plus" size={14} />
+            Add row
+            <Kbd keys="Ctrl+N" />
+          </button>
+          {p.onImport && (
+            <button type="button" className="button" onClick={p.onImport}>
+              <FeatureIcon name="import" size={16} />
+              Import a file...
+            </button>
+          )}
+          {p.onTransfer && (
+            <button type="button" className="button" onClick={p.onTransfer}>
+              <FeatureIcon name="transfer" size={16} />
+              Copy from a Connection...
+            </button>
+          )}
+        </div>
+      )}
+      {p.canAdd && (
+        <p className="grid-empty-note">
+          {p.production && p.connectionName
+            ? `New rows wait as Pending Edits. Saving on ${p.connectionName} shows the SQL and asks you to confirm.`
+            : "New rows wait as Pending Edits until you save."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * The read-only grid for one table or view. Only the current page lives in
  * state (ADR 0003): moving to another page replaces it, and the parent keys
  * this component by table so opening another table starts fresh. Only the
@@ -215,7 +277,6 @@ export default function DataGrid({
   onNotOpen,
   dialect = "postgres",
   lang,
-  ask,
   readOnly = false,
   kind = "table",
   production = false,
@@ -233,20 +294,17 @@ export default function DataGrid({
   onNoticeDone,
   onExport,
   onImport,
+  onSaved,
+  onTransfer,
 }: Props) {
   const { show: showToast } = useToast();
   const [pageIndex, setPageIndex] = useState(0);
   const [sort, setSort] = useState<SortSpec | null>(null);
-  /** What is typed in the ORDER BY field. */
-  const [orderDraft, setOrderDraft] = useState("");
-  /** The client-side filter and the hidden columns of the header's filter and columns menus (PR28). */
-  const [rowFilter, setRowFilter] = useState("");
+  /** The hidden columns of the Table menu's Columns list (PR28). */
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
-  /** The filter in use, and what is typed in the box. */
+  /** Item 2: the filters, built in words; `filter` is the WHERE they make, which the page is fetched with. */
+  const [rowFilters, setRowFilters] = useState<RowFilter[]>([]);
   const [filter, setFilter] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const filterRef = useRef<SqlEditorApi | null>(null);
-  const [askSel, setAskSel] = useState<AskSelection | null>(null);
   const schemaLoad = useSyncExternalStore(
     lang ? (l) => lang.schemas.subscribe(l) : noSubscribe,
     () => lang?.schemas.state(connectionId, table.database) ?? null,
@@ -289,49 +347,36 @@ export default function DataGrid({
     };
   }, [connectionId, pageIndex, sort, filter, attempt]);
 
-  function applyFilter() {
+  /** Item 2: new filters fetch page 0 with the WHERE they make. */
+  function applyFilters(next: RowFilter[]) {
     flushEditor();
-    const text = (filterRef.current?.text() ?? draft).trim();
-    setFilter(text || null);
+    setRowFilters(next);
+    const kinds = new Map(columns.map((c) => [c.name, valueKind(c.typeName)]));
+    setFilter(filtersSql(dialect, next, (c) => kinds.get(c) ?? "text"));
     setPageIndex(0);
   }
 
   function clearFilter(): boolean {
-    if (!filter && !draft) return false;
-    setDraft("");
-    filterRef.current?.replaceAll("");
-    setFilter(null);
-    setPageIndex(0);
+    if (rowFilters.length === 0 && !filter) return false;
+    applyFilters([]);
     return true;
   }
 
   function chooseSort(column: string) {
     flushEditor();
-    const next = nextSort(sort, column);
-    setSort(next);
-    setOrderDraft(sortText(next));
+    setSort(nextSort(sort, column));
     setPageIndex(0);
   }
 
-  function clearSort() {
-    setSort(null);
-    setOrderDraft("");
-    setPageIndex(0);
-  }
-
-  /** Enter in the ORDER BY field: one column with an optional ASC or DESC, else it says what it takes. */
-  function applyOrderBy() {
-    const parsed = parseOrderBy(orderDraft, columns);
-    if (!parsed) return setNote(ORDER_NOTE);
-    if (note === ORDER_NOTE) setNote(null);
-    const next = parsed.sort;
-    if (sortText(next) === sortText(sort)) return;
+  function setSortTo(next: SortSpec | null) {
     flushEditor();
     setSort(next);
     setPageIndex(0);
   }
 
-  const askSchema = lang ? lang.client.sqlSchemaFor(schemaKey(connectionId, table.database)) : null;
+  function clearSort() {
+    setSortTo(null);
+  }
   const page = shown?.page ?? null;
   const columns = page?.columns ?? [];
   const firstRow = (shown?.index ?? 0) * PAGE_SIZE + 1;
@@ -377,15 +422,11 @@ export default function DataGrid({
   viewRef.current = view;
   const keyed = hasKey(columns);
 
-  // The rows and columns on screen, as indexes into `view` and `columns`: the header's filter keeps
-  // the rows whose loaded or edited text matches, and every new row; the columns menu hides columns.
+  // The rows and columns on screen, as indexes into `view` and `columns`: every row (the filters run on the
+  // server), and the columns the Table menu's Columns list has not hidden.
   // Selection, editing and Pending Edits stay in `view` and `columns` indexes; only the grid maps.
-  const needle = rowFilter.trim().toLowerCase();
   const shownCols = useMemo(() => columns.flatMap((c, i) => (hidden.has(c.name) ? [] : [i])), [columns, hidden]);
-  const shownRows = useMemo(() => {
-    const hit = (cells: Cell[]) => cells.some((c) => plainText(c).toLowerCase().includes(needle));
-    return view.flatMap((d, i) => (!needle || d.kind === "new" || hit(d.cells) || hit(d.source) ? [i] : []));
-  }, [view, needle]);
+  const shownRows = useMemo(() => view.map((_, i) => i), [view]);
   const rowPos = (row: number) => shownRows.indexOf(row);
   const colPos = (column: number) => shownCols.indexOf(column);
   /** The selected cell is on screen: the header's filter or columns menu has not hidden it. */
@@ -450,7 +491,7 @@ export default function DataGrid({
     return null;
   }
 
-  function openEditor(row: number, column: number, typed?: string) {
+  function openEditor(row: number, column: number, typed?: string, larger = false) {
     if (!editable || !pendingRef.current || inflight.current) return;
     const d = view[row];
     if (!d) return;
@@ -461,7 +502,14 @@ export default function DataGrid({
     }
     setNote(null);
     const start = (initial: string, old?: Cell) =>
-      setEditing({ row, column, initial, multiline: initial.includes("\n"), old });
+      setEditing({
+        row,
+        column,
+        initial,
+        multiline: initial.includes("\n"),
+        old,
+        large: larger || (typed === undefined && (initial.length > LONG_VALUE || initial.includes("\n"))),
+      });
     const cell = d.cells[column];
     if (d.kind === "loaded" && cell.t === "text" && cell.truncated) {
       // The full value is the old value Save sends, so it is loaded even when typing over the cell.
@@ -653,7 +701,8 @@ export default function DataGrid({
       return;
     } else if (e.key === "Enter" || e.key === "F2") {
       e.preventDefault();
-      openEditor(at.row, at.column);
+      // Shift+F2 opens the larger editor (item 4).
+      openEditor(at.row, at.column, undefined, e.key === "F2" && e.shiftKey);
     } else if (e.key === "Delete") {
       e.preventDefault();
       deleteSelected();
@@ -688,6 +737,8 @@ export default function DataGrid({
   }
 
   /** Applies with a pass (or none); an expired or used pass asks again with the current SQL. */
+  const latestSaved = useRef(onSaved);
+  latestSaved.current = onSaved;
   async function apply(edits: EditSet, pass: PassId | null, state: Pending["state"]): Promise<boolean> {
     try {
       await applyEdits(connectionId, edits, pass);
@@ -696,6 +747,7 @@ export default function DataGrid({
       setConflict(null);
       setSaveError(null);
       setAttempt((n) => n + 1);
+      latestSaved.current?.();
       return true;
     } catch (e) {
       if ((e as { kind?: string })?.kind === "needsConfirmation") return runSave();
@@ -929,6 +981,98 @@ export default function DataGrid({
           : "";
   const noteText = note ?? notice ?? (editable && page && !keyed ? NO_KEY : null);
 
+  /** What the larger editor names: the column and type, the row and its key, and what keeping it does. */
+  function largeEditor(e: Editing): LargeEditor {
+    const c = columns[e.column];
+    const d = view[e.row];
+    const key = d?.kind === "loaded" && keyed ? rowKey(columns, d.source)[0] : undefined;
+    const where = d?.kind === "new" ? "new row" : `row ${(firstRow + e.row).toLocaleString("en-US")}${key ? `, ${key.column} ${cellText(key.value)}` : ""}`;
+    return {
+      column: `${c.name} ${c.typeName}`,
+      where,
+      note: production && connectionName
+        ? `Becomes a Pending Edit. Nothing is written to ${connectionName} until you save.`
+        : "Becomes a Pending Edit. Nothing is written until you save.",
+      onSetNull:
+        d && blocked(d, e.column, true) === null
+          ? () => {
+              setNull(e.row, e.column);
+              setEditing(null);
+              focusGrid();
+            }
+          : undefined,
+    };
+  }
+
+  /** Item 5: the one Table menu (frame Table): what the header's several menus and icons did, in words. */
+  function tableMenuItems(): MenuItem[] {
+    const items: MenuItem[] = [];
+    if (onOpenQuery) {
+      items.push({
+        key: "query",
+        label: "Open as a query",
+        icon: <FeatureIcon name="query" size={16} />,
+        description: "The SELECT behind this view, in the editor",
+        onSelect: () => onOpenQuery(`SELECT * FROM ${sqlName(dialect, table)}${filter ? `\nWHERE ${filter}` : ""};`),
+      });
+    }
+    if (onLineage && kind === "table") {
+      items.push({ key: "lineage", label: "Show lineage", icon: <FeatureIcon name="diagram" size={16} />, onSelect: onLineage });
+    }
+    items.push({
+      key: "csv",
+      label: "Copy rows as CSV",
+      icon: <Icon name="copy" />,
+      separatorBefore: items.length > 0,
+      onSelect: () =>
+        void navigator.clipboard
+          ?.writeText(toCsv(columns.map((c) => ({ ...c, numeric: NUMERIC_TYPE.test(c.typeName) })), view.map((d) => d.cells)))
+          .catch(() => {}),
+    });
+    if (onExport) {
+      items.push({
+        key: "export",
+        label: "Export rows...",
+        icon: <FeatureIcon name="export" size={16} />,
+        shortcut: "Ctrl+E",
+        onSelect: () => onExport(exportOrigin()),
+      });
+    }
+    if (onImport) {
+      items.push({ key: "import", label: `Import into ${table.name}...`, icon: <FeatureIcon name="import" size={16} />, onSelect: onImport });
+    }
+    if (onTransfer) {
+      items.push({ key: "transfer", label: "Copy to another Connection...", icon: <FeatureIcon name="transfer" size={16} />, onSelect: onTransfer });
+    }
+    if (columns.length > 0) {
+      items.push({
+        key: "columns",
+        label: "Columns",
+        icon: <Icon name="columns" />,
+        separatorBefore: true,
+        submenu: columns.map((c) => ({
+          key: c.name,
+          label: c.name,
+          checked: !hidden.has(c.name),
+          onSelect: () =>
+            setHidden((h) => {
+              const next = new Set(h);
+              if (!next.delete(c.name)) next.add(c.name);
+              return next;
+            }),
+        })),
+      });
+    }
+    items.push({
+      key: "copy",
+      label: "Copy name",
+      icon: <Icon name="copy" />,
+      separatorBefore: columns.length === 0,
+      onSelect: () => void navigator.clipboard?.writeText(`${objectPrefix(table)}${table.name}`).catch(() => {}),
+    });
+    return items;
+  }
+
   /** R3: a Read-only Connection never opens the cell editor; one toast says why. */
   function readOnlyEdit() {
     showToast({ kind: "readOnly", text: `${connectionName ?? "This Connection"} is Read-only. Changes are not allowed.` });
@@ -952,112 +1096,29 @@ export default function DataGrid({
       aria-label={`Data of ${table.name}`}
       ref={sectionRef}
     >
-      {/* T1: one 36 px strip: Connection, PRODUCTION, the table, WHERE and ORDER BY, then the tools. */}
+      {/*
+        Item 5 (frame Table): the strip names the table and holds its tools: Refresh, the row edits, Edit
+        structure in words, and one Table menu for everything else. Item 2: filters and sort are the strip under it.
+      */}
       <div className="table-header" role="toolbar" aria-label="Table">
-        {connectionName &&
-          (onOpenQuery ? (
-            <MenuButton
-              label="Connection"
-              compact
-              trigger={(p) => (
-                <button type="button" {...p} className="button button-small button-quiet table-header-connection">
-                  <DbMark dialect={dialect} open size={14} label={null} />
-                  <span className="editor-header-name">{connectionName}</span>
-                  <Icon name="chevronDown" size={14} />
-                </button>
-              )}
-              items={[
-                {
-                  key: "query",
-                  label: `New query on ${connectionName}`,
-                  icon: <Icon name="fileQuery" size={14} />,
-                  onSelect: () => onOpenQuery(""),
-                },
-              ]}
-            />
-          ) : (
-            <span className="table-header-connection">
-              <DbMark dialect={dialect} open size={14} label={null} />
-              <span className="editor-header-name">{connectionName}</span>
-            </span>
-          ))}
+        {connectionName && (
+          <span className="table-header-connection">
+            <DbMark dialect={dialect} open size={14} label={null} />
+            <span className="editor-header-name">{connectionName}</span>
+          </span>
+        )}
         {production && <span className="production-label">PRODUCTION</span>}
         {(connectionName || production) && <span className="editor-header-divider" aria-hidden="true" />}
-        <Icon name={kind === "view" ? "view" : "table"} size={14} className="muted" />
+        <FeatureIcon name={kind === "view" ? "view" : "table"} size={18} />
         <h2 className="table-header-name" title={`${objectPrefix(table)}${table.name}`}>
           {shortName(table)}
         </h2>
-        <div className="grid-filter">
-          <span className="grid-filter-label" aria-hidden="true">
-            WHERE
+        {rowEstimate !== null && (
+          <span className="table-header-rows">
+            {rowEstimate.toLocaleString("en-US")} {rowEstimate === 1 ? "row" : "rows"}
           </span>
-          <SqlEditor
-            oneLine
-            value={draft}
-            dialect={dialect}
-            editorRef={filterRef}
-            onChange={setDraft}
-            onRun={applyFilter}
-            onFormat={() => {}}
-            onSave={() => void save()}
-            onEscape={clearFilter}
-            onAsk={ask ? setAskSel : undefined}
-            lang={
-              lang && {
-                client: lang.client,
-                docId: `filter:${connectionId}:${objectPrefix(table)}${table.name}`,
-                schemaKey: schemaKey(connectionId, table.database),
-                schemaState: schemaLoad === "loaded" ? "loaded" : schemaLoad === "loading" ? "loading" : "none",
-                prefix: `SELECT * FROM ${sqlName(dialect, table)} WHERE `,
-              }
-            }
-          />
-          {ask && askSel && (
-            <InlineAsk
-              context={{
-                kind: "filter",
-                connection: ask.connection,
-                sql: askSel.sql,
-                tables: [{ schema: table.schema, name: table.name }],
-                label: table.name,
-              }}
-              schema={askSchema}
-              groupId={ask.groupId}
-              onOpenInChat={ask.onOpenInChat}
-              onOpenSettings={ask.onOpenSettings}
-              onClose={() => {
-                setAskSel(null);
-                filterRef.current?.focus();
-              }}
-            />
-          )}
-        </div>
-        <div className="order-by">
-          <span className="order-by-label" aria-hidden="true">
-            ORDER BY
-          </span>
-          <input
-            className="order-by-input"
-            type="text"
-            aria-label="Order by"
-            title={ORDER_NOTE}
-            spellCheck={false}
-            value={orderDraft}
-            onChange={(e) => setOrderDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                applyOrderBy();
-              } else if (e.key === "Escape" && (orderDraft || sort)) {
-                e.preventDefault();
-                if (note === ORDER_NOTE) setNote(null);
-                if (sort) clearSort();
-                else setOrderDraft("");
-              }
-            }}
-          />
-        </div>
-        <span className="editor-header-divider" aria-hidden="true" />
+        )}
+        <span className="spacer" />
         <button
           type="button"
           className="icon-button"
@@ -1068,16 +1129,6 @@ export default function DataGrid({
         >
           <Icon name="refresh" size={14} />
         </button>
-        {onDesign && kind === "table" && (
-          <button type="button" className="icon-button" aria-label="Design table" title="Design table" onClick={onDesign}>
-            <Icon name="edit" size={14} />
-          </button>
-        )}
-        {onLineage && kind === "table" && (
-          <button type="button" className="icon-button" aria-label="Show lineage" title="Show lineage" onClick={onLineage}>
-            <Icon name="flow" size={14} />
-          </button>
-        )}
         {editable && page && (
           <>
             {/* R20: the grid handles these keys itself (no registry command), so the hints stay literal. */}
@@ -1103,27 +1154,41 @@ export default function DataGrid({
             </button>
           </>
         )}
-        <ResultTools
-          columns={columns.map((c) => ({ name: c.name, typeName: c.typeName, numeric: NUMERIC_TYPE.test(c.typeName) }))}
-          rows={shownRows.map((i) => view[i].cells)}
-          filter={rowFilter}
-          onFilter={setRowFilter}
-          hidden={hidden}
-          onToggleColumn={(name) =>
-            setHidden((h) => {
-              const next = new Set(h);
-              if (!next.delete(name)) next.add(name);
-              return next;
-            })
-          }
-          connectionName={connectionName ? `${connectionName}_${table.name}` : table.name}
-          onExport={onExport ? () => onExport(exportOrigin()) : undefined}
-          onImport={onImport}
+        {onDesign && kind === "table" && (
+          <button
+            type="button"
+            className="button button-small table-header-structure"
+            title="Change columns, keys and indexes"
+            onClick={onDesign}
+          >
+            <FeatureIcon name="designer" size={18} />
+            Edit structure
+          </button>
+        )}
+        <MenuButton
+          label="Table"
+          align="end"
+          trigger={(p) => (
+            <button type="button" {...p} className="button button-small table-header-menu">
+              Table
+              <Icon name="chevronDown" size={14} />
+            </button>
+          )}
+          items={tableMenuItems()}
         />
         <div className={loading ? "progress progress-on" : "progress"} aria-hidden="true">
           <i />
         </div>
       </div>
+
+      <FilterBar
+        columns={columns.map((c) => ({ name: c.name, typeName: c.typeName, kind: valueKind(c.typeName) }))}
+        filters={rowFilters}
+        sort={sort}
+        onFilters={applyFilters}
+        onSort={setSortTo}
+        disabled={!page || (page.rows.length === 0 && rowFilters.length === 0 && pageIndex === 0)}
+      />
 
       {page && noteText && (
         <p className="grid-note" role="status">
@@ -1152,7 +1217,7 @@ export default function DataGrid({
             )}
             {filter && (
               <button type="button" className="button" onClick={clearFilter}>
-                Clear filter
+                Clear filters
               </button>
             )}
           </div>
@@ -1182,7 +1247,11 @@ export default function DataGrid({
             onPaste,
             onCellMenu: (row: number, column: number, x: number, y: number) =>
               setMenu({ row: shownRows[row], column: shownCols[column], x, y }),
-            cellClass: (r: number, c: number) => (editedAt(shownRows[r], shownCols[c]) ? "cell-edited" : undefined),
+            cellClass: (r: number, c: number) => {
+              // Item 3: the cell being edited draws no ring of its own; the editor's one ring is the only border.
+              const on = editing && editing.row === shownRows[r] && editing.column === shownCols[c] ? "cell-editing" : "";
+              return [editedAt(shownRows[r], shownCols[c]) ? "cell-edited" : "", on].filter(Boolean).join(" ") || undefined;
+            },
             cellTitle: (r: number, c: number) => {
               const row = shownRows[r];
               const column = shownCols[c];
@@ -1203,8 +1272,14 @@ export default function DataGrid({
               if (editing && editing.row === row && editing.column === column) {
                 return (
                   <CellEditor
+                    key={editing.large ? "large" : "cell"}
                     initial={editing.initial}
                     multiline={editing.multiline}
+                    large={editing.large ? largeEditor(editing) : undefined}
+                    onLarger={(v) => {
+                      editValue.current = v;
+                      setEditing({ ...editing, initial: v, large: true });
+                    }}
                     onCommit={commit}
                     onInput={(v) => (editValue.current = v)}
                     onSave={(v) => {
@@ -1236,12 +1311,20 @@ export default function DataGrid({
             return page && d?.kind === "loaded" ? { connectionId, table, column, rowKey: rowKey(page.columns, d.source) } : undefined;
           }}
         >
-          {page && page.rows.length === 0 && (
-            <p className="state-panel muted">
-              {shown?.index === 0 ? `${table.name} has no rows.` : "No more rows. Go back a page."}
-            </p>
+          {page && page.rows.length === 0 && view.length === 0 && (
+            <EmptyRows
+              table={table.name}
+              firstPage={shown?.index === 0}
+              filtered={filter !== null}
+              canAdd={editable}
+              production={production}
+              connectionName={connectionName ?? null}
+              onAdd={() => addNewRow()}
+              onClear={clearFilter}
+              onImport={onImport}
+              onTransfer={onTransfer}
+            />
           )}
-          {page && view.length > 0 && shownRows.length === 0 && <p className="state-panel muted">No loaded row matches the filter.</p>}
         </ResultGrid>
       )}
 

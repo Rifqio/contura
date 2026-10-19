@@ -1,6 +1,6 @@
 // The .flow language (A2): the document the parser returns and the writer writes, and the one quoting rule both follow.
 
-export type DiagramKind = "dfd" | "flow" | "cloud";
+export type DiagramKind = "dfd" | "flow" | "cloud" | "er" | "sequence" | "state" | "class" | "mindmap" | "timeline";
 
 /** Data flow kinds (Gane-Sarson). */
 export type DfdKind = "entity" | "process" | "store";
@@ -8,17 +8,54 @@ export type DfdKind = "entity" | "process" | "store";
 /** Flowchart kinds; a flowchart node with no kind is a step. */
 export type FlowKind = "start" | "end" | "step" | "decision" | "io" | "subprocess";
 
-/** Every node kind; a cloud node is a service, drawn with its icon. */
-export type FlowNodeKind = DfdKind | FlowKind | "service";
+/** Step 12, item 19: the kinds of the six newer diagrams. An ER file's `entity` is a table (a data flow's is an outside party). */
+export type ErKind = "entity" | "weak";
+export type SequenceKind = "participant" | "actor";
+export type StateKind = "state" | "choice" | "fork";
+export type ClassKind = "class" | "interface" | "enum";
+export type MindKind = "root" | "topic";
+export type TimelineKind = "event" | "period" | "milestone";
 
-export const DIAGRAM_KINDS: readonly DiagramKind[] = ["dfd", "flow", "cloud"];
+/** Every node kind; a cloud node is a service, drawn with its icon. A note is a remark on the canvas. */
+export type FlowNodeKind =
+  | DfdKind
+  | FlowKind
+  | "service"
+  | "document"
+  | "database"
+  | ErKind
+  | SequenceKind
+  | StateKind
+  | ClassKind
+  | MindKind
+  | TimelineKind
+  | "note";
 
-/** The kinds each diagram allows, in the order the problems list them. */
+export const DIAGRAM_KINDS: readonly DiagramKind[] = ["dfd", "flow", "cloud", "er", "sequence", "state", "class", "mindmap", "timeline"];
+
+/**
+ * The kind words each diagram takes in brackets, in the order the problems list them. Sequence, class, mind map
+ * and timeline nodes are written with a leading word instead (`participant App`, `class Invoice`, `root Plan`,
+ * `milestone v1.0`), so their lists are empty.
+ */
 export const KINDS: Record<DiagramKind, readonly FlowNodeKind[]> = {
   dfd: ["entity", "process", "store"],
-  flow: ["start", "end", "step", "decision", "io", "subprocess"],
+  flow: ["start", "end", "step", "decision", "io", "subprocess", "document", "database"],
   cloud: ["service"],
+  er: ["entity", "weak"],
+  sequence: [],
+  state: ["state", "choice", "fork"],
+  class: [],
+  mindmap: [],
+  timeline: [],
 };
+
+/** The kinds that take `note: text` (the shape picker offers it there). */
+export const NOTE_KINDS: ReadonlySet<DiagramKind> = new Set(["flow", "sequence", "state", "class", "mindmap"]);
+
+/** The name of the start and end marker `[*]` of a state diagram, as two nodes the canvas draws. */
+export const STATE_START = "[*] start";
+export const STATE_END = "[*] end";
 
 export type FlowAttrKey = "id" | "icon" | "color" | "table";
 export const ATTR_KEYS: readonly FlowAttrKey[] = ["id", "icon", "color", "table"];
@@ -32,10 +69,52 @@ export interface FlowNode {
   kind: FlowNodeKind;
   /** `id`, `icon`, `color` (a theme token name) and `table` (`schema.table`), in the order they are written. */
   attrs: Record<string, string>;
+  /**
+   * Rows written on their own lines: an ER entity's columns (`customers.email text`) as "email text", a class's
+   * members (`Invoice : + send()`) as "+ send()", in the order they are written.
+   */
+  rows?: string[];
+  /** A mind map topic's depth: 1 for a topic, 2 for a subtopic, and so on (the root is 0). */
+  depth?: number;
+  /** A timeline item's date (`2026-10-19`, `2026-10`), and a period's end. */
+  date?: string;
+  until?: string;
+  /** The timeline section the item is in. */
+  section?: string;
+  /** A note's text. */
+  text?: string;
 }
 
-/** `>` one way, `-` no arrow, `-->` dashed, `<>` both ways, `..>` dotted one way (cloud only). */
-export type FlowArrow = ">" | "-" | "-->" | "<>" | "..>";
+/**
+ * `>` one way, `-` no arrow, `-->` dashed, `<>` both ways, `..>` dotted one way (cloud and class). Step 12 adds:
+ * `->` a sequence message (`-->` its reply); `--` an ER relationship, and `1--*`, `*--1`, `1--1`, `*--*` its ends;
+ * `<|--` inheritance, `*--` composition (class).
+ */
+export type FlowArrow = ">" | "-" | "-->" | "<>" | "..>" | "->" | "--" | "1--*" | "*--1" | "1--1" | "*--*" | "<|--" | "*--";
+
+/** The line a flow drawn on the canvas writes, by diagram kind. */
+export function defaultArrow(kind: DiagramKind | null): FlowArrow {
+  if (kind === "sequence") return "->";
+  if (kind === "er") return "--";
+  if (kind === "class") return "-->";
+  return ">";
+}
+
+/** The kinds the canvas lays out from the text alone (time, the indent tree, the date order): nodes are not dragged. */
+export const FIXED_KINDS: ReadonlySet<DiagramKind> = new Set(["sequence", "mindmap", "timeline"]);
+
+/** The lines each diagram kind draws; any other arrow is a problem with a fix to the first. */
+export const ARROWS: Record<DiagramKind, readonly FlowArrow[]> = {
+  dfd: [">", "<>", "-->", "-"],
+  flow: [">", "<>", "-->", "-"],
+  cloud: [">", "<>", "-", "-->", "..>"],
+  er: ["--", "1--*", "*--1", "1--1", "*--*"],
+  sequence: ["->", "-->"],
+  state: [">", "-->"],
+  class: ["<|--", "*--", "..>", "-->", "--", "-"],
+  mindmap: [">", "-"],
+  timeline: [],
+};
 
 export interface FlowLink {
   /** A node or group name. */
@@ -43,6 +122,8 @@ export interface FlowLink {
   to: string;
   arrow: FlowArrow;
   label?: string;
+  /** A mind map branch the indents make: drawn, never written. */
+  tree?: boolean;
   /** Written on the same line as the link before it (`A > B > C`); set only when neither has a label. */
   chained?: boolean;
 }
@@ -64,6 +145,14 @@ export interface FlowDoc {
   nodes: FlowNode[];
   links: FlowLink[];
   groups: FlowGroup[];
+  /**
+   * A sequence diagram's frames (`loop label { ... }`) and activations (`activate Name`), by the index of the
+   * first and last message (link) they cover; -1 last when a frame is empty.
+   */
+  frames?: { label: string; kind: string; from: number; to: number; depth: number }[];
+  activations?: { name: string; from: number; to: number }[];
+  /** A timeline's sections, in order. */
+  sections?: string[];
 }
 
 /** Groups nest at most this deep, as Mermaid import caps them, so the parser, writer and canvas stay small. */
@@ -97,4 +186,33 @@ export function flowLabel(label: string): string {
 /** An attribute value runs to the next `,` or `]`. */
 export function flowValue(value: string): string {
   return /[,\]"\\\r\n]|\/\//.test(value) || value !== value.trim() || value === "" ? quote(value) : value;
+}
+
+/** The kinds written with a leading word (`participant App`, `class Invoice`, `milestone v1.0`), not in brackets. */
+const WORD_KINDS: ReadonlySet<FlowNodeKind> = new Set(["participant", "actor", "class", "interface", "enum", "root", "milestone"]);
+
+/** Today as YYYY-MM-DD, for a timeline event added from the canvas. */
+export function isoToday(now = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+/**
+ * The statement that writes `node` in a `diagram` file: a leading word for the kinds that take one, the date
+ * form on a timeline, an indent per level in a mind map, `note: text` for a note, else `Name [kind, attrs]`.
+ */
+export function nodeStatement(diagram: DiagramKind | null, node: Pick<FlowNode, "name" | "kind" | "attrs"> & Partial<FlowNode>): string {
+  const name = flowName(node.name);
+  if (node.kind === "note") return `note: ${flowLabel(node.text ?? node.name)}`;
+  if (WORD_KINDS.has(node.kind)) return `${node.kind} ${name}`;
+  if (diagram === "mindmap") return `${"  ".repeat(Math.max(1, node.depth ?? 1))}${name}`;
+  if (diagram === "timeline") {
+    const date = node.date ?? isoToday();
+    return node.kind === "period" ? `${date} to ${node.until ?? date}: ${name}` : `${date}: ${name}`;
+  }
+  // A cloud node is always a service, and the default kind of the newer diagrams goes unsaid.
+  const unsaid = (diagram === "cloud" && node.kind === "service") || (diagram === "state" && node.kind === "state") || (diagram === "er" && node.kind === "entity");
+  const parts: string[] = unsaid ? [] : [node.kind];
+  for (const [key, value] of Object.entries(node.attrs)) parts.push(`${key}: ${flowValue(value)}`);
+  return parts.length ? `${name} [${parts.join(", ")}]` : name;
 }

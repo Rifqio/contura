@@ -33,6 +33,11 @@ import { newId } from "./app/ids";
 import PlaceSidebar from "./app/PlaceSidebar";
 import WindowPanes from "./app/WindowPanes";
 import { FormDialogs, StartModelDialog, type Form, type ModelStart } from "./app/WorkspaceDialogs";
+import { featureGroups } from "./app/features";
+import FeatureBar from "./components/FeatureBar";
+import FeatureIcon from "./components/FeatureIcon";
+import { hintFor } from "./commands/keymap";
+import { useKeymap } from "./commands/useCommandKeys";
 import { usePlaceDrafts } from "./app/usePlaceDrafts";
 import { answerText, useQueryTabRefs } from "./app/queryTabRefs";
 import { useAskKit } from "./app/useAskKit";
@@ -70,6 +75,8 @@ import {
   lineageKey,
   newDesignKey,
   objectTabOf,
+  moveTab,
+  placeObject,
   tabConnectionId,
   tabKey,
 } from "./shell/tabs";
@@ -148,6 +155,7 @@ function Workspace() {
     schemaCloseFor,
   } = useWorkspaceTabs();
   const [historyOpen, setHistoryOpen] = useState(false);
+  const { map: keymap } = useKeymap();
   const [assistantOpen, setAssistantOpen] = useState(false);
   const { recent, openedTimes, load: loadRecent, record } = useRecentList();
   /** Query History shows every Connection instead of the tab's (from Home's Show all history). */
@@ -233,6 +241,7 @@ function Workspace() {
     if (tabs.some(away)) removeTabs(away);
   }, [connections, place, activeId, tabs]);
 
+  const dirtyRef = useRef<ReadonlySet<string>>(new Set());
   const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseUnsaved, confirmCloseFlow, dialog: leaveDialog } =
     usePendingEditsGuard({
       tabs,
@@ -246,6 +255,16 @@ function Workspace() {
       // Q22: quitting while a job runs asks, and a yes cancels the jobs before the window goes.
       jobsOnClose: { running: jobsGuard.running, confirmStop: () => jobsGuard.confirmStop() },
     });
+  dirtyRef.current = dirtyKeys;
+  // Item 8: the tab on top tells which database is in use on its Connection.
+  useEffect(() => {
+    const t = tabs.find((x) => tabKey(x) === activeKey);
+    if (!t) return;
+    const cid = tabConnectionId(t);
+    const db = t.kind === "query" || t.kind === "visual" ? t.doc.database : (objectTabOf(t)?.path?.database ?? null);
+    if (cid !== null && db) lastDatabase.current.set(cid, db);
+  }, [activeKey, tabs]);
+
   /** Home's ask about Pending Edits: each table shows while it is asked about, then Home comes back. */
   async function askFromHome(keys: string[], then?: () => Promise<boolean>): Promise<boolean> {
     if (!keys.some(isDirty)) return then ? then() : true;
@@ -536,13 +555,12 @@ function Workspace() {
     showHome();
   }
 
-  function openObject(selection: Selection) {
-    if (selection.kind === "table" || selection.kind === "view") {
-      record({ kind: "table", path: selection.path, object: selection.kind }, selection.connectionId);
-    }
+  /** Opens a table (or another object): a single click reuses the preview tab, a double click (`newTab`) keeps its own (item 1). */
+  function openObject(selection: Selection, opts: { newTab?: boolean } = {}) {
+    // Item 12: opening or browsing a table is not history; Recent lists a table once its data is saved or its design applied.
     const key = objectKey(selection.connectionId, selection.kind, selection.path);
     // Worked out on the latest tabs: a Recent open runs after drafts were restored into them.
-    setTabs((all) => (all.some((t) => t.kind === "object" && t.key === key) ? all : [...all, { kind: "object", key, selection }]));
+    setTabs((all) => placeObject(all, selection, key, opts.newTab ?? false, dirtyRef.current));
     setActiveKey(key);
   }
 
@@ -617,6 +635,7 @@ function Workspace() {
     lang.schemas.invalidate(connectionId, path.database);
     tree.refresh(connectionId);
     void reloadGrid(connectionId, path);
+    record({ kind: "table", path, object: "table" }, connectionId);
     if (kind !== "created") return;
     setReveal((r) => ({ connectionId, database: path.database, schema: path.schema, name: path.name, seq: (r?.seq ?? 0) + 1 }));
     const next = designKey(connectionId, path);
@@ -653,8 +672,11 @@ function Workspace() {
     );
   }
 
+  /** Item 8: the database used last on each Connection (a tab shown, a tree row picked), for new query tabs. */
+  const lastDatabase = useRef(new Map<ConnectionId, string>());
   function newQuery(connectionId: ConnectionId | null, text = "", database?: string) {
     const c = connections.find((x) => x.id === connectionId) ?? null;
+    if (database === undefined && c) database = lastDatabase.current.get(c.id);
     const doc: QueryTabDoc = {
       id: newId(),
       name: nextQueryName(tabs.map((t) => (t.kind === "query" ? t.doc.name : ""))),
@@ -1061,9 +1083,50 @@ function Workspace() {
   const stmt = assistantShown && assistantTarget ? (refs.editor(assistantTarget.doc.id)?.runTarget() ?? null) : null;
   const assistantContext = assistantShown && assistantTarget ? assistantContextFor(assistantTarget, assistantSchema, stmt) : null;
 
+  // ---- The feature bar (item 16): each feature on the open Connection and database, or off saying why ----
+  const featureConn = visualTarget ? connections.find((c) => c.id === visualTarget.id) : undefined;
+  const featureDb = featureConn
+    ? (visualTarget?.database ?? (featureConn.dialect === "sqlite" ? "main" : featureConn.database) ?? null)
+    : null;
+  const featureTarget = featureConn && featureDb ? { connectionId: featureConn.id, database: featureDb, schema: null } : null;
+  const features = featureGroups({
+    target: featureTarget,
+    postgres: featureConn?.dialect === "postgres",
+    table: selection?.kind === "table",
+    keys: { newQuery: hintFor(keymap, "query.new"), diagram: hintFor(keymap, "flow.new"), ask: hintFor(keymap, "assistant.toggle") },
+    askReady: !activeWindow && current !== undefined,
+    newQuery: () => newQuery(activeId),
+    newVisualQuery: () => visualTarget && newVisualQuery(visualTarget.id, visualTarget.database),
+    newTable: () => featureTarget && newTable(featureTarget.connectionId, featureTarget.database, null),
+    importInto: () => featureTarget && openImport(featureTarget.connectionId, { kind: "database", database: featureTarget.database }),
+    exportTable: () => selection && void exportTable(selection),
+    transfer: () =>
+      featureTarget &&
+      openTransferTab({ connectionId: featureTarget.connectionId, database: featureTarget.database, schema: null, table: selection?.kind === "table" ? selection.path.name : null }),
+    backup: () => featureTarget && featureConn?.dialect !== "postgres" && setBackingUp(featureTarget),
+    restore: () => featureTarget && setRestoring((r) => ({ target: featureTarget, seq: (r?.seq ?? 0) + 1 })),
+    compare: () => featureTarget && openCompareTab({ source: { kind: "database", ...featureTarget }, target: null }),
+    newModel: () => setModelStart(featureTarget ? { initial: featureTarget } : {}),
+    newDiagram: () => setNewDiagramOpen(true),
+    history: () => (current?.kind === "query" ? (setHistoryAll(false), setHistoryOpen((o) => !o)) : showAllHistory()),
+    ask: () => setAssistantOpen((o) => !o),
+  });
+
   const app = (
     <div className="app">
       <TitleBar>
+        {/* Item 13: Home, in words, at the start of the title bar. */}
+        <button
+          type="button"
+          className="title-home"
+          aria-current={activeKey === "home" ? "page" : undefined}
+          title={hintFor(keymap, "home.open") ? `Home (${hintFor(keymap, "home.open")})` : "Home"}
+          onClick={goHome}
+        >
+          <FeatureIcon name="home" size={18} />
+          Home
+        </button>
+        <span className="title-divider" aria-hidden="true" />
         <GroupSwitcher
           groups={groups}
           place={place}
@@ -1082,14 +1145,26 @@ function Workspace() {
           active={activeKey}
           onSelect={setActiveKey}
           onClose={(key) => void closeTab(key)}
+          onReorder={(from, to) => {
+            if (tabs.some((t) => tabKey(t) === from) && tabs.some((t) => tabKey(t) === to)) setTabs((all) => moveTab(all, from, to));
+            else setWindowTabs((all) => moveTab(all, from, to));
+          }}
+          onKeep={(key) => setTabs((all) => all.map((t) => (t.kind === "object" && t.key === key && t.preview ? { ...t, preview: false } : t)))}
           dirtyKeys={dirtyKeys}
           onNew={() => newQuery(activeId)}
           onNewVisual={() => visualTarget && newVisualQuery(visualTarget.id, visualTarget.database)}
           newVisualReady={visualTarget !== null}
           onNewDiagram={() => setNewDiagramOpen(true)}
+          onNewModel={() => setModelStart(featureTarget ? { initial: featureTarget } : {})}
+          newQueryWhere={(() => {
+            const c = connections.find((x) => x.id === activeId);
+            const db = current?.kind === "query" ? current.doc.database : (c?.database ?? null);
+            return c ? `On ${c.name}${db ? `, ${db}` : ""}` : null;
+          })()}
           diagramActions={diagramActions}
         />
       </TitleBar>
+      <FeatureBar groups={features.groups} end={features.end} />
 
       <div
         className={activeWindow ? "body body-home" : `body${historyFor || historyAllShown ? " body-history" : ""}${assistantShown ? " body-ai" : ""}`}
@@ -1145,6 +1220,7 @@ function Workspace() {
               onOpenSavedList={openSavedList}
               onSavedChanged={reloadSaved}
               openStatus={openStatus}
+              onUseDatabase={(id, db) => lastDatabase.current.set(id, db)}
               onFocusBranch={(id) => {
                 setTreeBranch(id);
                 if (id !== null) setActiveId(id);
@@ -1264,7 +1340,13 @@ function Workspace() {
                     onLineage={s.kind === "table" ? () => openLineage(s.connectionId, s.path) : undefined}
                     onExport={s.kind === "table" ? (origin) => openExport(s.connectionId, origin) : undefined}
                     onImport={s.kind === "table" ? () => openImport(s.connectionId, { kind: "table", path: s.path }) : undefined}
+                    onTransfer={
+                      s.kind === "table"
+                        ? () => openTransferTab({ connectionId: s.connectionId, database: s.path.database, schema: s.path.schema, table: s.path.name })
+                        : undefined
+                    }
                     version={gridVersions[t.key] ?? 0}
+                    onSaved={() => record({ kind: "table", path: s.path, object: s.kind === "view" ? "view" : "table" }, s.connectionId)}
                     notice={gridNotices[t.key] ?? null}
                     onNoticeDone={() => forgetNotice(t.key)}
                     lang={lang}

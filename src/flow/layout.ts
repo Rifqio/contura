@@ -15,6 +15,8 @@ export interface FlowLayout {
   style: NodeLook;
   /** Used by Tidy and by the placement of new nodes; the text does not change. */
   direction: FlowDirection;
+  /** Item 21: the sizes nodes were resized to on the canvas, by name; a node with none takes its kind's size. */
+  sizes?: Record<string, { w: number; h: number }>;
 }
 
 /** A flowchart runs top to bottom (answer 7A); a data flow and a cloud diagram read left to right, as their frames do. */
@@ -50,6 +52,14 @@ export function parseFlowLayout(json: string | null, kind: DiagramKind | null): 
   if (isPoint(vp) && typeof zoom === "number" && Number.isFinite(zoom)) out.viewport = { x: vp.x, y: vp.y, zoom };
   if (r.style === "modern" || r.style === "classic") out.style = r.style;
   if (r.direction === "TB" || r.direction === "LR") out.direction = r.direction;
+  if (typeof r.sizes === "object" && r.sizes !== null) {
+    const sizes = Object.create(null) as Record<string, { w: number; h: number }>;
+    for (const [k, v] of Object.entries(r.sizes as Record<string, unknown>)) {
+      const b = v as { w?: unknown; h?: unknown };
+      if (typeof b?.w === "number" && typeof b.h === "number" && b.w > 0 && b.h > 0 && Number.isFinite(b.w) && Number.isFinite(b.h)) sizes[k] = { w: b.w, h: b.h };
+    }
+    if (Object.keys(sizes).length) out.sizes = sizes;
+  }
   return out;
 }
 
@@ -61,5 +71,10 @@ export function serializeFlowLayout(l: FlowLayout): string {
   if (l.viewport) out.viewport = l.viewport;
   out.style = l.style;
   out.direction = l.direction;
+  if (l.sizes && Object.keys(l.sizes).length) {
+    const sizes: Record<string, { w: number; h: number }> = {};
+    for (const k of Object.keys(l.sizes).sort()) sizes[k] = { w: Math.round(l.sizes[k].w), h: Math.round(l.sizes[k].h) };
+    out.sizes = sizes;
+  }
   return `${JSON.stringify(out, null, 2)}\n`;
 }

@@ -16,6 +16,7 @@
         "create": false,
         "title": "Contura",
         "decorations": false,
+        "dragDropEnabled": false,
         "width": 1280,
         "height": 800,
         "minWidth": 1024,

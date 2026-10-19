@@ -3,7 +3,7 @@ export const GROW_CAP = 400;
 
 /**
  * The width a header needs to show in full: each part of its `.header-label` (key icon,
- * name, type hint, sort slot), the gaps between them and the side padding. The name is
+ * the name over its type hint, sort slot), the gaps between them and the side padding. The name is
  * read by its scrollWidth, since a column laid out narrower than its header clips the
  * name inside its own box and the label's scrollWidth then misses that part. Widths are
  * taken unrounded and the total rounded up: at a zoom like 124% the parts are fractional,
@@ -20,7 +20,13 @@ export function headerWidth(label: HTMLElement, padding: number, withType = true
     const whole = p.classList.contains("header-name") ? Math.max(p.scrollWidth, p.offsetWidth) : p.offsetWidth;
     return Math.max(exact, whole);
   };
-  const sum = parts.reduce((a, p) => a + width(p), 0);
+  // The name over its type (two lines): the wider of the two, the type left out for the floor.
+  const part = (p: Element) => {
+    if (!p.classList.contains("header-text")) return width(p);
+    const lines = Array.from(p.children).filter((q) => withType || !q.classList.contains("type-hint"));
+    return Math.max(0, ...lines.map(width));
+  };
+  const sum = parts.reduce((a, p) => a + part(p), 0);
   return Math.ceil(sum + gap * Math.max(0, parts.length - 1) + padding);
 }
 

@@ -380,6 +380,21 @@ export function toggleColumn(q: VisualQuery, tableId: string, column: string): V
   };
 }
 
+/** Ticks every column of a card not ticked yet, in the card's order, after the outputs there are. */
+export function tickAll(q: VisualQuery, tableId: string, columns: readonly string[]): VisualQuery {
+  const on = new Set(q.columns.filter((c) => c.table === tableId).map((c) => c.column));
+  const add = columns.filter((c) => !on.has(c)).map((column) => ({ table: tableId, column, alias: null, aggregate: null }));
+  return add.length === 0 ? q : { ...q, columns: [...q.columns, ...add] };
+}
+
+/** Unticks every column of a card: its outputs go with their sorts, as `toggleColumn` drops one. */
+export function untickAll(q: VisualQuery, tableId: string): VisualQuery {
+  const at = q.columns.flatMap((c, i) => (c.table === tableId ? [i] : []));
+  if (at.length === 0) return q;
+  const next = dropOutputs(q, at);
+  return { ...next, orderBy: next.orderBy.filter((s) => s.target.kind !== "column" || s.target.table !== tableId) };
+}
+
 /** Moves an output from one position to another; output sorts follow their column. */
 export function moveOutput(q: VisualQuery, from: number, to: number): VisualQuery {
   const n = q.columns.length;

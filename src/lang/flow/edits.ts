@@ -2,7 +2,7 @@
 // current text, so it works while the text has errors, and returns the smallest change: untouched lines stay
 // byte for byte. In the app they run in the language worker against its cached parse (ruling P5).
 import type { TextEdit } from "../protocol";
-import { ATTR_KEYS, type DiagramKind, type FlowArrow, type FlowAttrKey, type FlowNodeKind, flowLabel, flowName, flowValue } from "./model";
+import { ATTR_KEYS, type DiagramKind, type FlowArrow, type FlowAttrKey, type FlowNodeKind, flowLabel, flowName, flowValue, nodeStatement } from "./model";
 import type { FlowParse, FlowRange } from "./parse";
 
 /** One canvas action, as the worker is asked for it. */
@@ -149,6 +149,9 @@ function groupSpot(s: string, parse: FlowParse, group: string): { pos: number; i
 }
 
 function nodeText(name: string, kind: FlowNodeKind | null, attrs: Record<string, string>, diagram: DiagramKind | null): string {
+  // Step 12 kinds write their own statement (participant App, class Invoice, a dated timeline line, an indent).
+  if (kind && diagram && diagram !== "dfd" && diagram !== "flow" && diagram !== "cloud") return nodeStatement(diagram, { name, kind, attrs });
+  if (kind === "note") return nodeStatement(diagram, { name, kind, attrs, text: name });
   const parts: string[] = kind && !(kind === "service" && diagram === "cloud") ? [kind] : [];
   for (const [key, value] of Object.entries(attrs)) parts.push(`${key}: ${flowValue(value)}`);
   return parts.length ? `${flowName(name)} [${parts.join(", ")}]` : flowName(name);
@@ -264,6 +267,8 @@ export function renameNode(text: string, parse: FlowParse, old: string, next: st
     edits.push({ from: r.from, to: r.to, insert });
   };
   add((parse.span(`node:${old}`) ?? parse.span(`group:${old}`))?.name);
+  // Its own extra lines (ER columns, class members) name it too.
+  for (const row of parse.rowsOf(old)) add(row.name);
   parse.links.forEach((l, i) => {
     if (l.from !== old && l.to !== old) return;
     const sp = parse.span(`link:${i}`);
@@ -284,6 +289,8 @@ export function deleteNode(text: string, parse: FlowParse, name: string): TextEd
   const nl = lineBreak(text);
   const gone = new Set([name]);
   const removals: TextEdit[] = [removeStatement(text, sp.from, sp.to)];
+  // An ER entity's columns and a class's members go with it.
+  for (const row of parse.rowsOf(name)) removals.push(removeStatement(text, row.line.from, row.line.to));
   removeLinks(text, parse, gone, removals, nl);
   pruneGroups(text, parse, parse.parentOf(name), removals, gone);
   return normalize(text, removals);

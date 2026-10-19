@@ -39,7 +39,7 @@ export const OPERATORS: { value: FilterOp; label: string }[] = [
 ];
 
 const SEP = "\u0000";
-const LIMIT_PROBLEM = "LIMIT is a whole number.";
+const LIMIT_PROBLEM = "Limit takes a whole number, such as 100.";
 
 /** True when the rows after the first mix AND with OR. */
 export function mixesAndOr(filters: VqFilter[]): boolean {
@@ -129,7 +129,13 @@ export default function FilterPanel({ model, outputs, problems, tableColumns, on
   };
 
   return (
+    // Item 33 (frame VisualQuery, "Filter and sort"): conditions on the left, in the order they read; sort, limit
+    // and distinct on the right. A section's count is folded into its sentence, never set after its name.
     <div className="vq-filters">
+      <section className="vq-filters-main" aria-label="Conditions">
+      <h3 className="vq-panel-title">
+        Conditions <span className="vq-panel-title-note">{conditionsLine(model.filters)}</span>
+      </h3>
       <div className="vq-filter-list">
         {model.filters.map((f, i) => {
           const n = i + 1;
@@ -140,15 +146,15 @@ export default function FilterPanel({ model, outputs, problems, tableColumns, on
             <div key={i} role="group" aria-label={`Filter ${n}`} className="vq-filter">
               <div className="vq-filter-row">
                 {i === 0 ? (
-                  <span className="vq-filter-where">WHERE</span>
+                  <span className="vq-filter-where">Where</span>
                 ) : (
                   <Select
                     label={`Joiner for filter ${n}`}
                     value={f.joiner}
                     className="vq-filter-joiner"
                     options={[
-                      { value: "and", label: "AND" },
-                      { value: "or", label: "OR" },
+                      { value: "and", label: "And" },
+                      { value: "or", label: "Or" },
                     ]}
                     onChange={(joiner) => onChange((q) => editFilter(q, i, { joiner }))}
                   />
@@ -196,11 +202,13 @@ export default function FilterPanel({ model, outputs, problems, tableColumns, on
         <Icon name="plus" size={14} />
         Add condition
       </button>
-      <p className="vq-panel-hint">Values are sent as quoted literals. For anything more, Open in editor.</p>
-      {mixesAndOr(model.filters) && <p className="vq-panel-hint">AND binds before OR. For other groupings, Open in editor.</p>}
+      {mixesAndOr(model.filters) && <p className="vq-panel-hint">And binds before Or. For other groupings, Open in editor.</p>}
+      <p className="vq-panel-hint vq-filters-foot">Values are sent as quoted literals. For anything more, Open in editor.</p>
+      </section>
 
+      <section className="vq-filters-side" aria-label="Sort and limit">
       <div className="vq-sort-list">
-        <span className="vq-panel-label">ORDER BY</span>
+        <h3 className="vq-panel-title">Sort</h3>
         {model.orderBy.map((s, i) => {
           const n = i + 1;
           const problem = problemOf("sort", i);
@@ -257,9 +265,10 @@ export default function FilterPanel({ model, outputs, problems, tableColumns, on
         </button>
       </div>
 
+      <hr className="vq-filters-rule" />
       <div className="vq-limit-row">
-        <label className="vq-panel-label" htmlFor={`${base}-limit`}>
-          LIMIT
+        <label className="vq-side-label" htmlFor={`${base}-limit`}>
+          Limit
         </label>
         <input
           id={`${base}-limit`}
@@ -272,14 +281,30 @@ export default function FilterPanel({ model, outputs, problems, tableColumns, on
           aria-describedby={limitBad ? `${base}-limit-problem` : undefined}
           onChange={(e) => onLimit(e.target.value)}
         />
-        <span className="spacer" />
-        <Switch label="Distinct" checked={model.distinct} onChange={(on) => onChange((q) => setDistinct(q, on))} />
+        <span className="vq-side-note">rows</span>
       </div>
       {limitBad && (
         <p id={`${base}-limit-problem`} className="vq-problem">
           {LIMIT_PROBLEM}
         </p>
       )}
+      <div className="vq-limit-row">
+        <span className="vq-side-label" aria-hidden="true">
+          Distinct
+        </span>
+        <Switch label="Distinct" checked={model.distinct} onChange={(on) => onChange((q) => setDistinct(q, on))} />
+        <span className="vq-side-note">Drop repeated rows</span>
+      </div>
+      </section>
     </div>
   );
+}
+
+/** The conditions' sentence, with their count folded in (user, 2026-10-19): never a bare number after the title. */
+export function conditionsLine(filters: VisualQuery["filters"]): string {
+  const n = filters.length;
+  if (n === 0) return "None yet: every row is shown";
+  if (n === 1) return "Only rows that match this one condition";
+  if (filters.slice(1).some((f) => f.joiner === "or")) return `Rows that match the ${n} conditions, joined as shown`;
+  return `Only rows that match all ${n} conditions`;
 }

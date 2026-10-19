@@ -44,10 +44,10 @@ export default function SqlPane({ dialect, preview, production, bands, warnings 
   };
   return (
     <section className={production ? "vq-sql prod-wash" : "vq-sql"} data-part="sql" aria-label="SQL" onKeyDown={onKeyDown}>
+      {/* Item 30: in the panel's SQL tab, the strip says what the SQL is and what can be done with it. */}
       <div className="vq-sql-strip">
-        <span className="vq-sql-title">SQL</span>
         <span className="chip chip-neutral">{DIALECT_LABEL[dialect]}</span>
-        <span className="vq-sql-readonly">Read only</span>
+        <span className="vq-sql-readonly">Read only. Edits in the editor do not come back here.</span>
         <span className="spacer" />
         <button type="button" className="icon-button" aria-label="Copy SQL" title="Copy Ctrl+C" disabled={sql === null} onClick={onCopy}>
           <Icon name="copy" size={14} />
@@ -74,7 +74,6 @@ export default function SqlPane({ dialect, preview, production, bands, warnings 
           </WarningBanner>
         ))}
       </div>
-      <p className="vq-sql-foot">One way: edits in the editor do not come back here.</p>
     </section>
   );
 }

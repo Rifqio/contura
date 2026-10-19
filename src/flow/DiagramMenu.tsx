@@ -1,9 +1,10 @@
 // The right-click menu of a diagram (a Recent row, a diagram tab): its file actions. Drawn in a portal at the
 // pointer, so no scrolling or clipping container around the row cuts it off.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Icon from "../components/Icon";
 import { type MenuItem, MenuList } from "../components/Menu";
+import { useDismiss } from "../components/useDismiss";
 
 /** What a diagram menu can do; the owner (App) runs it through useDiagramFileActions. */
 export interface DiagramMenuActions {
@@ -29,7 +30,7 @@ export interface PlacedMenuState {
   items: MenuItem[];
 }
 
-/** A menu at a point, kept inside the window; a click outside or a pick closes it. */
+/** A menu at a point, kept inside the window; a click outside, Escape or a pick closes it. Every right-click menu uses it. */
 export function PlacedMenu({ menu, onClose }: { menu: PlacedMenuState; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: menu.x, y: menu.y });
@@ -42,13 +43,8 @@ export function PlacedMenu({ menu, onClose }: { menu: PlacedMenuState; onClose: 
     // Measured once per opening.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu]);
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [onClose]);
+  // A press anywhere else (a canvas too, which stops its own events) or Escape closes it.
+  useDismiss(true, [ref], onClose);
   return createPortal(
     <div ref={ref} className="tree-menu" style={{ left: at.x, top: at.y }}>
       <MenuList items={menu.items} label={menu.label} onClose={onClose} />

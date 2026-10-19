@@ -3,7 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, onTestFinished, test, vi } from "vitest";
 import type { DiagramCanvasProps } from "../diagram/DiagramCanvas";
 import { LangClient } from "../lang/client";
 import { callsTo, routeInvoke } from "../test/invoke";
@@ -315,6 +315,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
     ["Add process", "P", "Add processP"],
     ["Add data store", "S", "Add data storeS"],
     ["Add outside party", "E", "Add outside partyE"],
+    ["Shapes", "", "Every shape and line"],
     ["Modern", "", "Modern"],
     ["Textbook shapes (Gane-Sarson)", "", "Textbook shapes (Gane-Sarson)"],
     ["Tidy", "", "Tidy"],
@@ -341,6 +342,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
     ["Add decision", "D", "Add decisionD"],
     ["Add input or output", "I", "Add input or outputI"],
     ["Add start or end", "T", "Add start or endT"],
+    ["Shapes", "", "Every shape and line"],
     ["Tidy", "", "Tidy"],
   ]);
   expect(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByText("Flowchart")).toBeTruthy();
@@ -353,6 +355,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
     ["Select", "", "Select"],
     ["Add a service", "N", "Add a serviceN"],
     ["Group", "G", "GroupG"],
+    ["Shapes", "", "Every shape and line"],
     ["Tidy", "", "Tidy"],
   ]);
   const cloudStrip = cloud.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
@@ -766,4 +769,189 @@ test("a_move_on_a_file_deleted_outside_is_not_written_back", async () => {
   expect(f.disk.text).toBeNull();
   expect(f.disk.layout).toBeNull();
   expect(callsTo("write_diagram")).toHaveLength(0);
+});
+
+test("item_20_right_click_on_the_canvas_and_on_a_node_opens_contura_menus", async () => {
+  const s = setup();
+  await drawn(s);
+  // The empty canvas: add tools placed where it was clicked, then the canvas actions.
+  const pane = s.container.querySelector(".react-flow__pane") as HTMLElement;
+  fireEvent.contextMenu(pane, { clientX: 300, clientY: 200 });
+  const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+    "Add process",
+    "Add data store",
+    "Add outside party",
+    "Select all",
+    "Tidy",
+    "Zoom to fit",
+    "Publish image...",
+  ]);
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Add data store" }));
+  await waitFor(() => expect(s.text()).toContain("Data store [store, id: D2]\n"));
+  expect(screen.queryByRole("menu", { name: "Canvas actions" })).toBeNull();
+  // Escape closes it.
+  fireEvent.contextMenu(pane, { clientX: 300, clientY: 200 });
+  await screen.findByRole("menu", { name: "Canvas actions" });
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu", { name: "Canvas actions" })).toBeNull());
+  // A node: its own actions; Delete takes it out of the text.
+  fireEvent.contextMenu(s.node("Data store Orders")!, { clientX: 320, clientY: 220 });
+  const nodeMenu = await screen.findByRole("menu", { name: "Orders actions" });
+  expect(within(nodeMenu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Edit name and details...", "Rename", "Show in the text", "Delete"]);
+  await userEvent.click(within(nodeMenu).getByRole("menuitem", { name: "Delete" }));
+  await waitFor(() => expect(s.text()).not.toContain("Orders ["));
+});
+
+// ---- Step 12, item 19: the newer kinds draw ----
+
+const KIND_TEXTS: Record<string, string> = {
+  er: ['diagram er "Billing"', "customers", "customers.id int", "customers.email text", "invoices", "customers 1--* invoices : bills"].join("\n"),
+  sequence: ['diagram sequence "Pay"', "actor Customer", "participant App", "Customer -> App : Pay invoice", "loop retry {", "  App -> App : check", "}", "App --> Customer : done"].join("\n"),
+  state: ['diagram state "Invoice"', "Draft", "Sent", "Paid in full? [choice]", "[*] > Draft", "Draft > Sent : send", "Sent > [*]"].join("\n"),
+  class: ['diagram class "Types"', "interface Payable", "Payable : pay(amount)", "class Invoice", "Invoice : + total: numeric", "Payable <|-- Invoice"].join("\n"),
+  mindmap: ['diagram mindmap "Plan"', "root Q4 plan", "  Diagrams", "    New kinds", "  Release"].join("\n"),
+  timeline: ['diagram timeline "2026"', "section Q4", "2026-10-19: Docs ready", "milestone v1.0", "2026-11 to 2026-12: Backup"].join("\n"),
+};
+
+test("item_19_each_newer_kind_draws_its_shapes", async () => {
+  const expected: Record<string, string[]> = {
+    er: ["Entity customers", "Entity invoices"],
+    sequence: ["Actor Customer", "Participant App"],
+    state: ["Start", "End", "State Draft", "Choice Paid in full?"],
+    class: ["Interface Payable", "Class Invoice"],
+    mindmap: ["Central idea Q4 plan", "Topic Diagrams", "Topic New kinds"],
+    timeline: ["Event Docs ready", "Milestone v1.0", "Period Backup"],
+  };
+  for (const [kind, labels] of Object.entries(expected)) {
+    const s = setup({ text: `${KIND_TEXTS[kind]}\n`, layout: null }, `k-${kind}`);
+    for (const label of labels) await waitFor(() => expect(s.node(label)).not.toBeNull(), { timeout: 4000 });
+    cleanup();
+  }
+});
+
+test("item_19_cards_show_their_rows_and_fixed_kinds_are_laid_out_without_a_layout_file", async () => {
+  const s = setup({ text: `${KIND_TEXTS.er}\n`, layout: null }, "k-er-rows");
+  await waitFor(() => expect(s.node("Entity customers")).not.toBeNull(), { timeout: 4000 });
+  expect([...s.node("Entity customers")!.querySelectorAll(".fkind-col")].map((e) => e.textContent)).toEqual(["id", "email"]);
+  cleanup();
+  const seq = setup({ text: `${KIND_TEXTS.sequence}\n`, layout: null }, "k-seq");
+  await waitFor(() => expect(seq.node("Participant App")).not.toBeNull(), { timeout: 4000 });
+  // The frame and the lifelines are drawn; nothing is written to the layout file for a sequence.
+  expect(seq.container.querySelector('[aria-label="Frame loop retry"]')).not.toBeNull();
+  expect(seq.node("Participant App")!.querySelector(".fkind-lifeline")).not.toBeNull();
+  // Closing the tab runs any waiting save at once, so an empty list here means none was ever due.
+  seq.unmount();
+  expect(seq.saves()).toEqual([]);
+});
+
+test("item_19_the_shapes_list_names_the_open_kinds_shapes_and_writes_a_line", async () => {
+  const s = setup({ text: `${KIND_TEXTS.state}\n`, layout: null }, "k-shapes");
+  await waitFor(() => expect(s.node("State Draft")).not.toBeNull(), { timeout: 4000 });
+  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  const list = screen.getByRole("menu", { name: "Shapes" });
+  expect(within(list).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+    "State",
+    "Start",
+    "End",
+    "Choice",
+    "Fork or join",
+    "Composite",
+    "Transition",
+    "Note",
+  ]);
+  // A line shape is written at the end of the text, selected.
+  await userEvent.click(within(list).getByRole("menuitem", { name: "Transition" }));
+  expect(s.text().endsWith("A > B: event\n")).toBe(true);
+  const sel = s.view().state.selection.main;
+  expect(s.text().slice(sel.from, sel.to)).toBe("A > B: event");
+  // A shape with a tool adds the node.
+  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "State" }));
+  await waitFor(() => expect(s.text()).toMatch(/^State$/m));
+});
+
+test("item_21_a_selected_node_shows_four_resize_handles_and_a_kept_size_draws_it", async () => {
+  // A browser tells a ResizeObserver after layout, not inside observe(): the shared mock calls back at once,
+  // which a node with a size of its own turns into a render loop that no browser runs.
+  class LaterResizeObserver {
+    constructor(private cb: ResizeObserverCallback) {}
+    observe(target: Element) {
+      queueMicrotask(() => this.cb([{ target, contentRect: { width: 800, height: 600 } } as unknown as ResizeObserverEntry], this as never));
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  const Before = globalThis.ResizeObserver;
+  vi.stubGlobal("ResizeObserver", LaterResizeObserver);
+  onTestFinished(() => {
+    vi.stubGlobal("ResizeObserver", Before);
+  });
+  const layout = JSON.stringify({ version: 1, nodes: {}, style: "modern", direction: "LR", sizes: { Checkout: { w: 260, h: 90 } } });
+  const s = setup({ text: DFD, layout }, "resize-sizes");
+  await drawn(s);
+  select(s, "Process Checkout");
+  await waitFor(() => expect(s.node("Process Checkout")!.querySelectorAll(".fnode-resize")).toHaveLength(4));
+  // The kept size: the node draws at 260 x 90.
+  const fnode = s.node("Process Checkout")!.querySelector(".fnode") as HTMLElement;
+  expect(fnode.className).toContain("fnode-sized");
+  expect([fnode.style.width, fnode.style.height]).toEqual(["260px", "90px"]);
+  // Dragging the bottom right corner 40 px right and 10 down keeps the new size in the layout file.
+  const se = s.node("Process Checkout")!.querySelector('.fnode-resize[data-corner="se"]') as HTMLElement;
+  fireEvent.pointerDown(se, { button: 0, clientX: 100, clientY: 100 });
+  fireEvent.pointerMove(window, { clientX: 140, clientY: 110 });
+  fireEvent.pointerUp(window, { clientX: 140, clientY: 110 });
+  // jsdom measures every box at 800 x 600: the new size is that plus the drag, in canvas units at the fitted zoom.
+  const zoom = Number(/scale\(([\d.]+)\)/.exec((s.container.querySelector(".react-flow__viewport") as HTMLElement).style.transform)?.[1] ?? 1);
+  await waitFor(() => expect(JSON.parse(s.lastSave()?.layout ?? "{}").sizes?.Checkout).toEqual({ w: Math.round(800 + 40 / zoom), h: Math.round(600 + 10 / zoom) }));
+});
+
+test("item_22_double_click_a_node_to_edit_its_name_and_details", async () => {
+  const s = setup();
+  await drawn(s);
+  fireEvent.doubleClick(s.node("Data store Orders")!);
+  const panel = await screen.findByRole("dialog", { name: "Edit Orders" });
+  const name = within(panel).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+  expect(name.value).toBe("Orders");
+  expect((within(panel).getByRole("textbox", { name: "Id" }) as HTMLInputElement).value).toBe("D1");
+  expect((within(panel).getByRole("textbox", { name: "Table" }) as HTMLInputElement).value).toBe("shop.orders");
+  await userEvent.clear(name);
+  await userEvent.type(name, "Order book");
+  const id = within(panel).getByRole("textbox", { name: "Id" });
+  await userEvent.clear(id);
+  await userEvent.type(id, "D7{Enter}");
+  await waitFor(() => expect(s.text()).toContain("Order book [store, id: D7, table: shop.orders]\n"));
+  expect(s.text()).toContain("Checkout > Order book: new order");
+  expect(screen.queryByRole("dialog", { name: "Edit Orders" })).toBeNull();
+  // Escape leaves a node as it was.
+  await waitFor(() => expect(s.node("Process Checkout")).not.toBeNull());
+  fireEvent.doubleClick(s.node("Process Checkout")!);
+  const again = await screen.findByRole("dialog", { name: "Edit Checkout" });
+  await userEvent.type(within(again).getByRole("textbox", { name: "Name" }), "x");
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit Checkout" })).toBeNull());
+  expect(s.text()).toContain("Checkout [process, id: 1.0]");
+});
+
+test("item_23_canvas_keys_and_a_double_click_on_empty_canvas", async () => {
+  const s = setup(undefined, "keys-canvas");
+  await drawn(s);
+  // Ctrl+A selects every node; Escape lets go.
+  s.press("a", { ctrlKey: true });
+  await waitFor(() => expect(s.container.querySelectorAll(".react-flow__node.selected").length).toBeGreaterThanOrEqual(5));
+  s.press("Escape");
+  await waitFor(() => expect(s.container.querySelectorAll(".react-flow__node.selected")).toHaveLength(0));
+  // An arrow key nudges the selection one grid cell, kept in the layout file.
+  select(s, "Process Checkout");
+  await waitFor(() => expect(s.node("Process Checkout")!.classList.contains("selected")).toBe(true));
+  const before = JSON.parse(s.lastSave()?.layout ?? "null")?.nodes?.Checkout;
+  s.press("ArrowRight");
+  await waitFor(() => {
+    const now = JSON.parse(s.lastSave()?.layout ?? "{}").nodes?.Checkout;
+    expect(now?.x).toBe((before?.x ?? now.x - 16) + 16);
+  });
+  // A double-click on empty canvas offers the kind's shapes there.
+  fireEvent.doubleClick(s.container.querySelector(".react-flow__pane") as HTMLElement, { clientX: 400, clientY: 300 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: /Data store/ }));
+  await waitFor(() => expect(s.text()).toContain("Data store [store, id: D2]\n"));
 });

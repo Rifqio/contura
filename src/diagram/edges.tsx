@@ -8,6 +8,10 @@ export const MANY_MARKER = "crow-many";
 export const ONE_MARKER = "bar-one";
 /** Lineage into the Result node: a 6 px filled arrow. */
 export const ARROW_MARKER = "arrow";
+/** Step 12 class lines: a hollow triangle at the parent, a filled diamond at the whole, an open arrow on a dependency. */
+export const TRIANGLE_MARKER = "hollow-triangle";
+export const DIAMOND_MARKER = "filled-diamond";
+export const OPEN_ARROW_MARKER = "open-arrow";
 
 /** Corner radius of an orthogonal edge (DESIGN-NEXT 10.6). */
 export const EDGE_RADIUS = 8;
@@ -59,6 +63,15 @@ export function EdgeMarkers() {
         >
           <path className="edge-marker-fill" d="M0 0L6 3L0 6Z" />
         </marker>
+        <marker id={TRIANGLE_MARKER} viewBox="0 0 12 12" refX="12" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+          <path className="edge-marker edge-marker-hollow" d="M1 1L12 6L1 11Z" />
+        </marker>
+        <marker id={DIAMOND_MARKER} viewBox="0 0 14 10" refX="14" refY="5" markerWidth="14" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+          <path className="edge-marker-fill" d="M0 5L7 0L14 5L7 10Z" />
+        </marker>
+        <marker id={OPEN_ARROW_MARKER} viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+          <path className="edge-marker" d="M1 1L10 5L1 9" />
+        </marker>
       </defs>
     </svg>
   );
@@ -87,6 +100,50 @@ export function JoinBadge({ x, y, children, className }: { x: number; y: number;
 export function orthogonalPath(p: Pick<EdgeProps, "sourceX" | "sourceY" | "sourcePosition" | "targetX" | "targetY" | "targetPosition">) {
   const [path, x, y] = getSmoothStepPath({ ...p, borderRadius: EDGE_RADIUS });
   return { path, x, y };
+}
+
+/** A box on the canvas, in flow coordinates. */
+export interface FlowBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** The corner points of an SVG path made of M, L and Q commands (a Q's end point is a corner's end). */
+export function pathPoints(d: string): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  const re = /([MLQ])([^MLQ]*)/g;
+  for (let m = re.exec(d); m; m = re.exec(d)) {
+    const n = (m[2].match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi) ?? []).map(Number);
+    if (n.length >= 2) out.push({ x: n[n.length - 2], y: n[n.length - 1] });
+  }
+  return out;
+}
+
+/**
+ * Item 31: where an edge's badge goes so it covers no card: its midpoint when that is clear, else the middle of
+ * the longest run of the path that is, else the midpoint after all. `size` is the badge's box.
+ */
+export function clearBadgeSpot(d: string, mid: { x: number; y: number }, boxes: FlowBox[], size = { w: 72, h: 22 }): { x: number; y: number } {
+  const pad = 4;
+  const covers = (p: { x: number; y: number }) =>
+    boxes.some((b) => p.x + size.w / 2 + pad > b.x && p.x - size.w / 2 - pad < b.x + b.w && p.y + size.h / 2 + pad > b.y && p.y - size.h / 2 - pad < b.y + b.h);
+  if (!covers(mid)) return mid;
+  const pts = pathPoints(d);
+  let best: { x: number; y: number } | null = null;
+  let bestLen = -1;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (len > bestLen && !covers(m)) {
+      best = m;
+      bestLen = len;
+    }
+  }
+  return best ?? mid;
 }
 
 /** Edge type `orthogonal`: right angles with 8 px corners, and the Join badge when `data.badge` is set. */

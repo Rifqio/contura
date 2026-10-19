@@ -48,6 +48,26 @@
 .flow-editor .cm-scroller {
   font: var(--font-code-editor);
 }
+/* Item 17: the gutter follows the theme as the SQL editor's does (CodeMirror's own light grey showed in Dracula). */
+.flow-editor .cm-editor {
+  color: var(--c-text);
+  background: var(--c-bg-surface);
+}
+.flow-editor .cm-editor.cm-focused {
+  outline: none;
+}
+.flow-editor .cm-gutters {
+  min-width: 48px;
+  background: var(--c-bg-surface);
+  border-right: 1px solid var(--c-border-subtle);
+}
+.flow-editor .cm-lineNumbers {
+  color: var(--c-text-faint);
+}
+.flow-editor .cm-activeLineGutter {
+  background: none;
+  color: var(--c-text);
+}
 /* The selected node's line; it comes in over the band duration, never on a loop. */
 .flow-editor .cm-flow-band {
   background: var(--c-accent-subtle);
@@ -722,4 +742,117 @@
   color: var(--c-text-muted);
   font: var(--font-mono-small);
   white-space: pre-wrap;
+}
+/* Step 12, item 19 (frame Diagram): the Shapes list under the tool bar, each shape with the line it writes. */
+.flow-shapes {
+  position: relative;
+  display: inline-flex;
+}
+.flow-tool-shapes.is-on {
+  background: var(--c-accent-subtle);
+}
+.flow-shape-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 320px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 6px;
+  box-sizing: border-box;
+  transform: translateX(-50%);
+  background: var(--c-bg-raised);
+  border: 1px solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-menu);
+  animation: menu-in var(--motion-base) var(--ease-enter);
+}
+.flow-shape {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--rounded-md);
+  background: transparent;
+  color: var(--c-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+.flow-shape:hover,
+.flow-shape:focus-visible {
+  background: var(--c-bg-hover);
+}
+.flow-shape:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+.flow-shape > .icon {
+  flex: none;
+  color: var(--c-text-muted);
+}
+.flow-shape-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.flow-shape-label {
+  font: var(--font-body);
+}
+.flow-shape-code {
+  overflow: hidden;
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  white-space: pre;
+  text-overflow: ellipsis;
+}
+.flow-shape-foot {
+  margin: 4px 6px 2px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* Item 22: the name and details panel beside a double-clicked node (level 1, DN 10.12). */
+.flow-node-editor {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 280px;
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--c-bg-raised);
+  border: 1px solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-menu);
+  animation: menu-in var(--motion-base) var(--ease-enter);
+}
+.flow-node-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.flow-node-label {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.flow-node-problem {
+  margin: 0;
+  color: var(--c-danger-text);
+  font: var(--font-small);
+}
+.flow-node-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

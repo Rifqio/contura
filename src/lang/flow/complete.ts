@@ -1,7 +1,7 @@
 // Completion for .flow (spec section 2, "Editor"): kinds and attribute keys inside brackets, icon names after
 // `icon:` (provider prefix first), node names where a name goes, and the diagram kinds on the first line.
 import { rankIcons } from "./iconRank";
-import { ATTR_KEYS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS } from "./model";
+import { ATTR_KEYS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS, NOTE_KINDS } from "./model";
 import { parseFlow } from "./parse";
 
 export type FlowCompletion = {
@@ -16,6 +16,8 @@ export type FlowCompletionResult = { from: number; items: FlowCompletion[] };
 
 export { rankIcons };
 
+const KIND_LINE = new RegExp(`^diagram\\s+(${DIAGRAM_KINDS.join("|")})(?=$|[\\s"]|//)`);
+
 /** The kind on the first statement line, read without a full parse. */
 function diagramKind(text: string): DiagramKind | null {
   let p = 0;
@@ -23,7 +25,7 @@ function diagramKind(text: string): DiagramKind | null {
     const e = text.indexOf("\n", p);
     const line = text.slice(p, e < 0 ? text.length : e).trim();
     if (line !== "" && !line.startsWith("//")) {
-      const m = /^diagram\s+(dfd|flow|cloud)(?=$|[\s"]|\/\/)/.exec(line);
+      const m = KIND_LINE.exec(line);
       return m ? (m[1] as DiagramKind) : null;
     }
     if (e < 0) break;
@@ -45,6 +47,14 @@ function firstStatement(text: string, lineStart: number): boolean {
   }
   return true;
 }
+
+/** The words that start a statement in the kinds written with them. */
+const LEADING_WORDS: Partial<Record<DiagramKind, string[]>> = {
+  sequence: ["participant", "actor", "activate", "deactivate", "loop", "alt", "opt"],
+  class: ["class", "interface", "enum"],
+  mindmap: ["root"],
+  timeline: ["section", "milestone"],
+};
 
 const startsWithCi = (label: string, typed: string) => label.toLowerCase().startsWith(typed.toLowerCase());
 
@@ -98,6 +108,15 @@ function context(line: string, lineFrom: number): Context {
     } else if (c === "-" && (i === 0 || /\s/.test(line[i - 1])) && (i + 1 >= line.length || /\s/.test(line[i + 1]))) {
       nameFrom = i + 1;
       closedSomething = false;
+    } else if (/\s/.test(c)) {
+      // After a step 12 arrow (--, 1--*, <|--, *--): the name after it is being typed.
+      let t = i;
+      while (t > 0 && !/\s/.test(line[t - 1])) t--;
+      const token = line.slice(t, i);
+      if (token && /^[-<>|.*1]+$/.test(token) && /[-]/.test(token) && token.length > 1) {
+        nameFrom = i + 1;
+        closedSomething = false;
+      }
     }
   }
   if (inBracket) {
@@ -159,10 +178,17 @@ export function completeFlow(
   }
 
   const typed = ctx.typed.startsWith('"') ? ctx.typed.slice(1) : ctx.typed;
+  // Step 12: at the start of a line, the words a kind starts its statements with.
+  const dk = diagramKind(text);
+  const startOfLine = line.slice(0, ctx.from - lineFrom).trim() === "";
+  const words = startOfLine && dk ? [...(LEADING_WORDS[dk] ?? []), ...(NOTE_KINDS.has(dk) ? ["note"] : [])] : [];
+  const lead: FlowCompletion[] = words
+    .filter((w) => startsWithCi(w, typed) && w !== typed)
+    .map((w) => ({ label: w, kind: "keyword" as const, apply: w === "note" ? "note: " : `${w} ` }));
   const names = defined ?? parseFlow(text).defined;
   let lineNo = 1;
   for (let i = text.indexOf("\n"); i >= 0 && i < lineFrom; i = text.indexOf("\n", i + 1)) lineNo++;
-  const items: FlowCompletion[] = [];
+  const items: FlowCompletion[] = [...lead];
   for (const [n, at] of names) {
     if (at !== lineNo && startsWithCi(n, typed)) items.push({ label: n, kind: "node", apply: flowName(n) });
   }

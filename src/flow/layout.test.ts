@@ -40,3 +40,20 @@ test("positions_named___proto___are_plain_keys", () => {
   expect(l.nodes["__proto__"]).toEqual({ x: 1, y: 2 });
   expect(serializeFlowLayout(l)).toContain('"__proto__"');
 });
+
+test("item_21_resized_sizes_round_trip_and_bad_ones_are_dropped", () => {
+  const l = parseFlowLayout(JSON.stringify({ version: 1, nodes: {}, style: "modern", direction: "LR", sizes: { B: { w: 200.4, h: 80 }, A: { w: 100, h: 40 }, Bad: { w: -1, h: 3 } } }), "dfd");
+  expect(l.sizes).toEqual({ B: { w: 200.4, h: 80 }, A: { w: 100, h: 40 } });
+  const out = JSON.parse(serializeFlowLayout(l));
+  expect(Object.keys(out.sizes)).toEqual(["A", "B"]);
+  expect(out.sizes.B).toEqual({ w: 200, h: 80 });
+});
+
+test("item_21_a_corner_drag_keeps_the_far_corner_and_a_diamond_its_shape", async () => {
+  const { resizedBox } = await import("./flowNodes");
+  const start = { x: 100, y: 100, w: 150, h: 50 };
+  expect(resizedBox(start, "se", 30, 10, { w: 56, h: 24 }, false)).toEqual({ x: 100, y: 100, w: 180, h: 60 });
+  expect(resizedBox(start, "nw", -20, -10, { w: 56, h: 24 }, false)).toEqual({ x: 80, y: 90, w: 170, h: 60 });
+  expect(resizedBox(start, "ne", -500, 0, { w: 56, h: 24 }, false).w).toBe(56);
+  expect(resizedBox({ x: 0, y: 0, w: 116, h: 116 }, "se", 20, 0, { w: 56, h: 24 }, true)).toEqual({ x: 0, y: 0, w: 136, h: 136 });
+});

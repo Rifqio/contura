@@ -19,6 +19,13 @@ import { emptyQuery } from "./model";
 import SaveDialog from "./SaveDialog";
 import VisualQueryTab, { type VisualQueryTabProps } from "./VisualQueryTab";
 
+/** Item 30: the SQL is a tab of the bottom panel; this shows it. */
+async function showSql() {
+  await userEvent.click(screen.getByRole("tab", { name: "SQL" }));
+  return screen.findByRole("region", { name: "SQL" });
+}
+
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 patientFile();
@@ -367,6 +374,7 @@ test("an_edited_model_saved_while_closed_takes_the_last_preview_not_the_stored_s
       savedQueries={[storedRow({ connectionId: "c1" })]}
     />,
   );
+  await showSql();
   await screen.findByRole("group", { name: "Generated SQL" });
   ctrlS();
   await waitFor(() => expect(callsTo("save_saved_query")).toHaveLength(1));

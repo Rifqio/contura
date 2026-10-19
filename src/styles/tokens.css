@@ -104,6 +104,12 @@
   --syn-type-style: italic;
   --c-tree-guide: #c9c6b6;
   --c-tree-guide-strong: #8f8a73;
+  /* Item 14: the Contura mark (logo masters, small cut): two stacks and the teal middle. */
+  --c-logo-stack: #1b1f23;
+  --c-logo-teal: #0e7c86;
+  /* Item 16: the feature icons' line colour and the ink of strokes drawn over a hue. */
+  --c-feat-line: #48432f;
+  --c-feat-ink: #fffbeb;
   --db-mysql: #00758f;
   --db-pg: #336791;
   --db-sqlite: #0f80cc;
@@ -205,6 +211,10 @@
   --syn-type-style: italic;
   --c-tree-guide: #3c3f52;
   --c-tree-guide-strong: #6272a4;
+  --c-logo-stack: #e4e8eb;
+  --c-logo-teal: #3fb8c2;
+  --c-feat-line: #c7c8d3;
+  --c-feat-ink: #191a21;
   --db-mysql: #5fb6cc;
   --db-pg: #8fb3e3;
   --db-sqlite: #63b4ec;
@@ -308,6 +318,10 @@
     --syn-type-style: italic;
     --c-tree-guide: #3c3f52;
     --c-tree-guide-strong: #6272a4;
+    --c-logo-stack: #e4e8eb;
+    --c-logo-teal: #3fb8c2;
+    --c-feat-line: #c7c8d3;
+    --c-feat-ink: #191a21;
     --db-mysql: #5fb6cc;
     --db-pg: #8fb3e3;
     --db-sqlite: #63b4ec;
@@ -474,11 +488,19 @@
   --tree-row-height: var(--row-h);
   --tree-row-selected-background: var(--c-accent-subtle);
   --tree-row-selected-text: var(--c-text);
+  /* Item 16: feature families share the syntax hues, so both themes keep their meaning. */
+  --c-feat-query: var(--c-accent);
+  --c-feat-obj: var(--c-syn-type);
+  --c-feat-data: var(--c-syn-function);
+  --c-feat-safe: var(--c-syn-keyword);
+  --c-feat-vis: var(--c-syn-string);
+  --c-feat-none: var(--c-text-subtle);
   --grid-header-background: var(--c-bg-panel);
   --grid-header-text: var(--c-text);
   --grid-header-font: var(--font-label);
   --grid-header-padding: 0px 8px;
-  --grid-header-height: var(--row-h);
+  /* The name over its type: two lines (38 px, 34 compact). */
+  --grid-header-height: calc(var(--row-h) + 10px);
   --grid-cell-background: var(--c-bg-surface);
   --grid-cell-text: var(--c-text);
   --grid-cell-font: var(--font-mono-small);

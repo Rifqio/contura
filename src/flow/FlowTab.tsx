@@ -12,7 +12,10 @@ import type { Node, ReactFlowInstance } from "@xyflow/react";
 import { type KeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Icon, { type IconName } from "../components/Icon";
-import DiagramCanvas from "../diagram/DiagramCanvas";
+import DiagramCanvas, { type CanvasMenuAt } from "../diagram/DiagramCanvas";
+import type { MenuItem } from "../components/Menu";
+import { PlacedMenu, type PlacedMenuState } from "./DiagramMenu";
+import NodeEditor, { type NodeEdit, nodeEditOps } from "./NodeEditor";
 import PublishDialog from "../diagram/export/PublishDialog";
 import type { Box as SceneBox, Scene } from "../diagram/export/scene";
 import { type MotionKey, motionMs } from "../diagram/motion";
@@ -24,19 +27,20 @@ import { makeConnectionLine } from "./interactions/ConnectionLine";
 import { type Box, ghostCell, groupAt, guidesFor, linkBox, magnetTarget, type Point, snapTo } from "./interactions/geometry";
 import LabelBox from "./interactions/LabelBox";
 import { CanvasOverlay, createOverlayStore } from "./interactions/overlay";
-import QuickAdd from "./interactions/QuickAdd";
+import QuickAdd, { quickItems } from "./interactions/QuickAdd";
 import { glideFrames } from "./interactions/glide";
 import { afterPaint, easeExit, tween } from "./interactions/tween";
 import type { LivePositions } from "../diagram/livePositions";
 import type { NodeState } from "./nodes/parts";
 import type { TextEdit } from "../lang/protocol";
 import { appLang } from "../lang/appLang";
+import { insertionLine } from "../lang/insertionLine";
 import type { LangClient } from "../lang/client";
 import { flowLanguageWith } from "../lang/flow/cm";
-import type { DiagramKind, FlowDoc, FlowNode, FlowNodeKind } from "../lang/flow/model";
+import { defaultArrow, type DiagramKind, FIXED_KINDS, type FlowDoc, type FlowNode, type FlowNodeKind, STATE_END, STATE_START } from "../lang/flow/model";
 import type { FlowProblem } from "../lang/flow/problems";
 import { staleBanner } from "../lang/flow/problems";
-import { buildFlowGraph, drawnKind, FLOW_EDGE_TYPES, FLOW_NODE_TYPES, groupBoxes, layoutInput, nodeSize } from "./flowNodes";
+import { buildFlowGraph, drawnKind, FLOW_EDGE_TYPES, FLOW_NODE_TYPES, FlowResizeContext, groupBoxes, layoutInput, nodeSize } from "./flowNodes";
 import FlowToolbar, { ADD_TOOLS, type AddTool, firstNodeHint } from "./FlowToolbar";
 import { emptyPositions, type FlowDirection } from "./layout";
 import { kindOfText, type Parsed, useFlowDoc } from "./useFlowDoc";
@@ -45,7 +49,17 @@ import IconPicker from "./IconPicker";
 import { sendIconNames } from "./icons";
 import { flowScene, loadSceneIcons, sceneIconNames } from "./flowScene";
 
-const KIND_TITLE: Record<DiagramKind, string> = { dfd: "Data flow", flow: "Flowchart", cloud: "Cloud" };
+const KIND_TITLE: Record<DiagramKind, string> = {
+  dfd: "Data flow",
+  flow: "Flowchart",
+  cloud: "Cloud",
+  er: "Entity relationship",
+  sequence: "Sequence",
+  state: "State",
+  class: "Class",
+  mindmap: "Mind map",
+  timeline: "Timeline",
+};
 
 const NODE_WORD: Record<FlowNodeKind, string> = {
   entity: "Outside party",
@@ -58,6 +72,23 @@ const NODE_WORD: Record<FlowNodeKind, string> = {
   io: "Input or output",
   subprocess: "Subprocess",
   service: "Service",
+  document: "Document",
+  database: "Database",
+  weak: "Weak entity",
+  participant: "Participant",
+  actor: "Actor",
+  state: "State",
+  choice: "Choice",
+  fork: "Fork",
+  class: "Class",
+  interface: "Interface",
+  enum: "Enum",
+  root: "Central idea",
+  topic: "Topic",
+  event: "Event",
+  period: "Period",
+  milestone: "Milestone",
+  note: "Note",
 };
 
 const NODE_ICON: Partial<Record<FlowNodeKind, IconName>> = {
@@ -79,7 +110,16 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function countsOf(kind: DiagramKind, doc: FlowDoc): string {
   if (kind === "dfd") return `${plural(doc.nodes.length, "node")}, ${plural(doc.links.length, "flow")}`;
   if (kind === "flow") return `${plural(doc.nodes.length, "shape")}, ${plural(doc.links.length, "line")}`;
-  return plural(doc.nodes.length, "service");
+  if (kind === "cloud") return plural(doc.nodes.length, "service");
+  // Step 12 kinds: their own nouns (the start and end markers and the indent branches are not counted).
+  const shown = doc.nodes.filter((n) => n.name !== STATE_START && n.name !== STATE_END).length;
+  const drawn = doc.links.filter((l) => !l.tree).length;
+  if (kind === "er") return `${plural(shown, "entity", "entities")}, ${plural(drawn, "relationship")}`;
+  if (kind === "sequence") return `${plural(shown, "participant")}, ${plural(drawn, "message")}`;
+  if (kind === "state") return `${plural(shown, "state")}, ${plural(drawn, "transition")}`;
+  if (kind === "class") return `${plural(shown, "type")}, ${plural(drawn, "line")}`;
+  if (kind === "mindmap") return plural(shown, "topic");
+  return plural(shown, "item");
 }
 
 /** The next free id for a new process (`3.0`) or data store (`D2`), as the frames number them. */
@@ -255,7 +295,17 @@ export function explainProblem(p: FlowProblem, text: string): string | null {
 }
 
 /** What to type on the empty flow's first free line, per diagram kind. */
-const FIRST_LINE: Record<DiagramKind, string> = { dfd: "Customer [entity]", flow: "Request in [start]", cloud: "Users [icon: users]" };
+const FIRST_LINE: Record<DiagramKind, string> = {
+  dfd: "Customer [entity]",
+  flow: "Request in [start]",
+  cloud: "Users [icon: users]",
+  er: "customers [entity]",
+  sequence: "participant App",
+  state: "[*] > Draft",
+  class: "class Invoice",
+  mindmap: "root Q4 plan",
+  timeline: "2026-10-19: Release",
+};
 
 function toCm(problems: FlowProblem[], length: number, applyFix: (edits: FlowProblem["fixes"][number]["edits"]) => void): CmDiagnostic[] {
   return problems.map((p) => ({
@@ -299,6 +349,7 @@ function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, o
         doc: initialText,
         extensions: [
           lineNumbers(),
+          insertionLine(),
           bandField,
           ghostField,
           lintGutter(),
@@ -431,6 +482,12 @@ export default function FlowTab({ name, client: given }: Props) {
   const [selected, setSelected] = useState<string[]>([]);
   const [bandLines, setBandLines] = useState<number[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** Item 22: the node whose name and details are being edited, and where its panel sits. */
+  const [editingNode, setEditingNode] = useState<{ name: string; at: { left: number; top: number }; problem: string | null } | null>(null);
+  /** Item 23: a double-click on empty canvas offers the kind's shapes there. */
+  const [paneAdd, setPaneAdd] = useState<{ screen: { x: number; y: number }; flow: { x: number; y: number } } | null>(null);
+  /** The canvas's right-click menu (item 20), at the pointer. */
+  const [menu, setMenu] = useState<PlacedMenuState | null>(null);
   /** Why the last canvas action did nothing, in the strip; cleared by the next action. */
   const [notice, setNotice] = useState<string | null>(null);
   const [ghost, setGhost] = useState<{ edits: TextEdit[]; text: string } | null>(null);
@@ -514,7 +571,8 @@ export default function FlowTab({ name, client: given }: Props) {
   // Nodes with no position yet are placed by dagre in the worker, in the layout's direction.
   // Every node it asks about gets a position (the worker's, else a row below the drawing), so it never asks twice.
   useEffect(() => {
-    if (!drawn) return;
+    // A sequence, mind map or timeline is laid out from its text every time; it keeps no positions.
+    if (!drawn || FIXED_KINDS.has(drawn.kind)) return;
     const has = (n: string) => hasOwn(layout.nodes, n);
     if (drawn.nodes.every((n) => has(n.name))) return;
     const input = layoutInput(drawn, look);
@@ -558,9 +616,14 @@ export default function FlowTab({ name, client: given }: Props) {
   // frames go to the canvas as live positions of the moving nodes only (ruling P20).
   const graph = useMemo(() => {
     if (!drawn) return { nodes: [], edges: [] };
+    if (FIXED_KINDS.has(drawn.kind)) return buildFlowGraph(drawn, layout.nodes, look, { states, fresh: freshEdge });
     const placed = drawn.nodes.filter((n) => hasOwn(layout.nodes, n.name));
-    return buildFlowGraph(placed.length === drawn.nodes.length ? drawn : { ...drawn, nodes: placed }, layout.nodes, look, { states, fresh: freshEdge });
-  }, [drawn, layout.nodes, look, states, freshEdge]);
+    return buildFlowGraph(placed.length === drawn.nodes.length ? drawn : { ...drawn, nodes: placed }, layout.nodes, look, {
+      states,
+      fresh: freshEdge,
+      sizes: layout.sizes,
+    });
+  }, [drawn, layout.nodes, layout.sizes, look, states, freshEdge]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
 
@@ -800,7 +863,7 @@ export default function FlowTab({ name, client: given }: Props) {
     return { x: snap(at.x - s.w / 2), y: snap(at.y - s.h / 2) };
   }
 
-  async function add(tool: AddTool) {
+  async function add(tool: AddTool, at?: Point) {
     if (!kind || tool.kind === "group") return;
     let nodeKind: FlowNodeKind = tool.kind === "terminal" ? "start" : tool.kind;
     let base = tool.base;
@@ -818,7 +881,7 @@ export default function FlowTab({ name, client: given }: Props) {
       unique: true,
     });
     if (!r?.name) return;
-    doc.place({ [r.name]: viewCentre(nodeKind, r.name) }, true);
+    doc.place({ [r.name]: at ? { x: snap(at.x), y: snap(at.y) } : viewCentre(nodeKind, r.name) }, true);
     enter(r.name);
     setSelected([r.name]);
     // A new service gets its icon next (frame 6+.5, "from the toolbar"); Esc leaves it without one.
@@ -963,7 +1026,7 @@ export default function FlowTab({ name, client: given }: Props) {
         return;
       }
     }
-    const r = await doc.run({ op: "addLink", from: from.node, to: to.node, arrow: ">" });
+    const r = await doc.run({ op: "addLink", from: from.node, to: to.node, arrow: defaultArrow(kind) });
     if (r) void openLabel(from.node, to.node, r.at);
   }
 
@@ -1042,7 +1105,7 @@ export default function FlowTab({ name, client: given }: Props) {
       setGhost(null);
       return;
     }
-    void doc.plan({ op: "addLink", from: fromId, to: lock, arrow: ">" }).then((g) => {
+    void doc.plan({ op: "addLink", from: fromId, to: lock, arrow: defaultArrow(kind) }).then((g) => {
       if (drawLock.current === lock) setGhost(g);
     });
   };
@@ -1068,7 +1131,7 @@ export default function FlowTab({ name, client: given }: Props) {
       op: "batch",
       ops: [
         { op: "addNode", name, kind: kind === "cloud" ? null : nodeKind, ...(id ? { attrs: { id } } : {}) },
-        { op: "addLink", from: q.from, to: name, arrow: ">" },
+        { op: "addLink", from: q.from, to: name, arrow: defaultArrow(kind) },
       ],
     });
     if (!r) return;
@@ -1146,7 +1209,7 @@ export default function FlowTab({ name, client: given }: Props) {
    */
   async function tidy() {
     const d = drawnRef.current;
-    if (!d || d.nodes.length === 0) return;
+    if (!d || d.nodes.length === 0 || FIXED_KINDS.has(d.kind)) return;
     const names = new Set(d.nodes.map((n) => n.name));
     const picked = selectedRef.current.filter((n) => names.has(n));
     const only = picked.length >= 2 ? new Set(picked) : null;
@@ -1197,10 +1260,32 @@ export default function FlowTab({ name, client: given }: Props) {
       } else if (view && k === "y" && !e.shiftKey) {
         e.preventDefault();
         redo(view);
+      } else if (k === "a" && !e.shiftKey) {
+        // Item 23: select every node, as every canvas tool does.
+        e.preventDefault();
+        setSelected(drawnRef.current?.nodes.map((n) => n.name) ?? []);
       }
       return;
     }
     if (e.altKey) return;
+    if (e.key === "Escape" && selectedRef.current.length > 0) {
+      e.preventDefault();
+      setSelected([]);
+      return;
+    }
+    // Item 23: the arrow keys nudge the selection a grid cell (Shift: a quarter of one), one undo entry a press.
+    const nudge = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (nudge && selectedRef.current.length > 0 && drawnRef.current && !FIXED_KINDS.has(drawnRef.current.kind)) {
+      e.preventDefault();
+      const step = e.shiftKey ? 4 : 16;
+      const after = emptyPositions();
+      for (const n of selectedRef.current) {
+        const p = drawnAt(n);
+        if (p) after[n] = { x: p.x + nudge[0] * step, y: p.y + nudge[1] * step };
+      }
+      doc.move(after);
+      return;
+    }
     if (e.key === "F2") {
       if (selectedRef.current.length === 1) {
         e.preventDefault();
@@ -1221,6 +1306,101 @@ export default function FlowTab({ name, client: given }: Props) {
       void (tool.kind === "group" ? groupSelected() : add(tool));
     }
   };
+
+  /** Writes a shape's line at the end of the text, selected, with focus in the text, ready to fill in. */
+  function writeTemplate(template: string) {
+    const v = doc.view();
+    if (!v) return;
+    const text = v.state.doc.toString();
+    const lead = text === "" || text.endsWith("\n") ? "" : "\n";
+    const from = text.length + lead.length;
+    v.dispatch({ changes: { from: text.length, insert: `${lead}${template}\n` }, selection: { anchor: from, head: from + template.length }, scrollIntoView: true, userEvent: "input" });
+    v.focus();
+  }
+
+  /** Opens the name and details panel beside a node (item 22). */
+  function editNode(name: string) {
+    const d = drawnRef.current;
+    if (!d?.nodes.some((n) => n.name === name) || isArea(name)) return;
+    const n = instance.current?.getNode(name);
+    const w = n?.measured?.width ?? n?.width ?? n?.initialWidth ?? 0;
+    const flowAt = n ? { x: n.position.x + w + 12, y: n.position.y } : { x: 0, y: 0 };
+    const screen = instance.current?.flowToScreenPosition(flowAt) ?? { x: 120, y: 120 };
+    const left = Math.max(8, Math.min(screen.x, window.innerWidth - 300));
+    const top = Math.max(8, Math.min(screen.y, window.innerHeight - 280));
+    setSelected([name]);
+    setEditingNode({ name, at: { left, top }, problem: null });
+  }
+
+  /** Saves the panel: the attributes, then the name, as one batch and one undo entry. */
+  async function saveNodeEdit(edit: NodeEdit) {
+    const open = editingNode;
+    const d = drawnRef.current;
+    const node = d?.nodes.find((n) => n.name === open?.name);
+    if (!open || !d || !node) return setEditingNode(null);
+    const ops = nodeEditOps(d.kind, node, edit);
+    if (ops.length === 0) return setEditingNode(null);
+    const rename = ops.find((o) => o.op === "renameNode");
+    if (rename && rename.op === "renameNode" && node.kind !== "note") {
+      const taken = await doc.linesOf([rename.next]);
+      if (taken && taken[rename.next] != null) return setEditingNode({ ...open, problem: `${rename.next} is already used.` });
+    }
+    const r = await doc.run(ops.length === 1 ? ops[0] : { op: "batch", ops });
+    if (!r) return setEditingNode({ ...open, problem: "The text changed meanwhile. Try again." });
+    setEditingNode(null);
+    if (rename && rename.op === "renameNode" && node.kind !== "note") {
+      const kept = doc.layout.nodes[node.name];
+      if (kept) doc.place({ [rename.next]: kept }, true);
+      setSelected([rename.next]);
+    }
+  }
+
+  /** Moves the text to the line that defines `node` and gives it focus. */
+  async function showInText(node: string) {
+    const lines = await doc.linesOf([node]);
+    const line = lines?.[node];
+    const v = doc.view();
+    if (!v || typeof line !== "number" || line > v.state.doc.lines) return;
+    v.dispatch({ selection: { anchor: v.state.doc.line(line).from }, scrollIntoView: true });
+    v.focus();
+  }
+
+  /** Item 20: right-click on the canvas gives its actions; on a node, that node's (frame Diagram, menus). */
+  function openMenu(at: CanvasMenuAt) {
+    const names = drawnRef.current?.nodes.map((n) => n.name) ?? [];
+    if (at.node !== null && !isArea(at.node) && names.includes(at.node)) {
+      const node = at.node;
+      if (!selectedRef.current.includes(node)) setSelected([node]);
+      const many = selectedRef.current.includes(node) && selectedRef.current.length > 1;
+      const items: MenuItem[] = [
+        { key: "details", label: "Edit name and details...", icon: <Icon name="edit" />, disabled: many, onSelect: () => editNode(node) },
+        { key: "rename", label: "Rename", icon: <Icon name="edit" />, shortcut: "F2", disabled: many, onSelect: () => setRenaming(node) },
+        { key: "text", label: "Show in the text", icon: <Icon name="fileCode" />, onSelect: () => void showInText(node) },
+        {
+          key: "delete",
+          label: many ? `Delete ${selectedRef.current.length} nodes` : "Delete",
+          icon: <Icon name="trash" />,
+          shortcut: "Delete",
+          danger: true,
+          separatorBefore: true,
+          onSelect: () => void removeSelected(),
+        },
+      ];
+      setMenu({ x: at.screen.x, y: at.screen.y, label: `${node} actions`, items });
+      return;
+    }
+    const adders: MenuItem[] = tools
+      .filter((t) => t.kind !== "group")
+      .map((t) => ({ key: `add:${t.label}`, label: t.label, icon: <Icon name={t.icon} />, shortcut: t.key, onSelect: () => void add(t, at.flow) }));
+    const items: MenuItem[] = [
+      ...adders,
+      { key: "all", label: "Select all", icon: <Icon name="select" />, separatorBefore: true, disabled: names.length === 0, onSelect: () => setSelected(names) },
+      { key: "tidy", label: "Tidy", icon: <Icon name="tidy" />, disabled: names.length === 0, onSelect: () => void tidy() },
+      { key: "fit", label: "Zoom to fit", icon: <Icon name="fit" />, shortcut: "Shift+1", onSelect: at.fit },
+      { key: "publish", label: "Publish image...", icon: <Icon name="image" />, separatorBefore: true, disabled: !drawnRef.current, onSelect: () => void openPublish() },
+    ];
+    setMenu({ x: at.screen.x, y: at.screen.y, label: "Canvas actions", items });
+  }
 
   const nodeOf = (n: string): FlowNode | undefined => drawn?.nodes.find((x) => x.name === n);
   const one = selected.length === 1 ? nodeOf(selected[0]) : undefined;
@@ -1371,14 +1551,16 @@ export default function FlowTab({ name, client: given }: Props) {
           </button>
         </div>
         <div ref={canvasEl} className={stale ? "flow-canvas is-stale" : "flow-canvas"} tabIndex={-1} onKeyDown={onCanvasKey}>
+          <FlowResizeContext.Provider value={doc.resize}>
           <DiagramCanvas
             nodes={graph.nodes}
             edges={graph.edges}
             nodeTypes={FLOW_NODE_TYPES}
             edgeTypes={FLOW_EDGE_TYPES}
             connectionMode="loose"
-            onConnectPorts={(from, to) => void connect(from, to)}
-            onConnectRelease={onConnectRelease}
+            // A timeline has no lines between items: its order is the dates.
+            onConnectPorts={kind === "timeline" ? undefined : (from, to) => void connect(from, to)}
+            onConnectRelease={kind === "timeline" ? undefined : onConnectRelease}
             onDragCancel={onDragCancel}
             connectionLineComponent={connectionLine}
             snapWhileDragging={false}
@@ -1387,6 +1569,9 @@ export default function FlowTab({ name, client: given }: Props) {
             onSelect={onSelect}
             selection={selected}
             onEdgeDoubleClick={onEdgeDoubleClick}
+            onContextMenu={openMenu}
+            onNodeDoubleClick={editNode}
+            onPaneDoubleClick={kind && quickItems(kind).length > 0 ? setPaneAdd : undefined}
             minimapJump
             boxSelect
             livePositions={glide}
@@ -1414,6 +1599,10 @@ export default function FlowTab({ name, client: given }: Props) {
                 onLook={doc.setStyle}
                 onTidy={() => void tidy()}
                 tidySelection={selected.length >= 2}
+                onShape={(shape) => {
+                  if (shape.tool) void (shape.tool.kind === "group" ? groupSelected() : add(shape.tool));
+                  else if (shape.template) writeTemplate(shape.template);
+                }}
               />
             )}
             {stale && parsed?.errorLine != null && (
@@ -1439,8 +1628,21 @@ export default function FlowTab({ name, client: given }: Props) {
               </p>
             )}
           </DiagramCanvas>
+          </FlowResizeContext.Provider>
           <CanvasToast note={note} />
           {quick && kind && <QuickAdd kind={kind} at={quick.screen} onPick={(t) => void addAndConnect(t)} onCancel={cancelQuick} />}
+          {paneAdd && kind && !quick && (
+            <QuickAdd
+              kind={kind}
+              at={paneAdd.screen}
+              onPick={(t) => {
+                const at = paneAdd.flow;
+                setPaneAdd(null);
+                void add(t, at);
+              }}
+              onCancel={() => setPaneAdd(null)}
+            />
+          )}
         </div>
       </section>
       {picker &&
@@ -1455,6 +1657,20 @@ export default function FlowTab({ name, client: given }: Props) {
           document.body,
         )}
       {credits && <IconCredits onClose={() => setCredits(false)} />}
+      {menu && <PlacedMenu menu={menu} onClose={() => setMenu(null)} />}
+      {editingNode && kind && drawn?.nodes.some((n) => n.name === editingNode.name) &&
+        createPortal(
+          <NodeEditor
+            key={editingNode.name}
+            diagram={kind}
+            node={drawn.nodes.find((n) => n.name === editingNode.name)!}
+            at={editingNode.at}
+            problem={editingNode.problem}
+            onSave={(e) => void saveNodeEdit(e)}
+            onCancel={() => setEditingNode(null)}
+          />,
+          document.body,
+        )}
       {publishing && (
         <PublishDialog
           scene={publishing.scene}

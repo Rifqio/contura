@@ -18,7 +18,12 @@ type State = {
   value: boolean;
   /** After a link's `:`, the label runs to the end of the line. */
   label: boolean;
+  /** Nothing read yet on this line (step 12: the words a statement starts with, a timeline date). */
+  first: boolean;
 };
+
+/** The words step 12 kinds start a statement with. */
+const LEADING = /^(participant|actor|activate|deactivate|loop|alt|opt|par|critical|class|interface|enum|root|section|milestone)(?=\s)|^note(?=\s*:)/;
 
 const isWs = (c: string | undefined) => c !== undefined && /\s/.test(c);
 
@@ -46,14 +51,14 @@ function stopsName(s: string, j: number): boolean {
   const c = s[j];
   if ("[]{}:><\"\\".includes(c)) return true;
   if (c === "/") return s[j + 1] === "/";
-  if (c === "-") return s[j + 1] === "-" || ((j === 0 || isWs(s[j - 1])) && (j + 1 >= s.length || isWs(s[j + 1])));
+  if (c === "-") return s[j + 1] === "-" || s[j + 1] === ">" || ((j === 0 || isWs(s[j - 1])) && (j + 1 >= s.length || isWs(s[j + 1])));
   if (c === ".") return s[j + 1] === "." && s[j + 2] === ">";
   return false;
 }
 
 export const flowLanguage = StreamLanguage.define<State>({
   name: "flow",
-  startState: () => ({ header: false, kindNext: false, title: false, bracket: false, value: false, label: false }),
+  startState: () => ({ header: false, kindNext: false, title: false, bracket: false, value: false, label: false, first: true }),
   copyState: (s) => ({ ...s }),
   languageData: { commentTokens: { line: "//" } },
   token(stream, st) {
@@ -63,8 +68,17 @@ export const flowLanguage = StreamLanguage.define<State>({
       st.bracket = false;
       st.value = false;
       st.label = false;
+      st.first = true;
     }
     if (stream.eatSpace()) return null;
+    const first = st.first;
+    st.first = false;
+    if (first && st.header && stream.match(LEADING)) return "keyword";
+    // A timeline date, and a period's "to" and second date.
+    if (first && st.header && stream.match(/^\d{4}(-\d{2}){0,2}(?=[\s:])/)) return "number";
+    if (stream.match(/^to(?=\s+\d{4})/)) return "keyword";
+    if (/^\d{4}(-\d{2}){0,2}(?=\s*:)/.test(stream.string.slice(stream.pos)) && stream.match(/^\d{4}(-\d{2}){0,2}/)) return "number";
+    if (stream.match("[*]")) return "atom";
     if (stream.match("//")) {
       stream.skipToEnd();
       return "comment";
@@ -129,7 +143,7 @@ export const flowLanguage = StreamLanguage.define<State>({
       st.label = true;
       return "operator";
     }
-    if (stream.match(/^(-->|\.\.>|<>|>)/)) return "variableName.special";
+    if (stream.match(/^(<\|--|[1*]--[1*](?=\s)|\*--(?=\s)|-->|--(?=\s)|->|\.\.>|<>|>)/)) return "variableName.special";
     const s = stream.string;
     if (ch === "-" && stopsName(s, stream.pos)) {
       stream.next();

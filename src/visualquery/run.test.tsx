@@ -15,6 +15,13 @@ import CrossJoinDialog, { aboutRows } from "./CrossJoinDialog";
 import { emptyQuery } from "./model";
 import VisualQueryTab, { type VisualQueryTabProps, runBlock } from "./VisualQueryTab";
 
+/** Item 30: the SQL is a tab of the bottom panel; this shows it. */
+async function showSql() {
+  await userEvent.click(screen.getByRole("tab", { name: "SQL" }));
+  return screen.findByRole("region", { name: "SQL" });
+}
+
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 patientFile();
@@ -331,6 +338,10 @@ test("a_server_error_in_a_join_marks_the_join_and_its_line_until_the_next_change
   ctrlEnter();
   // The message as sent, in Results.
   expect(await screen.findByText(/Unknown column/)).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Show the Join" }));
+  expect(await screen.findByRole("dialog", { name: "Join orders to stores" })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Join orders to stores" }), { key: "Escape" });
+  await showSql();
   const lines = () => [...document.querySelectorAll('[aria-label="Generated SQL"] .sql-block-line')];
   await waitFor(() => expect(lines()[2].className).toContain("sql-block-line-danger"));
   expect(lines()[1].className).not.toContain("sql-block-line-danger");
@@ -343,10 +354,6 @@ test("a_server_error_in_a_join_marks_the_join_and_its_line_until_the_next_change
   expect(row("t1", "store_id").className).toContain("vq-card-row-danger");
   expect(row("t2", "id").className).toContain("vq-card-row-danger");
   expect(row("t1", "id").className).not.toContain("vq-card-row-danger");
-
-  await userEvent.click(screen.getByRole("button", { name: "Show the Join" }));
-  expect(await screen.findByRole("dialog", { name: "Join orders to stores" })).toBeTruthy();
-  fireEvent.keyDown(screen.getByRole("dialog", { name: "Join orders to stores" }), { key: "Escape" });
 
   // The next change clears the marks.
   act(() => setModel((q) => ({ ...q, distinct: true })));
@@ -366,21 +373,18 @@ test("a_mysql_error_at_a_line_bands_that_line", async () => {
   };
   ctrlEnter();
   expect(await screen.findByText(/You have an error/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Show the Join" })).toBeNull();
+  await showSql();
   const lines = () => [...document.querySelectorAll('[aria-label="Generated SQL"] .sql-block-line')];
   await waitFor(() => expect(lines()[1].className).toContain("sql-block-line-danger"));
   // Not a Join line: no Join is marked and there is nothing to show.
   expect(document.querySelector(".vq-join-badge-danger")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Show the Join" })).toBeNull();
 });
 
 test("production_washes_the_tab_and_runs_without_asking", async () => {
   render(<Harness initial={docWith(ORDERS_STORES)} connection={{ ...kestrel, production: true }} />);
   await ready();
-  expect([...document.querySelectorAll(".prod-wash")].map((e) => e.getAttribute("data-part")).filter(Boolean).sort()).toEqual([
-    "canvas",
-    "panel",
-    "sql",
-  ]);
+  expect([...document.querySelectorAll(".prod-wash")].map((e) => e.getAttribute("data-part")).filter(Boolean).sort()).toEqual(["canvas", "panel"]);
   expect(runButton().textContent).toMatch(/^Run/);
   expect(runButton().textContent).not.toMatch(/PROD/);
   expect(runButton().className).toContain("button-primary");
@@ -584,6 +588,7 @@ test("a_run_stopped_by_a_closed_connection_reads_as_stopped_not_failed", async (
 test("run_right_after_an_edit_shows_the_sql_it_runs_at_once", async () => {
   render(<Harness initial={docWith(ORDERS_STORES)} />);
   await ready();
+  await showSql();
   await waitFor(() => expect(screen.getByRole("group", { name: "Generated SQL" }).textContent).toContain("SELECT id, name"));
   act(() => setModel((q) => ({ ...q, columns: [...q.columns, { table: "t1", column: "code", aggregate: null, alias: null }] })));
   ctrlEnter();
@@ -591,6 +596,7 @@ test("run_right_after_an_edit_shows_the_sql_it_runs_at_once", async () => {
   await act(() => new Promise((r) => setTimeout(r, 0)));
   expect(callsTo("run_visual_query")).toHaveLength(1);
   // No 120ms wait: the pane already shows the SQL that runs.
+  await userEvent.click(screen.getByRole("tab", { name: "SQL" }));
   expect(screen.getByRole("group", { name: "Generated SQL" }).textContent).toContain("SELECT id, name, code");
 });
 
@@ -615,6 +621,7 @@ test("ctrl_c_in_the_sql_pane_with_nothing_selected_copies_the_sql", async () => 
   try {
     render(<Harness initial={docWith(ORDERS_STORES)} />);
     await ready();
+    await showSql();
     const code = await screen.findByRole("group", { name: "Generated SQL" });
     fireEvent.keyDown(code, { key: "c", code: "KeyC", ctrlKey: true });
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(previewFor({ ...emptyQuery("shop", "mysql"), ...ORDERS_STORES } as VisualQuery).query!.sql));

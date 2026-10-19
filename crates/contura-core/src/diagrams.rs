@@ -27,7 +27,14 @@ pub enum DiagramKind {
     Dfd,
     Flow,
     Cloud,
-    /// The first line is not `diagram dfd`, `diagram flow` or `diagram cloud`.
+    /// Step 12, item 19: the kinds the New diagram dialog added.
+    Er,
+    Sequence,
+    State,
+    Class,
+    Mindmap,
+    Timeline,
+    /// The first line names none of the kinds above.
     Unknown,
 }
 
@@ -127,6 +134,12 @@ pub fn diagram_head(reader: impl Read) -> (DiagramKind, Option<String>) {
         "dfd" => DiagramKind::Dfd,
         "flow" => DiagramKind::Flow,
         "cloud" => DiagramKind::Cloud,
+        "er" => DiagramKind::Er,
+        "sequence" => DiagramKind::Sequence,
+        "state" => DiagramKind::State,
+        "class" => DiagramKind::Class,
+        "mindmap" => DiagramKind::Mindmap,
+        "timeline" => DiagramKind::Timeline,
         _ => return (DiagramKind::Unknown, None),
     };
     let rest = rest.trim();

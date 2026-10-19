@@ -905,7 +905,8 @@ test("arrow_keys_move_open_and_close_rows", async () => {
   await userEvent.keyboard("{ArrowRight}{ArrowDown}{ArrowDown}");
   expect(document.activeElement).toBe(item("orders"));
   await userEvent.keyboard("{Enter}");
-  expect(h.onSelectObject).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } });
+  // Enter keeps the tab, as a double click does (item 1).
+  expect(h.onSelectObject).toHaveBeenLastCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } }, { newTab: true });
   await userEvent.keyboard("{ArrowLeft}");
   expect(document.activeElement).toBe(item("Tables"));
 });
@@ -1156,12 +1157,12 @@ test("table_row_menu_has_open_design_and_drop", async () => {
   render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
-  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Drop table..."]);
+  expect(menuLabels("orders")).toEqual(["Open", "Edit structure", "Drop table..."]);
   const path = { database: "shop", schema: null, name: "orders" };
   await userEvent.click(screen.getByRole("menuitem", { name: "Open" }));
-  expect(h.onSelectObject).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path });
+  expect(h.onSelectObject).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path }, { newTab: true });
   fireEvent.contextMenu(item("orders"));
-  await userEvent.click(screen.getByRole("menuitem", { name: "Design table" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Edit structure" }));
   expect(h.onDesignTable).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path });
   fireEvent.contextMenu(item("orders"));
   await userEvent.click(screen.getByRole("menuitem", { name: "Drop table..." }));
@@ -1176,7 +1177,7 @@ test("table_row_menu_shows_lineage", async () => {
   render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
-  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Show lineage"]);
+  expect(menuLabels("orders")).toEqual(["Open", "Edit structure", "Show lineage"]);
   await userEvent.click(screen.getByRole("menuitem", { name: "Show lineage" }));
   expect(h.onShowLineage).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } });
   expect(within(item("orders")).getByText("18,402")).toBeTruthy();
@@ -1189,7 +1190,7 @@ test("table_row_menu_opens_from_the_keyboard", async () => {
   await findItem("orders");
   await userEvent.click(item("orders"));
   await userEvent.keyboard("{Shift>}{F10}{/Shift}");
-  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Drop table..."]);
+  expect(menuLabels("orders")).toEqual(["Open", "Edit structure", "Drop table..."]);
 });
 
 test("read_only_table_row_has_design_but_no_drop", async () => {
@@ -1198,7 +1199,7 @@ test("read_only_table_row_has_design_but_no_drop", async () => {
   render(<Harness connections={[conn("a", "Shop", { readOnly: true })]} open={["a"]} {...h} />);
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
-  expect(menuLabels("orders")).toEqual(["Open", "Design table"]);
+  expect(menuLabels("orders")).toEqual(["Open", "Edit structure"]);
 });
 test("table_row_menu_has_export_and_import_after_design_table", async () => {
   routeMy();
@@ -1206,7 +1207,7 @@ test("table_row_menu_has_export_and_import_after_design_table", async () => {
   render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
-  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Export...", "Import...", "Drop table..."]);
+  expect(menuLabels("orders")).toEqual(["Open", "Edit structure", "Export...", "Import...", "Drop table..."]);
   const selection = { connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } };
   await userEvent.click(screen.getByRole("menuitem", { name: "Export..." }));
   expect(h.onExportTable).toHaveBeenCalledWith(selection);
@@ -1222,7 +1223,7 @@ test("read_only_table_row_still_offers_import_q15", async () => {
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
   // Q15: the Import tab itself shows the Read-only state; Drop stays hidden.
-  expect(menuLabels("orders")).toEqual(["Open", "Design table", "Export...", "Import..."]);
+  expect(menuLabels("orders")).toEqual(["Open", "Edit structure", "Export...", "Import..."]);
 });
 
 test("connection_menu_offers_new_visual_query_open_or_closed", async () => {
@@ -1245,7 +1246,7 @@ test("add_to_visual_query_shows_only_with_its_handler_on_tables_and_views", asyn
   const { rerender } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
-  expect(menuLabels("orders")).toEqual(["Open", "Design table"]);
+  expect(menuLabels("orders")).toEqual(["Open", "Edit structure"]);
   await userEvent.keyboard("{Escape}");
   await userEvent.click(item("Views"));
   fireEvent.contextMenu(await findItem("v_daily_sales"));
@@ -1254,7 +1255,7 @@ test("add_to_visual_query_shows_only_with_its_handler_on_tables_and_views", asyn
   const onAddToVisualQuery = vi.fn();
   rerender(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} onAddToVisualQuery={onAddToVisualQuery} />);
   fireEvent.contextMenu(item("orders"));
-  expect(menuLabels("orders")).toEqual(["Open", "Add to Visual Query", "Design table"]);
+  expect(menuLabels("orders")).toEqual(["Open", "Add to Visual Query", "Edit structure"]);
   await userEvent.click(screen.getByRole("menuitem", { name: "Add to Visual Query" }));
   expect(onAddToVisualQuery).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } });
   fireEvent.contextMenu(item("v_daily_sales"));
@@ -1314,6 +1315,7 @@ test("schema_compare_on_database_and_schema_rows", async () => {
   const { unmount } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...handlers()} onCompare={onCompare} />);
   await findItem("orders");
   await userEvent.click(within(item("shop")).getByRole("button", { name: "More actions for shop" }));
+  expect(screen.getByRole("menuitem", { name: "Schema Compare" }).querySelector("svg[data-feature]")?.getAttribute("data-feature")).toBe("compare");
   await userEvent.click(screen.getByRole("menuitem", { name: "Schema Compare" }));
   expect(onCompare).toHaveBeenLastCalledWith({ connectionId: "a", database: "shop", schema: null });
   unmount();
@@ -1339,6 +1341,10 @@ test("back_up_and_restore_on_database_schema_and_connection_rows", async () => {
   );
   await findItem("orders");
   fireEvent.contextMenu(item("shop"));
+  // The rows draw the feature bar's icons, as their neighbours do.
+  for (const [name, icon] of [["Back up...", "backup"], ["Restore...", "restore"]] as const) {
+    expect(screen.getByRole("menuitem", { name }).querySelector("svg[data-feature]")?.getAttribute("data-feature")).toBe(icon);
+  }
   await userEvent.click(screen.getByRole("menuitem", { name: "Back up..." }));
   expect(onBackup).toHaveBeenLastCalledWith({ connectionId: "a", database: "shop", schema: null });
   fireEvent.contextMenu(item("shop"));
@@ -1364,4 +1370,23 @@ test("back_up_and_restore_on_database_schema_and_connection_rows", async () => {
   await userEvent.click(within(item("sales")).getByRole("button", { name: "More actions for sales" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Restore..." }));
   expect(onRestore).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "sales" });
+});
+
+test("item_1_a_click_previews_a_table_and_a_double_click_opens_it_to_stay", async () => {
+  routeMy();
+  const h = handlers();
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} />);
+  await userEvent.click(await findItem("orders"));
+  expect(h.onSelectObject).toHaveBeenLastCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } });
+  fireEvent.doubleClick(item("orders"));
+  expect(h.onSelectObject).toHaveBeenLastCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } }, { newTab: true });
+});
+
+test("item_8_a_row_in_a_database_reports_it_as_the_one_in_use", async () => {
+  routeMy();
+  const h = handlers();
+  const onUseDatabase = vi.fn();
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...h} onUseDatabase={onUseDatabase} />);
+  await userEvent.click(await findItem("orders"));
+  expect(onUseDatabase).toHaveBeenLastCalledWith("a", "shop");
 });

@@ -1,9 +1,9 @@
 // A Join on the Visual Query canvas (edge type `join`): an orthogonal line between the two column
 // rows with a dot at each end, and a badge at its midpoint with the Venn mark and the kind.
-import { BaseEdge, type EdgeProps } from "@xyflow/react";
+import { BaseEdge, type EdgeProps, useStore } from "@xyflow/react";
 import { createContext, useContext, useId } from "react";
 import type { JoinKind, SqlFk, SmEndpoint, VqJoin, VqTable } from "../api/types";
-import { JoinBadge, orthogonalPath } from "../diagram/edges";
+import { clearBadgeSpot, type FlowBox, JoinBadge, orthogonalPath } from "../diagram/edges";
 import type { VqSchema } from "./model";
 
 export const KIND_LABEL: Record<JoinKind, string> = { inner: "Inner", left: "Left", right: "Right", full: "Full" };
@@ -126,11 +126,25 @@ function onBadgeBlur(e: React.FocusEvent<HTMLButtonElement>) {
   });
 }
 
+const boxesEqual = (a: FlowBox[], b: FlowBox[]) =>
+  a.length === b.length && a.every((p, i) => p.x === b[i].x && p.y === b[i].y && p.w === b[i].w && p.h === b[i].h);
+
 /** Edge type `join`. */
 export default function JoinEdge(props: EdgeProps) {
   const actions = useContext(JoinActionsContext);
   const data = props.data as JoinEdgeData | undefined;
-  const { path, x, y } = orthogonalPath(props);
+  const { path, x: midX, y: midY } = orthogonalPath(props);
+  // Item 31: the badge never sits on a card, where it would cover a column name.
+  const boxes = useStore((s) => {
+    const out: FlowBox[] = [];
+    for (const n of s.nodeLookup.values()) {
+      const w = n.measured.width ?? n.width ?? n.initialWidth ?? 0;
+      const h = n.measured.height ?? n.height ?? n.initialHeight ?? 0;
+      out.push({ x: n.internals.positionAbsolute.x, y: n.internals.positionAbsolute.y, w, h });
+    }
+    return out;
+  }, boxesEqual);
+  const { x, y } = clearBadgeSpot(path, { x: midX, y: midY }, boxes);
   if (!data) return <BaseEdge id={props.id} path={path} />;
   const { join, madeHere, selected, danger, title } = data;
   const pending = join.pending != null;

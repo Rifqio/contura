@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { Cell, Page } from "../api/types";
@@ -623,49 +623,35 @@ test("a full value that arrives after a reload doesn't open the editor", async (
   expect(editor()).toBeNull();
 });
 
-test("the header filter and columns menus keep edits on the right row and column", async () => {
+/** The Table menu's Columns list: shows or hides one column (item 5). */
+async function toggleColumn(name: string) {
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Columns" }));
+  await userEvent.click(screen.getByRole("menuitemcheckbox", { name }));
+}
+
+test("a_hidden_column_keeps_edits_on_the_right_row_and_column", async () => {
   await open();
-  await userEvent.click(screen.getByRole("button", { name: "Filter rows" }));
-  await userEvent.type(screen.getByRole("textbox", { name: "Filter loaded rows" }), "shipped");
-  // Only the second row is on screen; it keeps its own number.
-  expect(document.querySelectorAll("tbody tr[data-row]")).toHaveLength(1);
-  expect(document.querySelector('tr[data-row="0"] .row-number')!.textContent).toBe("2");
-  await userEvent.click(screen.getByRole("button", { name: "Columns" }));
-  await userEvent.click(screen.getByRole("checkbox", { name: "id" }));
-  fireEvent.doubleClick(td(0, 0));
+  await toggleColumn("id");
+  expect(screen.queryByRole("columnheader", { name: /^id/ })).toBeNull();
+  fireEvent.doubleClick(td(1, 0));
   fireEvent.change(editor()!, { target: { value: "gone" } });
   fireEvent.keyDown(editor()!, { key: "Enter" });
-  // The edit landed on row 2's status, though the filter still matches its old value.
-  await userEvent.click(screen.getByRole("button", { name: "Filter rows" }));
-  await userEvent.clear(screen.getByRole("textbox", { name: "Filter loaded rows" }));
-  await userEvent.click(screen.getByRole("button", { name: "Columns" }));
-  await userEvent.click(screen.getByRole("checkbox", { name: "id" }));
+  await toggleColumn("id");
   expect(td(1, 1).textContent).toBe("gone");
   expect(td(0, 1).textContent).toBe("paid");
 });
 
-test("a row the header filter hides loses its selection and can't be deleted or edited", async () => {
+test("a_selection_in_a_hidden_column_is_dropped_and_nothing_acts_on_it", async () => {
   await open();
   fireEvent.mouseDown(td(0, 1));
-  expect((screen.getByRole("button", { name: "Delete row" }) as HTMLButtonElement).disabled).toBe(false);
-  await userEvent.click(screen.getByRole("button", { name: "Filter rows" }));
-  await userEvent.type(screen.getByRole("textbox", { name: "Filter loaded rows" }), "shipped");
-  // Row 1 ("paid") is filtered out: nothing is selected on screen.
+  expect(document.querySelector(".cell-selected")).not.toBeNull();
+  await toggleColumn("status");
   expect(document.querySelector(".cell-selected")).toBeNull();
-  const del = screen.getByRole("button", { name: "Delete row" }) as HTMLButtonElement;
-  expect(del.disabled).toBe(true);
-  fireEvent.click(del);
-  key("Delete");
   key("Enter");
   key("x");
-  expect(document.querySelector(".row-deleted")).toBeNull();
   expect(editor()).toBeNull();
   expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
-  // Clearing the filter shows row 1 unchanged and still unselected.
-  await userEvent.clear(screen.getByRole("textbox", { name: "Filter loaded rows" }));
-  expect(td(0, 1).textContent).toBe("paid");
-  expect(document.querySelector(".row-deleted")).toBeNull();
-  expect(document.querySelector(".cell-selected")).toBeNull();
 });
 
 test("reload fetches the page again and keeps the edits", async () => {
@@ -695,20 +681,6 @@ test("status_shows_rows_ms_and_pending_edits", async () => {
   } finally {
     slot.remove();
   }
-});
-
-test("the cell menu closes when the filter hides its row, and nothing is marked", async () => {
-  await open();
-  await userEvent.click(screen.getByRole("button", { name: "Filter rows" }));
-  const filter = screen.getByRole("textbox", { name: "Filter loaded rows" });
-  fireEvent.contextMenu(td(0, 1));
-  expect(screen.getByRole("menu", { name: "Cell" })).toBeTruthy();
-  // Typed without a click, so only the filter change can close it.
-  fireEvent.change(filter, { target: { value: "shipped" } });
-  await waitFor(() => expect(screen.queryByRole("menu", { name: "Cell" })).toBeNull());
-  expect(document.querySelector(".row-deleted")).toBeNull();
-  expect(document.querySelector(".cell-edited")).toBeNull();
-  expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
 });
 
 test("the cell menu closes on a press outside it and on a scroll", async () => {
@@ -760,4 +732,59 @@ test("status_drops_the_old_rows_and_time_after_a_failed_page", async () => {
   } finally {
     slot.remove();
   }
+});
+
+test("item_3_the_cell_being_edited_is_marked_so_only_the_editor_draws_a_ring", async () => {
+  await open();
+  fireEvent.doubleClick(td(0, 2));
+  expect(editor()).not.toBeNull();
+  expect(td(0, 2).className).toContain("cell-editing");
+  fireEvent.keyDown(editor()!, { key: "Escape" });
+  expect(td(0, 2).className).not.toContain("cell-editing");
+});
+
+test("item_12_a_successful_save_tells_the_owner_once", async () => {
+  const onSaved = vi.fn();
+  await open(orders(), { onSaved }, { plan_edits: okPlan, apply_edits: saved });
+  expect(onSaved).not.toHaveBeenCalled();
+  await editStatus(0);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+});
+
+test("item_4_a_long_value_opens_in_the_larger_editor_and_ctrl_enter_keeps_it", async () => {
+  const long = "Customer disputes the fuel surcharge on the Rotterdam leg, hold reminders";
+  const page = orders();
+  page.rows[1][1] = text(long);
+  await open(page, {}, { fetch_page: () => page });
+  fireEvent.doubleClick(td(1, 1));
+  const panel = screen.getByRole("dialog", { name: "Edit status" });
+  expect(panel.textContent).toContain(`${long.length} characters`);
+  expect(panel.textContent).toContain("row 2, id 2");
+  const box = within(panel).getByRole("textbox", { name: "Cell value" }) as HTMLTextAreaElement;
+  // Enter adds a line; Ctrl+Enter keeps the value.
+  fireEvent.change(box, { target: { value: "short now" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(screen.getByRole("dialog", { name: "Edit status" })).toBeTruthy();
+  fireEvent.keyDown(box, { key: "Enter", ctrlKey: true });
+  expect(screen.queryByRole("dialog", { name: "Edit status" })).toBeNull();
+  expect(td(1, 1).textContent).toBe("short now");
+});
+
+test("item_4_shift_f2_opens_the_larger_editor_from_the_cell_or_the_grid", async () => {
+  await open();
+  fireEvent.doubleClick(td(0, 1));
+  // The cell editor says its keys, Shift+F2 among them.
+  expect(document.querySelector(".cell-editor-tip")?.textContent).toContain("opens larger");
+  fireEvent.change(editor()!, { target: { value: "typed" } });
+  fireEvent.keyDown(editor()!, { key: "F2", shiftKey: true });
+  const panel = screen.getByRole("dialog", { name: "Edit status" });
+  expect((within(panel).getByRole("textbox", { name: "Cell value" }) as HTMLTextAreaElement).value).toBe("typed");
+  await userEvent.click(within(panel).getByRole("button", { name: /Set NULL/ }));
+  expect(td(0, 1).textContent).toBe("NULL");
+  fireEvent.mouseDown(td(1, 1));
+  key("F2", { shiftKey: true });
+  expect(screen.getByRole("dialog", { name: "Edit status" })).toBeTruthy();
+  fireEvent.keyDown(editor()!, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Edit status" })).toBeNull();
 });

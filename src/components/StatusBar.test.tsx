@@ -139,22 +139,20 @@ test("only_the_left_segment_is_a_live_region", () => {
   expect(bar.querySelector(".app-status-prod")?.closest("[aria-live=off]")).toBeNull();
 });
 
-test("right_side_has_utf8_and_a_theme_menu_and_no_gear", async () => {
+test("right_side_has_utf8_and_a_theme_toggle_and_no_gear", async () => {
   const { bar, onTheme } = renderBar(work(), "dark");
   expect(bar.textContent).toContain("UTF-8");
   expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Theme" }));
-  const labels = screen.getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"));
-  expect(labels).toEqual(["Dracula", "Alucard", "Follow Windows"]);
-  await userEvent.click(screen.getByRole("menuitem", { name: "Follow Windows" }));
-  expect(onTheme).toHaveBeenCalledWith("system");
+  // Item 15: one icon, a moon on Dark; a click switches to Light.
+  await userEvent.click(screen.getByRole("button", { name: "Dark theme. Switch to Light" }));
+  expect(onTheme).toHaveBeenCalledWith("light");
 });
 
 test("the_jobs_node_renders_before_the_theme_menu", () => {
   render(<StatusBar screen={work()} theme="system" onTheme={() => {}} jobs={<button type="button">Exporting orders, 32 percent</button>} />);
   const bar = screen.getByRole("status");
   const job = screen.getByRole("button", { name: "Exporting orders, 32 percent" });
-  const theme = screen.getByRole("button", { name: "Theme" });
+  const theme = screen.getByRole("button", { name: /theme\. Switch to/ });
   expect(bar.contains(job)).toBe(true);
   expect(job.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(job.closest("#app-status-slot")).toBeNull();

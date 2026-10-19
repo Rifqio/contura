@@ -5,14 +5,15 @@ import { usePrefs } from "../../prefs/usePrefs";
 import { Row, type RowKey, Section } from "./layout";
 
 const ROW = {
-  theme: { label: "Theme", terms: "Dracula Alucard Follow Windows dark light" },
+  theme: { label: "Theme", terms: "Dark Light Follow Windows Dracula Alucard" },
   rowHeight: { label: "Row height", terms: "density compact" },
 } satisfies Record<string, RowKey>;
 export const APPEARANCE_ROWS: readonly RowKey[] = Object.values(ROW);
 
 const THEMES: { value: ThemeChoice; name: string; sub: string; draws: ("dark" | "light")[] }[] = [
-  { value: "dark", name: "Dracula", sub: "Dark", draws: ["dark"] },
-  { value: "light", name: "Alucard", sub: "Light", draws: ["light"] },
+  // Item 15: Dark and Light by name; the palettes (Dracula, Alucard) stay only as search words.
+  { value: "dark", name: "Dark", sub: "", draws: ["dark"] },
+  { value: "light", name: "Light", sub: "", draws: ["light"] },
   { value: "system", name: "Follow Windows", sub: "", draws: ["light", "dark"] },
 ];
 
@@ -36,7 +37,7 @@ export default function AppearanceSection() {
   const name = useId();
   return (
     <Section id="appearance" title="Appearance" rows={APPEARANCE_ROWS}>
-      <Row {...ROW.theme} stacked hint="Follow Windows uses Alucard in light mode and Dracula in dark mode.">
+      <Row {...ROW.theme} stacked hint="Follow Windows uses Light when Windows is light and Dark when it is dark.">
         {({ labelId, hintId }) => (
           <div className="theme-cards" role="radiogroup" aria-labelledby={labelId} aria-describedby={hintId}>
             {THEMES.map((t) => {

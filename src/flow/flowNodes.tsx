@@ -3,12 +3,14 @@
 // the one function that turns a FlowDoc and its positions into canvas nodes and edges. FlowTab and the Mermaid
 // dialog's preview both draw through it.
 import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer, Handle, type InternalNode, type Node, type NodeProps, type NodeTypes, Position, useInternalNode } from "@xyflow/react";
-import { memo } from "react";
-import { ARROW_MARKER } from "../diagram/edges";
+import { createContext, memo, useContext } from "react";
+import { ARROW_MARKER, DIAMOND_MARKER, MANY_MARKER, ONE_MARKER, OPEN_ARROW_MARKER, TRIANGLE_MARKER } from "../diagram/edges";
 import type { Positions } from "../diagram/layout";
 import { type Rect, routeOrthogonal } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
-import type { FlowArrow, FlowDoc, FlowGroup, FlowNode, FlowNodeKind } from "../lang/flow/model";
+import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, type FlowNodeKind, STATE_END, STATE_START } from "../lang/flow/model";
+import { fixedLayout, kindSize } from "./kindLayout";
+import { KindNode, type KindNodeData, MindEdge, SeqEdge, SeqFrame, TimeAxis, TimeSection } from "./kindNodes";
 import DfdNode, { type DfdNodeKind } from "./nodes/DfdNode";
 import FlowchartNode, { type FlowchartNodeKind } from "./nodes/FlowchartNode";
 import { useDetail } from "../diagram/detail";
@@ -30,7 +32,81 @@ export type FlowNodeData = {
   iconName?: string;
   /** Fading in after an add, or out before a delete. */
   state?: NodeState;
+  /** Item 21: the size it was resized to on the canvas, instead of its kind's size. */
+  sized?: { w: number; h: number };
 };
+
+/** Item 21: what a resize tells the tab (the diagram tab provides it; previews leave it out, so nothing resizes). */
+export const FlowResizeContext = createContext<((name: string, box: { x: number; y: number; w: number; h: number }) => void) | null>(null);
+
+const CORNERS = ["nw", "ne", "sw", "se"] as const;
+type Corner = (typeof CORNERS)[number];
+
+/** The box a corner drag makes: the far corner stays put; a diamond or a marker keeps its shape. */
+export function resizedBox(
+  start: { x: number; y: number; w: number; h: number },
+  corner: Corner,
+  dx: number,
+  dy: number,
+  min: { w: number; h: number },
+  square: boolean,
+): { x: number; y: number; w: number; h: number } {
+  const left = corner === "nw" || corner === "sw";
+  const top = corner === "nw" || corner === "ne";
+  let w = Math.max(min.w, Math.round(left ? start.w - dx : start.w + dx));
+  let h = Math.max(min.h, Math.round(top ? start.h - dy : start.h + dy));
+  if (square) w = h = Math.max(w, h);
+  return { x: left ? start.x + start.w - w : start.x, y: top ? start.y + start.h - h : start.y, w, h };
+}
+
+/**
+ * Four corner handles on a selected node (frame DiagramElements, "Resize handles"): drag one to make the node
+ * bigger or smaller, the far corner staying where it is. The node follows the pointer while dragged (its box set
+ * directly, so nothing else draws again), and the size goes into the layout file when the drag ends.
+ */
+function Resizer({ id, selected, kind }: { id: string; selected: boolean; kind: DrawnKind }) {
+  const resize = useContext(FlowResizeContext);
+  if (!resize || !selected) return null;
+  const square = kind === "decision" || kind === "choice" || kind === "stateStart" || kind === "stateEnd";
+  const min = { w: kind === "stateStart" || kind === "stateEnd" ? 16 : 56, h: kind === "fork" ? 6 : 24 };
+  const down = (corner: Corner) => (e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = e.currentTarget.closest<HTMLElement>(".react-flow__node");
+    if (!wrap) return;
+    const zoom = Number(wrap.closest<HTMLElement>(".react-flow__viewport")?.style.transform.match(/scale\(([\d.]+)\)/)?.[1] ?? 1) || 1;
+    const at = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(wrap.style.transform);
+    const start = { x: at ? Number(at[1]) : 0, y: at ? Number(at[2]) : 0, w: wrap.offsetWidth, h: wrap.offsetHeight };
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let box = start;
+    const move = (ev: PointerEvent) => {
+      box = resizedBox(start, corner, (ev.clientX - sx) / zoom, (ev.clientY - sy) / zoom, min, square);
+      wrap.style.width = `${box.w}px`;
+      wrap.style.height = `${box.h}px`;
+      wrap.style.transform = `translate(${box.x}px, ${box.y}px)`;
+      wrap.classList.add("is-resizing");
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      wrap.classList.remove("is-resizing");
+      if (box !== start) resize(id, box);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+  return (
+    <>
+      {CORNERS.map((c) => (
+        <i key={c} className="fnode-resize nodrag nopan" data-corner={c} title="Drag to resize" aria-hidden="true" onPointerDown={down(c)} />
+      ))}
+    </>
+  );
+}
 
 export type FlowAreaData = {
   name: string;
@@ -42,21 +118,55 @@ export type FlowAreaData = {
 
 export type FlowEdgeData = {
   label?: string;
+  /** An ER relationship's name sits in a diamond on its line (frame DiagramElements). */
+  diamond?: boolean;
   /** Fading out with a deleted node. */
   leaving?: boolean;
 };
 
-/** The family a kind's node type draws with. */
-export type FlowFamily = "dfd" | "flowchart" | "service";
+/** The family a kind's node type draws with; `kind` is the step 12 shapes. */
+export type FlowFamily = "dfd" | "flowchart" | "service" | "kind";
 
-/** The text's kind word as the engine's node kind: a data flow's entity is the engine's outside party. */
-export function drawnKind(kind: FlowNodeKind): DrawnKind {
-  return kind === "entity" ? "external" : kind;
+/**
+ * The text's kind word as the engine's node kind: a data flow's entity is the engine's outside party, an ER
+ * file's entity is a table card, and a state diagram's start and end are its two markers.
+ */
+export function drawnKind(kind: FlowNodeKind, diagram?: DiagramKind | null, name?: string): DrawnKind {
+  if (diagram === "er" && (kind === "entity" || kind === "weak")) return kind === "weak" ? "erWeak" : "erTable";
+  if (diagram === "state" && name === STATE_START) return "stateStart";
+  if (diagram === "state" && name === STATE_END) return "stateEnd";
+  if (kind === "entity") return "external";
+  if (kind === "weak") return "erWeak";
+  return kind;
 }
+
+const KIND_FAMILY: ReadonlySet<DrawnKind> = new Set([
+  "document",
+  "database",
+  "erTable",
+  "erWeak",
+  "participant",
+  "actor",
+  "state",
+  "choice",
+  "fork",
+  "stateStart",
+  "stateEnd",
+  "class",
+  "interface",
+  "enum",
+  "root",
+  "topic",
+  "event",
+  "period",
+  "milestone",
+  "note",
+]);
 
 export function familyOf(kind: DrawnKind): FlowFamily {
   if (kind === "process" || kind === "store" || kind === "external") return "dfd";
   if (kind === "service") return "service";
+  if (KIND_FAMILY.has(kind)) return "kind";
   return "flowchart";
 }
 
@@ -65,7 +175,9 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
 const textW = (s: string) => s.length * 7;
 
 /** The size a node is laid out and fitted at, by kind and look (flow-canvas.css draws them). */
-export function nodeSize(kind: DrawnKind, look: NodeLook, name: string, id?: string): { w: number; h: number } {
+export function nodeSize(kind: DrawnKind, look: NodeLook, name: string, id?: string, node?: Partial<FlowNode>): { w: number; h: number } {
+  const shaped = kindSize(kind, { name, rows: node?.rows, text: node?.text, depth: node?.depth });
+  if (shaped) return shaped;
   switch (kind) {
     case "process":
     case "store":
@@ -110,21 +222,23 @@ const Handles = memo(function Handles() {
   );
 });
 
-const DfdFlowNode = memo(function DfdFlowNode({ data, selected }: NodeProps) {
+const DfdFlowNode = memo(function DfdFlowNode({ id, data, selected }: NodeProps) {
   const d = data as FlowNodeData;
   return (
     <>
-      <DfdNode kind={d.kind as DfdNodeKind} name={d.name} id={d.id} table={d.table} style={d.look} selected={!!selected} state={d.state} />
+      <Resizer id={id} selected={!!selected} kind={d.kind} />
+      <DfdNode kind={d.kind as DfdNodeKind} name={d.name} id={d.id} table={d.table} style={d.look} selected={!!selected} state={d.state} sized={d.sized} />
       <Handles />
     </>
   );
 });
 
-const FlowchartFlowNode = memo(function FlowchartFlowNode({ data, selected }: NodeProps) {
+const FlowchartFlowNode = memo(function FlowchartFlowNode({ id, data, selected }: NodeProps) {
   const d = data as FlowNodeData;
   return (
     <>
-      <FlowchartNode kind={d.kind as FlowchartNodeKind} name={d.name} id={d.id} table={d.table} style={d.look} selected={!!selected} state={d.state} />
+      <Resizer id={id} selected={!!selected} kind={d.kind} />
+      <FlowchartNode kind={d.kind as FlowchartNodeKind} name={d.name} id={d.id} table={d.table} style={d.look} selected={!!selected} state={d.state} sized={d.sized} />
       <Handles />
     </>
   );
@@ -203,7 +317,10 @@ const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
       <BaseEdge id={p.id} path={route.d} markerStart={p.markerStart} markerEnd={p.markerEnd} style={p.style} interactionWidth={p.interactionWidth} />
       {label && (
         <EdgeLabelRenderer>
-          <div className={data?.leaving ? "flow-chip nodrag nopan is-leaving" : "flow-chip nodrag nopan"} style={{ transform: `translate(-50%, -50%) translate(${route.mid.x}px, ${route.mid.y}px)` }}>
+          <div
+            className={["flow-chip nodrag nopan", data?.diamond && "flow-chip-diamond", data?.leaving && "is-leaving"].filter(Boolean).join(" ")}
+            style={{ transform: `translate(-50%, -50%) translate(${route.mid.x}px, ${route.mid.y}px)` }}
+          >
             {label}
           </div>
         </EdgeLabelRenderer>
@@ -212,14 +329,31 @@ const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
   );
 });
 
+/** A step 12 shape, with the four ports a line is drawn from. */
+const KindFlowNode = memo(function KindFlowNode({ id, data, selected, draggable }: NodeProps) {
+  const d = data as KindNodeData;
+  return (
+    <>
+      {/* A sequence, mind map or timeline is laid out from its text: its shapes are not resized by hand. */}
+      {draggable !== false && <Resizer id={id} selected={!!selected} kind={d.kind} />}
+      <KindNode d={d} selected={!!selected} />
+      <Handles />
+    </>
+  );
+});
+
 export const FLOW_NODE_TYPES = {
   dfd: DfdFlowNode,
   flowchart: FlowchartFlowNode,
   service: ServiceFlowNode,
+  kind: KindFlowNode,
   area: FlowArea,
+  seqFrame: SeqFrame,
+  timeAxis: TimeAxis,
+  timeSection: TimeSection,
 } satisfies NodeTypes;
 
-export const FLOW_EDGE_TYPES = { flow: FlowEdge } satisfies EdgeTypes;
+export const FLOW_EDGE_TYPES = { flow: FlowEdge, seq: SeqEdge, mind: MindEdge } satisfies EdgeTypes;
 
 /** Room around a group's nodes, and above them for its name. */
 const AREA_PAD = 24;
@@ -289,29 +423,154 @@ function areaNodes(groups: FlowGroup[], placed: Map<string, Box>): Node[] {
 
 const DASH: Partial<Record<FlowArrow, string>> = { "-->": "flow-line flow-line-dashed", "..>": "flow-line flow-line-dotted" };
 
+/** The marker at each end of a line, by its arrow (step 12 adds the ER ends and the class marks). */
+function markers(arrow: FlowArrow, diagram: DiagramKind): { start?: string; end?: string } {
+  switch (arrow) {
+    case "-":
+    case "..>":
+      return diagram === "class" && arrow === "..>" ? { end: OPEN_ARROW_MARKER } : {};
+    case "<>":
+      return { start: ARROW_MARKER, end: ARROW_MARKER };
+    case "--":
+      return {};
+    case "1--*":
+      return { start: ONE_MARKER, end: MANY_MARKER };
+    case "*--1":
+      return { start: MANY_MARKER, end: ONE_MARKER };
+    case "1--1":
+      return { start: ONE_MARKER, end: ONE_MARKER };
+    case "*--*":
+      return { start: MANY_MARKER, end: MANY_MARKER };
+    case "<|--":
+      return { start: TRIANGLE_MARKER };
+    case "*--":
+      return { start: DIAMOND_MARKER };
+    case "-->":
+      return diagram === "sequence" ? { end: OPEN_ARROW_MARKER } : { end: ARROW_MARKER };
+    default:
+      return { end: ARROW_MARKER };
+  }
+}
+
+/** A node's canvas data: its words, rows and dates, whatever its family draws. */
+function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook): FlowNodeData & KindNodeData {
+  const data: FlowNodeData & KindNodeData = { name: n.name, kind, look };
+  if (n.attrs.id !== undefined) data.id = n.attrs.id;
+  if (n.attrs.table !== undefined) data.table = n.attrs.table;
+  if (kind === "service" && n.attrs.icon) data.iconName = n.attrs.icon;
+  if (n.rows) data.rows = n.rows;
+  if (n.text !== undefined) data.text = n.text;
+  if (n.depth !== undefined) data.depth = n.depth;
+  if (n.date !== undefined) data.date = n.date;
+  if (n.until !== undefined) data.until = n.until;
+  return data;
+}
+
+/** A sequence, mind map or timeline: laid out from the text every time, with its frames, lifelines and axis. */
+function fixedGraph(doc: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes: Node[]; edges: Edge[] } | null {
+  const size = (n: FlowNode) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, n.name, n.attrs.id, n);
+  const lay = fixedLayout(doc, size);
+  if (!lay) return null;
+  const acts = new Map<string, { from: number; to: number }[]>();
+  for (const a of doc.activations ?? []) acts.set(a.name, [...(acts.get(a.name) ?? []), { from: a.from, to: a.to }]);
+  const nodes: Node[] = doc.nodes.map((n) => {
+    const kind = drawnKind(n.kind, doc.kind, n.name);
+    const p = lay.positions[n.name] ?? { x: 0, y: 0 };
+    const s = lay.sizes.get(n.name) ?? size(n);
+    const data = nodeData(n, kind, look);
+    if (acts.has(n.name)) data.activations = acts.get(n.name);
+    const state = opts.states?.get(n.name);
+    if (state) data.state = state;
+    return { id: n.name, type: "kind", position: p, initialWidth: s.w, initialHeight: s.h, style: { width: s.w, height: s.h }, data, draggable: false };
+  });
+  const behind = (id: string, type: string, box: { x: number; y: number; w: number; h: number }, data: Record<string, unknown>, z: number): Node => ({
+    id,
+    type,
+    position: { x: box.x, y: box.y },
+    initialWidth: box.w,
+    initialHeight: box.h,
+    style: { width: box.w, height: box.h },
+    data,
+    selectable: false,
+    draggable: false,
+    focusable: false,
+    connectable: false,
+    zIndex: z,
+  });
+  const extras: Node[] = [];
+  (lay.frames ?? []).forEach((f, i) => extras.push(behind(`\u0000frame:${i}`, "seqFrame", f.box, { label: f.label, depth: f.depth }, -2 + Math.min(f.depth, 1))));
+  (lay.sections ?? []).forEach((sec, i) => extras.push(behind(`\u0000section:${i}`, "timeSection", sec.box, { name: sec.name }, -3)));
+  if (lay.axis) {
+    const kinds = new Map(doc.nodes.map((n) => [n.name, n.kind]));
+    const ticks = [...(lay.ticks ?? new Map()).entries()].map(([name, t]) => ({ x: t.x - lay.axis!.x, above: t.above, milestone: kinds.get(name) === "milestone" }));
+    extras.push(behind("\u0000axis", "timeAxis", { ...lay.axis, y: lay.axis.y - 6, h: 14 }, { ticks }, -1));
+  }
+  const edges: Edge[] = [];
+  doc.links.forEach((l, i) => {
+    if (!lay.positions[l.from] || !lay.positions[l.to]) return;
+    const leaving = opts.states?.get(l.from) === "leaving" || opts.states?.get(l.to) === "leaving";
+    const cls = (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : "");
+    if (doc.kind === "sequence") {
+      const reply = l.arrow === "-->";
+      edges.push({
+        id: `edge:${i}`,
+        source: l.from,
+        target: l.to,
+        type: "seq",
+        className: (reply ? "flow-line flow-line-dashed" : "flow-line") + cls,
+        markerEnd: reply ? OPEN_ARROW_MARKER : ARROW_MARKER,
+        data: { row: i, label: l.label, reply },
+      });
+      return;
+    }
+    if (l.tree) {
+      edges.push({ id: `edge:${i}`, source: l.from, target: l.to, type: "mind", className: "flow-line flow-line-branch" + cls, data: {} });
+      return;
+    }
+    const m = markers(l.arrow, doc.kind);
+    edges.push({
+      id: `edge:${i}`,
+      source: l.from,
+      target: l.to,
+      type: "flow",
+      className: "flow-line flow-line-dashed" + cls,
+      markerEnd: m.end,
+      markerStart: m.start,
+      data: l.label ? { label: l.label } : {},
+    });
+  });
+  return { nodes: [...extras, ...nodes], edges };
+}
+
 export interface GraphOptions {
   /** Nodes fading in or out; a line to a node fading out fades with it. */
   states?: ReadonlyMap<string, NodeState>;
   /** The index of a flow just drawn, kept in accent while its label box is open. */
   fresh?: number;
+  /** Item 21: sizes nodes were resized to. */
+  sizes?: Record<string, { w: number; h: number }>;
 }
 
 /** The canvas nodes and edges of `doc`, at `positions` (a node without one is drawn at 0, 0 until it is placed). */
 export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLook, opts: GraphOptions = {}): { nodes: Node[]; edges: Edge[] } {
+  const fixed = fixedGraph(doc, look, opts);
+  if (fixed) return fixed;
   const placed = new Map<string, Box>();
   const nodes: Node[] = doc.nodes.map((n: FlowNode) => {
-    const kind = drawnKind(n.kind);
-    const s = nodeSize(kind, look, n.name, n.attrs.id);
+    const kind = drawnKind(n.kind, doc.kind, n.name);
+    const own = opts.sizes && Object.prototype.hasOwnProperty.call(opts.sizes, n.name) ? opts.sizes[n.name] : null;
+    const s = own ?? nodeSize(kind, look, n.name, n.attrs.id, n);
     // Own keys only: a node named constructor or __proto__ is a plain name.
     const p = Object.prototype.hasOwnProperty.call(positions, n.name) ? positions[n.name] : { x: 0, y: 0 };
     placed.set(n.name, { x: p.x, y: p.y, w: s.w, h: s.h });
-    const data: FlowNodeData = { name: n.name, kind, look };
-    if (n.attrs.id !== undefined) data.id = n.attrs.id;
-    if (n.attrs.table !== undefined) data.table = n.attrs.table;
-    if (kind === "service" && n.attrs.icon) data.iconName = n.attrs.icon;
+    const data = nodeData(n, kind, look);
     const state = opts.states?.get(n.name);
     if (state) data.state = state;
-    return { id: n.name, type: familyOf(kind), position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, data };
+    const family = familyOf(kind);
+    if (own) data.sized = { w: own.w, h: own.h };
+    // A step 12 shape fills the box its rows and words size; one resized by hand draws at its own size instead.
+    const style = family === "kind" && !own ? { style: { width: s.w, height: s.h } } : {};
+    return { id: n.name, type: family, position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, ...style, data };
   });
   // Links to a group are allowed by the language (Mermaid writes them); the canvas draws lines between nodes only.
   const edges: Edge[] = [];
@@ -319,17 +578,19 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     if (!placed.has(l.from) || !placed.has(l.to)) return;
     const data: FlowEdgeData = {};
     if (l.label) data.label = l.label;
+    if (l.arrow === "--" && doc.kind === "er" && l.label) data.diamond = true;
     const leaving = opts.states?.get(l.from) === "leaving" || opts.states?.get(l.to) === "leaving";
     if (leaving) data.leaving = true;
+    // A dotted "assumes" line has no head (frame 6+.5): it is a permission, not data going one way.
+    const m = markers(l.arrow, doc.kind);
     edges.push({
       id: `edge:${i}`,
       source: l.from,
       target: l.to,
       type: "flow",
       className: (DASH[l.arrow] ?? "flow-line") + (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : ""),
-      // A dotted "assumes" line has no head (frame 6+.5): it is a permission, not data going one way.
-      markerEnd: l.arrow === "-" || l.arrow === "..>" ? undefined : ARROW_MARKER,
-      markerStart: l.arrow === "<>" ? ARROW_MARKER : undefined,
+      markerEnd: m.end,
+      markerStart: m.start,
       data,
     });
   });
@@ -340,7 +601,7 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
 export function layoutInput(doc: FlowDoc, look: NodeLook): { nodes: { id: string; w: number; h: number }[]; edges: { from: string; to: string }[] } {
   const names = new Set(doc.nodes.map((n) => n.name));
   return {
-    nodes: doc.nodes.map((n) => ({ id: n.name, ...nodeSize(drawnKind(n.kind), look, n.name, n.attrs.id) })),
+    nodes: doc.nodes.map((n) => ({ id: n.name, ...nodeSize(drawnKind(n.kind, doc.kind, n.name), look, n.name, n.attrs.id, n) })),
     edges: doc.links.filter((l) => names.has(l.from) && names.has(l.to)).map((l) => ({ from: l.from, to: l.to })),
   };
 }

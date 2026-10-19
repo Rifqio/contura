@@ -5,6 +5,7 @@ import { hintFor } from "../commands/keymap";
 import { useKeymap } from "../commands/useCommandKeys";
 import Icon from "../components/Icon";
 import Kbd from "../components/Kbd";
+import { useDismiss } from "../components/useDismiss";
 import { windowRange } from "../sidebar/treeModel";
 
 export interface FinderTable {
@@ -62,15 +63,8 @@ export default function Finder({ tables, onAdd, onClose, inline, anchor, home = 
   const view = viewport > 0 ? viewport : LIST_MAX;
   const { start, end } = windowRange(shown.length, scrollTop, view, ROW);
 
-  // A click outside closes the floating finder.
-  useEffect(() => {
-    if (inline) return;
-    const onDown = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [inline, onClose]);
+  // A press outside (the canvas too, which stops its own events) or Escape anywhere closes the floating finder (item 29).
+  useDismiss(!inline, [root], onClose);
 
   // The active row stays in view, so it is always drawn.
   useEffect(() => {

@@ -2,6 +2,17 @@ import { type ReactNode, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Icon from "./Icon";
 
+/** Item 14: the Contura mark (the logo masters' small-size cut): two stacked discs and the teal one between. */
+export function ConturaLogo({ size = 22 }: { size?: number }) {
+  return (
+    <svg className="contura-logo" width={size} height={size} viewBox="0 0 256 256" role="img" aria-label="Contura">
+      <path className="contura-logo-stack" d="M52 40A60 12 0 0 1 172 40V80A60 12 0 0 1 52 80Z" />
+      <path className="contura-logo-stack" d="M52 172A60 12 0 0 0 172 172V212A60 12 0 0 1 52 212Z" />
+      <path className="contura-logo-teal" d="M84 104A60 12 0 0 0 204 104V148A60 12 0 0 1 84 148Z" />
+    </svg>
+  );
+}
+
 /**
  * The window's title bar, drawn by the app (native decorations are off): the
  * app glyph, the given switcher and tabs, then Minimize, Maximize (Restore
@@ -41,8 +52,8 @@ export default function TitleBar({ children }: { children: ReactNode }) {
   const sizeLabel = maximized ? "Restore" : "Maximize";
   return (
     <header className="title-bar" data-tauri-drag-region>
-      <span className="title-bar-glyph" data-tauri-drag-region aria-hidden="true">
-        <Icon name="contura" />
+      <span className="title-bar-glyph" data-tauri-drag-region>
+        <ConturaLogo />
       </span>
       {children}
       <div className="window-buttons">

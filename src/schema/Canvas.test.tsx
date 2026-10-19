@@ -176,7 +176,7 @@ test("zoom_shows_percent_and_a_minimap_without_attribution", async () => {
   expect(container.querySelector(".react-flow__controls")).toBeNull();
 });
 
-test("selected_card_has_the_outline_and_four_handles", async () => {
+test("selected_card_has_the_outline_and_no_dead_handles", async () => {
   const { container } = render(
     <div style={{ width: 800, height: 600 }}>
       <Canvas
@@ -193,7 +193,8 @@ test("selected_card_has_the_outline_and_four_handles", async () => {
   const node = container.querySelector('.react-flow__node[data-id="public.orders"]') as HTMLElement;
   fireEvent.keyDown(node, { key: "Enter" });
   await waitFor(() => expect(container.querySelectorAll(".selbox")).toHaveLength(1));
-  expect(container.querySelectorAll(".selbox i")).toHaveLength(4);
+  // Item 25: a card that cannot be resized draws no corner handles, only the outline.
+  expect(container.querySelectorAll(".selbox i")).toHaveLength(0);
   expect(node.contains(container.querySelector(".selbox"))).toBe(true);
   expect(screen.getByText("orders selected")).toBeTruthy();
 });
@@ -383,4 +384,13 @@ test("arrange_falls_back_to_the_in_process_layout_when_the_worker_fails", async 
   expect(runLayout).toHaveBeenCalledTimes(1);
   const placed = onLayout.mock.calls[0][0].tables;
   expect(Object.keys(placed).sort()).toEqual(KFC_MODEL.tables.map(tableKey).sort());
+});
+
+test("item_20_right_click_on_the_schema_canvas_opens_its_menu", async () => {
+  renderCanvas();
+  fireEvent.contextMenu(document.querySelector(".react-flow__pane") as HTMLElement, { clientX: 100, clientY: 100 });
+  const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Add table", "Arrange", "Zoom to fit", "Publish image..."]);
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu", { name: "Canvas actions" })).toBeNull());
 });

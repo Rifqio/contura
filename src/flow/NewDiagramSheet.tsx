@@ -1,6 +1,7 @@
-// The New diagram sheet (frame 6+.6): pick the kind from drawn previews, name it, create. The file goes in
-// Contura's diagrams folder by name, so there is no folder to choose; Mermaid has its own way in, and the
-// recent diagrams sit beside it.
+// The New diagram sheet (frame 6+.6, extended in step 12 by frame NewDiagram): pick the kind from drawn
+// previews, found by a word or by group (Data, Software, Planning), name it, create. The file goes in Contura's
+// diagrams folder by name, so there is no folder to choose; Mermaid has its own way in, and the recent diagrams
+// sit beside it.
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { errorText, isCommandError, listDiagrams, writeDiagram } from "../api/client";
 import type { DiagramEntry } from "../api/types";
@@ -16,6 +17,8 @@ import { parseFlowLayout, serializeFlowLayout } from "./layout";
 import DfdNode from "./nodes/DfdNode";
 import FlowchartNode from "./nodes/FlowchartNode";
 import { kindStyle } from "./nodes/parts";
+import Segmented from "../components/Segmented";
+import { KindNode, type KindNodeData } from "./kindNodes";
 
 interface Props {
   onClose(): void;
@@ -34,11 +37,33 @@ interface Props {
 /** Recent rows shown in the right column. */
 const RECENT_SHOWN = 8;
 
-const KINDS: { kind: DiagramKind; title: string; text: string }[] = [
-  { kind: "dfd", title: "Data flow", text: "Processes, data stores and outside parties. Stores can link to tables." },
-  { kind: "flow", title: "Flowchart", text: "Steps, decisions, input and output, start and end." },
-  { kind: "cloud", title: "Cloud architecture", text: "Services as provider icons, grouped by network or layer." },
+type KindGroup = "data" | "software" | "planning";
+
+/** Every kind, in the frame's order; `group` sorts them under the switch. */
+export const KINDS: { kind: DiagramKind; title: string; text: string; group: KindGroup }[] = [
+  { kind: "dfd", title: "Data flow", text: "Processes, data stores and outside parties. Stores can link to tables.", group: "data" },
+  { kind: "flow", title: "Flowchart", text: "Steps, decisions, input and output, start and end.", group: "data" },
+  { kind: "cloud", title: "Cloud architecture", text: "Services as provider icons, grouped by network or layer.", group: "software" },
+  { kind: "er", title: "Entity relationship", text: "Tables, keys and how rows relate.", group: "data" },
+  { kind: "sequence", title: "Sequence", text: "Who calls whom, in order: requests, replies and waits.", group: "software" },
+  { kind: "state", title: "State", text: "States and the events that move between them.", group: "software" },
+  { kind: "class", title: "Class", text: "Types with their fields and methods, and how they extend each other.", group: "software" },
+  { kind: "mindmap", title: "Mind map", text: "One idea in the middle, branches out from it.", group: "planning" },
+  { kind: "timeline", title: "Timeline", text: "Dated events and periods along one line.", group: "planning" },
 ];
+
+const GROUPS: { value: "all" | KindGroup; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "data", label: "Data" },
+  { value: "software", label: "Software" },
+  { value: "planning", label: "Planning" },
+];
+
+/** The kinds a typed word finds: by title, kind word or description, ignoring case. */
+export function findKinds(query: string, group: "all" | KindGroup): typeof KINDS {
+  const q = query.trim().toLowerCase();
+  return KINDS.filter((k) => (group === "all" || k.group === group) && (!q || `${k.title} ${k.kind} ${k.text}`.toLowerCase().includes(q)));
+}
 
 /** The new file's text: only the first line, which names the kind and the title. */
 export function newDiagramText(kind: DiagramKind, name: string): string {
@@ -64,6 +89,11 @@ function Service({ name, icon }: { name?: string; icon: IconName }) {
       {name && <span className="fnode-name">{name}</span>}
     </div>
   );
+}
+
+/** A step 12 shape in a preview, drawn by the canvas's own node. */
+function Shape({ d }: { d: Omit<KindNodeData, "look"> }) {
+  return <KindNode d={{ ...d, look: "modern" }} selected={false} />;
 }
 
 /** The drawn preview of each kind, with the real nodes. */
@@ -125,6 +155,129 @@ function Preview({ kind }: { kind: DiagramKind }) {
             </At>
           </>
         )}
+        {kind === "er" && (
+          <>
+            <svg className="new-diagram-edges">
+              <path d="M 176 84 H 220" />
+            </svg>
+            <At x={8} y={30}>
+              <div style={{ width: 168, height: 105 }}>
+                <Shape d={{ name: "customers", kind: "erTable", rows: ["id int", "email text"] }} />
+              </div>
+            </At>
+            <At x={220} y={30}>
+              <div style={{ width: 168, height: 105 }}>
+                <Shape d={{ name: "invoices", kind: "erTable", rows: ["id int", "total numeric"] }} />
+              </div>
+            </At>
+          </>
+        )}
+        {kind === "sequence" && (
+          <>
+            <svg className="new-diagram-edges">
+              <path d="M 70 92 H 196" />
+              <path d="M 256 136 H 330" strokeDasharray="5 4" />
+            </svg>
+            {[
+              ["App", 10],
+              ["API", 136],
+              ["DB", 270],
+            ].map(([n, x]) => (
+              <At key={n as string} x={x as number} y={20}>
+                <div style={{ width: 120, height: 220, position: "relative" }}>
+                  <Shape d={{ name: n as string, kind: "participant" }} />
+                </div>
+              </At>
+            ))}
+          </>
+        )}
+        {kind === "state" && (
+          <>
+            <svg className="new-diagram-edges">
+              <path d="M 40 120 H 76" />
+              <path d="M 196 120 H 236" />
+            </svg>
+            <At x={18} y={109}>
+              <div style={{ width: 22, height: 22 }}>
+                <Shape d={{ name: "", kind: "stateStart" }} />
+              </div>
+            </At>
+            <At x={76} y={100}>
+              <div style={{ width: 120, height: 40 }}>
+                <Shape d={{ name: "Draft", kind: "state" }} />
+              </div>
+            </At>
+            <At x={236} y={100}>
+              <div style={{ width: 120, height: 40 }}>
+                <Shape d={{ name: "Sent", kind: "state" }} />
+              </div>
+            </At>
+          </>
+        )}
+        {kind === "class" && (
+          <>
+            <svg className="new-diagram-edges">
+              <path d="M 190 112 V 150 H 80 V 170 M 190 150 H 300 V 170" />
+            </svg>
+            <At x={110} y={12}>
+              <div style={{ width: 160, height: 100 }}>
+                <Shape d={{ name: "Invoice", kind: "class", rows: ["+ total: numeric", "+ send()"] }} />
+              </div>
+            </At>
+            <At x={10} y={170}>
+              <div style={{ width: 140, height: 70 }}>
+                <Shape d={{ name: "Paid", kind: "class", rows: [] }} />
+              </div>
+            </At>
+            <At x={230} y={170}>
+              <div style={{ width: 140, height: 70 }}>
+                <Shape d={{ name: "Overdue", kind: "class", rows: [] }} />
+              </div>
+            </At>
+          </>
+        )}
+        {kind === "mindmap" && (
+          <>
+            <svg className="new-diagram-edges">
+              <path d="M 140 130 C 110 130, 110 60, 80 60 M 140 130 C 110 130, 110 200, 80 200 M 260 130 C 290 130, 290 60, 310 60 M 260 130 C 290 130, 290 200, 310 200" />
+            </svg>
+            <At x={140} y={108}>
+              <div style={{ width: 120, height: 44 }}>
+                <Shape d={{ name: "Plan", kind: "root" }} />
+              </div>
+            </At>
+            {[
+              ["Ideas", -6, 43],
+              ["Risks", -6, 183],
+              ["Ship", 310, 43],
+              ["Docs", 310, 183],
+            ].map(([n, x, y]) => (
+              <At key={n as string} x={x as number} y={y as number}>
+                <div style={{ width: 86, height: 34 }}>
+                  <Shape d={{ name: n as string, kind: "topic", depth: 1 }} />
+                </div>
+              </At>
+            ))}
+          </>
+        )}
+        {kind === "timeline" && (
+          <>
+            <svg className="new-diagram-edges">
+              <path d="M 0 136 H 380" />
+            </svg>
+            {[
+              ["Q1", "2026-01", 10, 60, "event"],
+              ["Q2", "2026-04", 130, 160, "event"],
+              ["v1.0", "", 250, 60, "milestone"],
+            ].map(([n, date, x, y, k]) => (
+              <At key={n as string} x={x as number} y={y as number}>
+                <div style={{ width: 120, height: 52 }}>
+                  <Shape d={{ name: n as string, kind: k as KindNodeData["kind"], date: date as string }} />
+                </div>
+              </At>
+            ))}
+          </>
+        )}
       </div>
     </div>
   );
@@ -133,6 +286,9 @@ function Preview({ kind }: { kind: DiagramKind }) {
 export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeReplace, onOpenDiagram, now = new Date() }: Props) {
   const keys = useKeymap().map;
   const [kind, setKind] = useState<DiagramKind>("dfd");
+  const [query, setQuery] = useState("");
+  const [group, setGroup] = useState<"all" | KindGroup>("all");
+  const shown = findKinds(query, group);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -174,14 +330,18 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
   }
 
   function onKinds(e: KeyboardEvent) {
-    const at = KINDS.findIndex((k) => k.kind === kind);
-    const by = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (shown.length === 0) return;
+    const at = shown.findIndex((k) => k.kind === kind);
+    // A 3-column grid: left and right move one, up and down a row.
+    const by = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : e.key === "ArrowDown" ? 3 : e.key === "ArrowUp" ? -3 : 0;
     if (by === 0) return;
     e.preventDefault();
-    const next = (at + by + KINDS.length) % KINDS.length;
-    setKind(KINDS[next].kind);
+    const next = Math.max(0, Math.min(shown.length - 1, (at < 0 ? 0 : at) + by));
+    setKind(shown[next].kind);
     cards.current[next]?.focus();
   }
+
+  const title = (KINDS.find((k) => k.kind === kind) ?? KINDS[0]).title;
 
   const createKey = "Enter";
   const mermaidKey = hintFor(keys, "flow.fromMermaid");
@@ -190,8 +350,24 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
     <Dialog title="New diagram" subtitle="The kind is the first line of the file, so you can change it later." className="new-diagram" onClose={onClose}>
       <div className="new-diagram-body">
         <div className="new-diagram-main">
+          <div className="new-diagram-find">
+            <label className="new-diagram-search">
+              <Icon name="search" size={14} />
+              <input
+                className="input"
+                type="search"
+                aria-label="Find a kind"
+                placeholder="Find a kind"
+                value={query}
+                spellCheck={false}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
+            <Segmented label="Kind group" value={group} options={GROUPS} onChange={setGroup} />
+          </div>
+          {shown.length === 0 && <p className="new-diagram-none">No kind matches. Try another word.</p>}
           <div className="new-diagram-kinds" role="radiogroup" aria-label="Kind" onKeyDown={onKinds}>
-            {KINDS.map((k, i) => {
+            {shown.map((k, i) => {
               const on = k.kind === kind;
               return (
                 <button
@@ -203,7 +379,7 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
                   role="radio"
                   aria-checked={on}
                   aria-label={k.title}
-                  tabIndex={on ? 0 : -1}
+                  tabIndex={on || (i === 0 && !shown.some((x) => x.kind === kind)) ? 0 : -1}
                   className={on ? "new-diagram-kind is-on" : "new-diagram-kind"}
                   onClick={() => setKind(k.kind)}
                 >
@@ -214,7 +390,9 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
                   )}
                   <Preview kind={k.kind} />
                   <span className="new-diagram-kind-text">
-                    <span className="new-diagram-kind-title">{k.title}</span>
+                    <span className="new-diagram-kind-title">
+                      {k.title} <span className="new-diagram-kind-word">{k.kind}</span>
+                    </span>
                     <span className="new-diagram-kind-sub">{k.text}</span>
                   </span>
                 </button>
@@ -252,7 +430,7 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
           </div>
           <div className="new-diagram-alt">
             <Icon name="flow" size={14} />
-            <span>Have a Mermaid flowchart already?</span>
+            <span>Have a Mermaid diagram already?</span>
             <button type="button" className="button" title={mermaidKey ? `Flow from Mermaid (${mermaidKey})` : undefined} onClick={onMermaid}>
               Flow from Mermaid...
             </button>
@@ -273,7 +451,7 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
                   Cancel
                 </button>
                 <button type="button" className="button button-primary" disabled={!canCreate} onClick={() => void create()}>
-                  Create
+                  {`Create ${title.toLowerCase()}`}
                   <Kbd keys={createKey} />
                 </button>
               </>

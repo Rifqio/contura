@@ -85,6 +85,8 @@ Names are CSS custom properties, set on `:root` (light) and `:root[data-theme="d
 | `--c-node-icon-tile` | The tile behind a cloud service icon; light in both themes, because general and brand icons draw black |
 | `--c-syn-*`, `--syn-kw-weight`, `--syn-type-style` | Syntax highlighting |
 | `--c-tree-guide` / `--c-tree-guide-strong` | Tree indent guides; the strong one marks the level holding the selection |
+| `--c-logo-stack` / `--c-logo-teal` | The Contura mark in the title bar (step 12, item 14) |
+| `--c-feat-line` / `--c-feat-ink` | Feature icons (step 12, item 16): their lines, and strokes drawn over a hue; the hue is the family's (`--c-feat-query` accent, `--c-feat-obj` type, `--c-feat-data` function, `--c-feat-safe` keyword, `--c-feat-vis` string) |
 | `--db-mysql` / `--db-pg` / `--db-sqlite` | Database brand marks (open state) |
 | `--c-ink` | `#16181a`, dark text on Production and warning fills, in both themes |
 | `--on-accent` | Text on `--c-accent` (white in Alucard, `#191a21` on Dracula purple) |
@@ -183,6 +185,10 @@ Sources: the Dracula spec (draculatheme.com/spec), Alucard Classic: background `
   --syn-type-style: italic;
   --c-tree-guide: #c9c6b6;
   --c-tree-guide-strong: #8f8a73;
+  --c-logo-stack: #1b1f23;
+  --c-logo-teal: #0e7c86;
+  --c-feat-line: #48432f;
+  --c-feat-ink: #fffbeb;
   --db-mysql: #00758f;
   --db-pg: #336791;
   --db-sqlite: #0f80cc;
@@ -285,6 +291,10 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --syn-type-style: italic;
   --c-tree-guide: #3c3f52;
   --c-tree-guide-strong: #6272a4;
+  --c-logo-stack: #e4e8eb;
+  --c-logo-teal: #3fb8c2;
+  --c-feat-line: #c7c8d3;
+  --c-feat-ink: #191a21;
   --db-mysql: #5fb6cc;
   --db-pg: #8fb3e3;
   --db-sqlite: #63b4ec;

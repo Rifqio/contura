@@ -11,6 +11,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import { patientFile } from "../test/load";
 import { mockReactFlowDom } from "../test/reactFlow";
+import { conditionsLine } from "./FilterPanel";
 import { emptyQuery } from "./model";
 import VisualQueryTab from "./VisualQueryTab";
 
@@ -233,8 +234,8 @@ test("a_filter_without_a_column_shows_its_problem_under_it", async () => {
   await userEvent.click(tab(/Filter and sort/));
   await waitFor(() => expect(filterRows()).toHaveLength(2));
   // WHERE on the first row, AND or OR after.
-  expect(within(filterRows()[0]).getByText("WHERE")).toBeTruthy();
-  expect(within(filterRows()[1]).getByRole("combobox", { name: "Joiner for filter 2" }).textContent).toBe("AND");
+  expect(within(filterRows()[0]).getByText("Where")).toBeTruthy();
+  expect(within(filterRows()[1]).getByRole("combobox", { name: "Joiner for filter 2" }).textContent).toBe("And");
   const second = filterRows()[1];
   const problem = await within(second).findByText("Pick a column for filter 2.");
   expect(problem.className).toContain("vq-problem");
@@ -294,23 +295,23 @@ test("mixing_and_with_or_says_how_they_bind", async () => {
   );
   await userEvent.click(tab(/Filter and sort/));
   await waitFor(() => expect(filterRows()).toHaveLength(2));
-  expect(within(filterBody()).queryByText("AND binds before OR. For other groupings, Open in editor.")).toBeNull();
+  expect(within(filterBody()).queryByText("And binds before Or. For other groupings, Open in editor.")).toBeNull();
   await userEvent.click(within(filterBody()).getByRole("button", { name: "Add condition" }));
   await waitFor(() => expect(filterRows()).toHaveLength(3));
   expect(latest.filters[2]).toMatchObject({ joiner: "and", table: "t1", column: "" });
-  await pick(within(filterRows()[2]).getByRole("combobox", { name: "Joiner for filter 3" }), "OR");
-  expect(await within(filterBody()).findByText("AND binds before OR. For other groupings, Open in editor.")).toBeTruthy();
+  await pick(within(filterRows()[2]).getByRole("combobox", { name: "Joiner for filter 3" }), "Or");
+  expect(await within(filterBody()).findByText("And binds before Or. For other groupings, Open in editor.")).toBeTruthy();
   await userEvent.click(within(filterRows()[2]).getByRole("button", { name: "Remove filter 3" }));
-  await waitFor(() => expect(within(filterBody()).queryByText("AND binds before OR. For other groupings, Open in editor.")).toBeNull());
+  await waitFor(() => expect(within(filterBody()).queryByText("And binds before Or. For other groupings, Open in editor.")).toBeNull());
 });
 
 test("a_limit_that_is_not_whole_is_marked_and_not_sent", async () => {
   render(<Harness over={{ columns: [out("t2", "name")] }} />);
   await userEvent.click(tab(/Filter and sort/));
-  const limit = await within(filterBody()).findByRole("textbox", { name: "LIMIT" });
+  const limit = await within(filterBody()).findByRole("textbox", { name: "Limit" });
   expect(limit.getAttribute("placeholder")).toBe("No limit");
   await userEvent.type(limit, "5.5");
-  expect(await within(filterBody()).findByText("LIMIT is a whole number.")).toBeTruthy();
+  expect(await within(filterBody()).findByText("Limit takes a whole number, such as 100.")).toBeTruthy();
   expect(limit.getAttribute("aria-invalid")).toBe("true");
   expect(latest.limit).toBeNull();
   // The request after the edit omits the limit: 5 is sent, then 5.5 sends none.
@@ -324,13 +325,13 @@ test("a_limit_that_is_not_whole_is_marked_and_not_sent", async () => {
   // The text as typed, with its problem, survives a visit to another tab.
   await userEvent.click(tab(/^Columns/));
   await userEvent.click(tab(/Filter and sort/));
-  const again = within(filterBody()).getByRole("textbox", { name: "LIMIT" });
+  const again = within(filterBody()).getByRole("textbox", { name: "Limit" });
   expect((again as HTMLInputElement).value).toBe("5.5");
-  expect(within(filterBody()).getByText("LIMIT is a whole number.")).toBeTruthy();
+  expect(within(filterBody()).getByText("Limit takes a whole number, such as 100.")).toBeTruthy();
   await userEvent.clear(again);
   await userEvent.type(again, "5");
   await waitFor(() => expect(latest.limit).toBe(5));
-  expect(within(filterBody()).queryByText("LIMIT is a whole number.")).toBeNull();
+  expect(within(filterBody()).queryByText("Limit takes a whole number, such as 100.")).toBeNull();
   await userEvent.click(within(filterBody()).getByRole("switch", { name: "Distinct" }));
   await waitFor(() => expect(latest.distinct).toBe(true));
 });
@@ -381,10 +382,18 @@ test("every_picker_is_a_themed_select", async () => {
   expect(filterBody().querySelector("select")).toBeNull();
 });
 
-test("a_columns_problem_shows_under_the_columns", async () => {
+test("item_30_nothing_ticked_is_said_once_by_the_empty_state", async () => {
   render(<Harness over={{}} />);
-  const problem = await within(columnsBody()).findByText("Tick at least one column.");
-  expect(problem.className).toContain("vq-problem");
+  expect(await within(columnsBody()).findByText("Tick a column to start")).toBeTruthy();
+  expect(within(columnsBody()).queryByText("Tick at least one column.")).toBeNull();
+});
+
+test("item_33_conditions_fold_their_count_into_the_sentence", () => {
+  const f = (joiner: "and" | "or") => ({ joiner, table: "t1", column: "id", op: "eq" as const, values: ["1"] });
+  expect(conditionsLine([])).toBe("None yet: every row is shown");
+  expect(conditionsLine([f("and")])).toBe("Only rows that match this one condition");
+  expect(conditionsLine([f("and"), f("and")])).toBe("Only rows that match all 2 conditions");
+  expect(conditionsLine([f("and"), f("or"), f("and")])).toBe("Rows that match the 3 conditions, joined as shown");
 });
 
 test("a_group_by_row_with_no_column_shows_its_problem_under_that_row", async () => {

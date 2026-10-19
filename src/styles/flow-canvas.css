@@ -405,3 +405,392 @@
   content: "";
   pointer-events: none;
 }
+
+/*
+  Step 12, item 19 (frame DiagramElements): the newer kinds' shapes. Each sets the kind's token pair through the
+  shell; cards draw their rows in Code small, the state markers and the fork are solid in the neutral stroke,
+  and a sequence participant draws its lifeline down the node's full height.
+*/
+.fnode-kind {
+  border: 1px solid var(--fnode-stroke);
+  border-radius: var(--rounded-md);
+  background: var(--fnode-fill);
+}
+.fkind-inside {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+.fkind-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  flex: none;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--fnode-stroke);
+  color: var(--c-text);
+}
+.fkind-head .icon {
+  flex: none;
+  color: var(--fnode-stroke);
+}
+.fkind-rows {
+  margin: 0;
+  padding: 3px 0;
+  list-style: none;
+  background: var(--c-bg-surface);
+}
+.fkind-rows:last-child {
+  border-radius: 0 0 5px 5px;
+}
+.fkind-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.fkind-key {
+  flex: none;
+  color: var(--c-group-gold);
+}
+.fkind-col {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fkind-type {
+  margin-left: auto;
+  color: var(--c-syn-type);
+  font-style: italic;
+}
+/* A weak entity: the double edge. */
+.fnode-erWeak {
+  box-shadow: 0 0 0 3px var(--c-bg-canvas), 0 0 0 4px var(--fnode-stroke);
+}
+/* A class card: the name in the middle, then fields and methods, each part ruled off. */
+.fkind-head-class {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  height: auto;
+  min-height: 32px;
+  padding: 4px 10px;
+}
+.fkind-stereotype {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.fkind-part + .fkind-part {
+  border-top: 1px solid var(--fnode-stroke);
+}
+.fnode-interface {
+  border-style: dashed;
+}
+/* State: a pill; the choice a small diamond; the fork a bar; the start a dot and the end a ring around one. */
+.fnode-state {
+  display: grid;
+  place-items: center;
+  padding: 0 16px;
+  border-radius: var(--rounded-full);
+}
+.fnode-choice {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+}
+.fnode-choice::before {
+  position: absolute;
+  inset: 9px;
+  box-sizing: border-box;
+  border: 1px solid var(--fnode-stroke);
+  border-radius: var(--rounded-sm);
+  background: var(--fnode-fill);
+  transform: rotate(45deg);
+  content: "";
+}
+.fkind-choice-name {
+  position: relative;
+  max-width: 120px;
+  font: var(--font-small);
+  transform: translateY(42px);
+}
+.fnode-fork,
+.fnode-stateStart {
+  border: 0;
+  background: var(--fnode-stroke);
+}
+.fnode-fork {
+  border-radius: 3px;
+}
+.fnode-stateStart,
+.fnode-stateEnd {
+  border-radius: var(--rounded-full);
+}
+.fnode-stateEnd {
+  border: 2px solid var(--fnode-stroke);
+  background: var(--c-bg-canvas);
+}
+.fnode-stateEnd::before {
+  position: absolute;
+  inset: 4px;
+  border-radius: var(--rounded-full);
+  background: var(--fnode-stroke);
+  content: "";
+}
+/* Sequence: the participant's box on top and its dashed lifeline down the node; activations sit on the line. */
+.fnode-participant,
+.fnode-actor {
+  border: 0;
+  background: none;
+}
+.fkind-lifehead {
+  justify-content: center;
+  border: 1px solid var(--fnode-stroke);
+  border-radius: var(--rounded-md);
+  background: var(--fnode-fill);
+}
+.fkind-lifeline {
+  position: absolute;
+  top: 40px;
+  bottom: 0;
+  left: 50%;
+  border-left: 1px dashed var(--c-border-strong);
+}
+.fkind-activation {
+  position: absolute;
+  left: calc(50% - 5px);
+  width: 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--fnode-stroke);
+  border-radius: 2px;
+  background: var(--fnode-fill);
+}
+.fnode-participant.fnode-selected::after,
+.fnode-actor.fnode-selected::after {
+  bottom: auto;
+  height: 42px;
+}
+.fkind-msg {
+  position: absolute;
+  padding: 0 4px;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.fkind-frame {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--rounded-md);
+  background: color-mix(in srgb, var(--c-bg-panel) 40%, transparent);
+}
+.fkind-frame-tab {
+  display: inline-block;
+  padding: 2px 8px;
+  border-right: 1px solid var(--c-border-strong);
+  border-bottom: 1px solid var(--c-border-strong);
+  border-radius: 5px 0 6px 0;
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-weight: 600;
+}
+/* Mind map: the root a stronger pill, topics pills, deeper topics plain words on a line. */
+.fnode-root {
+  display: grid;
+  place-items: center;
+  border-width: 2px;
+  border-radius: var(--rounded-full);
+}
+.fnode-root .fnode-name {
+  font: var(--font-title);
+}
+.fnode-topic {
+  display: grid;
+  place-items: center;
+  padding: 0 14px;
+  border-radius: var(--rounded-full);
+}
+.fkind-depth-2,
+.fkind-depth-3 {
+  align-items: center;
+  justify-content: center;
+}
+.fnode-topic:has(.fkind-depth-2),
+.fnode-topic:has(.fkind-depth-3) {
+  border-width: 0 0 1px;
+  border-radius: 0;
+  background: none;
+}
+.fkind-depth-2 .fnode-name,
+.fkind-depth-3 .fnode-name {
+  font: var(--font-body);
+}
+/* Timeline: cards above and below one line, ticks where they meet it, sections as quiet bands. */
+.fnode-event,
+.fnode-period,
+.fnode-milestone {
+  padding: 6px 10px;
+}
+.fnode-period {
+  border-radius: var(--rounded-full);
+}
+.fnode-milestone {
+  border-width: 2px;
+}
+.fkind-time {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fkind-date {
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-numeric: tabular-nums;
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.fkind-axis {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.fkind-axis::before {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--c-border-strong);
+  content: "";
+}
+.fkind-tick {
+  position: absolute;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  box-sizing: border-box;
+  border: 2px solid var(--c-node-table-stroke);
+  border-radius: var(--rounded-full);
+  background: var(--c-bg-canvas);
+}
+.fkind-tick.is-milestone {
+  border-color: var(--c-node-enum-stroke);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+.fkind-section {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--c-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--c-bg-panel) 50%, transparent);
+}
+.fkind-section-name {
+  display: block;
+  padding: 8px 12px;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-weight: 600;
+}
+/* A note: the note pair, its text wrapping. */
+.fnode-note {
+  padding: 8px 10px;
+  border-radius: 2px;
+  white-space: normal;
+}
+.fkind-note {
+  color: var(--c-text);
+  font: var(--font-small);
+  overflow-wrap: anywhere;
+}
+/* Flowchart document and database (DiagramElements, "New"): a curved foot and a rounded cylinder. */
+.fnode-document,
+.fnode-database {
+  display: grid;
+  place-items: center;
+  padding: 0 10px;
+}
+.fnode-document {
+  border-radius: 6px 6px 40% 10% / 6px 6px 12px 6px;
+}
+.fnode-database {
+  border-radius: 50% / 10px;
+}
+.fnode-document .fnode-text,
+.fnode-database .fnode-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* An ER relationship's name in a diamond on its line. */
+.flow-chip-diamond {
+  padding: 2px 14px;
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-bg-surface);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.edge-marker-hollow {
+  fill: var(--c-bg-canvas);
+}
+.fnode-kind {
+  width: 100%;
+  height: 100%;
+}
+
+/* Item 21: a node resized by hand fills its box; the handles are four small accent squares at the corners. */
+.fnode.fnode-sized {
+  max-width: none;
+}
+.fnode-resize {
+  position: absolute;
+  z-index: 3;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  box-sizing: border-box;
+  border: 1px solid var(--c-accent);
+  border-radius: 1px;
+  background: var(--c-bg-surface);
+  transition: transform var(--motion-fast) var(--ease-enter);
+}
+.fnode-resize:hover {
+  transform: scale(1.25);
+}
+.fnode-resize[data-corner="nw"] {
+  top: -5px;
+  left: -5px;
+  cursor: nwse-resize;
+}
+.fnode-resize[data-corner="ne"] {
+  top: -5px;
+  left: calc(100% + 5px);
+  cursor: nesw-resize;
+}
+.fnode-resize[data-corner="sw"] {
+  top: calc(100% + 5px);
+  left: -5px;
+  cursor: nesw-resize;
+}
+.fnode-resize[data-corner="se"] {
+  top: calc(100% + 5px);
+  left: calc(100% + 5px);
+  cursor: nwse-resize;
+}
+.react-flow__node.is-resizing > .fnode {
+  width: 100%;
+  height: 100%;
+}

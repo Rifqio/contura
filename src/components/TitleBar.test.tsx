@@ -1,7 +1,6 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
-import Icon from "./Icon";
 import TitleBar from "./TitleBar";
 
 const win = vi.hoisted(() => ({
@@ -46,11 +45,10 @@ test("maximize_becomes_restore_while_the_window_is_maximized", async () => {
   expect(await screen.findByRole("button", { name: "Maximize" })).toBeTruthy();
 });
 
-test("shows_the_contura_glyph", () => {
+test("item_14_shows_the_contura_logo", () => {
   render(<TitleBar>tabs</TitleBar>);
   const glyph = document.querySelector(".title-bar-glyph") as HTMLElement;
-  expect(glyph.getAttribute("aria-hidden")).toBe("true");
-  const { container } = render(<Icon name="contura" />);
-  const contura = container.querySelector("path")?.getAttribute("d");
-  expect(glyph.querySelector("svg.icon path")?.getAttribute("d")).toBe(contura);
+  const logo = within(glyph).getByRole("img", { name: "Contura" });
+  // The logo masters' small cut: two stacks and the teal middle, in theme tokens.
+  expect([...logo.querySelectorAll("path")].map((p) => p.getAttribute("class"))).toEqual(["contura-logo-stack", "contura-logo-stack", "contura-logo-teal"]);
 });

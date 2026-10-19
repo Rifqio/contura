@@ -23,7 +23,7 @@ import {
   useStore,
   useStoreApi,
 } from "@xyflow/react";
-import { type DragEvent, type KeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
+import { type DragEvent, type KeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Icon from "../components/Icon";
 import { ConnectableContext } from "./CardFrame";
 import { DetailContext, GRID_FROM, detailFor } from "./detail";
@@ -79,6 +79,10 @@ export interface DiagramCanvasProps {
   /** Drawn inside the flow, so React Flow's ViewportPortal can place things in flow coordinates. */
   overlay?: ReactNode;
   onEdgeDoubleClick?(id: string): void;
+  /** Item 22: a node double-clicked (its editor opens). */
+  onNodeDoubleClick?(id: string): void;
+  /** Item 23: the empty canvas double-clicked, at a flow position (a shape is added there); the view does not zoom. */
+  onPaneDoubleClick?(at: { screen: { x: number; y: number }; flow: { x: number; y: number } }): void;
   /** A click on the minimap moves the view there in one smooth step (zoom to fit's duration). */
   minimapJump?: boolean;
   /**
@@ -91,6 +95,19 @@ export interface DiagramCanvasProps {
    * goes back to null or undefined, those nodes are drawn as `nodes` says again.
    */
   livePositions?: LivePositions | null;
+  /**
+   * A right-click on the empty canvas (`node` null) or on a node (item 20): where it was on screen and in flow
+   * coordinates, and the canvas's own zoom to fit for the menu. The browser's menu never shows.
+   */
+  onContextMenu?(at: CanvasMenuAt): void;
+}
+
+/** Where a canvas right-click landed, for the owner's menu. */
+export interface CanvasMenuAt {
+  node: string | null;
+  screen: { x: number; y: number };
+  flow: { x: number; y: number };
+  fit(): void;
 }
 
 /** Refit this long after the last window resize. */
@@ -248,7 +265,7 @@ const isTyping = (t: EventTarget | null) =>
 
 function Flow(props: DiagramCanvasProps) {
   const { readOnly, onConnectPorts, onDragOver, onDragCancel, connectionMode, onMove, onDrag, onSelect, onDropObject, onInit, nodeTypes, edgeTypes, children } = props;
-  const { snapWhileDragging = true, onConnectRelease, connectionLineComponent, overlay, onEdgeDoubleClick, minimapJump, boxSelect } = props;
+  const { snapWhileDragging = true, onConnectRelease, connectionLineComponent, overlay, onEdgeDoubleClick, minimapJump, boxSelect, onContextMenu, onNodeDoubleClick, onPaneDoubleClick } = props;
   const fast = detailFor(1, props.nodes.length).fast;
   const detail = useStore((s) => detailFor(s.transform[2], props.nodes.length).detail);
   const detailValue = useMemo(() => ({ detail, fast }), [detail, fast]);
@@ -362,27 +379,54 @@ function Flow(props: DiagramCanvasProps) {
     }
   };
 
+  const menuAt = (e: { clientX: number; clientY: number; preventDefault(): void }, node: string | null) => {
+    e.preventDefault();
+    onContextMenu?.({
+      node,
+      screen: { x: e.clientX, y: e.clientY },
+      flow: screenToFlowPosition({ x: e.clientX, y: e.clientY }),
+      fit: () => void fitRef.current(),
+    });
+  };
+
   // The DOM dragover of a drop from outside (the tree), not the `onDragOver` prop of a column drag.
+  // Item 24: while something from outside is over the canvas, the canvas rings so the drop is expected.
+  const [dropping, setDropping] = useState(false);
   const onDragOverPane = onDropObject
     ? (e: DragEvent) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
+        if (!dropping) setDropping(true);
+      }
+    : undefined;
+  const onDragLeavePane = onDropObject
+    ? (e: DragEvent) => {
+        if (!e.currentTarget.contains(e.relatedTarget as globalThis.Node | null)) setDropping(false);
       }
     : undefined;
   const onDropPane = onDropObject
     ? (e: DragEvent) => {
         e.preventDefault();
+        setDropping(false);
         onDropObject(e.dataTransfer, screenToFlowPosition({ x: e.clientX, y: e.clientY }));
       }
     : undefined;
 
   return (
     <div
-      className={fast ? "diagram-canvas is-fast" : "diagram-canvas"}
+      className={["diagram-canvas", fast && "is-fast", dropping && "is-drop-target"].filter(Boolean).join(" ")}
       // The canvas takes focus so Shift+1, Ctrl+Plus and Ctrl+Minus work on it.
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onDoubleClick={
+        onPaneDoubleClick &&
+        ((e) => {
+          if (!(e.target as Element).closest?.(".react-flow__pane")) return;
+          onPaneDoubleClick({ screen: { x: e.clientX, y: e.clientY }, flow: screenToFlowPosition({ x: e.clientX, y: e.clientY }) });
+        })
+      }
       onDragOver={onDragOverPane}
+      onDragLeave={onDragLeavePane}
       onDrop={onDropPane}
     >
       <EdgeMarkers />
@@ -410,6 +454,10 @@ function Flow(props: DiagramCanvasProps) {
             onlyRenderVisibleElements
             connectionLineComponent={connectionLineComponent}
             onEdgeDoubleClick={onEdgeDoubleClick && ((_, edge) => onEdgeDoubleClick(edge.id))}
+            onNodeDoubleClick={onNodeDoubleClick && ((_, node) => onNodeDoubleClick(node.id))}
+            zoomOnDoubleClick={!onPaneDoubleClick}
+            onPaneContextMenu={onContextMenu && ((e) => menuAt(e, null))}
+            onNodeContextMenu={onContextMenu && ((e, node) => menuAt(e, node.id))}
             {...(boxSelect ? { selectionOnDrag: true, selectionMode: SelectionMode.Partial, panOnDrag: [1], panOnScroll: true } : {})}
             minZoom={MIN_ZOOM}
             proOptions={{ hideAttribution: true }}

@@ -51,7 +51,9 @@ import Menu, { MenuList } from "../components/Menu";
 import SafetyTag from "../components/SafetyTag";
 import Select from "../components/Select";
 import { useToast } from "../components/Toast";
-import DiagramCanvas, { type DragOverPorts } from "../diagram/DiagramCanvas";
+import { PlacedMenu, type PlacedMenuState } from "../flow/DiagramMenu";
+import type { MenuItem } from "../components/Menu";
+import DiagramCanvas, { type CanvasMenuAt, type DragOverPorts } from "../diagram/DiagramCanvas";
 import { CARD_WIDTH } from "../diagram/metrics";
 import { durationText } from "../format/units";
 import type { LangClient } from "../lang/client";
@@ -82,7 +84,10 @@ import {
   loadingTables,
   mergeSchemas,
   missing,
+  emptyQuery,
   moveTable,
+  tickAll,
+  untickAll,
   pendingTables,
   pickForeignKey,
   removeCondition,
@@ -103,6 +108,7 @@ import QueryCard, {
   type CardColumn,
   type DropTarget,
   DropTargetContext,
+  fitWidth,
   type QueryCardData,
   queryCardHeight,
 } from "./QueryCard";
@@ -279,7 +285,8 @@ function findTable(schema: VqSchema, t: VqTable) {
   return schema.tables.find((s) => (s.schema ?? null) === (t.schema ?? null) && s.name === t.name);
 }
 
-type PanelTab = "columns" | "filter" | "results";
+/** Item 30 (frame VisualQuery): the bottom area is one panel of tabs, the SQL among them. */
+type PanelTab = "columns" | "filter" | "results" | "sql";
 
 export default function VisualQueryTab(props: VisualQueryTabProps) {
   const { doc, connection, open, visible, lang, rowEstimate, onChange, onOpenInEditor, databases } = props;
@@ -526,6 +533,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         problems: (preview?.problems ?? []).flatMap((p) => (p.target.kind === "table" && p.target.id === t.id ? [p.message] : [])),
         expanded: expanded.has(t.id),
         root: i === 0,
+        width: doc.widths?.[t.id],
         dangerColumns: markJoin
           ? [
               ...(markJoin.left === t.id ? markJoin.on.map((p) => p.leftColumn) : []),
@@ -537,14 +545,14 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         id: t.id,
         type: "vqCard",
         position: { x: t.x, y: t.y },
-        initialWidth: CARD_WIDTH,
+        initialWidth: data.width ?? fitWidth(data),
         initialHeight: queryCardHeight(data),
         data,
       };
     });
     // `cardState` reads the load states, which change with `schema`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, schema, loading, gone, lone, preview, expanded, dialect, tabDb, open, connection, markJoin]);
+  }, [model, schema, loading, gone, lone, preview, expanded, dialect, tabDb, open, connection, markJoin, doc.widths]);
 
   // ---- Joins: the edges, their popovers, the drag chip and J ----
   const [openJoin, setOpenJoin] = useState<{ id: string; anchor: DOMRect } | null>(null);
@@ -726,6 +734,14 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
       rename: (id, alias) => changeModel((q) => setAlias(q, id, alias)),
       setRoot: (id) => changeModel((q) => setRoot(q, id)),
       expand: (id) => setExpanded((s) => new Set([...s, id])),
+      resize: (id, width, shift) => {
+        // A left-corner drag moves the card's left edge: the card moves by as much, so its right edge stays.
+        if (shift !== 0) changeModel((q) => q.tables.reduce((m, t) => (t.id === id ? moveTable(m, id, { x: t.x + shift, y: t.y }) : m), q));
+        latest.current = { ...latest.current, widths: { ...latest.current.widths, [id]: width } };
+        onChange(latest.current);
+      },
+      tickAll: (id, columns) => changeModel((q) => tickAll(q, id, columns)),
+      untickAll: (id) => changeModel((q) => untickAll(q, id)),
       retry: (id) => retryCard.current(id),
       joinFrom: (id, column, anchor) => {
         jRow.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -897,10 +913,65 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const copy = () => {
     if (sql !== null) withSqlNow((text) => void navigator.clipboard?.writeText(text).catch(() => {}));
   };
+
+  // ---- The canvas's right-click menu (items 20 and 26; no Paste: nothing defines what it would paste) ----
+  const [canvasMenu, setCanvasMenu] = useState<PlacedMenuState | null>(null);
+  const openCanvasMenu = (at: CanvasMenuAt) => {
+    // A card's right-click opens the card's own menu (QueryCard).
+    if (at.node !== null) return;
+    const ids = latest.current.model.tables.map((t) => t.id);
+    const items: MenuItem[] = [
+      { key: "add", label: "Add table...", icon: <Icon name="table" />, shortcut: addKey ?? undefined, onSelect: openFinder },
+      {
+        key: "all",
+        label: "Select all",
+        icon: <Icon name="select" />,
+        separatorBefore: true,
+        disabled: ids.length === 0,
+        onSelect: () => {
+          flow.current?.setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
+          setSelected(ids);
+        },
+      },
+      { key: "tidy", label: "Tidy", icon: <Icon name="tidy" />, disabled: ids.length < 2, onSelect: tidy },
+      { key: "fit", label: "Zoom to fit", icon: <Icon name="fit" />, shortcut: "Shift+1", onSelect: at.fit },
+      // The SQL is a tab of the bottom panel (item 30): this shows it.
+      { key: "sql", label: "Show the SQL", icon: <Icon name="fileCode" />, separatorBefore: true, onSelect: () => setPanel("sql") },
+      {
+        key: "editor",
+        label: "Open in editor",
+        icon: <Icon name="external" />,
+        shortcut: hintFor(map, "visualQuery.openInEditor") ?? undefined,
+        disabled: sql === null,
+        onSelect: openInEditor,
+      },
+      {
+        key: "clear",
+        label: "Clear the canvas",
+        icon: <Icon name="trash" />,
+        danger: true,
+        separatorBefore: true,
+        disabled: ids.length === 0,
+        onSelect: () => {
+          const before = latest.current.model;
+          changeModel((q) => ({ ...emptyQuery(q.database, q.dialect ?? dialect), dialect: q.dialect }));
+          toast.show({
+            kind: "info",
+            text: `Cleared ${ids.length === 1 ? "1 table" : `${ids.length} tables`} from the canvas.`,
+            action: { label: "Undo", run: () => changeModel(() => before) },
+          });
+        },
+      },
+    ];
+    setCanvasMenu({ x: at.screen.x, y: at.screen.y, label: "Canvas actions", items });
+  };
+  // Item 30: "nothing ticked yet" is said once, by the Columns tab; the SQL tab only says when it will show.
   const emptyLines = empty
     ? ["The SQL appears here once a table is on the canvas."]
     : sql === null
-      ? (preview?.problems ?? []).filter((p) => p.target.kind !== "table").map((p) => p.message)
+      ? model.columns.length === 0
+        ? ["The SQL appears here once a column is ticked."]
+        : (preview?.problems ?? []).filter((p) => p.target.kind !== "table").map((p) => p.message)
       : [];
 
   // ---- Run (Ctrl+Enter or the Run button) ----
@@ -1137,7 +1208,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   // ---- Tidy ----
   function tidy() {
     const req = {
-      nodes: nodes.map((n) => ({ id: n.id, w: CARD_WIDTH, h: n.initialHeight ?? 0 })),
+      nodes: nodes.map((n) => ({ id: n.id, w: n.initialWidth ?? CARD_WIDTH, h: n.initialHeight ?? 0 })),
       edges: model.joins.map((j) => ({ from: j.left, to: j.right })),
       existing: {},
       rankdir: "LR" as const,
@@ -1440,6 +1511,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
                 // The canvas reports the selection on every draw; an equal one keeps the state, so nothing loops.
                 onSelect={(ids) => setSelected((prev) => (prev.length === ids.length && prev.every((x, i) => x === ids[i]) ? prev : ids))}
                 onDropObject={onDropObject}
+                onContextMenu={openCanvasMenu}
                 onInit={(i) => {
                   flow.current = i;
                 }}
@@ -1484,10 +1556,15 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
             anchor={canvasBox.current?.getBoundingClientRect() ?? null}
             inputRef={floatingInput}
             loadingNote={loadingNote}
-            onAdd={(t) => addCard(t)}
+            onAdd={(t) => {
+              // Item 29: picking a table is the finder's job done; it closes, and Add table opens it again.
+              addCard(t);
+              closeFinder();
+            }}
             onClose={closeFinder}
           />
         )}
+        {canvasMenu && <PlacedMenu menu={canvasMenu} onClose={() => setCanvasMenu(null)} />}
         {diagramOpen && diagramSql.current !== null && (
           <QueryDiagramPane
             source={{ kind: "visual", docId: `vq:${doc.id}`, text: diagramSql.current }}
@@ -1520,6 +1597,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
                   ["columns", `Columns ${model.columns.length}`],
                   ["filter", `Filter and sort ${model.filters.length + model.orderBy.length}`],
                   ["results", "Results"],
+                  ["sql", "SQL"],
                 ] as const
               ).map(([key, label]) => (
                 <button
@@ -1556,6 +1634,19 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
                 onChange={changeModel}
                 limitDraft={limitDraft}
                 onLimitDraft={setLimitDraft}
+              />
+            )}
+            {panel === "sql" && (
+              <SqlPane
+                dialect={dialect}
+                preview={empty ? null : preview}
+                production={production}
+                bands={bands}
+                warnings={warningLines(preview, model)}
+                empty={emptyLines}
+                onCopy={copy}
+                onOpenInEditor={openInEditor}
+                onLine={onLine}
               />
             )}
             {panel === "results" &&
@@ -1613,17 +1704,6 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
               ))}
           </div>
         </section>
-        <SqlPane
-          dialect={dialect}
-          preview={empty ? null : preview}
-          production={production}
-          bands={bands}
-          warnings={warningLines(preview, model)}
-          empty={emptyLines}
-          onCopy={copy}
-          onOpenInEditor={openInEditor}
-          onLine={onLine}
-        />
       </div>
 
       {statusSlot ? createPortal(status, statusSlot) : <div className="vq-status-line">{status}</div>}

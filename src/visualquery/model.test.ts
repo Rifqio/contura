@@ -36,7 +36,9 @@ import {
   setOutputName,
   setRoot,
   swapSides,
+  tickAll,
   toggleColumn,
+  untickAll,
   type VqSchema,
 } from "./model";
 
@@ -826,5 +828,21 @@ describe("cheap safety", () => {
   it("setAlias refuses a NUL", () => {
     const { q } = build(["orders"]);
     expect(setAlias(q, idOf(q, "o"), "a\0b")).toBe(q);
+  });
+});
+
+describe("tickAll and untickAll (card menu, item 27)", () => {
+  it("ticks_the_rest_in_card_order_and_unticks_with_their_sorts", () => {
+    let { q } = build(["orders", "stores"]);
+    const o = idOf(q, "o");
+    q = toggleColumn(q, idOf(q, "s"), "name");
+    q = toggleColumn(q, o, "total");
+    const all = tickAll(deepFreeze(q), o, ["id", "store_id", "total"]);
+    expect(all.columns.map((c) => c.column)).toEqual(["name", "total", "id", "store_id"]);
+    expect(tickAll(all, o, ["id", "total"])).toBe(all);
+    const sorted = addSort(all, { target: { kind: "output", index: 3 }, dir: "asc" });
+    const none = untickAll(deepFreeze(addSort(sorted, { target: { kind: "column", table: o, column: "id" }, dir: "desc" })), o);
+    expect(none.columns.map((c) => c.column)).toEqual(["name"]);
+    expect(none.orderBy).toEqual([]);
   });
 });
