@@ -10,13 +10,18 @@ use rusqlite::types::ValueRef;
 
 use super::page::{has_usable_rowid, real_text, table_columns};
 use super::{open_existing, query_err};
+use crate::backup::data::{
+    PendingRows, SnapshotFacts, SnapshotRead, TableAsk, TableFacts, snapshot_channel,
+    snapshot_opened,
+};
+use crate::backup::structure::sqlite::read_structure;
 use crate::common::{quote_double, sql_scoped};
 use crate::error::{Error, Result};
 use crate::jobs::source::{
     Opened, Producer, RowSource, SourceColumn, SourceRequest, Value, check_one_statement,
-    checked_query, start_source, value_kind,
+    checked_query, source_channel, start_source, value_kind,
 };
-use crate::model::DialectKind;
+use crate::model::{DialectKind, ObjectPath};
 use crate::query::Canceller;
 
 struct Interrupt(rusqlite::InterruptHandle);
@@ -53,27 +58,39 @@ pub(super) async fn open(path: PathBuf, req: &SourceRequest) -> Result<Box<dyn R
 }
 
 fn produce(path: &std::path::Path, req: &SourceRequest, p: Producer) {
-    let Producer { ready, mut feed } = p;
     // Read-only whatever the Connection is: the export only reads.
     let conn = match open_existing(path, true) {
         Ok(c) => c,
         Err(e) => {
-            let _ = ready.send(Err(e));
+            let _ = p.ready.send(Err(e));
             return;
         }
     };
     let server: Arc<dyn Canceller> = Arc::new(Interrupt(conn.get_interrupt_handle()));
     if let Err(e) = conn.execute_batch("BEGIN") {
-        let _ = ready.send(Err(query_err(e)));
+        let _ = p.ready.send(Err(query_err(e)));
         return;
     }
-    let (sql, estimate) = match plan(&conn, req) {
+    let planned = match plan(&conn, req) {
         Ok(planned) => planned,
         Err(e) => {
-            let _ = ready.send(Err(e));
+            let _ = p.ready.send(Err(e));
             return;
         }
     };
+    stream(&conn, planned, server, p);
+}
+
+/// Runs the planned SELECT on `conn`, sends `ready`, and steps it into the feed until
+/// the end, a failure or a stop.
+fn stream(
+    conn: &Connection,
+    planned: (String, Option<u64>),
+    server: Arc<dyn Canceller>,
+    p: Producer,
+) {
+    let Producer { ready, mut feed } = p;
+    let (sql, estimate) = planned;
     let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(e) => {
@@ -141,6 +158,7 @@ fn produce(path: &std::path::Path, req: &SourceRequest, p: Producer) {
             }
         }
     }
+    drop(rows);
     feed.finish_blocking();
 }
 
@@ -200,6 +218,125 @@ fn value_of(v: ValueRef<'_>) -> Value {
         },
         ValueRef::Blob(b) => Value::Bytes(b.to_vec()),
     }
+}
+
+// ---- The Backup's snapshot (step 9) ----
+
+/// Opens the Backup's read transaction on a read-only connection of its own, on a
+/// thread of its own; see `Dialect::open_backup_read`. A SQLite file is one database,
+/// so every table's rows are counted (the counts cost one scan each).
+pub(super) async fn backup_read(path: PathBuf) -> Result<SnapshotRead> {
+    let (ready, opened, asks_tx, asks) = snapshot_channel();
+    std::thread::Builder::new()
+        .name("contura-sqlite-backup".into())
+        .spawn(move || {
+            let conn = match open_existing(&path, true) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = ready.send(Err(e));
+                    return;
+                }
+            };
+            let facts = snapshot_facts(&conn);
+            let ok = facts.is_ok();
+            if ready.send(facts).is_ok() && ok {
+                serve(&conn, asks);
+            }
+            // Dropping the connection ends the read transaction.
+        })
+        .map_err(|e| Error::Query(format!("cannot start the backup read: {e}")))?;
+    snapshot_opened(opened, asks_tx).await
+}
+
+fn snapshot_facts(conn: &Connection) -> Result<SnapshotFacts> {
+    conn.execute_batch("BEGIN").map_err(query_err)?;
+    let parts = read_structure(conn)?;
+    let mut tables = Vec::with_capacity(parts.tables.len());
+    for name in &parts.tables {
+        let n: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM main.{}", quote_double(name)),
+                [],
+                |r| r.get(0),
+            )
+            .map_err(query_err)?;
+        tables.push(TableFacts {
+            name: name.clone(),
+            rows: n.max(0) as u64,
+        });
+    }
+    let pages: i64 = conn
+        .query_row("PRAGMA main.page_count", [], |r| r.get(0))
+        .map_err(query_err)?;
+    let size: i64 = conn
+        .query_row("PRAGMA main.page_size", [], |r| r.get(0))
+        .map_err(query_err)?;
+    Ok(SnapshotFacts {
+        parts,
+        tables,
+        data_bytes: (pages.max(0) * size.max(0)) as u64,
+        non_snapshot: Vec::new(),
+    })
+}
+
+/// Serves each asked table's rows on the snapshot's connection. `PRAGMA table_info`
+/// leaves generated columns out, so the SELECT reads every other column.
+fn serve(conn: &Connection, mut asks: tokio::sync::mpsc::Receiver<TableAsk>) {
+    let server: Arc<dyn Canceller> = Arc::new(Interrupt(conn.get_interrupt_handle()));
+    while let Some(ask) = asks.blocking_recv() {
+        let req = SourceRequest::Table {
+            path: ObjectPath {
+                database: "main".into(),
+                schema: None,
+                name: ask.table.clone(),
+            },
+            columns: Vec::new(),
+            filter: None,
+            sort: None,
+            keys: Vec::new(),
+        };
+        let planned = plan(conn, &req).and_then(|p| {
+            let path = req.table_parts().map(|t| t.path.clone());
+            let key = match path {
+                Some(path) => table_columns(conn, &path)?
+                    .into_iter()
+                    .filter(|c| c.is_primary_key)
+                    .map(|c| c.name)
+                    .collect(),
+                None => Vec::new(),
+            };
+            Ok((p, key))
+        });
+        match planned {
+            Err(e) => {
+                let _ = ask.reply.send(Err(e));
+            }
+            Ok((planned, key)) => {
+                let (producer, pending) = source_channel();
+                let rows = PendingRows {
+                    source: pending,
+                    overriding: false,
+                    key,
+                };
+                if ask.reply.send(Ok(rows)).is_err() {
+                    return;
+                }
+                stream(conn, planned, server.clone(), producer);
+            }
+        }
+    }
+}
+
+/// An exact copy of the file at `path` into `into` (which exists and is empty), made
+/// with `VACUUM INTO` on a read-only connection.
+pub(super) fn file_copy(path: &std::path::Path, into: &std::path::Path) -> Result<()> {
+    let conn = open_existing(path, true)?;
+    let target = into
+        .to_str()
+        .ok_or_else(|| Error::InvalidInput("The file path is not valid text.".into()))?;
+    conn.execute("VACUUM INTO ?1", [target])
+        .map_err(query_err)?;
+    Ok(())
 }
 
 /// Whether the file is in WAL mode, from the browse connection.

@@ -143,3 +143,27 @@ test("a_report_without_a_file_names_no_empty_file", async () => {
   );
   expect(await screen.findByText("Exported 3 rows")).toBeTruthy();
 });
+
+test("a_background_backup_announces_its_end_with_its_database", async () => {
+  const report: JobReport = {
+    kind: "backup",
+    rowsRead: 742_818,
+    rowsWritten: 742_818,
+    statements: 1503,
+    skipped: 0,
+    warnings: [],
+    elapsedMs: 214_000,
+    file: "E:\\Backups\\freight-2026-10-17.sql",
+    bytes: Math.round(48.2 * 1024 * 1024),
+    committed: 0,
+    check: null,
+  };
+  const backup = job({ id: "b1", kind: "backup", label: "Backing up", subject: "freight", done: { report } });
+  render(
+    <ToastProvider>
+      <JobStatusItem jobs={[backup]} onOpen={() => {}} />
+    </ToastProvider>,
+  );
+  expect(await screen.findByText("Backed up freight to freight-2026-10-17.sql, 48.2 MB")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open folder" })).toBeTruthy();
+});

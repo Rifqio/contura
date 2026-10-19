@@ -1,6 +1,6 @@
 import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { connectionTarget, deleteSavedQuery, DIALECT_LABEL, errorText } from "../api/client";
-import type { ConnectionConfig, ConnectionId, Group, GroupId, ObjectKind, ObjectPath, SavedQuery } from "../api/types";
+import type { ConnectionConfig, ConnectionId, Group, GroupId, ObjectKind, ObjectPath, RestoreTarget, SavedQuery } from "../api/types";
 import { hintFor } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
 import DbMark from "../components/DbMark";
@@ -64,6 +64,10 @@ export interface OneTreeProps {
   onImportTable?(s: Selection): void;
   /** "Transfer data..." on a database (MySQL, SQLite), schema (PostgreSQL) or table row (step 8). */
   onTransfer?(seed: TransferSeed): void;
+  /** "Back up..." on a database (MySQL, SQLite) or schema (PostgreSQL) row (step 9). */
+  onBackup?(target: { connectionId: ConnectionId; database: string; schema: string | null }): void;
+  /** "Restore..." on a database, schema or Connection row; `database: null` restores Into a new database. */
+  onRestore?(target: RestoreTarget): void;
   onMoveConnection(id: ConnectionId, group: GroupId | null): void;
   onNewGroup(): void;
   /** Asked for after the tree's own confirmation. */
@@ -471,6 +475,20 @@ export default function OneTree(props: OneTreeProps) {
     };
   }
 
+  /** Back up... (where the row is what a Backup holds) and Restore..., when the App offers them. */
+  function backupItems(connectionId: ConnectionId, database: string, schema: string | null, backUp: boolean): MenuItem[] {
+    const items: MenuItem[] = [];
+    const backup = props.onBackup;
+    if (backup && backUp) {
+      items.push({ key: "backup", label: "Back up...", icon: <Icon name="save" />, onSelect: () => backup({ connectionId, database, schema }) });
+    }
+    const restore = props.onRestore;
+    if (restore) {
+      items.push({ key: "restore", label: "Restore...", icon: <Icon name="history" />, onSelect: () => restore({ connectionId, database, schema }) });
+    }
+    return items;
+  }
+
   function menuFor(row: TreeRow): { label: string; items: MenuItem[] } | null {
     const n = row.node;
     switch (n.kind) {
@@ -487,6 +505,7 @@ export default function OneTree(props: OneTreeProps) {
               newQuery: () => props.onNewQuery(c.id),
               newVisualQuery: () => props.onNewVisualQuery(c.id),
               newSchemaModel: () => props.onNewSchemaModel(c.id, c.dialect === "sqlite" ? "main" : (c.database ?? ""), null),
+              ...(props.onRestore && { restore: () => props.onRestore?.({ connectionId: c.id, database: null, schema: null }) }),
               edit: () => props.onEditConnection(c),
               duplicate: () => props.onDuplicateConnection(c),
               copyHost: () => copyHost(c),
@@ -531,6 +550,7 @@ export default function OneTree(props: OneTreeProps) {
             onSelect: () => transfer({ connectionId: n.connectionId, database: n.name, schema: null, table: null }),
           });
         }
+        items.push(...backupItems(n.connectionId, n.name, null, c?.dialect !== "postgres"));
         return { label: n.name, items };
       }
       case "schema": {
@@ -555,6 +575,7 @@ export default function OneTree(props: OneTreeProps) {
                   },
                 ]
               : []),
+            ...backupItems(n.connectionId, n.database, n.name, true),
           ],
         };
       }

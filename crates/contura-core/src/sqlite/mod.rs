@@ -101,17 +101,41 @@ pub fn create_database(path: &Path) -> Result<()> {
             path.display()
         )));
     }
+    // Create-new: a file that appeared since the check above is never taken over.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(Error::InvalidInput(format!(
+                "a file already exists at {}. Pick a new file name",
+                path.display()
+            )));
+        }
+        Err(e) => {
+            return Err(Error::InvalidInput(format!(
+                "cannot create {}: {e}",
+                path.display()
+            )));
+        }
+    }
     let fail =
         |e: rusqlite::Error| Error::InvalidInput(format!("cannot create {}: {e}", path.display()));
-    let conn = Connection::open_with_flags(
+    let made = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(fail)?;
-    // A fresh file stays zero bytes until something is written; this gives it a header.
-    conn.pragma_update(None, "user_version", 0).map_err(fail)?;
+    .and_then(|conn| {
+        // A fresh file stays zero bytes until something is written; this gives it a header.
+        conn.pragma_update(None, "user_version", 0)
+    });
+    if let Err(e) = made {
+        // The empty file this call made is not left behind.
+        let _ = std::fs::remove_file(path);
+        return Err(fail(e));
+    }
     Ok(())
 }
 
@@ -526,6 +550,25 @@ impl Dialect for SqliteDialect {
         // A SQLite Connection is one file: `database` names nothing more to open.
         let _ = database;
         writer::open(self.path.clone(), self.read_only, setup.clone()).await
+    }
+
+    /// A SQLite file is one database: `database` and `schema` are not used, and every
+    /// table's rows are counted whatever `count_rows` says.
+    async fn open_backup_read(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        _count_rows: bool,
+    ) -> Result<crate::backup::data::SnapshotRead> {
+        source::backup_read(self.path.clone()).await
+    }
+
+    async fn backup_file_copy(&self, into: &Path) -> Result<()> {
+        let path = self.path.clone();
+        let into = into.to_path_buf();
+        tokio::task::spawn_blocking(move || source::file_copy(&path, &into))
+            .await
+            .map_err(|e| Error::Query(format!("the file copy stopped: {e}")))?
     }
 
     async fn disconnect(&self) -> Result<()> {

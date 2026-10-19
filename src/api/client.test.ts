@@ -16,8 +16,8 @@ test("fileName_is_the_last_part_of_either_path_style", () => {
   expect(fileName("orders.csv")).toBe("orders.csv");
 });
 import type { ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
-import type { ExportRequest, ImportRequest, JobEvent, ScriptRequest, TransferRequest } from "./types";
-import { DEFAULT_EXPORT_OPTIONS, DEFAULT_IMPORT_OPTIONS } from "./types";
+import type { BackupRequest, ExportRequest, ImportRequest, JobEvent, RestoreRequest, ScriptRequest, TransferRequest } from "./types";
+import { DEFAULT_BACKUP_INCLUDE, DEFAULT_EXPORT_OPTIONS, DEFAULT_IMPORT_OPTIONS } from "./types";
 import * as jobs from "./jobs";
 
 const exportReq: ExportRequest = {
@@ -135,6 +135,49 @@ test("jobs_functions_invoke_their_commands_with_the_spec_argument_names", async 
   await jobs.readTextFile("C:\\in\\flow.mmd");
   expect(mock).toHaveBeenLastCalledWith("read_text_file", { path: "C:\\in\\flow.mmd" });
   mock.mockReset();
+});
+
+test("backup_and_restore_functions_invoke_the_step9_commands", async () => {
+  const mock = vi.mocked(invoke);
+  mock.mockResolvedValue(undefined);
+  const onEvent = vi.fn();
+  const sent = (cmd: string) => {
+    const call = mock.mock.calls.filter(([c]) => c === cmd).slice(-1)[0];
+    const { events, ...rest } = call[1] as Record<string, unknown>;
+    return { rest, hasEvents: events !== undefined };
+  };
+  const backupReq: BackupRequest = {
+    connectionId: "c1",
+    database: "freight",
+    schema: "billing",
+    include: DEFAULT_BACKUP_INCLUDE,
+    format: "script",
+    rowsPerStatement: 500,
+    addDropTables: false,
+    path: "E:/Backups/freight-2026-10-17.sql",
+  };
+  await jobs.planBackup(backupReq);
+  expect(mock).toHaveBeenLastCalledWith("plan_backup", { req: backupReq });
+  await expect(jobs.startBackup("b1", backupReq, false, onEvent)).resolves.toBe("b1");
+  expect(sent("start_backup")).toEqual({ rest: { job: "b1", req: backupReq, overwrite: false }, hasEvents: true });
+
+  const target = { connectionId: "c1", database: "freight", schema: null };
+  await expect(jobs.inspectRestore("r1", target, "E:/Backups/f.sql", onEvent)).resolves.toBe("r1");
+  expect(sent("inspect_restore")).toEqual({ rest: { job: "r1", target, path: "E:/Backups/f.sql" }, hasEvents: true });
+  const restoreReq: RestoreRequest = { target, path: "E:/Backups/f.sql", mode: { kind: "newDatabase", name: "freight_restore_1017" }, runAsIs: false };
+  await jobs.planRestore(restoreReq);
+  expect(mock).toHaveBeenLastCalledWith("plan_restore", { req: restoreReq });
+  await jobs.restoreStatements(restoreReq, 50);
+  expect(mock).toHaveBeenLastCalledWith("restore_statements", { req: restoreReq, from: 50 });
+  await jobs.confirmRestore(restoreReq);
+  expect(mock).toHaveBeenLastCalledWith("confirm_restore", { req: restoreReq });
+  await expect(jobs.startRestore("r2", restoreReq, "fp1", "p9", onEvent)).resolves.toBe("r2");
+  expect(sent("start_restore")).toEqual({ rest: { job: "r2", req: restoreReq, fingerprint: "fp1", pass: "p9" }, hasEvents: true });
+  mock.mockReset();
+
+  expect(errorText({ kind: "backupRefused", message: { reason: "Line 2,041: DROP DATABASE is not run by Restore." } })).toBe(
+    "Line 2,041: DROP DATABASE is not run by Restore.",
+  );
 });
 
 test("newJobId_makes_a_fresh_uuid", () => {

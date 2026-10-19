@@ -1,5 +1,7 @@
+use std::path::Path;
 use std::sync::Arc;
 
+use crate::backup::data::SnapshotRead;
 use crate::design::{DesignOutcome, DesignPlan, TableDesign};
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::Result;
@@ -98,6 +100,31 @@ pub trait Dialect: Send + Sync {
         database: Option<&str>,
         setup: &WriterSetup,
     ) -> Result<Box<dyn BulkWriter>>;
+    /// Step 9: one read snapshot for a Backup of `database` (PostgreSQL: of `schema` in
+    /// it) on a connection of its own, its session in UTC, read only whatever the
+    /// Connection is. It reads the structure inside the snapshot, then serves each
+    /// table's rows from the same snapshot in primary key order, generated columns left
+    /// out. `count_rows` counts every table's rows inside the snapshot; otherwise the
+    /// server's estimates are given. Dropping the read ends the snapshot.
+    async fn open_backup_read(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        count_rows: bool,
+    ) -> Result<SnapshotRead> {
+        let _ = (database, schema, count_rows);
+        Err(crate::error::Error::InvalidInput(
+            "This database type cannot be backed up.".into(),
+        ))
+    }
+    /// SQLite only: an exact copy of the database file into `into`, which exists and is
+    /// empty (`VACUUM INTO` on a read-only connection).
+    async fn backup_file_copy(&self, into: &Path) -> Result<()> {
+        let _ = into;
+        Err(crate::error::Error::InvalidInput(
+            "Only a SQLite database can be copied as a file.".into(),
+        ))
+    }
     async fn disconnect(&self) -> Result<()>;
 }
 

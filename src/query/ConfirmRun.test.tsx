@@ -370,3 +370,43 @@ test("job_script_list_interleaves_exact_and_shapes", () => {
   expect(screen.queryByRole("button", { name: "Show all" })).toBeNull();
   expect(screen.getByRole("dialog").textContent).not.toContain("fingerprinted");
 });
+
+test("restore_verb_with_its_own_body_banner_and_fingerprint_sentence", () => {
+  render(
+    <ConfirmRun
+      verb="Restore"
+      verdict={{ connection: "freight-prod", database: "freight_restore_1017" }}
+      danger
+      banner={<p>Replace drops 6 tables in freight.</p>}
+      job={{
+        title: "Creates freight_restore_1017. All of it writes.",
+        shapes: [],
+        fingerprintText: "Checked file: 48.2 MB, SHA-256 9f3c 1a7e ... e21a. If the file changes before the run, Contura asks again.",
+        body: <p>the restore body</p>,
+      }}
+      onRun={() => {}}
+      onCancel={() => {}}
+    />,
+  );
+  expect(screen.getByRole("heading").textContent).toBe("Restore on freight-prod · freight_restore_1017");
+  expect(screen.getByText("the restore body")).toBeTruthy();
+  expect(screen.getByText("Replace drops 6 tables in freight.")).toBeTruthy();
+  expect(screen.getByText(/^Checked file: 48.2 MB/)).toBeTruthy();
+  expect(screen.getByText("Enter runs only when Restore on freight-prod has focus. Press Tab to reach it, or click it.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Restore on freight-prod" }).className).toContain("button-danger-fill");
+});
+
+test("a_plain_connection_has_no_prod_chip_and_the_bare_verb", () => {
+  render(
+    <ConfirmRun
+      verb="Restore"
+      production={false}
+      verdict={{ connection: "freight-dev", database: "freight" }}
+      job={{ title: "Creates 6 tables. All of it writes.", shapes: [] }}
+      onRun={() => {}}
+      onCancel={() => {}}
+    />,
+  );
+  expect(screen.queryByText("Production")).toBeNull();
+  expect(screen.getByRole("button", { name: "Restore" }).className).toContain("button-primary");
+});

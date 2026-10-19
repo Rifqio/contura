@@ -8,13 +8,18 @@ use tokio_postgres::{Client, SimpleQueryMessage};
 
 use super::page::{ColumnKind, order_term, relation};
 use super::{Settings, open_client, query_err, session, session::session_err};
+use crate::backup::data::{
+    PendingRows, SnapshotFacts, SnapshotRead, TableAsk, TableFacts, snapshot_channel,
+    snapshot_opened,
+};
+use crate::backup::structure::postgres::read_structure;
 use crate::common::{decode_hex, quote_double};
 use crate::error::{Error, Result};
 use crate::jobs::source::{
     CHUNK_BYTES, Opened, Producer, RowSource, SourceColumn, SourceRequest, Value,
-    check_one_statement, checked_query, start_source, value_kind,
+    check_one_statement, checked_query, source_channel, start_source, value_kind,
 };
-use crate::model::DialectKind;
+use crate::model::{DialectKind, ObjectPath};
 
 /// The most rows one FETCH asks for.
 const MAX_FETCH: u64 = 1_000;
@@ -107,42 +112,68 @@ async fn produce(
     req: SourceRequest,
     p: Producer,
 ) {
-    let Producer { ready, mut feed } = p;
     let client = match open_client(&settings, &database).await {
         Ok(c) => c,
         Err(e) => {
-            let _ = ready.send(Err(e));
+            let _ = p.ready.send(Err(e));
             return;
         }
     };
-    let (sql, carry, columns, estimate) = match plan(&client, &req, read_only).await {
+    let planned = match plan(&client, &req, read_only).await {
         Ok(planned) => planned,
         Err(e) => {
-            let _ = ready.send(Err(e));
+            let _ = p.ready.send(Err(e));
             return;
         }
     };
-    let declare = format!("DECLARE contura_export NO SCROLL CURSOR FOR {sql}");
+    let on = Cursor {
+        client: &client,
+        settings: &settings,
+        database: &database,
+        read_only,
+        name: "contura_export",
+    };
+    stream(&on, planned, p).await;
+    // Dropping the client closes the connection, which ends the read-only transaction.
+}
+
+/// Where a cursor read runs: the client in its transaction, and the cursor's name.
+struct Cursor<'a> {
+    client: &'a Client,
+    settings: &'a Settings,
+    database: &'a str,
+    read_only: bool,
+    name: &'a str,
+}
+
+/// Declares the cursor for `planned`, sends `ready`, and fetches into the feed until
+/// the end, a failure or a stop. The cursor is left open; the caller closes it or ends
+/// the transaction.
+async fn stream(on: &Cursor<'_>, planned: Plan, p: Producer) {
+    let Producer { ready, mut feed } = p;
+    let (sql, carry, columns, estimate) = planned;
+    let client = on.client;
+    let declare = format!("DECLARE {} NO SCROLL CURSOR FOR {sql}", on.name);
     if let Err(e) = client.batch_execute(&declare).await {
-        let _ = ready.send(Err(session_err(e, read_only)));
+        let _ = ready.send(Err(session_err(e, on.read_only)));
         return;
     }
     let opened = Opened {
         columns,
         estimate,
         sql,
-        server: session::canceller(&client, settings.tls.clone()),
+        server: session::canceller(client, on.settings.tls.clone()),
     };
     if ready.send(Ok(opened)).is_err() {
         return;
     }
     let mut size = FetchSize::new();
     loop {
-        let fetch = format!("FETCH FORWARD {} FROM contura_export", size.rows());
+        let fetch = format!("FETCH FORWARD {} FROM {}", size.rows(), on.name);
         let messages = match client.simple_query(&fetch).await {
             Ok(m) => m,
             Err(e) => {
-                feed.fail(session_err(e, read_only)).await;
+                feed.fail(session_err(e, on.read_only)).await;
                 return;
             }
         };
@@ -165,21 +196,22 @@ async fn produce(
                 .collect();
             drop(row);
             if !feed.push(values).await {
-                // Cancelled or dropped: dropping the client ends the transaction.
+                // Cancelled or dropped: the caller ends the transaction.
                 return;
             }
         }
         #[cfg(any(test, feature = "test-util"))]
         if let Ok(mut log) = FETCHES.lock() {
-            log.push((database.clone(), fetched, bytes));
+            log.push((on.database.to_string(), fetched, bytes));
         }
+        #[cfg(not(any(test, feature = "test-util")))]
+        let _ = on.database;
         if fetched == 0 {
             break;
         }
         size.after(fetched, bytes);
     }
     feed.finish().await;
-    // Dropping the client closes the connection, which ends the read-only transaction.
 }
 
 type Plan = (String, Vec<Carry>, Vec<SourceColumn>, Option<u64>);
@@ -190,6 +222,11 @@ async fn plan(client: &Client, req: &SourceRequest, read_only: bool) -> Result<P
         .batch_execute("SET TimeZone = 'UTC'; BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .await
         .map_err(query_err)?;
+    plan_select(client, req, read_only).await
+}
+
+/// The SELECT and how to carry its values, inside a transaction already open.
+async fn plan_select(client: &Client, req: &SourceRequest, read_only: bool) -> Result<Plan> {
     let Some(parts) = req.table_parts() else {
         let SourceRequest::Query { sql, .. } = req else {
             unreachable!("not a table, so a query");
@@ -308,6 +345,193 @@ fn value_of(text: Option<&str>, carry: Carry) -> Value {
         Carry::Number => Value::Number(text.to_string()),
         Carry::Text => Value::Text(text.to_string()),
     }
+}
+
+// ---- The Backup's snapshot (step 9) ----
+
+/// The cursor each Backup table is read through, closed after the table.
+const BACKUP_CURSOR: &str = "contura_backup";
+
+/// Opens the Backup's snapshot of `schema` in `database` on a client of its own; see
+/// `Dialect::open_backup_read`.
+pub(super) async fn backup_read(
+    settings: Settings,
+    database: String,
+    schema: String,
+    read_only: bool,
+    count_rows: bool,
+) -> Result<SnapshotRead> {
+    let (ready, opened, asks_tx, asks) = snapshot_channel();
+    tokio::spawn(async move {
+        let client = match open_client(&settings, &database).await {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = ready.send(Err(e));
+                return;
+            }
+        };
+        let facts = snapshot_facts(&client, &schema, count_rows).await;
+        let ok = facts.is_ok();
+        if ready.send(facts).is_ok() && ok {
+            let on = Cursor {
+                client: &client,
+                settings: &settings,
+                database: &database,
+                read_only,
+                name: BACKUP_CURSOR,
+            };
+            serve(&on, &schema, asks).await;
+        }
+        // Dropping the client closes the connection, which ends the transaction.
+    });
+    snapshot_opened(opened, asks_tx).await
+}
+
+async fn snapshot_facts(client: &Client, schema: &str, count_rows: bool) -> Result<SnapshotFacts> {
+    client
+        .batch_execute("SET TimeZone = 'UTC'; BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .await
+        .map_err(query_err)?;
+    // It sets `search_path` to '' for the rest of the session.
+    let parts = read_structure(client, schema).await?;
+    let stats = client
+        .query(
+            "SELECT c.relname::text, c.reltuples::float8, pg_catalog.pg_table_size(c.oid) \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relkind = 'r'",
+            &[&schema],
+        )
+        .await
+        .map_err(query_err)?;
+    let mut tables = Vec::with_capacity(parts.tables.len());
+    let mut data_bytes = 0u64;
+    for name in &parts.tables {
+        let stat = stats.iter().find(|r| r.get::<_, String>(0) == *name);
+        let estimate = stat.map_or(-1.0, |r| r.get::<_, f64>(1));
+        data_bytes += stat.map_or(0, |r| r.get::<_, i64>(2).max(0) as u64);
+        // A table never analyzed has no estimate (-1): its rows are counted.
+        let rows = if count_rows || estimate < 0.0 {
+            let row = client
+                .query_one(
+                    &format!(
+                        "SELECT count(*) FROM {}.{}",
+                        quote_double(schema),
+                        quote_double(name)
+                    ),
+                    &[],
+                )
+                .await
+                .map_err(query_err)?;
+            row.get::<_, i64>(0).max(0) as u64
+        } else {
+            estimate.round() as u64
+        };
+        tables.push(TableFacts {
+            name: name.clone(),
+            rows,
+        });
+    }
+    Ok(SnapshotFacts {
+        parts,
+        tables,
+        data_bytes,
+        non_snapshot: Vec::new(),
+    })
+}
+
+/// Serves each asked table's rows on the snapshot's client, one after the other.
+async fn serve(on: &Cursor<'_>, schema: &str, mut asks: tokio::sync::mpsc::Receiver<TableAsk>) {
+    while let Some(ask) = asks.recv().await {
+        let planned = async {
+            let BackupColumns {
+                columns,
+                overriding,
+                key,
+            } = backup_columns(on.client, schema, &ask.table).await?;
+            let req = SourceRequest::Table {
+                path: ObjectPath {
+                    database: on.database.to_string(),
+                    schema: Some(schema.to_string()),
+                    name: ask.table.clone(),
+                },
+                columns,
+                filter: None,
+                sort: None,
+                keys: Vec::new(),
+            };
+            Ok::<_, Error>((
+                plan_select(on.client, &req, on.read_only).await?,
+                overriding,
+                key,
+            ))
+        }
+        .await;
+        match planned {
+            Err(e) => {
+                let _ = ask.reply.send(Err(e));
+            }
+            Ok((plan, overriding, key)) => {
+                let (producer, pending) = source_channel();
+                let rows = PendingRows {
+                    source: pending,
+                    overriding,
+                    key,
+                };
+                if ask.reply.send(Ok(rows)).is_err() {
+                    return;
+                }
+                stream(on, plan, producer).await;
+                // A read stopped early leaves its cursor open; the next table needs the name.
+                let _ = on.client.batch_execute(&format!("CLOSE {}", on.name)).await;
+            }
+        }
+    }
+}
+
+/// The table's columns the Backup writes (all but generated ones), its key, and whether one of
+/// them is an ALWAYS identity, which needs `OVERRIDING SYSTEM VALUE`.
+async fn backup_columns(client: &Client, schema: &str, table: &str) -> Result<BackupColumns> {
+    let rows = client
+        .query(
+            "SELECT a.attname::text, a.attgenerated::text, a.attidentity::text, \
+             EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = a.attrelid \
+                     AND i.indisprimary AND a.attnum = ANY (i.indkey)) \
+             FROM pg_catalog.pg_attribute a \
+             JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped \
+             ORDER BY a.attnum",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(query_err)?;
+    let mut out = BackupColumns::default();
+    for r in rows {
+        let name: String = r.get(0);
+        if r.get::<_, bool>(3) {
+            out.key.push(name.clone());
+        }
+        let generated: String = r.get(1);
+        if !generated.is_empty() {
+            continue;
+        }
+        let identity: String = r.get(2);
+        out.overriding |= identity == "a";
+        out.columns.push(name);
+    }
+    Ok(out)
+}
+
+/// A table's columns as the Backup reads them.
+#[derive(Default)]
+struct BackupColumns {
+    /// All but generated ones.
+    columns: Vec<String>,
+    /// One of them is an ALWAYS identity.
+    overriding: bool,
+    /// The primary key's columns.
+    key: Vec<String>,
 }
 
 #[cfg(test)]

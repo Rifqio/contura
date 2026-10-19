@@ -335,6 +335,15 @@ impl JobCtx {
 
     /// Sent at most every 100 ms; the latest is always kept for `attach`.
     pub fn progress(&self, p: JobProgress) {
+        self.send_progress(p, false);
+    }
+
+    /// Sent whatever the 100 ms limit says: a step's last event (a table's end).
+    pub fn progress_now(&self, p: JobProgress) {
+        self.send_progress(p, true);
+    }
+
+    fn send_progress(&self, p: JobProgress, now_anyway: bool) {
         let percent = p.percent();
         let json = to_json(&JobEvent::from(p));
         let sinks = {
@@ -347,9 +356,9 @@ impl JobCtx {
             r.summary.percent = percent;
             r.last_progress = Some(json.clone());
             let now = Instant::now();
-            let due = r
-                .last_sent
-                .is_none_or(|t| now.duration_since(t) >= PROGRESS_EVERY);
+            let due = now_anyway
+                || r.last_sent
+                    .is_none_or(|t| now.duration_since(t) >= PROGRESS_EVERY);
             if !due {
                 return;
             }

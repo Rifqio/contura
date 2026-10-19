@@ -98,6 +98,9 @@ pub enum Error {
     /// A diagram `name` is saved already and the request did not say to replace it.
     #[error("{name}.flow already exists.")]
     DiagramExists { name: String },
+    /// Restore refuses a Backup file; `reason` is the sentence to show.
+    #[error("{reason}")]
+    BackupRefused { reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

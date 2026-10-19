@@ -11,6 +11,8 @@ export interface ConnectionMenuActions {
   /** Opens a Visual Query tab on the Connection, opening it first when closed. */
   newVisualQuery(): void;
   newSchemaModel(): void;
+  /** "Restore..." Into a new database (step 9); the item shows only when set. */
+  restore?(): void;
   edit(): void;
   duplicate(): void;
   copyHost(): void;
@@ -62,6 +64,7 @@ export function connectionMenu(c: ConnectionConfig, ctx: ConnectionMenuContext, 
     { key: "new-query", label: "New query", icon: icon("fileQuery"), shortcut: ctx.newQueryKey, onSelect: act.newQuery },
     { key: "new-visual", label: "New Visual Query", icon: icon("visualQuery"), onSelect: act.newVisualQuery },
     { key: "new-model", label: "New Schema Model...", icon: icon("layers"), onSelect: act.newSchemaModel },
+    ...(act.restore ? [{ key: "restore", label: "Restore...", icon: icon("history"), onSelect: act.restore }] : []),
     { key: "edit", label: "Edit Connection...", icon: icon("edit"), separatorBefore: true, onSelect: act.edit },
     { key: "duplicate", label: "Duplicate", icon: icon("duplicate"), onSelect: act.duplicate },
     { key: "copy-host", label: c.dialect === "sqlite" ? "Copy file path" : "Copy host", icon: icon("copy"), onSelect: act.copyHost },

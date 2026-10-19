@@ -569,6 +569,8 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `The rows were committed, but ${e.message.sql} failed afterwards: ${e.message.message}.`;
     case "diagramExists":
       return `${e.message.name}.flow already exists.`;
+    case "backupRefused":
+      return e.message.reason;
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

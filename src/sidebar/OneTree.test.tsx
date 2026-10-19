@@ -1307,3 +1307,39 @@ test("transfer_data_on_database_schema_and_table_rows", async () => {
   await userEvent.click(screen.getByRole("menuitem", { name: "Transfer data..." }));
   expect(onTransfer).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "sales", table: null });
 });
+
+test("back_up_and_restore_on_database_schema_and_connection_rows", async () => {
+  routeMy();
+  const onBackup = vi.fn();
+  const onRestore = vi.fn();
+  const { unmount } = render(
+    <Harness connections={[conn("a", "Shop")]} open={["a"]} {...handlers()} onBackup={onBackup} onRestore={onRestore} />,
+  );
+  await findItem("orders");
+  fireEvent.contextMenu(item("shop"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Back up..." }));
+  expect(onBackup).toHaveBeenLastCalledWith({ connectionId: "a", database: "shop", schema: null });
+  fireEvent.contextMenu(item("shop"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Restore..." }));
+  expect(onRestore).toHaveBeenLastCalledWith({ connectionId: "a", database: "shop", schema: null });
+  // A Connection row restores Into a new database.
+  await userEvent.click(screen.getByRole("button", { name: "More actions for Shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Restore..." }));
+  expect(onRestore).toHaveBeenLastCalledWith({ connectionId: "a", database: null, schema: null });
+  unmount();
+
+  // PostgreSQL backs up a schema: the schema row offers Back up, the database row only Restore.
+  routePg();
+  render(<Harness connections={[pgConn]} open={["p"]} {...handlers()} onBackup={onBackup} onRestore={onRestore} />);
+  await findItem("public");
+  await userEvent.click(within(item("shop")).getByRole("button", { name: "More actions for shop" }));
+  expect(screen.queryByRole("menuitem", { name: "Back up..." })).toBeNull();
+  expect(screen.getByRole("menuitem", { name: "Restore..." })).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(within(item("sales")).getByRole("button", { name: "More actions for sales" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Back up..." }));
+  expect(onBackup).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "sales" });
+  await userEvent.click(within(item("sales")).getByRole("button", { name: "More actions for sales" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Restore..." }));
+  expect(onRestore).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "sales" });
+});

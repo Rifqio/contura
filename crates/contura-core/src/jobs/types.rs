@@ -23,6 +23,12 @@ pub enum JobKind {
     Check,
     /// Data Transfer (step 8).
     Transfer,
+    /// A Backup (step 9).
+    Backup,
+    /// A Restore's check pass (step 9).
+    RestoreCheck,
+    /// Restore of a Backup (step 9).
+    Restore,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -480,6 +486,28 @@ pub struct JobProgress {
     /// `rows_total` count every table, so the status bar shows the whole run.
     pub table_rows: Option<u64>,
     pub table_total: Option<u64>,
+    /// A Backup: the tables whose rows are written so far, and in all.
+    pub tables_done: Option<u64>,
+    pub tables_total: Option<u64>,
+    /// A Restore: its phase in the running state's list.
+    pub restore_step: Option<RestoreStep>,
+    /// A Restore: the INSERT statements run so far.
+    pub inserts_done: Option<u64>,
+    /// A Restore: the statement running now, such as
+    /// "INSERT INTO billing.order_items, rows 154,001 to 154,500".
+    pub now: Option<String>,
+}
+
+/// A Restore's phase, as the running state lists them.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RestoreStep {
+    Database,
+    Structure,
+    Rows,
+    AfterRows,
+    Sequences,
+    Counts,
 }
 
 impl JobProgress {
@@ -519,6 +547,16 @@ pub enum JobEvent {
         table_rows: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         table_total: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tables_done: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tables_total: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        restore_step: Option<RestoreStep>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        inserts_done: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        now: Option<String>,
     },
     Warning {
         message: String,
@@ -553,6 +591,11 @@ impl From<JobProgress> for JobEvent {
             file_row: p.file_row,
             table_rows: p.table_rows,
             table_total: p.table_total,
+            tables_done: p.tables_done,
+            tables_total: p.tables_total,
+            restore_step: p.restore_step,
+            inserts_done: p.inserts_done,
+            now: p.now,
         }
     }
 }
@@ -589,6 +632,12 @@ pub struct JobReport {
     pub bytes: u64,
     pub committed: u64,
     pub check: Option<CheckReport>,
+    /// A Restore's check pass (`inspect_restore`): what it found.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub restore_check: Option<Box<crate::backup::restore::RestoreCheck>>,
+    /// A finished Restore run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restore: Option<crate::backup::restore::RestoreOutcome>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]

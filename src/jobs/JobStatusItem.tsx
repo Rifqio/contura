@@ -2,11 +2,37 @@ import { useEffect, useRef } from "react";
 import { errorText, fileName } from "../api/client";
 import { revealInFolder } from "../api/jobs";
 import type { ConnectionId, DialectKind, JobId } from "../api/types";
+import { BACKUP_CANCELLED, backedUpText } from "../backup/backupText";
 import Icon from "../components/Icon";
 import Menu from "../components/Menu";
-import { useToast } from "../components/Toast";
+import { type ToastSpec, useToast } from "../components/Toast";
 import { EXPORT_CANCELLED, exportedText, statusText } from "./exportText";
 import type { JobView } from "./jobStore";
+
+/** A Backup run in the background: its end toast (the dialog that would say it is closed). */
+function backupEnded(job: JobView, done: NonNullable<JobView["done"]>, dialect?: DialectKind): ToastSpec {
+  if ("error" in done) {
+    if (done.error.kind === "cancelled") return { kind: "info", text: BACKUP_CANCELLED };
+    return { kind: "error", text: errorText(done.error, dialect) };
+  }
+  const file = done.report.file;
+  return {
+    kind: "success",
+    text: backedUpText(job.subject ?? "", file ? fileName(file) : "", done.report.bytes),
+    action: file ? { label: "Open folder", run: () => void revealInFolder(file) } : undefined,
+  };
+}
+
+const JOB_ICON: Record<JobView["kind"], "export" | "import" | "swap" | "save" | "history"> = {
+  export: "export",
+  import: "import",
+  scriptImport: "import",
+  check: "import",
+  transfer: "swap",
+  backup: "save",
+  restoreCheck: "history",
+  restore: "history",
+};
 
 interface Props {
   jobs: JobView[];
@@ -32,10 +58,14 @@ export default function JobStatusItem({ jobs, onOpen, onEnded, dialectOf }: Prop
 
   useEffect(() => {
     for (const job of jobs) {
-      if (job.kind !== "export" || !job.background || !job.done || announced.current.has(job.id)) continue;
+      // A Restore's end is the App's: it also refreshes the tree (step 9).
+      const announces = job.kind === "export" || job.kind === "backup";
+      if (!announces || !job.background || !job.done || announced.current.has(job.id)) continue;
       announced.current.add(job.id);
       const done = job.done;
-      if ("report" in done) {
+      if (job.kind !== "export") {
+        toast.show(backupEnded(job, done, dialectOf?.(job.connectionId)));
+      } else if ("report" in done) {
         const file = done.report.file;
         toast.show({
           kind: "success",
@@ -56,7 +86,7 @@ export default function JobStatusItem({ jobs, onOpen, onEnded, dialectOf }: Prop
     const text = statusText(job);
     return (
       <button type="button" className="job-status" aria-label={text} onClick={() => onOpen(job.id)}>
-        <Icon name={job.kind === "export" ? "export" : job.kind === "transfer" ? "swap" : "import"} size={14} />
+        <Icon name={JOB_ICON[job.kind]} size={14} />
         <span className="job-status-text">{text}</span>
       </button>
     );

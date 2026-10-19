@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod backup_fixture;
 pub mod jobs;
 pub mod pg;
 

@@ -1,0 +1,420 @@
+/* Backup and Restore (step 9, frame 9.1): the Backup form, the Restore checks, the Restore confirm
+   body inside the 5a dialog, and both running views. Colours are tokens only. */
+
+/* A Production target washes the whole dialog (DESIGN-NEXT 11.1 A). */
+.dialog.backup-dialog.prod-wash,
+.dialog.restore-dialog.prod-wash {
+  background: var(--c-prod-wash);
+}
+
+.backup-dialog .mono,
+.restore-dialog .mono,
+.restore-confirm .mono {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+}
+
+.backup-title,
+.restore-title {
+  font-weight: 400;
+}
+
+.backup-title b,
+.restore-title b {
+  font-weight: 600;
+}
+
+.backup-keys,
+.restore-keys {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.backup-body,
+.restore-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding-top: 0;
+  overflow-y: auto;
+}
+
+/* The Backup form is 720 px wide (its running view keeps the form's 560 px), with 24 px at the
+   sides. */
+.dialog.backup-dialog.backup-form {
+  width: min(720px, 100%);
+}
+
+.backup-form .backup-body {
+  padding-right: 24px;
+  padding-left: 24px;
+}
+
+/* Two columns as the design: what goes in on the left (272 px), the file and its format on the
+   right, 32 px apart with no line between. The Not included banner runs under both. */
+.backup-grid {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: 32px;
+  min-width: 0;
+}
+
+.restore-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--spacing-lg);
+  min-width: 0;
+}
+
+.backup-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  min-width: 0;
+}
+
+.backup-section,
+.restore-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.backup-head,
+.restore-head {
+  margin: 0;
+  color: var(--c-text);
+  font: var(--font-body-strong);
+}
+
+.backup-tick,
+.backup-choice,
+.restore-tick,
+.restore-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  color: var(--c-text);
+  font: var(--font-body);
+}
+
+.backup-tick > input,
+.backup-choice > input,
+.restore-tick > input,
+.restore-choice > input {
+  flex: none;
+  margin-top: 3px;
+}
+
+.backup-tick-off,
+.restore-choice-off {
+  color: var(--c-text-subtle);
+}
+
+.backup-tick-text,
+.restore-tick-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.backup-count,
+.backup-hint,
+.restore-hint {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-file,
+.restore-file {
+  display: flex;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.backup-file > .input,
+.restore-file > .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.backup-banner,
+.restore-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) 10px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+  color: var(--c-text);
+  font: var(--font-small);
+}
+
+.backup-banner > .icon,
+.restore-banner > .icon {
+  flex: none;
+  color: var(--c-text-muted);
+}
+
+.backup-banner-prod {
+  border-color: transparent;
+  background: var(--c-prod-subtle);
+}
+
+.backup-banner-prod > .icon {
+  color: var(--c-prod-text);
+}
+
+.backup-warn,
+.restore-warn {
+  display: block;
+  color: var(--c-warning-text);
+  font: var(--font-small);
+}
+
+.backup-error,
+.restore-error {
+  margin: 0;
+  color: var(--c-danger-text);
+  font: var(--font-small);
+}
+
+.backup-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-xs) var(--spacing-lg);
+  margin: 0;
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-facts dt {
+  color: var(--c-text-subtle);
+}
+
+.backup-facts dd {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+
+/* Running views: percent, bar and facts (the step 7 running frame's look). */
+.backup-running,
+.restore-running {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding-top: 0;
+}
+
+.backup-running-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.backup-running-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-running-percent {
+  flex: none;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--c-border);
+}
+
+.backup-bar > b {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--c-accent);
+  transition: width var(--motion-base) linear;
+}
+
+/* Restore: checks. Header values in the key-value list style. */
+.restore-checking {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.restore-kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-xs) var(--spacing-md);
+  margin: 0;
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.restore-kv-row {
+  display: contents;
+}
+
+.restore-kv dt {
+  color: var(--c-text-subtle);
+}
+
+.restore-kv dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+
+.restore-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--font-small);
+}
+
+.restore-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  color: var(--c-text);
+}
+
+.restore-check > .icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--c-success-text);
+}
+
+.restore-check-warn > .icon {
+  color: var(--c-warning-text);
+}
+
+.restore-modes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.restore-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  min-width: 0;
+}
+
+.restore-mode > .restore-hint,
+.restore-mode > .restore-warn,
+.restore-sub {
+  flex-basis: 100%;
+  padding-left: 24px;
+}
+
+.restore-name {
+  flex: 1;
+  min-width: 160px;
+}
+
+/* Restore: confirm body, inside the 5a dialog's SQL box. */
+.restore-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.restore-shape-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+}
+
+.restore-step,
+.restore-cleanup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  margin: 0;
+  color: var(--c-text);
+  font: var(--font-small);
+}
+
+.restore-cleanup code {
+  font: var(--font-mono-small);
+}
+
+/* Restore: running phases. */
+.restore-phases {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--font-small);
+}
+
+.restore-phase {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--c-text-subtle);
+}
+
+.restore-phase-done {
+  color: var(--c-text);
+}
+
+.restore-phase-done > .icon {
+  color: var(--c-success-text);
+}
+
+.restore-phase-now {
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+.restore-phase-now > .icon {
+  color: var(--c-accent);
+}
+
+.restore-end-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  margin: 0;
+}
+
+.restore-end-line > .icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--c-success-text);
+}
+
+@media (max-width: 640px) {
+  .backup-grid,
+  .restore-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

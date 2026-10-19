@@ -651,6 +651,24 @@ impl Dialect for PostgresDialect {
         writer::open(&self.settings, database, self.read_only, setup).await
     }
 
+    async fn open_backup_read(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        count_rows: bool,
+    ) -> Result<crate::backup::data::SnapshotRead> {
+        let schema =
+            schema.ok_or_else(|| Error::InvalidInput("Choose a schema to back up.".into()))?;
+        source::backup_read(
+            self.settings.clone(),
+            database.to_string(),
+            schema.to_string(),
+            self.read_only,
+            count_rows,
+        )
+        .await
+    }
+
     async fn disconnect(&self) -> Result<()> {
         // Dropping a client ends its connection task.
         self.clients.lock().map_err(|_| poisoned())?.clear();

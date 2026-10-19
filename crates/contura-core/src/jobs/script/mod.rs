@@ -10,6 +10,7 @@
 
 mod insert_shape;
 mod lists;
+mod names;
 mod split;
 #[cfg(test)]
 mod tests;
@@ -28,8 +29,13 @@ use crate::model::DialectKind;
 use crate::safety::{StatementClass, classify};
 
 pub use insert_shape::insert_shape;
+pub(crate) use insert_shape::insert_shape_strict;
 pub(crate) use lists::{Facts, TxControl};
 pub use lists::{ends_transaction, is_transaction_control, statement_action, statement_kind};
+pub(crate) use names::{
+    DdlCounts, Name, calls_sequence_write, created_object, created_type_or_sequence, ddl_counts,
+    dml_calls, ends_shapes, insert_table,
+};
 pub(crate) use split::Splitter;
 
 use crate::jobs::limits::MAX_STATEMENT_BYTES;

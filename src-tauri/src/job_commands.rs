@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use contura_core::Error;
+use contura_core::backup::plan::{BackupPlan, BackupRequest};
+use contura_core::backup::restore::{RestorePlan, RestoreRequest, RestoreTarget};
 use contura_core::connections::ConnectionService;
 use contura_core::jobs::JobSink;
 use contura_core::jobs::formats::inspect;
@@ -201,6 +203,83 @@ pub async fn start_transfer(
     service
         .start_transfer(job, req, reviewed, pass, Arc::new(ChannelSink(events)))
         .await
+}
+
+/// What a Backup would hold: counts, not-included list, estimate and file name.
+#[tauri::command]
+pub async fn plan_backup(service: Service<'_>, req: BackupRequest) -> Result<BackupPlan, Error> {
+    service.plan_backup(req).await
+}
+
+/// Starts Backup `job` (made by the page). A read job: no pass on any Connection.
+/// `FileExists` and the path guard's refusals come back here, before the job starts.
+#[tauri::command]
+pub async fn start_backup(
+    service: Service<'_>,
+    job: JobId,
+    req: BackupRequest,
+    overwrite: bool,
+    events: Channel<serde_json::Value>,
+) -> Result<(), Error> {
+    service
+        .start_backup(job, req, overwrite, Arc::new(ChannelSink(events)))
+        .await
+        .map(|_| ())
+}
+
+/// Starts Restore's check pass `job` on `path`: a job of kind `restoreCheck` whose
+/// finished report carries the `restoreCheck`. Read-only is refused here.
+#[tauri::command]
+pub async fn inspect_restore(
+    service: Service<'_>,
+    job: JobId,
+    target: RestoreTarget,
+    path: PathBuf,
+    events: Channel<serde_json::Value>,
+) -> Result<(), Error> {
+    service
+        .inspect_restore(job, target, path, Arc::new(ChannelSink(events)))
+        .await
+        .map(|_| ())
+}
+
+/// The Restore confirmation: the plan, its run order and its fingerprint.
+#[tauri::command]
+pub async fn plan_restore(service: Service<'_>, req: RestoreRequest) -> Result<RestorePlan, Error> {
+    service.plan_restore(req).await
+}
+
+/// Up to 100 of the plan's structure statements from position `from` (Show all).
+#[tauri::command]
+pub async fn restore_statements(
+    service: Service<'_>,
+    req: RestoreRequest,
+    from: u32,
+) -> Result<Vec<ScriptStatement>, Error> {
+    service.restore_statements(req, from).await
+}
+
+/// The Production confirmation of a Restore: a Job pass for the plan's fingerprint.
+#[tauri::command]
+pub async fn confirm_restore(service: Service<'_>, req: RestoreRequest) -> Result<PassId, Error> {
+    service.confirm_restore(req).await
+}
+
+/// Starts Restore `job` (made by the page). `fingerprint` is the reviewed plan's (R28),
+/// on every Connection; `pass` from `confirm_restore` on Production.
+#[tauri::command]
+pub async fn start_restore(
+    service: Service<'_>,
+    job: JobId,
+    req: RestoreRequest,
+    fingerprint: String,
+    pass: Option<PassId>,
+    events: Channel<serde_json::Value>,
+) -> Result<(), Error> {
+    service
+        .start_restore(job, req, fingerprint, pass, Arc::new(ChannelSink(events)))
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]

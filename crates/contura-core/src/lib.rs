@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod backup;
 pub(crate) mod common;
 pub mod connections;
 pub mod dbml_writer;

@@ -462,33 +462,56 @@ pub(crate) struct Producer {
 /// Starts a read: `spawn` gets the producer's ends and runs it on a task or a thread of
 /// its own. Returns once the producer has sent `ready`.
 pub(crate) async fn start_source(spawn: impl FnOnce(Producer)) -> Result<Box<dyn RowSource>> {
+    let (producer, pending) = source_channel();
+    spawn(producer);
+    pending.open().await
+}
+
+/// The consumer's end of a read before the producer has sent `ready`.
+pub(crate) struct PendingSource {
+    opened: oneshot::Receiver<Result<Opened>>,
+    rx: mpsc::Receiver<Result<Option<Chunk>>>,
+    flag: Arc<AtomicBool>,
+}
+
+impl PendingSource {
+    /// Waits for the producer's `ready` and hands back the source.
+    pub(crate) async fn open(self) -> Result<Box<dyn RowSource>> {
+        let PendingSource { opened, rx, flag } = self;
+        let opened = opened
+            .await
+            .map_err(|_| Error::Query("the read stopped before it started".into()))??;
+        Ok(Box::new(ChannelSource {
+            columns: opened.columns,
+            rx,
+            ended: false,
+            gone: false,
+            estimate: opened.estimate,
+            sql: opened.sql,
+            canceller: Arc::new(StopRead {
+                flag: flag.clone(),
+                server: opened.server,
+            }),
+            flag,
+        }))
+    }
+}
+
+/// The two ends of one read, for a producer that already runs on a connection it holds
+/// (a Backup reads every table on the one connection of its snapshot).
+pub(crate) fn source_channel() -> (Producer, PendingSource) {
     let (tx, rx) = mpsc::channel(2);
     let (ready, opened) = oneshot::channel();
     let flag = Arc::new(AtomicBool::new(false));
-    spawn(Producer {
+    let producer = Producer {
         ready,
         feed: Feed {
             tx,
             builder: ChunkBuilder::new(),
             flag: flag.clone(),
         },
-    });
-    let opened = opened
-        .await
-        .map_err(|_| Error::Query("the export read stopped before it started".into()))??;
-    Ok(Box::new(ChannelSource {
-        columns: opened.columns,
-        rx,
-        ended: false,
-        gone: false,
-        estimate: opened.estimate,
-        sql: opened.sql,
-        canceller: Arc::new(StopRead {
-            flag: flag.clone(),
-            server: opened.server,
-        }),
-        flag,
-    }))
+    };
+    (producer, PendingSource { opened, rx, flag })
 }
 
 /// The consumer's end. Dropping it closes the channel; the producer then stops and

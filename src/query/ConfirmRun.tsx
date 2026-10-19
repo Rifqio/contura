@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import type { ConfirmItem, DialectKind, Group, InsertShape, RunVerdict } from "../api/types";
 import DbMark from "../components/DbMark";
 import Icon from "../components/Icon";
@@ -19,10 +19,14 @@ export interface ConfirmJob {
   title: string;
   /** Every item in file order: shapes and exact statements interleaved. */
   shapes: ConfirmShape[];
-  /** The count line under the title, such as "4 statements write." */
-  counts: string;
+  /** The count line under the title, such as "4 statements write."; none when the body says it. */
+  counts?: string;
   /** "212 KB, SHA-256 4be0 91c2 ... 7d1f": the fingerprint banner names it. */
   fingerprint?: string | null;
+  /** The banner's whole sentence instead, such as a Restore's "Checked file: ..." (step 9). */
+  fingerprintText?: string;
+  /** A body of its own in place of the items (a Restore's structure, shape and cleanup sections). */
+  body?: ReactNode;
   /** Show all under a shape's first rows. */
   onShowAll?(): void;
 }
@@ -38,11 +42,18 @@ type Props = Mode & {
   /** Offered beside the no-WHERE warning when given. */
   onAddWhere?(): void;
   /** "Save" for Pending Edits, "Apply" for a design, "Drop" for a table drop: the title and button say it. */
-  verb?: "Run" | "Save" | "Apply" | "Drop" | "Import" | "Transfer";
+  verb?: "Run" | "Save" | "Apply" | "Drop" | "Import" | "Transfer" | "Restore";
   /** The run deletes rows (a transfer's Empty it first): the button takes the danger fill. */
   danger?: boolean;
   /** Plan warnings, one banner each, above the count line. */
   warnings?: string[];
+  /** A banner with its own action above the warnings, such as Restore's Replace danger banner. */
+  banner?: ReactNode;
+  /**
+   * False on a plain Connection whose run still shows its SQL first (Restore always does): no
+   * PROD chip, and the button is the verb alone.
+   */
+  production?: boolean;
   /** The Connection's database, for the mark before the title. */
   dialect?: DialectKind;
   /** The Connection's Group, for the square after the PROD chip; none for Ungrouped. */
@@ -51,7 +62,15 @@ type Props = Mode & {
   rowEstimate?: number | null;
 };
 
-const DOES: Record<NonNullable<Props["verb"]>, string> = { Run: "runs", Save: "saves", Apply: "applies", Drop: "drops", Import: "runs", Transfer: "runs" };
+const DOES: Record<NonNullable<Props["verb"]>, string> = {
+  Run: "runs",
+  Save: "saves",
+  Apply: "applies",
+  Drop: "drops",
+  Import: "runs",
+  Transfer: "runs",
+  Restore: "runs",
+};
 
 /** Under a shape's first rows: "496 more rows in this statement, then 2 more statements"; null when nothing is left out. */
 export function foldText(shape: InsertShape): string | null {
@@ -132,10 +151,12 @@ export default function ConfirmRun({
   rowEstimate,
   warnings = [],
   danger = false,
+  banner,
+  production = true,
 }: Props) {
   const [runFocused, setRunFocused] = useState(false);
   // A transfer's title says where the rows go; its button runs the shown SQL there.
-  const runLabel = `${verb === "Transfer" ? "Run" : verb} on ${verdict.connection}`;
+  const runLabel = production ? `${verb === "Transfer" ? "Run" : verb} on ${verdict.connection}` : verb;
   const does = DOES[verb];
 
   // One block for every statement, a blank line between them. Writes get the Production band, and
@@ -167,7 +188,7 @@ export default function ConfirmRun({
       lead={dialect && <DbMark dialect={dialect} open />}
       badge={
         <span className="confirm-badges">
-          <SafetyTag connection={{ production: true, readOnly: false }} />
+          <SafetyTag connection={{ production, readOnly: false }} />
           {group && (
             <span className="confirm-group">
               <GroupBadge id={group.id} name={group.name} color={group.color} />
@@ -200,21 +221,23 @@ export default function ConfirmRun({
             {typeof rowEstimate === "number" ? `, about ${rowEstimate.toLocaleString("en-US")} rows.` : "."}
           </WarningBanner>
         )}
+        {banner}
         {warnings.map((w, i) => (
           <WarningBanner key={i}>{w}</WarningBanner>
         ))}
         {job ? (
           <>
             <p className="confirm-job-title">{job.title}</p>
-            <p className="confirm-count">{job.counts}</p>
+            {job.counts && <p className="confirm-count">{job.counts}</p>}
             <div className="confirm-sql confirm-job" tabIndex={0} data-autofocus aria-label="SQL to run, read-only">
-              <JobItems job={job} dialect={dialect ?? "postgres"} />
+              {job.body ?? <JobItems job={job} dialect={dialect ?? "postgres"} />}
             </div>
-            {job.fingerprint && (
+            {(job.fingerprintText || job.fingerprint) && (
               <p className="confirm-fingerprint">
                 <Icon name="info" />
                 <span>
-                  The file is fingerprinted ({job.fingerprint}). If it changes before the run, Contura asks again.
+                  {job.fingerprintText ??
+                    `The file is fingerprinted (${job.fingerprint}). If it changes before the run, Contura asks again.`}
                 </span>
               </p>
             )}

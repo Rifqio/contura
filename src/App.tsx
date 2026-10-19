@@ -1,6 +1,9 @@
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
-import { errorText, forgetRecent, listConnections, listDiagrams, listGroups, setLastGroup, tableDesign } from "./api/client";
-import type { ConnectionConfig, ConnectionId, DiagramEntry, Group, GroupId, JobId, ObjectPath, RecentItem, SavedQuery } from "./api/types";
+import { errorText, fileName, forgetRecent, listConnections, listDiagrams, listGroups, saveConnection, setLastGroup, tableDesign } from "./api/client";
+import type { ConnectionConfig, ConnectionId, DiagramEntry, Group, GroupId, JobId, ObjectPath, RecentItem, RestoreTarget, SavedQuery } from "./api/types";
+import BackupDialog from "./backup/BackupDialog";
+import RestoreDialog, { type RestoreRun, restoreErrorText } from "./backup/RestoreDialog";
+import { restoreStoppedText, restoredText, runStatements } from "./backup/backupText";
 import { useJobsGuard } from "./app/useJobsGuard";
 import { useDiagramFileActions } from "./flow/diagramFileActions";
 import { focusFlowText } from "./flow/focusFlowText";
@@ -267,6 +270,12 @@ function Workspace() {
   /** The origin each export job was started from, so the status bar can open its dialog again. */
   const exportOrigins = useRef(new Map<JobId, { connectionId: ConnectionId; origin: ExportOrigin }>());
   const [mermaidOpen, setMermaidOpen] = useState(false);
+  /** The open Backup or Restore dialog (step 9), from the tree's menus. */
+  const [backingUp, setBackingUp] = useState<{ connectionId: ConnectionId; database: string; schema: string | null } | null>(null);
+  const [restoring, setRestoring] = useState<{ target: RestoreTarget; attach?: { id: JobId; run: RestoreRun }; seq: number } | null>(null);
+  /** Each Restore started, so one in the background still ends right and the status bar can open it again. */
+  const restoreRuns = useRef(new Map<JobId, { target: RestoreTarget; run: RestoreRun }>());
+  const restoresEnded = useRef(new Set<JobId>());
   /** The job each Import tab started last, by tab key (its `onJob`). */
   const [importJobs, setImportJobs] = useState<ReadonlyMap<string, JobId>>(new Map());
   const importJobsRef = useRef(importJobs);
@@ -275,6 +284,69 @@ function Workspace() {
   const transferJobs = useRef(new Map<string, JobId>());
   const jobsNow = useRef(jobs.jobs);
   jobsNow.current = jobs.jobs;
+
+  /** A Restore ended: the tree refreshes and the completion schema cache is invalidated. */
+  function restoreDone(connectionId: ConnectionId) {
+    tree.refresh(connectionId);
+    lang.schemas.invalidate(connectionId);
+  }
+
+  /** SQLite "Add it as a Connection" (R4): the Core returns the new file; the Connection is added here. */
+  async function addRestoredFile(file: string, groupId: GroupId | null) {
+    try {
+      await saveConnection({
+        id: null,
+        name: fileName(file).replace(/\.[^.]+$/, ""),
+        dialect: "sqlite",
+        file,
+        host: "",
+        port: 0,
+        user: "",
+        database: null,
+        ssl: { mode: "disable" },
+        password: { t: "clear" },
+        groupId,
+        queryTimeoutSecs: null,
+        aiAccess: "never",
+        production: false,
+        readOnly: false,
+      });
+      await reload();
+    } catch (e) {
+      setNotice(errorText(e));
+    }
+  }
+
+  // A Restore that ended in the background: its end work and toast, once (its dialog is closed).
+  useEffect(() => {
+    for (const j of jobs.jobs) {
+      if (j.kind !== "restore" || !j.background || !j.done || restoresEnded.current.has(j.id)) continue;
+      restoresEnded.current.add(j.id);
+      const kept = restoreRuns.current.get(j.id);
+      const c = connections.find((x) => x.id === j.connectionId);
+      const done = j.done;
+      if ("report" in done) {
+        restoreDone(j.connectionId);
+        const r = done.report.restore;
+        if (kept?.run.addConnection && r?.newFile) void addRestoredFile(r.newFile, c?.groupId ?? null);
+        toast.show({
+          kind: "success",
+          text: r
+            ? restoredText(kept?.run.source ?? j.subject ?? null, c?.dialect === "sqlite" ? fileName(r.database) : r.database, r.tables, r.rows, done.report.elapsedMs, r.countsMatch)
+            : (kept ? `Restored ${kept.run.source} into ${kept.run.into}.` : "Restored."),
+        });
+      } else if (done.error.kind === "cancelled") {
+        const newName = kept?.run.mode === "newDatabase" ? (c?.dialect === "sqlite" ? fileName(kept.run.into) : kept.run.into) : null;
+        toast.show({ kind: "info", text: restoreStoppedText(c?.dialect ?? "postgres", newName, j.statementsDone, kept ? runStatements(kept.run.check, kept.run.runAsIs ?? false) : null) });
+      } else {
+        toast.show({ kind: "error", text: c ? restoreErrorText(done.error, c) : errorText(done.error) });
+      }
+      restoreRuns.current.delete(j.id);
+      jobs.dismiss(j.id);
+    }
+    // Reacts to the job list only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs.jobs]);
 
   function openExport(connectionId: ConnectionId, origin: ExportOrigin) {
     setExporting((e) => ({ connectionId, origin, seq: (e?.seq ?? 0) + 1 }));
@@ -398,6 +470,13 @@ function Workspace() {
       setExporting((e) => ({ ...from, attach: id, seq: (e?.seq ?? 0) + 1 }));
       return;
     }
+    // Backup and Restore show their progress in the status bar only once their dialog is closed.
+    if (job.kind === "restore") {
+      const kept = restoreRuns.current.get(id);
+      if (kept) setRestoring((r) => ({ target: kept.target, attach: { id, run: kept.run }, seq: (r?.seq ?? 0) + 1 }));
+      return;
+    }
+    if (job.kind === "backup" || job.kind === "restoreCheck") return;
     if (job.kind === "transfer") {
       const tab = [...transferJobs.current].find(([, j]) => j === id)?.[0];
       if (tab) setActiveKey(`transfer:${tab}`);
@@ -1048,6 +1127,8 @@ function Workspace() {
               onExportTable={(s) => void exportTable(s)}
               onImportTable={(s) => openImport(s.connectionId, { kind: "table", path: s.path })}
               onTransfer={openTransferTab}
+              onBackup={setBackingUp}
+              onRestore={(target) => setRestoring((r) => ({ target, seq: (r?.seq ?? 0) + 1 }))}
               onMoveConnection={(id, to) => void actions.moveFromTree(id, to)}
               onNewGroup={() => setForm({ kind: "newGroup" })}
               onClearHistory={(id) => void actions.clearHistoryFromTree(id)}
@@ -1436,6 +1517,43 @@ function Workspace() {
               origin={exporting.origin}
               attach={exporting.attach}
               onClose={() => setExporting(null)}
+            />
+          );
+        })()}
+      {backingUp &&
+        (() => {
+          const c = connections.find((x) => x.id === backingUp.connectionId);
+          if (!c) return null;
+          return (
+            <BackupDialog
+              connection={c}
+              group={c.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
+              database={backingUp.database}
+              schema={backingUp.schema}
+              onClose={() => setBackingUp(null)}
+            />
+          );
+        })()}
+      {restoring &&
+        (() => {
+          const c = connections.find((x) => x.id === restoring.target.connectionId);
+          if (!c) return null;
+          return (
+            <RestoreDialog
+              key={restoring.seq}
+              connection={c}
+              group={c.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
+              target={restoring.target}
+              attach={restoring.attach}
+              onStarted={(id, run) => restoreRuns.current.set(id, { target: restoring.target, run })}
+              onClose={() => setRestoring(null)}
+              onRestored={() => restoreDone(c.id)}
+              onOpenInTree={(database) => {
+                if (c.dialect === "sqlite") return;
+                const schema = c.dialect === "postgres" ? restoring.target.schema : null;
+                setReveal((r) => ({ connectionId: c.id, database, schema, name: "", seq: (r?.seq ?? 0) + 1 }));
+              }}
+              onAddConnection={(file) => addRestoredFile(file, c.groupId)}
             />
           );
         })()}

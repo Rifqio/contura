@@ -15,6 +15,10 @@ export interface JobView {
   kind: JobKind;
   label: string;
   connectionId: ConnectionId;
+  /** What the job is about, kept for its end text (a Backup's or Restore's source database). */
+  subject?: string;
+  /** The last progress event as sent, for views that show more than the counters (step 9). */
+  last?: Extract<JobEvent, { kind: "progress" }> | null;
   /** null until the first progress event. */
   phase: JobPhase | null;
   rowsDone: number;
@@ -34,7 +38,7 @@ export interface JobView {
 }
 
 export type JobAction =
-  | { type: "track"; id: JobId; kind: JobKind; label: string; connectionId: ConnectionId; startedAt: number }
+  | { type: "track"; id: JobId; kind: JobKind; label: string; connectionId: ConnectionId; startedAt: number; subject?: string }
   | { type: "event"; id: JobId; event: JobEvent }
   | { type: "background"; id: JobId }
   | { type: "remove"; id: JobId };
@@ -60,6 +64,7 @@ function applyEvent(v: JobView, e: JobEvent): JobView {
         bytesDone: e.bytesDone,
         bytesTotal: e.bytesTotal,
         statementsDone: e.statementsDone,
+        last: e,
       };
       return { ...next, percent: percentOf(next) };
     }
@@ -86,6 +91,8 @@ export function jobReducer(state: Map<JobId, JobView>, a: JobAction): Map<JobId,
       kind: a.kind,
       label: a.label,
       connectionId: a.connectionId,
+      ...(a.subject !== undefined && { subject: a.subject }),
+      last: null,
       phase: null,
       rowsDone: 0,
       rowsTotal: null,

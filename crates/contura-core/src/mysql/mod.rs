@@ -432,6 +432,23 @@ impl Dialect for MySqlDialect {
         .await
     }
 
+    /// `schema` is not used: a MySQL Backup is of one database.
+    async fn open_backup_read(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        count_rows: bool,
+    ) -> Result<crate::backup::data::SnapshotRead> {
+        source::backup_read(
+            self.opts.clone(),
+            self.pool.clone(),
+            self.read_only,
+            database,
+            count_rows,
+        )
+        .await
+    }
+
     async fn disconnect(&self) -> Result<()> {
         self.pool.clone().disconnect().await.map_err(query_err)
     }

@@ -10,11 +10,16 @@ use mysql_async::{Conn, OptsBuilder, Pool, Value as MyValue};
 use super::quote::quote_ident;
 use super::session::{BYTES, NUMERIC, type_name};
 use super::{query_err, session_err};
+use crate::backup::data::{
+    PendingRows, SnapshotFacts, SnapshotRead, TableAsk, TableFacts, snapshot_channel,
+    snapshot_opened,
+};
+use crate::backup::structure::mysql::read_structure;
 use crate::common::sql_scoped;
 use crate::error::{Error, Result};
 use crate::jobs::source::{
     Opened, Producer, RowSource, SourceColumn, SourceRequest, TableStorage, check_one_statement,
-    checked_query, start_source, value_kind,
+    checked_query, source_channel, start_source, value_kind,
 };
 use crate::model::{ColumnInfo, DialectKind, ObjectPath};
 use crate::query::Canceller;
@@ -119,6 +124,11 @@ async fn plan(conn: &mut Conn, req: &SourceRequest) -> Result<Plan> {
     conn.query_drop("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
         .await
         .map_err(query_err)?;
+    plan_select(conn, req).await
+}
+
+/// The SELECT and how to carry its values, inside a snapshot already open.
+async fn plan_select(conn: &mut Conn, req: &SourceRequest) -> Result<Plan> {
     let Some(parts) = req.table_parts() else {
         let SourceRequest::Query { database, sql } = req else {
             unreachable!("not a table, so a query");
@@ -425,4 +435,185 @@ async fn stream(conn: &mut Conn, plan: Plan, kill: Arc<Kill>, p: Producer, read_
     }
     let _ = result.drop_result().await;
     feed.finish().await;
+}
+
+// ---- The Backup's snapshot (step 9) ----
+
+/// Engines with transactions, whose tables the snapshot covers.
+fn transactional(engine: &str) -> bool {
+    ["innodb", "ndbcluster", "ndb"].contains(&engine.to_ascii_lowercase().as_str())
+}
+
+/// Opens the Backup's snapshot of `database` on a connection of its own; see
+/// `Dialect::open_backup_read`.
+pub(super) async fn backup_read(
+    opts: OptsBuilder,
+    pool: Pool,
+    read_only: bool,
+    database: &str,
+    count_rows: bool,
+) -> Result<SnapshotRead> {
+    let (ready, opened, asks_tx, asks) = snapshot_channel();
+    let database = database.to_string();
+    tokio::spawn(async move {
+        let mut conn = match Conn::new(opts).await {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = ready.send(Err(Error::Connect(format!(
+                    "cannot open a connection for the backup: {e}"
+                ))));
+                return;
+            }
+        };
+        let kill = Arc::new(Kill {
+            pool,
+            id: conn.id(),
+        });
+        let facts = snapshot_facts(&mut conn, &database, count_rows).await;
+        let ok = facts.is_ok();
+        if ready.send(facts).is_ok() && ok {
+            serve(&mut conn, &database, kill, read_only, asks).await;
+        }
+        // Closing without COMMIT ends the read-only transaction.
+        let _ = conn.disconnect().await;
+    });
+    snapshot_opened(opened, asks_tx).await
+}
+
+/// A table's name, engine, row estimate and data length.
+type TableStat = (String, Option<String>, Option<u64>, Option<u64>);
+
+async fn snapshot_facts(
+    conn: &mut Conn,
+    database: &str,
+    count_rows: bool,
+) -> Result<SnapshotFacts> {
+    conn.query_drop("SET SESSION net_write_timeout = 600, time_zone = '+00:00'")
+        .await
+        .map_err(query_err)?;
+    conn.query_drop("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+        .await
+        .map_err(query_err)?;
+    let parts = read_structure(conn, database).await?;
+    let stats: Vec<TableStat> = conn
+        .exec(
+            "SELECT CAST(TABLE_NAME AS CHAR), CAST(ENGINE AS CHAR), TABLE_ROWS, DATA_LENGTH \
+             FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'",
+            (database,),
+        )
+        .await
+        .map_err(query_err)?;
+    let mut tables = Vec::with_capacity(parts.tables.len());
+    let mut non_snapshot = Vec::new();
+    let mut data_bytes = 0u64;
+    for name in &parts.tables {
+        let stat = stats.iter().find(|s| &s.0 == name);
+        data_bytes += stat.and_then(|s| s.3).unwrap_or(0);
+        if let Some(engine) = stat.and_then(|s| s.1.as_deref())
+            && !transactional(engine)
+        {
+            non_snapshot.push((name.clone(), engine.to_string()));
+        }
+        let rows = if count_rows {
+            let n: Option<u64> = conn
+                .query_first(format!(
+                    "SELECT COUNT(*) FROM {}",
+                    sql_scoped(DialectKind::MySql, database, name)
+                ))
+                .await
+                .map_err(query_err)?;
+            n.unwrap_or(0)
+        } else {
+            stat.and_then(|s| s.2).unwrap_or(0)
+        };
+        tables.push(TableFacts {
+            name: name.clone(),
+            rows,
+        });
+    }
+    Ok(SnapshotFacts {
+        parts,
+        tables,
+        data_bytes,
+        non_snapshot,
+    })
+}
+
+/// Serves each asked table's rows on the snapshot's connection, one after the other.
+async fn serve(
+    conn: &mut Conn,
+    database: &str,
+    kill: Arc<Kill>,
+    read_only: bool,
+    mut asks: tokio::sync::mpsc::Receiver<TableAsk>,
+) {
+    while let Some(ask) = asks.recv().await {
+        let planned = async {
+            let (columns, key) = backup_columns(conn, database, &ask.table).await?;
+            let req = SourceRequest::Table {
+                path: ObjectPath {
+                    database: database.to_string(),
+                    schema: None,
+                    name: ask.table.clone(),
+                },
+                columns,
+                filter: None,
+                sort: None,
+                keys: Vec::new(),
+            };
+            Ok::<_, Error>((plan_select(conn, &req).await?, key))
+        }
+        .await;
+        match planned {
+            Err(e) => {
+                let _ = ask.reply.send(Err(e));
+            }
+            Ok((plan, key)) => {
+                let (producer, pending) = source_channel();
+                let rows = PendingRows {
+                    source: pending,
+                    overriding: false,
+                    key,
+                };
+                if ask.reply.send(Ok(rows)).is_err() {
+                    return;
+                }
+                stream(conn, plan, kill.clone(), producer, read_only).await;
+            }
+        }
+    }
+}
+
+/// The table's columns the Backup writes: all but the generated ones (`VIRTUAL
+/// GENERATED`, `STORED GENERATED`; an expression default is `DEFAULT_GENERATED` and stays).
+/// Also the primary key's columns, to name a row in a message.
+async fn backup_columns(
+    conn: &mut Conn,
+    database: &str,
+    table: &str,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let rows: Vec<(String, String, String)> = conn
+        .exec(
+            "SELECT CAST(COLUMN_NAME AS CHAR), CAST(EXTRA AS CHAR), CAST(COLUMN_KEY AS CHAR) \
+             FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+            (database, table),
+        )
+        .await
+        .map_err(query_err)?;
+    let key = rows
+        .iter()
+        .filter(|(_, _, k)| k == "PRI")
+        .map(|(name, _, _)| name.clone())
+        .collect();
+    let columns = rows
+        .into_iter()
+        .filter(|(_, extra, _)| {
+            let e = extra.to_ascii_uppercase();
+            !e.contains("VIRTUAL GENERATED") && !e.contains("STORED GENERATED")
+        })
+        .map(|(name, _, _)| name)
+        .collect();
+    Ok((columns, key))
 }

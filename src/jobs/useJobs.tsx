@@ -13,7 +13,7 @@ export interface JobsValue {
    * before the start, with the id from `newJobId`, so no event is lost. When the start call
    * rejects (`fileExists`, `jobBusy`, the job limit), call `dismiss(id)`: the job never ran.
    */
-  track(id: JobId, kind: JobKind, label: string, connectionId: ConnectionId): (e: JobEvent) => void;
+  track(id: JobId, kind: JobKind, label: string, connectionId: ConnectionId, subject?: string): (e: JobEvent) => void;
   /** Calls `fn` with each later event of `id`; returns the unsubscribe. */
   watch(id: JobId, fn: Watcher): () => void;
   /** Run in the background: the job stays listed after its dialog closes. */
@@ -30,8 +30,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(jobReducer, new Map<JobId, JobView>());
   const watchers = useRef(new Map<JobId, Set<Watcher>>());
 
-  const track = useCallback((id: JobId, kind: JobKind, label: string, connectionId: ConnectionId) => {
-    dispatch({ type: "track", id, kind, label, connectionId, startedAt: Date.now() });
+  const track = useCallback((id: JobId, kind: JobKind, label: string, connectionId: ConnectionId, subject?: string) => {
+    dispatch({ type: "track", id, kind, label, connectionId, startedAt: Date.now(), subject });
     return (event: JobEvent) => {
       dispatch({ type: "event", id, event });
       for (const fn of watchers.current.get(id) ?? []) fn(event);

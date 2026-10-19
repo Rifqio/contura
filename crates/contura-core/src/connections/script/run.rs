@@ -426,6 +426,7 @@ impl ScriptRun {
                     bytes: self.file_bytes,
                     committed: c.committed,
                     check: None,
+                    ..JobReport::default()
                 };
                 self.ctx.finish(Ok(report));
             }

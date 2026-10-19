@@ -247,7 +247,9 @@ export type CommandError =
   /** A writer's COMMIT succeeded, then a closing statement `sql` failed; the rows are in. */
   | { kind: "afterCommit"; message: { sql: string; message: string } }
   /** Diagram `name` is saved already and the save did not say to replace it. */
-  | { kind: "diagramExists"; message: { name: string } };
+  | { kind: "diagramExists"; message: { name: string } }
+  /** Restore will not run this file; `reason` is the sentence to show (step 9). */
+  | { kind: "backupRefused"; message: { reason: string } };
 
 /** One table as the server holds it, for the Table Designer. */
 export interface TableDesign {
@@ -1066,7 +1068,8 @@ export interface VqRun {
 // SHA-256 values travel as lowercase hex strings.
 
 export type JobId = string;
-export type JobKind = "export" | "import" | "scriptImport" | "check" | "transfer";
+/** Step 9 adds a Backup, a Restore's check pass (`restoreCheck`) and the Restore run. */
+export type JobKind = "export" | "import" | "scriptImport" | "check" | "transfer" | "backup" | "restoreCheck" | "restore";
 export type Format = "csv" | "json" | "xlsx" | "sql";
 export type Delimiter = "comma" | "semicolon" | "tab";
 export type NullText = "emptyCell" | "nullWord";
@@ -1324,6 +1327,10 @@ export interface JobReport {
   bytes: number;
   committed: number;
   check: CheckReport | null;
+  /** A Restore's check pass (`inspect_restore`): what it found. Absent on other jobs. */
+  restoreCheck?: RestoreCheck | null;
+  /** A finished Restore run. Absent on other jobs. */
+  restore?: RestoreOutcome | null;
 }
 
 export type JobEvent =
@@ -1340,6 +1347,15 @@ export type JobEvent =
       /** A Data Transfer's current table: its rows so far and its total; rowsDone and rowsTotal count the whole run. */
       tableRows?: number;
       tableTotal?: number | null;
+      /** A Backup: tables written so far and in all. */
+      tablesDone?: number;
+      tablesTotal?: number | null;
+      /** A Restore's phase in the running state's list. */
+      restoreStep?: RestoreStep | null;
+      /** A Restore: INSERT statements run so far, for "Rows (310 of 1,472 INSERT statements)". */
+      insertsDone?: number;
+      /** A Restore's current statement, such as "INSERT INTO billing.order_items, rows 154,001 to 154,500". */
+      now?: string | null;
     }
   | { kind: "warning"; message: string }
   | { kind: "rowSkipped"; fileRow: number; column: string | null; message: string }
@@ -1484,4 +1500,210 @@ export interface TransferPlan {
   orphanChecks: TransferOrphanCheck[];
   /** Sent back with Start, so a target that changed since Review is refused. */
   fingerprint: string;
+}
+
+// Backup and Restore (step 9). Same Dialect only; the file is Contura's own plain SQL script.
+
+/** The five ticks of "What goes in". Tables off turns off everything that needs them. */
+export interface BackupInclude {
+  /** Tables, columns and keys (with checks and generated columns). */
+  tables: boolean;
+  /** Indexes and Foreign Keys. */
+  indexes: boolean;
+  /** Enums and sequences. */
+  enums: boolean;
+  /** Views, functions, procedures and triggers, from the server's own definitions. */
+  definitions: boolean;
+  rows: boolean;
+}
+
+export const DEFAULT_BACKUP_INCLUDE: BackupInclude = { tables: true, indexes: true, enums: true, definitions: true, rows: true };
+
+/** `fileCopy` is SQLite's exact file copy (VACUUM INTO). */
+export type BackupFormat = "script" | "fileCopy";
+
+export interface BackupRequest {
+  connectionId: ConnectionId;
+  /** MySQL database, SQLite "main", PostgreSQL database. */
+  database: string;
+  /** PostgreSQL: the schema backed up; null elsewhere. */
+  schema: string | null;
+  include: BackupInclude;
+  format: BackupFormat;
+  /** 100, 500 or 1,000. */
+  rowsPerStatement: number;
+  /** Writes DROP TABLE IF EXISTS before each CREATE TABLE; the header says so. */
+  addDropTables: boolean;
+  /** The final file; the job writes `<path>.partial` and renames it. */
+  path: string;
+  /** The user's local date, `yyyy-mm-dd`, for the default file name (R25); UTC when absent. */
+  localDate?: string | null;
+}
+
+export interface BackupCounts {
+  tables: number;
+  indexes: number;
+  foreignKeys: number;
+  enums: number;
+  sequences: number;
+  views: number;
+  /** Functions and procedures. */
+  functions: number;
+  triggers: number;
+  /** From the server's statistics where exact counts are dear. */
+  rows: number;
+}
+
+export interface BackupPlan {
+  dialect: DialectKind;
+  counts: BackupCounts;
+  /** Phrases for the Not included banner, in order: "the pgcrypto extension", "large objects", "grants and roles". */
+  notIncluded: string[];
+  /** From the server's size figures. */
+  estimateBytes: number;
+  /** MySQL tables outside the snapshot (MyISAM and other non-transactional engines). */
+  nonSnapshotTables: string[];
+  /** `<database>-<yyyy-mm-dd>.sql` (SQLite file copy: `.sqlite`). */
+  defaultFileName: string;
+}
+
+/** Where a Restore goes. `database: null` on a Connection row: only Into a new database. */
+export interface RestoreTarget {
+  connectionId: ConnectionId;
+  database: string | null;
+  schema: string | null;
+}
+
+/** The file's header as read (spec "The script format"). */
+export interface RestoreHeader {
+  format: number;
+  madeBy: string;
+  dialect: DialectKind;
+  serverVersion: string;
+  database: string;
+  schema: string | null;
+  /** UTC, `2026-10-16T22:00:00Z`. */
+  takenAt: string;
+  /** The header's words: "tables", "indexes", "foreign-keys", ... */
+  contents: string[];
+  rows: { table: string; rows: number }[];
+  notIncluded: string[];
+  definerRemoved: boolean;
+  dropTables: boolean;
+}
+
+/** A statement Restore skips unless Run as is: `kind` is "GRANT", "REVOKE", "CREATE USER", "SET GLOBAL", ... */
+export interface RestoreSkipped {
+  line: number;
+  kind: string;
+}
+
+/** A statement that makes the file refused: `kind` is "DROP DATABASE", "COPY FROM STDIN", a psql meta-command, ... */
+export interface RestoreRefused {
+  line: number;
+  kind: string;
+}
+
+/** What the check pass found: the report of the `restoreCheck` job. */
+export interface RestoreCheck {
+  path: string;
+  /** null for plain SQL without a Contura header. */
+  header: RestoreHeader | null;
+  bytes: number;
+  /** Lowercase hex. */
+  sha256: string;
+  /** The target Connection's name, Dialect and server version. */
+  targetName: string;
+  targetDialect: DialectKind;
+  targetVersion: string;
+  /** False refuses the file (another Dialect). */
+  dialectOk: boolean;
+  /** An older target: "The backup is from PostgreSQL 17.0 and freight-prod runs 16.4. Statements may fail." */
+  versionNote: string | null;
+  statements: number;
+  refused: RestoreRefused[];
+  skipped: RestoreSkipped[];
+  /** Tables in the target with the file's names. */
+  existingTables: string[];
+  /** The target database holds no table, view or routine (Into <database> needs it). */
+  targetEmpty: boolean;
+  /** PostgreSQL: extensions the header names that the target lacks. */
+  missingExtensions: string[];
+  trailerOk: boolean;
+  /** Why Replace is disabled (PostgreSQL with no known schema): "Open Restore on a schema to replace its tables." */
+  replaceNote?: string | null;
+  /** Skipped statements past the 1,000 that `skipped` lists. */
+  skippedMore?: number;
+}
+
+export type RestoreMode =
+  /** `name` is a database name, or for SQLite a new file path (never an existing file). */
+  | { kind: "newDatabase"; name: string }
+  | { kind: "intoEmpty" }
+  /** MySQL: `backupFirst` runs a Backup of the tables to replace before any DROP. */
+  | { kind: "replace"; backupFirst: boolean };
+
+export interface RestoreRequest {
+  target: RestoreTarget;
+  path: string;
+  mode: RestoreMode;
+  runAsIs: boolean;
+  /** The user's local date, `yyyy-mm-dd`, for the Back up first file name (R25); UTC when absent. */
+  localDate?: string | null;
+}
+
+/**
+ * The Restore plan. Run order, which the confirmation shows as it is: `setup`, then `drops`, then
+ * the file's statements in file order (`structure` and the INSERTs shown as a shape), then `after`.
+ * `cleanup` runs only on failure or Cancel and is shown on its own line. Every statement carries its
+ * label from the 5a classifier in `class` (`setval` is labelled "write").
+ */
+export interface RestorePlan {
+  /** Into a new database: `CREATE DATABASE ..` on the maintenance connection, shown and run first, on its own (R15). */
+  createDatabase?: PlannedStatement | null;
+  /** The session setup Contura adds, before everything (MySQL's includes SET FOREIGN_KEY_CHECKS = 0). */
+  setup: PlannedStatement[];
+  /** Replace: every DROP, after the setup and before the file's statements. */
+  drops: PlannedStatement[];
+  /**
+   * The first 50 file statements that are not shown as a shape, in file order. Skipped statements
+   * (GRANT, ...) are left out unless Run as is, when they come with `runAsIs: true`.
+   */
+  structure: ScriptStatement[];
+  /** The same set counted whole; `restore_statements` pages the rest. */
+  structureTotal: number;
+  /** What the structure creates, for the count line. */
+  creates: { tables: number; indexes: number; foreignKeys: number };
+  /** INSERT statements shown as a shape, and their rows. */
+  insertCount: number;
+  insertRows: number;
+  /** The first such INSERT's head and first rows; null when the file has none. */
+  insertShape: InsertShape | null;
+  /** Statements Contura adds after the file (SQLite foreign_key_check, settings back). */
+  after: PlannedStatement[];
+  /** Run on failure or Cancel: `DROP DATABASE freight_restore_1017`. Empty in other modes. */
+  cleanup: string[];
+  /** Replace: the target's rows in the dropped tables, when known. */
+  replacedRows: number | null;
+  /** MySQL Replace with backupFirst: the file the first Backup writes. */
+  backupFirstPath: string | null;
+  /** The running state's note: "One transaction. Cancel rolls back and removes freight_restore_1017." */
+  modeLine: string;
+  /** Hex; the Job pass is bound to it. */
+  fingerprint: string;
+  verdict: JobVerdict;
+}
+
+export type RestoreStep = "database" | "structure" | "rows" | "afterRows" | "sequences" | "counts";
+
+/** A finished Restore (the `restore` field of its JobReport). */
+export interface RestoreOutcome {
+  /** The database restored into (SQLite: the file path). */
+  database: string;
+  tables: number;
+  rows: number;
+  /** Row counts matched the file header. */
+  countsMatch: boolean;
+  /** SQLite Into a new database: the new file, for "Add it as a Connection". */
+  newFile: string | null;
 }

@@ -15,6 +15,18 @@ const ROW_PREVIEW_BYTES: usize = 1_000;
 /// anything else, which the confirmation then shows exactly; also None when the other
 /// backslash reading finds more than one statement in it (Q37).
 pub fn insert_shape(dialect: DialectKind, text: &str) -> Option<InsertShape> {
+    shape(dialect, text, false)
+}
+
+/// Restore's stricter shape (R14): the only calls taken as literals are the two that
+/// Contura's own INSERTs write for binary and spatial values, with literal arguments:
+/// PostgreSQL `decode('<hex>', 'hex')` and `ST_GeomFromText('<literal>'[, <int>])`.
+/// Any other call makes the INSERT shown in full.
+pub(crate) fn insert_shape_strict(dialect: DialectKind, text: &str) -> Option<InsertShape> {
+    shape(dialect, text, true)
+}
+
+fn shape(dialect: DialectKind, text: &str, strict: bool) -> Option<InsertShape> {
     if text.contains('\\') && pieces(dialect, text, true) != 1 {
         return None;
     }
@@ -25,6 +37,7 @@ pub fn insert_shape(dialect: DialectKind, text: &str) -> Option<InsertShape> {
         text,
         dialect,
         last_end: 0,
+        strict,
     };
     let head_start = p.peek(0)?.start;
     if !(p.eat_word("INSERT") || p.eat_word("REPLACE")) {
@@ -126,6 +139,8 @@ struct Parser<'a> {
     dialect: DialectKind,
     /// Where the last token taken ends.
     last_end: usize,
+    /// Restore's rule: only `decode('<hex>', 'hex')` and `ST_GeomFromText('..'[, n])`.
+    strict: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -253,6 +268,39 @@ impl<'a> Parser<'a> {
                     self.eat_word("AS").then_some(())?;
                     self.type_name()?;
                     self.eat_punct(b')').then_some(())?;
+                } else if self.strict && next_open && postgres && is("DECODE") {
+                    self.take();
+                    self.take();
+                    self.hex_string()?;
+                    self.eat_punct(b',').then_some(())?;
+                    let t = self.peek(0)?;
+                    let hex =
+                        t.k == K::Str && self.text[t.start..t.end].eq_ignore_ascii_case("'hex'");
+                    hex.then_some(())?;
+                    self.take();
+                    self.eat_punct(b')').then_some(())?;
+                } else if self.strict && next_open && is("ST_GEOMFROMTEXT") {
+                    self.take();
+                    self.take();
+                    let text = self.text;
+                    let introducer = self
+                        .peek(0)
+                        .is_some_and(|t| t.k == K::Word && text[t.start..t.end].starts_with('_'));
+                    if mysql && introducer {
+                        self.take();
+                    }
+                    (self.kind(0) == Some(K::Str)).then_some(())?;
+                    self.take();
+                    if self.eat_punct(b',') {
+                        let t = self.peek(0)?;
+                        let int = t.k == K::Num
+                            && text[t.start..t.end].bytes().all(|b| b.is_ascii_digit());
+                        int.then_some(())?;
+                        self.take();
+                    }
+                    self.eat_punct(b')').then_some(())?;
+                } else if self.strict {
+                    return None;
                 } else if (postgres && is("DECODE") || mysql && is("ST_GEOMFROMTEXT")) && next_open
                 {
                     self.take();
@@ -269,6 +317,16 @@ impl<'a> Parser<'a> {
             }
             _ => return None,
         }
+        Some(())
+    }
+
+    /// A plain `'..'` string of hex digits.
+    fn hex_string(&mut self) -> Option<()> {
+        let t = self.peek(0)?;
+        let s = &self.text[t.start..t.end];
+        let inner = s.strip_prefix('\'')?.strip_suffix('\'')?;
+        (t.k == K::Str && inner.bytes().all(|b| b.is_ascii_hexdigit())).then_some(())?;
+        self.take();
         Some(())
     }
 

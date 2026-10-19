@@ -186,9 +186,9 @@ The reviewable SQL that would make one database's structure match another's.
 _Avoid_: Migration, patch
 
 **Backup**:
-A SQL script written by Contura itself, holding a database's structure and rows.
+A SQL script written by Contura itself, holding a database's (on PostgreSQL, a schema's) structure and rows, taken from one consistent snapshot. Its header lists what it does **not include**, such as extensions, large objects, grants and roles, partitioned tables or virtual tables, so it never claims more than it holds.
 _Avoid_: Dump, export, snapshot
 
 **Restore**:
-Running a Backup against a database to recreate its structure and rows.
+Running a Backup against a database to recreate its structure and rows, after Contura checks the file and shows the exact SQL. Three modes: **Into a new database** (removed again if the restore fails), **Into an existing database that must be empty**, and **Replace** the tables the file holds (every DROP is listed; on MySQL, back up those tables first).
 _Avoid_: Import, load

@@ -29,7 +29,13 @@ pub fn every_type_columns(kind: DialectKind) -> Vec<&'static str> {
     }
 }
 
-fn statements(kind: DialectKind, name: &str, rows: u64) -> Vec<String> {
+/// The every-type table's statements; `schema` is the PostgreSQL schema (else unused).
+pub fn every_type_statements(
+    kind: DialectKind,
+    schema: &str,
+    name: &str,
+    rows: u64,
+) -> Vec<String> {
     match kind {
         DialectKind::MySql => {
             let t = format!("`{}`", name.replace('`', "``"));
@@ -74,8 +80,8 @@ fn statements(kind: DialectKind, name: &str, rows: u64) -> Vec<String> {
             ]
         }
         DialectKind::Postgres => {
-            let t = format!("public.\"{}\"", name.replace('"', "\"\""));
-            let mood = format!("public.\"{}_mood\"", name.replace('"', "\"\""));
+            let t = format!("\"{schema}\".\"{}\"", name.replace('"', "\"\""));
+            let mood = format!("\"{schema}\".\"{}_mood\"", name.replace('"', "\"\""));
             vec![
                 format!("CREATE TYPE {mood} AS ENUM ('happy', 'sad', 'ok')"),
                 format!(
@@ -162,7 +168,7 @@ fn statements(kind: DialectKind, name: &str, rows: u64) -> Vec<String> {
 /// `db`'s own (MySQL: the configured database; PostgreSQL: schema `public`).
 pub async fn every_type_table(db: &dyn Dialect, kind: DialectKind, name: &str, rows: u64) {
     let session = db.open_query_session(None).await.expect("open a session");
-    for sql in statements(kind, name, rows) {
+    for sql in every_type_statements(kind, "public", name, rows) {
         session
             .execute(&sql)
             .await

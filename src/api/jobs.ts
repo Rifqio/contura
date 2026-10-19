@@ -1,5 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  BackupPlan,
+  BackupRequest,
   ConnectionId,
   ExportPreview,
   ExportRequest,
@@ -11,6 +13,9 @@ import type {
   JobId,
   JobSummary,
   PassId,
+  RestorePlan,
+  RestoreRequest,
+  RestoreTarget,
   ScriptPlan,
   ScriptRequest,
   ScriptStatement,
@@ -122,6 +127,46 @@ export async function startTransfer(
   onEvent: OnJobEvent,
 ): Promise<JobId> {
   await invoke("start_transfer", { job: id, req, reviewed, pass, events: channel(onEvent) });
+  return id;
+}
+
+/** What a Backup of the database (or PostgreSQL schema) would hold: counts, not-included list, estimate, file name. */
+export function planBackup(req: BackupRequest): Promise<BackupPlan> {
+  return invoke<BackupPlan>("plan_backup", { req });
+}
+
+/** Starts Backup `id` (from `newJobId`); `overwrite` replaces an existing file. A read job: no pass anywhere. */
+export async function startBackup(id: JobId, req: BackupRequest, overwrite: boolean, onEvent: OnJobEvent): Promise<JobId> {
+  await invoke("start_backup", { job: id, req, overwrite, events: channel(onEvent) });
+  return id;
+}
+
+/** Starts Restore's check pass `id` on `path`: its finished report carries the `restoreCheck`. */
+export async function inspectRestore(id: JobId, target: RestoreTarget, path: string, onEvent: OnJobEvent): Promise<JobId> {
+  await invoke("inspect_restore", { job: id, target, path, events: channel(onEvent) });
+  return id;
+}
+
+export function planRestore(req: RestoreRequest): Promise<RestorePlan> {
+  return invoke<RestorePlan>("plan_restore", { req });
+}
+
+/** Show all: 100 of the plan's structure statements from position `from`, read from the file on demand. */
+export function restoreStatements(req: RestoreRequest, from: number): Promise<ScriptStatement[]> {
+  return invoke<ScriptStatement[]>("restore_statements", { req, from });
+}
+
+/** The Production confirmation of a Restore: a Job pass for the plan's fingerprint (the file's SHA-256 included). */
+export function confirmRestore(req: RestoreRequest): Promise<PassId> {
+  return invoke<PassId>("confirm_restore", { req });
+}
+
+/**
+ * Starts Restore `id` (from `newJobId`). `fingerprint` is the reviewed plan's (R28, every Connection): another
+ * file or plan gives `fileChanged` before anything writes. `pass` comes from `confirmRestore` on Production.
+ */
+export async function startRestore(id: JobId, req: RestoreRequest, fingerprint: string, pass: PassId | null, onEvent: OnJobEvent): Promise<JobId> {
+  await invoke("start_restore", { job: id, req, fingerprint, pass, events: channel(onEvent) });
   return id;
 }
 

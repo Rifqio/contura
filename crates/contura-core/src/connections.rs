@@ -37,10 +37,13 @@ use crate::suggest::{SuggestedConnection, laragon_suggestions};
 use crate::visual_query::{self, ColumnTypes, VisualQuery, VqPreview, VqRun};
 use std::time::{Duration, Instant};
 
+mod backup;
 mod export;
 mod import;
+mod restore;
 mod script;
 mod transfer;
+pub use backup::non_snapshot_note;
 pub use transfer::TARGET_CHANGED;
 
 const LAST_GROUP_KEY: &str = "last_group";
