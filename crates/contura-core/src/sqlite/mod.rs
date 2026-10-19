@@ -15,13 +15,15 @@ use std::time::Duration;
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension};
 
 use crate::common::quote_double;
-use crate::design::{self, DesignOutcome, DesignPlan, LoadedSchema, Parts};
+use crate::design::{
+    self, DesignOutcome, DesignPlan, LoadedSchema, Parts, RunControl, RunOutcome, StatementPlan,
+};
 use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
-    ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
-    PageRequest, SchemaInfo,
+    ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
+    Page, PageRequest, SchemaInfo,
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -275,6 +277,7 @@ fn run_design(
     plan: &DesignPlan,
     parts: &Parts,
     read_only: bool,
+    control: Option<&RunControl>,
 ) -> Result<DesignOutcome> {
     if let Some(loaded) = plan.foreign_keys {
         let on: i64 = conn
@@ -284,7 +287,7 @@ fn run_design(
             return Err(Error::InvalidInput(design::FOREIGN_KEYS_CHANGED.into()));
         }
     }
-    let outcome = run_design_body(conn, plan, parts, read_only);
+    let outcome = run_design_body(conn, plan, parts, read_only, control);
     // This is the shared browse connection: whatever happened, no transaction may
     // stay open on it.
     if !conn.is_autocommit() {
@@ -365,6 +368,7 @@ fn run_design_body(
     plan: &DesignPlan,
     parts: &Parts,
     read_only: bool,
+    control: Option<&RunControl>,
 ) -> Result<DesignOutcome> {
     let failed = |statement: usize, e: rusqlite::Error| {
         if read_only && is_read_only_refusal(&e) {
@@ -377,6 +381,9 @@ fn run_design_body(
         })
     };
     for at in parts.before.clone() {
+        if design::stop(control, at) {
+            return Ok(DesignOutcome::Cancelled { ran: 0 });
+        }
         if let Err(e) = first_row(conn, &plan.statements[at]) {
             return failed(at, e);
         }
@@ -391,6 +398,10 @@ fn run_design_body(
         return Err(Error::InvalidInput(design::TABLE_CHANGED.into()));
     }
     for at in parts.middle.clone() {
+        if design::stop(control, at) {
+            let _ = rollback(conn);
+            return Ok(DesignOutcome::Cancelled { ran: 0 });
+        }
         match first_row(conn, &plan.statements[at]) {
             Ok(None) => {}
             // A row from any statement in the middle is a failed check.
@@ -519,8 +530,26 @@ impl Dialect for SqliteDialect {
         let read_only = self.read_only;
         // One `run`: the connection lock is held from the first statement to the last
         // `after` statement, so nothing else uses the connection in between.
-        self.run(move |c| run_design(c, &plan, &parts, read_only))
+        self.run(move |c| run_design(c, &plan, &parts, read_only, None))
             .await
+    }
+
+    /// SQLite has one database per file, so `database` is not used.
+    async fn run_statements(
+        &self,
+        _database: &str,
+        plan: &StatementPlan,
+        control: RunControl,
+    ) -> Result<RunOutcome> {
+        let design = design::statement_design_plan(DialectKind::Sqlite, plan)?;
+        let parts = design::runnable(&design)?;
+        let of = design.statements.len();
+        let read_only = self.read_only;
+        // One `run`, as for `apply_design`: the lock is held from first to last statement.
+        let outcome = self
+            .run(move |c| run_design(c, &design, &parts, read_only, Some(&control)))
+            .await?;
+        design::run_outcome(outcome, of)
     }
 
     async fn open_row_source(
@@ -610,7 +639,7 @@ mod tests {
 
     fn run(conn: &Connection, plan: &DesignPlan) -> Result<DesignOutcome> {
         let parts = design::runnable(plan).unwrap();
-        run_design(conn, plan, &parts, false)
+        run_design(conn, plan, &parts, false, None)
     }
 
     fn int(conn: &Connection, sql: &str) -> i64 {

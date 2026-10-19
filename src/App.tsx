@@ -142,6 +142,8 @@ function Workspace() {
     renameFlowTab,
     openTransferTab,
     setTransferMeta,
+    openCompareTab,
+    setCompareMeta,
     schemaClose,
     schemaCloseFor,
   } = useWorkspaceTabs();
@@ -282,6 +284,8 @@ function Workspace() {
   importJobsRef.current = importJobs;
   /** The running job of each Data Transfer tab, by tab id, so closing it asks first. */
   const transferJobs = useRef(new Map<string, JobId>());
+  /** Each Schema Compare tab's Apply job while it runs. */
+  const compareJobs = useRef(new Map<string, JobId>());
   const jobsNow = useRef(jobs.jobs);
   jobsNow.current = jobs.jobs;
 
@@ -501,6 +505,8 @@ function Workspace() {
     if (tab.kind === "import" && !(await jobsGuard.confirmCloseImport(importJobOf(key)))) return;
     // A running transfer asks "Cancel the transfer and roll back?"; one only set up closes at once.
     if (tab.kind === "transfer" && !(await jobsGuard.confirmCloseTransfer(transferJobs.current.get(tab.id) ?? null))) return;
+    // A compare whose Apply runs asks "Cancel Apply?" (R6).
+    if (tab.kind === "compare" && !(await jobsGuard.confirmCloseCompare(compareJobs.current.get(tab.id) ?? null))) return;
     // A New table created through the ask's Apply is its table's design tab now: that tab closes (M2).
     const created = createdTabs.current.get(key);
     if (created !== undefined) {
@@ -1127,6 +1133,7 @@ function Workspace() {
               onExportTable={(s) => void exportTable(s)}
               onImportTable={(s) => openImport(s.connectionId, { kind: "table", path: s.path })}
               onTransfer={openTransferTab}
+              onCompare={(side) => openCompareTab({ source: { kind: "database", ...side }, target: null })}
               onBackup={setBackingUp}
               onRestore={(target) => setRestoring((r) => ({ target, seq: (r?.seq ?? 0) + 1 }))}
               onMoveConnection={(id, to) => void actions.moveFromTree(id, to)}
@@ -1194,6 +1201,7 @@ function Workspace() {
                 onPathChange: (id, path) => modelSavedAs(id, path),
                 ask: askKit,
                 sourceConnection: (id) => schemaSources.get(id),
+                onApplyToConnection: (source) => openCompareTab({ source: { kind: "model", ...source }, target: null }),
               }}
               transfer={{
                 connections,
@@ -1208,6 +1216,24 @@ function Workspace() {
                   lang.schemas.invalidate(connectionId, path.database);
                   tree.refresh(connectionId);
                   setReveal((r) => ({ connectionId, database: path.database, schema: path.schema, name: path.name, seq: (r?.seq ?? 0) + 1 }));
+                },
+              }}
+              compare={{
+                connections,
+                groups,
+                onMeta: setCompareMeta,
+                onOpenInEditor: (target, sql) => newQuery(target.connectionId, sql, target.database),
+                onApplied: (target, tables, dropped) => {
+                  // The target's tree and completion schemas load again; open table tabs get the table-changed event,
+                  // and the tabs of dropped tables close.
+                  lang.schemas.invalidate(target.connectionId, target.database);
+                  tree.refresh(target.connectionId);
+                  for (const path of tables) void reloadGrid(target.connectionId, path);
+                  for (const path of dropped) tableDropped(target.connectionId, path);
+                },
+                onJob: (id, job) => {
+                  if (job) compareJobs.current.set(id, job);
+                  else compareJobs.current.delete(id);
                 },
               }}
             />

@@ -1,6 +1,6 @@
 import type { SetStateAction } from "react";
 import type { QueryTabDoc } from "../query/QueryTab";
-import { type TransferSeed, type VisualTabDoc, type WindowTab, type WorkTab, afterClose, tabKey } from "../shell/tabs";
+import { type CompareSeed, type TransferSeed, type VisualTabDoc, type WindowTab, type WorkTab, afterClose, tabKey } from "../shell/tabs";
 
 /** The place's tabs, the window's tabs and the active tab, in one state so each step sees the ones before it. */
 export interface TabsState {
@@ -30,7 +30,11 @@ export type TabsAction =
   /** Adds a Data Transfer tab and shows it; every Transfer data... starts its own. */
   | { type: "openTransfer"; id: string; seed: TransferSeed }
   /** A Data Transfer tab's title and mark, as the tab reports them. */
-  | { type: "transferMeta"; id: string; title: string; dirty: boolean };
+  | { type: "transferMeta"; id: string; title: string; dirty: boolean }
+  /** Adds a Schema Compare tab and shows it; every Schema Compare starts its own. */
+  | { type: "openCompare"; id: string; seed: CompareSeed }
+  /** A Schema Compare tab's title and target Connection, as the tab reports them. */
+  | { type: "compareMeta"; id: string; title: string; connectionId: string | null };
 
 function apply<T>(prev: T, next: SetStateAction<T>): T {
   return typeof next === "function" ? (next as (p: T) => T)(prev) : next;
@@ -107,6 +111,18 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const old = state.windowTabs[at];
       if (!old || old.kind !== "transfer" || (old.title === title && old.dirty === dirty)) return state;
       const windowTabs = state.windowTabs.map((t, i) => (i === at ? { ...old, title, dirty } : t));
+      return { ...state, windowTabs };
+    }
+    case "openCompare": {
+      const tab: WindowTab = { kind: "compare", id: action.id, seed: action.seed, title: "Schema Compare", connectionId: action.seed.target?.connectionId ?? null };
+      return { ...state, windowTabs: [...state.windowTabs, tab], activeKey: tabKey(tab) };
+    }
+    case "compareMeta": {
+      const { id, title, connectionId } = action;
+      const at = state.windowTabs.findIndex((t) => t.kind === "compare" && t.id === id);
+      const old = state.windowTabs[at];
+      if (!old || old.kind !== "compare" || (old.title === title && old.connectionId === connectionId)) return state;
+      const windowTabs = state.windowTabs.map((t, i) => (i === at ? { ...old, title, connectionId } : t));
       return { ...state, windowTabs };
     }
   }

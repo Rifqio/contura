@@ -14,13 +14,15 @@ use std::time::Duration;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 
-use crate::design::{self, DesignOutcome, DesignPlan, Parts};
+use crate::design::{
+    self, DesignOutcome, DesignPlan, Parts, RunControl, RunOutcome, StatementPlan,
+};
 use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
-    ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
-    PageRequest, SchemaInfo, SslMode,
+    ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
+    Page, PageRequest, SchemaInfo, SslMode,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -217,8 +219,9 @@ async fn run_design(
     plan: &DesignPlan,
     parts: &Parts,
     read_only: bool,
+    control: Option<&RunControl>,
 ) -> Result<DesignOutcome> {
-    let outcome = run_design_body(conn, plan, parts, read_only).await;
+    let outcome = run_design_body(conn, plan, parts, read_only, control).await;
     for at in parts.after.clone() {
         let sql = &plan.statements[at];
         if let Err(e) = first_row(conn, sql).await {
@@ -233,10 +236,14 @@ async fn run_design_body(
     plan: &DesignPlan,
     parts: &Parts,
     read_only: bool,
+    control: Option<&RunControl>,
 ) -> Result<DesignOutcome> {
     for at in parts.before.start..parts.middle.end {
         // Every statement before this one ran (and committed).
         let ran = at;
+        if design::stop(control, at) {
+            return Ok(DesignOutcome::Cancelled { ran });
+        }
         match first_row(conn, &plan.statements[at]).await {
             Ok(None) => {}
             Ok(Some(first)) => return Ok(design::returned_row(plan, at, ran, Some(first))),
@@ -398,9 +405,29 @@ impl Dialect for MySqlDialect {
         let mut conn = Conn::new(self.opts.clone())
             .await
             .map_err(|e| Error::Connect(format!("cannot open a connection for the change: {e}")))?;
-        let outcome = run_design(&mut conn, plan, &parts, self.read_only).await;
+        let outcome = run_design(&mut conn, plan, &parts, self.read_only, None).await;
         let _ = conn.disconnect().await;
         browse_result(outcome, self.read_only)
+    }
+
+    /// The statements name their database, so `database` is not used.
+    async fn run_statements(
+        &self,
+        _database: &str,
+        plan: &StatementPlan,
+        control: RunControl,
+    ) -> Result<RunOutcome> {
+        let design = design::statement_design_plan(DialectKind::MySql, plan)?;
+        let parts = design::runnable(&design)?;
+        let mut conn = Conn::new(self.opts.clone())
+            .await
+            .map_err(|e| Error::Connect(format!("cannot open a connection for the change: {e}")))?;
+        let outcome = run_design(&mut conn, &design, &parts, self.read_only, Some(&control)).await;
+        let _ = conn.disconnect().await;
+        design::run_outcome(
+            browse_result(outcome, self.read_only)?,
+            design.statements.len(),
+        )
     }
 
     async fn open_row_source(

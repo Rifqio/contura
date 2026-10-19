@@ -30,7 +30,14 @@ const TABLES_SQL: &str = "SELECT c.relname::text, c.relkind::text, obj_descripti
 
 const COLUMNS_SQL: &str = "SELECT c.relname::text, a.attname::text, format_type(a.atttypid, a.atttypmod), \
     a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text, \
-    col_description(a.attrelid, a.attnum) \
+    col_description(a.attrelid, a.attnum), \
+    EXISTS (SELECT 1 FROM pg_depend dep \
+       JOIN pg_class s ON s.oid = dep.refobjid AND s.relkind = 'S' \
+       JOIN pg_depend own ON own.classid = 'pg_class'::regclass AND own.objid = s.oid \
+         AND own.refclassid = 'pg_class'::regclass AND own.refobjid = a.attrelid \
+         AND own.refobjsubid = a.attnum AND own.deptype = 'a' \
+       WHERE dep.classid = 'pg_attrdef'::regclass AND dep.objid = d.oid \
+         AND dep.refclassid = 'pg_class'::regclass) \
     FROM pg_attribute a \
     JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
     LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
@@ -83,6 +90,16 @@ const SKIPPED_SQL: &str = "SELECT kind, name FROM ( \
       WHERE n.nspname = $1 AND t.typtype = 'd' \
     ) s ORDER BY kind, name";
 
+/// `sequence` (`[schema, name]`) is the one PostgreSQL makes for a `serial`
+/// column `column` of `schema.table`.
+/// R11: on a live connection the sequence `nextval` reads is the column's own
+/// when it is OWNED BY that column (`pg_depend` deptype `a`), whatever its name,
+/// so a serial stays one after its table or column is renamed.
+fn own_sequence(owned: bool) -> bool {
+    use crate::compare::normalise::{TableRef, is_own_sequence};
+    is_own_sequence(TableRef::default(), "", None, "", Some(owned))
+}
+
 pub(super) async fn schema_snapshot(client: &Client, schema: &str) -> Result<SchemaModel> {
     let mut skipped = Vec::new();
     let mut tables: BTreeMap<String, SmTable> = BTreeMap::new();
@@ -128,9 +145,14 @@ pub(super) async fn schema_snapshot(client: &Client, schema: &str) -> Result<Sch
         let identity: String = row.get(5);
         let generated: String = row.get(6);
         let mut note: Option<String> = row.get(7);
+        // Only the column's own sequence (`<table>_<column>_seq` in the table's
+        // schema, as `serial` makes it) is the increment; any other `nextval`
+        // stays a default, as the compare's normaliser reads it.
+        let owned = row.get::<_, Option<bool>>(8).unwrap_or(false);
         let serial = default_expr
             .as_deref()
-            .is_some_and(|d| d.starts_with("nextval("));
+            .is_some_and(|d| d.starts_with("nextval("))
+            && own_sequence(owned);
         let mut default = None;
         if generated == "s" {
             skipped.push(format!("generated column {table}.{name}"));
@@ -260,7 +282,14 @@ const DESIGN_COLUMNS_SQL: &str = "SELECT a.attname::text, format_type(a.atttypid
     a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text, \
     col_description(a.attrelid, a.attnum), \
     CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation \
-         THEN (SELECT co.collname::text FROM pg_collation co WHERE co.oid = a.attcollation) END \
+         THEN (SELECT co.collname::text FROM pg_collation co WHERE co.oid = a.attcollation) END, \
+    EXISTS (SELECT 1 FROM pg_depend dep \
+       JOIN pg_class s ON s.oid = dep.refobjid AND s.relkind = 'S' \
+       JOIN pg_depend own ON own.classid = 'pg_class'::regclass AND own.objid = s.oid \
+         AND own.refclassid = 'pg_class'::regclass AND own.refobjid = a.attrelid \
+         AND own.refobjsubid = a.attnum AND own.deptype = 'a' \
+       WHERE dep.classid = 'pg_attrdef'::regclass AND dep.objid = d.oid \
+         AND dep.refclassid = 'pg_class'::regclass) \
     FROM pg_attribute a \
     JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
     JOIN pg_type t ON t.oid = a.atttypid \
@@ -408,11 +437,15 @@ pub(super) async fn table_design(
         if generated {
             unsupported.push(format!("generated column {name}"));
         }
+        // The same own-sequence rule as the snapshot: any other `nextval` is a
+        // plain default the designer (and a Sync Script) can change or drop.
+        let owned = row.get::<_, Option<bool>>(8).unwrap_or(false);
         let increment = if !identity.is_empty() {
             Increment::Identity
         } else if default_expr
             .as_deref()
             .is_some_and(|d| d.starts_with("nextval("))
+            && own_sequence(owned)
         {
             Increment::Serial
         } else {

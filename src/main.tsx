@@ -8,6 +8,7 @@ import "./styles/export.css";
 import "./styles/import.css";
 import "./styles/transfer.css";
 import "./styles/backup.css";
+import "./styles/compare.css";
 import "./styles/flow.css";
 import "./styles/flow-canvas.css";
 import "./styles/lineage.css";

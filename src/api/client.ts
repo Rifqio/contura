@@ -487,6 +487,18 @@ function keyText(key: KeyPart[]): string {
   return key.map((k) => `${k.column} ${cellText(k.value)}`).join(", ");
 }
 
+/** A cancelled Sync Apply says what stayed: MySQL commits one by one, PostgreSQL keeps its committed enum values. */
+export function syncCancelledText(applied: number, total: number): string {
+  if (applied === 0) return "Apply was cancelled. Nothing was changed.";
+  const were = applied === 1 ? "was" : "were";
+  return `Apply was cancelled. ${applied.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} statements ${were} applied.`;
+}
+
+/** Schema Compare: the target changed between the compare and Apply. */
+export function planChangedText(connection: string): string {
+  return `${connection} changed since you compared. Compare again to see the current Sync Script.`;
+}
+
 /**
  * Turns a command error into UI text that says what went wrong and what to do.
  * `dialect` picks hints that fit the Connection, such as file hints for SQLite.
@@ -543,8 +555,8 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `Save failed at statement ${e.message.statement + 1}: ${e.message.message}`;
     case "designFailed": {
       const { statement, ran, total, message } = e.message;
-      const failed = `Statement ${statement + 1} failed: ${message}`;
-      return ran === 0 ? `Nothing was changed. ${failed}` : `${ran} of ${total} statements were applied. ${failed}`;
+      const failed = `Statement ${(statement + 1).toLocaleString("en-US")} failed: ${message}`;
+      return ran === 0 ? `Nothing was changed. ${failed}` : `${ran.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} statements were applied. ${failed}`;
     }
     case "designForeignKeys":
       return `Rows in ${e.message.table} would break a Foreign Key. Nothing was changed.`;
@@ -571,6 +583,10 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return `${e.message.name}.flow already exists.`;
     case "backupRefused":
       return e.message.reason;
+    case "planChanged":
+      return planChangedText(e.message.connection);
+    case "syncCancelled":
+      return syncCancelledText(e.message.applied, e.message.total);
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

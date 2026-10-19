@@ -6,13 +6,15 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, NoTls};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-use crate::design::{self, DesignOutcome, DesignPlan, Parts};
+use crate::design::{
+    self, DesignOutcome, DesignPlan, Parts, RunControl, RunOutcome, StatementPlan,
+};
 use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
-    ConnectionConfig, DbObject, FullValue, FullValueRequest, ObjectKind, ObjectPath, Page,
-    PageRequest, SchemaInfo, SslMode,
+    ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
+    Page, PageRequest, SchemaInfo, SslMode,
 };
 
 mod ddl;
@@ -257,8 +259,9 @@ async fn run_design(
     plan: &DesignPlan,
     parts: &Parts,
     read_only: bool,
+    control: Option<&RunControl>,
 ) -> Result<DesignOutcome> {
-    let outcome = run_design_body(client, plan, parts, read_only).await;
+    let outcome = run_design_body(client, plan, parts, read_only, control).await;
     for at in parts.after.clone() {
         let sql = &plan.statements[at];
         if let Err(e) = first_row(client, sql).await {
@@ -273,6 +276,7 @@ async fn run_design_body(
     plan: &DesignPlan,
     parts: &Parts,
     read_only: bool,
+    control: Option<&RunControl>,
 ) -> Result<DesignOutcome> {
     // A server error is `Failed`, except a read-only refusal on a Read-only
     // Connection; any other error is the connection's.
@@ -290,12 +294,19 @@ async fn run_design_body(
         })
     };
     for at in parts.before.clone() {
+        if design::stop(control, at) {
+            return Ok(DesignOutcome::Cancelled { ran: 0 });
+        }
         if let Err(e) = first_row(client, &plan.statements[at]).await {
             return failed(at, e);
         }
     }
     client.batch_execute("BEGIN").await.map_err(query_err)?;
     for at in parts.middle.clone() {
+        if design::stop(control, at) {
+            let _ = client.batch_execute("ROLLBACK").await;
+            return Ok(DesignOutcome::Cancelled { ran: 0 });
+        }
         let result = first_row(client, &plan.statements[at]).await;
         if matches!(result, Ok(None)) {
             continue;
@@ -624,9 +635,26 @@ impl Dialect for PostgresDialect {
         // A client of its own, so a page fetch from another tab never joins the transaction.
         let client = open_client(&self.settings, database).await?;
         browse_result(
-            run_design(&client, plan, &parts, self.read_only).await,
+            run_design(&client, plan, &parts, self.read_only, None).await,
             self.read_only,
         )
+    }
+
+    async fn run_statements(
+        &self,
+        database: &str,
+        plan: &StatementPlan,
+        control: RunControl,
+    ) -> Result<RunOutcome> {
+        let design = design::statement_design_plan(DialectKind::Postgres, plan)?;
+        let parts = design::runnable(&design)?;
+        // A client of its own, so a page fetch from another tab never joins the transaction.
+        let client = open_client(&self.settings, database).await?;
+        let outcome = browse_result(
+            run_design(&client, &design, &parts, self.read_only, Some(&control)).await,
+            self.read_only,
+        )?;
+        design::run_outcome(outcome, design.statements.len())
     }
 
     async fn open_row_source(

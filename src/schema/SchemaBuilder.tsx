@@ -2,6 +2,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DIALECT_LABEL, errorText, exportSql, writeBinaryFile, writeModelFiles, writeTextFile } from "../api/client";
 import type { DialectKind, SchemaModel } from "../api/types";
+import { dbmlErrorNotice } from "../compare/compareModel";
 import type { AskContext, AskKit } from "../assistant/context";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
@@ -56,9 +57,14 @@ interface Props {
   closeRef?: MutableRefObject<(() => void) | null>;
   /** The file the model was saved to, once a Save picks one; its tab is named after it. */
   onPathChange?: (path: string) => void;
+  /**
+   * Apply to Connection...: opens Schema Compare with this model as the source (saving nothing).
+   * `notice` is set while the DBML has an error and the compare uses the last valid version.
+   */
+  onApplyToConnection?: (source: { model: SchemaModel; path: string | null; dialect: DialectKind; notice: string | null }) => void;
 }
 
-export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnection, closeRef, onPathChange }: Props) {
+export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnection, closeRef, onPathChange, onApplyToConnection }: Props) {
   const [text, setText] = useState(doc.dbml);
   const [saved, setSaved] = useState(doc.savedDbml);
   const [path, setPath] = useState(doc.path);
@@ -277,6 +283,16 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
               onEdit={onEdit}
               onSelectionChange={setSelected}
               onPublish={setPublishAt}
+              onApplyToConnection={
+                onApplyToConnection &&
+                (() =>
+                  onApplyToConnection({
+                    model,
+                    path,
+                    dialect: doc.dialect,
+                    notice: blocked && firstError ? dbmlErrorNotice(firstError.line) : null,
+                  }))
+              }
               onShowText={collapsed ? () => setCollapsed(false) : undefined}
               onGoToError={() => {
                 setCollapsed(false);

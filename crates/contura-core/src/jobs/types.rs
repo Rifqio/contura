@@ -29,6 +29,8 @@ pub enum JobKind {
     RestoreCheck,
     /// Restore of a Backup (step 9).
     Restore,
+    /// Applying a Sync Script (step 10).
+    Sync,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]

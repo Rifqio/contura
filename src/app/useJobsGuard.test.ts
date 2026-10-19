@@ -230,3 +230,18 @@ test("closing_a_running_transfer_tab_asks_to_roll_back", async () => {
   // A transfer only set up closes at once.
   await expect(hook.result.current.confirmCloseTransfer(null)).resolves.toBe(true);
 });
+
+test("closing_a_compare_tab_while_apply_runs_asks_first", async () => {
+  const { jobs, hook, redraw } = setup([job("s1", "sync", "Applying the Sync Script on freight-prod", "c1")]);
+  expect(leaveLine(job("s1", "sync", "Applying the Sync Script on freight-prod", "c1"), [])).toBe("Apply on its Connection is running");
+  let answer: Promise<boolean> = Promise.resolve(false);
+  act(() => {
+    answer = hook.result.current.confirmCloseCompare("s1");
+  });
+  redraw();
+  expect(screen.getByRole("dialog", { name: "Cancel Apply?" })).toBeTruthy();
+  await act(async () => screen.getByRole("button", { name: "Cancel Apply" }).click());
+  await expect(answer).resolves.toBe(true);
+  expect(jobs.cancel).toHaveBeenCalledWith("s1");
+  await expect(hook.result.current.confirmCloseCompare(null)).resolves.toBe(true);
+});

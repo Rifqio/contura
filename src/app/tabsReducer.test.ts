@@ -208,3 +208,14 @@ it("openTransfer adds a tab each time and transferMeta sets its title and mark",
   // The same title and mark change nothing.
   expect(tabsReducer(next, { type: "transferMeta", id: "t1", title: "pos_live to analytics", dirty: true })).toBe(next);
 });
+
+it("openCompare adds a tab each time and compareMeta sets its title and target", () => {
+  const seed = { source: { kind: "database" as const, connectionId: "stg", database: "freight", schema: "billing" }, target: null };
+  let s = tabsReducer({ tabs: [], windowTabs: [], activeKey: null }, { type: "openCompare", id: "c1", seed });
+  s = tabsReducer(s, { type: "openCompare", id: "c2", seed });
+  expect(s.windowTabs.map((t) => t.kind === "compare" && t.title)).toEqual(["Schema Compare", "Schema Compare"]);
+  expect(s.activeKey).toBe("compare:c2");
+  const next = tabsReducer(s, { type: "compareMeta", id: "c1", title: "freight-staging to freight-prod", connectionId: "prod" });
+  expect(next.windowTabs[0]).toMatchObject({ kind: "compare", title: "freight-staging to freight-prod", connectionId: "prod" });
+  expect(tabsReducer(next, { type: "compareMeta", id: "c1", title: "freight-staging to freight-prod", connectionId: "prod" })).toBe(next);
+});

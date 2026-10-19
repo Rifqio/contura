@@ -153,7 +153,7 @@ pub struct Group {
 /// The largest Group image the data folder accepts.
 pub const GROUP_IMAGE_MAX: usize = 262_144;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectPath {
     pub database: String,

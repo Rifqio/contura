@@ -38,12 +38,16 @@ use crate::visual_query::{self, ColumnTypes, VisualQuery, VqPreview, VqRun};
 use std::time::{Duration, Instant};
 
 mod backup;
+mod compare;
 mod export;
 mod import;
 mod restore;
 mod script;
 mod transfer;
 pub use backup::non_snapshot_note;
+pub use compare::{
+    CompareDatabase, CompareRequest, CompareResult, CompareSide, DdlPair, SyncOutcome,
+};
 pub use transfer::TARGET_CHANGED;
 
 const LAST_GROUP_KEY: &str = "last_group";
@@ -180,6 +184,9 @@ pub enum PassScope {
     /// One import or script job on a Connection, bound to its fingerprint (D5): the
     /// request, the mapping, the template and the file, exactly as confirmed.
     Job(ConnectionId, [u8; 32]),
+    /// One Sync Script on the target database (and schema; `name` is empty): it
+    /// covers exactly the script's statements, once (step 10).
+    Sync(ConnectionId, ObjectPath),
 }
 
 /// The statements a save would run and what running them needs.
@@ -565,8 +572,9 @@ impl ConnectionService {
         if p.scope != *scope || p.expires <= Instant::now() {
             return Err(Error::NeedsConfirmation);
         }
-        // A design pass covers every statement of the plan, its checks included.
-        let covered: Vec<&String> = if matches!(scope, PassScope::Design(..)) {
+        // A design or Sync pass covers every statement of the plan, its checks included.
+        let exact = matches!(scope, PassScope::Design(..) | PassScope::Sync(..));
+        let covered: Vec<&String> = if exact {
             statements.iter().collect()
         } else {
             writes.iter().map(|(_, sql)| *sql).collect()
@@ -580,7 +588,7 @@ impl ConnectionService {
                 .ok_or(Error::NeedsConfirmation)?;
             remaining.swap_remove(at);
         }
-        if matches!(scope, PassScope::Edits(..) | PassScope::Design(..)) && !remaining.is_empty() {
+        if (exact || matches!(scope, PassScope::Edits(..))) && !remaining.is_empty() {
             return Err(Error::NeedsConfirmation);
         }
         if remaining.is_empty() {
@@ -2182,6 +2190,128 @@ mod job_pass_tests {
         ));
         assert!(matches!(
             svc.authorize_job(&config(false, true), FP, None),
+            Err(Error::ReadOnly(0))
+        ));
+    }
+
+    fn sync_scope(c: &ConnectionConfig) -> PassScope {
+        PassScope::Sync(
+            c.id,
+            ObjectPath {
+                database: "freight".into(),
+                schema: Some("billing".into()),
+                name: String::new(),
+            },
+        )
+    }
+
+    fn script() -> Vec<String> {
+        vec![
+            "ALTER TABLE \"billing\".\"invoices\" DROP COLUMN \"fax\"".to_string(),
+            "CREATE TABLE \"billing\".\"refunds\" (\"id\" integer)".to_string(),
+        ]
+    }
+
+    #[test]
+    fn sync_pass_covers_exactly_its_script_once() {
+        let (_d, svc) = service();
+        let c = config(true, false);
+        let scope = sync_scope(&c);
+        let pass = svc.issue_pass(scope.clone(), &script()).unwrap();
+        // One statement less (the selection changed): refused, the pass stays.
+        assert!(matches!(
+            svc.authorize(&scope, &c, &script()[..1], Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+        // One statement more: refused.
+        let mut more = script();
+        more.push("DROP TABLE \"billing\".\"old\"".into());
+        assert!(matches!(
+            svc.authorize(&scope, &c, &more, Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+        // Another target database: refused.
+        let other = PassScope::Sync(
+            c.id,
+            ObjectPath {
+                database: "other".into(),
+                schema: Some("billing".into()),
+                name: String::new(),
+            },
+        );
+        assert!(matches!(
+            svc.authorize(&other, &c, &script(), Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+        svc.authorize(&scope, &c, &script(), Some(pass)).unwrap();
+        // Used up.
+        assert!(matches!(
+            svc.authorize(&scope, &c, &script(), Some(pass)),
+            Err(Error::NeedsConfirmation)
+        ));
+        assert!(matches!(
+            svc.authorize(&scope, &c, &script(), None),
+            Err(Error::NeedsConfirmation)
+        ));
+    }
+
+    #[test]
+    fn sync_pass_never_covers_query_edits_design_job_and_reverse() {
+        let (_d, svc) = service();
+        let c = config(true, false);
+        let path = ObjectPath {
+            database: "freight".into(),
+            schema: Some("billing".into()),
+            name: "invoices".into(),
+        };
+        let session = Uuid::new_v4();
+        let others = [
+            PassScope::Query(session),
+            PassScope::Edits(c.id, path.clone()),
+            PassScope::Design(c.id, path.clone()),
+        ];
+        let sync = svc.issue_pass(sync_scope(&c), &script()).unwrap();
+        for scope in &others {
+            assert!(
+                matches!(
+                    svc.authorize(scope, &c, &script(), Some(sync)),
+                    Err(Error::NeedsConfirmation)
+                ),
+                "{scope:?}"
+            );
+        }
+        assert!(matches!(
+            svc.authorize_job(&c, FP, Some(sync)),
+            Err(Error::NeedsConfirmation)
+        ));
+        // Still there for its own script.
+        svc.authorize(&sync_scope(&c), &c, &script(), Some(sync))
+            .unwrap();
+
+        for scope in others {
+            let pass = svc.issue_pass(scope.clone(), &script()).unwrap();
+            assert!(
+                matches!(
+                    svc.authorize(&sync_scope(&c), &c, &script(), Some(pass)),
+                    Err(Error::NeedsConfirmation)
+                ),
+                "{scope:?}"
+            );
+        }
+        let job = svc.issue_job_pass(c.id, FP, None).unwrap();
+        assert!(matches!(
+            svc.authorize(&sync_scope(&c), &c, &script(), Some(job)),
+            Err(Error::NeedsConfirmation)
+        ));
+    }
+
+    #[test]
+    fn sync_read_only_wins() {
+        let (_d, svc) = service();
+        let c = config(true, true);
+        let pass = svc.issue_pass(sync_scope(&c), &script()).unwrap();
+        assert!(matches!(
+            svc.authorize(&sync_scope(&c), &c, &script(), Some(pass)),
             Err(Error::ReadOnly(0))
         ));
     }

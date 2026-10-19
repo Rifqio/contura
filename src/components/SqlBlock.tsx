@@ -5,7 +5,7 @@ import { highlightSql } from "../lang/sql/highlightStatic";
 export interface SqlMark {
   firstLine: number;
   lastLine: number;
-  tag?: "writes" | "reads";
+  tag?: "writes" | "reads" | "dropsData";
   /** `select` marks what a selected card or Join wrote; `danger` the line a server error names. */
   band?: "prod" | "readOnly" | "select" | "danger";
 }
@@ -72,7 +72,7 @@ export default function SqlBlock({
             </code>
             {tag && (
               <span className={`sql-block-tag sql-block-tag-${tag}`}>
-                {tag}
+                {tag === "dropsData" ? "drops data" : tag}
               </span>
             )}
           </div>

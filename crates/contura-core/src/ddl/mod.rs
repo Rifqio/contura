@@ -390,7 +390,7 @@ pub struct DdlOptions {
 /// The longest index name `d` keeps, and whether the limit counts characters
 /// (MySQL) rather than bytes (PostgreSQL cuts at 63 bytes; SQLite has no limit but
 /// takes the same one so a name reads the same on both).
-fn index_name_limit(d: DialectKind) -> (usize, bool) {
+pub(crate) fn index_name_limit(d: DialectKind) -> (usize, bool) {
     match d {
         DialectKind::MySql => (64, true),
         DialectKind::Postgres | DialectKind::Sqlite => (63, false),
@@ -399,7 +399,7 @@ fn index_name_limit(d: DialectKind) -> (usize, bool) {
 
 /// `name` itself when it fits `max`, otherwise its start (on a char boundary)
 /// then `_` and the first 7 hex digits of the full name's SHA-256, `max` in all.
-fn fit_name(name: &str, max: usize, by_chars: bool) -> String {
+pub(crate) fn fit_name(name: &str, max: usize, by_chars: bool) -> String {
     let len = if by_chars {
         name.chars().count()
     } else {

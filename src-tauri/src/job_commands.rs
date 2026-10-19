@@ -8,7 +8,10 @@ use std::sync::Arc;
 use contura_core::Error;
 use contura_core::backup::plan::{BackupPlan, BackupRequest};
 use contura_core::backup::restore::{RestorePlan, RestoreRequest, RestoreTarget};
-use contura_core::connections::ConnectionService;
+use contura_core::compare::{ItemId, SyncPlan};
+use contura_core::connections::{
+    CompareRequest, CompareResult, ConnectionService, DdlPair, SyncOutcome,
+};
 use contura_core::jobs::JobSink;
 use contura_core::jobs::formats::inspect;
 use contura_core::jobs::paths::{PathUse, check_user_path, read_user_text};
@@ -225,6 +228,72 @@ pub async fn start_backup(
         .start_backup(job, req, overwrite, Arc::new(ChannelSink(events)))
         .await
         .map(|_| ())
+}
+
+/// Schema Compare: reads both sides and diffs them, with the data-loss counts.
+/// Read only on both sides: no pass on Read-only or Production.
+#[tauri::command]
+pub async fn compare_schemas(
+    service: Service<'_>,
+    req: CompareRequest,
+) -> Result<CompareResult, Error> {
+    service.compare_schemas(req).await
+}
+
+/// One table's (or enum's) DDL on each side, for the aligned panes.
+#[tauri::command]
+pub async fn compare_ddl(
+    service: Service<'_>,
+    req: CompareRequest,
+    table: String,
+) -> Result<DdlPair, Error> {
+    service.compare_ddl(req, table).await
+}
+
+/// The Sync Script for `selection` (`null`: the default selection). Read only.
+#[tauri::command]
+pub async fn plan_sync(
+    service: Service<'_>,
+    req: CompareRequest,
+    selection: Option<Vec<ItemId>>,
+) -> Result<SyncPlan, Error> {
+    service.plan_sync(req, selection).await
+}
+
+/// The Production confirmation: a Sync pass for exactly this selection's script.
+#[tauri::command]
+pub async fn confirm_sync(
+    service: Service<'_>,
+    req: CompareRequest,
+    selection: Vec<ItemId>,
+) -> Result<PassId, Error> {
+    service.confirm_sync(req, selection).await
+}
+
+/// Applies the Sync Script as job `job` (made by the page, kind `sync`). Only the
+/// selection and the hash come from the page: the script is rebuilt here, and a
+/// different one is `planChanged`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_sync(
+    service: Service<'_>,
+    job: JobId,
+    req: CompareRequest,
+    selection: Vec<ItemId>,
+    pass: Option<PassId>,
+    expected_hash: String,
+    events: Channel<serde_json::Value>,
+) -> Result<SyncOutcome, Error> {
+    service
+        .apply_sync(
+            job,
+            req,
+            selection,
+            pass,
+            expected_hash,
+            Arc::new(ChannelSink(events)),
+        )
+        .await
 }
 
 /// Starts Restore's check pass `job` on `path`: a job of kind `restoreCheck` whose

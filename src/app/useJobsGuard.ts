@@ -25,6 +25,8 @@ export interface JobsGuard {
   confirmCloseImport(jobId: JobId | null): Promise<boolean>;
   /** The same for a Data Transfer tab: "Cancel the transfer and roll back?" */
   confirmCloseTransfer(jobId: JobId | null): Promise<boolean>;
+  /** The same for a Schema Compare tab while Apply runs: "Cancel Apply?" */
+  confirmCloseCompare(jobId: JobId | null): Promise<boolean>;
   /** The open ask, else null. */
   dialog: ReactNode;
 }
@@ -40,6 +42,7 @@ export function leaveLine(job: JobView, connections: ConnectionConfig[]): string
   const conn = connections.find((c) => c.id === job.connectionId)?.name ?? "its Connection";
   if (job.kind === "export") return `Export of ${job.label.replace(/^Exporting /, "")} is running`;
   if (job.kind === "transfer") return `Transfer to ${conn} is running`;
+  if (job.kind === "sync") return `Apply on ${conn} is running`;
   const what = /^Importing into /.test(job.label)
     ? job.label.replace(/^Importing into /, "Import into ")
     : `Import of ${job.label.replace(/^Importing /, "")}`;
@@ -111,13 +114,13 @@ export function useJobsGuard(opts: { jobs: JobsGuardJobs; connections: Connectio
     });
   }
 
-  async function confirmCloseImport(jobId: JobId | null, title = "Cancel the import and roll back?"): Promise<boolean> {
+  async function confirmCloseImport(jobId: JobId | null, title = "Cancel the import and roll back?", yes = "Cancel and roll back"): Promise<boolean> {
     if (jobId === null || !live().some((j) => j.id === jobId)) return true;
     return open({
       title,
       lines: [],
       question: "",
-      yes: "Cancel and roll back",
+      yes,
       ids: [jobId],
     });
   }
@@ -166,6 +169,8 @@ export function useJobsGuard(opts: { jobs: JobsGuardJobs; connections: Connectio
   }
 
   const confirmCloseTransfer = (jobId: JobId | null) => confirmCloseImport(jobId, "Cancel the transfer and roll back?");
+  // MySQL keeps the statements that ran, so the answer says Cancel, not roll back.
+  const confirmCloseCompare = (jobId: JobId | null) => confirmCloseImport(jobId, "Cancel Apply?", "Cancel Apply");
 
-  return { running: () => live().length > 0, confirmStop, confirmCloseImport: (id) => confirmCloseImport(id), confirmCloseTransfer, dialog };
+  return { running: () => live().length > 0, confirmStop, confirmCloseImport: (id) => confirmCloseImport(id), confirmCloseTransfer, confirmCloseCompare, dialog };
 }

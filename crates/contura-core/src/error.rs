@@ -101,6 +101,17 @@ pub enum Error {
     /// Restore refuses a Backup file; `reason` is the sentence to show.
     #[error("{reason}")]
     BackupRefused { reason: String },
+    /// Schema Compare: the Sync Script rebuilt for Apply is not the one shown,
+    /// because a side changed since the compare (any Connection).
+    #[error(
+        "{connection} changed since you compared. Compare again to see the current Sync Script."
+    )]
+    PlanChanged { connection: String },
+    /// Schema Compare: Apply was cancelled after `applied` of the script's `total`
+    /// statements stayed applied (MySQL commits one by one; PostgreSQL keeps the
+    /// enum values it committed first).
+    #[error("Apply was cancelled after {applied} of {total} statements were applied")]
+    SyncCancelled { applied: usize, total: usize },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -262,6 +273,33 @@ mod tests {
             }),
             serde_json::json!({"kind":"designRestoreFailed","message":{"applied":true,
                 "sql":"PRAGMA foreign_keys = ON","message":"disk I/O error"}})
+        );
+    }
+
+    #[test]
+    fn plan_changed_shape_and_text() {
+        let e = Error::PlanChanged {
+            connection: "freight-prod".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "freight-prod changed since you compared. Compare again to see the current Sync Script."
+        );
+        assert_eq!(
+            serde_json::to_value(e).unwrap(),
+            serde_json::json!({"kind":"planChanged","message":{"connection":"freight-prod"}})
+        );
+    }
+
+    #[test]
+    fn sync_cancelled_shape() {
+        assert_eq!(
+            serde_json::to_value(Error::SyncCancelled {
+                applied: 3,
+                total: 9
+            })
+            .unwrap(),
+            serde_json::json!({"kind":"syncCancelled","message":{"applied":3,"total":9}})
         );
     }
 

@@ -236,6 +236,24 @@ pub fn plan_design(kind: DialectKind, req: &DesignRequest) -> Result<DesignPlan>
     Ok(plan)
 }
 
+/// The plan for one table's edit list, for any loaded table: the Table Designer's
+/// Alter plan, so a Sync Script changes each table exactly as the designer would.
+pub fn plan_design_for(
+    table: &TableDesign,
+    edits: &[DesignEdit],
+    kind: DialectKind,
+) -> Result<DesignPlan> {
+    plan_design(
+        kind,
+        &DesignRequest {
+            target: DesignTarget::Alter {
+                base: table.clone(),
+            },
+            edits: edits.to_vec(),
+        },
+    )
+}
+
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidInput(message.into())
 }
@@ -2162,6 +2180,31 @@ mod alter_tests {
     use super::*;
 
     const BOTH: [DialectKind; 2] = [DialectKind::MySql, DialectKind::Postgres];
+
+    /// Two tables' edit lists planned one after the other: each plan is the one
+    /// the Table Designer makes for that table alone, and names only that table.
+    #[test]
+    fn plan_for_any_table() {
+        for kind in BOTH {
+            let first = orders(kind);
+            let mut second = orders(kind);
+            second.path = at(kind, "invoices");
+            let first_edits = vec![DesignEdit::AddColumn {
+                column: new_column("note", "varchar(40)"),
+                position: Position::Last,
+            }];
+            let second_edits = vec![change(&second, "email", |c| {
+                c.type_sql = "varchar(100)".into()
+            })];
+            let a = plan_design_for(&first, &first_edits, kind).unwrap();
+            let b = plan_design_for(&second, &second_edits, kind).unwrap();
+            assert_eq!(a, alter(kind, &first, first_edits).unwrap(), "{kind:?}");
+            assert_eq!(b, alter(kind, &second, second_edits).unwrap(), "{kind:?}");
+            assert!(a.statements.iter().all(|s| s.contains("orders")), "{a:?}");
+            assert!(b.statements.iter().all(|s| s.contains("invoices")), "{b:?}");
+            assert!(!b.statements.iter().any(|s| s.contains("orders")), "{b:?}");
+        }
+    }
 
     #[test]
     fn widening_gives_no_warning() {

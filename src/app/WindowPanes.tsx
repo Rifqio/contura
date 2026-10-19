@@ -5,6 +5,7 @@ import FlowTab from "../flow/FlowTab";
 import SchemaBuilder from "../schema/SchemaBuilder";
 import SettingsView from "../settings/SettingsView";
 import TransferTab from "../transfer/TransferTab";
+import CompareTab from "../compare/CompareTab";
 import { type SettingsSection, type WindowTab, tabKey } from "../shell/tabs";
 
 /** Home's props, built in App; `active` is set here from the tab on top. */
@@ -27,6 +28,7 @@ interface Props {
     onPathChange(id: string, path: string): void;
     ask: ComponentProps<typeof SchemaBuilder>["ask"];
     sourceConnection(id: string): ComponentProps<typeof SchemaBuilder>["sourceConnection"];
+    onApplyToConnection: ComponentProps<typeof SchemaBuilder>["onApplyToConnection"];
   };
   transfer: {
     /** Every Connection and Group: a transfer may span two Groups. */
@@ -37,10 +39,19 @@ interface Props {
     onOpenInEditor: ComponentProps<typeof TransferTab>["onOpenInEditor"];
     onOpenTarget: ComponentProps<typeof TransferTab>["onOpenTarget"];
   };
+  compare: {
+    /** Every Connection and Group: a compare may span two Groups. */
+    connections: ConnectionConfig[];
+    groups: Group[];
+    onMeta(id: string, title: string, connectionId: string | null): void;
+    onOpenInEditor: ComponentProps<typeof CompareTab>["onOpenInEditor"];
+    onApplied: ComponentProps<typeof CompareTab>["onApplied"];
+    onJob(id: string, job: JobId | null): void;
+  };
 }
 
 /** The window tabs (Home, Settings, Schema Models, diagrams) as panes of the work area. */
-export default function WindowPanes({ windowTabs, activeKey, home, settings, schema, transfer }: Props) {
+export default function WindowPanes({ windowTabs, activeKey, home, settings, schema, transfer, compare }: Props) {
   return (
     <>
       {windowTabs.map((t) => {
@@ -91,6 +102,23 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
             </div>
           );
         }
+        if (t.kind === "compare") {
+          // Stays mounted while hidden, so a running Apply keeps its view.
+          return (
+            <div key={key} className="work-pane compare-main" hidden={key !== activeKey}>
+              <CompareTab
+                seed={t.seed}
+                connections={compare.connections}
+                groups={compare.groups}
+                visible={key === activeKey}
+                onMeta={(title, connectionId) => compare.onMeta(t.id, title, connectionId)}
+                onOpenInEditor={compare.onOpenInEditor}
+                onApplied={compare.onApplied}
+                onJob={(job) => compare.onJob(t.id, job)}
+              />
+            </div>
+          );
+        }
         return (
           <div key={key} className="work-pane schema-main" hidden={key !== activeKey}>
             <SchemaBuilder
@@ -100,6 +128,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
               onPathChange={(path) => schema.onPathChange(t.id, path)}
               ask={schema.ask}
               sourceConnection={schema.sourceConnection(t.id)}
+              onApplyToConnection={schema.onApplyToConnection}
             />
           </div>
         );

@@ -33,6 +33,8 @@ interface Props {
   runLayout?: (r: LayoutRequest) => Promise<Positions>;
   /** Opens the Publish image dialog with the part of the diagram on screen, in canvas units; absent, Publish is off. */
   onPublish?: (onScreen: { x: number; y: number; w: number; h: number }) => void;
+  /** Apply to Connection...: opens Schema Compare with the model as the source; absent, the button is off. */
+  onApplyToConnection?: () => void;
 }
 
 const nodeTypes = { table: TableCard };
@@ -108,7 +110,7 @@ function sidesKeyFor(model: SchemaModel, xs: Map<string, number>): string {
 /** The schema a table without one parses to: Postgres models default to "public" (Ruling R4). */
 const newTableSchema = (model: SchemaModel) => (model.dialect === "postgres" ? "public" : null);
 
-export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEdit, onGoToError, onSelectionChange, onShowText, ask, runLayout, onPublish }: Props) {
+export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEdit, onGoToError, onSelectionChange, onShowText, ask, runLayout, onPublish, onApplyToConnection }: Props) {
   const { show } = useToast();
   const flow = useRef<ReactFlowInstance | null>(null);
   const flowRef = useRef<HTMLDivElement>(null);
@@ -273,12 +275,10 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
           <Icon name="image" size={14} />
           Publish
         </button>
-        <span title="Arrives with Schema Compare">
-          <button type="button" className="button button-small" disabled>
-            <Icon name="database" size={14} />
-            Apply to Connection...
-          </button>
-        </span>
+        <button type="button" className="button button-small" disabled={!onApplyToConnection} onClick={() => onApplyToConnection?.()}>
+          <Icon name="database" size={14} />
+          Apply to Connection...
+        </button>
       </div>
       {blocked && errorAt && (
         <div className="canvas-banner" role="alert">

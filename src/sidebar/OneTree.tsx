@@ -64,6 +64,8 @@ export interface OneTreeProps {
   onImportTable?(s: Selection): void;
   /** "Transfer data..." on a database (MySQL, SQLite), schema (PostgreSQL) or table row (step 8). */
   onTransfer?(seed: TransferSeed): void;
+  /** "Schema Compare" on a database or schema row: opens a compare with that side as the source (step 10). */
+  onCompare?(source: { connectionId: ConnectionId; database: string; schema: string | null }): void;
   /** "Back up..." on a database (MySQL, SQLite) or schema (PostgreSQL) row (step 9). */
   onBackup?(target: { connectionId: ConnectionId; database: string; schema: string | null }): void;
   /** "Restore..." on a database, schema or Connection row; `database: null` restores Into a new database. */
@@ -550,6 +552,12 @@ export default function OneTree(props: OneTreeProps) {
             onSelect: () => transfer({ connectionId: n.connectionId, database: n.name, schema: null, table: null }),
           });
         }
+        const compare = props.onCompare;
+        if (compare) {
+          // PostgreSQL compares one schema: its database row starts from public.
+          const schema = c?.dialect === "postgres" ? "public" : null;
+          items.push({ key: "compare", label: "Schema Compare", icon: <Icon name="columns" />, onSelect: () => compare({ connectionId: n.connectionId, database: n.name, schema }) });
+        }
         items.push(...backupItems(n.connectionId, n.name, null, c?.dialect !== "postgres"));
         return { label: n.name, items };
       }
@@ -572,6 +580,16 @@ export default function OneTree(props: OneTreeProps) {
                     label: "Transfer data...",
                     icon: <Icon name="swap" />,
                     onSelect: () => props.onTransfer?.({ connectionId: n.connectionId, database: n.database, schema: n.name, table: null }),
+                  },
+                ]
+              : []),
+            ...(props.onCompare
+              ? [
+                  {
+                    key: "compare",
+                    label: "Schema Compare",
+                    icon: <Icon name="columns" />,
+                    onSelect: () => props.onCompare?.({ connectionId: n.connectionId, database: n.database, schema: n.name }),
                   },
                 ]
               : []),

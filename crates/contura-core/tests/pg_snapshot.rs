@@ -3,7 +3,7 @@ mod common;
 use common::pg::{PgTestDb, pg_admin_client};
 use contura_core::Error;
 use contura_core::dialect::connect;
-use contura_core::schema_model::{SchemaModel, SmEnum};
+use contura_core::schema_model::{SchemaModel, SmDefault, SmEnum};
 
 async fn fixture() -> (PgTestDb, SchemaModel) {
     let db = PgTestDb::create().await;
@@ -90,5 +90,62 @@ async fn pg_snapshot_requires_schema() {
         "{err:?}"
     );
     dialect.disconnect().await.ok();
+    db.drop_db().await;
+}
+
+/// Only a serial's own sequence (`<table>_<column>_seq` in the table's schema)
+/// is the increment; any other `nextval` default stays a default, so a compare
+/// sees it (R9).
+#[tokio::test]
+async fn pg_snapshot_keeps_a_foreign_sequence_default() {
+    let db = PgTestDb::create().await;
+    let admin = pg_admin_client(&db.name).await;
+    admin
+        .batch_execute(
+            "CREATE SCHEMA other;
+             CREATE SEQUENCE public.ticket_seq;
+             CREATE SEQUENCE other.dbview_same_id_seq;
+             CREATE TABLE public.dbview_own (id serial PRIMARY KEY);
+             CREATE TABLE public.dbview_ticket (id int PRIMARY KEY,
+                 ticket bigint DEFAULT nextval('public.ticket_seq'));
+             CREATE TABLE public.dbview_same (id int DEFAULT nextval('other.dbview_same_id_seq'));",
+        )
+        .await
+        .expect("seed");
+    drop(admin);
+    let dialect = connect(&db.config, db.password.as_deref())
+        .await
+        .expect("connect");
+    let model = dialect
+        .schema_snapshot(&db.name, Some("public"))
+        .await
+        .expect("snapshot");
+    dialect.disconnect().await.ok();
+    let column = |t: &str, c: &str| {
+        model
+            .tables
+            .iter()
+            .find(|x| x.name == t)
+            .and_then(|x| x.columns.iter().find(|y| y.name == c))
+            .cloned()
+            .unwrap_or_else(|| panic!("{t}.{c}"))
+    };
+    let own = column("dbview_own", "id");
+    assert!(own.increment && own.default.is_none(), "{own:?}");
+    let ticket = column("dbview_ticket", "ticket");
+    assert!(!ticket.increment, "{ticket:?}");
+    assert!(
+        matches!(&ticket.default, Some(SmDefault::Expression { value })
+            if value.starts_with("nextval('ticket_seq'") || value.starts_with("nextval('public.ticket_seq'")),
+        "{ticket:?}"
+    );
+    // The serial name, but in another schema: not the column's own.
+    let same = column("dbview_same", "id");
+    assert!(!same.increment, "{same:?}");
+    assert!(
+        matches!(&same.default, Some(SmDefault::Expression { value })
+            if value.contains("other.dbview_same_id_seq")),
+        "{same:?}"
+    );
     db.drop_db().await;
 }

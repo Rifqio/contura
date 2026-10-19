@@ -249,7 +249,11 @@ export type CommandError =
   /** Diagram `name` is saved already and the save did not say to replace it. */
   | { kind: "diagramExists"; message: { name: string } }
   /** Restore will not run this file; `reason` is the sentence to show (step 9). */
-  | { kind: "backupRefused"; message: { reason: string } };
+  | { kind: "backupRefused"; message: { reason: string } }
+  /** The Sync Script rebuilt at Apply differs from the one shown: `connection` (the target) changed since the compare. */
+  | { kind: "planChanged"; message: { connection: string } }
+  /** Apply of a Sync Script was cancelled; `applied` of its `total` statements stayed applied (MySQL; PostgreSQL's committed enum values). */
+  | { kind: "syncCancelled"; message: { applied: number; total: number } };
 
 /** One table as the server holds it, for the Table Designer. */
 export interface TableDesign {
@@ -1069,7 +1073,7 @@ export interface VqRun {
 
 export type JobId = string;
 /** Step 9 adds a Backup, a Restore's check pass (`restoreCheck`) and the Restore run. */
-export type JobKind = "export" | "import" | "scriptImport" | "check" | "transfer" | "backup" | "restoreCheck" | "restore";
+export type JobKind = "export" | "import" | "scriptImport" | "check" | "transfer" | "backup" | "restoreCheck" | "restore" | "sync";
 export type Format = "csv" | "json" | "xlsx" | "sql";
 export type Delimiter = "comma" | "semicolon" | "tab";
 export type NullText = "emptyCell" | "nullWord";
@@ -1706,4 +1710,201 @@ export interface RestoreOutcome {
   countsMatch: boolean;
   /** SQLite Into a new database: the new file, for "Add it as a Connection". */
   newFile: string | null;
+}
+
+// Schema Compare and the Sync Script (step 10). Same Dialect only; schemas, never rows. Plan,
+// confirm and apply each rebuild the diff and the script from fresh snapshots, so the pass and
+// the hash cover exactly the shown statements.
+
+/** One side read from a database: MySQL database, PostgreSQL database and schema, SQLite "main". */
+export interface CompareDatabase {
+  connectionId: ConnectionId;
+  database: string;
+  /** PostgreSQL: the schema compared; null elsewhere. */
+  schema: string | null;
+}
+
+/** The source: a database, or a Schema Model as the UI parsed it (by its file path; null before a first Save). */
+export type CompareSource = ({ kind: "database" } & CompareDatabase) | { kind: "model"; model: SchemaModel; path: string | null };
+
+/** The target is always a database: the Sync Script changes it to match the source. */
+export interface CompareRequest {
+  source: CompareSource;
+  target: CompareDatabase;
+}
+
+/** Stable text from the kind and path, such as `column:billing.invoices.fax:removed`; survives a recompare. */
+export type ItemId = string;
+
+/** Added: in the source only. Removed: in the target only. Changed: on both, and they differ. */
+export type DiffKind = "added" | "removed" | "changed";
+
+export type DiffObject = "table" | "column" | "primaryKey" | "index" | "foreignKey" | "enum";
+
+/**
+ * Where an item sits. `table` is the table the object belongs to (null for a table or an enum
+ * itself); `name` is what the tree shows: the table, column, index or enum name, or a key's columns.
+ * `schema` is the target's schema (PostgreSQL), else null.
+ */
+export interface DiffPath {
+  schema: string | null;
+  table: string | null;
+  name: string;
+}
+
+/** What differs on a changed item; `from` is the target's value, `to` the source's. */
+export type Change =
+  | { kind: "type"; from: string; to: string }
+  | { kind: "nullable"; from: boolean; to: boolean }
+  | { kind: "default"; from: string | null; to: string | null }
+  | { kind: "increment"; from: boolean; to: boolean }
+  | { kind: "unique"; from: boolean; to: boolean }
+  | { kind: "note"; from: string | null; to: string | null }
+  | { kind: "onDelete"; from: string | null; to: string | null }
+  | { kind: "onUpdate"; from: string | null; to: string | null }
+  /** Index or key columns. */
+  | { kind: "columns"; from: string[]; to: string[] }
+  | { kind: "enumValues"; added: string[]; removed: string[]; reordered: boolean };
+
+/** Rows on the target whose values the item drops: `count(*)` or `count(col)` within 2 s, else the server's estimate. */
+export interface DataLoss {
+  rows: number;
+  /** False for the server's estimate, shown as "about". */
+  exact: boolean;
+}
+
+export interface DiffItem {
+  id: ItemId;
+  kind: DiffKind;
+  object: DiffObject;
+  path: DiffPath;
+  /** The short detail after the name: "varchar(16) to varchar(24)", "integer", "index", "default", "+ written_off". */
+  detail: string;
+  changes: Change[];
+  /** A removed table or column, or a narrowing change: it starts unticked in the Sync Script. */
+  losesData: boolean;
+  /** The row count behind `losesData`; null when neither the count nor an estimate came back. */
+  dataLoss: DataLoss | null;
+  /** Each side's definition text of the item (its DDL line or block); null on the side that lacks it. */
+  source: string | null;
+  target: string | null;
+  /** Items this one cannot run without (an index on an added column needs that column). */
+  needs: ItemId[];
+  /** Null when Contura can script it; else the reason, such as "PostgreSQL cannot remove a value from an enum. Remove written_off by hand." */
+  notScriptable: string | null;
+}
+
+/** What Contura leaves out of the compare, counted by kind. */
+export type NotComparedKind =
+  | "view"
+  | "routine"
+  | "trigger"
+  | "check"
+  | "generatedColumn"
+  | "expressionIndex"
+  | "partialIndex"
+  | "comment"
+  /** A model table named `other.table` when the target schema is another one. */
+  | "otherSchema";
+
+export interface NotComparedCount {
+  kind: NotComparedKind;
+  count: number;
+}
+
+export interface NotCompared {
+  source: NotComparedCount[];
+  target: NotComparedCount[];
+}
+
+/** What was compared, for "6 tables, 1 enum, 14 indexes, 5 Foreign Keys". */
+export interface CompareSummary {
+  tables: number;
+  enums: number;
+  indexes: number;
+  foreignKeys: number;
+  /** No items, and the sides' not-compared lists agree: "match" claims no more than was compared. */
+  matches: boolean;
+  /** The Core's line, such as "Not compared yet: 1 view in the source; 1 view, 1 trigger in the target."; null when nothing was left out. */
+  notComparedLine: string | null;
+}
+
+export interface CompareResult {
+  /** Both sides' Dialect; equal, or the request was refused. */
+  dialect: DialectKind;
+  items: DiffItem[];
+  notCompared: NotCompared;
+  summary: CompareSummary;
+  /** When the snapshots were read, in Unix milliseconds. */
+  comparedAtMs: number;
+}
+
+/** One table's (or enum's) DDL on each side, by the same writer, so the lines align; null where it is missing. */
+export interface DdlPair {
+  source: string | null;
+  target: string | null;
+}
+
+export type SyncGroup = "drop" | "change" | "create";
+
+/** One change of the Sync Script list. */
+export interface SyncItem {
+  id: ItemId;
+  group: SyncGroup;
+  kind: DiffKind;
+  object: DiffObject;
+  /** The list's line, such as "DROP COLUMN invoices.fax". */
+  line: string;
+  /** The table it changes (or the enum), for the Differences pane's script block. */
+  table: string | null;
+  /** After the closure over `needs`: in the script. */
+  ticked: boolean;
+  needs: ItemId[];
+  losesData: boolean;
+  dataLoss: DataLoss | null;
+  notScriptable: string | null;
+}
+
+export interface SyncStatement {
+  sql: string;
+  /** The items this statement carries (a MySQL merged ALTER carries several). */
+  items: ItemId[];
+  group: SyncGroup;
+  /** False for the SQLite pragma lines and checks. */
+  writes: boolean;
+  dropsData: boolean;
+  /** The qualified object it changes, such as "billing.invoices.fax", for the Production note. */
+  object: string | null;
+}
+
+/** Transaction: PostgreSQL, SQLite. Sequential: MySQL commits each statement. CopyOnly: Apply refuses. */
+export type SyncMode = { kind: "transaction" } | { kind: "sequential" } | { kind: "copyOnly"; reason: string };
+
+export type SyncVerdict = "ok" | "readOnly" | "needsConfirmation";
+
+export interface SyncPlan {
+  /** Every item of the diff in group order, ticked or not. */
+  items: SyncItem[];
+  /** The ticked items' statements, in the order Apply runs them (MySQL: DROP TABLE and DROP COLUMN last). */
+  statements: SyncStatement[];
+  warnings: string[];
+  mode: SyncMode;
+  /** The line under the script: "Apply runs exactly this, in one transaction." and the MySQL and enum lines. */
+  line: string;
+  verdict: SyncVerdict;
+  /** Hash of the statements' text; Apply sends it back as `expectedHash`. */
+  hash: string;
+  /**
+   * PostgreSQL: the enum values (`ADD VALUE`) commit first, in their own transaction, before the
+   * rest runs, so the script is not one transaction (`line` says so too).
+   */
+  enumValuesFirst: boolean;
+}
+
+/** What Apply did. A failure comes back as an error (`designFailed`, `designForeignKeys`, `planChanged`). */
+export interface SyncOutcome {
+  applied: number;
+  elapsedMs: number;
+  /** The target tables a statement changed or dropped, for the open tabs' "table changed" event. */
+  tables: ObjectPath[];
 }

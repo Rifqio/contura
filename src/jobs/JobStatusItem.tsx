@@ -23,7 +23,7 @@ function backupEnded(job: JobView, done: NonNullable<JobView["done"]>, dialect?:
   };
 }
 
-const JOB_ICON: Record<JobView["kind"], "export" | "import" | "swap" | "save" | "history"> = {
+const JOB_ICON: Record<JobView["kind"], "export" | "import" | "swap" | "save" | "history" | "columns"> = {
   export: "export",
   import: "import",
   scriptImport: "import",
@@ -32,6 +32,7 @@ const JOB_ICON: Record<JobView["kind"], "export" | "import" | "swap" | "save" | 
   backup: "save",
   restoreCheck: "history",
   restore: "history",
+  sync: "columns",
 };
 
 interface Props {

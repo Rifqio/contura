@@ -7,6 +7,7 @@ mod mysql;
 mod plan;
 mod postgres;
 mod sqlite;
+mod statements;
 mod warning;
 
 pub(crate) use fragment::check_fragment;
@@ -17,9 +18,13 @@ pub use model::{
 pub(crate) use model::{add_attribute, advanced_note};
 pub use plan::{
     ColumnDraft, DesignEdit, DesignMode, DesignPlan, DesignRequest, DesignTarget, ForeignKeyDraft,
-    IndexDraft, Position, plan_design,
+    IndexDraft, Position, plan_design, plan_design_for,
 };
-pub(crate) use plan::{LoadedSchema, TABLE_CHANGED};
+pub(crate) use plan::{LoadedSchema, TABLE_CHANGED, checked_action, column_draft};
+pub use statements::{
+    Progress, RunControl, RunMode, RunOutcome, StatementPlan, sqlite_pragma_frame,
+};
+pub(crate) use statements::{design_plan as statement_design_plan, is_count_check, run_outcome};
 pub use warning::{ChildAction, DesignWarning, RowCount, Rule};
 
 /// What `Dialect::apply_design` did with a plan.
@@ -42,6 +47,10 @@ pub enum DesignOutcome {
     },
     /// A Foreign Key check found rows in `table` that break a key; rolled back.
     ForeignKeys { table: String },
+    /// A cancel stopped the run between statements. `ran` statements stay
+    /// applied: 0 where the transaction rolled back. Only `apply_statements`
+    /// takes a cancel, so `apply_design` never returns this.
+    Cancelled { ran: usize },
 }
 
 /// The refusal for a plan Apply must not run.
@@ -51,6 +60,15 @@ pub(crate) const CANNOT_REBUILD: &str = "Contura cannot rebuild this table safel
 /// made with (S9): the `after` statements would restore the wrong value.
 pub(crate) const FOREIGN_KEYS_CHANGED: &str = "Foreign Key enforcement on this Connection changed \
      since the table was loaded. Reload the table and apply again.";
+
+/// The refusal for a plan whose parts or mode do not fit its statements.
+pub(crate) const PLAN_MISFIT: &str = "This plan does not fit its statements. Plan it again.";
+
+/// A runner calls this before statement `at`: it reports the statements done so
+/// far and says whether the cancel was set.
+pub(crate) fn stop(control: Option<&RunControl>, at: usize) -> bool {
+    control.is_some_and(|c| c.before(at))
+}
 
 /// Where the plan's parts start and end: `before` statements, the middle (the
 /// transaction), the `after` statements that run whatever happened.
@@ -67,9 +85,7 @@ pub(crate) fn runnable(plan: &DesignPlan) -> crate::error::Result<Parts> {
     }
     let n = plan.statements.len();
     if plan.before + plan.after > n || plan.checks.iter().any(|&c| c >= n) {
-        return Err(crate::error::Error::InvalidInput(
-            "This plan does not fit its statements. Plan it again.".into(),
-        ));
+        return Err(crate::error::Error::InvalidInput(PLAN_MISFIT.into()));
     }
     Ok(Parts {
         before: 0..plan.before,
@@ -131,7 +147,7 @@ pub(crate) fn after_failed(
 ) -> crate::error::Error {
     let applied = match outcome {
         Ok(DesignOutcome::Done { .. }) => true,
-        Ok(DesignOutcome::Failed { ran, .. }) => *ran > 0,
+        Ok(DesignOutcome::Failed { ran, .. } | DesignOutcome::Cancelled { ran }) => *ran > 0,
         _ => false,
     };
     crate::error::Error::DesignRestoreFailed {

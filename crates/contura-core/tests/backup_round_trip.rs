@@ -8,9 +8,8 @@
 //! "Compares" means: `schema_snapshot` equality, `object_definition` text equality for
 //! views, routines and triggers, per-table counts, every row through `RowSource`, the
 //! trigger did not fire during the load, and the next identity or auto-increment insert.
-//!
-//! TODO(step 10): Schema Compare becomes the oracle for the structure once it exists;
-//! it must report no differences between the source and each restored copy.
+//! Schema Compare (step 10) is the oracle for the structure as well: comparing the source
+//! with the new database must give no differences after each of the three restores.
 //!
 //! MySQL and PostgreSQL in `dbview_test_<8hex>` databases as `dbview_test`, the new
 //! database named `dbview_test_<8hex>_restore_1019`; SQLite in temp files.
@@ -30,7 +29,10 @@ use common::backup_fixture::{
 use common::pg::{PgTestDb, pg_admin_client};
 use contura_core::backup::plan::{BackupFormat, BackupInclude, BackupRequest};
 use contura_core::backup::restore::{RestoreMode, RestoreRequest, RestoreTarget};
-use contura_core::connections::{ConnectionInput, ConnectionService, PasswordChange};
+use contura_core::connections::{
+    CompareDatabase, CompareRequest, CompareSide, ConnectionInput, ConnectionService,
+    PasswordChange,
+};
 use contura_core::dialect::{Dialect, connect};
 use contura_core::jobs::JobSink;
 use contura_core::jobs::source::SourceRequest;
@@ -383,6 +385,96 @@ impl Rt {
         }
     }
 
+    /// A saved, open Connection on the copy `db` (SQLite: the file `db`), so Schema
+    /// Compare can read it as the target.
+    async fn copy_connection(&self, db: &str) -> ConnectionId {
+        let (config, password) = match self.kind {
+            DialectKind::MySql => {
+                let t = self.my.as_ref().unwrap();
+                (Some(&t.config), t.password.clone())
+            }
+            DialectKind::Postgres => {
+                let t = self.pg.as_ref().unwrap();
+                (Some(&t.config), t.password.clone())
+            }
+            DialectKind::Sqlite => (None, None),
+        };
+        let inp = ConnectionInput {
+            id: None,
+            name: "kestrel-copy".into(),
+            dialect: self.kind,
+            host: config.map(|c| c.host.clone()).unwrap_or_default(),
+            port: config.map(|c| c.port).unwrap_or(0),
+            user: config.map(|c| c.user.clone()).unwrap_or_default(),
+            database: config.map(|_| db.to_string()),
+            ssl: SslMode::Disable,
+            password: match password {
+                Some(value) => PasswordChange::Set { value },
+                None => PasswordChange::Keep,
+            },
+            group_id: None,
+            file: (self.kind == DialectKind::Sqlite).then(|| PathBuf::from(db)),
+            query_timeout_secs: None,
+            ai_access: Default::default(),
+            production: false,
+            read_only: false,
+        };
+        let saved = self
+            .svc
+            .save(inp)
+            .await
+            .expect("save the copy's Connection");
+        self.svc
+            .open(saved.id)
+            .await
+            .expect("open the copy's Connection");
+        saved.id
+    }
+
+    /// Schema Compare with the source as the source and the copy `db` as the target
+    /// must find no differences. The tables the Backup leaves out (`kept`) are only in
+    /// the source, so their items are the one expected difference.
+    async fn compare_structure(&self, what: &str, db: &str) {
+        let copy = self.copy_connection(db).await;
+        let req = CompareRequest {
+            source: CompareSide::Database {
+                connection_id: self.id,
+                database: self.source_database(),
+                schema: self.schema(),
+            },
+            target: CompareDatabase {
+                connection_id: copy,
+                database: match self.kind {
+                    DialectKind::Sqlite => "main".into(),
+                    _ => db.to_string(),
+                },
+                schema: self.schema(),
+            },
+        };
+        let result = self
+            .svc
+            .compare_schemas(req)
+            .await
+            .unwrap_or_else(|e| panic!("{:?} {what}: compare: {e}", self.kind));
+        let left: Vec<String> = result
+            .items
+            .iter()
+            .filter(|i| self.kept(i.path.table.as_deref().unwrap_or(&i.path.name)))
+            .map(|i| format!("{} ({})", i.id, i.detail))
+            .collect();
+        assert!(
+            left.is_empty(),
+            "{:?} {what}: Schema Compare found differences: {left:#?}",
+            self.kind
+        );
+        assert!(
+            result.summary.tables > 0,
+            "{:?} {what}: compared nothing",
+            self.kind
+        );
+        self.svc.close(copy).await.ok();
+    }
+
     /// Inserts one customer and one order; the new ids, and the audit row the trigger
     /// wrote for the order.
     async fn next_ids(&self, db: &str) -> NextIds {
@@ -715,6 +807,7 @@ async fn round_trip(kind: DialectKind, rows: u64) {
     assert!(end["report"]["restore"]["rows"].as_u64().unwrap() >= rows);
     let copy = rt.picture(&name).await;
     compare(kind, "new database", &original, &copy);
+    rt.compare_structure("new database", &name).await;
     // The trigger came after the rows, so the load added no audit row.
     assert_eq!(copy.rows["audit"].len(), audit_rows, "{kind:?}");
 
@@ -733,6 +826,7 @@ async fn round_trip(kind: DialectKind, rows: u64) {
     )
     .await;
     compare(kind, "Replace", &original, &rt.picture(&source).await);
+    rt.compare_structure("Replace", &name).await;
     if kind == DialectKind::Postgres {
         // The left-out partitioned table and its sequences were kept (R33).
         let client = pg_admin_client(&source).await;
@@ -754,6 +848,8 @@ async fn round_trip(kind: DialectKind, rows: u64) {
         &original,
         &rt.picture(&source).await,
     );
+    rt.compare_structure("Into the emptied database", &name)
+        .await;
 
     // The next identity and auto-increment insert works, in both copies.
     assert_eq!(

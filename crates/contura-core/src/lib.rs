@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod backup;
 pub(crate) mod common;
+pub mod compare;
 pub mod connections;
 pub mod dbml_writer;
 pub mod ddl;

@@ -2,7 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::backup::data::SnapshotRead;
-use crate::design::{DesignOutcome, DesignPlan, TableDesign};
+use crate::design::{
+    DesignOutcome, DesignPlan, RunControl, RunOutcome, StatementPlan, TableDesign,
+};
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::Result;
 use crate::jobs::source::{RowSource, SourceRequest, TableStorage};
@@ -78,6 +80,30 @@ pub trait Dialect: Send + Sync {
     /// whatever happened. A `CopyOnly` plan is refused before any statement. `Err`
     /// means the connection failed, or the server refused on a Read-only Connection.
     async fn apply_design(&self, database: &str, plan: &DesignPlan) -> Result<DesignOutcome>;
+    /// Runs a statement list of any length with `apply_design`'s runner: PostgreSQL
+    /// and SQLite in one transaction (SQLite with the `sqlite_pragma_frame` lines
+    /// when `sqlite_pragmas`), MySQL statement by statement, stopping at the first
+    /// failure. `cancel` is checked before each statement: a cancel rolls back the
+    /// transaction, or on MySQL stops with what already ran. A mode the Dialect does
+    /// not run this way is refused before any statement. A failure is
+    /// `Error::DesignFailed` (or `DesignForeignKeys` for a `foreign_key_check` row).
+    async fn apply_statements(
+        &self,
+        database: &str,
+        plan: &StatementPlan,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<RunOutcome> {
+        self.run_statements(database, plan, RunControl::new(cancel, None))
+            .await
+    }
+    /// `apply_statements` with a progress callback: before each statement the
+    /// runner reports how many statements of the plan are done (R4).
+    async fn run_statements(
+        &self,
+        database: &str,
+        plan: &StatementPlan,
+        control: RunControl,
+    ) -> Result<RunOutcome>;
     /// Starts an export read: full values in chunks of up to 1,000 rows or 8 MB, from one
     /// consistent snapshot on a connection of its own. A producer task (SQLite: a thread)
     /// reads ahead through a channel of 2 chunks; dropping the source closes the channel

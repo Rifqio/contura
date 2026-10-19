@@ -1308,6 +1308,28 @@ test("transfer_data_on_database_schema_and_table_rows", async () => {
   expect(onTransfer).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "sales", table: null });
 });
 
+test("schema_compare_on_database_and_schema_rows", async () => {
+  routeMy();
+  const onCompare = vi.fn();
+  const { unmount } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...handlers()} onCompare={onCompare} />);
+  await findItem("orders");
+  await userEvent.click(within(item("shop")).getByRole("button", { name: "More actions for shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Schema Compare" }));
+  expect(onCompare).toHaveBeenLastCalledWith({ connectionId: "a", database: "shop", schema: null });
+  unmount();
+
+  // PostgreSQL compares one schema: the schema row fills it, the database row starts from public.
+  routePg();
+  render(<Harness connections={[pgConn]} open={["p"]} {...handlers()} onCompare={onCompare} />);
+  await findItem("public");
+  await userEvent.click(within(item("sales")).getByRole("button", { name: "More actions for sales" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Schema Compare" }));
+  expect(onCompare).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "sales" });
+  await userEvent.click(within(item("shop")).getByRole("button", { name: "More actions for shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Schema Compare" }));
+  expect(onCompare).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "public" });
+});
+
 test("back_up_and_restore_on_database_schema_and_connection_rows", async () => {
   routeMy();
   const onBackup = vi.fn();

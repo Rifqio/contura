@@ -1,6 +1,6 @@
 // The window's tab model (PR5): Home, Settings, Schema Model and diagram tabs belong to the window and
 // survive a Group change; query and table tabs belong to the place.
-import type { ConnectionId, GroupId, ObjectKind, ObjectPath, VisualQuery } from "../api/types";
+import type { CompareDatabase, ConnectionId, DialectKind, GroupId, ObjectKind, ObjectPath, SchemaModel, VisualQuery } from "../api/types";
 import type { ImportTarget } from "../jobs/importModel";
 import type { QueryTabDoc } from "../query/QueryTab";
 import type { ModelDoc } from "../schema/SchemaBuilder";
@@ -65,6 +65,18 @@ export interface TransferSeed {
   table: string | null;
 }
 
+/**
+ * Where a Schema Compare starts. A database source fills the left side (tree menus); a model
+ * source comes from the Schema Builder's Apply to Connection..., with `notice` set while its
+ * DBML has an error and the compare uses the last valid version.
+ */
+export interface CompareSeed {
+  source:
+    | ({ kind: "database" } & CompareDatabase)
+    | { kind: "model"; model: SchemaModel; path: string | null; dialect: DialectKind; notice: string | null };
+  target: CompareDatabase | null;
+}
+
 /** A tab of the window. */
 export type WindowTab =
   | { kind: "home" }
@@ -77,7 +89,12 @@ export type WindowTab =
    * A Data Transfer (step 8): a window tab, since it spans two Connections. `title` and `dirty`
    * come from the tab ("pos_live to analytics", set up but not run); never saved.
    */
-  | { kind: "transfer"; id: string; seed: TransferSeed; title: string; dirty: boolean };
+  | { kind: "transfer"; id: string; seed: TransferSeed; title: string; dirty: boolean }
+  /**
+   * A Schema Compare (step 10): a window tab, since it spans two Connections. `title` ("freight-staging
+   * to freight-prod") and `connectionId` (the target, for its PROD chip) come from the tab.
+   */
+  | { kind: "compare"; id: string; seed: CompareSeed; title: string; connectionId: ConnectionId | null };
 
 export type AnyTab = WorkTab | WindowTab;
 
@@ -93,6 +110,8 @@ export function tabKey(t: AnyTab): string {
       return `flow:${t.name}`;
     case "transfer":
       return `transfer:${t.id}`;
+    case "compare":
+      return `compare:${t.id}`;
     case "query":
       return `query:${t.doc.id}`;
     case "visual":
@@ -150,6 +169,7 @@ export function tabConnectionId(t: AnyTab): ConnectionId | null {
     case "design":
     case "import":
     case "lineage":
+    case "compare":
       return t.connectionId;
     default:
       return null;

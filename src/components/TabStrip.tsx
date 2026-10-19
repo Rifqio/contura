@@ -26,6 +26,7 @@ export function tabName(t: AnyTab): string {
     case "flow":
       return `${t.name}.flow`;
     case "transfer":
+    case "compare":
       return t.title;
     case "query":
     case "visual":
@@ -57,6 +58,8 @@ function iconOf(t: AnyTab): IconName | null {
       return "flow";
     case "transfer":
       return "swap";
+    case "compare":
+      return "columns";
     case "query":
       return null;
     case "visual":

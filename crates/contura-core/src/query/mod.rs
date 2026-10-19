@@ -300,6 +300,25 @@ impl SessionHandle {
         self.ask(|reply| Command::Execute { sql, reply }).await?
     }
 
+    /// Queues `sql` to run after what the session runs now, without waiting for
+    /// it or its answer: for a drop guard that must undo a session setting when
+    /// the call that made it is dropped.
+    pub(crate) fn execute_detached(&self, sql: &str) {
+        let (reply, _) = oneshot::channel();
+        let command = Command::Execute {
+            sql: sql.to_string(),
+            reply,
+        };
+        if let Err(mpsc::error::TrySendError::Full(command)) = self.tx.try_send(command)
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let tx = self.tx.clone();
+            runtime.spawn(async move {
+                let _ = tx.send(command).await;
+            });
+        }
+    }
+
     /// Runs `sql`, an EXPLAIN statement, and returns every cell as full text, with no
     /// preview cut. Nothing is recorded.
     pub async fn explain_rows(&self, sql: &str) -> Result<Vec<Vec<String>>> {

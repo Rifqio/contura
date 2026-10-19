@@ -178,11 +178,11 @@ Copying a table's structure and/or rows from one database to another, possibly a
 _Avoid_: Migration, sync, export
 
 **Schema Compare**:
-Comparing the structure of two databases of the same Dialect, which produces a Sync Script.
+Comparing the structure of two databases of the same Dialect (on PostgreSQL, one schema against one schema), or a Schema Model against a database, which produces a Sync Script. Each difference is an item marked added, removed or changed. What Contura does not compare (views, routines, triggers, checks, generated column expressions, expression and partial indexes) is listed per side as **not compared**, so "No differences" never claims more than was compared. Renames show as a removal plus an addition (ADR 0022).
 _Avoid_: Diff, schema sync
 
 **Sync Script**:
-The reviewable SQL that would make one database's structure match another's.
+The reviewable SQL that would make one database's structure match another's, built only by Contura from the ticked items and run exactly as shown. A **data-loss item** (a removed table or column, or a change that narrows a column) carries the rows it would lose and starts unticked. Unticking an item unticks what needs it; ticking one ticks what it needs.
 _Avoid_: Migration, patch
 
 **Backup**:

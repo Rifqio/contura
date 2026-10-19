@@ -138,8 +138,7 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
   - export a SQL script for the model's Dialect
   - export the diagram as PNG or SVG
   - while the DBML has an error, an export uses the last valid version and says so first
-  - "Apply to Connection" is shown disabled with "Arrives with Schema Compare" until build step 10
-  - apply to a Connection, which compares the model with the database and produces a Sync Script the user reviews and confirms before it runs
+  - apply to a Connection ("Apply to Connection...", enabled since step 10), which compares the model with the database and produces a Sync Script the user reviews and confirms before it runs
 
 ## AI assistant
 
@@ -189,7 +188,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 7. Import/export, plus Mermaid flowchart import (done: Import and Export, Mermaid flowchart import, the Job service, ADR 0018)
 8. Data Transfer (done: copies across Dialects with a type mapping reviewed per column, per-target transaction rules, the Job pass on the target, ADR 0020)
 9. Backup/Restore (done: Contura's own script from one snapshot with a not-included header, the optional SQLite file copy, Restore checks, three modes and the Job pass bound to the file's SHA-256, ADR 0021)
-10. Schema Compare, plus applying a Schema Model to a Connection
+10. Schema Compare, plus applying a Schema Model to a Connection (done: a structural diff of the same Dialect with what is not compared named on both sides, a Sync Script built only in the Core with data-loss items unticked, Apply under the exact-set Sync pass and `PlanChanged`, ADR 0022)
 11. AI answers: real provider calls (Anthropic and OpenAI-compatible, incl. local Ollama), access levels enforced in the Core, rule-based guardrails, schema context with an on-disk index and sync, chat memory. All in the Rust Core, no Python (research in docs/research/2026-10-17-ai-*.md)
    - then sequence diagrams; cloud sharing later
 12. Refinements: UI and UX polish from the user's critique, always the last step after every feature step (list in docs/step12-refinements.md, kept growing until then)

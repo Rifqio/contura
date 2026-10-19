@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -36,9 +37,11 @@ const doc = (over: Partial<ModelDoc> = {}): ModelDoc => ({
   ...over,
 });
 
-function setup(d: ModelDoc) {
+function setup(d: ModelDoc, onApplyToConnection?: ComponentProps<typeof SchemaBuilder>["onApplyToConnection"]) {
   const onClose = vi.fn();
-  const utils = render(<SchemaBuilder doc={d} onClose={onClose} client={new LangClient(() => fakeWorker())} />);
+  const utils = render(
+    <SchemaBuilder doc={d} onClose={onClose} client={new LangClient(() => fakeWorker())} onApplyToConnection={onApplyToConnection} />,
+  );
   const view = () => EditorView.findFromDOM(utils.container.querySelector(".cm-editor") as HTMLElement)!;
   return { ...utils, onClose, view };
 }
@@ -90,11 +93,26 @@ test("close_with_changes_asks_to_save", async () => {
   expect(onClose).toHaveBeenCalled();
 });
 
-test("apply_is_disabled_with_hint", async () => {
-  setup(doc());
+test("apply_to_connection_opens_compare_with_the_model", async () => {
+  const onApply = vi.fn();
+  setup(doc(), onApply);
   const apply = (await screen.findByRole("button", { name: "Apply to Connection..." })) as HTMLButtonElement;
-  expect(apply.disabled).toBe(true);
-  expect(apply.closest("[title]")?.getAttribute("title")).toBe("Arrives with Schema Compare");
+  expect(apply.disabled).toBe(false);
+  await userEvent.click(apply);
+  expect(onApply).toHaveBeenCalledWith({ model: KFC_MODEL, path: "C:\\m\\shop.dbml", dialect: "postgres", notice: null });
+});
+
+test("apply_to_connection_during_an_error_uses_the_last_valid_version", async () => {
+  const onApply = vi.fn();
+  const { view } = setup(doc(), onApply);
+  await screen.findByRole("button", { name: "Apply to Connection..." });
+  const broken = KFC_TEXT.replace("Table orders {", "Table orders ");
+  act(() => view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: broken } }));
+  await screen.findByText(/The canvas shows the last valid version/);
+  await userEvent.click(screen.getByRole("button", { name: "Apply to Connection..." }));
+  const arg = onApply.mock.calls[0][0];
+  expect(arg.model).toEqual(KFC_MODEL);
+  expect(arg.notice).toMatch(/^The DBML has an error on line \d+\. Compare uses the last valid version\.$/);
 });
 
 test("dbml_and_canvas_are_two_islands", async () => {

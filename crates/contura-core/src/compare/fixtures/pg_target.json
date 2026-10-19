@@ -1,0 +1,70 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    {
+      "schema": "billing",
+      "name": "audit_log",
+      "alias": null,
+      "note": null,
+      "columns": [
+        {"name": "id", "typeName": "integer", "pk": true, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "msg", "typeName": "text", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null}
+      ],
+      "indexes": []
+    },
+    {
+      "schema": "billing",
+      "name": "customers",
+      "alias": null,
+      "note": null,
+      "columns": [
+        {"name": "id", "typeName": "integer", "pk": true, "increment": true, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "email", "typeName": "character varying(255)", "pk": false, "increment": false, "notNull": true, "unique": true, "default": null, "note": null},
+        {"name": "name", "typeName": "text", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null},
+        {"name": "fax", "typeName": "character varying(32)", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null}
+      ],
+      "indexes": []
+    },
+    {
+      "schema": "billing",
+      "name": "invoices",
+      "alias": null,
+      "note": null,
+      "columns": [
+        {"name": "id", "typeName": "bigint", "pk": true, "increment": true, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "customer_id", "typeName": "integer", "pk": false, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "status", "typeName": "invoice_status", "pk": false, "increment": false, "notNull": true, "unique": false, "default": {"t": "string", "value": "draft"}, "note": null},
+        {"name": "amount", "typeName": "numeric(12,2)", "pk": false, "increment": false, "notNull": true, "unique": false, "default": {"t": "number", "value": "0.00"}, "note": null},
+        {"name": "note", "typeName": "character varying(16)", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null},
+        {"name": "created_at", "typeName": "timestamp with time zone", "pk": false, "increment": false, "notNull": false, "unique": false, "default": {"t": "expression", "value": "CURRENT_TIMESTAMP"}, "note": null}
+      ],
+      "indexes": [
+        {"name": "invoices_customer_id_created_at_idx", "columns": ["customer_id", "created_at"], "unique": false, "pk": false},
+        {"name": "invoices_old_idx", "columns": ["note"], "unique": false, "pk": false},
+        {"name": "invoices_status_idx", "columns": ["status"], "unique": false, "pk": false}
+      ]
+    },
+    {
+      "schema": "billing",
+      "name": "payments",
+      "alias": null,
+      "note": null,
+      "columns": [
+        {"name": "id", "typeName": "integer", "pk": true, "increment": true, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "invoice_id", "typeName": "bigint", "pk": false, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "paid_at", "typeName": "timestamp with time zone", "pk": false, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "amount", "typeName": "numeric(12,2)", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null}
+      ],
+      "indexes": []
+    }
+  ],
+  "refs": [
+    {"name": null, "from": {"schema": "billing", "table": "invoices", "columns": ["customer_id"]}, "to": {"schema": "billing", "table": "customers", "columns": ["id"]}, "onDelete": null, "onUpdate": null},
+    {"name": "fk_pay_inv", "from": {"schema": "billing", "table": "payments", "columns": ["invoice_id"]}, "to": {"schema": "billing", "table": "invoices", "columns": ["id"]}, "onDelete": null, "onUpdate": null}
+  ],
+  "enums": [
+    {"schema": "billing", "name": "invoice_status", "values": ["draft", "sent", "paid", "void"]},
+    {"schema": "billing", "name": "legacy_kind", "values": ["a"]}
+  ],
+  "skipped": ["view v_open_invoices", "trigger trg_audit on invoices"]
+}

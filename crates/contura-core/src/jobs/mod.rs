@@ -303,6 +303,47 @@ impl JobService {
     }
 }
 
+fn send_progress(shared: &Shared, id: JobId, p: JobProgress, now_anyway: bool) {
+    let percent = p.percent();
+    let json = to_json(&JobEvent::from(p));
+    let sinks = {
+        let Ok(mut st) = shared.state() else {
+            return;
+        };
+        let Some(r) = st.running.get_mut(&id) else {
+            return;
+        };
+        r.summary.percent = percent;
+        r.last_progress = Some(json.clone());
+        let now = Instant::now();
+        let due = now_anyway
+            || r.last_sent
+                .is_none_or(|t| now.duration_since(t) >= PROGRESS_EVERY);
+        if !due {
+            return;
+        }
+        r.last_sent = Some(now);
+        r.sinks.clone()
+    };
+    for s in sinks {
+        s.send(json.clone());
+    }
+}
+
+/// Sends one job's progress and nothing else; see `JobCtx::reporter`.
+#[derive(Clone)]
+pub struct JobReporter {
+    id: JobId,
+    shared: Arc<Shared>,
+}
+
+impl JobReporter {
+    /// As `JobCtx::progress_now`.
+    pub fn progress_now(&self, p: JobProgress) {
+        send_progress(&self.shared, self.id, p, true);
+    }
+}
+
 /// One running job's handle, moved into the task that does the work. `finish` ends it;
 /// dropped without `finish`, the job fails and leaves the running list all the same.
 pub struct JobCtx {
@@ -344,29 +385,15 @@ impl JobCtx {
     }
 
     fn send_progress(&self, p: JobProgress, now_anyway: bool) {
-        let percent = p.percent();
-        let json = to_json(&JobEvent::from(p));
-        let sinks = {
-            let Ok(mut st) = self.shared.state() else {
-                return;
-            };
-            let Some(r) = st.running.get_mut(&self.id) else {
-                return;
-            };
-            r.summary.percent = percent;
-            r.last_progress = Some(json.clone());
-            let now = Instant::now();
-            let due = now_anyway
-                || r.last_sent
-                    .is_none_or(|t| now.duration_since(t) >= PROGRESS_EVERY);
-            if !due {
-                return;
-            }
-            r.last_sent = Some(now);
-            r.sinks.clone()
-        };
-        for s in sinks {
-            s.send(json.clone());
+        send_progress(&self.shared, self.id, p, now_anyway);
+    }
+
+    /// A handle that only sends this job's progress, for a callback that must own
+    /// what it holds (a statement runner's progress, R4).
+    pub fn reporter(&self) -> JobReporter {
+        JobReporter {
+            id: self.id,
+            shared: self.shared.clone(),
         }
     }
 

@@ -42,7 +42,7 @@ type Props = Mode & {
   /** Offered beside the no-WHERE warning when given. */
   onAddWhere?(): void;
   /** "Save" for Pending Edits, "Apply" for a design, "Drop" for a table drop: the title and button say it. */
-  verb?: "Run" | "Save" | "Apply" | "Drop" | "Import" | "Transfer" | "Restore";
+  verb?: "Run" | "Save" | "Apply" | "Drop" | "Import" | "Transfer" | "Restore" | "Sync";
   /** The run deletes rows (a transfer's Empty it first): the button takes the danger fill. */
   danger?: boolean;
   /** Plan warnings, one banner each, above the count line. */
@@ -60,6 +60,12 @@ type Props = Mode & {
   group?: Group | null;
   /** Rows the statement without WHERE would change, when known; the warning says "about N rows". */
   rowEstimate?: number | null;
+  /** A sentence after the count line, such as a Sync Script's "They run in one transaction: if one fails, nothing changes." */
+  countNote?: string;
+  /** Statements (by index) that drop data: their tag says "drops data" instead of "writes". */
+  dropsData?: number[];
+  /** The run button waits, such as while a Sync Script is planned again after Untick it. */
+  runDisabled?: boolean;
 };
 
 const DOES: Record<NonNullable<Props["verb"]>, string> = {
@@ -70,6 +76,7 @@ const DOES: Record<NonNullable<Props["verb"]>, string> = {
   Import: "runs",
   Transfer: "runs",
   Restore: "runs",
+  Sync: "runs",
 };
 
 /** Under a shape's first rows: "496 more rows in this statement, then 2 more statements"; null when nothing is left out. */
@@ -153,10 +160,15 @@ export default function ConfirmRun({
   danger = false,
   banner,
   production = true,
+  countNote,
+  dropsData = [],
+  runDisabled = false,
 }: Props) {
   const [runFocused, setRunFocused] = useState(false);
   // A transfer's title says where the rows go; its button runs the shown SQL there.
-  const runLabel = production ? `${verb === "Transfer" ? "Run" : verb} on ${verdict.connection}` : verb;
+  // A Sync Script is applied: "Apply Sync Script on freight-prod", confirmed by "Apply on freight-prod".
+  const button = verb === "Transfer" ? "Run" : verb === "Sync" ? "Apply" : verb;
+  const runLabel = production ? `${button} on ${verdict.connection}` : button;
   const does = DOES[verb];
 
   // One block for every statement, a blank line between them. Writes get the Production band, and
@@ -166,10 +178,11 @@ export default function ConfirmRun({
   const statements = "statements" in verdict ? verdict.statements : [];
   const writes = "writes" in verdict ? verdict.writes : 0;
   const sql = statements
-    .map((s) => {
+    .map((s, i) => {
       const lines = s.text.split("\n").length;
       const write = s.class === "write";
-      marks.push({ firstLine: next, lastLine: next + lines - 1, tag: write ? "writes" : "reads", ...(write && { band: "prod" as const }) });
+      const tag = dropsData.includes(i) ? ("dropsData" as const) : write ? ("writes" as const) : ("reads" as const);
+      marks.push({ firstLine: next, lastLine: next + lines - 1, tag, ...(write && { band: "prod" as const }) });
       next += lines + 1;
       return s.text;
     })
@@ -181,7 +194,7 @@ export default function ConfirmRun({
       size="wide"
       title={
         <span className="confirm-title">
-          {verb} {verb === "Transfer" ? "to" : "on"} <b>{verdict.connection}</b>
+          {verb === "Sync" ? "Apply Sync Script" : verb} {verb === "Transfer" ? "to" : "on"} <b>{verdict.connection}</b>
           {verdict.database !== null && ` · ${verdict.database}`}
         </span>
       }
@@ -247,6 +260,7 @@ export default function ConfirmRun({
             <p className="confirm-count">
               {countText(writes, statements.length)}
               {verb === "Save" && " They run in one transaction."}
+              {countNote && ` ${countNote}`}
             </p>
             <div className="confirm-sql" tabIndex={0} data-autofocus aria-label="SQL to run, read-only">
               <SqlBlock sql={sql} dialect={dialect ?? "postgres"} marks={marks} />
@@ -264,6 +278,7 @@ export default function ConfirmRun({
         <button
           type="button"
           className={noWhere || verb === "Drop" || danger ? "button button-danger-fill" : "button button-primary"}
+          disabled={runDisabled}
           onFocus={() => setRunFocused(true)}
           onBlur={() => setRunFocused(false)}
           onClick={onRun}

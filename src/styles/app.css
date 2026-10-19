@@ -4197,6 +4197,11 @@ button.chip[aria-pressed="true"] {
   color: var(--c-prod-text);
   font-weight: 600;
 }
+.sql-block-tag-dropsData {
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+  font-weight: 600;
+}
 .sql-block-line-prod {
   background: var(--c-prod-subtle);
 }

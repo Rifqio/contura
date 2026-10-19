@@ -1,0 +1,686 @@
+/* Schema Compare (step 10, frame 10.1): the tab, the Differences tree and DDL panes, the Sync Script. Colours are tokens only. */
+
+.compare-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.compare-tab .mono {
+  font-family: var(--font-mono-small-family);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+
+/* ---- header: Source, Swap, Target, Compared ago, Compare again ---- */
+.compare-head {
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  padding: 0 10px 0 var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  overflow-x: auto;
+}
+.compare-lbl {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  white-space: nowrap;
+}
+.compare-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.compare-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.compare-model .icon {
+  color: var(--c-text-subtle);
+}
+.compare-swap {
+  width: 28px;
+  height: 28px;
+}
+.compare-ago {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Banners under the header: the DBML notice, refusals, errors. */
+.compare-ban {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin: var(--spacing-sm) var(--spacing-md) 0;
+  padding: var(--spacing-sm) 10px;
+  border-radius: var(--rounded-md);
+  font: var(--font-small);
+}
+.compare-ban > .icon {
+  flex: none;
+}
+.compare-ban-bad {
+  background: var(--c-danger-subtle);
+}
+.compare-ban-bad > .icon {
+  color: var(--c-danger-text);
+}
+.compare-ban-info {
+  background: var(--c-info-subtle);
+}
+.compare-ban-info > .icon {
+  color: var(--c-info-text);
+}
+
+/* ---- the view tabs: Differences 9, Sync Script 6 of 9 ---- */
+.compare-strip {
+  height: 36px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 var(--spacing-md) 0 2px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.compare-tabs {
+  display: flex;
+  align-items: center;
+}
+.compare-itab {
+  position: relative;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--c-text-muted);
+  font: var(--font-body);
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-enter);
+}
+.compare-itab:hover {
+  color: var(--c-text);
+}
+.compare-itab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: -2px;
+}
+.compare-itab-on {
+  color: var(--c-text);
+  font: var(--font-body-strong);
+}
+.compare-itab-on::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--c-accent);
+}
+.compare-itab-n {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+.compare-vdiv {
+  width: 1px;
+  height: 16px;
+  margin: 0 10px 0 var(--spacing-sm);
+  background: var(--c-border);
+}
+.compare-strip-note {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- body ---- */
+.compare-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.compare-state {
+  margin: var(--spacing-lg) var(--spacing-md);
+}
+.compare-split {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.compare-left {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+}
+.compare-left-diff {
+  width: 380px;
+}
+.compare-left-sync {
+  width: 420px;
+}
+.compare-filter {
+  height: 40px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--spacing-sm);
+}
+.compare-filter .segmented {
+  background: var(--c-bg-panel);
+}
+.compare-filter-n {
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.compare-foot-hint {
+  flex: none;
+  margin: 0;
+  padding: 10px 14px 12px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* The tree reuses the object tree's rows and guides; marks carry their word too. */
+.compare-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 6px 6px;
+  outline: none;
+}
+.compare-tree:focus-visible {
+  box-shadow: inset 0 0 0 var(--focus-ring-width) var(--c-focus);
+}
+.compare-trow {
+  gap: 6px;
+  padding-right: 10px;
+}
+.compare-chevron {
+  display: inline-flex;
+  color: var(--c-text-subtle);
+}
+.compare-trow-name {
+  flex: none;
+}
+.compare-trow-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-subtle);
+  font-size: 11px;
+}
+.compare-trow-word {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--spacing-sm);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.compare-trow-note {
+  cursor: default;
+  color: var(--c-text-muted);
+}
+.compare-mark {
+  flex: none;
+}
+.compare-mark-added {
+  color: var(--c-success-text);
+}
+.compare-mark-removed {
+  color: var(--c-danger-text);
+}
+.compare-mark-changed {
+  color: var(--c-warning-text);
+}
+
+/* ---- the Differences pane: title, legend, DDL panes, data-loss banner, In the Sync Script ---- */
+.compare-right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.compare-right-head {
+  height: 40px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 var(--spacing-md);
+}
+.compare-right-title {
+  font-weight: 600;
+}
+.compare-chip-bad {
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+}
+.compare-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.compare-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compare-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  margin: 0 var(--spacing-md);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  overflow: hidden;
+}
+.compare-panes-state {
+  align-items: center;
+  justify-content: center;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.compare-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.compare-pane + .compare-pane {
+  border-left: var(--border-hairline) solid var(--c-border);
+}
+.compare-pane-head {
+  height: 32px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 10px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+}
+.compare-pane-name {
+  font-weight: 600;
+}
+.compare-pane-role {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.compare-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+.compare-dl {
+  display: flex;
+  height: 20px;
+  font-size: 12px;
+  line-height: 20px;
+}
+.compare-dl-n {
+  flex: none;
+  box-sizing: border-box;
+  width: 40px;
+  padding-right: var(--spacing-sm);
+  color: var(--c-text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.compare-dl-mk {
+  flex: none;
+  width: 16px;
+  border-right: var(--border-hairline) solid var(--c-border);
+  text-align: center;
+}
+.compare-dl-ct {
+  padding-left: 10px;
+  white-space: pre;
+  font: inherit;
+}
+.compare-dl-chg {
+  background: var(--c-warning-subtle);
+}
+.compare-dl-chg .compare-dl-mk {
+  color: var(--c-warning-text);
+}
+.compare-dl-add {
+  background: var(--c-success-subtle);
+}
+.compare-dl-add .compare-dl-mk {
+  color: var(--c-success-text);
+}
+.compare-dl-rem {
+  background: var(--c-danger-subtle);
+}
+.compare-dl-rem .compare-dl-mk {
+  color: var(--c-danger-text);
+}
+.compare-dl-fill {
+  background: color-mix(in srgb, var(--c-border-subtle) 60%, transparent);
+}
+.compare-dl-foc {
+  box-shadow: inset 2px 0 0 var(--c-accent);
+}
+
+.compare-loss {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-height: 32px;
+  margin: var(--spacing-sm) var(--spacing-md) 0;
+  padding: 0 10px;
+  border-radius: var(--rounded-md);
+  background: var(--c-danger-subtle);
+  font: var(--font-small);
+}
+.compare-loss > .icon {
+  flex: none;
+  color: var(--c-danger-text);
+}
+
+.compare-inscript {
+  flex: none;
+  margin: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  overflow: hidden;
+}
+.compare-inscript-head {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 10px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+  font: var(--font-small);
+}
+.compare-inscript .sql-block {
+  max-height: 160px;
+  border: 0;
+  border-radius: 0;
+}
+
+/* ---- no differences ---- */
+.compare-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xl);
+  text-align: center;
+}
+.compare-empty p {
+  margin: 0;
+  max-width: 560px;
+}
+.compare-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--rounded-full);
+  background: var(--c-success-subtle);
+  color: var(--c-success-text);
+}
+.compare-empty-title {
+  margin: 0;
+  font: var(--font-subtitle);
+}
+.compare-empty-hint {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* ---- the Sync Script list ---- */
+.sync-list-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sync-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 6px var(--spacing-sm);
+  outline: none;
+}
+.sync-list:focus-visible {
+  box-shadow: inset 0 0 0 var(--focus-ring-width) var(--c-focus);
+}
+.sync-group-head {
+  height: 28px;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 var(--spacing-sm) 4px;
+  box-sizing: border-box;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-weight: 600;
+}
+/* Fixed heights (30 px, 48 px with a second line) so the list draws only the rows on screen. */
+.sync-item {
+  position: relative;
+  box-sizing: border-box;
+  height: 30px;
+  display: grid;
+  grid-template-columns: 16px 14px minmax(0, 1fr);
+  column-gap: var(--spacing-sm);
+  align-items: center;
+  padding: 6px var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+.sync-item:hover {
+  background: var(--c-bg-hover);
+}
+.sync-item input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--c-accent);
+}
+.sync-item-on,
+.sync-item-on:hover {
+  background: var(--c-accent-subtle);
+}
+.sync-item-on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 2px;
+  background: var(--c-accent);
+}
+.sync-item-off {
+  cursor: default;
+  color: var(--c-text-muted);
+}
+.sync-item-two {
+  height: 48px;
+}
+.sync-item-line {
+  line-height: 18px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.sync-item-loss .sync-item-line {
+  color: var(--c-danger-text);
+}
+.sync-item-l2 {
+  grid-column: 3;
+  min-width: 0;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--font-small);
+  line-height: 16px;
+}
+.sync-item-l2-danger {
+  color: var(--c-danger-text);
+}
+.sync-item-l2-subtle {
+  color: var(--c-text-subtle);
+}
+
+/* ---- the script pane ---- */
+.script-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.script-pane-head {
+  height: 36px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 var(--spacing-sm) 0 var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.script-pane-title {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.script-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0;
+  outline: none;
+}
+.script-pane-body:focus-visible {
+  box-shadow: inset 0 0 0 var(--focus-ring-width) var(--c-focus);
+}
+.script-line {
+  position: relative;
+  display: flex;
+  min-height: 20px;
+  font-size: 12px;
+  line-height: 20px;
+}
+.script-line-n {
+  flex: none;
+  box-sizing: border-box;
+  width: 48px;
+  padding-right: var(--spacing-md);
+  border-right: var(--border-hairline) solid var(--c-border);
+  color: var(--c-text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.script-line-ct {
+  padding-left: var(--spacing-md);
+  white-space: pre;
+  font: inherit;
+}
+.script-line-w {
+  background: var(--c-prod-subtle);
+}
+.script-line-w::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 42px;
+  width: 3px;
+  background: var(--c-prod-solid);
+}
+.script-note {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 60px;
+  color: var(--c-prod-text);
+  font: var(--font-small);
+  font-weight: 600;
+}
+.script-pane-line {
+  height: 28px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* ---- footer ---- */
+.compare-foot {
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 10px 0 var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+}
+.compare-foot-line {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.compare-foot-why {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* The Production dialog's data-loss banner sits on the danger tint. */
+.compare-danger {
+  background: var(--c-danger-subtle);
+}

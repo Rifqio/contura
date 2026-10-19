@@ -1,0 +1,71 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    {
+      "schema": "staging",
+      "name": "customers",
+      "alias": null,
+      "note": null,
+      "columns": [
+        {"name": "id", "typeName": "integer", "pk": true, "increment": true, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "email", "typeName": "varchar(255)", "pk": false, "increment": false, "notNull": true, "unique": true, "default": null, "note": null},
+        {"name": "name", "typeName": "text", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null}
+      ],
+      "indexes": []
+    },
+    {
+      "schema": "staging",
+      "name": "invoices",
+      "alias": null,
+      "note": "Invoices",
+      "columns": [
+        {"name": "id", "typeName": "bigint", "pk": true, "increment": true, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "customer_id", "typeName": "integer", "pk": false, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "status", "typeName": "staging.invoice_status", "pk": false, "increment": false, "notNull": true, "unique": false, "default": {"t": "string", "value": "draft"}, "note": null},
+        {"name": "amount", "typeName": "numeric(12,2)", "pk": false, "increment": false, "notNull": true, "unique": false, "default": {"t": "number", "value": "0"}, "note": null},
+        {"name": "note", "typeName": "varchar(24)", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null},
+        {"name": "created_at", "typeName": "timestamptz", "pk": false, "increment": false, "notNull": false, "unique": false, "default": {"t": "expression", "value": "now()"}, "note": null}
+      ],
+      "indexes": [
+        {"name": "invoices_status_idx", "columns": ["status"], "unique": false, "pk": false},
+        {"name": null, "columns": ["customer_id", "created_at"], "unique": false, "pk": false}
+      ]
+    },
+    {
+      "schema": "staging",
+      "name": "payments",
+      "alias": null,
+      "note": null,
+      "columns": [
+        {"name": "invoice_id", "typeName": "bigint", "pk": false, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "paid_at", "typeName": "timestamptz", "pk": false, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "amount", "typeName": "numeric(12,2)", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null}
+      ],
+      "indexes": [
+        {"name": null, "columns": ["invoice_id", "paid_at"], "unique": true, "pk": true}
+      ]
+    },
+    {
+      "schema": "staging",
+      "name": "refunds",
+      "alias": null,
+      "note": null,
+      "columns": [
+        {"name": "id", "typeName": "integer", "pk": true, "increment": true, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "invoice_id", "typeName": "bigint", "pk": false, "increment": false, "notNull": true, "unique": false, "default": null, "note": null},
+        {"name": "amount", "typeName": "numeric(12,2)", "pk": false, "increment": false, "notNull": false, "unique": false, "default": null, "note": null}
+      ],
+      "indexes": []
+    }
+  ],
+  "refs": [
+    {"name": null, "from": {"schema": "staging", "table": "invoices", "columns": ["customer_id"]}, "to": {"schema": "staging", "table": "customers", "columns": ["id"]}, "onDelete": "CASCADE", "onUpdate": null},
+    {"name": null, "from": {"schema": "staging", "table": "refunds", "columns": ["invoice_id"]}, "to": {"schema": "staging", "table": "invoices", "columns": ["id"]}, "onDelete": null, "onUpdate": null},
+    {"name": "payments_invoice_fk", "from": {"schema": "staging", "table": "payments", "columns": ["invoice_id"]}, "to": {"schema": "staging", "table": "invoices", "columns": ["id"]}, "onDelete": null, "onUpdate": null}
+  ],
+  "enums": [
+    {"schema": "staging", "name": "currency", "values": ["usd", "eur"]},
+    {"schema": "staging", "name": "invoice_status", "values": ["draft", "sent", "paid", "written_off"]}
+  ],
+  "skipped": ["view v_open_invoices"]
+}
