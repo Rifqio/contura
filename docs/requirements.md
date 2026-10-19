@@ -187,7 +187,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 6. Visual Query, plus the shared diagram engine and the query diagram and result shape (done: Visual Query, the shared diagram engine and the query diagram, ADR 0017)
    - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams (done: Lineage, the flow language, Diagrams with the icon pack, and Publish for every kind, ADR 0019)
 7. Import/export, plus Mermaid flowchart import (done: Import and Export, Mermaid flowchart import, the Job service, ADR 0018)
-8. Data Transfer
+8. Data Transfer (done: copies across Dialects with a type mapping reviewed per column, per-target transaction rules, the Job pass on the target, ADR 0020)
 9. Backup/Restore
 10. Schema Compare, plus applying a Schema Model to a Connection
 11. AI answers: real provider calls (Anthropic and OpenAI-compatible, incl. local Ollama), access levels enforced in the Core, rule-based guardrails, schema context with an on-disk index and sync, chat memory. All in the Rust Core, no Python (research in docs/research/2026-10-17-ai-*.md)

@@ -127,3 +127,8 @@ test("an_origin_from_the_job_alone_names_its_table_or_the_query_result", () => {
   expect(originFromJob("Exporting orders")).toMatchObject({ kind: "table", path: { schema: null, name: "orders" }, columns: [] });
   expect(originFromJob("Exporting the query result")).toMatchObject({ kind: "result", sql: "", rows: [] });
 });
+
+test("a transfer's status text counts the whole run", () => {
+  expect(statusText(job({ kind: "transfer", label: "Copying 6 tables to analytics", percent: 38 }))).toBe("Transfer running, 38 percent");
+  expect(statusText(job({ kind: "transfer", label: "Copying 6 tables to analytics" }))).toBe("Transfer running");
+});

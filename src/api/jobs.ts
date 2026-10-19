@@ -14,6 +14,8 @@ import type {
   ScriptPlan,
   ScriptRequest,
   ScriptStatement,
+  TransferPlan,
+  TransferRequest,
 } from "./types";
 
 /** Receives every event of one job, in order. */
@@ -91,6 +93,35 @@ export function confirmScript(req: ScriptRequest): Promise<PassId> {
 /** Starts script `id` (from `newJobId`, Q21); `pass` comes from `confirmScript` on Production. */
 export async function startScript(id: JobId, req: ScriptRequest, pass: PassId | null, onEvent: OnJobEvent): Promise<JobId> {
   await invoke("start_script", { job: id, req, pass, events: channel(onEvent) });
+  return id;
+}
+
+export function planTransfer(req: TransferRequest): Promise<TransferPlan> {
+  return invoke<TransferPlan>("plan_transfer", { req });
+}
+
+/** The first INSERT of `table`'s copy, from 4 source rows. */
+export function transferSample(req: TransferRequest, table: string): Promise<string> {
+  return invoke<string>("transfer_sample", { req, table });
+}
+
+/** The Production confirmation of a transfer: a pass on the target for this plan. */
+export function confirmTransfer(req: TransferRequest): Promise<PassId> {
+  return invoke<PassId>("confirm_transfer", { req });
+}
+
+/**
+ * Starts transfer `id` (from `newJobId`). `reviewed` is the plan fingerprint Review SQL showed,
+ * so a target that changed since is refused; `pass` comes from `confirmTransfer` on Production.
+ */
+export async function startTransfer(
+  id: JobId,
+  req: TransferRequest,
+  reviewed: string | null,
+  pass: PassId | null,
+  onEvent: OnJobEvent,
+): Promise<JobId> {
+  await invoke("start_transfer", { job: id, req, reviewed, pass, events: channel(onEvent) });
   return id;
 }
 

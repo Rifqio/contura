@@ -16,7 +16,7 @@ test("fileName_is_the_last_part_of_either_path_style", () => {
   expect(fileName("orders.csv")).toBe("orders.csv");
 });
 import type { ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
-import type { ExportRequest, ImportRequest, JobEvent, ScriptRequest } from "./types";
+import type { ExportRequest, ImportRequest, JobEvent, ScriptRequest, TransferRequest } from "./types";
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_IMPORT_OPTIONS } from "./types";
 import * as jobs from "./jobs";
 
@@ -97,6 +97,32 @@ test("jobs_functions_invoke_their_commands_with_the_spec_argument_names", async 
   expect(mock).toHaveBeenLastCalledWith("confirm_script", { req: scriptReq });
   await expect(jobs.startScript("j4", scriptReq, null, onEvent)).resolves.toBe("j4");
   expect(sent("start_script")).toEqual({ rest: { job: "j4", req: scriptReq, pass: null }, hasEvents: true });
+
+  const side = { connectionId: "c1", database: "shop", schema: null };
+  const transferReq: TransferRequest = {
+    source: side,
+    target: { ...side, connectionId: "c2" },
+    tables: [{ name: "stores", ticked: true, ifExists: "stop" }],
+    order: [],
+    copy: "both",
+    batchRows: 1000,
+    overrides: [],
+    choices: [],
+    names: [],
+    compareCounts: true,
+    createTargetScope: false,
+  };
+  await jobs.planTransfer(transferReq);
+  expect(mock).toHaveBeenLastCalledWith("plan_transfer", { req: transferReq });
+  await jobs.transferSample(transferReq, "stores");
+  expect(mock).toHaveBeenLastCalledWith("transfer_sample", { req: transferReq, table: "stores" });
+  await jobs.confirmTransfer(transferReq);
+  expect(mock).toHaveBeenLastCalledWith("confirm_transfer", { req: transferReq });
+  await expect(jobs.startTransfer("j5", transferReq, "ab12", "p2", onEvent)).resolves.toBe("j5");
+  expect(sent("start_transfer")).toEqual({
+    rest: { job: "j5", req: transferReq, reviewed: "ab12", pass: "p2" },
+    hasEvents: true,
+  });
 
   await jobs.cancelJob("j1");
   expect(mock).toHaveBeenLastCalledWith("cancel_job", { job: "j1" });

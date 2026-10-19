@@ -185,6 +185,7 @@ impl Run {
             bytes_total: Some(self.file_bytes),
             statements_done: t.statements,
             file_row: Some(t.file_row),
+            ..JobProgress::default()
         });
     }
 

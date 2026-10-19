@@ -40,6 +40,7 @@ pub fn list_objects(conn: &Connection, database: &str) -> Result<Vec<DbObject>> 
                 kind,
                 name,
                 rows: None,
+                bytes: None,
             })
         })
         .collect();

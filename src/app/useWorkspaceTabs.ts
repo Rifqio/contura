@@ -1,6 +1,6 @@
 import { type MutableRefObject, type SetStateAction, useCallback, useEffect, useLayoutEffect, useReducer, useRef } from "react";
 import type { QueryTabDoc } from "../query/QueryTab";
-import { type AnyTab, type VisualTabDoc, type WindowTab, type WorkTab, afterClose, stripOrder, tabKey } from "../shell/tabs";
+import { type AnyTab, type TransferSeed, type VisualTabDoc, type WindowTab, type WorkTab, afterClose, stripOrder, tabKey } from "../shell/tabs";
 import { type SchemaTab, tabsReducer } from "./tabsReducer";
 
 /** The place's tabs, the window's tabs and the active tab, on one reducer so no setter runs inside another's updater. */
@@ -95,6 +95,13 @@ export function useWorkspaceTabs() {
     dispatch({ type: "renameFlow", from, to });
   }
 
+  /** Opens a new Data Transfer tab from `seed`. */
+  function openTransferTab(seed: TransferSeed) {
+    dispatch({ type: "openTransfer", id: crypto.randomUUID(), seed });
+  }
+
+  const setTransferMeta = useCallback((id: string, title: string, dirty: boolean) => dispatch({ type: "transferMeta", id, title, dirty }), []);
+
   // Kept for handlers and effects: layout effects run after each commit and before any event or passive effect reads them.
   const allTabs: AnyTab[] = stripOrder(windowTabs, tabs);
   useLayoutEffect(() => {
@@ -121,6 +128,8 @@ export function useWorkspaceTabs() {
     openSchemaTab,
     openFlowTab,
     renameFlowTab,
+    openTransferTab,
+    setTransferMeta,
     schemaClose,
     schemaCloseFor,
   };

@@ -214,3 +214,19 @@ test("two_jobs_with_the_same_line_render_both_without_a_key_clash", () => {
   expect(error.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(false);
   error.mockRestore();
 });
+
+test("closing_a_running_transfer_tab_asks_to_roll_back", async () => {
+  const { jobs, hook, redraw } = setup([job("t1", "transfer", "Copying 6 tables to analytics", "c1")]);
+  expect(leaveLine(job("t1", "transfer", "Copying 6 tables to analytics", "c1"), [])).toBe("Transfer to its Connection is running");
+  let answer: Promise<boolean> = Promise.resolve(false);
+  act(() => {
+    answer = hook.result.current.confirmCloseTransfer("t1");
+  });
+  redraw();
+  expect(screen.getByRole("dialog", { name: "Cancel the transfer and roll back?" })).toBeTruthy();
+  await act(async () => screen.getByRole("button", { name: "Cancel and roll back" }).click());
+  await expect(answer).resolves.toBe(true);
+  expect(jobs.cancel).toHaveBeenCalledWith("t1");
+  // A transfer only set up closes at once.
+  await expect(hook.result.current.confirmCloseTransfer(null)).resolves.toBe(true);
+});

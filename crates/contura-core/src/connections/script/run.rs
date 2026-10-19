@@ -209,6 +209,7 @@ impl ScriptRun {
             statements_done: c.ran,
             // A script's place is its line.
             file_row: Some(u64::from(c.line)),
+            ..JobProgress::default()
         });
     }
 

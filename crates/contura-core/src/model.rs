@@ -186,6 +186,9 @@ pub struct DbObject {
     /// The database's own row estimate; tables only.
     #[serde(default)]
     pub rows: Option<u64>,
+    /// The database's own size estimate in bytes, data and indexes; tables only.
+    #[serde(default)]
+    pub bytes: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

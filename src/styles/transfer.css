@@ -1,0 +1,656 @@
+/* Data Transfer (step 8, frame 8.1): the tab, its five steps and the Production job body. Colours are tokens only. */
+
+.transfer-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.transfer-tab.prod-wash {
+  background: var(--c-prod-wash);
+}
+
+.transfer-head {
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  padding: 0 var(--spacing-sm) 0 var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.transfer-title {
+  font: var(--font-subtitle);
+  white-space: nowrap;
+}
+.transfer-vline {
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--spacing-xs);
+  flex: none;
+  background: var(--c-border);
+}
+.transfer-sp {
+  flex: 1;
+}
+.transfer-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font: var(--font-small);
+  white-space: nowrap;
+}
+.transfer-pair .icon {
+  color: var(--c-text-subtle);
+}
+
+/* The stepper: done steps carry a check, the current one the accent. */
+.transfer-steps {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.transfer-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  color: var(--c-text-subtle);
+  white-space: nowrap;
+}
+.transfer-steps li > .icon:first-child {
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  color: var(--c-text-subtle);
+}
+.transfer-steps li.on {
+  background: var(--c-accent-subtle);
+  color: var(--c-text);
+  font-weight: 600;
+}
+.transfer-steps li.done {
+  color: var(--c-text-muted);
+}
+.transfer-step-n {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: var(--border-hairline) solid var(--c-border-strong);
+  border-radius: var(--rounded-sm);
+  color: var(--c-text-muted);
+  font: 600 11px/16px var(--font-family-code);
+}
+.transfer-steps li.on .transfer-step-n {
+  border-color: var(--c-accent);
+  background: var(--c-accent);
+  color: var(--button-primary-text);
+}
+.transfer-steps li.done .transfer-step-n {
+  border-color: var(--c-success-text);
+  color: var(--c-success-text);
+}
+
+/* Step 1: the two ends side by side. */
+.transfer-ends-wrap {
+  flex: none;
+  padding: var(--spacing-md) var(--spacing-md) 0;
+}
+.transfer-ends {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: var(--spacing-md);
+  align-items: start;
+}
+.transfer-arrow {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  margin-top: 20px;
+  color: var(--c-text-subtle);
+}
+.transfer-end {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.transfer-end-label,
+.transfer-flab {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.transfer-end-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+.transfer-end-row > .select:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.transfer-end-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.transfer-hint {
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.transfer-hint-bad {
+  color: var(--c-danger-text);
+}
+.transfer-muted {
+  color: var(--c-text-subtle);
+}
+
+/* Banners inside the tab. */
+.transfer-ban {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin: var(--spacing-sm) var(--spacing-md) 0;
+  padding: var(--spacing-sm) 10px;
+  border-radius: var(--rounded-md);
+  font: var(--font-small);
+}
+.transfer-ban > .icon {
+  flex: none;
+}
+.transfer-ban-warn {
+  background: var(--c-warning-subtle);
+}
+.transfer-ban-warn > .icon {
+  color: var(--c-warning-text);
+}
+.transfer-ban-bad {
+  background: var(--c-danger-subtle);
+}
+.transfer-ban-bad > .icon {
+  color: var(--c-danger-text);
+}
+.transfer-ban-info {
+  background: var(--c-info-subtle);
+}
+.transfer-ban-info > .icon {
+  color: var(--c-info-text);
+}
+.transfer-ban .button {
+  margin-left: auto;
+}
+
+/* Step 2: the table list and the options panel. */
+.transfer-tables {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+}
+.transfer-box {
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.transfer-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.transfer-pane-head {
+  height: 36px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 var(--spacing-sm) 0 var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.transfer-sect {
+  font: var(--font-body-strong);
+  white-space: nowrap;
+}
+.transfer-count {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.transfer-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.transfer-lt {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.transfer-lt th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 28px;
+  padding: 0 var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border);
+  background: var(--c-bg-panel);
+  color: var(--c-text-muted);
+  font: var(--font-label);
+  text-align: left;
+  white-space: nowrap;
+}
+.transfer-lt td {
+  height: 36px;
+  max-width: 320px;
+  padding: 0 var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-lt .w0 {
+  width: 1%;
+}
+.transfer-lt .r {
+  text-align: right;
+}
+.transfer-lt .m {
+  font: var(--font-mono-small);
+}
+.transfer-lt tbody tr:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.transfer-lt tr.off td {
+  color: var(--c-text-subtle);
+}
+.transfer-lt tr.sel td {
+  background: var(--c-accent-subtle);
+}
+.transfer-lt tr.dragging td {
+  opacity: 0.5;
+}
+.transfer-lt tr.att td {
+  background: color-mix(in srgb, var(--c-warning-subtle) 70%, transparent);
+}
+.transfer-lt tr.err td {
+  background: color-mix(in srgb, var(--c-danger-subtle) 80%, transparent);
+}
+.transfer-lt tbody tr[draggable="true"] td:first-child {
+  cursor: grab;
+  color: var(--c-text-subtle);
+}
+.transfer-lt .select {
+  min-width: 140px;
+}
+.transfer-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.transfer-name .icon {
+  color: var(--c-text-subtle);
+}
+.transfer-needs .m {
+  color: var(--c-text-subtle);
+}
+.transfer-note {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.transfer-note-warn {
+  color: var(--c-warning-text);
+}
+
+.transfer-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  min-width: 0;
+}
+.transfer-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+}
+.transfer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.transfer-radio {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 24px;
+}
+.transfer-batch {
+  width: 120px;
+}
+.transfer-summary {
+  margin: 0;
+  padding: 10px var(--spacing-md);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+  font: var(--font-body-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.transfer-foot {
+  height: 48px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: auto;
+  padding: 0 10px 0 var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-surface);
+}
+
+/* Run step */
+.transfer-run {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+}
+.transfer-run .transfer-ban {
+  margin: 0;
+}
+.transfer-run-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+}
+.transfer-run-line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+.transfer-run-time,
+.transfer-run-sub {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.transfer-run-sub > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.transfer-pb {
+  height: 4px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-active);
+  overflow: hidden;
+}
+.transfer-pb > b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--c-accent);
+}
+.transfer-pb-big {
+  height: 6px;
+}
+.transfer-pb.ok > b {
+  background: var(--c-success-solid);
+}
+.transfer-pb.bad > b {
+  background: var(--c-danger-solid);
+}
+.transfer-run-list {
+  min-height: 0;
+  overflow: auto;
+}
+.transfer-run-pcol {
+  width: 34%;
+}
+.transfer-run-ic .icon {
+  display: block;
+}
+.transfer-run-ic.ok,
+.transfer-run-state.ok {
+  color: var(--c-success-text);
+}
+.transfer-run-ic.run {
+  color: var(--c-info-text);
+}
+.transfer-run-ic.wait,
+.transfer-run-ic.back,
+.transfer-run-state.wait,
+.transfer-run-state.back {
+  color: var(--c-text-subtle);
+}
+.transfer-run-ic.bad,
+.transfer-run-state.bad {
+  color: var(--c-danger-text);
+}
+.transfer-run-state.run,
+.transfer-run-state.bad {
+  font-weight: 600;
+}
+
+/* Type mapping: the ticked tables on the left, the selected table's columns on the right. */
+.transfer-pad {
+  padding: var(--spacing-md);
+}
+.transfer-mapping {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+.transfer-mapping-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--spacing-sm) 0;
+  border-right: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+}
+.transfer-mapping-side > .transfer-flab {
+  padding: 4px var(--spacing-md) 6px;
+}
+.transfer-mapping-table {
+  position: relative;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 var(--spacing-md);
+  border: 0;
+  background: none;
+  color: var(--c-text);
+  font: var(--font-mono-small);
+  text-align: left;
+}
+.transfer-mapping-table:hover {
+  background: var(--c-bg-hover);
+}
+.transfer-mapping-table.on {
+  background: var(--c-accent-subtle);
+}
+.transfer-mapping-table.on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 2px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--c-accent);
+}
+.transfer-mapping-table .icon {
+  color: var(--c-text-muted);
+}
+.transfer-mapping-table .m {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.transfer-chip {
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: var(--rounded-sm);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+.transfer-chip-warn {
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+}
+.transfer-ok {
+  display: inline-flex;
+  color: var(--c-success-text);
+}
+.transfer-mapping-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.transfer-mapping-main > .transfer-pane-head {
+  height: 40px;
+}
+.transfer-mapping-main > .transfer-ban {
+  margin: 10px var(--spacing-md) 0;
+}
+.transfer-mapping-tnote {
+  padding: var(--spacing-sm) var(--spacing-md) 0;
+}
+.transfer-mapping-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px var(--spacing-md);
+}
+.transfer-mapping-grid > .transfer-hint {
+  margin-top: 10px;
+}
+.transfer-srctype {
+  color: var(--c-syn-type);
+  font-style: italic;
+}
+.transfer-lt td .icon {
+  color: var(--c-text-subtle);
+}
+.transfer-note-col {
+  width: 42%;
+}
+.transfer-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.transfer-note-info {
+  color: var(--c-info-text);
+}
+.transfer-note-bad {
+  color: var(--c-danger-text);
+}
+.transfer-type {
+  width: 100%;
+  max-width: 280px;
+  height: 24px;
+}
+.transfer-type-warn {
+  border-color: var(--c-warning-solid);
+}
+.transfer-type-bad {
+  border-color: var(--c-danger-solid);
+}
+
+/* Review SQL: the structure SQL, the row copies, what is not copied, the mode line. */
+.transfer-review {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+}
+.transfer-review > .transfer-ban {
+  margin: 0;
+}
+.transfer-review-sql {
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
+  overflow: hidden;
+}
+.transfer-review-code {
+  max-height: 360px;
+  overflow: auto;
+  padding: var(--spacing-sm) 0;
+}
+.transfer-copies,
+.transfer-notcopied {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.transfer-copies li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-height: 36px;
+  padding: 0 var(--spacing-sm) 0 var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.transfer-copies li:last-child,
+.transfer-notcopied li:last-child {
+  border-bottom: 0;
+}
+.transfer-copies .m {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--font-mono-small);
+}
+.transfer-notcopied li {
+  padding: 6px var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+  font: var(--font-mono-small);
+}
+.transfer-mode {
+  padding: 0 2px;
+}

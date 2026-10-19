@@ -1,9 +1,10 @@
 import type { ComponentProps, MutableRefObject } from "react";
-import type { ConnectionConfig, GroupId } from "../api/types";
+import type { ConnectionConfig, Group, GroupId, JobId } from "../api/types";
 import Home from "../components/Home";
 import FlowTab from "../flow/FlowTab";
 import SchemaBuilder from "../schema/SchemaBuilder";
 import SettingsView from "../settings/SettingsView";
+import TransferTab from "../transfer/TransferTab";
 import { type SettingsSection, type WindowTab, tabKey } from "../shell/tabs";
 
 /** Home's props, built in App; `active` is set here from the tab on top. */
@@ -27,10 +28,19 @@ interface Props {
     ask: ComponentProps<typeof SchemaBuilder>["ask"];
     sourceConnection(id: string): ComponentProps<typeof SchemaBuilder>["sourceConnection"];
   };
+  transfer: {
+    /** Every Connection and Group: a transfer may span two Groups. */
+    connections: ConnectionConfig[];
+    groups: Group[];
+    onMeta(id: string, title: string, dirty: boolean): void;
+    onJob(id: string, job: JobId | null): void;
+    onOpenInEditor: ComponentProps<typeof TransferTab>["onOpenInEditor"];
+    onOpenTarget: ComponentProps<typeof TransferTab>["onOpenTarget"];
+  };
 }
 
 /** The window tabs (Home, Settings, Schema Models, diagrams) as panes of the work area. */
-export default function WindowPanes({ windowTabs, activeKey, home, settings, schema }: Props) {
+export default function WindowPanes({ windowTabs, activeKey, home, settings, schema, transfer }: Props) {
   return (
     <>
       {windowTabs.map((t) => {
@@ -61,6 +71,23 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
           return (
             <div key={key} className="work-pane schema-main" data-flow-name={t.name} hidden={key !== activeKey}>
               <FlowTab name={t.name} />
+            </div>
+          );
+        }
+        if (t.kind === "transfer") {
+          // Stays mounted while hidden, so a running transfer keeps its view.
+          return (
+            <div key={key} className="work-pane transfer-main" hidden={key !== activeKey}>
+              <TransferTab
+                seed={t.seed}
+                connections={transfer.connections}
+                groups={transfer.groups}
+                visible={key === activeKey}
+                onMeta={(title, dirty) => transfer.onMeta(t.id, title, dirty)}
+                onJob={(job) => transfer.onJob(t.id, job)}
+                onOpenInEditor={transfer.onOpenInEditor}
+                onOpenTarget={transfer.onOpenTarget}
+              />
             </div>
           );
         }

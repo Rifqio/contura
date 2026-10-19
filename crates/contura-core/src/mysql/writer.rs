@@ -127,6 +127,17 @@ impl BulkWriter for MySqlWriter {
         }
     }
 
+    async fn first_value(&mut self, sql: &str) -> Result<Option<String>> {
+        let read_only = self.read_only;
+        // Prepared, so a second statement is refused.
+        let row: Option<mysql_async::Row> = self
+            .conn
+            .exec_first(sql, ())
+            .await
+            .map_err(|e| session_err(e, read_only))?;
+        Ok(row.and_then(|r| r.as_ref(0).and_then(mysql_text)))
+    }
+
     async fn savepoint(&mut self, name: &str) -> Result<()> {
         self.exec(&format!("SAVEPOINT {}", quote_ident(name))).await
     }
@@ -166,5 +177,19 @@ impl BulkWriter for MySqlWriter {
         // Outside a transaction this does nothing; inside one it undoes the work now.
         let _ = conn.query_drop("ROLLBACK").await;
         let _ = conn.disconnect().await;
+    }
+}
+
+/// A value the text protocol or a prepared statement gave, as text.
+fn mysql_text(v: &mysql_async::Value) -> Option<String> {
+    use mysql_async::Value as V;
+    match v {
+        V::NULL => None,
+        V::Bytes(b) => Some(String::from_utf8_lossy(b).into_owned()),
+        V::Int(i) => Some(i.to_string()),
+        V::UInt(u) => Some(u.to_string()),
+        V::Float(f) => Some(f.to_string()),
+        V::Double(d) => Some(d.to_string()),
+        other => Some(format!("{other:?}")),
     }
 }

@@ -68,6 +68,10 @@ async fn lists_objects_in_kind_order() {
             (ObjectKind::Trigger, "t_items"),
         ]
     );
+    // Tables carry the server's size estimate; other kinds have none.
+    for o in &objects {
+        assert_eq!(o.bytes.is_some(), o.kind == ObjectKind::Table, "{}", o.name);
+    }
     dialect.disconnect().await.ok();
     db.drop_db().await;
 }

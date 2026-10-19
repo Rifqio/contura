@@ -217,6 +217,9 @@ impl BulkWriter for Commits {
     async fn run(&mut self, _: &str) -> Result<u64> {
         Ok(0)
     }
+    async fn first_value(&mut self, _: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
     async fn savepoint(&mut self, _: &str) -> Result<()> {
         Ok(())
     }

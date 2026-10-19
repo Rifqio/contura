@@ -57,6 +57,14 @@ export type WorkTab =
   /** A table's lineage (step 6+): read only, so never saved in place drafts. */
   | { kind: "lineage"; key: string; connectionId: ConnectionId; path: ObjectPath };
 
+/** Where a Data Transfer starts: the source database (and schema), and a table to tick first. */
+export interface TransferSeed {
+  connectionId: ConnectionId;
+  database: string;
+  schema: string | null;
+  table: string | null;
+}
+
 /** A tab of the window. */
 export type WindowTab =
   | { kind: "home" }
@@ -64,7 +72,12 @@ export type WindowTab =
   | { kind: "settings"; section: SettingsSection; seq?: number }
   | { kind: "schema"; id: string; doc: ModelDoc }
   /** A diagram, `<name>.flow` in Contura's diagrams folder; one tab per name. */
-  | { kind: "flow"; name: string };
+  | { kind: "flow"; name: string }
+  /**
+   * A Data Transfer (step 8): a window tab, since it spans two Connections. `title` and `dirty`
+   * come from the tab ("pos_live to analytics", set up but not run); never saved.
+   */
+  | { kind: "transfer"; id: string; seed: TransferSeed; title: string; dirty: boolean };
 
 export type AnyTab = WorkTab | WindowTab;
 
@@ -78,6 +91,8 @@ export function tabKey(t: AnyTab): string {
       return `schema:${t.id}`;
     case "flow":
       return `flow:${t.name}`;
+    case "transfer":
+      return `transfer:${t.id}`;
     case "query":
       return `query:${t.doc.id}`;
     case "visual":
@@ -184,6 +199,7 @@ export function sameModel(model: VisualQuery, savedJson: string | null): boolean
 export function isUnsaved(t: AnyTab): boolean {
   if (t.kind === "query") return t.doc.savedId !== null && t.doc.text !== t.doc.savedText;
   if (t.kind === "visual") return t.doc.savedId !== null && !sameModel(t.doc.model, t.doc.savedJson);
+  if (t.kind === "transfer") return t.dirty;
   return false;
 }
 

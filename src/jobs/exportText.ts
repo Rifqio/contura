@@ -155,6 +155,8 @@ export function elapsedLine(ms: number, left: number | null): string {
 
 /** The status bar's words for a job: "Exporting orders, 32 percent", or the bytes written without a total. */
 export function statusText(job: JobView): string {
+  // Step 8: a transfer's percent counts every table's rows.
+  if (job.kind === "transfer") return job.percent !== null ? `Transfer running, ${job.percent} percent` : "Transfer running";
   if (job.percent !== null) return `${job.label}, ${job.percent} percent`;
   if (job.bytesDone > 0) return `${job.label}, ${bytesText(job.bytesDone)}`;
   return job.label;

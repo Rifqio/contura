@@ -2,6 +2,11 @@
 
 mod mysql;
 
+use std::collections::HashSet;
+
+use sha2::{Digest, Sha256};
+
+use crate::common::hex_lower;
 use crate::design::MySqlColumn;
 use crate::error::{Error, Result};
 use crate::model::DialectKind;
@@ -247,16 +252,34 @@ impl Writer<'_> {
         default_sql(self.d(), d)
     }
 
-    fn column(&self, t: &SmTable, c: &SmColumn, single_pk: bool) -> Result<String> {
+    /// One column line. With `as_note`, an SQLite increment the rowid cannot hold is
+    /// left out and described in `notes` instead of refusing the whole script.
+    fn column(
+        &self,
+        t: &SmTable,
+        c: &SmColumn,
+        single_pk: bool,
+        as_note: bool,
+        notes: &mut Vec<String>,
+    ) -> Result<String> {
+        let mut c = c.clone();
         if self.d() == DialectKind::Sqlite && c.increment {
             let integer_pk = c.pk && single_pk && c.type_name.eq_ignore_ascii_case("integer");
             if !integer_pk {
-                return Err(Error::InvalidInput(format!(
-                    "SQLite can only auto-increment a single INTEGER primary key ({}.{})",
+                if !as_note {
+                    return Err(Error::InvalidInput(format!(
+                        "SQLite can only auto-increment a single INTEGER primary key ({}.{})",
+                        t.name, c.name
+                    )));
+                }
+                notes.push(format!(
+                    "AUTOINCREMENT is left out; values are copied as they are ({}.{})",
                     t.name, c.name
-                )));
+                ));
+                c.increment = false;
             }
         }
+        let c = &c;
         let type_sql = match (self.enum_for(&c.type_name), self.d()) {
             (Some(e), DialectKind::MySql) => format!("ENUM({})", self.enum_values(e)),
             (Some(e), DialectKind::Sqlite) => format!(
@@ -310,13 +333,13 @@ fn is_current_time(expr: &str) -> bool {
     ) && (e == base || e.ends_with(')'))
 }
 
-fn same_table(t: &SmTable, schema: &Option<String>, name: &str) -> bool {
+pub(crate) fn same_table(t: &SmTable, schema: &Option<String>, name: &str) -> bool {
     t.name == name && (t.schema == *schema || schema.is_none() || t.schema.is_none())
 }
 
 /// Tables in dependency order: a referenced table comes before the tables that
 /// reference it. Tables in a cycle keep model order.
-fn table_order(model: &SchemaModel) -> Vec<usize> {
+pub(crate) fn table_order(model: &SchemaModel) -> Vec<usize> {
     let n = model.tables.len();
     let mut placed = vec![false; n];
     let mut order = Vec::with_capacity(n);
@@ -347,13 +370,141 @@ fn table_order(model: &SchemaModel) -> Vec<usize> {
     order
 }
 
-pub(crate) fn create_script_dated(model: &SchemaModel, date: &str) -> Result<String> {
-    let w = Writer { model };
-    let mut stmts: Vec<String> = Vec::new();
+/// How `parts` writes a model.
+#[derive(Clone, Debug, Default)]
+pub struct DdlOptions {
+    /// From a transfer: an SQLite increment the rowid cannot hold becomes a note,
+    /// not an error (the Schema Builder export keeps the error).
+    pub sqlite_autoincrement_as_note: bool,
+    /// Write `CREATE SCHEMA` (PostgreSQL) or `CREATE DATABASE` (MySQL) for the
+    /// tables' schemas.
+    pub create_schemas: bool,
+    /// From a transfer: keep every index name within the target's length limit
+    /// (63 bytes on PostgreSQL and SQLite, 64 characters on MySQL) by shortening
+    /// it with a stable hash, and on PostgreSQL and SQLite, where index names are
+    /// per schema rather than per table, make each one unique in the run. Off,
+    /// names are written as they are (the Schema Builder export).
+    pub unique_index_names: bool,
+}
 
-    if model.dialect == DialectKind::Postgres {
+/// The longest index name `d` keeps, and whether the limit counts characters
+/// (MySQL) rather than bytes (PostgreSQL cuts at 63 bytes; SQLite has no limit but
+/// takes the same one so a name reads the same on both).
+fn index_name_limit(d: DialectKind) -> (usize, bool) {
+    match d {
+        DialectKind::MySql => (64, true),
+        DialectKind::Postgres | DialectKind::Sqlite => (63, false),
+    }
+}
+
+/// `name` itself when it fits `max`, otherwise its start (on a char boundary)
+/// then `_` and the first 7 hex digits of the full name's SHA-256, `max` in all.
+fn fit_name(name: &str, max: usize, by_chars: bool) -> String {
+    let len = if by_chars {
+        name.chars().count()
+    } else {
+        name.len()
+    };
+    if len <= max {
+        return name.to_string();
+    }
+    let keep = max - 8;
+    let mut end = 0;
+    for (count, (i, ch)) in name.char_indices().enumerate() {
+        let next = if by_chars {
+            count + 1
+        } else {
+            i + ch.len_utf8()
+        };
+        if next > keep {
+            break;
+        }
+        end = i + ch.len_utf8();
+    }
+    let digest: [u8; 32] = Sha256::digest(name.as_bytes()).into();
+    format!("{}_{}", &name[..end], &hex_lower(&digest)[..7])
+}
+
+/// The name a transfer writes for an index of `table` first called `base`: kept
+/// within the limit and, on PostgreSQL and SQLite, not one of `used` (compared
+/// without case, as SQLite does). The result is added to `used`.
+fn unique_index_name(
+    d: DialectKind,
+    table: &str,
+    base: &str,
+    used: &mut HashSet<String>,
+) -> String {
+    let (max, by_chars) = index_name_limit(d);
+    if d == DialectKind::MySql {
+        return fit_name(base, max, by_chars);
+    }
+    for n in 0usize.. {
+        let candidate = match n {
+            0 => base.to_string(),
+            1 => format!("{table}_{base}"),
+            _ => format!("{table}_{base}_{n}"),
+        };
+        let name = fit_name(&candidate, max, by_chars);
+        if used.insert(name.to_lowercase()) {
+            return name;
+        }
+    }
+    unreachable!("the numbered names never run out")
+}
+
+/// The statements of a model, grouped so a transfer can run each group when it
+/// should. The Schema Builder export is `schema + types + tables + deferred_fks +
+/// indexes`, in that order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DdlParts {
+    pub schema: Vec<String>,
+    /// PostgreSQL `CREATE TYPE` for each enum.
+    pub types: Vec<String>,
+    /// `CREATE TABLE` in dependency order with Foreign Keys inline where the
+    /// referenced table comes first, each followed by its PostgreSQL comments.
+    pub tables: Vec<String>,
+    /// The same tables with no Foreign Keys at all (PostgreSQL adds them after the
+    /// rows). On SQLite, which cannot add one later, this equals `tables`.
+    pub tables_without_fks: Vec<String>,
+    /// The forward references `tables` leaves out, as `ALTER TABLE ... ADD`.
+    pub deferred_fks: Vec<String>,
+    pub indexes: Vec<String>,
+    /// Every Foreign Key as `ALTER TABLE ... ADD`, for use after `tables_without_fks`.
+    /// Empty on SQLite.
+    pub foreign_keys: Vec<String>,
+    /// What `sqlite_autoincrement_as_note` left out.
+    pub notes: Vec<String>,
+}
+
+/// Writes `model` (in its own Dialect) as grouped statements.
+pub fn parts(model: &SchemaModel, opts: &DdlOptions) -> Result<DdlParts> {
+    let w = Writer { model };
+    let d = model.dialect;
+    let mut p = DdlParts::default();
+
+    if opts.create_schemas {
+        let mut seen: Vec<&str> = Vec::new();
+        for s in model.tables.iter().filter_map(|t| t.schema.as_deref()) {
+            if seen.contains(&s) {
+                continue;
+            }
+            seen.push(s);
+            match d {
+                DialectKind::Postgres => p
+                    .schema
+                    .push(format!("CREATE SCHEMA IF NOT EXISTS {};", w.q(s))),
+                DialectKind::MySql => p.schema.push(format!(
+                    "CREATE DATABASE IF NOT EXISTS {} DEFAULT CHARSET utf8mb4;",
+                    w.q(s)
+                )),
+                DialectKind::Sqlite => {}
+            }
+        }
+    }
+
+    if d == DialectKind::Postgres {
         for e in &model.enums {
-            stmts.push(format!(
+            p.types.push(format!(
                 "CREATE TYPE {} AS ENUM ({});",
                 w.qualified(&e.schema, &e.name),
                 w.enum_values(e)
@@ -361,65 +512,95 @@ pub(crate) fn create_script_dated(model: &SchemaModel, date: &str) -> Result<Str
         }
     }
 
+    // Index names share a namespace with tables on PostgreSQL and SQLite.
+    let mut used_index_names: HashSet<String> = if opts.unique_index_names {
+        model.tables.iter().map(|t| t.name.to_lowercase()).collect()
+    } else {
+        HashSet::new()
+    };
+
     let order = table_order(model);
     let position = |schema: &Option<String>, name: &str| {
         order
             .iter()
             .position(|&i| same_table(&model.tables[i], schema, name))
     };
-    let mut deferred = Vec::new();
-    let mut indexes = Vec::new();
     for (pos, &i) in order.iter().enumerate() {
         let t = &model.tables[i];
         let table = w.qualified(&t.schema, &t.name);
         let single_pk = t.columns.iter().filter(|c| c.pk).count() == 1;
         let mut lines = Vec::new();
         for c in &t.columns {
-            lines.push(format!("  {}", w.column(t, c, single_pk)?));
+            let line = w.column(
+                t,
+                c,
+                single_pk,
+                opts.sqlite_autoincrement_as_note,
+                &mut p.notes,
+            )?;
+            lines.push(format!("  {line}"));
         }
         for idx in t.indexes.iter().filter(|x| x.pk) {
             lines.push(format!("  PRIMARY KEY ({})", w.cols(&idx.columns)));
         }
+        let plain_lines = lines.clone();
         for r in model
             .refs
             .iter()
             .filter(|r| same_table(t, &r.from.schema, &r.from.table))
         {
+            let alter = format!("ALTER TABLE {table} ADD {};", w.foreign_key(r));
             let later = position(&r.to.schema, &r.to.table).is_some_and(|p| p > pos);
-            if later && model.dialect != DialectKind::Sqlite {
-                deferred.push(format!("ALTER TABLE {table} ADD {};", w.foreign_key(r)));
+            if later && d != DialectKind::Sqlite {
+                p.deferred_fks.push(alter.clone());
             } else {
                 lines.push(format!("  {}", w.foreign_key(r)));
             }
+            if d != DialectKind::Sqlite {
+                p.foreign_keys.push(alter);
+            }
         }
-        let tail = match (&t.note, model.dialect) {
+        let tail = match (&t.note, d) {
             (Some(n), DialectKind::MySql) => format!(" COMMENT={}", w.lit(n)),
             _ => String::new(),
         };
-        stmts.push(format!(
-            "CREATE TABLE {table} (\n{}\n){tail};",
-            lines.join(",\n")
-        ));
-        if model.dialect == DialectKind::Postgres {
+        let create =
+            |lines: &[String]| format!("CREATE TABLE {table} (\n{}\n){tail};", lines.join(",\n"));
+        p.tables.push(create(&lines));
+        p.tables_without_fks
+            .push(create(if d == DialectKind::Sqlite {
+                &lines
+            } else {
+                &plain_lines
+            }));
+        if d == DialectKind::Postgres {
+            let mut comments = Vec::new();
             if let Some(n) = &t.note {
-                stmts.push(format!("COMMENT ON TABLE {table} IS {};", w.lit(n)));
+                comments.push(format!("COMMENT ON TABLE {table} IS {};", w.lit(n)));
             }
             for c in &t.columns {
                 if let Some(n) = &c.note {
-                    stmts.push(format!(
+                    comments.push(format!(
                         "COMMENT ON COLUMN {table}.{} IS {};",
                         w.q(&c.name),
                         w.lit(n)
                     ));
                 }
             }
+            p.tables.extend(comments.iter().cloned());
+            p.tables_without_fks.extend(comments);
         }
         for idx in t.indexes.iter().filter(|x| !x.pk) {
             let name = idx
                 .name
                 .clone()
                 .unwrap_or_else(|| format!("{}_{}_idx", t.name, idx.columns.join("_")));
-            indexes.push(format!(
+            let name = if opts.unique_index_names {
+                unique_index_name(d, &t.name, &name, &mut used_index_names)
+            } else {
+                name
+            };
+            p.indexes.push(format!(
                 "CREATE {}INDEX {} ON {table} ({});",
                 if idx.unique { "UNIQUE " } else { "" },
                 w.q(&name),
@@ -427,14 +608,29 @@ pub(crate) fn create_script_dated(model: &SchemaModel, date: &str) -> Result<Str
             ));
         }
     }
-    stmts.extend(deferred);
-    stmts.extend(indexes);
+    Ok(p)
+}
 
+pub(crate) fn create_script_dated(model: &SchemaModel, date: &str) -> Result<String> {
+    let p = parts(model, &DdlOptions::default())?;
+    let stmts: Vec<String> = p
+        .schema
+        .into_iter()
+        .chain(p.types)
+        .chain(p.tables)
+        .chain(p.deferred_fks)
+        .chain(p.indexes)
+        .collect();
     Ok(format!(
         "-- Generated by Contura from a Schema Model on {date}\n\n{}\n",
         stmts.join("\n\n")
     ))
 }
+
+#[cfg(test)]
+mod index_names_tests;
+#[cfg(test)]
+mod snapshot_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {

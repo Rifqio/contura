@@ -38,7 +38,9 @@ type Props = Mode & {
   /** Offered beside the no-WHERE warning when given. */
   onAddWhere?(): void;
   /** "Save" for Pending Edits, "Apply" for a design, "Drop" for a table drop: the title and button say it. */
-  verb?: "Run" | "Save" | "Apply" | "Drop" | "Import";
+  verb?: "Run" | "Save" | "Apply" | "Drop" | "Import" | "Transfer";
+  /** The run deletes rows (a transfer's Empty it first): the button takes the danger fill. */
+  danger?: boolean;
   /** Plan warnings, one banner each, above the count line. */
   warnings?: string[];
   /** The Connection's database, for the mark before the title. */
@@ -49,7 +51,7 @@ type Props = Mode & {
   rowEstimate?: number | null;
 };
 
-const DOES: Record<NonNullable<Props["verb"]>, string> = { Run: "runs", Save: "saves", Apply: "applies", Drop: "drops", Import: "runs" };
+const DOES: Record<NonNullable<Props["verb"]>, string> = { Run: "runs", Save: "saves", Apply: "applies", Drop: "drops", Import: "runs", Transfer: "runs" };
 
 /** Under a shape's first rows: "496 more rows in this statement, then 2 more statements"; null when nothing is left out. */
 export function foldText(shape: InsertShape): string | null {
@@ -129,9 +131,11 @@ export default function ConfirmRun({
   group,
   rowEstimate,
   warnings = [],
+  danger = false,
 }: Props) {
   const [runFocused, setRunFocused] = useState(false);
-  const runLabel = `${verb} on ${verdict.connection}`;
+  // A transfer's title says where the rows go; its button runs the shown SQL there.
+  const runLabel = `${verb === "Transfer" ? "Run" : verb} on ${verdict.connection}`;
   const does = DOES[verb];
 
   // One block for every statement, a blank line between them. Writes get the Production band, and
@@ -156,7 +160,7 @@ export default function ConfirmRun({
       size="wide"
       title={
         <span className="confirm-title">
-          {verb} on <b>{verdict.connection}</b>
+          {verb} {verb === "Transfer" ? "to" : "on"} <b>{verdict.connection}</b>
           {verdict.database !== null && ` · ${verdict.database}`}
         </span>
       }
@@ -236,7 +240,7 @@ export default function ConfirmRun({
         </button>
         <button
           type="button"
-          className={noWhere || verb === "Drop" ? "button button-danger-fill" : "button button-primary"}
+          className={noWhere || verb === "Drop" || danger ? "button button-danger-fill" : "button button-primary"}
           onFocus={() => setRunFocused(true)}
           onBlur={() => setRunFocused(false)}
           onClick={onRun}

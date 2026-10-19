@@ -35,6 +35,10 @@ pub trait BulkWriter: Send {
     /// Runs one statement, never several joined by `;` (the Dialects differ on those);
     /// the rows it changed.
     async fn run(&mut self, sql: &str) -> Result<u64>;
+    /// Runs one statement that reads, and returns the first column of its first row as
+    /// text (`None` for no row or a NULL). Used for counts and checks inside the job's
+    /// own transaction.
+    async fn first_value(&mut self, sql: &str) -> Result<Option<String>>;
     async fn savepoint(&mut self, name: &str) -> Result<()>;
     async fn rollback_to(&mut self, name: &str) -> Result<()>;
     async fn release(&mut self, name: &str) -> Result<()>;

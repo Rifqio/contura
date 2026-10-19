@@ -140,6 +140,27 @@ impl BulkWriter for SqliteWriter {
             .await
     }
 
+    async fn first_value(&mut self, sql: &str) -> Result<Option<String>> {
+        let sql = sql.to_string();
+        let read_only = self.read_only;
+        self.call(move |conn| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| writer_err(e, read_only))?;
+            let mut rows = stmt.raw_query();
+            let Some(row) = rows.next().map_err(|e| writer_err(e, read_only))? else {
+                return Ok(None);
+            };
+            use rusqlite::types::ValueRef as V;
+            let v = row.get_ref(0).map_err(|e| writer_err(e, read_only))?;
+            Ok(match v {
+                V::Null => None,
+                V::Integer(i) => Some(i.to_string()),
+                V::Real(f) => Some(f.to_string()),
+                V::Text(t) | V::Blob(t) => Some(String::from_utf8_lossy(t).into_owned()),
+            })
+        })
+        .await
+    }
+
     async fn savepoint(&mut self, name: &str) -> Result<()> {
         self.exec(format!("SAVEPOINT {}", quote_double(name))).await
     }

@@ -21,6 +21,8 @@ pub enum JobKind {
     Import,
     ScriptImport,
     Check,
+    /// Data Transfer (step 8).
+    Transfer,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -474,6 +476,10 @@ pub struct JobProgress {
     pub bytes_total: Option<u64>,
     pub statements_done: u64,
     pub file_row: Option<u64>,
+    /// A Data Transfer's current table: its rows so far and its total. `rows_done` and
+    /// `rows_total` count every table, so the status bar shows the whole run.
+    pub table_rows: Option<u64>,
+    pub table_total: Option<u64>,
 }
 
 impl JobProgress {
@@ -509,6 +515,10 @@ pub enum JobEvent {
         bytes_total: Option<u64>,
         statements_done: u64,
         file_row: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        table_rows: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        table_total: Option<u64>,
     },
     Warning {
         message: String,
@@ -541,6 +551,8 @@ impl From<JobProgress> for JobEvent {
             bytes_total: p.bytes_total,
             statements_done: p.statements_done,
             file_row: p.file_row,
+            table_rows: p.table_rows,
+            table_total: p.table_total,
         }
     }
 }
@@ -669,6 +681,7 @@ mod tests {
             bytes_total: None,
             statements_done: 1,
             file_row: Some(10),
+            ..JobProgress::default()
         }
         .into();
         assert_eq!(
@@ -676,6 +689,20 @@ mod tests {
             serde_json::json!({"kind":"progress","phase":"writing","table":"orders",
                 "rowsDone":10,"rowsTotal":100,"bytesDone":2048,"bytesTotal":null,
                 "statementsDone":1,"fileRow":10})
+        );
+        // A transfer adds its current table's count; other jobs send neither field.
+        let e: JobEvent = JobProgress {
+            table: Some("sales".into()),
+            rows_done: 700,
+            table_rows: Some(200),
+            table_total: Some(500),
+            ..JobProgress::default()
+        }
+        .into();
+        let v = serde_json::to_value(e).unwrap();
+        assert_eq!(
+            (v["tableRows"].clone(), v["tableTotal"].clone()),
+            (200.into(), 500.into())
         );
         assert_eq!(
             serde_json::to_value(JobEvent::Failed {

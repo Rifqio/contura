@@ -97,6 +97,10 @@ async fn objects_in_public_in_order() {
             (ObjectKind::Trigger, "audit on stores"),
         ]
     );
+    // Tables carry the server's size estimate; other kinds have none.
+    for o in &objects {
+        assert_eq!(o.bytes.is_some(), o.kind == ObjectKind::Table, "{}", o.name);
+    }
     dialect.disconnect().await.ok();
     db.drop_db().await;
 }

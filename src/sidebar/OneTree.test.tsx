@@ -1281,3 +1281,29 @@ test("table_and_view_rows_drag_their_object", async () => {
   });
   expect(dataTransfer.effectAllowed).toBe("copy");
 });
+
+test("transfer_data_on_database_schema_and_table_rows", async () => {
+  routeMy();
+  const onTransfer = vi.fn();
+  const { unmount } = render(<Harness connections={[conn("a", "Shop")]} open={["a"]} {...handlers()} onTransfer={onTransfer} />);
+  await findItem("orders");
+  await userEvent.click(within(item("shop")).getByRole("button", { name: "More actions for shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Transfer data..." }));
+  expect(onTransfer).toHaveBeenLastCalledWith({ connectionId: "a", database: "shop", schema: null, table: null });
+  // A table row also ticks that table first.
+  fireEvent.contextMenu(item("orders"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Transfer data..." }));
+  expect(onTransfer).toHaveBeenLastCalledWith({ connectionId: "a", database: "shop", schema: null, table: "orders" });
+  unmount();
+
+  // PostgreSQL copies a schema: the schema row offers it, the database row does not.
+  routePg();
+  render(<Harness connections={[pgConn]} open={["p"]} {...handlers()} onTransfer={onTransfer} />);
+  await findItem("public");
+  await userEvent.click(within(item("shop")).getByRole("button", { name: "More actions for shop" }));
+  expect(screen.queryByRole("menuitem", { name: "Transfer data..." })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(within(item("sales")).getByRole("button", { name: "More actions for sales" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Transfer data..." }));
+  expect(onTransfer).toHaveBeenLastCalledWith({ connectionId: "p", database: "shop", schema: "sales", table: null });
+});

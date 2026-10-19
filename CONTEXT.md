@@ -174,7 +174,7 @@ A long run with progress and cancel, such as an Export or an Import. It can move
 _Avoid_: Task, process
 
 **Data Transfer**:
-Copying a table's structure and/or rows from one database to another, possibly across Dialects.
+Copying a table's structure and/or rows from one database to another, possibly across Dialects. Each column has a type mapping: its target type and a note, which the user reviews and can change before anything runs. Views, routines, triggers, checks, generated column expressions and partitions are not copied; they are listed as not copied, never dropped quietly. A writing Job on the target: Read-only refuses it, Production asks once with a Job pass (ADR 0020).
 _Avoid_: Migration, sync, export
 
 **Schema Compare**:

@@ -69,6 +69,7 @@ async fn lists_tables_views_triggers_in_order() {
         kind,
         name: name.into(),
         rows: None,
+        bytes: None,
     };
     assert_eq!(
         db.list_objects("main", None).await.unwrap(),

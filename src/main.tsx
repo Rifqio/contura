@@ -6,6 +6,7 @@ import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/export.css";
 import "./styles/import.css";
+import "./styles/transfer.css";
 import "./styles/flow.css";
 import "./styles/flow-canvas.css";
 import "./styles/lineage.css";

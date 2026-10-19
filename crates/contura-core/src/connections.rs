@@ -40,6 +40,8 @@ use std::time::{Duration, Instant};
 mod export;
 mod import;
 mod script;
+mod transfer;
+pub use transfer::TARGET_CHANGED;
 
 const LAST_GROUP_KEY: &str = "last_group";
 const UI_PREFS_KEY: &str = "ui_prefs";

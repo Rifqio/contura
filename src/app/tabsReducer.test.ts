@@ -196,3 +196,15 @@ describe("tabsReducer", () => {
     expect(next.activeKey).toBe("query:draft");
   });
 });
+
+it("openTransfer adds a tab each time and transferMeta sets its title and mark", () => {
+  const seed = { connectionId: "c1", database: "pos_live", schema: null, table: null };
+  let s = tabsReducer({ tabs: [], windowTabs: [], activeKey: null }, { type: "openTransfer", id: "t1", seed });
+  s = tabsReducer(s, { type: "openTransfer", id: "t2", seed });
+  expect(s.windowTabs.map((t) => t.kind === "transfer" && t.id)).toEqual(["t1", "t2"]);
+  expect(s.activeKey).toBe("transfer:t2");
+  const next = tabsReducer(s, { type: "transferMeta", id: "t1", title: "pos_live to analytics", dirty: true });
+  expect(next.windowTabs[0]).toMatchObject({ kind: "transfer", title: "pos_live to analytics", dirty: true });
+  // The same title and mark change nothing.
+  expect(tabsReducer(next, { type: "transferMeta", id: "t1", title: "pos_live to analytics", dirty: true })).toBe(next);
+});

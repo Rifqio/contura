@@ -112,6 +112,8 @@ export interface DbObject {
   kind: ObjectKind;
   name: string;
   rows: number | null;
+  /** The server's size estimate in bytes; tables only. Older Cores send none. */
+  bytes?: number | null;
 }
 
 export interface ColumnInfo {
@@ -1064,7 +1066,7 @@ export interface VqRun {
 // SHA-256 values travel as lowercase hex strings.
 
 export type JobId = string;
-export type JobKind = "export" | "import" | "scriptImport" | "check";
+export type JobKind = "export" | "import" | "scriptImport" | "check" | "transfer";
 export type Format = "csv" | "json" | "xlsx" | "sql";
 export type Delimiter = "comma" | "semicolon" | "tab";
 export type NullText = "emptyCell" | "nullWord";
@@ -1335,6 +1337,9 @@ export type JobEvent =
       bytesTotal: number | null;
       statementsDone: number;
       fileRow: number | null;
+      /** A Data Transfer's current table: its rows so far and its total; rowsDone and rowsTotal count the whole run. */
+      tableRows?: number;
+      tableTotal?: number | null;
     }
   | { kind: "warning"; message: string }
   | { kind: "rowSkipped"; fileRow: number; column: string | null; message: string }
@@ -1358,4 +1363,125 @@ export interface JobPosition {
   line: number | null;
   table: string | null;
   statement: number | null;
+}
+
+// Data Transfer (step 8). The plan is built again from the request on every call, so
+// Review SQL, the Production pass and the run cover the same statements.
+
+export interface TransferSide {
+  connectionId: ConnectionId;
+  database: string;
+  schema: string | null;
+}
+
+export type TransferIfExists = "stop" | "append" | "emptyFirst";
+export type TransferCopyKind = "both" | "structureOnly" | "rowsOnly";
+
+export interface TransferTableChoice {
+  name: string;
+  ticked: boolean;
+  ifExists: TransferIfExists;
+}
+
+/** A typed type (`column` set), a choice, or a new name, for one table or column. */
+export interface TransferSetting {
+  table: string;
+  column: string | null;
+  value: string;
+}
+
+export interface TransferRequest {
+  source: TransferSide;
+  target: TransferSide;
+  tables: TransferTableChoice[];
+  /** The user's load order; empty means parents first. */
+  order: string[];
+  copy: TransferCopyKind;
+  batchRows: number;
+  overrides: TransferSetting[];
+  choices: TransferSetting[];
+  names: TransferSetting[];
+  compareCounts: boolean;
+  createTargetScope: boolean;
+}
+
+export type TransferNoteKind =
+  | { kind: "info" }
+  | { kind: "new" }
+  | { kind: "needsChoice"; options: string[] }
+  | { kind: "noMatch" }
+  | { kind: "lossy" };
+
+export interface TransferNote {
+  table: string;
+  column: string | null;
+  kind: TransferNoteKind;
+  text: string;
+}
+
+export interface TransferColumn {
+  name: string;
+  targetName: string;
+  sourceType: string;
+  targetType: string;
+}
+
+export interface TransferTable {
+  name: string;
+  target: string;
+  exists: boolean;
+  columns: TransferColumn[];
+}
+
+export interface TransferCopyColumn {
+  source: string;
+  target: string;
+  targetType: string;
+}
+
+export interface TransferCopy {
+  table: string;
+  source: string;
+  target: string;
+  columns: TransferCopyColumn[];
+  select: string;
+  sourceSql: string;
+  insertHead: string;
+  targetSql: string;
+  overriding: boolean;
+  delete: string | null;
+  keyColumns: string[];
+  rowsHint: number | null;
+}
+
+export interface TransferOrphanCheck {
+  sourceTable: string;
+  table: string;
+  columns: string[];
+  parent: string;
+  countSql: string;
+  sampleSql: string;
+}
+
+export type TransferMode = "oneTransaction" | "perTable";
+
+export interface TransferPlan {
+  sourceDialect: DialectKind;
+  targetDialect: DialectKind;
+  tables: TransferTable[];
+  mappingNotes: TransferNote[];
+  notes: { table: string; text: string }[];
+  structure: string[];
+  afterRows: string[];
+  copies: TransferCopy[];
+  notCopied: string[];
+  emptied: { table: string; rows: number | null }[];
+  mode: TransferMode;
+  modeLine: string;
+  /** Columns that still need a choice; Start stays off while any is left. */
+  blocked: string[];
+  fkGroups: string[][];
+  orphanChecks: TransferOrphanCheck[];
+  /** Sent back with Start, so a target that changed since Review is refused. */
+  fingerprint: string;
 }

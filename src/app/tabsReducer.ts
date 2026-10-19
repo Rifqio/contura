@@ -1,6 +1,6 @@
 import type { SetStateAction } from "react";
 import type { QueryTabDoc } from "../query/QueryTab";
-import { type VisualTabDoc, type WindowTab, type WorkTab, afterClose, tabKey } from "../shell/tabs";
+import { type TransferSeed, type VisualTabDoc, type WindowTab, type WorkTab, afterClose, tabKey } from "../shell/tabs";
 
 /** The place's tabs, the window's tabs and the active tab, in one state so each step sees the ones before it. */
 export interface TabsState {
@@ -26,7 +26,11 @@ export type TabsAction =
   /** Shows the tab of diagram `name`, else adds one. */
   | { type: "openFlow"; name: string }
   /** Puts diagram `to` in the place of the tab of diagram `from` (a rename); active stays active. */
-  | { type: "renameFlow"; from: string; to: string };
+  | { type: "renameFlow"; from: string; to: string }
+  /** Adds a Data Transfer tab and shows it; every Transfer data... starts its own. */
+  | { type: "openTransfer"; id: string; seed: TransferSeed }
+  /** A Data Transfer tab's title and mark, as the tab reports them. */
+  | { type: "transferMeta"; id: string; title: string; dirty: boolean };
 
 function apply<T>(prev: T, next: SetStateAction<T>): T {
   return typeof next === "function" ? (next as (p: T) => T)(prev) : next;
@@ -92,6 +96,18 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const tab: WindowTab = { kind: "flow", name: action.to };
       const windowTabs = state.windowTabs.map((t, i) => (i === at ? tab : t));
       return { ...state, windowTabs, activeKey: state.activeKey === tabKey(old) ? tabKey(tab) : state.activeKey };
+    }
+    case "openTransfer": {
+      const tab: WindowTab = { kind: "transfer", id: action.id, seed: action.seed, title: "Data Transfer", dirty: true };
+      return { ...state, windowTabs: [...state.windowTabs, tab], activeKey: tabKey(tab) };
+    }
+    case "transferMeta": {
+      const { id, title, dirty } = action;
+      const at = state.windowTabs.findIndex((t) => t.kind === "transfer" && t.id === id);
+      const old = state.windowTabs[at];
+      if (!old || old.kind !== "transfer" || (old.title === title && old.dirty === dirty)) return state;
+      const windowTabs = state.windowTabs.map((t, i) => (i === at ? { ...old, title, dirty } : t));
+      return { ...state, windowTabs };
     }
   }
 }

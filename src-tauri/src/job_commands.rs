@@ -1,6 +1,6 @@
 //! Commands for import and export jobs. A job's events reach the page through a
 //! `Channel`; the job commands of Tasks 7 to 9 are added here in those tasks (Task 8:
-//! the table import; Task 9: the SQL file import).
+//! the table import; Task 9: the SQL file import) and step 8's Data Transfer.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ use contura_core::jobs::types::{
 };
 use contura_core::model::ConnectionId;
 use contura_core::safety::PassId;
+use contura_core::transfer::{TransferPlan, TransferRequest};
 use tauri::State;
 use tauri::ipc::Channel;
 
@@ -157,6 +158,48 @@ pub async fn start_script(
     let job = job.unwrap_or_else(JobId::new_v4);
     service
         .start_script(job, req, pass, Arc::new(ChannelSink(events)))
+        .await
+}
+
+/// The Data Transfer plan Review SQL shows. Read-only and the planner's refusals come
+/// back here.
+#[tauri::command]
+pub async fn plan_transfer(
+    service: Service<'_>,
+    req: TransferRequest,
+) -> Result<TransferPlan, Error> {
+    service.plan_transfer(req).await
+}
+
+/// The first INSERT of `table`'s copy, from 4 source rows.
+#[tauri::command]
+pub async fn transfer_sample(
+    service: Service<'_>,
+    req: TransferRequest,
+    table: String,
+) -> Result<String, Error> {
+    service.transfer_sample(req, table).await
+}
+
+/// The Production confirmation of a transfer: a Job pass on the target for this plan.
+#[tauri::command]
+pub async fn confirm_transfer(service: Service<'_>, req: TransferRequest) -> Result<PassId, Error> {
+    service.confirm_transfer(req).await
+}
+
+/// Starts transfer `job` (made by the page); `reviewed` is the fingerprint Review SQL
+/// showed and `pass` comes from `confirm_transfer` on a Production target.
+#[tauri::command]
+pub async fn start_transfer(
+    service: Service<'_>,
+    job: JobId,
+    req: TransferRequest,
+    reviewed: Option<String>,
+    pass: Option<PassId>,
+    events: Channel<serde_json::Value>,
+) -> Result<JobId, Error> {
+    service
+        .start_transfer(job, req, reviewed, pass, Arc::new(ChannelSink(events)))
         .await
 }
 

@@ -10,7 +10,7 @@ import Kbd from "../components/Kbd";
 import { MenuList, type MenuItem } from "../components/Menu";
 import { guideX, STUB_WIDTH, treeGuides, type RowGuides } from "../components/treeGuides";
 import SaveQueryDialog from "../query/SaveQueryDialog";
-import type { Selection } from "../shell/tabs";
+import type { Selection, TransferSeed } from "../shell/tabs";
 import { connectionMenu } from "./connectionMenu";
 import { flattenTree, moveFocus, SAVED_ROOT_ID, type TreeKey, type TreeNode, type TreeRow, windowRange } from "./treeModel";
 import type { TreeData } from "./useTreeData";
@@ -62,6 +62,8 @@ export interface OneTreeProps {
   onExportTable?(s: Selection): void;
   /** Opens an Import tab into a table; shown on Read-only Connections too, whose tab says so (Q15). */
   onImportTable?(s: Selection): void;
+  /** "Transfer data..." on a database (MySQL, SQLite), schema (PostgreSQL) or table row (step 8). */
+  onTransfer?(seed: TransferSeed): void;
   onMoveConnection(id: ConnectionId, group: GroupId | null): void;
   onNewGroup(): void;
   /** Asked for after the tree's own confirmation. */
@@ -519,6 +521,16 @@ export default function OneTree(props: OneTreeProps) {
           separatorBefore: items.length > 0 && !newTable,
           onSelect: () => props.onNewSchemaModel(n.connectionId, n.name, null),
         });
+        const transfer = props.onTransfer;
+        // PostgreSQL copies a schema, so its database row offers no Transfer data.
+        if (transfer && c?.dialect !== "postgres") {
+          items.push({
+            key: "transfer",
+            label: "Transfer data...",
+            icon: <Icon name="swap" />,
+            onSelect: () => transfer({ connectionId: n.connectionId, database: n.name, schema: null, table: null }),
+          });
+        }
         return { label: n.name, items };
       }
       case "schema": {
@@ -533,6 +545,16 @@ export default function OneTree(props: OneTreeProps) {
               icon: <Icon name="layers" />,
               onSelect: () => props.onNewSchemaModel(n.connectionId, n.database, n.name),
             },
+            ...(props.onTransfer
+              ? [
+                  {
+                    key: "transfer",
+                    label: "Transfer data...",
+                    icon: <Icon name="swap" />,
+                    onSelect: () => props.onTransfer?.({ connectionId: n.connectionId, database: n.database, schema: n.name, table: null }),
+                  },
+                ]
+              : []),
           ],
         };
       }
@@ -569,6 +591,15 @@ export default function OneTree(props: OneTreeProps) {
         const importTable = props.onImportTable;
         if (importTable) {
           items.push({ key: "import", label: "Import...", icon: <Icon name="import" />, onSelect: () => importTable(selection) });
+        }
+        const transfer = props.onTransfer;
+        if (transfer) {
+          items.push({
+            key: "transfer",
+            label: "Transfer data...",
+            icon: <Icon name="swap" />,
+            onSelect: () => transfer({ connectionId: n.connectionId, database: n.path.database, schema: n.path.schema, table: n.path.name }),
+          });
         }
         const drop = props.onDropTable;
         if (drop && !isReadOnly(n.connectionId)) {

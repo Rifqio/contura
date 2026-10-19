@@ -25,6 +25,8 @@ export function tabName(t: AnyTab): string {
       return t.doc.path ? basename(t.doc.path) : "untitled.dbml";
     case "flow":
       return `${t.name}.flow`;
+    case "transfer":
+      return t.title;
     case "query":
     case "visual":
       return t.doc.name;
@@ -53,6 +55,8 @@ function iconOf(t: AnyTab): IconName | null {
       return "layers";
     case "flow":
       return "flow";
+    case "transfer":
+      return "swap";
     case "query":
       return null;
     case "visual":

@@ -55,6 +55,22 @@ impl BulkWriter for PgWriter {
             .map_err(|e| session_err(e, self.read_only))
     }
 
+    /// The statement must give text in its first column (cast it, such as
+    /// `count(*)::text`), since the extended protocol carries values typed.
+    async fn first_value(&mut self, sql: &str) -> Result<Option<String>> {
+        let row = self
+            .client
+            .query_opt(sql, &[])
+            .await
+            .map_err(|e| session_err(e, self.read_only))?;
+        match row {
+            None => Ok(None),
+            Some(r) => r
+                .try_get::<_, Option<String>>(0)
+                .map_err(|e| crate::error::Error::Query(e.to_string())),
+        }
+    }
+
     async fn savepoint(&mut self, name: &str) -> Result<()> {
         self.run(&format!("SAVEPOINT {}", quote_double(name)))
             .await

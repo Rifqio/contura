@@ -137,6 +137,8 @@ function Workspace() {
     openSchemaTab,
     openFlowTab,
     renameFlowTab,
+    openTransferTab,
+    setTransferMeta,
     schemaClose,
     schemaCloseFor,
   } = useWorkspaceTabs();
@@ -269,6 +271,8 @@ function Workspace() {
   const [importJobs, setImportJobs] = useState<ReadonlyMap<string, JobId>>(new Map());
   const importJobsRef = useRef(importJobs);
   importJobsRef.current = importJobs;
+  /** The running job of each Data Transfer tab, by tab id, so closing it asks first. */
+  const transferJobs = useRef(new Map<string, JobId>());
   const jobsNow = useRef(jobs.jobs);
   jobsNow.current = jobs.jobs;
 
@@ -394,6 +398,11 @@ function Workspace() {
       setExporting((e) => ({ ...from, attach: id, seq: (e?.seq ?? 0) + 1 }));
       return;
     }
+    if (job.kind === "transfer") {
+      const tab = [...transferJobs.current].find(([, j]) => j === id)?.[0];
+      if (tab) setActiveKey(`transfer:${tab}`);
+      return;
+    }
     const held = [...importJobs].find(([, j]) => j === id)?.[0];
     const tab =
       tabsRef.current.find((t) => t.kind === "import" && t.key === held) ??
@@ -411,6 +420,8 @@ function Workspace() {
     if (objectTabOf(tab) && !(await confirmLeave([key]))) return;
     // A running import asks to cancel and roll back; one with only a mapping closes at once.
     if (tab.kind === "import" && !(await jobsGuard.confirmCloseImport(importJobOf(key)))) return;
+    // A running transfer asks "Cancel the transfer and roll back?"; one only set up closes at once.
+    if (tab.kind === "transfer" && !(await jobsGuard.confirmCloseTransfer(transferJobs.current.get(tab.id) ?? null))) return;
     // A New table created through the ask's Apply is its table's design tab now: that tab closes (M2).
     const created = createdTabs.current.get(key);
     if (created !== undefined) {
@@ -1036,6 +1047,7 @@ function Workspace() {
               onDropTable={(id, path) => void tableDrop.drop(id, path)}
               onExportTable={(s) => void exportTable(s)}
               onImportTable={(s) => openImport(s.connectionId, { kind: "table", path: s.path })}
+              onTransfer={openTransferTab}
               onMoveConnection={(id, to) => void actions.moveFromTree(id, to)}
               onNewGroup={() => setForm({ kind: "newGroup" })}
               onClearHistory={(id) => void actions.clearHistoryFromTree(id)}
@@ -1101,6 +1113,21 @@ function Workspace() {
                 onPathChange: (id, path) => modelSavedAs(id, path),
                 ask: askKit,
                 sourceConnection: (id) => schemaSources.get(id),
+              }}
+              transfer={{
+                connections,
+                groups,
+                onMeta: setTransferMeta,
+                onJob: (id, job) => {
+                  if (job) transferJobs.current.set(id, job);
+                  else transferJobs.current.delete(id);
+                },
+                onOpenInEditor: (side, sql) => newQuery(side.connectionId, sql, side.database),
+                onOpenTarget: ({ connectionId, ...path }) => {
+                  lang.schemas.invalidate(connectionId, path.database);
+                  tree.refresh(connectionId);
+                  setReveal((r) => ({ connectionId, database: path.database, schema: path.schema, name: path.name, seq: (r?.seq ?? 0) + 1 }));
+                },
               }}
             />
             {/* Table and view tabs stay mounted while hidden, so their Pending Edits survive a tab switch. */}

@@ -47,16 +47,17 @@ pub(super) async fn list_schemas(client: &Client) -> Result<Vec<SchemaInfo>> {
 }
 
 const OBJECTS_SQL: &str = "\
-SELECT CASE WHEN c.relkind IN ('v', 'm') THEN 'view' ELSE 'table' END, c.relname::text, CASE WHEN c.relkind IN ('r', 'p', 'f') AND c.reltuples >= 0 THEN c.reltuples::bigint END \
+SELECT CASE WHEN c.relkind IN ('v', 'm') THEN 'view' ELSE 'table' END, c.relname::text, CASE WHEN c.relkind IN ('r', 'p', 'f') AND c.reltuples >= 0 THEN c.reltuples::bigint END, \
+       CASE WHEN c.relkind IN ('r', 'p') THEN pg_total_relation_size(c.oid) END \
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
  WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'f', 'v', 'm') \
 UNION ALL \
 SELECT CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, \
-       format('%s(%s)', p.proname, pg_get_function_identity_arguments(p.oid)), NULL::bigint \
+       format('%s(%s)', p.proname, pg_get_function_identity_arguments(p.oid)), NULL::bigint, NULL::bigint \
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
  WHERE n.nspname = $1 AND p.prokind IN ('f', 'p') \
 UNION ALL \
-SELECT 'trigger', format('%s on %s', t.tgname, c.relname), NULL::bigint \
+SELECT 'trigger', format('%s on %s', t.tgname, c.relname), NULL::bigint, NULL::bigint \
   FROM pg_trigger t \
   JOIN pg_class c ON c.oid = t.tgrelid \
   JOIN pg_namespace n ON n.oid = c.relnamespace \
@@ -80,10 +81,12 @@ pub(super) async fn list_objects(client: &Client, schema: Option<&str>) -> Resul
             _ => ObjectKind::Trigger,
         };
         let rows: Option<i64> = row.try_get(2).map_err(query_err)?;
+        let bytes: Option<i64> = row.try_get(3).map_err(query_err)?;
         objects.push(DbObject {
             kind,
             name,
             rows: rows.map(|n| n as u64),
+            bytes: bytes.map(|n| n as u64),
         });
     }
     sort_objects(&mut objects);

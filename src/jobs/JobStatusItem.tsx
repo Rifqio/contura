@@ -56,7 +56,7 @@ export default function JobStatusItem({ jobs, onOpen, onEnded, dialectOf }: Prop
     const text = statusText(job);
     return (
       <button type="button" className="job-status" aria-label={text} onClick={() => onOpen(job.id)}>
-        <Icon name={job.kind === "export" ? "export" : "import"} size={14} />
+        <Icon name={job.kind === "export" ? "export" : job.kind === "transfer" ? "swap" : "import"} size={14} />
         <span className="job-status-text">{text}</span>
       </button>
     );

@@ -339,6 +339,7 @@ mod tests {
             kind,
             name: name.into(),
             rows: None,
+            bytes: None,
         };
         let mut v = vec![
             obj(ObjectKind::Trigger, "a"),
