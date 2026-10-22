@@ -138,6 +138,9 @@ const PATHS = {
   cards: "M4 6h16v12H4zM4 10h16",
   classic: "M20 6H4v12h16M8 6v12",
   tidy: "M4 6h6v5H4zM14 13h6v5h-6zM10 8.5h2a2 2 0 0 1 2 2v5",
+  // A light bulb for thinking and a bolt for prompt caching, as drawn on board 11.1.
+  think: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.3 1.1 2.2h5c0-.9.5-1.7 1.1-2.2A6 6 0 0 0 12 3z",
+  bolt: "M13 3 5 13.5h6L10 21l8-10.5h-6z",
 } as const;
 
 export type IconName = keyof typeof PATHS;

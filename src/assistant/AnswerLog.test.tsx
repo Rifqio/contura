@@ -1,0 +1,502 @@
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { expect, test, vi } from "vitest";
+import type { AnswerRecord, LogLine, ProcessStep } from "../api/types";
+import { sentRecord } from "../test/aiStream";
+import AnswerLog from "./AnswerLog";
+
+const LOG: LogLine[] = [
+  { atMs: 0, level: "info", source: "question", fields: [["chars", "62"]] },
+  { atMs: 2, level: "info", source: "access", fields: [["level", "schemaQuery"], ["rows", "blocked"]] },
+  { atMs: 9, level: "info", source: "tables", fields: [["picked", "2"], ["of", "6"]] },
+  { atMs: 214, level: "info", source: "request", fields: [["provider", "groq"], ["bytes", "2314"], ["cache", "false"]] },
+  { atMs: 900, level: "warn", source: "retry", fields: [["status", "429"], ["wait", "1s"]] },
+  { atMs: 1102, level: "debug", source: "thinking", fields: [["chars", "412"]] },
+  { atMs: 1806, level: "error", source: "http", fields: [["kind", "rateLimited"], ["status", "429"]] },
+  { atMs: 1912, level: "info", source: "database", fields: [["ran", "nothing"]] },
+];
+
+const STEPS: ProcessStep[] = [
+  {
+    step: "access",
+    atMs: 2,
+    value: "schema, query text",
+    rule: "Read from the saved Connection: AI access is Schema and query text.",
+    evidence: [
+      ["schema", "allowed", "AI access level"],
+      ["sample rows", "blocked", "AI access level"],
+    ],
+    byModel: false,
+  },
+  { step: "schema", atMs: 6, value: "read, 6 tables", rule: "Read from the catalog.", evidence: [], byModel: false },
+  {
+    step: "tables",
+    atMs: 9,
+    value: "2 of 6 picked",
+    rule: "Named in the question, open in a tab, or one key away.",
+    evidence: [
+      ["invoices", "name match", "full card"],
+      ["customers", "name match", "full card"],
+      ["payments", "left out", "not sent"],
+      ["plans", "left out", "not sent"],
+    ],
+    byModel: false,
+    leftOut: 2,
+  },
+  { step: "cleaning", atMs: 11, value: "1 value masked", rule: "Values are masked.", evidence: [["line 7", "date literal", "'[date]'"]], byModel: false },
+  { step: "request", atMs: 214, value: "2,314 B, no tools", rule: "Sent over https to api.groq.com.", evidence: [], byModel: false },
+  { step: "thinking", atMs: 1102, value: "412 chars, by the model", rule: "Shared by the provider, as written.", evidence: [], byModel: true },
+  { step: "answer", atMs: 1806, value: "1 SQL block, by the model", rule: "214 characters, 486 output tokens.", evidence: [], byModel: true },
+  { step: "sqlCheck", atMs: 1900, value: "1 read, 0 writes, no flags", rule: "Each statement split and classified.", evidence: [], byModel: false },
+];
+
+const RECORD: AnswerRecord = {
+  sent: sentRecord(),
+  usage: { input: 500, output: 486, cacheRead: 0, cacheWrite: 0 },
+  millis: 1900,
+  stop: "end",
+  mark: null,
+  error: null,
+  sqlBlocks: [],
+  notes: [],
+  thinking: "The user wants invoices joined to customers.",
+  log: LOG,
+  steps: STEPS,
+  actions: [],
+  context: null,
+  commandError: null,
+};
+
+function renderLog(over: Partial<AnswerRecord> = {}, props: Partial<React.ComponentProps<typeof AnswerLog>> = {}) {
+  const onBack = vi.fn();
+  render(
+    <AnswerLog
+      question="Who were our 8 biggest customers?"
+      answer="Here it is."
+      record={{ ...RECORD, ...over }}
+      connection="Shop"
+      providerName="Groq"
+      onBack={onBack}
+      {...props}
+    />,
+  );
+  return { onBack };
+}
+
+const rows = () => Array.from(document.querySelectorAll(".lrow"));
+
+test("opens_on_log_tab", async () => {
+  const user = userEvent.setup();
+  const { onBack } = renderLog();
+  expect(screen.getByText("Answer log")).toBeTruthy();
+  expect(document.querySelector(".alog-time")!.textContent).toBe("1.9s");
+  expect(screen.getByText("For: Who were our 8 biggest customers?")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Log" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByRole("tab", { name: "Steps" }).getAttribute("aria-selected")).toBe("false");
+  expect(screen.getByRole("log", { name: "Answer log" })).toBeTruthy();
+  expect(rows()).toHaveLength(8);
+  expect(rows()[3].textContent).toBe("00.214INFOrequestprovider=groq bytes=2314 cache=false");
+  // One mark per line in the volume strip, coloured by level.
+  expect(document.querySelectorAll(".lvol .vb")).toHaveLength(8);
+  expect(document.querySelectorAll(".lvol .vb.error")).toHaveLength(1);
+  expect(screen.getByText("8 of 8 lines · 1 error · click a line for its fields")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Back to the answer" }));
+  expect(onBack).toHaveBeenCalled();
+});
+
+test("level_chips_count_debug_as_info", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  const chip = (name: RegExp) => screen.getByRole("button", { name });
+  expect(chip(/^All 8$/)).toBeTruthy();
+  expect(chip(/^Info 6$/)).toBeTruthy();
+  expect(chip(/^Warn 1$/)).toBeTruthy();
+  expect(chip(/^Error 1$/)).toBeTruthy();
+  await user.click(chip(/^Info 6$/));
+  expect(rows()).toHaveLength(6);
+  expect(screen.getByText("6 of 8 lines · 1 error · click a line for its fields")).toBeTruthy();
+  await user.click(chip(/^Warn 1$/));
+  expect(rows().map((r) => r.classList.contains("warn"))).toEqual([true]);
+});
+
+test("empty_level_says_so", async () => {
+  const user = userEvent.setup();
+  renderLog({ log: LOG.filter((l) => l.level !== "error") });
+  await user.click(screen.getByRole("button", { name: /^Error 0$/ }));
+  expect(screen.getByText("No lines at this level.")).toBeTruthy();
+});
+
+test("search_filters_rows", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  const box = screen.getByRole("textbox", { name: "Search the log" });
+  expect(box.getAttribute("placeholder")).toBe("Search the log, for example status=429");
+  await user.type(box, "status=429");
+  expect(rows().map((r) => r.querySelector(".ls")!.textContent)).toEqual(["retry", "http"]);
+  await user.clear(box);
+  await user.type(box, "datab");
+  expect(rows().map((r) => r.querySelector(".ls")!.textContent)).toEqual(["database"]);
+});
+
+test("first_error_open", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  const error = rows()[6];
+  expect(error.classList.contains("error")).toBe(true);
+  expect(error.getAttribute("aria-expanded")).toBe("true");
+  const json = document.querySelectorAll(".ljson");
+  expect(json).toHaveLength(1);
+  expect(json[0].textContent).toBe('"kind": "rateLimited""status": 429');
+  // Other rows open on a click; numbers and booleans are not quoted.
+  await user.click(rows()[3]);
+  expect(rows()[3].getAttribute("aria-expanded")).toBe("true");
+  expect(document.querySelectorAll(".ljson")[0].textContent).toBe('"provider": "groq""bytes": 2314"cache": false');
+});
+
+test("wrap_toggle", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  await user.click(screen.getByRole("button", { name: "Wrap long lines" }));
+  expect(screen.getByRole("log", { name: "Answer log" }).classList.contains("wrap")).toBe(true);
+  expect(screen.getByRole("button", { name: "Do not wrap long lines" }).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("copy_record_is_plain_lines", async () => {
+  const user = userEvent.setup();
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  renderLog();
+  await user.click(screen.getByRole("button", { name: "Copy record" }));
+  const text = writeText.mock.calls[0][0] as string;
+  expect(text.split("\n")).toHaveLength(8);
+  expect(text.split("\n")[6]).toBe("01.806 ERROR http kind=rateLimited status=429");
+  await user.click(screen.getByRole("button", { name: "Copy the log" }));
+  expect(writeText.mock.calls[1][0]).toBe(text);
+});
+
+test("steps_cells_and_rows", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  await user.click(screen.getByRole("tab", { name: "Steps" }));
+  const cells = Array.from(document.querySelectorAll(".cell3")).map((c) => c.textContent);
+  expect(cells).toEqual(["Sent2,314 Bapi.groq.com", "Not sentRows, values2 tables, the key", "Ran on ShopNothingNo tools offered"]);
+  const prows = Array.from(document.querySelectorAll(".prow"));
+  expect(prows.map((r) => r.querySelector(".lb")!.textContent)).toEqual([
+    "Access",
+    "Schema",
+    "Tables",
+    "Cleaning",
+    "Request",
+    "Thinking",
+    "Answer",
+    "SQL check",
+  ]);
+  expect(prows.map((r) => r.querySelector(".tm")!.textContent)).toEqual(["2ms", "6ms", "9ms", "11ms", "0.2s", "1.1s", "1.8s", "1.9s"]);
+  expect(prows[5].querySelector(".v")!.classList.contains("model")).toBe(true);
+  expect(prows[6].querySelector(".v")!.classList.contains("model")).toBe(true);
+  expect(prows[4].querySelector(".v")!.classList.contains("model")).toBe(false);
+  expect(screen.getByText("Nothing ran on the database")).toBeTruthy();
+});
+
+test("evidence_table_opens", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  await user.click(screen.getByRole("tab", { name: "Steps" }));
+  const tables = screen.getByRole("button", { name: /^Tables/ });
+  expect(tables.getAttribute("aria-expanded")).toBe("false");
+  await user.click(tables);
+  expect(tables.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByText("Named in the question, open in a tab, or one key away.")).toBeTruthy();
+  const ev = document.querySelector(".ev")!;
+  expect(Array.from(ev.querySelectorAll(".eh")).map((e) => e.textContent)).toEqual(["Table", "Rule", "Evidence"]);
+  expect(ev.textContent).toContain("paymentsleft outnot sent");
+  // The Thinking row opens the thinking as returned.
+  await user.click(screen.getByRole("button", { name: /^Thinking/ }));
+  expect(screen.getByText("The user wants invoices joined to customers.")).toBeTruthy();
+});
+
+test("diagram_zones_and_bytes", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  const zones = Array.from(document.querySelectorAll(".zone .zt")).map((z) => z.textContent);
+  expect(zones).toEqual(["On this PC", "Groq, openai/gpt-oss-20b", "Back on this PC"]);
+  expect(screen.getByText("2,314 B leave your PC")).toBeTruthy();
+  expect(screen.getByText("11 B back")).toBeTruthy();
+  expect(screen.getByText("No tools: the model has no path to Shop.")).toBeTruthy();
+  expect(screen.getByText("Tables, 2 of 6")).toBeTruthy();
+  expect(screen.getByText("Not shared")).toBeTruthy();
+  expect(screen.getAllByText("catalog only, no rows").length).toBeGreaterThan(0);
+  // A box's details show under the diagram, and Open in Steps opens its row.
+  await user.click(screen.getByRole("button", { name: /^Cleaning/ }));
+  const details = screen.getByRole("region", { name: "Cleaning" });
+  expect(within(details).getByText("Values are masked.")).toBeTruthy();
+  await user.click(within(details).getByRole("button", { name: "Open in Steps" }));
+  expect(screen.getByRole("tab", { name: "Steps" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByRole("button", { name: /^Cleaning/ }).getAttribute("aria-expanded")).toBe("true");
+});
+
+test("diagram_fills_from_the_top_while_live", async () => {
+  const user = userEvent.setup();
+  renderLog({ steps: STEPS.slice(0, 2), sent: null, millis: null }, { live: true });
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  expect(document.querySelector(".dbox.pending")).toBeTruthy();
+  expect(screen.queryByText(/leave your PC/)).toBeNull();
+});
+
+test("show_exactly_when_not_kept", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  await user.click(screen.getByRole("button", { name: "Show exactly what was sent" }));
+  expect(screen.getByText("The exact text was not kept. Turn on Keep the exact text sent in AI settings.")).toBeTruthy();
+});
+
+test("show_exactly_when_kept", async () => {
+  const user = userEvent.setup();
+  renderLog({ sent: sentRecord({ exact: "Question:\nWho?" }) });
+  await user.click(screen.getByRole("button", { name: "Show exactly what was sent" }));
+  expect(screen.getByRole("region", { name: "Exactly what was sent" }).textContent).toContain("Question:\nWho?");
+});
+
+// ---- Final fix wave ----
+
+test("a_search_with_no_match_says_so", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  await user.type(screen.getByRole("textbox", { name: "Search the log" }), "nothing-like-this");
+  expect(screen.getByText("No lines match.")).toBeTruthy();
+  expect(screen.queryByText("No lines at this level.")).toBeNull();
+});
+
+test("diagram_shows_what_you_did_with_the_sql", async () => {
+  const user = userEvent.setup();
+  renderLog({ actions: [{ kind: "insertedCommented", at: 5 }] });
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  const back = Array.from(document.querySelectorAll(".zone")).pop()!;
+  expect(within(back as HTMLElement).getByText("You: Inserted commented out")).toBeTruthy();
+});
+
+test("diagram_says_nothing_left_when_the_connection_failed", async () => {
+  const user = userEvent.setup();
+  renderLog({ error: { kind: "offline" }, mark: "failed", stop: null, steps: STEPS.slice(0, 5) });
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  expect(screen.queryByText(/leave your PC/)).toBeNull();
+  expect(screen.getByText("Not sent, no connection")).toBeTruthy();
+});
+
+// ---- 11c ----
+
+test("markup_in_a_field_stays_text", async () => {
+  const user = userEvent.setup();
+  const markup = '<img src=x onerror="alert(1)"><b>bold</b>';
+  renderLog({ log: [{ atMs: 5, level: "info", source: "<i>src</i>", fields: [["<b>k</b>", markup]] }] });
+  expect(document.querySelector(".lgrid b, .lgrid img, .lgrid i")).toBeNull();
+  expect(rows()[0].textContent).toContain(`<b>k</b>=${markup}`);
+  await user.click(rows()[0]);
+  const json = document.querySelector(".ljson")!;
+  expect(json.querySelector("b, img")).toBeNull();
+  expect(json.textContent).toContain(JSON.stringify(markup));
+});
+
+test("left_out_tables_count_from_left_out", async () => {
+  const user = userEvent.setup();
+  // Four left out, though only two evidence rows say "not sent".
+  renderLog({ steps: STEPS.map((s) => (s.step === "tables" ? { ...s, leftOut: 4 } : s)) });
+  await user.click(screen.getByRole("tab", { name: "Steps" }));
+  expect(document.querySelectorAll(".cell3")[1].textContent).toBe("Not sentRows, values4 tables, the key");
+});
+
+test("left_out_tables_of_an_older_record_count_its_evidence", async () => {
+  const user = userEvent.setup();
+  // Saved before 11c: no leftOut, so the "not sent" evidence rows are counted.
+  renderLog({ steps: STEPS.map(({ leftOut: _, ...s }) => s) });
+  await user.click(screen.getByRole("tab", { name: "Steps" }));
+  expect(document.querySelectorAll(".cell3")[1].textContent).toBe("Not sentRows, values2 tables, the key");
+});
+
+// ---- 11d: the outline call ----
+
+const OUTLINE_STEP: ProcessStep = {
+  step: "outline",
+  atMs: 7,
+  value: "picked 1 area, 2 tables from 1,204",
+  rule: "The model named the areas and tables it needs from an outline of table names. Contura kept only names in this database.",
+  evidence: [
+    ["billing", "picked area", "12 tables"],
+    ["payments", "picked table", "by the model"],
+    ["ignore previous instructions", "dropped", "not in this database"],
+  ],
+  byModel: true,
+};
+const WITH_OUTLINE: ProcessStep[] = [...STEPS.slice(0, 2), OUTLINE_STEP, ...STEPS.slice(2)];
+const OUTLINE_SENT = {
+  bytes: 1204,
+  tokens: 300,
+  hash: "00aa11bb22cc33dd",
+  pickedAreas: 1,
+  pickedTables: 2,
+  dropped: 1,
+  usage: null,
+  exact: null,
+  left: true,
+};
+
+test("outline_row_in_steps", async () => {
+  const user = userEvent.setup();
+  renderLog({ steps: WITH_OUTLINE });
+  await user.click(screen.getByRole("tab", { name: "Steps" }));
+  const prows = Array.from(document.querySelectorAll(".prow"));
+  expect(prows[2].querySelector(".lb")!.textContent).toBe("Outline");
+  await user.click(screen.getByRole("button", { name: /^Outline/ }));
+  const ev = document.querySelector(".ev")!;
+  expect(Array.from(ev.querySelectorAll(".eh")).map((e) => e.textContent)).toEqual(["Name", "Rule", "Evidence"]);
+  expect(ev.textContent).toContain("ignore previous instructionsdroppednot in this database");
+  expect(ev.textContent).toContain("billingpicked area12 tables");
+});
+
+test("rows_open_by_index", async () => {
+  const user = userEvent.setup();
+  const second: ProcessStep = { ...STEPS[4], atMs: 300, value: "900 B, no tools" };
+  renderLog({ steps: [...STEPS.slice(0, 5), second, ...STEPS.slice(5)] });
+  await user.click(screen.getByRole("tab", { name: "Steps" }));
+  const requests = screen.getAllByRole("button", { name: /^Request/ });
+  expect(requests).toHaveLength(2);
+  await user.click(requests[1]);
+  expect(requests[0].getAttribute("aria-expanded")).toBe("false");
+  expect(requests[1].getAttribute("aria-expanded")).toBe("true");
+});
+
+test("diagram_draws_the_outline_call", async () => {
+  const user = userEvent.setup();
+  renderLog({ steps: WITH_OUTLINE, sent: sentRecord({ outlineCall: true, outline: OUTLINE_SENT }) });
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  expect(screen.getByRole("button", { name: /^Outline, 1,204 tables/ })).toBeTruthy();
+  const picked = screen.getByRole("button", { name: /^Picked 1 area, 2 tables/ });
+  expect(picked.classList.contains("model")).toBe(true);
+  expect(within(picked).getByText("model")).toBeTruthy();
+  expect(screen.getByText("1,204 B leave your PC")).toBeTruthy();
+  expect(screen.getByText("2,314 B leave your PC")).toBeTruthy();
+  // Board 11.7: the outline call is its own crossing, zone to zone.
+  const zones = Array.from(document.querySelectorAll(".zone"));
+  expect(zones.map((z) => z.querySelector(".zt")!.textContent)).toEqual([
+    "On this PC",
+    "Groq, openai/gpt-oss-20b",
+    "On this PC",
+    "Groq, openai/gpt-oss-20b",
+    "Back on this PC",
+  ]);
+  expect(within(zones[0] as HTMLElement).getByRole("button", { name: /^Outline, 1,204 tables/ })).toBeTruthy();
+  expect(within(zones[1] as HTMLElement).getByRole("button", { name: /^Picked 1 area, 2 tables/ })).toBeTruthy();
+  expect(within(zones[2] as HTMLElement).getByRole("button", { name: /^Tables, 2 of 6/ })).toBeTruthy();
+  const crossings = Array.from(document.querySelectorAll(".dcross"));
+  expect(crossings[0].textContent).toContain("1,204 B leave your PC");
+  expect(crossings[0].textContent).toContain("outline call");
+  expect(crossings[1].textContent).toContain("2,314 B leave your PC");
+  await user.click(picked);
+  const details = screen.getByRole("region", { name: "Outline" });
+  await user.click(within(details).getByRole("button", { name: "Open in Steps" }));
+  expect(screen.getByRole("tab", { name: "Steps" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByRole("button", { name: /^Outline/ }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("button", { name: /^Tables/ }).getAttribute("aria-expanded")).toBe("false");
+});
+
+test("diagram_outline_pending_while_live", async () => {
+  const user = userEvent.setup();
+  const { rerender } = render(
+    <AnswerLog question="Q?" record={{ ...RECORD, steps: STEPS.slice(0, 2), sent: null, millis: null }} live onBack={() => {}} />,
+  );
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  const pending = () => Array.from(document.querySelectorAll(".dbox.pending")).filter((b) => b.textContent === "Outline");
+  expect(pending()).toHaveLength(1);
+  rerender(<AnswerLog question="Q?" record={{ ...RECORD, steps: STEPS.slice(0, 3), sent: null, millis: null }} live onBack={() => {}} />);
+  expect(pending()).toHaveLength(0);
+});
+
+// A connector sits between the Schema box and the box after it in one zone.
+function linkedAfterSchema() {
+  const schema = screen.getByRole("button", { name: /^Schema/ }).closest(".drow")!;
+  const next = schema.nextElementSibling!;
+  expect(next.classList.contains("vlink")).toBe(true);
+  expect(next.nextElementSibling).toBeTruthy();
+}
+
+test("diagram_failed_outline_invents_no_pick", async () => {
+  const user = userEvent.setup();
+  const failed: ProcessStep = {
+    ...OUTLINE_STEP,
+    value: "could not pick, ranked instead",
+    rule: "The outline step failed, so the tables were ranked by name and words.",
+    evidence: [],
+    byModel: false,
+  };
+  renderLog({ steps: [...STEPS.slice(0, 2), failed, ...STEPS.slice(2)] });
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  expect(screen.getByRole("button", { name: /^Outline/ })).toBeTruthy();
+  expect(screen.queryByText(/^Picked/)).toBeNull();
+  expect(screen.queryByText("outline call")).toBeNull();
+  linkedAfterSchema();
+});
+
+test("diagram_failed_outline_call_draws_the_failed_scene", async () => {
+  const user = userEvent.setup();
+  const failed: ProcessStep = {
+    ...OUTLINE_STEP,
+    value: "could not pick, ranked instead",
+    rule: "The outline step failed, so the tables were ranked by name and words.",
+    evidence: [],
+    byModel: false,
+  };
+  const log: LogLine[] = [...LOG.slice(0, 2), { atMs: 8, level: "warn", source: "outline", fields: [["error", "rateLimited"]] }, ...LOG.slice(2)];
+  renderLog({
+    steps: [...STEPS.slice(0, 2), failed, ...STEPS.slice(2)],
+    log,
+    sent: sentRecord({ outlineCall: true, outline: { ...OUTLINE_SENT, pickedAreas: 0, pickedTables: 0, dropped: 0 } }),
+  });
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  // Board 11.7, outline call failed: the bytes that left still cross, the provider box says it could not pick.
+  const crossings = Array.from(document.querySelectorAll(".dcross"));
+  expect(crossings[0].textContent).toContain("1,204 B leave your PC");
+  expect(crossings[0].textContent).toContain("outline call");
+  const box = screen.getByRole("button", { name: /^Could not pick/ });
+  expect(within(box).getByText("Rate limited")).toBeTruthy();
+  expect(box.classList.contains("bad")).toBe(true);
+  expect(box.classList.contains("model")).toBe(false);
+  expect(screen.queryByText(/^Picked/)).toBeNull();
+  const zones = Array.from(document.querySelectorAll(".zone"));
+  expect(zones.map((z) => z.querySelector(".zt")!.textContent)).toEqual([
+    "On this PC",
+    "Groq, openai/gpt-oss-20b",
+    "On this PC",
+    "Groq, openai/gpt-oss-20b",
+    "Back on this PC",
+  ]);
+  expect(within(zones[1] as HTMLElement).getByRole("button", { name: /^Could not pick/ })).toBeTruthy();
+  await user.click(box);
+  expect(screen.getByRole("region", { name: "Outline" })).toBeTruthy();
+});
+
+test("diagram_when_only_the_outline_left", async () => {
+  const user = userEvent.setup();
+  // The answer request was too big to build: only the outline call went.
+  renderLog({
+    steps: WITH_OUTLINE.slice(0, 5),
+    sent: sentRecord({ bytes: 0, tokens: 0, hash: "", kinds: ["outline"], outlineCall: true, outline: OUTLINE_SENT }),
+    error: { kind: "tooBig", needed: 40000, window: 32000, model: "M" },
+    mark: "failed",
+    stop: null,
+  });
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  expect(screen.getByText("1,204 B leave your PC")).toBeTruthy();
+  expect(screen.getAllByText(/leave your PC/)).toHaveLength(1);
+  expect(screen.getByText("Not sent")).toBeTruthy();
+});
+
+test("diagram_without_outline_unchanged", async () => {
+  const user = userEvent.setup();
+  renderLog();
+  await user.click(screen.getByRole("tab", { name: "Diagram" }));
+  expect(screen.queryByText(/^Outline/)).toBeNull();
+  expect(screen.queryByText(/^Picked/)).toBeNull();
+  expect(screen.getAllByText(/leave your PC/)).toHaveLength(1);
+  linkedAfterSchema();
+});

@@ -53,6 +53,7 @@ async fn fixture(production: bool, read_only: bool) -> Fixture {
             file: Some(file.clone()),
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production,
             read_only,
         })
@@ -460,6 +461,7 @@ async fn production_save_on_mysql() {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: true,
             read_only: false,
         })

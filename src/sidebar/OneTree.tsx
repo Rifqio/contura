@@ -82,6 +82,8 @@ export interface OneTreeProps {
   onDeleteConnection(id: ConnectionId): void;
   /** The branch reloaded, so what depends on the schema should reload too. */
   onRefresh(id: ConnectionId): void;
+  /** "Re-sync AI context" on a Connection row; hidden when unset or at AI access Never. */
+  onResync?(id: ConnectionId): void;
   onOpenSaved(q: SavedQuery): void;
   /** Opens the Saved Queries list tab; the branch's list button shows only when this is set. */
   onOpenSavedList?(): void;
@@ -531,6 +533,7 @@ export default function OneTree(props: OneTreeProps) {
               duplicate: () => props.onDuplicateConnection(c),
               copyHost: () => copyHost(c),
               refresh: () => refreshBranch(c.id),
+              ...(props.onResync && { resync: () => props.onResync?.(c.id) }),
               move: (to) => props.onMoveConnection(c.id, to),
               newGroup: props.onNewGroup,
               clearHistory: () => setAsk({ kind: "clear", connection: c }),

@@ -8,6 +8,8 @@ export interface SqlMark {
   tag?: "writes" | "reads" | "dropsData";
   /** `select` marks what a selected card or Join wrote; `danger` the line a server error names. */
   band?: "prod" | "readOnly" | "select" | "danger";
+  /** AI SQL from the register: its first line says "Written by the assistant" (R6.5). */
+  byAssistant?: boolean;
 }
 
 interface Props {
@@ -46,6 +48,7 @@ export default function SqlBlock({
           (m) => m.band && n >= m.firstLine && n <= m.lastLine,
         )?.band;
         const tag = marks.find((m) => m.tag && m.firstLine === n)?.tag;
+        const byAssistant = marks.some((m) => m.byAssistant && m.firstLine === n);
         return (
           <div
             key={i}
@@ -70,6 +73,7 @@ export default function SqlBlock({
                 ),
               )}
             </code>
+            {byAssistant && <span className="sql-block-tag sql-block-tag-assistant">Written by the assistant</span>}
             {tag && (
               <span className={`sql-block-tag sql-block-tag-${tag}`}>
                 {tag === "dropsData" ? "drops data" : tag}

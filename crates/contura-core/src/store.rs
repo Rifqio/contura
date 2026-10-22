@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
 /// The `user_version` this build writes and understands.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// Chat threads returned per place.
 pub const THREAD_LIMIT: i64 = 50;
@@ -96,7 +96,49 @@ impl AppStore {
             )
             .map_err(store_err)?;
         }
+        if version < 5 {
+            // The AI Context. Text keys compare as written, so `Orders` and `orders` are
+            // two tables.
+            db.execute_batch(
+                "BEGIN;
+                 CREATE TABLE ai_context_meta (
+                   connection_id TEXT, database TEXT, schema TEXT, fingerprint TEXT,
+                   built_at INTEGER NOT NULL, checked_at INTEGER NOT NULL,
+                   stale INTEGER NOT NULL DEFAULT 0, table_count INTEGER NOT NULL,
+                   bytes INTEGER NOT NULL,
+                   PRIMARY KEY (connection_id, database, schema));
+                 CREATE TABLE ai_context_node (
+                   connection_id TEXT, database TEXT, schema TEXT, node_id TEXT, parent_id TEXT,
+                   kind TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+                   tables TEXT NOT NULL DEFAULT '[]', tokens INTEGER NOT NULL,
+                   PRIMARY KEY (connection_id, database, schema, node_id));
+                 CREATE TABLE ai_context_card (
+                   connection_id TEXT, database TEXT, schema TEXT, table_name TEXT,
+                   card TEXT NOT NULL, card_rows TEXT NOT NULL DEFAULT '',
+                   tokens INTEGER NOT NULL, rows_tokens INTEGER NOT NULL DEFAULT 0,
+                   fk_out TEXT NOT NULL, fk_in TEXT NOT NULL,
+                   PRIMARY KEY (connection_id, database, schema, table_name));
+                 CREATE VIRTUAL TABLE ai_context_fts USING fts5(
+                   connection_id UNINDEXED, database UNINDEXED, schema UNINDEXED,
+                   node_id UNINDEXED, names, words, note,
+                   tokenize = \"unicode61 tokenchars '_'\");
+                 PRAGMA user_version = 5;
+                 COMMIT;",
+            )
+            .map_err(store_err)?;
+        }
         Ok(AppStore { db })
+    }
+
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.db
+    }
+
+    /// The page cache, as `PRAGMA cache_size = -<kib>`.
+    pub fn set_cache_kib(&self, kib: u32) -> Result<()> {
+        self.db
+            .pragma_update(None, "cache_size", -i64::from(kib))
+            .map_err(store_err)
     }
 
     /// Newest first, at most `THREAD_LIMIT`; older threads stay stored.
@@ -116,6 +158,20 @@ impl AppStore {
             out.push(serde_json::from_str(&row.map_err(store_err)?).map_err(store_err)?);
         }
         Ok(out)
+    }
+
+    pub fn get_ai_thread(&self, id: ThreadId) -> Result<Option<AiThread>> {
+        let json: Option<String> = self
+            .db
+            .query_row(
+                "SELECT json FROM ai_threads WHERE id = ?1",
+                params![id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(store_err)?;
+        json.map(|j| serde_json::from_str(&j).map_err(store_err))
+            .transpose()
     }
 
     pub fn save_ai_thread(&self, t: &AiThread) -> Result<()> {
@@ -143,6 +199,14 @@ impl AppStore {
     pub fn clear_ai_threads(&self, place: &str) -> Result<()> {
         self.db
             .execute("DELETE FROM ai_threads WHERE place = ?1", params![place])
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    /// Every thread of every place.
+    pub fn clear_all_ai_threads(&self) -> Result<()> {
+        self.db
+            .execute("DELETE FROM ai_threads", [])
             .map_err(store_err)?;
         Ok(())
     }
@@ -576,6 +640,7 @@ mod tests {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         }
@@ -766,6 +831,7 @@ mod tests {
                 text: "how many users?".into(),
                 context: vec!["Schema".into()],
                 at: updated_at,
+                record: None,
             }],
             updated_at,
         }
@@ -825,9 +891,13 @@ mod tests {
             let s = AppStore::open(&path).unwrap();
             s.add_history(&entry(c, "SELECT 1", Outcome::Ok, false))
                 .unwrap();
-            // Back to schema 2: no ai_threads, no Saved Visual Query columns.
+            // Back to schema 2: no ai_threads, no Saved Visual Query columns, no AI Context.
             s.db.execute_batch(
-                "DROP TABLE ai_threads;
+                "DROP TABLE ai_context_meta;
+                 DROP TABLE ai_context_node;
+                 DROP TABLE ai_context_card;
+                 DROP TABLE ai_context_fts;
+                 DROP TABLE ai_threads;
                  ALTER TABLE saved_queries DROP COLUMN kind;
                  ALTER TABLE saved_queries DROP COLUMN visual_json;
                  PRAGMA user_version = 2;",
@@ -1034,7 +1104,7 @@ mod tests {
         let v: i64 =
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, SCHEMA_VERSION);
         let list = s.list_saved_queries().unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(
@@ -1144,14 +1214,87 @@ mod tests {
     }
 
     #[test]
-    fn a_store_newer_than_4_is_refused() {
-        assert_eq!(SCHEMA_VERSION, 4);
+    fn migration_5_adds_context_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let id = Uuid::new_v4();
+        {
+            // A store as schema 4 left it, with one Saved Query.
+            let v4 = Connection::open(&path).unwrap();
+            v4.execute_batch(
+                "CREATE TABLE connections (id TEXT PRIMARY KEY, config_json TEXT NOT NULL);
+                 CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL);
+                 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE query_history (
+                   id INTEGER PRIMARY KEY, connection_id TEXT NOT NULL, sql TEXT NOT NULL,
+                   ran_at_ms INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, outcome TEXT NOT NULL,
+                   rows INTEGER, changed INTEGER NOT NULL, error TEXT);
+                 CREATE INDEX query_history_by_connection ON query_history (connection_id, id DESC);
+                 CREATE TABLE saved_queries (
+                   id TEXT PRIMARY KEY, name TEXT NOT NULL, sql TEXT NOT NULL,
+                   updated_at_ms INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'sql',
+                   visual_json TEXT);
+                 CREATE UNIQUE INDEX saved_queries_by_name ON saved_queries (name COLLATE NOCASE);
+                 CREATE TABLE ai_threads (
+                   id TEXT PRIMARY KEY, place TEXT NOT NULL, json TEXT NOT NULL,
+                   updated_at INTEGER NOT NULL);
+                 CREATE INDEX ai_threads_by_place ON ai_threads (place, updated_at DESC);
+                 PRAGMA user_version = 4;",
+            )
+            .unwrap();
+            v4.execute(
+                "INSERT INTO saved_queries (id, name, sql, updated_at_ms) VALUES (?1, 'late orders', 'SELECT 1', 10)",
+                params![id.to_string()],
+            )
+            .unwrap();
+        }
+        let s = AppStore::open(&path).unwrap();
+        let v: i64 =
+            s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(v, 5);
+        let list = s.list_saved_queries().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].id, list[0].name.as_str()), (id, "late orders"));
+        for table in [
+            "ai_context_meta",
+            "ai_context_node",
+            "ai_context_card",
+            "ai_context_fts",
+        ] {
+            let n: i64 =
+                s.db.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+                    params![table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{table}");
+        }
+        drop(s);
+        AppStore::open(&path).unwrap();
+    }
+
+    #[test]
+    fn cache_kib_is_set() {
+        let (_d, s) = open_tmp();
+        s.set_cache_kib(1024).unwrap();
+        let n: i64 = s
+            .conn()
+            .query_row("PRAGMA cache_size", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, -1024);
+    }
+
+    #[test]
+    fn a_store_newer_than_5_is_refused() {
+        assert_eq!(SCHEMA_VERSION, 5);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
         drop(AppStore::open(&path).unwrap());
         Connection::open(&path)
             .unwrap()
-            .pragma_update(None, "user_version", 5)
+            .pragma_update(None, "user_version", 6)
             .unwrap();
         assert!(
             matches!(AppStore::open(&path), Err(Error::Store(m)) if m == "data folder was written by a newer Contura")

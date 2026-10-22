@@ -1,14 +1,19 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { PROVIDERS } from "../settings/ai/providers";
 import type {
   AiAccess,
-  AiAnswer,
+  AiSyncMode,
+  ContextInfo,
+  ContextStatusRow,
   AiError,
-  AiRequest,
+  AiEvent,
   AiSettings,
   AiSettingsView,
   AiThread,
   AiTestOk,
+  AnswerAction,
+  AnswerActionKind,
+  AskRequest,
   CommandError,
   ConnectionConfig,
   ConnectionId,
@@ -27,6 +32,9 @@ import type {
   GroupId,
   GroupInput,
   KeyChange,
+  ModelList,
+  ModelPicks,
+  Preview,
   ObjectKind,
   ObjectPath,
   Page,
@@ -411,16 +419,73 @@ export const saveAiSettings = (
 
 export const aiTest = (groupId: GroupId | null): Promise<AiTestOk> => invoke("ai_test", { groupId });
 
-export const aiAsk = (groupId: GroupId | null, request: AiRequest): Promise<AiAnswer> =>
-  invoke("ai_ask", { groupId, request });
+/** The provider's models, fetched with the saved key, with what each accepts. */
+export const aiModels = (groupId: GroupId | null): Promise<ModelList> => invoke("ai_models", { groupId });
+
+/** The models known without the network: the built-in records and the last fetched listing. */
+export const aiKnownModels = (groupId: GroupId | null): Promise<ModelList> => invoke("ai_known_models", { groupId });
+
+/** Remembers the thinking and caching picks for `model` and makes it the current model. */
+export const setAiModelPrefs = (groupId: GroupId | null, model: string, picks: ModelPicks): Promise<void> =>
+  invoke("set_ai_model_prefs", { groupId, model, picks });
+
+/**
+ * Binds the saved key to `host`, the host the keyHostChanged card named. Rejects with keyHostChanged for the
+ * current host when the base URL changed again since.
+ */
+export const aiConfirmKeyHost = (groupId: GroupId | null, host: string): Promise<void> =>
+  invoke("ai_confirm_key_host", { groupId, host });
+
+/** What `request` would send, built by the Core: the Sends list and "Show exactly". */
+export const aiPreview = (request: AskRequest): Promise<Preview> => invoke("ai_preview", { request });
+
+/**
+ * Starts an Ask; its events arrive on `onEvent` in order and end with `done` or `error`. Resolves as soon
+ * as the Core has started it, and rejects when it could not start (no provider, or another Ask is running).
+ */
+export async function aiAskStream(request: AskRequest, onEvent: (e: AiEvent) => void): Promise<void> {
+  const events = new Channel<AiEvent>();
+  events.onmessage = onEvent;
+  await invoke("ai_ask_stream", { request, events });
+}
+
+/** Stops a running Ask; false when it had already ended. */
+export const aiCancel = (requestId: string): Promise<boolean> => invoke("ai_cancel", { requestId });
 
 export const listAiThreads = (place: string): Promise<AiThread[]> => invoke("list_ai_threads", { place });
 
-export const saveAiThread = (thread: AiThread): Promise<void> => invoke("save_ai_thread", { thread });
+/** Saves a thread; `requestId` is the Ask whose answer this save adds, so the Core writes the AI Context it used. */
+export const saveAiThread = (thread: AiThread, requestId: string | null = null): Promise<void> =>
+  invoke("save_ai_thread", { thread, requestId });
+
+/** Keeps what the user did with the SQL of the answer at `messageAt`; null for an answer kept before records were. */
+export const aiRecordAction = (threadId: string, messageAt: number, kind: AnswerActionKind): Promise<AnswerAction | null> =>
+  invoke("ai_record_action", { threadId, messageAt, kind });
 
 export const deleteAiThread = (id: string): Promise<void> => invoke("delete_ai_thread", { id });
 
 export const clearAiThreads = (place: string): Promise<void> => invoke("clear_ai_threads", { place });
+
+/** Changes only when a Connection's AI Context is checked; like AI access, it keeps the sessions open. */
+export const setAiSyncMode = (connectionId: ConnectionId, mode: AiSyncMode): Promise<ConnectionConfig> =>
+  invoke("set_ai_sync_mode", { connectionId, mode });
+
+/** Marks the Connection's AI Context out of date after the schema may have changed (Refresh, a Restore). */
+export const aiContextChanged = (connectionId: ConnectionId): Promise<void> => invoke("ai_context_changed", { connectionId });
+
+/** Removes a Connection's AI Context; null removes every AI Context. */
+export const aiClearContext = (connectionId: ConnectionId | null): Promise<void> => invoke("ai_clear_context", { connectionId });
+
+/** Removes every AI thread of every place and every AI Context. */
+export const aiClearAll = (): Promise<void> => invoke("ai_clear_all", {});
+
+/** The stored AI Contexts of a Connection, or of every Connection with null. */
+export const aiContextStatus = (connectionId: ConnectionId | null): Promise<ContextStatusRow[]> =>
+  invoke("ai_context_status", { connectionId });
+
+/** Builds the AI Context again now. A failed build resolves with `check.kind` "failed" or "missing". */
+export const aiResync = (connectionId: ConnectionId, database: string | null, schema: string | null): Promise<ContextInfo> =>
+  invoke("ai_resync", { connectionId, database, schema });
 
 export function isCommandError(e: unknown): e is CommandError {
   return typeof e === "object" && e !== null && typeof (e as { kind?: unknown }).kind === "string";
@@ -453,12 +518,31 @@ function sqliteConnectText(message: string): string {
   return `${sentence(message)} Check that Contura can read the file.`;
 }
 
+/** A token count the compact way, as the context meter shows it: `950`, `18.4K`, `200K`, `1.3M`. */
+function tokensText(n: number): string {
+  const short = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  // 999,960 rounds to 1,000K, so it reads 1M.
+  if (n >= 999_950) return `${short(n / 1_000_000)}M`;
+  if (n >= 1000) return `${short(n / 1000)}K`;
+  return n.toLocaleString("en-US");
+}
+
+/** The local clock, `09:05`. */
+function clockText(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** The provider's own short message, capped at 200 characters. */
+function providerMessage(message: string): string {
+  const capped = message.length > 200 ? `${message.slice(0, 199)}…` : message;
+  return /[.!?…]$/.test(capped) ? capped : `${capped}.`;
+}
+
 function aiErrorText(e: AiError): string {
   switch (e.kind) {
     case "notConfigured":
       return "No AI provider is set up. Connect one in Settings.";
-    case "notAvailable":
-      return `Answers from ${PROVIDERS[e.provider].name} arrive in a later Contura version. Nothing was sent.`;
     case "badKey":
       return "The provider did not accept the key. Check it in Settings.";
     case "rateLimited":
@@ -467,6 +551,44 @@ function aiErrorText(e: AiError): string {
         : `The provider is limiting requests. Try again in ${e.retryAfterSecs}s.`;
     case "network":
       return `Could not reach ${e.host}. Check your connection and the base URL.`;
+    case "keyHostChanged":
+      return `The base URL now points to ${e.host}. Save the key again to send it there.`;
+    case "insecureUrl":
+      return e.host === ""
+        ? "The base URL is not a valid address."
+        : `Use https for ${e.host}. Plain http is allowed only on this PC or a private network.`;
+    case "timeout":
+      return "The provider did not answer in time.";
+    case "cancelled":
+      return "Stopped.";
+    case "provider":
+      return `The provider returned an error (${e.status}): ${providerMessage(e.message)}`;
+    case "badResponse":
+      return "The provider's answer could not be read.";
+    case "tooLarge":
+      return "This Ask is over the size this model accepts, even after trimming.";
+    case "contextUnavailable":
+      return `Could not check the schema. Using the context from ${clockText(e.builtAt)}.`;
+    case "overloaded":
+      return `${PROVIDERS[e.provider].name} is busy right now.`;
+    case "urlHasCredentials":
+      return "Remove the user name and password from the base URL. Save the key in the key field instead.";
+    case "offline":
+      return "No internet connection.";
+    case "outOfCredit":
+      return `Your ${PROVIDERS[e.provider].name} account is out of credit.`;
+    case "modelRetired":
+      return `${e.model} is no longer offered.`;
+    case "contextFull":
+      return `This thread fills ${Math.round((e.used / e.window) * 100)}% of ${e.model}'s ${tokensText(e.window)} window.`;
+    case "tooBig":
+      return `This question needs ${tokensText(e.needed)} tokens. ${e.model} holds ${tokensText(e.window)}.`;
+    case "tls":
+      return `Could not check the certificate of ${e.host}. A proxy or antivirus may be inspecting https.`;
+    case "busy":
+      return "An answer is still being written. Stop it first.";
+    case "internal":
+      return "Something went wrong before the question was sent.";
   }
 }
 

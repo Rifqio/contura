@@ -170,12 +170,6 @@ mod tests {
             serde_json::json!({"kind":"ai","message":{"kind":"notConfigured"}})
         );
         assert_eq!(
-            json(Error::Ai(AiError::NotAvailable {
-                provider: AiProviderKind::Groq
-            })),
-            serde_json::json!({"kind":"ai","message":{"kind":"notAvailable","provider":"groq"}})
-        );
-        assert_eq!(
             json(Error::Ai(AiError::RateLimited {
                 retry_after_secs: Some(7)
             })),
@@ -189,6 +183,148 @@ mod tests {
             json(Error::Ai(AiError::BadKey)),
             serde_json::json!({"kind":"ai","message":{"kind":"badKey"}})
         );
+        let ai = |e: AiError| json(Error::Ai(e));
+        let msg = |v: serde_json::Value| serde_json::json!({"kind":"ai","message":v});
+        assert_eq!(
+            ai(AiError::KeyHostChanged { host: "h".into() }),
+            msg(serde_json::json!({"kind":"keyHostChanged","host":"h"}))
+        );
+        assert_eq!(
+            ai(AiError::InsecureUrl { host: "h".into() }),
+            msg(serde_json::json!({"kind":"insecureUrl","host":"h"}))
+        );
+        assert_eq!(
+            ai(AiError::Timeout {
+                phase: "connect".into()
+            }),
+            msg(serde_json::json!({"kind":"timeout","phase":"connect"}))
+        );
+        assert_eq!(
+            ai(AiError::Cancelled),
+            msg(serde_json::json!({"kind":"cancelled"}))
+        );
+        assert_eq!(
+            ai(AiError::Provider {
+                status: 404,
+                message: "model not found".into()
+            }),
+            msg(serde_json::json!({"kind":"provider","status":404,"message":"model not found"}))
+        );
+        assert_eq!(
+            ai(AiError::BadResponse),
+            msg(serde_json::json!({"kind":"badResponse"}))
+        );
+        assert_eq!(
+            ai(AiError::TooLarge),
+            msg(serde_json::json!({"kind":"tooLarge"}))
+        );
+        assert_eq!(
+            ai(AiError::ContextUnavailable { built_at: 1234 }),
+            msg(serde_json::json!({"kind":"contextUnavailable","builtAt":1234}))
+        );
+        assert_eq!(
+            ai(AiError::Overloaded {
+                provider: AiProviderKind::Groq
+            }),
+            msg(serde_json::json!({"kind":"overloaded","provider":"groq"}))
+        );
+        assert_eq!(
+            ai(AiError::UrlHasCredentials {
+                host: "x.example".into()
+            }),
+            msg(serde_json::json!({"kind":"urlHasCredentials","host":"x.example"}))
+        );
+        assert_eq!(
+            ai(AiError::Offline),
+            msg(serde_json::json!({"kind":"offline"}))
+        );
+        assert_eq!(
+            ai(AiError::OutOfCredit {
+                provider: AiProviderKind::Anthropic
+            }),
+            msg(serde_json::json!({"kind":"outOfCredit","provider":"anthropic"}))
+        );
+        assert_eq!(
+            ai(AiError::ModelRetired { model: "m".into() }),
+            msg(serde_json::json!({"kind":"modelRetired","model":"m"}))
+        );
+        assert_eq!(
+            ai(AiError::ContextFull {
+                used: 192000,
+                window: 200000,
+                model: "m".into()
+            }),
+            msg(
+                serde_json::json!({"kind":"contextFull","used":192000,"window":200000,"model":"m"})
+            )
+        );
+        assert_eq!(
+            ai(AiError::TooBig {
+                needed: 1_300_000,
+                window: 200_000,
+                model: "m".into()
+            }),
+            msg(serde_json::json!({"kind":"tooBig","needed":1300000,"window":200000,"model":"m"}))
+        );
+        assert_eq!(
+            ai(AiError::Tls {
+                host: "api.groq.com".into()
+            }),
+            msg(serde_json::json!({"kind":"tls","host":"api.groq.com"}))
+        );
+    }
+
+    /// A stored answer record keeps its error: every kind reads back as written.
+    #[test]
+    fn ai_error_round_trips() {
+        use crate::ai::AiProviderKind;
+        let all = [
+            AiError::NotConfigured,
+            AiError::BadKey,
+            AiError::RateLimited {
+                retry_after_secs: Some(7),
+            },
+            AiError::Network { host: "h".into() },
+            AiError::KeyHostChanged { host: "h".into() },
+            AiError::InsecureUrl { host: "h".into() },
+            AiError::Timeout {
+                phase: "connect".into(),
+            },
+            AiError::Cancelled,
+            AiError::Provider {
+                status: 404,
+                message: "m".into(),
+            },
+            AiError::BadResponse,
+            AiError::TooLarge,
+            AiError::ContextUnavailable { built_at: 1234 },
+            AiError::Overloaded {
+                provider: AiProviderKind::Groq,
+            },
+            AiError::UrlHasCredentials { host: "h".into() },
+            AiError::Offline,
+            AiError::OutOfCredit {
+                provider: AiProviderKind::Anthropic,
+            },
+            AiError::ModelRetired { model: "m".into() },
+            AiError::ContextFull {
+                used: 1,
+                window: 2,
+                model: "m".into(),
+            },
+            AiError::TooBig {
+                needed: 3,
+                window: 2,
+                model: "m".into(),
+            },
+            AiError::Tls { host: "h".into() },
+            AiError::Busy,
+            AiError::Internal,
+        ];
+        for e in all {
+            let v = serde_json::to_value(&e).unwrap();
+            assert_eq!(serde_json::from_value::<AiError>(v).unwrap(), e);
+        }
     }
 
     #[test]

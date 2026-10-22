@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use super::{ConnectionService, now_ms, plain_message};
+use crate::common::grouped;
 use crate::common::{sql_ident, sql_string, sql_table};
 use crate::design::Increment;
 use crate::dialect::Dialect;
@@ -22,7 +23,7 @@ use crate::jobs::checks::check_value;
 use crate::jobs::fingerprint::{JobPlan, job_fingerprint};
 use crate::jobs::formats::csv::CsvReader;
 use crate::jobs::formats::json::JsonReader;
-use crate::jobs::formats::xlsx::{XlsxReader, grouped};
+use crate::jobs::formats::xlsx::XlsxReader;
 use crate::jobs::formats::{EXACT_COUNT_BYTES, FileRecord, PREVIEW_ROWS, RecordReader};
 use crate::jobs::insert::{
     BuiltStatement, Conversion, InsertBuilder, InsertLimits, conversion_for, row_text, srid_in,

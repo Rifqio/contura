@@ -1,5 +1,7 @@
-import { clearQueryHistory, closeConnection, deleteConnection, errorText, moveConnection } from "../api/client";
+import { aiResync, clearQueryHistory, closeConnection, deleteConnection, errorText, moveConnection } from "../api/client";
 import type { ConnectionId, GroupId } from "../api/types";
+import type { ToastSpec } from "../components/Toast";
+import { resyncProblem, tablesText } from "../settings/ai/providers";
 
 export interface ConnectionActionsEnv {
   openIds: ReadonlySet<ConnectionId>;
@@ -14,11 +16,16 @@ export interface ConnectionActionsEnv {
   setNotice(text: string | null): void;
   /** Query History was cleared: App bumps historyRefresh. */
   historyCleared(): void;
+  /** Shows the one toast; Re-sync AI context reports through it. */
+  toast(t: ToastSpec): void;
   /** Jobs running on the Connection: asks to cancel them (useJobsGuard); false keeps it. */
   confirmJobs?(id: ConnectionId): Promise<boolean>;
   /** A move takes its running Import tabs out of the place: asks about each (Q43); false keeps it. */
   confirmImports?(id: ConnectionId): Promise<boolean>;
 }
+
+/** Connections whose tree Re-sync is running; the actions are made again on each render, so this outlives them. */
+const resyncing = new Set<ConnectionId>();
 
 export function connectionActions(env: ConnectionActionsEnv) {
   /** Opens a new tab on the Connection (a query, a Visual Query), then opens the Connection when it is closed. */
@@ -84,5 +91,24 @@ export function connectionActions(env: ConnectionActionsEnv) {
     }
   }
 
-  return { newQueryOn, newTabOn, openFromTree, closeFromTree, moveFromTree, deleteFromTree, clearHistoryFromTree };
+  /**
+   * "Re-sync AI context": builds the Connection's AI Context again for its default database. One runs per Connection at
+   * a time; choosing it again while it runs only says so again.
+   */
+  async function resyncFromTree(id: ConnectionId) {
+    env.toast({ kind: "info", text: "Re-syncing the AI context..." });
+    if (resyncing.has(id)) return;
+    resyncing.add(id);
+    try {
+      const info = await aiResync(id, null, null);
+      const problem = resyncProblem(info, env.openIds.has(id));
+      env.toast(problem ? { kind: "error", text: problem } : { kind: "success", text: `AI context re-synced: ${tablesText(info.tableCount)}.` });
+    } catch (e) {
+      env.toast({ kind: "error", text: errorText(e) });
+    } finally {
+      resyncing.delete(id);
+    }
+  }
+
+  return { newQueryOn, newTabOn, openFromTree, closeFromTree, moveFromTree, deleteFromTree, clearHistoryFromTree, resyncFromTree };
 }

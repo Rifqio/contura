@@ -1201,7 +1201,7 @@ test("sidebar_header_shows_the_group_letter_square_without_an_image", async () =
   expect(badge?.nextElementSibling?.textContent).toBe("KFC");
 });
 
-test("run_from_an_answer_on_production_opens_the_confirmation", async () => {
+test("an_answer_goes_into_the_editor_through_the_diff_and_runs_nothing", async () => {
   const draft = [
     { id: "d1", name: "Late deliveries", text: "SELECT 1", connectionId: "c1", database: "kfc_shop", savedId: null, savedText: null },
   ];
@@ -1240,21 +1240,18 @@ test("run_from_an_answer_on_production_opens_the_confirmation", async () => {
   await userEvent.keyboard("{Control>}{Alt>}i{/Alt}{/Control}");
   const panel = await screen.findByRole("complementary", { name: "Ask" });
   await waitFor(() => expect(callsTo("open_query_session")).toHaveLength(1));
-  await userEvent.click(await within(panel).findByRole("button", { name: "Run" }));
-  const dialog = await screen.findByRole("dialog");
-  expect(dialog.textContent).toContain("1 of 1 statement writes.");
+  // No Run on an answer (R6.1): it reaches the database only from the editor.
+  expect(within(panel).queryByRole("button", { name: "Run" })).toBeNull();
+  // A saved answer without the Core's SQL check goes in only commented out, and has no Open in new tab.
+  await userEvent.click(await within(panel).findByRole("button", { name: "Insert commented out" }));
+  expect(within(panel).queryByRole("button", { name: "Open in new tab" })).toBeNull();
+  const diff = within(panel).getByRole("region", { name: "Insert into the editor" });
+  expect(diff.textContent).toContain("Replaces line 1 of Late deliveries");
+  await userEvent.click(within(diff).getByRole("button", { name: "Insert" }));
+  expect(await within(panel).findByText("Inserted into the editor")).toBeTruthy();
+  await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("-- UPDATE orders SET status = 'x';"));
+  expect(callsTo("prepare_run")).toHaveLength(0);
   expect(callsTo("execute_sql")).toHaveLength(0);
-  // Declined: nothing ran, so the line must not say it did.
-  expect(screen.queryByText(/Inserted into the editor/)).toBeNull();
-  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  expect(await screen.findByText("Inserted into the editor")).toBeTruthy();
-  expect(screen.queryByText(/and run/)).toBeNull();
-  expect(callsTo("execute_sql")).toHaveLength(0);
-  // Confirmed: it ran, and the line carries the count.
-  await userEvent.click(within(panel).getByRole("button", { name: "Run" }));
-  await userEvent.click(await screen.findByRole("button", { name: "Run on KFC Postgres" }));
-  expect(await screen.findByText("Inserted into the editor and run, 1 row")).toBeTruthy();
-  expect(callsTo("execute_sql")).toHaveLength(1);
 });
 
 // ---- final review fixes: Home's Connection changes keep the Pending Edits ask (F1), tree Saved Query (F10), Filter key (F11) ----
@@ -2326,4 +2323,13 @@ test("item_8_a_new_query_opens_on_the_database_used_last", async () => {
     const saved = callsTo("save_query_tabs").map((a) => JSON.parse(a.json as string) as { tabs: { database: string | null }[] });
     expect(saved.some((s) => s.tabs.some((t) => t.database === "hc_backend"))).toBe(true);
   });
+});
+
+// ---- AI Context (step 11c) ----
+
+test("refresh_marks_ai_context_changed", async () => {
+  await openOrders({ ai_context_changed: () => null });
+  await userEvent.click(screen.getByRole("button", { name: "More actions for KFC Shop" }));
+  await userEvent.click(within(screen.getByRole("menu", { name: "KFC Shop" })).getByRole("menuitem", { name: "Refresh schema" }));
+  await waitFor(() => expect(callsTo("ai_context_changed")).toEqual([{ connectionId: "c2" }]));
 });

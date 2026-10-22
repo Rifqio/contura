@@ -1,0 +1,1143 @@
+[
+ {
+  "schema": 12,
+  "kind": "named",
+  "question": "How many rows are in orders?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "orders"
+  ]
+ },
+ {
+  "schema": 12,
+  "kind": "named",
+  "question": "List employees with their departments",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees",
+   "departments"
+  ]
+ },
+ {
+  "schema": 12,
+  "kind": "paraphrase",
+  "question": "Which bills are past their due date?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoices"
+  ]
+ },
+ {
+  "schema": 12,
+  "kind": "abbrev",
+  "question": "Sum of amt by pmt method",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "For each warehouse, how many stock_moves left it last month?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "warehouses",
+   "stock_moves"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "Total per customer from invoices and payments",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers",
+   "invoices",
+   "payments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "Which agent closed the most tickets?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "agents",
+   "tickets"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "eu_orders without a matching eu_invoices row",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "eu_orders",
+   "eu_invoices"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "When was each key created?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "keys"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "How many licenses expire this year?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "license"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "Answers to the latest survey",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "surveys"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "Campaign spend versus sessions per channel",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "campaigns",
+   "sessions"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "Why are there duplicates?",
+  "sql": "select * from archive_payments p join archive_refunds r on r.payment_id = p.id",
+  "open": [],
+  "expect": [
+   "archive_payments",
+   "archive_refunds"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "salesOrderItems for the biggest order",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "salesOrderItems"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "employee and department of each timesheet",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees",
+   "departments",
+   "timesheets"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "named",
+  "question": "purchase_orders per supplier this year",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "purchase_orders",
+   "suppliers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Which bills are past their due date?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoices"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "What did we pay staff each period?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payroll_runs"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Hours logged per person last week",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "timesheets"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Which marketing channel brings the most visits?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "campaigns",
+   "sessions"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Which pages are viewed most?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "page_views"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Money we returned to buyers last quarter",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "refunds"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Which vendors supply us the most?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "suppliers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Average salary by team",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "How much stock left the depot?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "stock_moves"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Help desk requests still open per support person",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "tickets",
+   "agents"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "What is the list price of each item we sell?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "products"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Which card payments failed?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Top clients by lifetime value",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "paraphrase",
+  "question": "Which shoppers come back most often?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "Total quantity moved per warehouse",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "stock_moves"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "Sum of amt by pmt method",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "inv num and due date of every bill",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoices"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "emp names with their dept",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees",
+   "departments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "acct num of every vendor",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "suppliers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "prod desc and cat for every item",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "products"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "Visits per user",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "sessions"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "abbrev",
+  "question": "line amount per invoice line",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoice_lines"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "fk",
+  "question": "Refunds above 100 with the original receipt",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "fk",
+  "question": "why slow?",
+  "sql": "select url from page_views where viewed_at > now() - interval 1 day",
+  "open": [],
+  "expect": [
+   "sessions",
+   "campaigns"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "fk",
+  "question": "timesheets with missing entries",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees",
+   "departments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "fk",
+  "question": "make it faster",
+  "sql": "select * from ticket_comments where body like '%refund%'",
+  "open": [],
+  "expect": [
+   "tickets",
+   "agents"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "prefixed",
+  "question": "archive invoices that were never paid",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "archive_invoices"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "prefixed",
+  "question": "eu sessions by campaign",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "eu_sessions"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "prefixed",
+  "question": "legacy employees hired before 2010",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "legacy_employees"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "Which warehouse received the most purchase_orders?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "warehouses",
+   "purchase_orders"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "refunds per payment method",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "refunds",
+   "payments"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "legacy_customers who never placed legacy_orders",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "legacy_customers",
+   "legacy_orders"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "rotate every key older than a year",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "keys"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "Which license is held by the most employees?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "license",
+   "employees"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "Response rate per survey",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "surveys"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "slow join",
+  "sql": "select * from eu_page_views v join eu_sessions s on s.id = v.session_id",
+  "open": [],
+  "expect": [
+   "eu_page_views",
+   "eu_sessions"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "agents with the oldest open ticket",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "agents",
+   "tickets"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "archiveInvoiceLines totals",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "archiveInvoiceLines"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "payroll_runs gross vs net per employee",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payroll_runs",
+   "employees"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "Which product sold the most order_items?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "products",
+   "order_items"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "named",
+  "question": "main2_campaigns budget",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "main2_campaigns"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Show overdue bills with their amount",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoices"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Who runs each division?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "departments"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Net pay per month for the last year",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payroll_runs"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Days with the most hours booked",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "timesheets"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Marketing budget by channel",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "campaigns"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Most visited URLs",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "page_views"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Goods that left a depot in March",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "stock_moves"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Vendor bank account numbers",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "suppliers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Transfers versus cash received",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payments"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Comments written by the help desk",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "ticket_comments"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Checkout count per day",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "orders"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Reasons people give for money back",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "refunds"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Top clients by lifetime value",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "paraphrase",
+  "question": "Which shoppers come back most often?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "qty sold per item",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "order_items"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "payment method used most",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payments"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "invoice number lookup",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoices"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "employee name and hire date",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "dept name list",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "departments"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "billing addr of each buyer",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "product description search",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "products"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "abbrev",
+  "question": "usr activity by start time",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "sessions"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "fk",
+  "question": "invoice_lines with zero amount",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoices",
+   "products"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "fk",
+  "question": "explain this",
+  "sql": "select * from purchase_orders where total_amt > 10000",
+  "open": [],
+  "expect": [
+   "suppliers",
+   "warehouses"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "fk",
+  "question": "payroll_runs with negative net",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees",
+   "departments"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "fk",
+  "question": "why so many rows",
+  "sql": "select * from order_items where qty > 10",
+  "open": [],
+  "expect": [
+   "orders",
+   "products",
+   "customers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "prefixed",
+  "question": "sales refunds this month",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "sales_refunds"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "prefixed",
+  "question": "archive tickets still open",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "archive_tickets"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "prefixed",
+  "question": "eu stock moves out of the main depot",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "eu_stock_moves"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "synonym",
+  "question": "Top clients by lifetime value",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "synonym",
+  "question": "Which vendors deliver late",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "suppliers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "synonym",
+  "question": "How many staff joined last year",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "synonym",
+  "question": "Average salary by month",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payroll_runs"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "synonym",
+  "question": "Which visit lasted longest",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "sessions"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "synonym",
+  "question": "Bills not yet paid",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "invoices"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "synonym",
+  "question": "Biggest buyers this quarter",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "synonym",
+  "question": "Vendor with the most deliveries",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "suppliers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "synonym",
+  "question": "Which team has the most workers",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "departments",
+   "employees"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "synonym",
+  "question": "Wage total by pay period",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payroll_runs"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "synonym",
+  "question": "Which return was the largest",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "refunds"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "synonym",
+  "question": "Oldest charge on record",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "payments"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "vague",
+  "question": "Who handles complaints the fastest?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "tickets",
+   "agents"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "vague",
+  "question": "What did the spring promotion bring in?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "campaigns",
+   "sessions"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "vague",
+  "question": "Which depot ran low before the holidays?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "warehouses",
+   "stock_moves"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "vague",
+  "question": "Who has gone quiet since signing up?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "vague",
+  "question": "What do we still owe the firms we restock from?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "suppliers",
+   "purchase_orders"
+  ]
+ },
+ {
+  "schema": 300,
+  "kind": "vague",
+  "question": "Who deserves a raise this year?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees",
+   "payroll_runs"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "vague",
+  "question": "Who handles complaints the fastest?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "tickets",
+   "agents"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "vague",
+  "question": "What did the spring promotion bring in?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "campaigns",
+   "sessions"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "vague",
+  "question": "Which depot ran low before the holidays?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "warehouses",
+   "stock_moves"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "vague",
+  "question": "Who has gone quiet since signing up?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "customers"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "vague",
+  "question": "What do we still owe the firms we restock from?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "suppliers",
+   "purchase_orders"
+  ]
+ },
+ {
+  "schema": 2000,
+  "kind": "vague",
+  "question": "Who deserves a raise this year?",
+  "sql": null,
+  "open": [],
+  "expect": [
+   "employees",
+   "payroll_runs"
+  ]
+ }
+]

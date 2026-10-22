@@ -43,6 +43,7 @@ fn sqlite_input(file: &std::path::Path, production: bool, read_only: bool) -> Co
         file: Some(file.to_path_buf()),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production,
         read_only,
     }
@@ -565,6 +566,7 @@ async fn mysql_partial_failure_is_one_history_entry() {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         })
@@ -683,6 +685,7 @@ async fn postgres_table_ddl_is_the_servers_own_text() {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: true,
         })
@@ -961,6 +964,7 @@ async fn server_service(
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         })

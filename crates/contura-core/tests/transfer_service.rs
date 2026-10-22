@@ -110,6 +110,7 @@ impl Fx {
                 file: Some(path),
                 query_timeout_secs: None,
                 ai_access: Default::default(),
+                ai_sync: Default::default(),
                 production,
                 read_only,
             })
@@ -310,4 +311,38 @@ async fn target_changed_since_review_refused() {
     }
     assert!(fx.svc.jobs().list().is_empty());
     assert_eq!(fx.count("target.sqlite"), 0);
+}
+
+/// The target's AI Context is marked stale by a run; the source's is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_marks_the_target_context_stale() {
+    use contura_core::ai::context::store::{BuiltContext, ContextKey, ContextStore};
+    let fx = Fx::new().await;
+    let target = fx.save("freight", "target.sqlite", false, false).await;
+    for id in [fx.source, target] {
+        let key = ContextKey {
+            connection_id: id,
+            database: "main".into(),
+            schema: String::new(),
+        };
+        fx.svc
+            .replace_context(&key, &BuiltContext::default(), None, 1)
+            .unwrap();
+    }
+    let stale = |id: ConnectionId| -> Vec<bool> {
+        fx.svc
+            .context_list(Some(id))
+            .unwrap()
+            .into_iter()
+            .map(|(_, m)| m.stale)
+            .collect()
+    };
+    let plan = fx.svc.plan_transfer(fx.req(target)).await.unwrap();
+    let rec = fx
+        .start(fx.req(target), Some(plan.fingerprint.clone()), None)
+        .await
+        .expect("start");
+    assert_eq!(rec.wait().await["kind"], "finished");
+    assert_eq!(stale(target), [true]);
+    assert_eq!(stale(fx.source), [false]);
 }

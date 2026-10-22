@@ -327,6 +327,13 @@ impl Dialect for MySqlDialect {
         )
     }
 
+    async fn schema_fingerprint(&self, database: &str, _schema: Option<&str>) -> Result<String> {
+        browse_result(
+            snapshot::schema_fingerprint(&self.pool, database).await,
+            self.read_only,
+        )
+    }
+
     async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
         browse_result(
             snapshot::table_design(&self.pool, path).await,
@@ -500,6 +507,7 @@ mod tests {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         }
@@ -546,6 +554,7 @@ mod tests {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         };

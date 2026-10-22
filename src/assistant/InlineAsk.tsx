@@ -1,21 +1,31 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { aiAsk, aiSettings } from "../api/client";
-import type { AiSettingsView, SqlSchema } from "../api/types";
+import { aiConfirmKeyHost, aiKnownModels, aiSettings, setAiModelPrefs } from "../api/client";
+import type { AiSettingsView, ItemKind, ModelList, ModelPicks, SqlSchema } from "../api/types";
 import Icon from "../components/Icon";
 import { PROVIDERS } from "../settings/ai/providers";
-import answerState from "./answerState";
-import { actionsFor, type AskContext } from "./context";
-import { buildSends, payloadText, type SendItem } from "./payload";
+import { looksLikeSql, parseAnswer } from "./answerMarkdown";
+import answerState, { aiErrorOf, answerEnd, endMark, modelToUse } from "./answerState";
+import AnswerLog from "./AnswerLog";
+import { buildRecord, onlyOutlineLeft, sentLine, streamRecord } from "./answerRecord";
+import { type StreamEnd, stopText, useAnswerStream } from "./answerStream";
+import AnswerText from "./AnswerText";
+import { actionsFor, type AskContext, toAskRequest } from "./context";
+import type { InsertTarget } from "./InsertDiff";
 import Sends from "./Sends";
+import { useAiPreview } from "./usePreview";
 
 interface Props {
   context: AskContext;
+  /** Not read: the Core reads the schema for the preview itself. Kept until the callers drop it. */
   schema: SqlSchema | null;
   groupId: string | null;
   /** Absent where there is no panel to open, such as the Schema Builder. */
   onOpenInChat?(seed: { question: string; context: AskContext }): void;
   onOpenSettings(): void;
   onClose(): void;
+  /** The query tab the box sits in: Insert works on its editor, through the diff. */
+  insertTarget?: InsertTarget | null;
+  onOpenInNewTab?(sql: string, connection: AskContext["connection"]): void;
 }
 
 const PLACEHOLDER: Record<AskContext["kind"], string> = {
@@ -34,15 +44,34 @@ function hostOf(url: string): string {
   }
 }
 
-type Outcome = { q: string } & ({ s: "busy" } | { s: "answer"; text: string } | { s: "failed"; error: unknown });
+/** The question asked, and how its answer ended once it has. `tries` counts the same failure in a row. */
+/** The model a "Use <model>" action asks with. */
+type Use = { id: string; picks: ModelPicks };
+
+type Outcome = { q: string; action?: string; end: StreamEnd | null; tries: number; startedAt?: number };
 
 /** The small Ask popover: a question or an action, what it would send, and the answer state. */
-export default function InlineAsk({ context, schema, groupId, onOpenInChat, onOpenSettings, onClose }: Props) {
+export default function InlineAsk({
+  context,
+  groupId,
+  onOpenInChat,
+  onOpenSettings,
+  onClose,
+  insertTarget = null,
+  onOpenInNewTab,
+}: Props) {
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   const [text, setText] = useState("");
-  const [offKeys, setOffKeys] = useState<ReadonlySet<string>>(new Set());
-  const [rowsOff, setRowsOff] = useState(false);
+  const [off, setOff] = useState<ItemKind[]>([]);
+  const [values, setValues] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [models, setModels] = useState<ModelList | null>(null);
+  /** Show log is open in place of the answer. */
+  const [showLog, setShowLog] = useState(false);
+  /** "Send the saved key to <host>" is on its way. */
+  const confirmingRef = useRef(false);
+  const [confirming, setConfirming] = useState(false);
+  const stream = useAnswerStream();
   const input = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
 
@@ -59,16 +88,29 @@ export default function InlineAsk({ context, schema, groupId, onOpenInChat, onOp
     aiSettings(groupId)
       .then((v) => live && setSettings(v))
       .catch(() => live && setSettings(null));
+    aiKnownModels(groupId)
+      .then((l) => live && setModels(l))
+      .catch(() => live && setModels(null));
     return () => {
       live = false;
     };
   }, [groupId]);
 
-  const conn = context.connection;
-  const items = useMemo<SendItem[]>(() => {
-    if (conn?.access === "never") return [];
-    return buildSends(context, schema, rowsOff).map((i) => (offKeys.has(i.key) && !i.locked ? { ...i, on: false } : i));
-  }, [conn, context, schema, rowsOff, offKeys]);
+  // The model the panel picked last is the settings' current model; its picks are remembered with it.
+  const model = settings?.settings.provider ? settings.settings.model || null : null;
+  const picks = model ? (settings?.settings.modelPrefs[model] ?? null) : null;
+  const request = (question: string, action?: string, use?: Use) =>
+    toAskRequest(context, question, off, { rows: false, values }, {
+      groupId,
+      action,
+      model: use?.id ?? model,
+      picks: use?.picks ?? picks,
+    });
+  const previewed = useMemo(
+    () => toAskRequest(context, text.trim(), off, { rows: false, values }, { groupId, model, picks }),
+    [context, text, off, values, groupId, model, picks],
+  );
+  const { preview, error: previewError } = useAiPreview(previewed, context.connection?.access);
 
   const provider = settings?.settings.provider ?? null;
   const providerName = provider ? PROVIDERS[provider].name : undefined;
@@ -76,37 +118,105 @@ export default function InlineAsk({ context, schema, groupId, onOpenInChat, onOp
     ? `To ${hostOf(settings?.settings.baseUrl ?? "")} (${settings?.settings.model})`
     : "Nothing is sent until a provider is set.";
 
-  const toggle = (key: SendItem["key"]) => {
-    if (key === "rows") {
-      setRowsOff((o) => !o);
+  const toggle = (kind: ItemKind) => {
+    if (kind === "values") {
+      setValues((v) => !v);
       return;
     }
-    setOffKeys((s) => {
-      const n = new Set(s);
-      if (n.has(key)) n.delete(key);
-      else n.add(key);
-      return n;
-    });
+    setOff((o) => (o.includes(kind) ? o.filter((k) => k !== kind) : [...o, kind]));
   };
 
-  async function ask(question: string) {
+  async function ask(question: string, action?: string, before?: Outcome, use?: Use) {
     const q = question.trim();
-    if (!q || outcome?.s === "busy") return;
-    setOutcome({ q, s: "busy" });
-    try {
-      const answer = await aiAsk(groupId, { question: q, payload: payloadText(items) });
-      if (alive.current) setOutcome({ q, s: "answer", text: answer.text });
-    } catch (error) {
-      if (alive.current) setOutcome({ q, s: "failed", error });
-    }
+    if (!q || stream.running) return;
+    const startedAt = Date.now();
+    setShowLog(false);
+    setOutcome({ q, action, end: null, tries: 0, startedAt });
+    const end = await stream.start(request(q, action, use));
+    const same = before?.end?.error != null && aiErrorOf(before.end.error)?.kind === aiErrorOf(end.error)?.kind;
+    if (alive.current) setOutcome({ q, action, end, tries: same ? before.tries + 1 : 1, startedAt });
   }
 
+  // Esc stops an answer being written; once nothing is running it closes the box.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      onClose();
+      if (stream.running) stream.stop();
+      else onClose();
     }
+  };
+
+  const end = outcome?.end ?? null;
+  const endKind = end?.stopped ? "stopped" : end?.done && end.done.stop !== "end" && end.done.stop !== "tooLong" ? end.done.stop : null;
+  const mark = endKind ? endMark(endKind) : end?.done ? stopText(end.done.stop) : null;
+  const current = models?.models.find((m) => m.id === model) ?? null;
+  const openLog = () => setShowLog(true);
+  // The record of this Ask: from how it ended once it has, else as far as the stream got.
+  const record = end
+    ? { ...buildRecord(end, end.live), millis: end.done?.millis ?? (outcome?.startedAt !== undefined ? end.at - outcome.startedAt : null) }
+    : streamRecord(stream);
+  const sent = end ? sentLine(record, end.at) : null;
+
+  /** Back to the question box with `q` in it. */
+  const askAgain = (q: string) => {
+    stream.reset();
+    setOutcome(null);
+    setText(q);
+    input.current?.focus();
+  };
+
+  /** The card of a failed Ask and what its actions do; the inline box has no model menu, Sends list or Stop. */
+  const failureCard = (o: Outcome, e: StreamEnd) => {
+    const retry = () => void ask(o.q, o.action, o);
+    return answerState(e.error, {
+      providerName,
+      provider,
+      onShowLog: openLog,
+      model: current,
+      models: models?.models ?? [],
+      connectionName: context.connection?.name,
+      host: settings ? hostOf(settings.settings.baseUrl) : undefined,
+      partial: e.partial,
+      tries: o.tries,
+      outlineSent: onlyOutlineLeft(record),
+      onOpenSettings,
+      onRetry: retry,
+      onSendNow: retry,
+      onCancelQueued: () => askAgain(o.q),
+      onUseModel: (id) => {
+        const use = modelToUse(id, models?.models ?? [], settings?.settings ?? null);
+        setModels((l) => l && { ...l, current: id });
+        void setAiModelPrefs(groupId, id, use.picks)
+          .then(() => aiSettings(groupId))
+          .then((v) => alive.current && setSettings(v))
+          .catch(() => {});
+        void ask(o.q, o.action, o, use);
+      },
+      confirmingKeyHost: confirming,
+      onConfirmKeyHost: (host) => {
+        // A second click while the first confirm is on its way would send the Ask twice.
+        if (confirmingRef.current) return;
+        confirmingRef.current = true;
+        setConfirming(true);
+        const settle = () => {
+          confirmingRef.current = false;
+          if (alive.current) setConfirming(false);
+        };
+        aiConfirmKeyHost(groupId, host).then(
+          () => {
+            settle();
+            retry();
+          },
+          (error) => {
+            settle();
+            if (!alive.current) return;
+            const same = aiErrorOf(error)?.kind === aiErrorOf(e.error)?.kind;
+            setOutcome({ ...o, end: { ...e, error, partial: false }, tries: same ? o.tries + 1 : 1 });
+          },
+        );
+      },
+    });
   };
 
   const question = outcome?.q ?? text.trim();
@@ -121,7 +231,19 @@ export default function InlineAsk({ context, schema, groupId, onOpenInChat, onOp
         </button>
       </div>
       <div className="pop-body">
-        {outcome === null && (
+        {outcome && showLog && (
+          <AnswerLog
+            question={outcome.q}
+            answer={stream.text}
+            record={record}
+            live={stream.running}
+            connection={context.connection?.name ?? null}
+            database={context.connection?.database ?? null}
+            providerName={record.sent ? PROVIDERS[record.sent.provider].name : providerName}
+            onBack={() => setShowLog(false)}
+          />
+        )}
+        {!showLog && outcome === null && (
           <>
             <input
               ref={input}
@@ -140,26 +262,66 @@ export default function InlineAsk({ context, schema, groupId, onOpenInChat, onOp
             />
             <div className="acts">
               {actionsFor(context.kind).map((a) => (
-                <button key={a.key} type="button" className="act" onClick={() => void ask(a.label)}>
+                <button key={a.key} type="button" className="act" onClick={() => void ask(a.label, a.key)}>
                   {a.label}
                 </button>
               ))}
             </div>
-            <Sends items={items} header={header} onToggle={toggle} />
+            <Sends preview={preview} error={previewError} header={header} onToggle={toggle} withTip={false} />
           </>
         )}
-        {outcome?.s === "busy" && <p className="muted">Asking…</p>}
-        {outcome?.s === "answer" && <div className="answer-text">{outcome.text}</div>}
-        {outcome?.s === "failed" &&
-          answerState(outcome.error, {
-            providerName,
-            onOpenSettings,
-            onRetry: () => void ask(outcome.q),
+        {!showLog && outcome && !stream.text && stream.running && <p className="muted">{stream.status ?? "Asking…"}</p>}
+        {!showLog && outcome && stream.text && (
+          <div className="answer-body">
+            <AnswerText
+              text={stream.text}
+              streaming={stream.running}
+              blocks={end?.done?.sqlBlocks}
+              notes={end?.done?.notes}
+              dialect={context.connection?.dialect ?? "postgres"}
+              target={insertTarget}
+              onOpenInNewTab={onOpenInNewTab && ((sql) => onOpenInNewTab(sql, context.connection))}
+              onCopy={(sql) => void navigator.clipboard?.writeText(sql).catch(() => {})}
+            />
+          </div>
+        )}
+        {!showLog && endKind && mark && <span className="cutm">{mark}</span>}
+        {!showLog && outcome && end && endKind &&
+          answerEnd(endKind, {
+            sqlMissing: !parseAnswer(end.text).some((b) => b.kind === "code" && b.closed && looksLikeSql(b)),
+            output: end.done?.usage?.output ?? null,
+            millis: end.done?.millis ?? (outcome.startedAt !== undefined ? end.at - outcome.startedAt : null),
+            onRetry: () => void ask(outcome.q, outcome.action),
+            onEdit: () => askAgain(outcome.q),
+            onShowLog: openLog,
           })}
+        {!showLog && outcome && (stream.running || (end && !endKind && end.error == null)) && (
+          <div className="msg-mark">
+            {!endKind && mark && <span className="msg-stop">{mark}</span>}
+            <button type="button" className="link-button" onClick={openLog}>
+              Show log
+            </button>
+            {sent && <span className="msg-notice">{sent}</span>}
+          </div>
+        )}
+        {!showLog && sent && end && (endKind || end.error != null) && <p className="msg-notice">{sent}</p>}
+        {!showLog && outcome && end?.error != null && failureCard(outcome, end)}
       </div>
       <div className="pop-foot">
-        {outcome && (
-          <button type="button" className="button button-small" onClick={() => setOutcome(null)}>
+        {stream.running && (
+          <button type="button" className="button button-small" onClick={() => stream.stop()}>
+            Stop
+          </button>
+        )}
+        {outcome && !stream.running && (
+          <button
+            type="button"
+            className="button button-small"
+            onClick={() => {
+              stream.reset();
+              setOutcome(null);
+            }}
+          >
             Ask again
           </button>
         )}

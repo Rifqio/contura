@@ -9,6 +9,15 @@ export function answerText(sql: string): string {
   return `${sql.trimEnd().replace(/;$/, "")};\n`;
 }
 
+/** SQL that Run cannot pick up: each line behind `-- `, ended with a new line. */
+export function commentedOut(sql: string): string {
+  return `${sql
+    .trimEnd()
+    .split(/\r?\n/)
+    .map((l) => `-- ${l}`)
+    .join("\n")}\n`;
+}
+
 /** The editor and runner refs of each query tab, by tab id. */
 export function useQueryTabRefs() {
   const editorRefs = useRef(new Map<string, MutableRefObject<SqlEditorApi | null>>());

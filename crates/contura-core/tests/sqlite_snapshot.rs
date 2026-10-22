@@ -28,6 +28,7 @@ async fn sqlite_snapshot_reads_tables_indexes_refs() {
         file: Some(path.clone()),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: false,
         read_only: false,
     };

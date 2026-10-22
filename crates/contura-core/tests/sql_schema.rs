@@ -176,6 +176,7 @@ async fn sqlite_sql_schema_lists_tables_views_columns_and_fks() {
         file: Some(path),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: false,
         read_only: false,
     };
@@ -322,6 +323,7 @@ async fn sqlite_fks_carry_their_constraint_names() {
         file: Some(path),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: false,
         read_only: false,
     };

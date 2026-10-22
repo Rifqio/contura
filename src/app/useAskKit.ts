@@ -3,6 +3,7 @@ import { aiSettings } from "../api/client";
 import type { ConnectionConfig, GroupId } from "../api/types";
 import type { AskContext, AskKit } from "../assistant/context";
 import type { Place } from "../shell/tabs";
+import { answerText } from "./queryTabRefs";
 
 /** The inline Ask's settings and "open in chat" seed for the Group being worked in. */
 export function useAskKit(opts: {
@@ -15,6 +16,8 @@ export function useAskKit(opts: {
   openPanel(): void;
   /** App: openSettings("ai"). */
   openAiSettings(): void;
+  /** "Open in new tab" on an answer's SQL: App opens a query tab with the text. */
+  openQuery(connectionId: string | null, text: string, database: string | null): void;
 }): { askKit: AskKit; chatSeed: { question: string; context: AskContext } | undefined } {
   const { groupId, settingsActive, activeKey, place, connections } = opts;
   /** A question carried into the panel by "Open in chat"; it ends when you move to another tab or place. */
@@ -33,9 +36,10 @@ export function useAskKit(opts: {
   useEffect(() => setChatSeed(undefined), [activeKey, place]);
   // A question kept from before an access change must not outlive it.
   useEffect(() => setChatSeed(undefined), [settingsActive, connections]);
-  const actions = useRef({ openPanel: opts.openPanel, openAiSettings: opts.openAiSettings });
+  const actions = useRef({ openPanel: opts.openPanel, openAiSettings: opts.openAiSettings, openQuery: opts.openQuery });
   actions.current.openPanel = opts.openPanel;
   actions.current.openAiSettings = opts.openAiSettings;
+  actions.current.openQuery = opts.openQuery;
   const askKit = useMemo<AskKit>(
     () => ({
       groupId,
@@ -46,6 +50,8 @@ export function useAskKit(opts: {
         actions.current.openPanel();
       },
       onOpenSettings: () => actions.current.openAiSettings(),
+      onOpenInNewTab: (sql, connection) =>
+        actions.current.openQuery(connection?.id ?? null, answerText(sql), connection?.database ?? null),
     }),
     [groupId, askSettings],
   );

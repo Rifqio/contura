@@ -23,6 +23,7 @@ beforeEach(() => {
 function setup(over: Record<string, unknown> = {}) {
   const openPanel = vi.fn();
   const openAiSettings = vi.fn();
+  const openQuery = vi.fn();
   const props = {
     groupId: null as string | null,
     settingsActive: false,
@@ -31,13 +32,24 @@ function setup(over: Record<string, unknown> = {}) {
     connections: noConnections,
     openPanel,
     openAiSettings,
+    openQuery,
     ...over,
   };
   const hook = renderHook((p: typeof props) => useAskKit(p), { initialProps: props });
-  return { ...hook, props, openPanel, openAiSettings };
+  return { ...hook, props, openPanel, openAiSettings, openQuery };
 }
 
 describe("useAskKit", () => {
+  it("open_in_new_tab_opens_the_answer_on_the_asks_connection", () => {
+    routeInvoke({ ai_settings: () => view(true, true) });
+    const { result, openQuery } = setup();
+    const connection = { id: "c1", name: "Shop", dialect: "postgres" as const, database: "shop", access: "schema" as const };
+    act(() => result.current.askKit.onOpenInNewTab!("SELECT 1", connection));
+    expect(openQuery).toHaveBeenCalledWith("c1", "SELECT 1;\n", "shop");
+    act(() => result.current.askKit.onOpenInNewTab!("SELECT 2;", null));
+    expect(openQuery).toHaveBeenLastCalledWith(null, "SELECT 2;\n", null);
+  });
+
   it("reads_the_groups_ask_settings_and_not_while_settings_is_shown", async () => {
     routeInvoke({ ai_settings: (a) => (a.groupId === "g1" ? view(false, false) : view(true, true)) });
     const { result, rerender, props } = setup({ settingsActive: true });

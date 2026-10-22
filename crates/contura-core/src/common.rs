@@ -171,6 +171,19 @@ pub(crate) fn sql_scoped(kind: DialectKind, scope: &str, name: &str) -> String {
     format!("{}.{}", sql_ident(kind, scope), sql_ident(kind, name))
 }
 
+/// `n` with a comma between thousands.
+pub fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, d) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(d);
+    }
+    out
+}
+
 #[cfg(test)]
 mod sql_text_tests {
     use super::*;

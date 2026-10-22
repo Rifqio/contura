@@ -100,6 +100,53 @@ fn own_sequence(owned: bool) -> bool {
     is_own_sequence(TableRef::default(), "", None, "", Some(owned))
 }
 
+/// One line per catalog fact of the schema (relations of every kind, columns, defaults,
+/// constraints, index definitions, comments, enum labels), hashed together. NULL when the
+/// schema does not exist, so a missing schema never reads as an empty, stable one.
+/// Catalog only, no table scans.
+const FINGERPRINT_SQL: &str = "WITH ns AS (SELECT oid FROM pg_namespace WHERE nspname = $1), \
+    x AS ( \
+      SELECT concat_ws('|', 'c', c.relname, c.relkind) AS x \
+        FROM pg_class c WHERE c.relnamespace = (SELECT oid FROM ns) \
+      UNION ALL \
+      SELECT concat_ws('|', 'a', c.relname, a.attname, format_type(a.atttypid, a.atttypmod), \
+             a.attnum, a.attnotnull) \
+        FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid \
+       WHERE c.relnamespace = (SELECT oid FROM ns) AND a.attnum > 0 AND NOT a.attisdropped \
+      UNION ALL \
+      SELECT concat_ws('|', 'd', c.relname, d.adnum, pg_get_expr(d.adbin, d.adrelid)) \
+        FROM pg_attrdef d JOIN pg_class c ON c.oid = d.adrelid \
+       WHERE c.relnamespace = (SELECT oid FROM ns) \
+      UNION ALL \
+      SELECT concat_ws('|', 'k', c.relname, k.conname, k.contype, pg_get_constraintdef(k.oid)) \
+        FROM pg_constraint k LEFT JOIN pg_class c ON c.oid = k.conrelid \
+       WHERE k.connamespace = (SELECT oid FROM ns) \
+      UNION ALL \
+      SELECT concat_ws('|', 'i', c.relname, i.indisprimary, pg_get_indexdef(i.indexrelid)) \
+        FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid \
+       WHERE c.relnamespace = (SELECT oid FROM ns) \
+      UNION ALL \
+      SELECT concat_ws('|', 'm', c.relname, d.objsubid, d.description) \
+        FROM pg_description d JOIN pg_class c \
+          ON c.oid = d.objoid AND d.classoid = 'pg_catalog.pg_class'::regclass \
+       WHERE c.relnamespace = (SELECT oid FROM ns) \
+      UNION ALL \
+      SELECT concat_ws('|', 'e', t.typname, string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder)) \
+        FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid \
+       WHERE t.typnamespace = (SELECT oid FROM ns) GROUP BY t.typname \
+    ) \
+    SELECT CASE WHEN EXISTS (SELECT 1 FROM ns) \
+      THEN 'pg:' || md5(coalesce(string_agg(x, '|' ORDER BY x), '')) END FROM x";
+
+pub(super) async fn schema_fingerprint(client: &Client, schema: &str) -> Result<String> {
+    let row = client
+        .query_one(FINGERPRINT_SQL, &[&schema])
+        .await
+        .map_err(query_err)?;
+    row.get::<_, Option<String>>(0)
+        .ok_or_else(|| Error::NotFound(format!("schema {schema} not found")))
+}
+
 pub(super) async fn schema_snapshot(client: &Client, schema: &str) -> Result<SchemaModel> {
     let mut skipped = Vec::new();
     let mut tables: BTreeMap<String, SmTable> = BTreeMap::new();

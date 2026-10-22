@@ -185,6 +185,7 @@ mod tests {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         }

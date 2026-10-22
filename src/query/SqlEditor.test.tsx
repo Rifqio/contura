@@ -350,3 +350,14 @@ test("gutter_and_content_mount_side_by_side", () => {
   const kids = Array.from(scroller.children).map((c) => c.className.split(" ")[0]);
   expect(kids.slice(0, 2)).toEqual(["cm-gutters", "cm-content"]);
 });
+
+test("replace_range_replaces_and_leaves_you_typing_after_it", () => {
+  const { view, editorRef, onChange } = setup("SELECT 1; SELECT 2;");
+  act(() => editorRef.current!.replaceRange(10, 18, "SELECT 3"));
+  expect(view.state.doc.toString()).toBe("SELECT 1; SELECT 3;");
+  expect(view.state.selection.main.head).toBe(18);
+  expect(onChange).toHaveBeenLastCalledWith("SELECT 1; SELECT 3;");
+  // Past the end it clamps rather than throws.
+  act(() => editorRef.current!.replaceRange(99, 120, "!"));
+  expect(view.state.doc.toString()).toBe("SELECT 1; SELECT 3;!");
+});

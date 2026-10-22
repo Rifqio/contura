@@ -60,6 +60,8 @@ export interface SqlEditorApi {
   select(from: number, to: number): void;
   insert(text: string): void;
   replaceAll(text: string): void;
+  /** Replaces `from` to `to` with `text`, leaves you typing after it, and scrolls it into view. */
+  replaceRange(from: number, to: number, text: string): void;
   focus(): void;
   /** Bands every line the ranges touch in --c-accent-subtle (the query diagram's selected card); empty clears. */
   band(ranges: Range[]): void;
@@ -843,6 +845,16 @@ export default function SqlEditor({
       },
       replaceAll(text) {
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      },
+      replaceRange(from, to, text) {
+        const len = view.state.doc.length;
+        const start = Math.min(from, len);
+        view.dispatch({
+          changes: { from: start, to: Math.min(Math.max(to, start), len), insert: text },
+          selection: { anchor: start + text.length },
+          scrollIntoView: true,
+        });
+        view.focus();
       },
       focus() {
         view.focus();

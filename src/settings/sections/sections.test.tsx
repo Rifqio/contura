@@ -4,13 +4,15 @@ import { beforeEach, expect, test, vi } from "vitest";
 import type { AiSettings, ConnectionConfig, UiPrefs } from "../../api/types";
 import { COMMANDS } from "../../commands/registry";
 import { callsTo } from "../../test/invoke";
-import { aiView, GROQ, renderWithProviders, settingsRoutes } from "../../test/settingsRoutes";
+import { aiView, GROQ, modelInfo, modelList, renderWithProviders, settingsRoutes } from "../../test/settingsRoutes";
 import AboutSection from "./AboutSection";
-import AiSection from "./AiSection";
+import { onThreadsCleared } from "../../assistant/threadsCleared";
+import AiSection, { fetchedText } from "./AiSection";
 import AppearanceSection from "./AppearanceSection";
 import DataFolderSection from "./DataFolderSection";
 import EditorSection from "./EditorSection";
 import KeymapSection from "./KeymapSection";
+import { SearchContext } from "./layout";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 // The app plugin calls Tauri from inside the package, past the core mock.
@@ -29,6 +31,9 @@ beforeEach(() => {
 const last = <T,>(xs: T[]): T | undefined => xs[xs.length - 1];
 const lastPrefs = () => last(callsTo("save_ui_prefs"))?.prefs as UiPrefs;
 const lastAi = () => last(callsTo("save_ai_settings"))!;
+
+/** A model fact chip by its whole text: the window's number is set in bold apart from the words. */
+const fact = (text: string) => (_: string, el: Element | null) => !!el?.classList.contains("mfact") && el.textContent === text;
 
 /** An option's label, without the quiet hint at its right. */
 const labelOf = (o: HTMLElement) => o.querySelector(".select-label")?.textContent;
@@ -286,12 +291,12 @@ test("ai_rows_provider_model_key_new_connections_inline", async () => {
   // Each change is saved at once, with the saved key left alone.
   await choose("Provider", "Groq");
   await waitFor(() => expect(callsTo("save_ai_settings")).toHaveLength(1));
-  expect(lastAi().settings).toMatchObject({ provider: "groq", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" });
+  expect(lastAi().settings).toMatchObject({ provider: "groq", baseUrl: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-20b" });
   expect(lastAi().key).toEqual({ t: "keep" });
   expect(lastAi().overrideGroup).toBe(false);
 
-  await choose("Model", "llama-3.1-8b-instant");
-  await waitFor(() => expect((lastAi().settings as AiSettings).model).toBe("llama-3.1-8b-instant"));
+  await choose("Model", "openai/gpt-oss-120b");
+  await waitFor(() => expect((lastAi().settings as AiSettings).model).toBe("openai/gpt-oss-120b"));
   expect(lastAi().settings).toMatchObject({ temperature: null, maxTokens: null });
 
   expect(await optionsOf("New Connections")).toEqual([
@@ -371,7 +376,7 @@ test("api_key_keeps_its_own_save_and_test", async () => {
   expect(document.body.innerHTML).not.toContain("gsk_secret_wxyz");
 
   await userEvent.click(screen.getByRole("button", { name: "Test" }));
-  expect(await screen.findByText(/Connected to Groq\. llama-3\.3-70b-versatile replied in 412ms\. Only the test prompt was sent\./)).toBeTruthy();
+  expect(await screen.findByText(/Connected to Groq\. openai\/gpt-oss-20b replied in 412ms\. Only the test prompt was sent\./)).toBeTruthy();
   expect(callsTo("ai_test")).toEqual([{ groupId: "g2" }]);
   // Testing saves nothing.
   expect(callsTo("save_ai_settings")).toHaveLength(1);
@@ -423,7 +428,7 @@ test("a_save_during_a_group_change_never_writes_the_old_groups_settings_into_the
   await waitFor(() => expect(release).not.toBeNull());
   release!();
   await screen.findByRole("combobox", { name: "Model" });
-  await choose("Model", "llama-3.1-8b-instant");
+  await choose("Model", "openai/gpt-oss-120b");
   await waitFor(() => expect(callsTo("save_ai_settings")).toHaveLength(1));
   expect(lastAi()).toMatchObject({ groupId: "g2", overrideGroup: true });
 });
@@ -457,6 +462,322 @@ test("saved_key_is_removed_only_after_asking", async () => {
   // The other settings go back unchanged, temperature and max tokens with them.
   expect(lastAi().settings).toEqual(GROQ);
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("groq_preset_fills_base_url", async () => {
+  settingsRoutes();
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("combobox", { name: "Provider" });
+  await choose("Provider", "Groq");
+  await waitFor(() => expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("https://api.groq.com/openai/v1"));
+  expect(await optionsOf("Model")).toEqual([
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "Type a name...",
+  ]);
+  expect(lastAi().settings).toMatchObject({ provider: "groq", model: "openai/gpt-oss-20b" });
+
+  await choose("Provider", "OpenAI-compatible");
+  await choose("Preset", "OpenRouter");
+  await waitFor(() => expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("https://openrouter.ai/api/v1"));
+  await waitFor(() => expect(lastAi().settings).toMatchObject({ provider: "openai", preset: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" }));
+
+  await choose("Provider", "Anthropic Claude");
+  await waitFor(() => expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("https://api.anthropic.com"));
+  expect(await optionsOf("Model")).toEqual(["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-fable-5-1", "Type a name..."]);
+  await waitFor(() => expect((lastAi().settings as AiSettings).model).toBe("claude-sonnet-5-5"));
+});
+
+test("models_fetched_list_replaces_builtin", async () => {
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: GROQ, keySaved: true, keyLast4: "3f9a" }),
+    ai_models: () => modelList([modelInfo(), modelInfo({ id: "moonshotai/kimi-k2-instruct", name: "Kimi K2" })], Date.now()),
+  });
+  renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("Fetched just now")).toBeTruthy();
+  expect(callsTo("ai_models")).toEqual([{ groupId: "g1" }]);
+  expect(await optionsOf("Model")).toEqual(["openai/gpt-oss-20b", "moonshotai/kimi-k2-instruct", "Type a name..."]);
+  await choose("Model", "moonshotai/kimi-k2-instruct");
+  await waitFor(() => expect((lastAi().settings as AiSettings).model).toBe("moonshotai/kimi-k2-instruct"));
+  expect(fetchedText(0, 2 * 60_000 + 5_000)).toBe("Fetched 2m ago");
+  expect(fetchedText(0, 10_000)).toBe("Fetched just now");
+});
+
+test("refresh_shows_fetched_just_now", async () => {
+  let at = Date.now() - 3 * 60_000;
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: GROQ, keySaved: true, keyLast4: "3f9a" }),
+    ai_models: () => modelList([modelInfo()], at),
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("Fetched 3m ago")).toBeTruthy();
+  at = Date.now();
+  await userEvent.click(screen.getByRole("button", { name: "Fetch the model list again" }));
+  expect(await screen.findByText("Fetched just now")).toBeTruthy();
+  expect(screen.queryByText("Fetched 3m ago")).toBeNull();
+  expect(callsTo("ai_models")).toHaveLength(2);
+});
+
+test("model_facts_chips", async () => {
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: GROQ, keySaved: true, keyLast4: "3f9a" }),
+    ai_models: () => modelList([modelInfo({ contextWindow: 131_072 })], Date.now()),
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText(fact("131K token context window"))).toBeTruthy();
+  expect(screen.getByText("Shares its thinking")).toBeTruthy();
+  expect(screen.getByText("Prompt caching")).toBeTruthy();
+  expect(screen.getByText("Fetched just now")).toBeTruthy();
+});
+
+test("model_facts_come_from_the_known_list_without_a_key", async () => {
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: GROQ }),
+    ai_known_models: () => modelList([modelInfo({ sharesThinking: false, caching: "none", contextWindow: 8_192 })]),
+  });
+  renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText(fact("8K token context window"))).toBeTruthy();
+  expect(callsTo("ai_known_models")[0]).toEqual({ groupId: "g1" });
+  expect(callsTo("ai_models")).toHaveLength(0);
+  expect(screen.queryByText("Shares its thinking")).toBeNull();
+  expect(screen.queryByText("Prompt caching")).toBeNull();
+  expect(screen.queryByText(/^Fetched/)).toBeNull();
+});
+
+test("context_window_field_only_for_unknown", async () => {
+  const props = { groupId: null, groupName: null, connections: [], onConnectionSaved: () => {} };
+  let settings: AiSettings = GROQ;
+  let known = [modelInfo()];
+  settingsRoutes({
+    ai_settings: () => aiView({ settings }),
+    ai_known_models: () => modelList(known),
+    save_ai_settings: (a) => {
+      settings = a.settings as AiSettings;
+      // The Core gives an unknown model the saved window.
+      known = known.map((m) => (m.known ? m : { ...m, contextWindow: settings.contextWindow ?? 8_000 }));
+    },
+  });
+  const first = renderWithProviders(<AiSection {...props} />);
+  expect(await screen.findByText(fact("131K token context window"))).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "Context window" })).toBeNull();
+  first.unmount();
+
+  // A model nothing is known about: its window is asked for.
+  settings = { ...GROQ, model: "my-model" };
+  known = [modelInfo({ id: "my-model", name: "my-model", known: false, contextWindow: 8_000 })];
+  const second = renderWithProviders(<AiSection {...props} />);
+  const field = (await screen.findByRole("textbox", { name: "Context window" })) as HTMLInputElement;
+  expect(await screen.findByText(fact("8K token context window"))).toBeTruthy();
+  await userEvent.type(field, "32768{Enter}");
+  await waitFor(() => expect((lastAi().settings as AiSettings).contextWindow).toBe(32_768));
+  expect(field.value).toBe("32,768");
+  // The chip follows the saved window at once.
+  expect(await screen.findByText(fact("33K token context window"))).toBeTruthy();
+  expect(screen.queryByText(fact("8K token context window"))).toBeNull();
+  // Enter then leaving the field saves once.
+  await userEvent.click(document.body);
+  expect(callsTo("save_ai_settings")).toHaveLength(1);
+  second.unmount();
+
+  // Custom always asks.
+  settings = { ...GROQ, provider: "custom", baseUrl: "http://127.0.0.1:11434/v1", model: "llama3.1:8b", contextWindow: 16_000 };
+  known = [];
+  renderWithProviders(<AiSection {...props} />);
+  expect(((await screen.findByRole("textbox", { name: "Context window" })) as HTMLInputElement).value).toBe("16,000");
+});
+
+test("defaults_save_with_settings", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("combobox", { name: "Default thinking level" });
+  expect(await optionsOf("Default thinking level")).toEqual(["Off", "Low", "Medium", "High"]);
+  expect(screen.getByText("Each model remembers the level you last picked for it.")).toBeTruthy();
+  const caching = screen.getByRole("switch", { name: "Use prompt caching when the model supports it" });
+  expect(caching.getAttribute("aria-checked")).toBe("true");
+  const share = screen.getByRole("switch", { name: "Ask models to share their thinking when they support it" });
+  expect(share.getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByText("Shown in Show log as the provider returned it. Never sent back.")).toBeTruthy();
+
+  await choose("Default thinking level", "High");
+  await userEvent.click(caching);
+  await waitFor(() => expect(lastAi().settings).toMatchObject({ defaultThinking: "high", promptCaching: false }));
+  // The per-model picks and the other new fields go back as they were.
+  expect(lastAi().settings).toMatchObject({ shareThinking: true, keepExactText: false, modelPrefs: GROQ.modelPrefs });
+  await userEvent.click(share);
+  await waitFor(() => expect(lastAi().settings).toMatchObject({ defaultThinking: "high", promptCaching: false, shareThinking: false }));
+});
+
+test("privacy_keep_exact_text", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByRole("heading", { name: "Privacy" })).toBeTruthy();
+  const keep = screen.getByRole("switch", { name: "Keep the exact text sent with each answer" });
+  expect(keep.getAttribute("aria-checked")).toBe("false");
+  expect(screen.getByText(String.raw`The text can contain your schema and SQL. data\ is portable and not encrypted.`)).toBeTruthy();
+  await userEvent.click(keep);
+  await waitFor(() => expect((lastAi().settings as AiSettings).keepExactText).toBe(true));
+  expect(lastAi().settings).toMatchObject({ temperature: 0.5, maxTokens: 1024, modelPrefs: GROQ.modelPrefs });
+});
+
+const renderAi = () =>
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+
+test("pick_tables_switch_saves", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, pickTables: true } }) });
+  renderAi();
+  const pick = await screen.findByRole("switch", { name: "Let the assistant pick tables in large databases" });
+  expect(pick.getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByText("Sends an outline of table names, one extra step per Ask.")).toBeTruthy();
+  await userEvent.click(pick);
+  await waitFor(() => expect((lastAi().settings as AiSettings).pickTables).toBe(false));
+  expect(lastAi().settings).toMatchObject({ keepExactText: false, modelPrefs: GROQ.modelPrefs });
+});
+
+test("pick_tables_in_a_groups_own_settings", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, pickTables: true }, groupOverride: true }) });
+  renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
+  // Ruling 13: Pick tables is a Privacy switch, the same for every Group, so a Group's own settings do not show it.
+  expect(await screen.findByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: "Let the assistant pick tables in large databases" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Keep the exact text sent with each answer" })).toBeNull();
+});
+
+test("tools_table_rows", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  renderAi();
+  expect(await screen.findByRole("heading", { name: "Tools the assistant can use" })).toBeTruthy();
+  expect(
+    screen.getByText(
+      "A tool is an action a model may ask Contura to take. Contura checks and runs it, never the model, and every use shows here and in Show log.",
+    ),
+  ).toBeTruthy();
+  const table = screen.getByRole("table", { name: "Tools the assistant can use" });
+  for (const head of ["Tool", "What it can do", "Where", "State"]) expect(within(table).getByRole("columnheader", { name: head })).toBeTruthy();
+  const rows = within(table).getAllByRole("row");
+  expect(rows).toHaveLength(3);
+  const pick = within(rows[1]);
+  expect(pick.getByText("Pick tables")).toBeTruthy();
+  expect(pick.getByText("a step, not a tool")).toBeTruthy();
+  expect(pick.getByText("The model names the tables it needs from an outline of table names. Contura sends only those.")).toBeTruthy();
+  expect(pick.getByText("Ask, large databases")).toBeTruthy();
+  expect(pick.getByText("Follows the privacy switch")).toBeTruthy();
+  const run = within(rows[2]);
+  expect(run.getByText("Run SQL or read rows")).toBeTruthy();
+  expect(run.getByText("not available")).toBeTruthy();
+  expect(run.getByText("No model can run anything on a database. Answers are text: only Run in the editor touches a database.")).toBeTruthy();
+  expect(run.getByText("Nowhere")).toBeTruthy();
+  expect(run.getByText("Never")).toBeTruthy();
+  expect(rows[2].className).toContain("off");
+});
+
+test("settings_search_finds_pick_tables", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  for (const query of ["pick tables", "outline", "tools"]) {
+    const view = renderWithProviders(
+      <SearchContext.Provider value={query}>
+        <AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />
+      </SearchContext.Provider>,
+    );
+    expect(await screen.findByRole("heading", { name: "Tools the assistant can use" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Let the assistant pick tables in large databases" })).toBeTruthy();
+    view.unmount();
+  }
+});
+
+test("refetch_on_key_change", async () => {
+  let last4 = "3f9a";
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: GROQ, keySaved: true, keyLast4: last4 }),
+    ai_models: () => modelList([modelInfo()], Date.now()),
+    save_ai_settings: (a) => {
+      if ((a.key as { t: string }).t === "set") last4 = "9z9z";
+    },
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  await screen.findByText("Fetched just now");
+  expect(callsTo("ai_models")).toHaveLength(1);
+  await userEvent.type(screen.getByLabelText("API key"), "gsk_new_key_9z9z");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(callsTo("ai_models")).toHaveLength(2));
+});
+
+test("openrouter_key_is_separate", async () => {
+  const OPENAI: AiSettings = { ...GROQ, provider: "openai", preset: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" };
+  let saved = OPENAI;
+  settingsRoutes({
+    // The OpenRouter preset has its own key account, with no key in it yet.
+    ai_settings: () =>
+      saved.preset === "OpenRouter" ? aiView({ settings: saved }) : aiView({ settings: saved, keySaved: true, keyLast4: "aaaa" }),
+    save_ai_settings: (a) => {
+      saved = a.settings as AiSettings;
+    },
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("••••••••aaaa")).toBeTruthy();
+  await choose("Preset", "OpenRouter");
+  await waitFor(() => expect(screen.queryByText("••••••••aaaa")).toBeNull());
+  expect(screen.queryByRole("button", { name: "Remove the saved API key" })).toBeNull();
+  await choose("Preset", "OpenAI");
+  expect(await screen.findByText("••••••••aaaa")).toBeTruthy();
+});
+
+test("models_fetch_failure_keeps_builtin", async () => {
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: GROQ, keySaved: true, keyLast4: "3f9a" }),
+    ai_models: () => {
+      throw { kind: "ai", message: { kind: "network", host: "api.groq.com" } };
+    },
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("Could not fetch the model list. Showing the built-in one.")).toBeTruthy();
+  expect(screen.queryByText(/^Fetched/)).toBeNull();
+  expect(await optionsOf("Model")).toEqual([
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "Type a name...",
+  ]);
+  // Free text still works.
+  await choose("Model", "Type a name...");
+  const typed = screen.getByRole("textbox", { name: "Model" });
+  await userEvent.type(typed, "my-model{Enter}");
+  await waitFor(() => expect((lastAi().settings as AiSettings).model).toBe("my-model"));
+});
+
+test("models_fetch_refused_for_a_new_host_says_why", async () => {
+  // The Core refuses before sending: the saved key belongs to another host.
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: { ...GROQ, baseUrl: "https://openrouter.ai/api/v1" }, keySaved: true, keyLast4: "3f9a" }),
+    ai_models: () => {
+      throw { kind: "ai", message: { kind: "keyHostChanged", host: "openrouter.ai" } };
+    },
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("The base URL now points to openrouter.ai. Save the key again to send it there.")).toBeTruthy();
+  expect(screen.queryByText("Could not fetch the model list. Showing the built-in one.")).toBeNull();
+  expect(callsTo("ai_models")).toHaveLength(1);
+});
+
+test("models_not_fetched_without_a_saved_key", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }), ai_models: () => modelList([modelInfo({ id: "x" })], Date.now()) });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("combobox", { name: "Model" });
+  expect(callsTo("ai_models")).toHaveLength(0);
+  expect(screen.queryByRole("button", { name: "Fetch the model list again" })).toBeNull();
+});
+
+test("test_success_text", async () => {
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: GROQ, keySaved: true, keyLast4: "3f9a" }),
+    ai_models: () => modelList([modelInfo()], Date.now()),
+    ai_test: () => ({ model: "openai/gpt-oss-20b", millis: 412 }),
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Test" }));
+  expect(
+    (await screen.findByText("Connected to Groq. openai/gpt-oss-20b replied in 412ms. Only the test prompt was sent.")).textContent,
+  ).toBeTruthy();
 });
 
 test("access_table_rows_use_brand_marks", async () => {
@@ -578,3 +899,132 @@ test("about_has_version_licences_and_note", async () => {
   expect(screen.getByText("Everything Contura keeps is in the data folder next to Contura.exe.")).toBeTruthy();
 });
 
+
+test("a_group_override_does_not_offer_the_privacy_switches", async () => {
+  // F2: Keep the exact text and Share thinking are global, so a Group's own settings leave them out.
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, groupOverride: true }) });
+  renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("switch", { name: "Use different settings for KFC" });
+  expect(screen.queryByRole("switch", { name: "Keep the exact text sent with each answer" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Ask models to share their thinking when they support it" })).toBeNull();
+  expect(screen.getByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
+});
+
+// ---- AI Context (step 11c) ----
+
+const ctxRow = (connectionId: string, agoMs: number, stale: boolean) => ({
+  connectionId,
+  database: "shop",
+  schema: "",
+  builtAt: Date.now() - agoMs,
+  checkedAt: Date.now() - agoMs,
+  stale,
+  tableCount: 6,
+  bytes: 4096,
+});
+
+test("access_table_sync_and_context_columns", async () => {
+  const a = conn("c1", "freight-stg", { aiAccess: "schemaQuery", aiSync: "automatic" });
+  const b = conn("c2", "notes", { dialect: "sqlite", aiAccess: "schemaQueryRows", aiSync: "manual" });
+  const c = conn("c3", "freight-prod", { aiAccess: "never", production: true });
+  settingsRoutes({ ai_context_status: () => [ctxRow("c1", 180_000, false), ctxRow("c2", 2 * 86_400_000 + 60_000, true)] });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a, b, c]} onConnectionSaved={() => {}} />);
+  const table = await screen.findByRole("table", { name: "What AI can see, per Connection" });
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+    "Connection",
+    "Dialect",
+    "AI can see",
+    "Sync",
+    "Context",
+  ]);
+  expect(await within(table).findByText("Synced 3m ago")).toBeTruthy();
+  const stale = within(table).getByText("Stale, synced 2d ago");
+  expect(stale.classList.contains("warn-text")).toBe(true);
+  expect(screen.getByRole("combobox", { name: "Keep the AI context of freight-stg in sync" }).textContent).toContain("Automatically");
+  expect(screen.getByRole("combobox", { name: "Keep the AI context of notes in sync" }).textContent).toContain("Manual");
+  expect(screen.queryByRole("combobox", { name: "Keep the AI context of freight-prod in sync" })).toBeNull();
+  const prodRow = within(table).getAllByRole("row")[3];
+  expect(within(prodRow).getByText("Off").classList.contains("muted")).toBe(true);
+  expect(within(prodRow).getByText("Not built").classList.contains("muted")).toBe(true);
+  expect(callsTo("ai_context_status")).toEqual([{ connectionId: null }]);
+});
+
+test("sync_select_saves", async () => {
+  const a = conn("c1", "freight-stg", { aiSync: "automatic" });
+  settingsRoutes({ set_ai_sync_mode: (args) => ({ ...a, aiSync: args.mode }) });
+  const onConnectionSaved = vi.fn();
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a]} onConnectionSaved={onConnectionSaved} />);
+  await screen.findByRole("table", { name: "What AI can see, per Connection" });
+  await choose("Keep the AI context of freight-stg in sync", "Manual");
+  await waitFor(() => expect(callsTo("set_ai_sync_mode")).toEqual([{ connectionId: "c1", mode: "manual" }]));
+  await waitFor(() => expect(onConnectionSaved).toHaveBeenCalledWith({ ...a, aiSync: "manual" }));
+  expect(callsTo("save_connection")).toHaveLength(0);
+});
+
+test("sync_select_follows_a_change_made_elsewhere_after_a_save", async () => {
+  const a = conn("c1", "freight-stg", { aiSync: "automatic" });
+  settingsRoutes({ set_ai_sync_mode: (args) => ({ ...a, aiSync: args.mode }) });
+  const { rerender } = renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("table", { name: "What AI can see, per Connection" });
+  await choose("Keep the AI context of freight-stg in sync", "Manual");
+  await waitFor(() => expect(callsTo("set_ai_sync_mode")).toHaveLength(1));
+  rerender(<AiSection groupId={null} groupName={null} connections={[{ ...a, aiSync: "manual" }]} onConnectionSaved={() => {}} />);
+  // The Connection form sets it back to Automatically; the table shows the stored value.
+  rerender(<AiSection groupId={null} groupName={null} connections={[{ ...a, aiSync: "automatic" }]} onConnectionSaved={() => {}} />);
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Keep the AI context of freight-stg in sync" }).textContent).toContain("Automatically"));
+});
+
+test("clear_ai_history_names_the_place_and_confirms", async () => {
+  // A Group's own settings are open: the clear buttons stay, since they are not settings.
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, groupOverride: true }), clear_ai_threads: () => undefined });
+  renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Clear AI history..." }));
+  expect(screen.getByText("Clear the AI history of KFC? Every thread in this place is removed.")).toBeTruthy();
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Cancel/ }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(callsTo("clear_ai_threads")).toHaveLength(0);
+
+  const cleared: (string | null)[] = [];
+  const off = onThreadsCleared((place) => cleared.push(place));
+  await userEvent.click(screen.getByRole("button", { name: "Clear AI history..." }));
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "group:g1" }]));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  // An open Assistant panel of that place drops its threads.
+  await waitFor(() => expect(cleared).toEqual(["group:g1"]));
+  off();
+});
+
+test("clear_ai_history_without_a_group_names_ungrouped", async () => {
+  settingsRoutes({ clear_ai_threads: () => undefined });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Clear AI history..." }));
+  expect(screen.getByText("Clear the AI history of Ungrouped? Every thread in this place is removed.")).toBeTruthy();
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "ungrouped" }]));
+});
+
+test("clear_all_ai_data_confirms", async () => {
+  settingsRoutes({ ai_clear_all: () => undefined });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  const button = await screen.findByRole("button", { name: "Clear all AI data..." });
+  expect(button.classList.contains("button-danger-text")).toBe(true);
+  await userEvent.click(button);
+  expect(screen.getByText("Clear all AI data? Every thread and every AI Context is removed. Connections and settings stay.")).toBeTruthy();
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Cancel/ }));
+  expect(callsTo("ai_clear_all")).toHaveLength(0);
+  const cleared: (string | null)[] = [];
+  const off = onThreadsCleared((place) => cleared.push(place));
+  await userEvent.click(screen.getByRole("button", { name: "Clear all AI data..." }));
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(callsTo("ai_clear_all")).toHaveLength(1));
+  await waitFor(() => expect(cleared).toEqual([null]));
+  off();
+});
+
+test("production_help_line", async () => {
+  settingsRoutes();
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("table", { name: "What AI can see, per Connection" });
+  expect(screen.getByText("Production Connections stay at Never: turning Production on also clears their AI Context.")).toBeTruthy();
+});

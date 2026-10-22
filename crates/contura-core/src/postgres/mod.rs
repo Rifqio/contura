@@ -544,6 +544,15 @@ impl Dialect for PostgresDialect {
         )
     }
 
+    async fn schema_fingerprint(&self, database: &str, schema: Option<&str>) -> Result<String> {
+        let schema = snapshot::require_schema(schema)?;
+        let client = self.client(database).await?;
+        browse_result(
+            snapshot::schema_fingerprint(&client, schema).await,
+            self.read_only,
+        )
+    }
+
     async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
         let schema = snapshot::require_schema(path.schema.as_deref())?;
         let client = self.client(&path.database).await?;

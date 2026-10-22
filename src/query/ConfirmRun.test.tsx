@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { RunVerdict } from "../api/types";
@@ -409,4 +409,44 @@ test("a_plain_connection_has_no_prod_chip_and_the_bare_verb", () => {
   );
   expect(screen.queryByText("Production")).toBeNull();
   expect(screen.getByRole("button", { name: "Restore" }).className).toContain("button-primary");
+});
+
+test("assistant_tag", () => {
+  setup({
+    ...VERDICT,
+    writes: 2,
+    statements: [
+      { text: "SELECT pg_sleep(1)", class: "write", byAssistant: true },
+      { text: "UPDATE orders SET status = 'shipped'\nWHERE id = 10482", class: "write", byAssistant: false },
+    ],
+  });
+  const dialog = screen.getByRole("dialog");
+  const tags = Array.from(dialog.querySelectorAll(".sql-block-tag")).map((t) => t.textContent);
+  expect(tags).toEqual(["Written by the assistant", "writes", "writes"]);
+  const first = dialog.querySelectorAll(".sql-block-line")[0];
+  expect(first.textContent).toContain("Written by the assistant");
+  expect(within(dialog).getAllByText("Written by the assistant")).toHaveLength(1);
+});
+
+test("a_flagged_read_says_why_it_is_confirmed", () => {
+  // Final review M2: a read the register made a write names its reason.
+  setup({
+    ...VERDICT,
+    writes: 1,
+    statements: [{ text: "SELECT pg_sleep(60)", class: "write", byAssistant: true, reason: "calls pg_sleep()" }],
+  } as Ask);
+  expect(screen.getByText("Written by the assistant and calls pg_sleep().")).toBeTruthy();
+});
+
+test("several_flagged_reads_name_their_statements", () => {
+  setup({
+    ...VERDICT,
+    writes: 2,
+    statements: [
+      { text: "SELECT 1", class: "read" },
+      { text: "SELECT pg_sleep(60)", class: "write", byAssistant: true, reason: "calls pg_sleep()" },
+      { text: "DELETE FROM t WHERE a = 1", class: "write", byAssistant: true },
+    ],
+  } as Ask);
+  expect(screen.getByText("Statement 2 was written by the assistant and calls pg_sleep().")).toBeTruthy();
 });

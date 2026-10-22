@@ -1,0 +1,4 @@
+data: {"choices":[{"index":0,"delta":{"content":"SEL"},"finish_reason":null}]}
+
+data: {"error":{"message":"Upstream failed for key sk-or-v1-fixture-secret","code":502}}
+

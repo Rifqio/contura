@@ -1,11 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { expect, test, vi } from "vitest";
 import {
+  aiAskStream,
+  aiCancel,
+  aiClearAll,
+  aiClearContext,
+  aiContextChanged,
+  aiContextStatus,
+  aiResync,
+  aiConfirmKeyHost,
+  aiKnownModels,
+  aiModels,
   connectionTarget,
   errorText,
   fileName,
   listSavedQueries,
   runVisualQuery,
+  setAiModelPrefs,
+  setAiSyncMode,
   shortenPath,
   visualQuerySql,
 } from "./client";
@@ -15,10 +27,11 @@ test("fileName_is_the_last_part_of_either_path_style", () => {
   expect(fileName("/home/r/orders.csv")).toBe("orders.csv");
   expect(fileName("orders.csv")).toBe("orders.csv");
 });
-import type { ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
+import type { AiError, AiEvent, AskRequest, ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
 import type { BackupRequest, ExportRequest, ImportRequest, JobEvent, RestoreRequest, ScriptRequest, TransferRequest } from "./types";
 import { DEFAULT_BACKUP_INCLUDE, DEFAULT_EXPORT_OPTIONS, DEFAULT_IMPORT_OPTIONS } from "./types";
 import * as jobs from "./jobs";
+import { contextAge, contextText, formatWindow } from "../settings/ai/providers";
 
 const exportReq: ExportRequest = {
   connectionId: "c1",
@@ -358,11 +371,71 @@ test("error_text_for_safety_errors", () => {
 
 test("error_text_for_ai_errors", () => {
   expect(errorText({ kind: "ai", message: { kind: "notConfigured" } })).toBe("No AI provider is set up. Connect one in Settings.");
-  expect(errorText({ kind: "ai", message: { kind: "notAvailable", provider: "groq" } })).toBe(
-    "Answers from Groq arrive in a later Contura version. Nothing was sent.",
-  );
   expect(errorText({ kind: "ai", message: { kind: "rateLimited", retryAfterSecs: 7 } })).toContain("7s");
   expect(errorText({ kind: "ai", message: { kind: "network", host: "api.groq.com" } })).toContain("api.groq.com");
+});
+
+test("error_text_for_real_provider_errors", () => {
+  const ai = (message: AiError) => errorText({ kind: "ai", message });
+  expect(ai({ kind: "rateLimited", retryAfterSecs: 20 })).toBe("The provider is limiting requests. Try again in 20s.");
+  expect(ai({ kind: "contextFull", used: 192_000, window: 200_000, model: "claude-haiku-4-5" })).toBe(
+    "This thread fills 96% of claude-haiku-4-5's 200K window.",
+  );
+  expect(ai({ kind: "tooBig", needed: 1_300_000, window: 200_000, model: "claude-haiku-4-5" })).toBe(
+    "This question needs 1.3M tokens. claude-haiku-4-5 holds 200K.",
+  );
+  expect(ai({ kind: "tooBig", needed: 1_000_000, window: 128_000, model: "gpt-4o" })).toBe(
+    "This question needs 1M tokens. gpt-4o holds 128K.",
+  );
+  expect(ai({ kind: "tooBig", needed: 999_960, window: 950, model: "tiny" })).toBe("This question needs 1M tokens. tiny holds 950.");
+  expect(ai({ kind: "tls", host: "api.groq.com" })).toBe(
+    "Could not check the certificate of api.groq.com. A proxy or antivirus may be inspecting https.",
+  );
+  expect(ai({ kind: "insecureUrl", host: "10.0.0.5" })).toBe(
+    "Use https for 10.0.0.5. Plain http is allowed only on this PC or a private network.",
+  );
+  expect(ai({ kind: "insecureUrl", host: "" })).toBe("The base URL is not a valid address.");
+  expect(ai({ kind: "keyHostChanged", host: "api.example.com" })).toBe(
+    "The base URL now points to api.example.com. Save the key again to send it there.",
+  );
+  expect(ai({ kind: "timeout", phase: "firstByte" })).toBe("The provider did not answer in time.");
+  expect(ai({ kind: "provider", status: 404, message: "model not found" })).toBe(
+    "The provider returned an error (404): model not found.",
+  );
+  const long = ai({ kind: "provider", status: 500, message: "x".repeat(300) });
+  expect(long.startsWith("The provider returned an error (500): ")).toBe(true);
+  expect(long.length - "The provider returned an error (500): ".length).toBeLessThanOrEqual(200);
+  expect(ai({ kind: "badResponse" })).toBe("The provider's answer could not be read.");
+  expect(ai({ kind: "tooLarge" })).toBe("This Ask is over the size this model accepts, even after trimming.");
+  const builtAt = new Date(2026, 9, 19, 9, 5).getTime();
+  expect(ai({ kind: "contextUnavailable", builtAt })).toBe("Could not check the schema. Using the context from 09:05.");
+  expect(ai({ kind: "overloaded", provider: "groq" })).toBe("Groq is busy right now.");
+  expect(ai({ kind: "urlHasCredentials", host: "x.example" })).toBe(
+    "Remove the user name and password from the base URL. Save the key in the key field instead.",
+  );
+  expect(ai({ kind: "offline" })).toBe("No internet connection.");
+  expect(ai({ kind: "outOfCredit", provider: "anthropic" })).toBe("Your Anthropic Claude account is out of credit.");
+  expect(ai({ kind: "modelRetired", model: "claude-sonnet-4-5" })).toBe("claude-sonnet-4-5 is no longer offered.");
+  expect(ai({ kind: "cancelled" })).toBe("Stopped.");
+  expect(ai({ kind: "busy" })).toBe("An answer is still being written. Stop it first.");
+  expect(ai({ kind: "internal" })).toBe("Something went wrong before the question was sent.");
+});
+
+test("ai_ask_stream_sends_the_request_and_forwards_events", async () => {
+  const mock = vi.mocked(invoke);
+  mock.mockResolvedValue(undefined);
+  const onEvent = vi.fn();
+  const request = { requestId: "r1" } as AskRequest;
+  await aiAskStream(request, onEvent);
+  const call = mock.mock.calls.filter(([c]) => c === "ai_ask_stream").slice(-1)[0];
+  const { events, ...rest } = call[1] as { events: { onmessage: (e: AiEvent) => void } };
+  expect(rest).toEqual({ request });
+  events.onmessage({ type: "delta", text: "hi" });
+  expect(onEvent).toHaveBeenCalledWith({ type: "delta", text: "hi" });
+
+  mock.mockResolvedValue(true);
+  await expect(aiCancel("r1")).resolves.toBe(true);
+  expect(mock).toHaveBeenLastCalledWith("ai_cancel", { requestId: "r1" });
 });
 
 test("visualQuerySql invokes visual_query_sql with id, query and types", async () => {
@@ -438,4 +511,72 @@ test("a_saved_query_without_kind_from_an_older_core_reads_as_sql", async () => {
   const list = await listSavedQueries();
   expect(list[0]).toEqual({ id: "q1", name: "late orders", sql: "SELECT 1", updatedAtMs: 1, connectionId: null, kind: "sql", visualJson: null });
   expect(list[1]).toMatchObject({ kind: "visual", visualJson: '{"version":1}' });
+});
+
+test("format_window_reads_like_the_model_facts", () => {
+  expect(formatWindow(1_000_000)).toBe("1M");
+  expect(formatWindow(1_047_576)).toBe("1M");
+  expect(formatWindow(200_000)).toBe("200K");
+  expect(formatWindow(131_072)).toBe("131K");
+  expect(formatWindow(1_500_000)).toBe("1.5M");
+  expect(formatWindow(8_000)).toBe("8K");
+  expect(formatWindow(8_192)).toBe("8K");
+});
+
+test("model_list_commands_carry_the_group", async () => {
+  const list = { models: [], current: "m", fetchedAt: null };
+  vi.mocked(invoke).mockResolvedValue(list);
+  expect(await aiModels("g1")).toEqual(list);
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_models", { groupId: "g1" });
+  expect(await aiKnownModels(null)).toEqual(list);
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_known_models", { groupId: null });
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  await setAiModelPrefs("g1", "openai/gpt-oss-20b", { thinking: "high", caching: false });
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("set_ai_model_prefs", {
+    groupId: "g1",
+    model: "openai/gpt-oss-20b",
+    picks: { thinking: "high", caching: false },
+  });
+  await aiConfirmKeyHost("g1", "api.example.com");
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_confirm_key_host", { groupId: "g1", host: "api.example.com" });
+});
+
+test("contextAge_latest_and_stale", () => {
+  const row = (builtAt: number, stale: boolean, tableCount: number) => ({
+    connectionId: "c1",
+    database: "shop",
+    schema: "",
+    builtAt,
+    checkedAt: builtAt,
+    stale,
+    tableCount,
+    bytes: 2048,
+  });
+  const now = 10_000_000_000;
+  expect(contextAge([], now)).toEqual({ builtAt: null, stale: false, tables: 0 });
+  expect(contextAge([row(now - 180_000, false, 6), row(now - 600_000, true, 4)], now)).toEqual({
+    builtAt: now - 180_000,
+    stale: true,
+    tables: 10,
+  });
+  expect(contextText({ builtAt: null, stale: false, tables: 0 }, now)).toBe("Not built");
+  expect(contextText({ builtAt: now - 30_000, stale: false, tables: 6 }, now)).toBe("Synced just now");
+  expect(contextText({ builtAt: now - 180_000, stale: false, tables: 6 }, now)).toBe("Synced 3m ago");
+  expect(contextText({ builtAt: now - 2 * 86_400_000, stale: true, tables: 6 }, now)).toBe("Stale, synced 2d ago");
+});
+
+test("ai_context_commands_send_their_shapes", async () => {
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  await setAiSyncMode("c1", "manual");
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("set_ai_sync_mode", { connectionId: "c1", mode: "manual" });
+  await aiContextChanged("c1");
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_context_changed", { connectionId: "c1" });
+  await aiClearContext(null);
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_clear_context", { connectionId: null });
+  await aiClearAll();
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_clear_all", {});
+  await aiContextStatus("c1");
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_context_status", { connectionId: "c1" });
+  await aiResync("c1", "shop", null);
+  expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_resync", { connectionId: "c1", database: "shop", schema: null });
 });

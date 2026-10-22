@@ -642,6 +642,7 @@ impl ConnectionService {
             });
         }
         if applied > 0 {
+            ctx.mark_ai_context_stale(target.id);
             let (outcome, error) = match &result {
                 Ok(()) => (Outcome::Ok, None),
                 Err(Error::SyncCancelled { .. }) => (Outcome::Cancelled, None),

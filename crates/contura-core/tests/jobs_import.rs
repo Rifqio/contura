@@ -131,6 +131,7 @@ fn input(kind: DialectKind, place: &Place, name: &str) -> ConnectionInput {
         file: place.file.clone(),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: false,
         read_only: false,
     }

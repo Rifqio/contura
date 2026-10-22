@@ -119,6 +119,7 @@ fn input(kind: DialectKind, setup: Setup) -> ConnectionInput {
         file: None,
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: setup.production,
         read_only: false,
     }
@@ -1445,6 +1446,7 @@ async fn sql_export_loads_back_sqlite() {
         file: Some(file.clone()),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: false,
         read_only: false,
     };

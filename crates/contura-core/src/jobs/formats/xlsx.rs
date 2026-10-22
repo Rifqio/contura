@@ -22,6 +22,7 @@ use super::{
     BUF_BYTES, FileRecord, FormatWriter, MAX_RECORD_BYTES, RecordReader, WriteSummary,
     header_names, read_err, value_text,
 };
+use crate::common::grouped;
 use crate::edits::is_number;
 use crate::error::{Error, Result};
 use crate::jobs::paths::{HashingReader, HeldFile, PartialFile, PartialWriter, PathUse};
@@ -354,19 +355,6 @@ impl FormatWriter for XlsxWriter {
     fn finish(self: Box<Self>) -> Result<PartialWriter> {
         (*self).end()
     }
-}
-
-/// `n` with a comma between thousands.
-pub(crate) fn grouped(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, d) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(d);
-    }
-    out
 }
 
 /// The refusal for a workbook with more data rows than Excel import takes.

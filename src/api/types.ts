@@ -24,6 +24,8 @@ export interface ConnectionConfig {
   queryTimeoutSecs: number | null;
   /** What the AI assistant may see of this Connection. */
   aiAccess: AiAccess;
+  /** When its AI Context is checked against the schema. The Core always sends it; absent reads Automatic. */
+  aiSync?: AiSyncMode;
   /** Writes ask for confirmation first. */
   production: boolean;
   /** Writes are blocked by the Core and refused by the server. */
@@ -179,6 +181,8 @@ export interface ConnectionInput {
   queryTimeoutSecs: number | null;
   /** What the AI assistant may see of this Connection. */
   aiAccess: AiAccess;
+  /** Left out, the stored mode is kept (a new Connection gets Automatic). */
+  aiSync?: AiSyncMode;
   production: boolean;
   readOnly: boolean;
 }
@@ -740,6 +744,10 @@ export type StatementClass = "read" | "write";
 export interface PlannedStatement {
   text: string;
   class: StatementClass;
+  /** In the AI SQL register: a Production confirmation tags it "Written by the assistant" (R6.5). */
+  byAssistant?: boolean;
+  /** Why a read from an answer counts as a write here (R6.4), to follow "Written by the assistant and": "calls pg_sleep()". */
+  reason?: string;
 }
 
 export type RunVerdict =
@@ -850,6 +858,48 @@ export interface DataFolderInfo {
 }
 export type AiAccess = "never" | "schema" | "schemaQuery" | "schemaQueryRows";
 
+/** Automatic checks the schema on an Ask (at most once a minute); Manual waits for Re-sync. */
+export type AiSyncMode = "automatic" | "manual";
+
+// The AI Context. Mirrors crates/contura-core/src/ai/context (store.rs, sync.rs).
+
+/** One AI Context: a Connection's database and schema; schema is "" when the Dialect has none. */
+export interface ContextKey {
+  connectionId: ConnectionId;
+  database: string;
+  schema: string;
+}
+
+/** One stored AI Context, for the AI access table and the Connection form. Times are ms since the epoch. */
+export interface ContextStatusRow extends ContextKey {
+  builtAt: number;
+  checkedAt: number;
+  stale: boolean;
+  tableCount: number;
+  bytes: number;
+}
+
+export type RebuildReason = "first" | "changed" | "stale" | "asked";
+
+/** What the schema check found: "failed" keeps the last Context, "missing" means none is stored. */
+export type SchemaCheck =
+  | { kind: "match" }
+  | { kind: "recent" }
+  | { kind: "rebuilt"; reason: RebuildReason }
+  | { kind: "stale" }
+  | { kind: "unchecked" }
+  | { kind: "failed" }
+  | { kind: "missing" };
+
+/** The AI Context after a check or Re-sync; `builtAt` is null when there is none. */
+export interface ContextInfo extends ContextKey {
+  sync: AiSyncMode;
+  builtAt: number | null;
+  tableCount: number;
+  stale: boolean;
+  check: SchemaCheck;
+}
+
 export type AiProviderKind = "openai" | "anthropic" | "groq" | "deepseek" | "custom";
 
 export interface AiSettings {
@@ -859,9 +909,71 @@ export interface AiSettings {
   model: string;
   temperature: number | null;
   maxTokens: number | null;
+  /** The model's context window in tokens; unset means 8,000 (Anthropic is always 200,000). */
+  contextWindow?: number | null;
   inlineAsk: boolean;
   errorAsk: boolean;
   newConnectionAccess: AiAccess;
+  /** The host the saved key was entered for; set by the Core, never by the UI. */
+  keyHost?: string | null;
+  /** The thinking level a model with no tier starts at. */
+  defaultThinking: ThinkingLevel;
+  /** Whether a model with cache marks starts with them on. */
+  promptCaching: boolean;
+  shareThinking: boolean;
+  /** "Keep the exact text sent with each answer" (R7.2). */
+  keepExactText: boolean;
+  /** "Let the assistant pick tables in large databases": sends an outline of table names (step 11d). */
+  pickTables: boolean;
+  /** The picks remembered per model id, already clamped by the Core. */
+  modelPrefs: Record<string, ModelPicks>;
+}
+
+// Model capability records. Mirrors crates/contura-core/src/ai/models.rs.
+
+export type ThinkingLevel = "off" | "low" | "medium" | "high";
+
+/** How the model thinks before it answers, if it does. */
+export type ThinkingKind = "none" | "anthropicEffort" | "anthropicBudget" | "reasoningEffort";
+
+/** How thinking Off is sent; `notAllowed` means the model always thinks. */
+export type ThinkingOff = "omit" | "notAllowed" | "disabled" | "betweenTools" | "effortNone";
+
+/** `breakpoints`: cache marks the user can switch off; `automatic`: the provider caches on its own. */
+export type CachingKind = "none" | "breakpoints" | "automatic";
+
+export type ModelTier = "largest" | "mid" | "fastest";
+
+/** The thinking level and caching switch picked for one model. */
+export interface ModelPicks {
+  thinking: ThinkingLevel;
+  caching: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  contextWindow: number;
+  maxOutput: number | null;
+  thinking: ThinkingKind;
+  thinkingOff: ThinkingOff;
+  sharesThinking: boolean;
+  caching: CachingKind;
+  /** Whether the model takes a temperature. */
+  temperature: boolean;
+  maxTokensField: "maxTokens" | "maxCompletionTokens";
+  tier: ModelTier | null;
+  /** False when neither the built-in table nor the listing says anything about it. */
+  known: boolean;
+  /** The picks for this model, already clamped. */
+  picks: ModelPicks;
+}
+
+export interface ModelList {
+  models: ModelInfo[];
+  current: string;
+  /** When the listing was fetched, epoch milliseconds; null before the first fetch. */
+  fetchedAt: number | null;
 }
 
 /** The saved key never comes back: only whether one is saved and its last 4 characters. */
@@ -876,19 +988,291 @@ export type KeyChange = { t: "keep" } | { t: "set"; value: string } | { t: "clea
 
 export type AiError =
   | { kind: "notConfigured" }
-  | { kind: "notAvailable"; provider: AiProviderKind }
   | { kind: "badKey" }
   | { kind: "rateLimited"; retryAfterSecs: number | null }
-  | { kind: "network"; host: string };
+  | { kind: "network"; host: string }
+  | { kind: "keyHostChanged"; host: string }
+  | { kind: "insecureUrl"; host: string }
+  | { kind: "timeout"; phase: string }
+  | { kind: "cancelled" }
+  | { kind: "provider"; status: number; message: string }
+  | { kind: "badResponse" }
+  | { kind: "tooLarge" }
+  /** Epoch milliseconds of the context still in use. */
+  | { kind: "contextUnavailable"; builtAt: number }
+  | { kind: "overloaded"; provider: AiProviderKind }
+  | { kind: "urlHasCredentials"; host: string }
+  | { kind: "offline" }
+  | { kind: "outOfCredit"; provider: AiProviderKind }
+  | { kind: "modelRetired"; model: string }
+  | { kind: "contextFull"; used: number; window: number; model: string }
+  | { kind: "tooBig"; needed: number; window: number; model: string }
+  /** The TLS handshake failed: an untrusted certificate, or a proxy inspecting https. */
+  | { kind: "tls"; host: string }
+  /** Another Ask in this place is still being written. */
+  | { kind: "busy" }
+  | { kind: "internal" };
 
-export interface AiRequest {
+// One Ask and its preview. Mirrors crates/contura-core/src/ai/{request,preview,budget,log}.rs.
+
+/** One kind of item an Ask can send. */
+export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline";
+
+export interface TableRef {
+  schema: string | null;
+  name: string;
+}
+
+/** What the place the Ask came from was showing. */
+export interface Focus {
+  sql: string | null;
+  selection: string | null;
+  error: string | null;
+  filter: string | null;
+  dbml: string | null;
+  tables: TableRef[];
+  /** A Schema Model not tied to any Connection: with no Connection, its DBML may go and nothing else (R1.4). */
+  untiedModel: boolean;
+}
+
+export interface Switches {
+  rows: boolean;
+  values: boolean;
+}
+
+export interface AskRequest {
+  requestId: string;
+  /** The drafts place key: "ungrouped" or "group:<id>". */
+  place: string;
+  groupId: GroupId | null;
+  connectionId: ConnectionId | null;
+  database: string | null;
+  schema: string | null;
+  action: string;
   question: string;
-  payload: string;
+  threadId: string | null;
+  focus: Focus;
+  switches: Switches;
+  /** Kinds switched off in the Sends list; it can only remove items. */
+  off: ItemKind[];
+  /** The model picked for this Ask; absent or null asks the settings' model. */
+  model?: string | null;
+  /** The picker's thinking and caching picks; the Core clamps them to the model. */
+  picks?: ModelPicks | null;
 }
 
-export interface AiAnswer {
-  text: string;
+/** One row of the Sends list, measured after cleaning. */
+export interface PreviewItem {
+  kind: ItemKind;
+  label: string;
+  bytes: number;
+  tokens: number;
+  /** Why the item cannot be switched on, when it cannot. */
+  locked: string | null;
+  on: boolean;
 }
+
+/** How the table cards fit the budget: demoted to names only before they are left out. Mirrors `TableFit`. */
+export interface TableFit {
+  full: string[];
+  namesOnly: string[];
+  leftOut: string[];
+  /** (table, rule, evidence) for every table offered, in the order offered. */
+  reasons: [string, string, string][];
+}
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+export interface LogLine {
+  /** Milliseconds since the log started. */
+  atMs: number;
+  level: LogLevel;
+  source: string;
+  /** Key and value pairs in push order. */
+  fields: [string, string][];
+}
+
+/** What one Ask would send, built by the Core. */
+export interface Preview {
+  items: PreviewItem[];
+  tables: TableFit;
+  totalBytes: number;
+  /** An estimate from bytes, measured after framing. */
+  tokens: number;
+  /** What "Show exactly" displays, byte for byte. */
+  exact: string;
+  notes: string[];
+  log: LogLine[];
+  /** The AI Context the preview read; null with no Connection, at AI access Never, or with the schema off or locked. */
+  context: ContextInfo | null;
+  /** The outline step an Ask would send first, when the Core would run one; absent or null otherwise. */
+  outline?: OutlinePreview | null;
+}
+
+/** The outline step of a preview: how big the outline is and the exact text it would send. */
+export interface OutlinePreview {
+  tables: number;
+  areas: number;
+  level: number;
+  exact: string;
+}
+
+/** Why an answer ended. Mirrors `StopReason` in crates/contura-core/src/ai/provider. */
+export type StopReason = "end" | "length" | "refusal" | "tooLong" | "dropped";
+
+/** Token counts the provider reported for one answer. */
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** What one Ask sent, measured from the request itself (R7.1). Mirrors `SentRecord` in crates/contura-core/src/ai/sent.rs. */
+export interface SentRecord {
+  /** Epoch milliseconds. */
+  at: number;
+  /** The kinds of the Sends items that went. */
+  kinds: ItemKind[];
+  bytes: number;
+  /** About: an estimate from bytes. */
+  tokens: number;
+  provider: AiProviderKind;
+  model: string;
+  modelName: string;
+  /** The host (with `:port` when not the default); never the URL. */
+  host: string;
+  /** FNV-1a 64 of the texts sent, 16 lower-case hex digits. */
+  hash: string;
+  outlineCall: boolean;
+  summaryCall: boolean;
+  /**
+   * The outline call, once its request left this PC; absent in records saved before it existed. With `bytes` 0 only
+   * the outline call went: the Ask ended before its main request was sent.
+   */
+  outline?: OutlineSent | null;
+  /** The exact text, only with "Keep the exact text sent" on (R7.2). */
+  exact: string | null;
+}
+
+/** The outline call of an Ask, measured from its request. Mirrors `OutlineSent` in sent.rs. */
+export interface OutlineSent {
+  bytes: number;
+  tokens: number;
+  hash: string;
+  pickedAreas: number;
+  pickedTables: number;
+  dropped: number;
+  usage: Usage | null;
+  /** The outline call's exact text, only with "Keep the exact text sent" on. */
+  exact: string | null;
+  /** The request left this PC. The Core keeps an outline record only once it did, and reads an older record as true. */
+  left: boolean;
+}
+
+/** One Steps row of the answer log. Mirrors `StepKind` (camelCase). */
+export type StepKind = "access" | "schema" | "tables" | "cleaning" | "request" | "thinking" | "answer" | "sqlCheck" | "outline";
+
+/** A Steps row in fixed wording, filled by the Core from what ran. Mirrors `ProcessStep`. */
+export interface ProcessStep {
+  step: StepKind;
+  /** Milliseconds since the Ask's log started. */
+  atMs: number;
+  value: string;
+  rule: string;
+  /** The evidence table, three cells per row. */
+  evidence: [string, string, string][];
+  /** Text from the provider (Thinking, Answer), not from Contura. */
+  byModel: boolean;
+  /** Only on the Tables row: how many tables were left out. */
+  leftOut?: number;
+}
+
+/** How an answer ended when it did not end normally. Mirrors `AnswerMark`. */
+export type AnswerMark = "stopped" | "length" | "refusal" | "dropped" | "tooLong" | "failed";
+
+/** What the user did with an answer's SQL. Mirrors `AnswerActionKind`. */
+export type AnswerActionKind = "inserted" | "insertedCommented" | "openedInNewTab";
+
+/** Mirrors `AnswerAction`; `at` is epoch milliseconds. */
+export interface AnswerAction {
+  kind: AnswerActionKind;
+  at: number;
+}
+
+/** Everything kept with an assistant message besides its text. Mirrors `AnswerRecord`; every field may be absent on read. */
+export interface AnswerRecord {
+  sent: SentRecord | null;
+  usage: Usage | null;
+  millis: number | null;
+  stop: StopReason | null;
+  mark: AnswerMark | null;
+  error: AiError | null;
+  sqlBlocks: SqlBlock[];
+  notes: string[];
+  /** As the provider returned it, at most 64 KB. */
+  thinking: string | null;
+  log: LogLine[];
+  steps: ProcessStep[];
+  /** What the user did with the answer's SQL, oldest first: the Diagram's "You:" boxes. */
+  actions: AnswerAction[];
+  /** The AI Context the Ask used, written by the Core; null when no schema was asked for and in older records. */
+  context: ContextInfo | null;
+  /** The text of a failure that is not an AiError (a command that could not start), at most 2 KB. */
+  commandError: string | null;
+}
+
+/** One event of a streamed Ask, in order. Mirrors `AiEvent` (serde tag "type"). */
+export type AiEvent =
+  | ({ type: "log" } & LogLine)
+  /** The Sent record, once the request is built and before the first attempt. */
+  | ({ type: "sent" } & SentRecord)
+  /** One Steps row, as it completes. */
+  | ({ type: "process" } & ProcessStep)
+  /** The AI Context the Ask uses, once, right after the Schema row. */
+  | { type: "context"; info: ContextInfo }
+  | { type: "status"; step: string }
+  | { type: "thinking"; text: string }
+  /** The whole thinking, redacted again over the joined chunks; replaces what the chunks built up. */
+  | { type: "thinkingKept"; text: string }
+  | { type: "delta"; text: string }
+  | {
+      type: "done";
+      usage: Usage | null;
+      stop: StopReason;
+      sentBytes: number;
+      model: string;
+      provider: AiProviderKind;
+      millis: number;
+      /** Shown above the answer: the injection note (R5.4), the query-share note, the unreadable schema note. */
+      notes: string[];
+      sqlBlocks: SqlBlock[];
+    }
+  | { type: "error"; error: AiError; partial: boolean };
+
+/** What the output rail found in one statement of an answer (R5.3). Mirrors `Flag` (serde tag "kind"). */
+export type Flag =
+  | { kind: "noWhere"; verb: string }
+  | { kind: "riskyFunction"; name: string }
+  | { kind: "unknownFunction"; name: string }
+  | { kind: "writeInReadAnswer" }
+  | { kind: "readOnlyConnection" };
+
+/** One statement of an answer's SQL block, classified as Run classifies it. */
+export interface StatementCheck {
+  text: string;
+  class: StatementClass;
+  flags: Flag[];
+}
+
+/** A fenced SQL block of an answer: its index among all fences, its label and its statements (R5.2). */
+export interface SqlBlock {
+  fence: number;
+  label: string;
+  statements: StatementCheck[];
+}
+
+export type AiDone = Extract<AiEvent, { type: "done" }>;
 
 export type AiRole = "user" | "assistant" | "notice";
 
@@ -897,6 +1281,8 @@ export interface AiMessage {
   text: string;
   context: string[];
   at: number;
+  /** What an assistant answer sent and did, kept with the thread; absent on questions and older answers. */
+  record?: AnswerRecord;
 }
 
 export interface AiThread {

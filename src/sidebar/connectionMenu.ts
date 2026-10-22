@@ -17,6 +17,8 @@ export interface ConnectionMenuActions {
   duplicate(): void;
   copyHost(): void;
   refresh(): void;
+  /** "Re-sync AI context"; the item shows only when set, and never at AI access Never. */
+  resync?(): void;
   move(to: GroupId | null): void;
   newGroup(): void;
   clearHistory(): void;
@@ -76,6 +78,9 @@ export function connectionMenu(c: ConnectionConfig, ctx: ConnectionMenuContext, 
       disabled: !ctx.open,
       onSelect: act.refresh,
     },
+    ...(act.resync && c.aiAccess !== "never"
+      ? [{ key: "resync", label: "Re-sync AI context", icon: icon("refresh"), onSelect: act.resync }]
+      : []),
     { key: "move", label: "Move to Group", icon: icon("folder"), submenu: moveTo },
     {
       key: "clear-history",

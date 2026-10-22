@@ -1,0 +1,10 @@
+: OPENROUTER PROCESSING
+
+data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning":"The user wants a count."},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"content":"SELECT 1;"},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

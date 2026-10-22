@@ -472,6 +472,12 @@ impl Dialect for SqliteDialect {
             .await
     }
 
+    async fn schema_fingerprint(&self, database: &str, _schema: Option<&str>) -> Result<String> {
+        let database = database.to_string();
+        self.run(move |c| snapshot::schema_fingerprint(c, &database))
+            .await
+    }
+
     async fn table_design(&self, path: &ObjectPath) -> Result<crate::design::TableDesign> {
         let path = path.clone();
         self.run(move |c| snapshot::table_design(c, &path)).await

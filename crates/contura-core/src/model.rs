@@ -10,6 +10,16 @@ pub const PREVIEW_CHARS: usize = 1024;
 pub const PREVIEW_BYTES: usize = 1024;
 pub const FULL_VALUE_LIMIT: u64 = 16 * 1024 * 1024;
 
+/// When an Ask checks the AI Context against the database: `Automatic` before an Ask
+/// (at most once a minute), `Manual` only on Re-sync.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AiSyncMode {
+    #[default]
+    Automatic,
+    Manual,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DialectKind {
@@ -53,6 +63,9 @@ pub struct ConnectionConfig {
     /// What the AI assistant may see of this Connection.
     #[serde(default)]
     pub ai_access: AiAccess,
+    /// When the AI Context is checked against the database.
+    #[serde(default)]
+    pub ai_sync: AiSyncMode,
     /// Writes ask for confirmation first.
     #[serde(default)]
     pub production: bool,

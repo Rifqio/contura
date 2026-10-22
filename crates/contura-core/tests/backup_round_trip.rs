@@ -110,6 +110,7 @@ impl Rt {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         };
@@ -416,6 +417,7 @@ impl Rt {
             file: (self.kind == DialectKind::Sqlite).then(|| PathBuf::from(db)),
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         };

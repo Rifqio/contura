@@ -35,6 +35,12 @@ flate2 = "1"
 url = "2"
 # The zip calamine reads with, for the unpacked-size check before it opens a workbook.
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
+# Secret shapes the AI input rail redacts; already in the tree.
+regex = "1"
+# The one HTTP client for AI providers (ai/provider/http.rs); TLS is rustls with ring and
+# the OS certificate store, so no aws-lc-rs enters the tree.
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls-manual-roots-no-provider", "system-proxy"] }
+rustls-platform-verifier = "0.7"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
@@ -45,4 +51,6 @@ test-util = []
 
 [dev-dependencies]
 tempfile = "3"
+# The mock HTTP server in tests/support/mock_http.rs.
+tokio = { version = "1", features = ["net", "io-util"] }
 contura-core = { path = ".", features = ["test-util"] }

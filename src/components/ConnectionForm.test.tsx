@@ -189,6 +189,7 @@ test("sqlite_hides_server_fields_and_saves_the_file", async () => {
     groupId: null,
     queryTimeoutSecs: null,
     aiAccess: "schema",
+    aiSync: "automatic",
     production: false,
     readOnly: false,
   });
@@ -483,6 +484,7 @@ test("fields_follow_the_design_order", () => {
     "SSL",
     "Query timeout",
     "AI access",
+    "Keep context in sync",
     "Safety",
   ]);
 });
@@ -638,4 +640,120 @@ test("saving_asks_before_save_first_and_a_no_keeps_the_form_q43", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
   expect(callsTo("save_connection")).toHaveLength(1);
+});
+
+// ---- AI Context (step 11c) ----
+
+const syncSelect = () => screen.queryByRole("combobox", { name: "Keep context in sync" }) as HTMLButtonElement | null;
+
+function renderSaved(connection: ConnectionConfig, isOpen = true) {
+  const onSaved = vi.fn();
+  render(
+    <ConnectionForm connection={connection} isOpen={isOpen} groups={groups} defaultGroupId={null} onSaved={onSaved} onCancel={() => {}} />,
+  );
+  return onSaved;
+}
+
+const info = (over: Record<string, unknown> = {}) => ({
+  connectionId: "c1",
+  database: "shop",
+  schema: "",
+  sync: "automatic",
+  builtAt: Date.now(),
+  tableCount: 42,
+  stale: false,
+  check: { kind: "rebuilt", reason: "asked" },
+  ...over,
+});
+
+test("sync_select_saved_with_the_form", async () => {
+  routeInvoke({ ai_context_status: () => [], save_connection: () => existing });
+  const onSaved = renderSaved({ ...existing, aiSync: "manual" });
+  expect(syncSelect()!.textContent).toContain("Manual");
+  await userEvent.click(syncSelect()!);
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Automatically", "Manual"]);
+  await userEvent.click(screen.getByRole("option", { name: "Automatically" }));
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(callsTo("save_connection")[0].input).toMatchObject({ aiSync: "automatic" });
+  expect(callsTo("set_ai_sync_mode")).toHaveLength(0);
+});
+
+test("a_new_connection_shows_only_the_sync_select", async () => {
+  routeInvoke({ save_connection: () => existing });
+  const onSaved = renderNew();
+  expect(syncSelect()!.textContent).toContain("Automatically");
+  expect(screen.queryByRole("button", { name: "Re-sync now" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Clear AI context" })).toBeNull();
+  await userEvent.type(screen.getByLabelText("Name"), "Laragon");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(callsTo("save_connection")[0].input).toMatchObject({ aiSync: "automatic" });
+});
+
+test("resync_now_shows_synced", async () => {
+  let release: () => void = () => {};
+  routeInvoke({
+    ai_context_status: () => [],
+    ai_resync: () => new Promise((resolve) => (release = () => resolve(info()))),
+  });
+  renderSaved({ ...existing, database: "shop" });
+  expect(await screen.findByText("Not built")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Re-sync now" }));
+  expect(await screen.findByText("Re-syncing...")).toBeTruthy();
+  release();
+  expect(await screen.findByText("Synced just now, 42 tables")).toBeTruthy();
+  expect(callsTo("ai_resync")).toEqual([{ connectionId: "c1", database: "shop", schema: null }]);
+});
+
+test("resync_now_shows_the_error_under_the_row", async () => {
+  routeInvoke({
+    ai_context_status: () => [],
+    ai_resync: () => {
+      throw { kind: "invalidInput", message: "AI access is Never for this Connection." };
+    },
+  });
+  renderSaved(existing);
+  await userEvent.click(await screen.findByRole("button", { name: "Re-sync now" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("AI access is Never for this Connection.");
+});
+
+test("resync_on_a_closed_connection_asks_to_open_it", async () => {
+  routeInvoke({ ai_context_status: () => [], ai_resync: () => info({ builtAt: null, tableCount: 0, check: { kind: "missing" } }) });
+  renderSaved(existing, false);
+  await userEvent.click(await screen.findByRole("button", { name: "Re-sync now" }));
+  expect((await screen.findByRole("alert")).textContent).toBe("Open the Connection to re-sync.");
+});
+
+test("clear_ai_context_shows_not_built", async () => {
+  routeInvoke({
+    ai_context_status: () => [
+      { connectionId: "c1", database: "shop", schema: "", builtAt: Date.now() - 180_000, checkedAt: Date.now(), stale: false, tableCount: 6, bytes: 900 },
+    ],
+    ai_clear_context: () => undefined,
+  });
+  renderSaved(existing);
+  expect(await screen.findByText("Synced 3m ago")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Clear AI context" }));
+  expect(screen.getByText("Clear the AI context of Local MySQL? Its stored table summaries are removed. They are built again when you open the assistant or Ask.")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Keep it" }));
+  expect(callsTo("ai_clear_context")).toHaveLength(0);
+  expect(screen.getByText("Synced 3m ago")).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", { name: "Clear AI context" }));
+  await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+  expect(await screen.findByText("Not built")).toBeTruthy();
+  expect(callsTo("ai_clear_context")).toEqual([{ connectionId: "c1" }]);
+});
+
+test("never_hides_sync_controls", async () => {
+  routeInvoke({ ai_context_status: () => [] });
+  renderSaved({ ...existing, aiAccess: "never" });
+  expect(syncSelect()).toBeNull();
+  expect(screen.queryByRole("button", { name: "Re-sync now" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Clear AI context" })).toBeNull();
+  await chooseAi("Schema only");
+  expect(syncSelect()).not.toBeNull();
+  await chooseAi("Never send anything");
+  expect(syncSelect()).toBeNull();
 });

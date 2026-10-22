@@ -97,6 +97,7 @@ export function FormDialogs({
       {form.kind === "connection" && (
         <ConnectionForm
           connection={form.connection}
+          isOpen={form.connection ? openIds.has(form.connection.id) : false}
           duplicateOf={form.duplicateOf}
           groups={groups}
           defaultGroupId={workspaceGroupId}

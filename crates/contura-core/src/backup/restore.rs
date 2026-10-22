@@ -27,13 +27,13 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::format::{BackupFile, BackupHeader, Trailer, read_header};
+use crate::common::grouped;
 use crate::common::{quote_double, sql_ident, sql_string};
 use crate::dialect::Dialect;
 use crate::error::{Error, Result};
 use crate::jobs::FileIdentity;
 use crate::jobs::fingerprint::{JobPlan, job_fingerprint};
 use crate::jobs::formats::sql::dialect_name as dialect_label;
-use crate::jobs::formats::xlsx::grouped;
 use crate::jobs::paths::hex;
 use crate::jobs::script::{
     DdlCounts, Facts, Name, ScriptReader, calls_sequence_write, created_object,
@@ -1578,6 +1578,8 @@ fn planned(dialect: DialectKind, text: String) -> PlannedStatement {
     PlannedStatement {
         class: classify(dialect, &text),
         text,
+        by_assistant: false,
+        reason: None,
     }
 }
 

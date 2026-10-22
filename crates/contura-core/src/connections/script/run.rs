@@ -397,6 +397,10 @@ impl ScriptRun {
             Err(Error::Cancelled) => (Outcome::Cancelled, None),
             Err(e) => (Outcome::Error, Some(plain_message(e))),
         };
+        // Anything that ran may have stayed (MySQL commits DDL): the AI Context may be old.
+        if result.is_ok() || c.ran > 0 {
+            self.ctx.mark_ai_context_stale(self.connection_id);
+        }
         self.ctx.history(NewHistory {
             connection_id: self.connection_id,
             sql: format!(

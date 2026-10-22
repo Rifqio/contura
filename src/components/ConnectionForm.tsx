@@ -1,6 +1,9 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useId, useRef, useState } from "react";
 import {
+  aiClearContext,
+  aiContextStatus,
+  aiResync,
   createSqliteDatabase,
   DIALECT_DEFAULTS,
   DIALECT_LABEL,
@@ -12,6 +15,7 @@ import {
 } from "../api/client";
 import type {
   AiAccess,
+  AiSyncMode,
   ConnectionConfig,
   ConnectionInput,
   DialectKind,
@@ -21,7 +25,7 @@ import type {
   SslMode,
   SuggestedConnection,
 } from "../api/types";
-import { AI_ACCESS_OPTIONS } from "../settings/ai/providers";
+import { AI_ACCESS_OPTIONS, contextAge, type ContextAge, contextText, resyncProblem, tablesText } from "../settings/ai/providers";
 import { keysFor } from "../commands/keymap";
 import { keysFromEvent } from "../commands/keys";
 import { useKeymap } from "../commands/useCommandKeys";
@@ -48,7 +52,19 @@ interface Props {
   onCancel: () => void;
   /** Asked right before an edit is saved (saving closes the session, so jobs on it end); false keeps the form. */
   beforeSave?: () => Promise<boolean>;
+  /** Whether the Connection being edited is open: Re-sync reads the catalog of an open Connection only. */
+  isOpen?: boolean;
 }
+
+const SYNC_OPTIONS: { value: AiSyncMode; label: string }[] = [
+  { value: "automatic", label: "Automatically" },
+  { value: "manual", label: "Manual" },
+];
+
+const NOT_BUILT: ContextAge = { builtAt: null, stale: false, tables: 0 };
+
+/** The AI Context line; after a Re-sync it also counts the tables: "Synced just now, 42 tables". */
+type ContextShown = { age: ContextAge; withTables: boolean };
 
 type SslChoice = SslMode["mode"];
 type ServerDialect = keyof typeof DIALECT_DEFAULTS;
@@ -68,7 +84,17 @@ function isExistingFileRefusal(e: unknown): boolean {
   return isCommandError(e) && e.kind === "invalidInput" && e.message.startsWith("a file already exists");
 }
 
-export default function ConnectionForm({ connection, prefill, duplicateOf, groups, defaultGroupId, onSaved, onCancel, beforeSave }: Props) {
+export default function ConnectionForm({
+  connection,
+  prefill,
+  duplicateOf,
+  groups,
+  defaultGroupId,
+  onSaved,
+  onCancel,
+  beforeSave,
+  isOpen = false,
+}: Props) {
   const id = useId();
   const editing = connection !== undefined;
   /** Where the stored settings come from: the Connection being edited, or the one duplicated. */
@@ -94,6 +120,11 @@ export default function ConnectionForm({ connection, prefill, duplicateOf, group
   const [file, setFile] = useState(base?.file ?? "");
   const [groupId, setGroupId] = useState<GroupId | "">((base ? base.groupId : defaultGroupId) ?? "");
   const [aiAccess, setAiAccess] = useState<AiAccess>(base?.aiAccess ?? "schema");
+  const [aiSync, setAiSync] = useState<AiSyncMode>(base?.aiSync ?? "automatic");
+  const [ctx, setCtx] = useState<ContextShown | null>(null);
+  const [ctxBusy, setCtxBusy] = useState<"resync" | "clear" | null>(null);
+  const [ctxError, setCtxError] = useState<string | null>(null);
+  const [askingClear, setAskingClear] = useState(false);
   const [production, setProduction] = useState(base?.production ?? false);
   const [readOnly, setReadOnly] = useState(base?.readOnly ?? false);
   const [busy, setBusy] = useState<"test" | "save" | "create" | null>(null);
@@ -122,6 +153,19 @@ export default function ConnectionForm({ connection, prefill, duplicateOf, group
     // Read once, when the form opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The saved Connection's AI Context, across its databases.
+  const savedId = connection?.id;
+  useEffect(() => {
+    if (!savedId) return;
+    let live = true;
+    aiContextStatus(savedId)
+      .then((rows) => live && setCtx((shown) => shown ?? { age: contextAge(rows, Date.now()), withTables: false }))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [savedId]);
 
   const sqlite = dialect === "sqlite";
   const accessDescription = AI_ACCESS_OPTIONS.find((o) => o.value === aiAccess)?.description ?? "";
@@ -167,6 +211,7 @@ export default function ConnectionForm({ connection, prefill, duplicateOf, group
       groupId: groupId === "" ? null : groupId,
       queryTimeoutSecs: t === "" ? null : Number(t),
       aiAccess: productionIsNew ? "never" : aiAccess,
+      aiSync,
       production,
       readOnly,
     };
@@ -256,6 +301,40 @@ export default function ConnectionForm({ connection, prefill, duplicateOf, group
       setResult({ ok: false, text });
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function onResync() {
+    if (!connection) return;
+    setCtxBusy("resync");
+    setCtxError(null);
+    setAskingClear(false);
+    try {
+      const info = await aiResync(connection.id, connection.database, null);
+      const problem = resyncProblem(info, isOpen);
+      if (problem) setCtxError(problem);
+      else {
+        setCtx({ age: { builtAt: info.builtAt, stale: info.stale, tables: info.tableCount }, withTables: true });
+      }
+    } catch (e) {
+      setCtxError(errorText(e, connection.dialect));
+    } finally {
+      setCtxBusy(null);
+    }
+  }
+
+  async function onClearContext() {
+    if (!connection) return;
+    setAskingClear(false);
+    setCtxBusy("clear");
+    setCtxError(null);
+    try {
+      await aiClearContext(connection.id);
+      setCtx({ age: NOT_BUILT, withTables: false });
+    } catch (e) {
+      setCtxError(errorText(e, connection.dialect));
+    } finally {
+      setCtxBusy(null);
     }
   }
 
@@ -524,6 +603,52 @@ export default function ConnectionForm({ connection, prefill, duplicateOf, group
               <Icon name="warning" />
               <span>{`This is a Production Connection: the assistant will see ${lowerFirst(accessDescription)}.`}</span>
             </p>
+          )}
+          {access !== "never" && (
+            <div className="field">
+              <span className="fl">Keep context in sync</span>
+              <Select value={aiSync} label="Keep context in sync" onChange={setAiSync} options={SYNC_OPTIONS} />
+            </div>
+          )}
+          {access !== "never" && connection && connection.aiAccess !== "never" && (
+            <div className="ai-context" role="group" aria-label="AI context">
+              <span className={ctx?.age.stale && ctx.age.builtAt !== null ? "ai-context-state warn-text" : "ai-context-state muted"}>
+                {ctx &&
+                  (ctx.withTables && ctx.age.builtAt !== null
+                    ? `${contextText(ctx.age, Date.now())}, ${tablesText(ctx.age.tables)}`
+                    : contextText(ctx.age, Date.now()))}
+              </span>
+              <span className="ai-context-actions">
+                <button type="button" className="button button-small" onClick={() => void onResync()} disabled={ctxBusy !== null}>
+                  <Icon name="refresh" size={14} />
+                  {ctxBusy === "resync" ? "Re-syncing..." : "Re-sync now"}
+                </button>
+                <button
+                  type="button"
+                  className="button button-small button-danger-text"
+                  onClick={() => setAskingClear(true)}
+                  disabled={ctxBusy !== null || askingClear}
+                >
+                  Clear AI context
+                </button>
+              </span>
+            </div>
+          )}
+          {askingClear && connection && (
+            <div className="ai-context-ask field-wide" role="group" aria-label="Clear AI context">
+              <span>{`Clear the AI context of ${connection.name}? Its stored table summaries are removed. They are built again when you open the assistant or Ask.`}</span>
+              <button type="button" className="button button-small" onClick={() => setAskingClear(false)}>
+                Keep it
+              </button>
+              <button type="button" className="button button-small button-danger-fill" onClick={() => void onClearContext()}>
+                Clear
+              </button>
+            </div>
+          )}
+          {ctxError && (
+            <span className="field-error field-wide" role="alert">
+              {ctxError}
+            </span>
           )}
           <div className="safety field-wide" role="group" aria-label="Safety">
             <span className="fl">Safety</span>

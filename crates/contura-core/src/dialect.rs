@@ -33,6 +33,10 @@ pub trait Dialect: Send + Sync {
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue>;
     /// Reads one database (MySQL, SQLite) or one schema (Postgres) as a Schema Model. Read only.
     async fn schema_snapshot(&self, database: &str, schema: Option<&str>) -> Result<SchemaModel>;
+    /// A short text that changes when the structure `schema_snapshot` reads changes
+    /// (tables, columns, defaults, keys, indexes, comments, enum labels) and stays equal
+    /// when only rows change. One catalog read, no table scans, no special rights.
+    async fn schema_fingerprint(&self, database: &str, schema: Option<&str>) -> Result<String>;
     /// Reads one table for the Table Designer, with the real names of its indexes and
     /// keys. Read only. `NotFound` with the table's name when there is no such table.
     async fn table_design(&self, path: &ObjectPath) -> Result<TableDesign>;

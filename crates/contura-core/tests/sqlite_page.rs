@@ -50,6 +50,7 @@ async fn open(path: &Path) -> Arc<dyn Dialect> {
         file: Some(path.to_path_buf()),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: false,
         read_only: false,
     };

@@ -48,6 +48,7 @@ async fn sqlite_fixture(production: bool, read_only: bool) -> Fixture {
             file: Some(file),
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production,
             read_only,
         })
@@ -181,6 +182,7 @@ async fn mysql_explain_tree_on_dbview_test() {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         })
@@ -229,6 +231,7 @@ async fn pg_explain_json_is_not_cut() {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: false,
             read_only: false,
         })

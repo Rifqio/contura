@@ -1,12 +1,20 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { SqlEditorApi } from "../query/SqlEditor";
-import { answerText, type RunFn, useQueryTabRefs } from "./queryTabRefs";
+import { answerText, commentedOut, type RunFn, useQueryTabRefs } from "./queryTabRefs";
 
 describe("answerText", () => {
   it("answer_text_ends_with_one_semicolon_and_a_new_line", () => {
     expect(answerText("SELECT 1;  ")).toBe("SELECT 1;\n");
     expect(answerText("SELECT 1")).toBe("SELECT 1;\n");
+  });
+});
+
+describe("commentedOut", () => {
+  it("commented_out", () => {
+    expect(commentedOut("DELETE FROM t\nWHERE a = 1;")).toBe("-- DELETE FROM t\n-- WHERE a = 1;\n");
+    expect(commentedOut("DELETE FROM t;\n")).toBe("-- DELETE FROM t;\n");
+    expect(commentedOut("A\r\nB")).toBe("-- A\n-- B\n");
   });
 });
 

@@ -43,6 +43,18 @@ fn pk_columns(conn: &Connection, database: &str, table: &str) -> Result<Vec<Stri
         .map_err(query_err)
 }
 
+/// The file header's schema cookie, which SQLite bumps on every schema change.
+pub(super) fn schema_fingerprint(conn: &Connection, database: &str) -> Result<String> {
+    let version: i64 = conn
+        .query_row(
+            &format!("PRAGMA {}.schema_version", quote_double(database)),
+            [],
+            |r| r.get(0),
+        )
+        .map_err(query_err)?;
+    Ok(format!("sqlite:{version}"))
+}
+
 pub(super) fn schema_snapshot(conn: &Connection, database: &str) -> Result<SchemaModel> {
     let master = format!("{}.sqlite_master", quote_double(database));
     let mut skipped = Vec::new();

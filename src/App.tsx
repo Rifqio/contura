@@ -1,5 +1,16 @@
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
-import { errorText, fileName, forgetRecent, listConnections, listDiagrams, listGroups, saveConnection, setLastGroup, tableDesign } from "./api/client";
+import {
+  aiContextChanged,
+  errorText,
+  fileName,
+  forgetRecent,
+  listConnections,
+  listDiagrams,
+  listGroups,
+  saveConnection,
+  setLastGroup,
+  tableDesign,
+} from "./api/client";
 import type { ConnectionConfig, ConnectionId, DiagramEntry, Group, GroupId, JobId, ObjectPath, RecentItem, RestoreTarget, SavedQuery } from "./api/types";
 import BackupDialog from "./backup/BackupDialog";
 import RestoreDialog, { type RestoreRun, restoreErrorText } from "./backup/RestoreDialog";
@@ -54,6 +65,7 @@ import TabStrip from "./components/TabStrip";
 import TitleBar from "./components/TitleBar";
 import WorkEmpty from "./components/WorkEmpty";
 import AssistantPanel from "./assistant/AssistantPanel";
+import type { InsertTarget } from "./assistant/InsertDiff";
 import TableDesigner from "./design/TableDesigner";
 import { appLang } from "./lang/appLang";
 import { schemaKey } from "./lang/sql/schemaCache";
@@ -312,6 +324,12 @@ function Workspace() {
   function restoreDone(connectionId: ConnectionId) {
     tree.refresh(connectionId);
     lang.schemas.invalidate(connectionId);
+    schemaMayHaveChanged(connectionId);
+  }
+
+  /** The AI Context is checked again on the next Ask; a failure here changes nothing the user sees. */
+  function schemaMayHaveChanged(connectionId: ConnectionId) {
+    void aiContextChanged(connectionId).catch(() => {});
   }
 
   /** SQLite "Add it as a Connection" (R4): the Core returns the new file; the Connection is added here. */
@@ -886,6 +904,7 @@ function Workspace() {
     connections,
     openPanel: () => setAssistantOpen(true),
     openAiSettings: () => openSettings("ai"),
+    openQuery: (connectionId, text, database) => newQuery(connectionId, text, database ?? undefined),
   });
   // Each Schema Model's live source Connection, kept by tab so a card ask sees the same object between draws.
   const schemaSources = useMemo(
@@ -1030,6 +1049,7 @@ function Workspace() {
     newQuery: (id) => newQuery(id),
     setNotice,
     historyCleared: () => setHistoryRefresh((n) => n + 1),
+    toast: (t) => toast.show(t),
     confirmJobs: (id) => jobsGuard.confirmStop(id),
     confirmImports: (id) => confirmImportsLeave(id),
   });
@@ -1074,7 +1094,9 @@ function Workspace() {
   const historyAllShown = historyOpen && historyAll && current?.kind === "query";
 
   const assistantShown = assistantOpen && !activeWindow;
-  const answerTab = current?.kind === "query" ? current.doc.id : null;
+  // An answer's SQL goes into the active query tab, through the Insert diff.
+  const answerTarget: InsertTarget | null =
+    current?.kind === "query" ? { editor: () => refs.editor(current.doc.id), name: current.doc.name } : null;
   const assistantTarget = assistantTargetFor(current, inPlace);
   const assistantSchema = assistantTarget?.database
     ? lang.client.sqlSchemaFor(schemaKey(assistantTarget.connection.id, assistantTarget.database))
@@ -1215,7 +1237,11 @@ function Workspace() {
               onNewGroup={() => setForm({ kind: "newGroup" })}
               onClearHistory={(id) => void actions.clearHistoryFromTree(id)}
               onDeleteConnection={(id) => void actions.deleteFromTree(id)}
-              onRefresh={(id) => lang.schemas.invalidate(id)}
+              onRefresh={(id) => {
+                lang.schemas.invalidate(id);
+                schemaMayHaveChanged(id);
+              }}
+              onResync={(id) => void actions.resyncFromTree(id)}
               onOpenSaved={openSavedHere}
               onOpenSavedList={openSavedList}
               onSavedChanged={reloadSaved}
@@ -1562,16 +1588,9 @@ function Workspace() {
               seed={chatSeed}
               connections={connections}
               onClose={() => setAssistantOpen(false)}
-              onInsert={answerTab ? (sql) => refs.editor(answerTab)?.insert(answerText(sql)) : undefined}
-              onRun={
-                answerTab
-                  ? async (sql) => {
-                      // The answer goes into the editor first, then runs through the tab's runner (the Production and Read-only checks).
-                      refs.editor(answerTab)?.insert(answerText(sql));
-                      return (await refs.runner(answerTab)?.(sql)) ?? { ran: false };
-                    }
-                  : undefined
-              }
+              insertTarget={answerTarget}
+              onOpenInNewTab={(sql, c) => newQuery(c?.id ?? null, answerText(sql), c?.database ?? undefined)}
+              openIds={openIds}
             />
           )}
         </div>

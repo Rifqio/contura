@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use std::path::PathBuf;
@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::ai::AiAccess;
+use crate::ai::AiThread;
+use crate::ai::context::store::ContextStore;
+use crate::ai::preview::CatalogReader;
+use crate::ai::rails::output::{Flag, StatementCheck, risky_anywhere};
+use crate::ai::sent::fnv1a64;
 use crate::common::sql_table;
 use crate::design::{
     self, DesignOutcome, DesignPlan, DesignRequest, DesignTarget, DesignWarning, RowCount,
@@ -20,8 +25,9 @@ use crate::explain::{Plan, explain_sql, plan_from_rows};
 use crate::jobs::paths::{PathUse, check_user_path};
 use crate::jobs::{FileIdentity, JobService};
 use crate::model::{
-    Cell, ConnectionConfig, ConnectionId, DialectKind, EditorPrefs, GROUP_IMAGE_MAX, Group,
-    GroupColor, GroupId, KeymapOverrides, ObjectPath, PageRequest, RowHeight, SslMode, UiPrefs,
+    AiSyncMode, Cell, ConnectionConfig, ConnectionId, DialectKind, EditorPrefs, GROUP_IMAGE_MAX,
+    Group, GroupColor, GroupId, KeymapOverrides, ObjectPath, PageRequest, RowHeight, SslMode,
+    UiPrefs,
 };
 use crate::query::{
     ExecOutcome, Execution, HistoryEntry, HistoryFilter, MoreRows, NewHistory, Outcome,
@@ -29,7 +35,8 @@ use crate::query::{
 };
 use crate::recent::{RecentItem, RecentTarget, merge_restored, push_recent};
 use crate::safety::{
-    PassId, RunVerdict, StatementClass, classify, leading_word, statement_count, verdict,
+    AssistantSql, PassId, RunVerdict, StatementClass, classify, is_ddl, leading_word, run_class,
+    split_statements, statement_count, verdict, verdict_with,
 };
 use crate::secrets::SecretStore;
 use crate::store::AppStore;
@@ -37,6 +44,7 @@ use crate::suggest::{SuggestedConnection, laragon_suggestions};
 use crate::visual_query::{self, ColumnTypes, VisualQuery, VqPreview, VqRun};
 use std::time::{Duration, Instant};
 
+mod ai_context;
 mod backup;
 mod compare;
 mod export;
@@ -107,6 +115,9 @@ pub struct ConnectionInput {
     pub query_timeout_secs: Option<u32>,
     #[serde(default)]
     pub ai_access: AiAccess,
+    /// None keeps the stored mode; a new Connection gets Automatically.
+    #[serde(default)]
+    pub ai_sync: Option<AiSyncMode>,
     #[serde(default)]
     pub production: bool,
     #[serde(default)]
@@ -160,7 +171,63 @@ pub struct ConnectionService {
     /// Confirm passes handed out by `confirm_run`, used up by `execute_sql`.
     passes: Mutex<HashMap<PassId, Pass>>,
     pass_ttl: Mutex<Duration>,
+    /// R6.3: the statements of answers, by hash, for every Connection: SQL from an Ask on
+    /// one Connection (or none) can be run on another. Memory only; stored answers are
+    /// registered again when their threads load.
+    ai_sql: Mutex<AiSqlRegister>,
+    /// One AI Context check or build at a time per Context, and the failure back-off.
+    context_gates: crate::ai::context::sync::ContextGates,
     data_dir: Option<PathBuf>,
+}
+
+/// How many flagged statements the register keeps; plain ones cannot push them out.
+const AI_SQL_FLAGGED: usize = 1024;
+/// How many unflagged statements it keeps, for the "Written by the assistant" tag.
+const AI_SQL_PLAIN: usize = 256;
+
+/// The AI SQL register: flagged and plain statement hashes, each oldest first.
+#[derive(Default)]
+struct AiSqlRegister {
+    flagged: VecDeque<u64>,
+    plain: VecDeque<u64>,
+}
+
+impl AiSqlRegister {
+    /// Adds `hash`; a statement once flagged stays flagged (a later unflagged text with
+    /// the same hash never clears it).
+    fn add(&mut self, hash: u64, flagged: bool) {
+        let push = |list: &mut VecDeque<u64>, cap: usize| {
+            list.retain(|h| *h != hash);
+            list.push_back(hash);
+            while list.len() > cap {
+                list.pop_front();
+            }
+        };
+        if flagged || self.flagged.contains(&hash) {
+            self.plain.retain(|h| *h != hash);
+            push(&mut self.flagged, AI_SQL_FLAGGED);
+        } else {
+            push(&mut self.plain, AI_SQL_PLAIN);
+        }
+    }
+
+    fn get(&self, hash: u64) -> Option<AssistantSql> {
+        if self.flagged.contains(&hash) {
+            Some(AssistantSql { flagged: true })
+        } else {
+            self.plain
+                .contains(&hash)
+                .then_some(AssistantSql { flagged: false })
+        }
+    }
+}
+
+/// The register's hash of a statement: whitespace runs collapsed to one space, trimmed,
+/// a final `;` dropped. Any other edit gives another hash (R6.6).
+fn ai_sql_hash(text: &str) -> u64 {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let body = joined.strip_suffix(';').unwrap_or(&joined).trim_end();
+    fnv1a64(body.as_bytes())
 }
 
 type QuerySlot = (ConnectionId, Arc<SessionHandle>, Option<String>);
@@ -274,6 +341,13 @@ fn poisoned() -> Error {
     Error::Store("lock poisoned".into())
 }
 
+/// Whether two configs of a Connection point at the same server, database or file, so an
+/// AI Context built through one is the other's too.
+pub(crate) fn same_target(a: &ConnectionConfig, b: &ConnectionConfig) -> bool {
+    (&a.dialect, &a.host, a.port, &a.database, &a.file)
+        == (&b.dialect, &b.host, b.port, &b.database, &b.file)
+}
+
 impl ConnectionService {
     pub fn new(store: AppStore, secrets: Arc<dyn SecretStore>) -> Self {
         let store = Arc::new(Mutex::new(store));
@@ -286,6 +360,8 @@ impl ConnectionService {
             query_sessions: Mutex::new(HashMap::new()),
             passes: Mutex::new(HashMap::new()),
             pass_ttl: Mutex::new(PASS_TTL),
+            ai_sql: Mutex::new(AiSqlRegister::default()),
+            context_gates: Default::default(),
             data_dir: None,
         };
         let _ = svc.prune_history_by_prefs();
@@ -519,6 +595,50 @@ impl ConnectionService {
         Ok(())
     }
 
+    /// Keeps the statements of an answer in the AI SQL register (R6.3), newest last. Each
+    /// statement is also checked for risky calls in every Dialect, as on reload, since the
+    /// Ask's Dialect may not be the one it runs on.
+    pub fn register_ai_sql(&self, statements: &[StatementCheck]) {
+        let mut register = self.ai_sql.lock().unwrap_or_else(|e| e.into_inner());
+        for st in statements {
+            let flagged = st.flags.iter().any(Flag::escalates) || risky_anywhere(&st.text);
+            register.add(ai_sql_hash(&st.text), flagged);
+        }
+    }
+
+    /// Registers the SQL of every stored answer in `threads` again, as they load: the
+    /// register is memory only, and a stored answer can still be inserted and run. A stored
+    /// flag is kept, and each statement is checked again for risky calls, so a record
+    /// edited on disk cannot drop one.
+    pub fn register_ai_threads(&self, threads: &[AiThread]) {
+        let mut register = self.ai_sql.lock().unwrap_or_else(|e| e.into_inner());
+        let records = threads
+            .iter()
+            .flat_map(|t| &t.messages)
+            .filter_map(|m| m.record.as_ref());
+        for st in records
+            .flat_map(|r| &r.sql_blocks)
+            .flat_map(|b| &b.statements)
+        {
+            let flagged = st.flags.iter().any(Flag::escalates) || risky_anywhere(&st.text);
+            register.add(ai_sql_hash(&st.text), flagged);
+        }
+    }
+
+    /// The register's entry for `text`: the whole text, or any statement in it as
+    /// `split_statements` reads it, so text holding several statements cannot slip past.
+    /// Flagged when any of them is flagged.
+    fn assistant_sql(&self, dialect: DialectKind, text: &str) -> Option<AssistantSql> {
+        let register = self.ai_sql.lock().unwrap_or_else(|e| e.into_inner());
+        let pieces = split_statements(dialect, text);
+        let found: Vec<AssistantSql> = std::iter::once(text)
+            .chain(pieces.into_iter().map(|r| &text[r]))
+            .filter_map(|t| register.get(ai_sql_hash(t)))
+            .collect();
+        let flagged = found.iter().any(|a| a.flagged);
+        (!found.is_empty()).then_some(AssistantSql { flagged })
+    }
+
     /// What running these statements on the session needs: nothing, a block or a confirmation.
     /// A new run starts here, so the session's earlier passes end.
     pub fn prepare_run(&self, s: QuerySessionId, statements: Vec<String>) -> Result<RunVerdict> {
@@ -526,7 +646,12 @@ impl ConnectionService {
         self.drop_passes(&PassScope::Query(s))?;
         let config = self.config(conn)?;
         let database = database.or_else(|| config.database.clone());
-        Ok(verdict(&config, database.as_deref(), &statements))
+        Ok(verdict_with(
+            &config,
+            database.as_deref(),
+            &statements,
+            &|t| self.assistant_sql(config.dialect, t),
+        ))
     }
 
     /// Records the user's confirmation of the writes among `statements`. The pass covers
@@ -534,10 +659,13 @@ impl ConnectionService {
     /// earlier passes.
     pub fn confirm_run(&self, s: QuerySessionId, statements: Vec<String>) -> Result<PassId> {
         let (conn, _, _) = self.query_slot(s)?;
-        let dialect = self.config(conn)?.dialect;
+        let config = self.config(conn)?;
         let writes: Vec<String> = statements
             .into_iter()
-            .filter(|t| classify(dialect, t) == StatementClass::Write)
+            .filter(|t| {
+                run_class(&config, t, self.assistant_sql(config.dialect, t))
+                    == StatementClass::Write
+            })
             .collect();
         self.issue_pass(PassScope::Query(s), &writes)
     }
@@ -555,10 +683,17 @@ impl ConnectionService {
         if !config.read_only && !config.production {
             return Ok(());
         }
+        // Only a query tab runs answer SQL, so only its runs consult the register (R6.4).
+        let query = matches!(scope, PassScope::Query(_));
         let writes: Vec<(usize, &String)> = statements
             .iter()
             .enumerate()
-            .filter(|(_, sql)| classify(config.dialect, sql) == StatementClass::Write)
+            .filter(|(_, sql)| {
+                let mine = query
+                    .then(|| self.assistant_sql(config.dialect, sql))
+                    .flatten();
+                run_class(config, sql, mine) == StatementClass::Write
+            })
             .collect();
         let Some((first, _)) = writes.first() else {
             return Ok(());
@@ -876,8 +1011,13 @@ impl ConnectionService {
             config.read_only,
         );
         let elapsed_ms = started.elapsed().as_millis() as u64;
+        let entry = design_history(&plan.statements, &result);
+        // A history entry means statements stayed applied: the AI Context may be out of date.
+        if entry.is_some() {
+            let _ = self.mark_ai_context_stale(id);
+        }
         // History is a record, not part of the change: a store failure must not hide the result.
-        if let Some(entry) = design_history(&plan.statements, &result)
+        if let Some(entry) = entry
             && let Ok(store) = self.store()
         {
             let _ = store.add_history(&NewHistory {
@@ -956,6 +1096,7 @@ impl ConnectionService {
                 file: input.file.clone(),
                 query_timeout_secs: input.query_timeout_secs.filter(|s| *s > 0),
                 ai_access: input.ai_access,
+                ai_sync: input.ai_sync.unwrap_or_default(),
                 production: input.production,
                 read_only: input.read_only,
             };
@@ -973,6 +1114,7 @@ impl ConnectionService {
             file: None,
             query_timeout_secs: input.query_timeout_secs.filter(|s| *s > 0),
             ai_access: input.ai_access,
+            ai_sync: input.ai_sync.unwrap_or_default(),
             production: input.production,
             read_only: input.read_only,
         }
@@ -997,16 +1139,25 @@ impl ConnectionService {
         }
         let id = input.id.unwrap_or_else(Uuid::new_v4);
         let mut config = Self::config_from(id, name, &input);
-        {
+        let repointed = {
             let store = self.store()?;
-            let was_production = store
-                .list_connections()?
-                .iter()
-                .any(|c| c.id == id && c.production);
+            let stored = store.list_connections()?.into_iter().find(|c| c.id == id);
+            let was_production = stored.as_ref().is_some_and(|c| c.production);
             if config.production && !was_production {
                 config.ai_access = AiAccess::Never;
             }
+            if input.ai_sync.is_none()
+                && let Some(stored) = &stored
+            {
+                config.ai_sync = stored.ai_sync;
+            }
             store.save_connection(&config)?;
+            stored.is_some_and(|c| !same_target(&c, &config))
+        };
+        // A Connection at Never has no AI Context (this covers Production turning on). One
+        // pointed at another server or file loses it too: the old schema is not this one's.
+        if config.ai_access == AiAccess::Never || repointed {
+            self.clear_ai_context(Some(id))?;
         }
         // A SQLite file has no password, so nothing may be stored for it.
         let change = if input.dialect == DialectKind::Sqlite {
@@ -1042,6 +1193,10 @@ impl ConnectionService {
             .ok_or_else(|| Error::NotFound("connection not found".into()))?;
         config.ai_access = access;
         store.save_connection(&config)?;
+        drop(store);
+        if access == AiAccess::Never {
+            self.clear_ai_context(Some(id))?;
+        }
         Ok(config)
     }
 
@@ -1050,6 +1205,7 @@ impl ConnectionService {
         self.secrets.delete(id)?;
         self.store()?.delete_connection(id)?;
         self.store()?.clear_history(id)?;
+        self.clear_ai_context(Some(id))?;
         let _ = self.forget_connection(id);
         // An open that started during the delete must not outlive it.
         self.bump_generation(id)
@@ -1615,6 +1771,7 @@ impl ConnectionService {
             }
         };
         let elapsed_ms = started.elapsed().as_millis() as u64;
+        let ddl = is_ddl(config.dialect, &sql);
         let (outcome, rows, changed, error) = match &result {
             Ok(ExecOutcome::Rows { rows, .. }) => {
                 (Outcome::Ok, Some(rows.len() as u64), false, None)
@@ -1638,6 +1795,9 @@ impl ConnectionService {
             });
         }
         let _ = self.prune_history_by_prefs();
+        if result.is_ok() && ddl {
+            let _ = self.mark_ai_context_stale(conn);
+        }
         result.map(|outcome| Execution {
             outcome,
             elapsed_ms,
@@ -1874,11 +2034,17 @@ impl ConnectionService {
             }
             None => q.connection_id = opens_on.get(&q.id.to_string()).copied(),
         }
+        // The AI Context follows from its stored tables. Saving has happened, so a failure
+        // here takes the query out of every Context rather than leaving an old copy.
+        if self.keep_saved_in_context(&q).is_err() {
+            let _ = self.remove_saved(None, q.id);
+        }
         Ok(q)
     }
 
     pub fn delete_saved_query(&self, id: Uuid) -> Result<()> {
         self.store()?.delete_saved_query(id)?;
+        self.remove_saved(None, id)?;
         let mut opens_on = self.setting_map::<ConnectionId>(SAVED_QUERY_CONNECTIONS_KEY)?;
         if opens_on.remove(&id.to_string()).is_some() {
             self.save_setting_map(SAVED_QUERY_CONNECTIONS_KEY, &opens_on)?;
@@ -1924,6 +2090,47 @@ async fn close_all(handles: Vec<Arc<SessionHandle>>) {
         let _ = t.await;
     }
 }
+
+/// The AI preview reads the saved Connection and the open session's schema.
+#[async_trait::async_trait]
+impl CatalogReader for ConnectionService {
+    async fn connection_config(&self, id: ConnectionId) -> Result<Option<ConnectionConfig>> {
+        Ok(self.list()?.into_iter().find(|c| c.id == id))
+    }
+
+    async fn schema_snapshot(
+        &self,
+        id: ConnectionId,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<crate::schema_model::SchemaModel> {
+        self.session(id)
+            .await?
+            .schema_snapshot(database, schema)
+            .await
+    }
+
+    async fn schema_fingerprint(
+        &self,
+        id: ConnectionId,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<String> {
+        self.session(id)
+            .await?
+            .schema_fingerprint(database, schema)
+            .await
+    }
+
+    fn context(&self) -> &dyn crate::ai::context::store::ContextStore {
+        self
+    }
+
+    async fn saved_queries(&self) -> Result<Vec<SavedQuery>> {
+        self.list_saved_queries()
+    }
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2044,6 +2251,7 @@ mod job_pass_tests {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production,
             read_only,
         }

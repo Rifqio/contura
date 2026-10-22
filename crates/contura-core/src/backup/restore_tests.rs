@@ -7,8 +7,8 @@ use super::format::{
     BackupHeader, FORMAT_VERSION, INCOMPLETE, made_by, write_header, write_trailer,
 };
 use super::restore::*;
+use crate::common::grouped;
 use crate::error::Error;
-use crate::jobs::formats::xlsx::grouped;
 use crate::jobs::script::{
     DdlCounts, created_object, ddl_counts, dml_calls, ends_shapes, insert_table,
 };
@@ -31,6 +31,7 @@ fn config(dialect: DialectKind) -> ConnectionConfig {
         file: (dialect == Sqlite).then(|| PathBuf::from("freight.sqlite")),
         query_timeout_secs: None,
         ai_access: Default::default(),
+        ai_sync: Default::default(),
         production: false,
         read_only: false,
     }

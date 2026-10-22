@@ -4283,6 +4283,10 @@ button.chip[aria-pressed="true"] {
   color: var(--c-prod-text);
   font-weight: 600;
 }
+.sql-block-tag-assistant {
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-text);
+}
 .sql-block-tag-dropsData {
   background: var(--c-danger-subtle);
   color: var(--c-danger-text);
@@ -5143,6 +5147,41 @@ button.chip[aria-pressed="true"] {
   gap: var(--spacing-sm);
   margin-top: var(--spacing-sm);
 }
+/* The current model's facts under the Model field (board 11.4). */
+.mfacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--spacing-xs);
+}
+.mfact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+}
+.mfact b {
+  color: var(--c-text);
+  font-weight: 600;
+}
+.mfact.acc {
+  border-color: color-mix(in srgb, var(--c-accent) 40%, var(--c-border));
+  background: color-mix(in srgb, var(--c-accent) 12%, var(--c-bg-surface));
+  color: var(--c-text);
+}
+.mfact.acc svg {
+  color: var(--c-accent);
+}
+.window-input {
+  width: 120px;
+  font-variant-numeric: tabular-nums;
+}
 .folder-row {
   display: flex;
   gap: var(--spacing-sm);
@@ -5275,6 +5314,70 @@ button.chip[aria-pressed="true"] {
 .button-danger-text {
   color: var(--c-danger-text);
 }
+/* AI access table, step 11c (board 11.4): the Sync and Context columns, then the help line. */
+.share-table .sync-select {
+  min-width: 140px;
+}
+.share-table .share-ctx {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.warn-text {
+  color: var(--c-warning-text);
+}
+.share-help {
+  margin: var(--spacing-sm) 0 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+/* Tools the assistant can use, step 11d (board 11.4). */
+.tools-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+}
+.tools-table th {
+  text-align: left;
+  font: var(--font-label);
+  color: var(--c-text-subtle);
+  background: var(--c-bg-panel);
+  padding: 6px var(--spacing-md);
+}
+.tools-table td {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  vertical-align: middle;
+}
+.tools-table tr.off {
+  background: color-mix(in srgb, var(--c-bg-panel) 60%, transparent);
+}
+.tools-table .tool-name {
+  display: block;
+  font-weight: 600;
+  color: var(--c-text);
+}
+.tools-table tr.off .tool-name {
+  color: var(--c-text-muted);
+}
+.tools-table .tool-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--c-text-subtle);
+}
+.tools-table .tool-never {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.privacy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
 @media (max-width: 1100px) {
   .settings-cols {
     grid-template-columns: minmax(0, 1fr);
@@ -5388,8 +5491,39 @@ button.chip[aria-pressed="true"] {
   overflow-x: auto;
   padding: var(--spacing-sm) 0;
   border: 0;
-  border-radius: var(--rounded-md) var(--rounded-md) 0 0;
+  border-radius: 0;
   background: transparent;
+}
+/* Board 11.1: the 28 px head strip with the Core's label (check, or a warning for writes and flags) and Copy. */
+.answer-sql-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px var(--spacing-xs) 2px 10px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-md) var(--rounded-md) 0 0;
+  background: var(--c-bg-panel);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.answer-sql-head svg {
+  flex: none;
+  color: var(--c-success-solid);
+}
+.answer-sql-head.warn svg {
+  color: var(--c-warning-solid);
+}
+.answer-sql-head .icon-button svg {
+  color: inherit;
+}
+.answer-sql-label {
+  min-width: 0;
+}
+.answer-sql-head .icon-button {
+  flex: none;
+  width: 24px;
+  height: 24px;
 }
 .answer-sql .sql-block-text {
   padding-left: var(--spacing-md);
@@ -5422,6 +5556,141 @@ button.chip[aria-pressed="true"] {
   margin: 0;
   color: var(--c-text-subtle);
   font: var(--font-small);
+}
+/* R5.1: the answer's strict subset. Text stays text; inline code in the code face. */
+.answer-p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.answer-list {
+  display: grid;
+  gap: var(--spacing-2xs);
+  margin: 0;
+  padding-left: 20px;
+  white-space: pre-wrap;
+}
+.answer-p code,
+.answer-list code {
+  padding: 0 3px;
+  border-radius: var(--rounded-xs);
+  background: var(--c-bg-hover);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.answer-code {
+  min-width: 0;
+  margin: 0;
+  overflow-x: auto;
+  padding: var(--spacing-sm) 10px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+/* A note above the answer (R5.4, the shortened statement, the unread schema): the board's warning chip, wrapped. */
+.answer-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 6px var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+  font: var(--font-small);
+}
+.answer-note svg {
+  flex: none;
+  margin-top: 1px;
+}
+/* The Insert diff (board AIInline, iDiff): head, the line diff in the code face, the flags, Cancel and Insert. */
+.insert-diff {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.insert-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+}
+.insert-diff-head .t {
+  font: var(--font-body-strong);
+}
+.insert-diff-head .sub,
+.insert-diff-foot .count {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+.insert-diff-note {
+  margin: 0;
+  color: var(--c-warning-text);
+  font: var(--font-small);
+}
+.insert-diff-lines {
+  max-height: 148px;
+  overflow: auto;
+  padding: var(--spacing-2xs) 0;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  font: var(--font-mono-small);
+  font-size: 12px;
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  line-height: 18px;
+  white-space: pre;
+}
+.diff-mark {
+  color: var(--c-text-subtle);
+  text-align: center;
+}
+.diff-line.add {
+  background: color-mix(in srgb, var(--c-success-solid) 13%, transparent);
+}
+.diff-line.add .diff-mark {
+  color: var(--c-success-text);
+}
+.diff-line.del {
+  background: color-mix(in srgb, var(--c-danger-solid) 12%, transparent);
+}
+.diff-line.del .diff-mark {
+  color: var(--c-danger-text);
+}
+.diff-line.del .diff-text {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--c-danger-solid) 60%, transparent);
+}
+.insert-diff-flags {
+  display: grid;
+  gap: var(--spacing-2xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--c-warning-text);
+  font: var(--font-small);
+}
+.insert-diff-flags li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.insert-diff-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.insert-diff-foot .spacer {
+  flex: 1;
 }
 /* A2: the Sends line above the input, 10 px 12 px 12 px, 8 px between. */
 .composer {
@@ -5461,8 +5730,12 @@ button.chip[aria-pressed="true"] {
   padding: 0 var(--spacing-xs) var(--spacing-xs) var(--spacing-sm);
 }
 .comp-sub {
+  min-width: 0;
+  overflow: hidden;
   color: var(--c-text-subtle);
   font: var(--font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ai-send {
   display: grid;
@@ -5481,6 +5754,313 @@ button.chip[aria-pressed="true"] {
 .comp-box:has(textarea:focus-visible) {
   outline: var(--focus-ring-width) solid var(--c-focus);
   outline-offset: var(--focus-ring-offset);
+}
+/* Board 11.1: the context meter band on top of the composer box, 28 px, "Context", the bar and "18.4K / 1M". */
+.comp-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 28px;
+  padding: 0 10px;
+  border-bottom: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm) var(--rounded-sm) 0 0;
+  background: color-mix(in srgb, var(--c-bg-panel) 55%, transparent);
+  color: var(--c-text-subtle);
+  font-size: 11px;
+}
+.meter-bar {
+  display: block;
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--c-border-subtle);
+  box-shadow: inset 0 0 0 1px var(--c-border);
+}
+.meter-bar.small {
+  height: 4px;
+  border-radius: 2px;
+  box-shadow: none;
+}
+.meter-fill {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: var(--c-accent);
+  transition: width 180ms var(--ease-enter);
+}
+.meter-fill.warn {
+  background: var(--c-warning-solid);
+}
+.meter-fill.bad {
+  background: var(--c-danger-solid);
+}
+.meter-n {
+  color: var(--c-text-muted);
+  font-family: var(--font-family-code);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The model pill on the left of the foot bar: name, thinking chip, bolt when caching is on, chevron. */
+/* The pill gives way before Enter and Send do: it shrinks and the model name ellipsizes (board 11.1 caps it at 200 px). */
+.mpick {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
+}
+.mpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 13px;
+  background: var(--c-bg-panel);
+  color: var(--c-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.mpill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mpill:hover {
+  border-color: var(--c-border-strong);
+  color: var(--c-text);
+}
+.mpill.on {
+  border-color: var(--c-accent);
+  color: var(--c-text);
+}
+.mpill .icon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.mpill-think {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--c-accent) 16%, transparent);
+  color: var(--c-accent-text);
+  font-size: 11px;
+}
+.mpill-think.off {
+  background: transparent;
+  color: var(--c-text-subtle);
+}
+.mpill-cache {
+  display: inline-flex;
+  flex: none;
+  color: var(--c-group-gold);
+}
+.mpill-cache .icon {
+  width: 11px;
+  height: 11px;
+}
+.mpill .mpill-chev {
+  width: 11px;
+  height: 11px;
+  color: var(--c-text-subtle);
+}
+/* The model menu opens above the pill: 320 px, raised, 8 px radius. */
+.mmenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 100;
+  box-sizing: border-box;
+  width: 320px;
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg-raised);
+  box-shadow: var(--shadow-menu);
+  animation: mmenu-in 120ms var(--ease-enter);
+}
+@keyframes mmenu-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mmenu {
+    animation: none;
+  }
+  .meter-fill {
+    transition: none;
+  }
+}
+.mmenu-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 4px 10px 6px;
+  color: var(--c-text-subtle);
+  font-size: 11px;
+}
+.mrow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 4px 10px 4px 6px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mrow:hover {
+  background: var(--c-bg-hover);
+}
+.mrow.on {
+  background: var(--c-accent-subtle);
+}
+.mrow-check {
+  display: inline-flex;
+  width: 14px;
+  flex: none;
+  color: var(--c-accent);
+}
+.mrow-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.mrow-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mrow-note {
+  overflow: hidden;
+  color: var(--c-text-subtle);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mrow-win {
+  color: var(--c-text-muted);
+  font-family: var(--font-family-code);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.msec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.mlabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--c-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.mlabel .icon {
+  width: 13px;
+  height: 13px;
+  color: var(--c-accent-text);
+}
+.mhint {
+  color: var(--c-text-subtle);
+  font-weight: 400;
+}
+.tseg {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  gap: 2px;
+  padding: 2px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+}
+.tseg button {
+  height: 24px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tseg button.on {
+  background: var(--c-bg-surface);
+  box-shadow: 0 0 0 1px var(--c-border);
+  color: var(--c-text);
+  font-weight: 600;
+}
+.mnote {
+  color: var(--c-text-subtle);
+  font-size: 11px;
+  line-height: 15px;
+}
+.mcache {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 4px;
+  font-size: 12px;
+}
+.mcache-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.mcache-label {
+  color: var(--c-text);
+}
+.musage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 10px 6px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.musage-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.musage .mnote {
+  font-size: 12px;
+  line-height: 16px;
 }
 /* "Sends" then icon-and-word items, in UI small. */
 .sends {
@@ -5521,6 +6101,21 @@ button.send-pill:hover {
   height: 14px;
   color: var(--c-text-subtle);
 }
+/* The outline row's long label wraps (board 11.7): height grows, the icon sits 2px down at the top. */
+.send-pill-tall {
+  align-items: flex-start;
+  height: auto;
+  min-height: 20px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  line-height: 16px;
+  text-align: left;
+  white-space: normal;
+}
+.send-pill-tall .icon {
+  flex: none;
+  margin-top: 2px;
+}
 .send-pill[aria-pressed="false"] {
   color: var(--c-text-subtle);
   text-decoration: line-through;
@@ -5536,6 +6131,81 @@ button.send-pill:hover {
   text-decoration: none;
 }
 .sends .link-button:hover {
+  text-decoration: underline;
+}
+.sends .link-button:disabled {
+  color: var(--c-text-subtle);
+  cursor: default;
+  text-decoration: none;
+}
+/* One row per item the Core built: the item, then its size or why it is locked. */
+.sends-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sends-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.sends-size,
+.sends-lock,
+.sends-note {
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+.sends-lock {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sends-note {
+  margin: 0;
+}
+/* "Context from 2d ago" in the Sends header: the AI Context sent may be out of date. */
+.sends-age {
+  font: var(--font-small);
+  color: var(--c-warning-text);
+}
+/* The Context line above the composer box (board 11.1, .ctxalert): shown only when the AI Context needs attention. */
+.ctxalert {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 6px 10px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.ctxalert.warnline {
+  border-color: color-mix(in srgb, var(--c-warning-solid) 40%, var(--c-border));
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+}
+.ctxalert .icon {
+  flex: none;
+}
+.ctxalert-text {
+  flex: 1;
+  min-width: 0;
+}
+.ctxalert .link-button,
+.ctxalert-busy {
+  flex: none;
+  font: var(--font-small);
+  font-weight: 600;
+}
+.ctxalert .link-button {
+  color: var(--c-accent-text);
+  text-decoration: none;
+}
+.ctxalert .link-button:hover {
   text-decoration: underline;
 }
 /* What is sent, as a code block: 1 px border, 6 px radius, Code 12/18 on the surface. */
@@ -5565,26 +6235,888 @@ button.send-pill:hover {
   gap: var(--spacing-xs);
   font: var(--font-body-strong);
 }
-/* An error names the problem and the fix; icon and words, no coloured stripe. */
-.ai-err {
-  display: grid;
+/* The error and answer state card (board 11.6): tone icon, title, body, optional countdown, actions with Show log on the right. */
+.errc {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-surface);
+  animation: errc-in var(--motion-slow) var(--ease-enter);
+}
+@keyframes errc-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .errc {
+    animation: none;
+  }
+  .errc-fill {
+    transition: none;
+  }
+}
+.errc.warn {
+  border-color: color-mix(in srgb, var(--c-warning-solid) 45%, var(--c-border));
+}
+.errc.bad {
+  border-color: color-mix(in srgb, var(--c-danger-solid) 55%, var(--c-border));
+}
+.errc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 10px 12px 2px;
+  font: var(--font-body-strong);
+  color: var(--c-text);
+}
+.errc-head svg {
+  flex: none;
+}
+.errc.warn .errc-head svg {
+  color: var(--c-warning-solid);
+}
+.errc.bad .errc-head svg {
+  color: var(--c-danger-solid);
+}
+.errc.neu .errc-head svg {
+  color: var(--c-text-subtle);
+}
+.errc.info .errc-head svg {
+  color: var(--c-info-solid);
+}
+.errc-title {
+  flex: 1;
+  min-width: 0;
+}
+.errc-try {
+  font: var(--font-small);
+  font-size: 11px;
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.errc-body {
+  padding: 2px 12px 10px 34px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--c-text-muted);
+}
+.errc-count {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 12px 10px 34px;
+  font-size: 11px;
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.errc-bar {
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--c-border-subtle);
+}
+.errc-fill {
+  display: block;
+  height: 100%;
+  background: var(--c-warning-solid);
+  transition: width 1000ms linear;
+}
+.errc-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: var(--spacing-sm);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+}
+.errc-foot .link-button {
+  white-space: nowrap;
+}
+/* The mark inside a partial answer: "Cut off", "Length limit", "Stopped". */
+.cutm {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+  font-size: 11px;
+}
+/* Under a streamed answer: how it ended, the Sent line, and its one action. */
+.msg-mark {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  font: var(--font-small);
+}
+.msg-stop {
+  font: var(--font-body-strong);
+  font-size: inherit;
+  color: var(--c-text-subtle);
+}
+.msg-thinking summary {
+  cursor: pointer;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+
+/* The Sent line under an answer opens its Sent record (R7.1). */
+.msg-sent {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+.msg-sent:hover,
+.msg-sent[aria-expanded="true"] {
+  color: var(--c-text);
+  text-decoration: underline;
+}
+.sent-pop {
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-xs);
-  padding: var(--spacing-sm) 10px;
+  padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-raised);
+  box-shadow: var(--shadow-1);
+  font: var(--font-small);
+}
+.sent-pop:focus {
+  outline: none;
+}
+.sent-pop-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.sent-pop-head .t {
+  font: var(--font-body-strong);
+}
+.sent-pop-rows {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.sent-pop-rows > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--spacing-sm);
+}
+.sent-pop-rows dt {
+  color: var(--c-text-subtle);
+}
+.sent-pop-rows dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.sent-pop-rows .mono {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.sent-pop-line {
+  margin: 0;
+}
+.sent-pop-exact-head,
+.sends-step-head {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: baseline;
+  margin: 0;
+  font: var(--font-small);
+  font-weight: 600;
+  color: var(--c-text);
+}
+.sent-pop-note {
+  margin: 0;
+  color: var(--c-text-subtle);
+}
+.sent-pop-exact,
+.alog-exact pre,
+.pthinking {
+  max-height: 240px;
+  margin: 0;
+  padding: var(--spacing-sm);
+  overflow: auto;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Show log (board 11.3): the answer log in place of the thread, with Log, Steps and Diagram over one record. */
+.alog {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.ask-pop .alog {
+  max-height: 480px;
+}
+.alog-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  flex: none;
+  padding: 0 6px;
+}
+.alog-head .t {
+  font: var(--font-body-strong);
+}
+.alog-time {
+  padding-right: 6px;
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  font-variant-numeric: tabular-nums;
+}
+.alog-tabs {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  flex: none;
+  padding: 0 2px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.alog-tab {
+  position: relative;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--c-text-muted);
+  font: var(--font-body);
+  cursor: pointer;
+}
+.alog-tab:hover {
+  color: var(--c-text);
+}
+.alog-tab.on {
+  color: var(--c-text);
+  font: var(--font-body-strong);
+}
+.alog-tab.on::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--c-accent);
+}
+.alog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: var(--spacing-sm);
+}
+.alog-for {
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md) 0;
+  overflow: hidden;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.alog-exact {
+  margin: 6px var(--spacing-md) 0;
+}
+.alog-note {
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.alog-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 40px;
+  flex: none;
+  padding: 0 var(--spacing-sm);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.alog-foot .link-button,
+.ddetail .link-button {
+  align-self: center;
+  color: var(--c-accent-text);
+  font: var(--font-label);
+  text-decoration: none;
+}
+.alog-foot .link-button:hover,
+.ddetail .link-button:hover {
+  text-decoration: underline;
+}
+
+/* Log: the volume strip, level chips, search, and one monospace row per line. */
+.lvol {
+  position: relative;
+  height: 22px;
+  margin: var(--spacing-sm) var(--spacing-md) 0;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.lvol .vb {
+  position: absolute;
+  bottom: 0;
+  width: 3px;
+  height: 12px;
+  border-radius: 1px 1px 0 0;
+  background: var(--c-info-solid);
+  opacity: 0.75;
+}
+.lvol .vb.debug {
+  height: 8px;
+  background: var(--c-text-subtle);
+}
+.lvol .vb.warn {
+  height: 16px;
+  background: var(--c-warning-solid);
+}
+.lvol .vb.error {
+  height: 20px;
+  background: var(--c-danger-solid);
+  opacity: 1;
+}
+.lvol .vt1 {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.lgbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px var(--spacing-sm) 4px var(--spacing-md);
+}
+.lchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--c-border);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-size: 11px;
+  cursor: pointer;
+}
+.lchip.on {
+  background: var(--c-bg-active);
+  box-shadow: inset 0 0 0 1px var(--c-border-strong);
+  color: var(--c-text);
+}
+.lchip .n {
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.ldot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-text-subtle);
+}
+.ldot.info {
+  background: var(--c-info-solid);
+}
+.ldot.warn {
+  background: var(--c-warning-solid);
+}
+.ldot.error {
+  background: var(--c-danger-solid);
+}
+.ldot.all {
+  background: conic-gradient(var(--c-info-solid) 0 50%, var(--c-warning-solid) 0 75%, var(--c-danger-solid) 0);
+}
+.lsearch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin: 2px var(--spacing-md) 6px;
+  padding: 0 var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  color: var(--c-text-subtle);
+}
+.lsearch:focus-within {
+  border-color: var(--c-accent);
+}
+.lsearch input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--c-text);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  outline: none;
+}
+.lgrid {
+  margin: 0 var(--spacing-md);
+  overflow: hidden;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.lline + .lline {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.lrow {
+  display: grid;
+  grid-template-columns: 14px 44px 38px 64px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  padding: 3px var(--spacing-sm) 3px 4px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+.lrow:hover {
+  background: var(--c-bg-hover);
+}
+.lrow.warn {
+  border-left-color: var(--c-warning-solid);
+  background: var(--c-warning-subtle);
+}
+.lrow.error {
+  border-left-color: var(--c-danger-solid);
+  background: var(--c-danger-subtle);
+}
+.lchev {
+  display: flex;
+  align-items: center;
+  height: 16px;
+  color: var(--c-text-subtle);
+}
+.lchev.none {
+  visibility: hidden;
+}
+.lt {
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.lv {
+  color: var(--c-info-text);
+  font: var(--font-micro);
+  line-height: 16px;
+  letter-spacing: 0.02em;
+}
+.lv.debug {
+  color: var(--c-text-subtle);
+}
+.lv.warn {
+  color: var(--c-warning-text);
+}
+.lv.error {
+  color: var(--c-danger-text);
+}
+.ls {
+  overflow: hidden;
+  color: var(--c-accent-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lm {
+  overflow: hidden;
+  color: var(--c-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lgrid.wrap .lm {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ljson {
+  padding: 4px var(--spacing-sm) 6px 64px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-panel);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ljson .jk {
+  color: var(--c-accent-text);
+}
+.ljson .jp {
+  color: var(--c-text-subtle);
+}
+.ljson .js {
+  color: var(--c-success-text);
+}
+.ljson .jn {
+  color: var(--c-syn-number);
+}
+.ljson .jb {
+  color: var(--c-info-text);
+}
+.lempty {
+  padding: 10px;
+  color: var(--c-text-subtle);
+  text-align: center;
+}
+.lfoot {
+  padding: 6px var(--spacing-md) 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Steps: the three cells, then fixed-wording rows with full-width dividers. */
+.cells3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 6px var(--spacing-md) var(--spacing-sm);
   border: var(--border-hairline) solid var(--c-border);
   border-radius: var(--rounded-md);
   background: var(--c-bg-surface);
 }
-.ai-err b {
+.cell3 {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 10px;
+}
+.cell3 + .cell3 {
+  border-left: var(--border-hairline) solid var(--c-border-subtle);
+}
+.cell3 .k {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-size: 11px;
+  line-height: 14px;
+}
+.cell3 .v {
+  font: var(--font-small);
+}
+.cell3 .v.mono {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  font-variant-numeric: tabular-nums;
+}
+.psteps {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.prow {
+  display: grid;
+  grid-template-columns: 14px 76px minmax(0, 1fr) 40px;
+  column-gap: 6px;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-subtle);
+  cursor: pointer;
+}
+.prow:hover {
+  background: var(--c-bg-hover);
+}
+.prow .lb {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.prow .v,
+.ddetail .v {
+  overflow: hidden;
+  color: var(--c-text);
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.prow .v.model,
+.ddetail .v.model {
+  color: var(--c-accent-text);
+}
+.prow .tm,
+.ddetail .tm {
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pdetail {
+  padding: 6px var(--spacing-sm) var(--spacing-sm) 28px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  background: var(--c-bg-surface);
+}
+.prule {
+  margin: 0;
+  padding: 0 0 4px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.ev {
+  display: grid;
+  grid-template-columns: 84px 92px minmax(0, 1fr);
+  font: var(--font-small);
+}
+.ev-row {
+  display: contents;
+}
+.ev .eh,
+.ev-row > span {
+  overflow: hidden;
+  padding: 4px var(--spacing-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ev-row > span {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.ev .eh {
+  color: var(--c-text-subtle);
+  font: var(--font-body-strong);
+  font-size: 12px;
+}
+.ev .mono {
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.ev-row > span:last-child {
+  color: var(--c-text-muted);
+}
+.pthinking {
+  margin-top: 4px;
+}
+.pdone {
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
+  gap: var(--spacing-sm);
+  height: 32px;
+  padding: 0 var(--spacing-sm) 0 28px;
   font: var(--font-body-strong);
+  font-size: 12px;
+}
+.pdone svg {
+  color: var(--c-success-text);
+}
+
+/* Diagram: DOM boxes in three zones (ruling 16: not the .flow engine). */
+.diag {
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
+}
+.zone {
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-sm);
+  border: var(--border-hairline) dashed var(--c-border);
+  border-radius: 10px;
+}
+.zone .zt {
+  margin-bottom: 6px;
+  color: var(--c-text-muted);
+  font: var(--font-body-strong);
+  font-size: 12px;
+}
+.dbox {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  padding: 5px var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-small);
+  text-align: left;
+}
+button.dbox {
+  cursor: pointer;
+}
+button.dbox:hover,
+.dbox.on {
+  border-color: var(--c-border-strong);
+}
+.dbox.model {
+  border-color: var(--c-accent);
+  background: var(--c-accent-subtle);
+}
+/* Board 11.7: the outline call that could not pick. */
+.dbox.bad {
+  border-color: color-mix(in srgb, var(--c-danger-solid) 55%, var(--c-border));
   color: var(--c-danger-text);
 }
-.ai-err .row {
+.dbox.pending,
+.dbox.dashed {
+  border-style: dashed;
+  background: transparent;
+}
+.dbox.pending {
+  color: var(--c-text-subtle);
+}
+.dbox .t {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--c-text-subtle);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dmodel {
+  color: var(--c-accent-text);
+  font-size: 11px;
+}
+.vlink {
+  width: 1px;
+  height: var(--spacing-sm);
+  margin-left: 16px;
+  background: var(--c-border-strong);
+}
+.drow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
+  align-items: center;
+}
+.dside {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs);
+  align-items: center;
+  min-width: 0;
+}
+.dside .dsl {
+  width: 16px;
+  flex: none;
+  border-top: var(--border-hairline) dashed var(--c-border-strong);
+}
+.dside .dbox {
+  flex: 1;
+}
+.dnote {
+  overflow: hidden;
+  padding-left: 4px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dstore {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-end;
+  margin-top: var(--spacing-sm);
+  padding: 4px var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border-strong);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.dcross {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 32px;
+  padding-left: 16px;
+}
+.dline {
+  width: 2px;
+  height: 32px;
+  background: var(--c-border-strong);
+}
+.dline.accent {
+  background: var(--c-accent);
+}
+.dchip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-active);
+  color: var(--c-text-muted);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  font-variant-numeric: tabular-nums;
+}
+.dchip.accent {
+  color: var(--c-accent-text);
+}
+.dnopath {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: var(--border-hairline) dashed var(--c-danger-solid);
+  color: var(--c-danger-text);
+  font: var(--font-small);
+}
+.ddetail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.ddetail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+.ddetail-head .t {
+  font: var(--font-body-strong);
+  font-size: 12px;
+}
+.ddetail .link-button {
+  align-self: flex-start;
 }
 
 /* Assistant: inline Ask */
@@ -5718,8 +7250,12 @@ button.send-pill:hover {
   outline: var(--focus-ring-width) solid var(--c-focus);
   outline-offset: calc(var(--focus-ring-width) * -1);
 }
-.answer-text {
-  white-space: pre-wrap;
+.answer-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-sm);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .cm-tooltip.cm-ask-tip {
   border: 0;
@@ -6196,6 +7732,34 @@ button.send-pill:hover {
 .connection-form .ai-warn,
 .connection-form .field-hint {
   margin: 0;
+}
+/* The AI access row's context controls (step 11c), beside Keep context in sync. */
+.ai-context {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--spacing-xs);
+  min-width: 0;
+}
+.ai-context-state {
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  min-height: 16px;
+}
+.ai-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+.ai-context-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font: var(--font-small);
+}
+.ai-context-ask > span {
+  flex: 1 1 240px;
 }
 
 /* Result tools, plan and query error (Task 17) */

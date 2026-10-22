@@ -353,6 +353,8 @@ export default function ResultsPanel({
                   groupId={ask.groupId}
                   onOpenInChat={ask.onOpenInChat}
                   onOpenSettings={ask.onOpenSettings}
+                  insertTarget={ask.insertTarget}
+                  onOpenInNewTab={ask.onOpenInNewTab}
                   onClose={() => setAskOpen(false)}
                 />
               </div>

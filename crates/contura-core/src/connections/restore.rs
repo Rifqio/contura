@@ -33,11 +33,11 @@ use crate::backup::restore::{
     self as rs, Class, RestoreCheck, RestoreMode, RestoreOutcome, RestorePlan, RestoreRequest,
     RestoreTarget, Walker,
 };
+use crate::common::grouped;
 use crate::common::sql_ident;
 use crate::dialect::Dialect;
 use crate::error::{Error, Result};
 use crate::jobs::formats::read_err;
-use crate::jobs::formats::xlsx::grouped;
 use crate::jobs::paths::{PathUse, check_user_path, hex, open_locked};
 use crate::jobs::script::{Facts, ScriptReader, calls_sequence_write, insert_table};
 use crate::jobs::types::{
@@ -1176,6 +1176,10 @@ impl RestoreRun {
             Err(e) => (Outcome::Error, Some(plain_message(e))),
         };
         let kept = if self.mysql() { st.committed } else { 0 };
+        // Anything that ran may have stayed (MySQL commits DDL): the AI Context may be old.
+        if result.is_ok() || st.ran > 0 || st.drops_ran > 0 {
+            self.ctx.mark_ai_context_stale(self.config.id);
+        }
         self.ctx.history(NewHistory {
             connection_id: self.config.id,
             sql: self.history_sql(),

@@ -1,7 +1,12 @@
 use contura_core::Error;
+use contura_core::ai::context::sync::{ContextInfo, ContextStatusRow, context_status, resync};
+use contura_core::ai::models::{ModelList, ModelPicks};
+use contura_core::ai::preview::{Preview, preview};
+use contura_core::ai::request::AskRequest;
+use contura_core::ai::sent::{AnswerAction, AnswerActionKind};
+use contura_core::ai::stream::{AiEvent, ask_stream};
 use contura_core::ai::{
-    AiAccess, AiAnswer, AiRequest, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread,
-    KeyChange, ThreadId,
+    AiAccess, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread, KeyChange, ThreadId,
 };
 use contura_core::connections::{
     ConnectionInput, ConnectionService, DataFolderInfo, DesignVerdict, EditOutcome, EditPlan,
@@ -11,8 +16,9 @@ use contura_core::design::{DesignOutcome, DesignRequest, TableDesign};
 use contura_core::edits::EditSet;
 use contura_core::explain::Plan;
 use contura_core::model::{
-    ConnectionConfig, ConnectionId, DbObject, DialectKind, FullValue, FullValueRequest, Group,
-    GroupId, KeymapOverrides, ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo, UiPrefs,
+    AiSyncMode, ConnectionConfig, ConnectionId, DbObject, DialectKind, FullValue, FullValueRequest,
+    Group, GroupId, KeymapOverrides, ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
+    UiPrefs,
 };
 use contura_core::query::{
     Execution, HistoryEntry, HistoryFilter, MoreRows, QuerySessionId, SavedQuery, SavedQueryId,
@@ -26,7 +32,8 @@ use contura_core::suggest::SuggestedConnection;
 use contura_core::visual_query::{ColumnTypes, VisualQuery, VqPreview, VqRun};
 use std::path::PathBuf;
 
-use tauri::State;
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Manager, State};
 
 type Service<'a> = State<'a, ConnectionService>;
 type Ai<'a> = State<'a, AiService>;
@@ -51,6 +58,79 @@ pub async fn set_connection_ai_access(
     access: AiAccess,
 ) -> Result<ConnectionConfig, Error> {
     service.set_ai_access(id, access).await
+}
+
+/// When an Ask checks the Connection's AI Context; only that field is rewritten.
+#[tauri::command]
+pub fn set_ai_sync_mode(
+    service: Service<'_>,
+    connection_id: ConnectionId,
+    mode: AiSyncMode,
+) -> Result<ConnectionConfig, Error> {
+    service.set_ai_sync_mode(connection_id, mode)
+}
+
+/// The tree's Refresh: the Connection's AI Contexts are marked stale, with no database call.
+#[tauri::command]
+pub fn ai_context_changed(service: Service<'_>, connection_id: ConnectionId) -> Result<(), Error> {
+    service.mark_ai_context_stale(connection_id)
+}
+
+/// Deletes one Connection's AI Context, or every one with no Connection.
+#[tauri::command]
+pub fn ai_clear_context(
+    service: Service<'_>,
+    connection_id: Option<ConnectionId>,
+) -> Result<(), Error> {
+    service.clear_ai_context(connection_id)
+}
+
+/// Every stored AI Context, or one Connection's: when it was built and checked, and its size.
+#[tauri::command]
+pub fn ai_context_status(
+    service: Service<'_>,
+    connection_id: Option<ConnectionId>,
+) -> Result<Vec<ContextStatusRow>, Error> {
+    context_status(&*service, connection_id)
+}
+
+/// Re-sync: rebuilds the AI Context of one database and schema. Refused at AI access Never.
+#[tauri::command]
+pub async fn ai_resync(
+    app: AppHandle,
+    connection_id: ConnectionId,
+    database: Option<String>,
+    schema: Option<String>,
+) -> Result<ContextInfo, Error> {
+    let reader = app.clone();
+    let secrets = off_runtime(move || {
+        let connections = reader.state::<ConnectionService>().list()?;
+        reader
+            .state::<AiService>()
+            .secrets_for_redaction(&connections)
+    })
+    .await?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let service = app.state::<ConnectionService>();
+    resync(
+        &*service,
+        connection_id,
+        database.as_deref(),
+        schema.as_deref(),
+        &secrets,
+        now_ms,
+    )
+    .await
+}
+
+/// "Clear all AI data": every thread of every place and every AI Context.
+#[tauri::command]
+pub fn ai_clear_all(app: AppHandle) -> Result<(), Error> {
+    app.state::<AiService>().clear_all_threads()?;
+    app.state::<ConnectionService>().clear_ai_context(None)
 }
 
 #[tauri::command]
@@ -753,9 +833,10 @@ pub fn list_saved_queries(service: Service<'_>) -> Result<Vec<SavedQuery>, Error
     service.list_saved_queries()
 }
 
+/// Off the runtime: keeping the AI Context's copy up to date reads the saved secrets.
 #[tauri::command]
-pub fn save_saved_query(service: Service<'_>, input: SavedQueryInput) -> Result<SavedQuery, Error> {
-    service.save_saved_query(input)
+pub async fn save_saved_query(app: AppHandle, input: SavedQueryInput) -> Result<SavedQuery, Error> {
+    off_runtime(move || app.state::<ConnectionService>().save_saved_query(input)).await
 }
 
 #[tauri::command]
@@ -789,19 +870,177 @@ pub fn save_ai_settings(
     ai.save_settings(group_id, settings, override_group, key)
 }
 
+/// "Send the saved key to <host>?": binds the saved key to the host the settings now use.
 #[tauri::command]
-pub fn ai_test(ai: Ai<'_>, group_id: Option<GroupId>) -> Result<AiTestOk, Error> {
-    ai.test(group_id)
+pub fn ai_confirm_key_host(
+    ai: Ai<'_>,
+    group_id: Option<GroupId>,
+    host: String,
+) -> Result<(), Error> {
+    ai.confirm_key_host(group_id, &host)
+}
+
+/// One short request with the saved settings and key.
+#[tauri::command]
+pub async fn ai_test(app: AppHandle, group_id: Option<GroupId>) -> Result<AiTestOk, Error> {
+    let (provider, _, model) =
+        off_runtime(move || app.state::<AiService>().provider_for(group_id)).await?;
+    contura_core::ai::test_provider(&*provider, &model).await
+}
+
+/// The provider's models, fetched with the saved key and stored for the offline list.
+#[tauri::command]
+pub async fn ai_models(app: AppHandle, group_id: Option<GroupId>) -> Result<ModelList, Error> {
+    let reader = app.clone();
+    let (provider, settings, _) =
+        off_runtime(move || reader.state::<AiService>().provider_for(group_id)).await?;
+    let listed = provider
+        .models(&mut contura_core::ai::log::Log::new())
+        .await?;
+    // A store write blocks too.
+    off_runtime(move || app.state::<AiService>().store_listing(&settings, listed)).await
+}
+
+/// The model list with no network: the built-in records and the last fetched listing.
+#[tauri::command]
+pub fn ai_known_models(ai: Ai<'_>, group_id: Option<GroupId>) -> Result<ModelList, Error> {
+    ai.known_models(group_id)
+}
+
+/// Remembers the picker's thinking and caching picks for `model` and makes it current.
+#[tauri::command]
+pub fn set_ai_model_prefs(
+    ai: Ai<'_>,
+    group_id: Option<GroupId>,
+    model: String,
+    picks: ModelPicks,
+) -> Result<(), Error> {
+    ai.set_model_prefs(group_id, &model, picks)
+}
+
+/// Removes a running Ask from the AI service when its task ends, however it ends:
+/// done, failed, or aborted by Stop (dropping the task drops this).
+struct Finish {
+    app: AppHandle,
+    request_id: String,
+}
+
+impl Drop for Finish {
+    fn drop(&mut self) {
+        self.app.state::<AiService>().finish(&self.request_id);
+    }
+}
+
+/// Starts an Ask and returns once it is registered; its events go to `events` and end
+/// with `done` or `error`. Refused at once when it cannot start: no provider, a key
+/// bound to another host, or another Ask running in the same place.
+#[tauri::command]
+pub async fn ai_ask_stream(
+    app: AppHandle,
+    request: AskRequest,
+    events: Channel<AiEvent>,
+) -> Result<(), Error> {
+    let group = request.group_id;
+    let reader = app.clone();
+    let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
+    let (provider, model, settings, secrets) = off_runtime(move || {
+        let ai = reader.state::<AiService>();
+        let (provider, settings, model) = ai.provider_for(group)?;
+        // From the same read as the provider, so a save in between cannot mix the two.
+        let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&model))?;
+        let connections = reader.state::<ConnectionService>().list()?;
+        Ok((
+            provider,
+            model,
+            settings,
+            ai.secrets_for_redaction(&connections)?,
+        ))
+    })
+    .await?;
+    let place = request.place.clone();
+    let request_id = request.request_id.clone();
+    // The task waits until the Ask is registered, so it can never finish before it starts.
+    let (go, registered) = tokio::sync::oneshot::channel::<()>();
+    let task_app = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        if registered.await.is_err() {
+            return;
+        }
+        let _finish = Finish {
+            app: task_app.clone(),
+            request_id: request.request_id.clone(),
+        };
+        let catalog = task_app.state::<ConnectionService>();
+        let asks = task_app.state::<AiService>();
+        let emit = |e: AiEvent| {
+            // R6.3: the answer's SQL goes into the register, whatever the Ask's Connection.
+            if let AiEvent::Done { sql_blocks, .. } = &e {
+                for block in sql_blocks {
+                    catalog.register_ai_sql(&block.statements);
+                }
+            }
+            // The save of the answer writes it into the record.
+            if let AiEvent::Context { info } = &e {
+                asks.remember_context(&request.request_id, info.clone());
+            }
+            // A page that has gone away is not an error.
+            let _ = events.send(e);
+        };
+        // Every error has already been sent as the last event.
+        let _ = ask_stream(
+            &*provider, &*catalog, &settings, &model, &secrets, &request, &emit,
+        )
+        .await;
+    });
+    let ai = app.state::<AiService>();
+    if let Err(e) = ai.start(&place, &request_id, task.inner().abort_handle()) {
+        task.abort();
+        return Err(e);
+    }
+    let _ = go.send(());
+    Ok(())
+}
+
+/// Stops a running Ask; false when it had already ended.
+#[tauri::command]
+pub fn ai_cancel(ai: Ai<'_>, request_id: String) -> bool {
+    ai.cancel(&request_id)
 }
 
 #[tauri::command]
-pub fn list_ai_threads(ai: Ai<'_>, place: String) -> Result<Vec<AiThread>, Error> {
-    ai.list_threads(&place)
+pub fn list_ai_threads(
+    ai: Ai<'_>,
+    connections: State<'_, ConnectionService>,
+    place: String,
+) -> Result<Vec<AiThread>, Error> {
+    let threads = ai.list_threads(&place)?;
+    // Stored answers can be inserted and run again, so their SQL is registered again.
+    connections.register_ai_threads(&threads);
+    Ok(threads)
 }
 
+/// Saves a thread; `request_id` is the Ask whose answer this save adds, so the Core writes
+/// the AI Context that Ask used into the answer's record.
 #[tauri::command]
-pub fn save_ai_thread(ai: Ai<'_>, thread: AiThread) -> Result<(), Error> {
-    ai.save_thread(&thread)
+pub fn save_ai_thread(
+    ai: Ai<'_>,
+    thread: AiThread,
+    request_id: Option<String>,
+) -> Result<(), Error> {
+    ai.save_thread_for(&thread, request_id.as_deref())
+}
+
+/// Keeps what the user did with an answer's SQL (Insert, Insert commented out, Open in new
+/// tab) with the answer, for the Diagram's "You:" box. `None` for an answer kept before
+/// records were.
+#[tauri::command]
+pub fn ai_record_action(
+    ai: Ai<'_>,
+    thread_id: ThreadId,
+    message_at: i64,
+    kind: AnswerActionKind,
+) -> Result<Option<AnswerAction>, Error> {
+    ai.record_action(thread_id, message_at, kind)
 }
 
 #[tauri::command]
@@ -814,13 +1053,34 @@ pub fn clear_ai_threads(ai: Ai<'_>, place: String) -> Result<(), Error> {
     ai.clear_threads(&place)
 }
 
+/// Runs `f` on the blocking pool: Credential Manager reads block, and an async command
+/// must not hold a runtime worker while they do.
+async fn off_runtime<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| Error::File(format!("cannot read the saved secrets: {e}")))?
+}
+
+/// What the Ask would send, built in the Core: the Sends list and "Show exactly".
 #[tauri::command]
-pub fn ai_ask(
-    ai: Ai<'_>,
-    group_id: Option<GroupId>,
-    request: AiRequest,
-) -> Result<AiAnswer, Error> {
-    ai.ask(group_id, &request)
+pub async fn ai_preview(
+    app: tauri::AppHandle,
+    service: Service<'_>,
+    request: AskRequest,
+) -> Result<Preview, Error> {
+    let group = request.group_id;
+    let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
+    let (settings, model, secrets) = off_runtime(move || {
+        let ai = app.state::<AiService>();
+        let settings = ai.settings(group)?.settings;
+        let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&settings.model))?;
+        let connections = app.state::<ConnectionService>().list()?;
+        Ok((settings, model, ai.secrets_for_redaction(&connections)?))
+    })
+    .await?;
+    preview(&*service, &settings, &model, &secrets, &request).await
 }
 
 /// Opens an https link (an icon set's source in Icon credits) in the system browser. The
@@ -831,4 +1091,34 @@ pub async fn open_url(url: String) -> Result<(), Error> {
     tauri::async_runtime::spawn_blocking(move || crate::browser::open(&url))
         .await
         .map_err(|e| Error::File(format!("The browser didn't open: {e}")))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// On a one-thread runtime, `f` waits for a task on that runtime. It only gets its
+    /// answer if `f` runs off the runtime's thread.
+    #[test]
+    fn credential_reads_run_off_the_runtime() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let got = rt.block_on(async move {
+            let reply = tokio::spawn(async move {
+                let _ = tx.send("read");
+            });
+            let got = off_runtime(move || {
+                rx.recv_timeout(Duration::from_secs(5))
+                    .map_err(|e| Error::File(e.to_string()))
+            })
+            .await;
+            reply.await.unwrap();
+            got
+        });
+        assert_eq!(got.unwrap(), "read");
+    }
 }

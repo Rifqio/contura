@@ -1,0 +1,4 @@
+data: {"choices":[{"index":0,"delta":{"content":"SELECT "},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"content":"name FROM"},"finish_reason":null}]}
+

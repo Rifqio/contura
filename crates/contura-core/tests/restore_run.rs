@@ -101,6 +101,7 @@ impl Fx {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: setup.production,
             read_only: setup.read_only,
         };

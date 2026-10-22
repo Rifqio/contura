@@ -461,6 +461,13 @@ impl JobCtx {
         }
     }
 
+    /// Marks every AI Context of `connection` stale: the job changed its schema, or may have.
+    pub fn mark_ai_context_stale(&self, connection: ConnectionId) {
+        if let Ok(store) = self.shared.store.lock() {
+            let _ = crate::ai::context::store::mark_stale(store.conn(), connection);
+        }
+    }
+
     /// Sends `event` as the final one, keeps it for `attach`, and leaves the running list.
     fn end(&mut self, event: JobEvent) {
         if self.done {

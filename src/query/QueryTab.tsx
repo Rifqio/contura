@@ -773,7 +773,12 @@ export default function QueryTab({
   const askConnection = connection
     ? { id: connection.id, name: connection.name, dialect: connection.dialect, database: schemaDb, access: connection.aiAccess }
     : null;
-  const askSetup: AskSetup | undefined = ask && { ...ask, connection: askConnection, schema: askSchema };
+  const askSetup: AskSetup | undefined = ask && {
+    ...ask,
+    connection: askConnection,
+    schema: askSchema,
+    insertTarget: { editor: () => editorRef.current, name: tab.name },
+  };
 
   const active = state.items[state.active];
   const errorMark = active?.state.s === "error" ? wordAt(tab.text, active.state.at) : null;
@@ -916,6 +921,8 @@ export default function QueryTab({
               groupId={ask.groupId}
               onOpenInChat={ask.onOpenInChat}
               onOpenSettings={ask.onOpenSettings}
+              insertTarget={{ editor: () => editorRef.current, name: tab.name }}
+              onOpenInNewTab={ask.onOpenInNewTab}
               onClose={() => {
                 setAskSel(null);
                 editorRef.current?.focus();

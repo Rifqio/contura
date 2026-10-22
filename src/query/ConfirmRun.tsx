@@ -172,7 +172,7 @@ export default function ConfirmRun({
   const does = DOES[verb];
 
   // One block for every statement, a blank line between them. Writes get the Production band, and
-  // each statement's first line its tag.
+  // each statement's first line its tag (and "Written by the assistant" for AI SQL from the register).
   const marks: SqlMark[] = [];
   let next = 1;
   const statements = "statements" in verdict ? verdict.statements : [];
@@ -182,7 +182,13 @@ export default function ConfirmRun({
       const lines = s.text.split("\n").length;
       const write = s.class === "write";
       const tag = dropsData.includes(i) ? ("dropsData" as const) : write ? ("writes" as const) : ("reads" as const);
-      marks.push({ firstLine: next, lastLine: next + lines - 1, tag, ...(write && { band: "prod" as const }) });
+      marks.push({
+        firstLine: next,
+        lastLine: next + lines - 1,
+        tag,
+        ...(write && { band: "prod" as const }),
+        ...(s.byAssistant && { byAssistant: true }),
+      });
       next += lines + 1;
       return s.text;
     })
@@ -262,6 +268,16 @@ export default function ConfirmRun({
               {verb === "Save" && " They run in one transaction."}
               {countNote && ` ${countNote}`}
             </p>
+            {statements.map(
+              (s, i) =>
+                s.reason && (
+                  <p key={i} className="confirm-count confirm-reason">
+                    {statements.length === 1
+                      ? `Written by the assistant and ${s.reason}.`
+                      : `Statement ${(i + 1).toLocaleString("en-US")} was written by the assistant and ${s.reason}.`}
+                  </p>
+                ),
+            )}
             <div className="confirm-sql" tabIndex={0} data-autofocus aria-label="SQL to run, read-only">
               <SqlBlock sql={sql} dialect={dialect ?? "postgres"} marks={marks} />
             </div>

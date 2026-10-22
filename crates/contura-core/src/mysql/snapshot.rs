@@ -55,6 +55,61 @@ fn typed_default(raw: &str, expression_default: bool, data_type: &str) -> SmDefa
     }
 }
 
+/// A row count and a CRC32 sum per catalog view of the database: columns (with defaults
+/// and comments), key columns, index columns and tables (with comments). `SUM` keeps it
+/// one row per view without `GROUP_CONCAT`'s length cap. The last column counts the
+/// database in SCHEMATA: 0 when it is missing or hidden from the user, which is an error
+/// rather than an empty, stable fingerprint. Catalog only, no table scans.
+const FINGERPRINT_SQL: &str = "SELECT \
+    CAST(c.n AS CHAR), CAST(c.s AS CHAR), CAST(k.n AS CHAR), CAST(k.s AS CHAR), \
+    CAST(i.n AS CHAR), CAST(i.s AS CHAR), CAST(t.n AS CHAR), CAST(t.s AS CHAR), \
+    CAST(d.n AS CHAR) FROM \
+    (SELECT COUNT(*) AS n, COALESCE(SUM(CRC32(CONCAT_WS('|', TABLE_NAME, COLUMN_NAME, \
+       ORDINAL_POSITION, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA, \
+       COLUMN_COMMENT))), 0) AS s \
+       FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ?) c, \
+    (SELECT COUNT(*) AS n, COALESCE(SUM(CRC32(CONCAT_WS('|', CONSTRAINT_NAME, TABLE_NAME, \
+       COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME))), 0) AS s \
+       FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ?) k, \
+    (SELECT COUNT(*) AS n, COALESCE(SUM(CRC32(CONCAT_WS('|', TABLE_NAME, INDEX_NAME, \
+       COLUMN_NAME, SEQ_IN_INDEX, NON_UNIQUE))), 0) AS s \
+       FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ?) i, \
+    (SELECT COUNT(*) AS n, COALESCE(SUM(CRC32(CONCAT_WS('|', TABLE_NAME, TABLE_TYPE, \
+       TABLE_COMMENT))), 0) AS s \
+       FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?) t, \
+    (SELECT COUNT(*) AS n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?) d";
+
+pub(crate) async fn schema_fingerprint(pool: &Pool, database: &str) -> Result<String> {
+    let mut conn = pool.get_conn().await.map_err(query_err)?;
+    let row: Option<mysql_async::Row> = conn
+        .exec_first(
+            FINGERPRINT_SQL,
+            (database, database, database, database, database),
+        )
+        .await
+        .map_err(query_err)?;
+    let row = row.ok_or_else(|| Error::Query("the catalog returned no fingerprint".into()))?;
+    let part = |i: usize| -> String {
+        row.get::<Option<String>, _>(i)
+            .flatten()
+            .unwrap_or_default()
+    };
+    if part(8) == "0" {
+        return Err(Error::NotFound(format!("database {database} not found")));
+    }
+    Ok(format!(
+        "mysql:{}:{}/{}:{}/{}:{}/{}:{}",
+        part(0),
+        part(1),
+        part(2),
+        part(3),
+        part(4),
+        part(5),
+        part(6),
+        part(7)
+    ))
+}
+
 pub(crate) async fn schema_snapshot(pool: &Pool, database: &str) -> Result<SchemaModel> {
     let mut conn = pool.get_conn().await.map_err(query_err)?;
     let mut skipped = Vec::new();

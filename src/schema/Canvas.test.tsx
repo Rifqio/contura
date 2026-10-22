@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, expect, test, vi } from "vitest";
-import { routeInvoke } from "../test/invoke";
+import type { AiAccess, AskRequest } from "../api/types";
+import { fakePreview } from "../test/aiPreview";
+import { callsTo, routeInvoke } from "../test/invoke";
 import type { AskContext, AskKit } from "../assistant/context";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { applyEdits, renameColumn, renameTable } from "../lang/dbml/edits";
@@ -12,7 +14,12 @@ import Canvas, { edgeSides, edgesFor, refFromConnection } from "./Canvas";
 import { sourceConnectionFor } from "./sourceConnection";
 import { autoLayout, followRenames, parseLayout, serializeLayout } from "./layout";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  Channel: class {
+    onmessage: (e: unknown) => void = () => {};
+  },
+}));
 
 beforeAll(mockReactFlowDom);
 
@@ -255,7 +262,8 @@ test("ask_ai_opens_the_inline_ask_for_the_card", async () => {
       keySaved: false,
       keyLast4: null,
     }),
-    ai_ask: () => {
+    ai_preview: (a) => fakePreview(a.request as AskRequest),
+    ai_ask_stream: () => {
       throw { kind: "ai", message: { kind: "notConfigured" } };
     },
   });
@@ -265,9 +273,9 @@ test("ask_ai_opens_the_inline_ask_for_the_card", async () => {
   await userEvent.click(within(stores).getByRole("button", { name: "Table actions" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Ask AI" }));
   expect(screen.getByRole("button", { name: "Generate DBML for…" })).toBeTruthy();
-  // The whole model is sent, so the pill counts the model's tables, not the card's.
-  expect(screen.getByRole("button", { name: `DBML · ${KFC_MODEL.tables.length} tables` })).toBeTruthy();
-  expect(KFC_MODEL.tables.length).toBeGreaterThan(1);
+  expect(await screen.findByRole("button", { name: /^DBML/ })).toBeTruthy();
+  // The whole model goes to the Core, not just the card.
+  expect((callsTo("ai_preview")[0].request as AskRequest).focus.dbml).toBe(KFC_TEXT);
   await userEvent.click(screen.getByRole("button", { name: "Explain" }));
   expect(await screen.findByText("Connect an AI provider in Settings")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Connect a provider" }));
@@ -278,21 +286,28 @@ test("ask_ai_opens_the_inline_ask_for_the_card", async () => {
 
 const KIT: AskKit = { groupId: null, inlineAsk: true, errorAsk: true, onOpenSettings: () => {} };
 
-const sent: string[] = [];
+/** The Core locks every item but the question for a Connection that shares nothing or is gone. */
+let coreAccess: AiAccess | "gone" = "schema";
+const sent = () => callsTo("ai_ask_stream").map((c) => c.request as AskRequest);
+const lockedPreview = (a: Record<string, unknown>) => {
+  const r = a.request as AskRequest;
+  const locked = coreAccess === "gone" ? "No Connection is chosen" : coreAccess === "never" ? "KFC shop shares nothing with AI" : null;
+  return fakePreview(r, locked);
+};
+const SETTINGS = () => ({
+  settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
+  groupOverride: false,
+  keySaved: false,
+  keyLast4: null,
+});
 
 async function openCardAsk(connection?: AskContext["connection"]) {
-  sent.length = 0;
   routeInvoke({
-    ai_ask: (args: unknown) => {
-      sent.push(JSON.stringify(args));
+    ai_ask_stream: () => {
       throw { kind: "ai", message: { kind: "notConfigured" } };
     },
-    ai_settings: () => ({
-      settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
-      groupOverride: false,
-      keySaved: false,
-      keyLast4: null,
-    }),
+    ai_preview: lockedPreview,
+    ai_settings: SETTINGS,
   });
   renderCanvas(false, { getDbml: () => KFC_TEXT, label: "shop.dbml", kit: KIT, connection });
   const stores = screen.getByRole("group", { name: "Table stores" });
@@ -300,38 +315,43 @@ async function openCardAsk(connection?: AskContext["connection"]) {
   await userEvent.click(screen.getByRole("menuitem", { name: "Ask AI" }));
 }
 
-test("card_ask_from_never_connection_sends_no_dbml", async () => {
+test("card_ask_from_never_connection_leaves_the_gate_to_the_core", async () => {
+  coreAccess = "never";
   await openCardAsk({ id: "c1", name: "KFC shop", dialect: "postgres", database: "shop", access: "never" });
-  expect(screen.queryByRole("button", { name: /^DBML/ })).toBeNull();
+  const dbml = await screen.findByRole("button", { name: /^DBML/ });
+  expect(dbml.getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getAllByText("KFC shop shares nothing with AI").length).toBeGreaterThan(0);
   await userEvent.click(screen.getByRole("button", { name: "Explain" }));
   await screen.findByText("Connect an AI provider in Settings");
-  expect(sent).toHaveLength(1);
-  expect(sent[0]).not.toContain("CREATE");
-  expect(sent[0]).not.toContain("stores");
+  expect(sent()).toHaveLength(1);
+  // The Core reads the stored Connection's access and drops the DBML itself.
+  expect(sent()[0].connectionId).toBe("c1");
 });
 
 test("card_ask_without_source_still_sends_dbml", async () => {
+  coreAccess = "schema";
   await openCardAsk(undefined);
-  expect(screen.getByRole("button", { name: `DBML · ${KFC_MODEL.tables.length} tables` }).getAttribute("aria-disabled")).toBeNull();
+  expect((await screen.findByRole("button", { name: /^DBML · not tied to a Connection/ })).getAttribute("aria-disabled")).toBeNull();
+  const r = callsTo("ai_preview")[0].request as AskRequest;
+  expect(r.connectionId).toBeNull();
+  expect(r.focus.untiedModel).toBe(true);
+  expect(r.focus.dbml).toBe(KFC_TEXT);
 });
 
-test("card_ask_with_deleted_source_connection_sends_no_dbml", async () => {
+test("card_ask_with_deleted_source_connection_names_the_gone_connection", async () => {
+  coreAccess = "gone";
   await openCardAsk(sourceConnectionFor("gone", "postgres", []));
-  expect(screen.queryByRole("button", { name: /^DBML/ })).toBeNull();
+  expect((await screen.findByRole("button", { name: /^DBML/ })).getAttribute("aria-disabled")).toBe("true");
   await userEvent.click(screen.getByRole("button", { name: "Explain" }));
   await screen.findByText("Connect an AI provider in Settings");
-  expect(sent[0]).not.toContain("stores");
+  // The Core finds no stored Connection with this id and sends the question only.
+  expect(sent()[0].connectionId).toBe("gone");
+  expect(sent()[0].focus.untiedModel).toBe(false);
 });
 
 test("card_ask_follows_live_access_changes", async () => {
-  routeInvoke({
-    ai_settings: () => ({
-      settings: { provider: null, preset: null, baseUrl: "", model: "", temperature: null, maxTokens: null, inlineAsk: true, errorAsk: true },
-      groupOverride: false,
-      keySaved: false,
-      keyLast4: null,
-    }),
-  });
+  coreAccess = "never";
+  routeInvoke({ ai_settings: SETTINGS, ai_preview: lockedPreview });
   const layout = { version: 1 as const, tables: { "public.stores": { x: 0, y: 0 }, "public.orders": { x: 320, y: 0 } } };
   const view = (access: NonNullable<AskContext["connection"]>["access"]) => (
     <div style={{ width: 800, height: 600 }}>
@@ -351,16 +371,18 @@ test("card_ask_follows_live_access_changes", async () => {
       />
     </div>
   );
-  const pill = { name: `DBML · ${KFC_MODEL.tables.length} tables` };
+  const pill = () => screen.findByRole("button", { name: /^DBML/ });
   const { rerender } = render(view("never"));
   const stores = () => screen.getByRole("group", { name: "Table stores" });
   await userEvent.click(within(stores()).getByRole("button", { name: "Table actions" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Ask AI" }));
-  expect(screen.queryByRole("button", pill)).toBeNull();
+  expect((await pill()).getAttribute("aria-disabled")).toBe("true");
+  coreAccess = "schema";
   rerender(view("schema"));
-  expect(await screen.findByRole("button", pill)).toBeTruthy();
+  await waitFor(async () => expect((await pill()).getAttribute("aria-disabled")).toBeNull());
+  coreAccess = "never";
   rerender(view("never"));
-  await waitFor(() => expect(screen.queryByRole("button", pill)).toBeNull());
+  await waitFor(async () => expect((await pill()).getAttribute("aria-disabled")).toBe("true"));
 });
 
 test("a_card_has_no_ask_ai_without_the_setting", async () => {

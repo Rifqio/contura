@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callsTo, routeInvoke } from "../test/invoke";
+import type { ConnectionConfig } from "../api/types";
+import { connectionMenu } from "../sidebar/connectionMenu";
 import { type ConnectionActionsEnv, connectionActions } from "./connectionActions";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -16,6 +18,7 @@ function fakeEnv(over: Partial<ConnectionActionsEnv> = {}): ConnectionActionsEnv
     newQuery: vi.fn(),
     setNotice: vi.fn(),
     historyCleared: vi.fn(),
+    toast: vi.fn(),
     ...over,
   };
 }
@@ -138,5 +141,78 @@ describe("connectionActions", () => {
     await connectionActions(open).newQueryOn("a");
     expect(open.newQuery).toHaveBeenCalledWith("a");
     expect(open.openTracked).not.toHaveBeenCalled();
+  });
+
+  it("resync_item_hidden_at_never", () => {
+    const c: ConnectionConfig = {
+      id: "a",
+      name: "Shop",
+      dialect: "mysql",
+      host: "127.0.0.1",
+      port: 3306,
+      user: "root",
+      database: "shop",
+      ssl: { mode: "disable" },
+      file: null,
+      groupId: null,
+      queryTimeoutSecs: null,
+      aiAccess: "schema",
+      production: false,
+      readOnly: false,
+    };
+    const noop = () => {};
+    const act = { toggleOpen: noop, newQuery: noop, newVisualQuery: noop, newSchemaModel: noop, edit: noop, duplicate: noop, copyHost: noop, refresh: noop, move: noop, newGroup: noop, clearHistory: noop, remove: noop, resync: vi.fn() };
+    const keys = (conn: ConnectionConfig) => connectionMenu(conn, { open: true, groups: [] }, act).map((i) => i.key);
+    expect(keys(c)).toContain("resync");
+    const item = connectionMenu(c, { open: true, groups: [] }, act).find((i) => i.key === "resync")!;
+    expect(item.label).toBe("Re-sync AI context");
+    // Right after Refresh schema.
+    expect(keys(c)[keys(c).indexOf("refresh") + 1]).toBe("resync");
+    expect(keys({ ...c, aiAccess: "never" })).not.toContain("resync");
+    const { resync: _, ...withoutResync } = act;
+    expect(connectionMenu(c, { open: true, groups: [] }, withoutResync).map((i) => i.key)).not.toContain("resync");
+  });
+
+  it("resync_from_tree_toasts_the_tables_or_the_error", async () => {
+    routeInvoke({
+      ai_resync: ({ connectionId }) => {
+        if (connectionId === "bad") throw { kind: "invalidInput", message: "AI access is Never for this Connection." };
+        if (connectionId === "shut") return { connectionId, database: "shop", schema: "", sync: "automatic", builtAt: null, tableCount: 0, stale: false, check: { kind: "missing" } };
+        return { connectionId, database: "shop", schema: "", sync: "automatic", builtAt: 1, tableCount: 1042, stale: false, check: { kind: "rebuilt", reason: "asked" } };
+      },
+    });
+    const env = fakeEnv({ openIds: new Set(["a", "bad"]) });
+    await connectionActions(env).resyncFromTree("a");
+    expect(callsTo("ai_resync")).toEqual([{ connectionId: "a", database: null, schema: null }]);
+    expect(env.toast).toHaveBeenLastCalledWith({ kind: "success", text: "AI context re-synced: 1,042 tables." });
+    await connectionActions(env).resyncFromTree("bad");
+    expect(env.toast).toHaveBeenLastCalledWith({ kind: "error", text: "AI access is Never for this Connection." });
+    await connectionActions(env).resyncFromTree("shut");
+    expect(env.toast).toHaveBeenLastCalledWith({ kind: "error", text: "Open the Connection to re-sync." });
+  });
+
+  it("resync_from_tree_runs_once_at_a_time_and_says_so", async () => {
+    let finish: () => void = () => {};
+    routeInvoke({
+      ai_resync: ({ connectionId }) =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({ connectionId, database: "shop", schema: "", sync: "automatic", builtAt: 1, tableCount: 3, stale: false, check: { kind: "rebuilt", reason: "asked" } });
+        }),
+    });
+    const env = fakeEnv({ openIds: new Set(["a"]) });
+    const first = connectionActions(env).resyncFromTree("a");
+    expect(env.toast).toHaveBeenLastCalledWith({ kind: "info", text: "Re-syncing the AI context..." });
+    // Chosen again while it runs: no second call.
+    await connectionActions(env).resyncFromTree("a");
+    await vi.waitFor(() => expect(callsTo("ai_resync")).toHaveLength(1));
+    finish();
+    await first;
+    expect(env.toast).toHaveBeenLastCalledWith({ kind: "success", text: "AI context re-synced: 3 tables." });
+    // Done: it can run again.
+    const again = connectionActions(env).resyncFromTree("a");
+    await vi.waitFor(() => expect(callsTo("ai_resync")).toHaveLength(2));
+    finish();
+    await again;
   });
 });

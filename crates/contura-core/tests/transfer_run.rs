@@ -89,6 +89,7 @@ impl End {
                     file: Some(file),
                     query_timeout_secs: None,
                     ai_access: Default::default(),
+                    ai_sync: Default::default(),
                     production: false,
                     read_only: false,
                 };

@@ -50,6 +50,7 @@ async fn fixture_with(timeout: Option<u32>, production: bool, read_only: bool) -
             file: Some(file),
             query_timeout_secs: timeout,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production,
             read_only,
         })
@@ -149,6 +150,7 @@ async fn changing_ai_access_keeps_sessions_and_changes_only_that_field() {
         saved,
         ConnectionConfig {
             ai_access: AiAccess::Never,
+            ai_sync: Default::default(),
             ..before
         }
     );
@@ -680,6 +682,7 @@ async fn resave(f: &Fixture, production: bool, read_only: bool) {
             file: Some(file),
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production,
             read_only,
         })
@@ -745,6 +748,7 @@ async fn prepare_run_dialog_falls_back_to_the_configured_database() {
             file: None,
             query_timeout_secs: None,
             ai_access: Default::default(),
+            ai_sync: Default::default(),
             production: true,
             read_only: false,
         })

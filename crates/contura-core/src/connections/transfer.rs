@@ -338,6 +338,12 @@ impl ConnectionService {
                 Err(e) => (Outcome::Error, Some(plain_message(e))),
             };
             let rows = result.as_ref().map(|o| o.rows).ok();
+            // The target's AI Context: a run that ended Ok, or one that may have created
+            // tables before it failed, can have changed its schema.
+            let ddl = !plan.structure.is_empty() || !plan.after_rows.is_empty();
+            if result.is_ok() || ddl {
+                ctx.mark_ai_context_stale(inputs.target.id);
+            }
             ctx.history(NewHistory {
                 connection_id: inputs.target.id,
                 sql: history_text(&plan, &req, &source_name, &inputs.target.name, rows),
