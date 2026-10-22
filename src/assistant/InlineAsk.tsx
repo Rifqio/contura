@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { rowsLine, rowsState, rowsStateLine } from "./payload";
 import { aiConfirmKeyHost, aiKnownModels, aiSettings, setAiModelPrefs } from "../api/client";
 import type { AiSettingsView, ItemKind, ModelList, ModelPicks, SqlSchema } from "../api/types";
 import Icon from "../components/Icon";
@@ -11,7 +12,9 @@ import { type StreamEnd, stopText, useAnswerStream } from "./answerStream";
 import AnswerText from "./AnswerText";
 import { actionsFor, type AskContext, toAskRequest } from "./context";
 import type { InsertTarget } from "./InsertDiff";
+import { queueOffline } from "./offlineQueue";
 import Sends from "./Sends";
+import { sampleReads } from "./StepsView";
 import { useAiPreview } from "./usePreview";
 
 interface Props {
@@ -64,6 +67,7 @@ export default function InlineAsk({
   const [text, setText] = useState("");
   const [off, setOff] = useState<ItemKind[]>([]);
   const [values, setValues] = useState(false);
+  const [rows, setRows] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [models, setModels] = useState<ModelList | null>(null);
   /** Show log is open in place of the answer. */
@@ -100,17 +104,19 @@ export default function InlineAsk({
   const model = settings?.settings.provider ? settings.settings.model || null : null;
   const picks = model ? (settings?.settings.modelPrefs[model] ?? null) : null;
   const request = (question: string, action?: string, use?: Use) =>
-    toAskRequest(context, question, off, { rows: false, values }, {
+    toAskRequest(context, question, off, { rows, values }, {
       groupId,
       action,
       model: use?.id ?? model,
       picks: use?.picks ?? picks,
     });
   const previewed = useMemo(
-    () => toAskRequest(context, text.trim(), off, { rows: false, values }, { groupId, model, picks }),
-    [context, text, off, values, groupId, model, picks],
+    () => toAskRequest(context, text.trim(), off, { rows, values }, { groupId, model, picks }),
+    [context, text, off, rows, values, groupId, model, picks],
   );
   const { preview, error: previewError } = useAiPreview(previewed, context.connection?.access);
+
+  const rowsNow = rowsState(preview);
 
   const provider = settings?.settings.provider ?? null;
   const providerName = provider ? PROVIDERS[provider].name : undefined;
@@ -123,6 +129,10 @@ export default function InlineAsk({
       setValues((v) => !v);
       return;
     }
+    if (kind === "rows") {
+      setRows((v) => !v);
+      return;
+    }
     setOff((o) => (o.includes(kind) ? o.filter((k) => k !== kind) : [...o, kind]));
   };
 
@@ -131,6 +141,7 @@ export default function InlineAsk({
     if (!q || stream.running) return;
     const startedAt = Date.now();
     setShowLog(false);
+    setRows(false);
     setOutcome({ q, action, end: null, tries: 0, startedAt });
     const end = await stream.start(request(q, action, use));
     const same = before?.end?.error != null && aiErrorOf(before.end.error)?.kind === aiErrorOf(end.error)?.kind;
@@ -158,6 +169,16 @@ export default function InlineAsk({
     : streamRecord(stream);
   const sent = end ? sentLine(record, end.at) : null;
 
+  // A question kept while offline goes out through the shared queue, with the panel's, one at a time.
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const queuedOutcome = outcome?.end && aiErrorOf(outcome.end.error)?.kind === "offline" ? outcome : null;
+  const place = groupId ? `group:${groupId}` : "ungrouped";
+  useEffect(() => {
+    if (!queuedOutcome) return;
+    return queueOffline(`inline:${place}`, () => askRef.current(queuedOutcome.q, queuedOutcome.action, queuedOutcome));
+  }, [queuedOutcome, place]);
+
   /** Back to the question box with `q` in it. */
   const askAgain = (q: string) => {
     stream.reset();
@@ -172,10 +193,12 @@ export default function InlineAsk({
     return answerState(e.error, {
       providerName,
       provider,
+      keySaved: settings?.keySaved,
       onShowLog: openLog,
       model: current,
       models: models?.models ?? [],
       connectionName: context.connection?.name,
+      rowsRead: sampleReads(record),
       host: settings ? hostOf(settings.settings.baseUrl) : undefined,
       partial: e.partial,
       tries: o.tries,
@@ -184,6 +207,7 @@ export default function InlineAsk({
       onRetry: retry,
       onSendNow: retry,
       onCancelQueued: () => askAgain(o.q),
+      onAskAgain: () => askAgain(o.q),
       onUseModel: (id) => {
         const use = modelToUse(id, models?.models ?? [], settings?.settings ?? null);
         setModels((l) => l && { ...l, current: id });
@@ -267,7 +291,16 @@ export default function InlineAsk({
                 </button>
               ))}
             </div>
-            <Sends preview={preview} error={previewError} header={header} onToggle={toggle} withTip={false} />
+            <Sends
+              preview={preview}
+              error={previewError}
+              header={header}
+              onToggle={toggle}
+              connection={context.connection ? { name: context.connection.name, access: context.connection.access } : null}
+              withTip={false}
+            />
+            <p className={rowsNow.on ? "sends-note sends-rows-on" : "sends-note"}>{rowsLine(rowsNow, preview?.rows ?? null)}</p>
+            {rowsNow.allowed && <p className="sends-note">{rowsStateLine(rowsNow.on)}</p>}
           </>
         )}
         {!showLog && outcome && !stream.text && stream.running && <p className="muted">{stream.status ?? "Asking…"}</p>}

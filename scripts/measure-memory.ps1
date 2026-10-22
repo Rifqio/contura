@@ -12,9 +12,12 @@
 # Before running: open one Connection, close any table, and wait 30 s.
 # Drive the app by hand or over the remote debugging port, not with UI
 # automation: automation turns on Chromium accessibility and inflates every figure.
-# Exit codes: 0 under budget, 1 at or over budget, 2 contura.exe not running.
+# -ProcessId <n> measures that one process and its descendants only, so a test build is
+# read without the everyday Contura counted (two contura.exe can run at once).
+# Exit codes: 0 under budget, 1 at or over budget, 2 contura.exe (or the -ProcessId one) not running.
 
 param(
+    [int]$ProcessId = 0,
     [int]$Samples = 3,
     [int]$IntervalSeconds = 10
 )
@@ -23,7 +26,11 @@ $BudgetMB = 150
 
 function Measure-Once {
     $all = Get-CimInstance Win32_Process
-    $roots = @($all | Where-Object { $_.Name -eq 'contura.exe' })
+    $roots = if ($ProcessId -ne 0) {
+        @($all | Where-Object { [int]$_.ProcessId -eq $ProcessId })
+    } else {
+        @($all | Where-Object { $_.Name -eq 'contura.exe' })
+    }
     if ($roots.Count -eq 0) { return $null }
 
     $byParent = @{}
@@ -88,7 +95,8 @@ for ($i = 1; $i -le $Samples; $i++) {
     if ($i -gt 1) { Start-Sleep -Seconds $IntervalSeconds }
     $s = Measure-Once
     if ($null -eq $s) {
-        [Console]::Error.WriteLine('contura.exe is not running.')
+        $what = if ($ProcessId -ne 0) { "Process $ProcessId is not running." } else { 'contura.exe is not running.' }
+        [Console]::Error.WriteLine($what)
         exit 2
     }
     Write-Host ("Sample {0} of {1}: {2:N1} MB private, {3:N1} MB working set" -f $i, $Samples, $s.PrivateMB, $s.WorkingSetMB)

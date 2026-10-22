@@ -2,6 +2,7 @@
 
 use std::ops::Range;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use regex::Regex;
 
@@ -20,11 +21,21 @@ const QUESTION_CAP: usize = 16 * 1024;
 const ERROR_CAP: usize = 4 * 1024;
 const SQL_CAP: usize = 64 * 1024;
 const OUTLINE_CAP: usize = 32 * 1024;
+/// A diagram item's cap after cleaning. Never cut: the changes are written against the
+/// whole text, so an item over it stops the Ask with `TooLarge`.
+pub const DIAGRAM_CAP: usize = 160 * 1024;
 
-/// The level an item kind needs: 0 question, 1 schema, 2 query text, 3 rows.
+/// What `need` gives a kind no AI access level lets go.
+const NO_LEVEL: u8 = u8::MAX;
+
+/// The level an item kind needs: 0 question, 1 schema, 2 query text, 3 rows. History
+/// needs none of its own: `select_history` gates each turn and summary by the kinds it
+/// carried (R1.7), and the memory stage sends none at Never. Diagram text is not database
+/// data: no level lets it go, and only a diagram Ask opens it.
 fn need(kind: ItemKind) -> u8 {
     match kind {
-        ItemKind::Question => 0,
+        ItemKind::Diagram => NO_LEVEL,
+        ItemKind::Question | ItemKind::History | ItemKind::Summary => 0,
         ItemKind::Names | ItemKind::Cards | ItemKind::Outline | ItemKind::Dbml => 1,
         ItemKind::Sql | ItemKind::Error | ItemKind::SavedQueries => 2,
         ItemKind::Values | ItemKind::Rows => 3,
@@ -56,6 +67,9 @@ pub fn lock_reason(access: AiAccess, kind: ItemKind, connection_name: &str) -> O
     let need = need(kind);
     if need == 0 {
         return None;
+    }
+    if need == NO_LEVEL {
+        return Some("Only a diagram Ask sends diagram text".into());
     }
     if connection_name.is_empty() {
         return Some("No Connection is chosen".into());
@@ -271,6 +285,7 @@ fn cap_for(kind: ItemKind) -> Option<usize> {
         // The AI Context stores each saved query capped at 4 KB; this is the outer guard.
         ItemKind::SavedQueries => Some(SQL_CAP),
         ItemKind::Outline => Some(OUTLINE_CAP),
+        ItemKind::Rows => Some(crate::ai::rows::ROWS_ITEM_CAP),
         // Cards hold many tables; each card is capped where it is built.
         _ => None,
     }
@@ -303,6 +318,22 @@ fn cleaned_row(cleaned: &mut Vec<[String; 3]>, place: &str, rule: &str, sent_as:
 pub struct InputRail {
     /// The saved provider keys and every saved Connection password, matched exactly.
     pub secrets: Secrets,
+    /// The secrets the last run replaced, for the caller's Cleaning row.
+    found: AtomicUsize,
+}
+
+impl InputRail {
+    pub fn new(secrets: Secrets) -> Self {
+        Self {
+            secrets,
+            found: AtomicUsize::new(0),
+        }
+    }
+
+    /// How many secrets the last run replaced.
+    pub fn secrets_found(&self) -> usize {
+        self.found.load(Ordering::Relaxed)
+    }
 }
 
 impl Rail for InputRail {
@@ -318,10 +349,14 @@ impl Rail for InputRail {
             values: switched(ItemKind::Values),
         };
         let mask_values = !allowed(ask.access, ItemKind::Values, switches);
-        let (access, untied_model) = (ask.access, ask.untied_model);
+        let (access, untied_model, diagram) = (ask.access, ask.untied_model, ask.diagram);
         // R1.4: an untied Schema Model's DBML goes with no Connection; nothing else does.
-        let open =
-            |kind| allowed(access, kind, switches) || (untied_model && kind == ItemKind::Dbml);
+        // A diagram's text goes only on a diagram Ask, under no AI access level.
+        let open = |kind| {
+            allowed(access, kind, switches)
+                || (untied_model && kind == ItemKind::Dbml)
+                || (diagram && kind == ItemKind::Diagram)
+        };
         // With no Dialect, the MySQL lexer also reads double quotes as strings, so it hides more.
         let dialect = ask.dialect.unwrap_or(DialectKind::MySql);
         let (mut locked, mut masked, mut secrets, mut invisible, mut capped) = (0, 0, 0, 0, 0);
@@ -364,16 +399,34 @@ impl Rail for InputRail {
                 masked += numbers + strings;
                 text = hidden;
             }
+            if item.kind == ItemKind::Diagram && text.len() > DIAGRAM_CAP {
+                // Never cut: a cut text would have the changes written against part of it.
+                return RailOutcome::Stop(crate::error::Error::Ai(crate::ai::AiError::TooLarge));
+            }
             if let Some(cap) = cap_for(item.kind) {
                 let cut = cap_chars(&text, cap).len();
                 if cut < text.len() {
+                    let whole = text.as_bytes()[cut] == b'\n';
                     text.truncate(cut);
+                    if item.kind == ItemKind::Rows {
+                        // A rows item is cut at a line end, as `trim_to_cap` does: a
+                        // broken row line is never sent or counted, and a header with no
+                        // row is nothing to send.
+                        if !whole {
+                            let at = text.rfind('\n').unwrap_or(0);
+                            text.truncate(at);
+                        }
+                        if !text.contains('\n') {
+                            text.clear();
+                        }
+                    }
                     capped += 1;
                 }
             }
             item.text = text;
         }
 
+        self.found.store(secrets, Ordering::Relaxed);
         log.push(
             Level::Info,
             "rail.input",
@@ -443,14 +496,13 @@ mod tests {
             dialect: Some(DialectKind::Postgres),
             notes: Vec::new(),
             untied_model: false,
+            diagram: false,
             cleaned: Vec::new(),
         }
     }
 
     fn rail() -> InputRail {
-        InputRail {
-            secrets: Secrets::default(),
-        }
+        InputRail::new(Secrets::default())
     }
 
     #[test]
@@ -505,6 +557,88 @@ mod tests {
         };
         assert!(allowed(SchemaQueryRows, Rows, rows_only));
         assert!(!allowed(SchemaQueryRows, Values, rows_only));
+    }
+
+    #[test]
+    fn diagram_passes_only_on_a_diagram_ask() {
+        use AiAccess::*;
+        let on = Switches {
+            rows: true,
+            values: true,
+        };
+        for level in [Never, Schema, SchemaQuery, SchemaQueryRows] {
+            assert!(!allowed(level, ItemKind::Diagram, on), "{level:?}");
+            assert!(lock_reason(level, ItemKind::Diagram, "shop").is_some());
+        }
+        // A database Ask, at any level: the diagram item is locked and emptied.
+        let mut a = ask(SchemaQueryRows, vec![item(ItemKind::Diagram, "A > B")]);
+        rail().run(&mut a, &mut Log::new());
+        assert!(!a.items[0].on);
+        assert!(a.items[0].text.is_empty());
+        // A diagram Ask at Never (no Connection): it goes, cleaned.
+        let mut a = ask(
+            Never,
+            vec![
+                item(ItemKind::Question, "q"),
+                item(ItemKind::Diagram, "A\u{200B} > B"),
+            ],
+        );
+        a.diagram = true;
+        rail().run(&mut a, &mut Log::new());
+        assert!(a.items.iter().all(|i| i.on));
+        assert_eq!(a.items[1].text, "A > B");
+        // Nothing else of a database opens on a diagram Ask.
+        let mut a = ask(Never, vec![item(ItemKind::Cards, "orders(id int)")]);
+        a.diagram = true;
+        rail().run(&mut a, &mut Log::new());
+        assert!(!a.items[0].on);
+    }
+
+    #[test]
+    fn the_rail_returns_its_secrets_count() {
+        let rail = InputRail::new(Secrets {
+            keys: Vec::new(),
+            passwords: vec!["hunter2pass".into()],
+        });
+        assert_eq!(rail.secrets_found(), 0);
+        let mut a = ask(
+            AiAccess::Never,
+            vec![item(
+                ItemKind::Diagram,
+                "hunter2pass and IDENTIFIED BY 'x' and hunter2pass",
+            )],
+        );
+        a.diagram = true;
+        rail.run(&mut a, &mut Log::new());
+        assert_eq!(rail.secrets_found(), 3);
+        let mut a = ask(AiAccess::Never, vec![item(ItemKind::Question, "q")]);
+        rail.run(&mut a, &mut Log::new());
+        assert_eq!(rail.secrets_found(), 0);
+    }
+
+    #[test]
+    fn diagram_over_its_cap_stops_and_is_not_cut() {
+        let full = "a".repeat(DIAGRAM_CAP);
+        let mut a = ask(AiAccess::Never, vec![item(ItemKind::Diagram, &full)]);
+        a.diagram = true;
+        assert!(matches!(
+            rail().run(&mut a, &mut Log::new()),
+            RailOutcome::Pass
+        ));
+        assert_eq!(a.items[0].text.len(), DIAGRAM_CAP);
+        let mut a = ask(
+            AiAccess::Never,
+            vec![item(ItemKind::Diagram, &format!("{full}b"))],
+        );
+        a.diagram = true;
+        let out = rail().run(&mut a, &mut Log::new());
+        assert!(
+            matches!(
+                out,
+                RailOutcome::Stop(crate::error::Error::Ai(crate::ai::AiError::TooLarge))
+            ),
+            "{out:?}"
+        );
     }
 
     #[test]
@@ -569,6 +703,56 @@ mod tests {
     }
 
     #[test]
+    fn rows_capped_not_masked() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig_Nature-123";
+        let mut text = format!("orders(id, note)\n[42,\"x\"]\n[1,\"{jwt}\"]\n");
+        while text.len() < 20 * 1024 {
+            text.push_str("[7,\"yyyyyyyyyyyyyyyyyyyyyyyyyy\"]\n");
+        }
+        let mut a = ask(AiAccess::SchemaQueryRows, vec![item(ItemKind::Rows, &text)]);
+        let out = rail().run(&mut a, &mut Log::new());
+        assert!(matches!(out, RailOutcome::Changed(_)));
+        let got = &a.items[0].text;
+        assert!(
+            got.len() <= 16 * 1024 && got.len() > 15 * 1024,
+            "{}",
+            got.len()
+        );
+        assert!(got.contains("[42,\"x\"]"), "{got}");
+        assert!(!got.contains("eyJhbGci"), "{got}");
+        assert!(got.contains("[redacted]"));
+        assert!(a.cleaned.iter().any(|r| r[0] == "Rows"), "{:?}", a.cleaned);
+    }
+
+    #[test]
+    fn rows_cap_cuts_at_a_line_end() {
+        // An item over 16 KB (redaction can grow one): the cut drops the partial last row.
+        let line = format!("[\"{}\"]", "y".repeat(997));
+        let mut text = "orders(note)".to_string();
+        while text.len() < 20 * 1024 {
+            text.push('\n');
+            text.push_str(&line);
+        }
+        let mut a = ask(AiAccess::SchemaQueryRows, vec![item(ItemKind::Rows, &text)]);
+        rail().run(&mut a, &mut Log::new());
+        let got = &a.items[0].text;
+        assert!(got.len() <= 16 * 1024, "{}", got.len());
+        let rows: Vec<&str> = got.lines().skip(1).collect();
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter().all(|l| *l == line),
+            "a broken row line was kept"
+        );
+        assert!(!got.ends_with('\n'));
+
+        // Only the header left: nothing to send.
+        let big = format!("t(a)\n[\"{}\"]", "z".repeat(20 * 1024));
+        let mut a = ask(AiAccess::SchemaQueryRows, vec![item(ItemKind::Rows, &big)]);
+        rail().run(&mut a, &mut Log::new());
+        assert_eq!(a.items[0].text, "");
+    }
+
+    #[test]
     fn unknown_connection_is_question_only() {
         // R1.3: with no Connection the builder uses `Never`.
         let items = ALL_KINDS.iter().map(|k| item(*k, "select 1")).collect();
@@ -578,6 +762,7 @@ mod tests {
             dialect: None,
             notes: Vec::new(),
             untied_model: false,
+            diagram: false,
             cleaned: Vec::new(),
         };
         let mut log = Log::new();

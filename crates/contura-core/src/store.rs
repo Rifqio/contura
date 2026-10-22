@@ -1,4 +1,4 @@
-use crate::ai::{AiThread, ThreadId};
+use crate::ai::{AiRole, AiThread, ThreadId, memory, tool_uses};
 use crate::error::{Error, Result};
 use crate::model::{ConnectionConfig, ConnectionId, Group, GroupId};
 use crate::query::{
@@ -9,10 +9,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
 /// The `user_version` this build writes and understands.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 7;
 
 /// Chat threads returned per place.
 pub const THREAD_LIMIT: i64 = 50;
+
+/// Messages kept per chat thread.
+pub const MESSAGE_LIMIT: usize = 200;
 
 /// Query History kept per Connection.
 pub const HISTORY_LIMIT: i64 = 1000;
@@ -127,6 +130,69 @@ impl AppStore {
             )
             .map_err(store_err)?;
         }
+        if version < 6 {
+            // Conversation memory: a thread's Topics, their search rows and its compactions.
+            db.execute_batch(
+                "BEGIN;
+                 CREATE TABLE ai_topic (
+                   thread_id TEXT NOT NULL, seq INTEGER NOT NULL, place TEXT NOT NULL,
+                   title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+                   summary_by TEXT NOT NULL DEFAULT '', tables TEXT NOT NULL DEFAULT '[]',
+                   connection_id TEXT, database TEXT, kinds TEXT NOT NULL DEFAULT '[]',
+                   first_at INTEGER NOT NULL, last_at INTEGER NOT NULL,
+                   messages INTEGER NOT NULL, closed INTEGER NOT NULL DEFAULT 0,
+                   PRIMARY KEY (thread_id, seq));
+                 CREATE VIRTUAL TABLE ai_topic_fts USING fts5(
+                   thread_id UNINDEXED, seq UNINDEXED, place UNINDEXED,
+                   title, summary, tables, questions,
+                   tokenize = \"unicode61 tokenchars '_'\");
+                 CREATE TABLE ai_compaction (
+                   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, topic INTEGER NOT NULL,
+                   first_at INTEGER NOT NULL, last_at INTEGER NOT NULL,
+                   messages INTEGER NOT NULL, summary TEXT NOT NULL, summary_by TEXT NOT NULL,
+                   connection_id TEXT, database TEXT, kinds TEXT NOT NULL DEFAULT '[]',
+                   before_tokens INTEGER NOT NULL, after_tokens INTEGER NOT NULL,
+                   at INTEGER NOT NULL, undone INTEGER NOT NULL DEFAULT 0,
+                   record TEXT NOT NULL DEFAULT '{}');
+                 CREATE INDEX ai_compaction_by_thread ON ai_compaction (thread_id, at);
+                 PRAGMA user_version = 6;
+                 COMMIT;",
+            )
+            .map_err(store_err)?;
+        }
+        if version < 7 {
+            // Recent tool uses: one row per answer that proposed diagram changes or picked
+            // tables, filled once from the saved threads.
+            let tx = db.unchecked_transaction().map_err(store_err)?;
+            tx.execute_batch(
+                "CREATE TABLE ai_tool_use (
+                   thread_id TEXT NOT NULL, message_at INTEGER NOT NULL, at INTEGER NOT NULL,
+                   tool TEXT NOT NULL, target TEXT NOT NULL, connection_id TEXT,
+                   result TEXT NOT NULL,
+                   PRIMARY KEY (thread_id, message_at));
+                 CREATE INDEX ai_tool_use_by_at ON ai_tool_use (at);",
+            )
+            .map_err(store_err)?;
+            let saved: Vec<String> = {
+                let mut stmt = tx
+                    .prepare("SELECT json FROM ai_threads")
+                    .map_err(store_err)?;
+                let rows = stmt
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .map_err(store_err)?;
+                rows.collect::<std::result::Result<_, _>>()
+                    .map_err(store_err)?
+            };
+            for json in saved {
+                // A thread that no longer reads has nothing to list.
+                if let Ok(thread) = serde_json::from_str::<AiThread>(&json) {
+                    tool_uses::sync_tool_uses(&tx, &thread)?;
+                }
+            }
+            tx.execute_batch("PRAGMA user_version = 7")
+                .map_err(store_err)?;
+            tx.commit().map_err(store_err)?;
+        }
         Ok(AppStore { db })
     }
 
@@ -174,41 +240,106 @@ impl AppStore {
             .transpose()
     }
 
+    /// Saves the thread in one transaction: keeps its newest `MESSAGE_LIMIT` messages
+    /// (whole turns, so the first kept is not an answer), drops compactions whose range
+    /// is gone, rebuilds its Topics, then drops the place's threads beyond the newest
+    /// `THREAD_LIMIT` with their Topics and compactions.
     pub fn save_ai_thread(&self, t: &AiThread) -> Result<()> {
-        let json = serde_json::to_string(t).map_err(store_err)?;
-        self.db
-            .execute(
-                "INSERT OR REPLACE INTO ai_threads (id, place, json, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![t.id.to_string(), t.place, json, t.updated_at],
+        let mut t = t.clone();
+        let trimmed = t.messages.len() > MESSAGE_LIMIT;
+        if trimmed {
+            let mut start = t.messages.len() - MESSAGE_LIMIT;
+            while start < t.messages.len() && t.messages[start].role != AiRole::User {
+                start += 1;
+            }
+            t.messages.drain(..start);
+        }
+        let json = serde_json::to_string(&t).map_err(store_err)?;
+        let id = t.id.to_string();
+        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO ai_threads (id, place, json, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![id, t.place, json, t.updated_at],
+        )
+        .map_err(store_err)?;
+        if trimmed {
+            // Every compaction ends before the oldest message kept.
+            let oldest = t.messages.iter().map(|m| m.at).min().unwrap_or(i64::MAX);
+            tx.execute(
+                "DELETE FROM ai_compaction WHERE thread_id = ?1 AND last_at < ?2",
+                params![id, oldest],
             )
             .map_err(store_err)?;
-        Ok(())
+        }
+        memory::store::sync_topics(&tx, &t)?;
+        tool_uses::sync_tool_uses(&tx, &t)?;
+        let old: Vec<String> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM ai_threads WHERE place = ?1
+                     ORDER BY updated_at DESC, id LIMIT -1 OFFSET ?2",
+                )
+                .map_err(store_err)?;
+            let rows = stmt
+                .query_map(params![t.place, THREAD_LIMIT], |r| r.get::<_, String>(0))
+                .map_err(store_err)?;
+            rows.collect::<std::result::Result<_, _>>()
+                .map_err(store_err)?
+        };
+        memory::store::delete_for_threads(&tx, &old)?;
+        tool_uses::delete_for_threads(&tx, &old)?;
+        for old_id in &old {
+            tx.execute("DELETE FROM ai_threads WHERE id = ?1", params![old_id])
+                .map_err(store_err)?;
+        }
+        tx.commit().map_err(store_err)
     }
 
     pub fn delete_ai_thread(&self, id: ThreadId) -> Result<()> {
-        self.db
-            .execute(
-                "DELETE FROM ai_threads WHERE id = ?1",
-                params![id.to_string()],
-            )
-            .map_err(store_err)?;
-        Ok(())
+        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        memory::store::delete_for_threads(&tx, &[id.to_string()])?;
+        tool_uses::delete_for_threads(&tx, &[id.to_string()])?;
+        tx.execute(
+            "DELETE FROM ai_threads WHERE id = ?1",
+            params![id.to_string()],
+        )
+        .map_err(store_err)?;
+        tx.commit().map_err(store_err)
     }
 
     pub fn clear_ai_threads(&self, place: &str) -> Result<()> {
-        self.db
-            .execute("DELETE FROM ai_threads WHERE place = ?1", params![place])
+        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        let ids: Vec<String> = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM ai_threads WHERE place = ?1")
+                .map_err(store_err)?;
+            let rows = stmt
+                .query_map(params![place], |r| r.get::<_, String>(0))
+                .map_err(store_err)?;
+            rows.collect::<std::result::Result<_, _>>()
+                .map_err(store_err)?
+        };
+        memory::store::delete_for_threads(&tx, &ids)?;
+        tool_uses::delete_for_threads(&tx, &ids)?;
+        tx.execute("DELETE FROM ai_threads WHERE place = ?1", params![place])
             .map_err(store_err)?;
-        Ok(())
+        tx.commit().map_err(store_err)
     }
 
     /// Every thread of every place.
     pub fn clear_all_ai_threads(&self) -> Result<()> {
-        self.db
-            .execute("DELETE FROM ai_threads", [])
-            .map_err(store_err)?;
-        Ok(())
+        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        for sql in [
+            "DELETE FROM ai_topic",
+            "DELETE FROM ai_topic_fts",
+            "DELETE FROM ai_compaction",
+            "DELETE FROM ai_tool_use",
+            "DELETE FROM ai_threads",
+        ] {
+            tx.execute(sql, []).map_err(store_err)?;
+        }
+        tx.commit().map_err(store_err)
     }
 
     /// Adds a Query History row and keeps only that Connection's newest `HISTORY_LIMIT`.
@@ -832,6 +963,12 @@ mod tests {
                 context: vec!["Schema".into()],
                 at: updated_at,
                 record: None,
+                topic: None,
+                connection_id: None,
+                database: None,
+                kinds: Vec::new(),
+                tables: Vec::new(),
+                action: None,
             }],
             updated_at,
         }
@@ -869,7 +1006,8 @@ mod tests {
         let n: i64 =
             s.db.query_row("SELECT COUNT(*) FROM ai_threads", [], |r| r.get(0))
                 .unwrap();
-        assert_eq!(n, 55);
+        // Threads beyond the newest 50 are deleted with the save that pushes them out.
+        assert_eq!(n, 50);
     }
 
     #[test]
@@ -897,6 +1035,10 @@ mod tests {
                  DROP TABLE ai_context_node;
                  DROP TABLE ai_context_card;
                  DROP TABLE ai_context_fts;
+                 DROP TABLE ai_topic;
+                 DROP TABLE ai_topic_fts;
+                 DROP TABLE ai_compaction;
+                 DROP TABLE ai_tool_use;
                  DROP TABLE ai_threads;
                  ALTER TABLE saved_queries DROP COLUMN kind;
                  ALTER TABLE saved_queries DROP COLUMN visual_json;
@@ -1252,7 +1394,7 @@ mod tests {
         let v: i64 =
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, SCHEMA_VERSION);
         let list = s.list_saved_queries().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!((list[0].id, list[0].name.as_str()), (id, "late orders"));
@@ -1287,17 +1429,360 @@ mod tests {
     }
 
     #[test]
-    fn a_store_newer_than_5_is_refused() {
-        assert_eq!(SCHEMA_VERSION, 5);
+    fn a_store_newer_than_7_is_refused() {
+        assert_eq!(SCHEMA_VERSION, 7);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
         drop(AppStore::open(&path).unwrap());
         Connection::open(&path)
             .unwrap()
-            .pragma_update(None, "user_version", 6)
+            .pragma_update(None, "user_version", 8)
             .unwrap();
         assert!(
             matches!(AppStore::open(&path), Err(Error::Store(m)) if m == "data folder was written by a newer Contura")
         );
+    }
+
+    /// A stamped user and assistant message of one turn.
+    fn turn(topic: u32, at: i64, q: &str) -> Vec<crate::ai::AiMessage> {
+        [crate::ai::AiRole::User, crate::ai::AiRole::Assistant]
+            .into_iter()
+            .enumerate()
+            .map(|(i, role)| crate::ai::AiMessage {
+                role,
+                text: q.into(),
+                context: Vec::new(),
+                at: at + i as i64,
+                record: None,
+                topic: Some(topic),
+                connection_id: None,
+                database: None,
+                kinds: Vec::new(),
+                tables: vec!["orders".into()],
+                action: None,
+            })
+            .collect()
+    }
+
+    fn count(s: &AppStore, table: &str) -> i64 {
+        s.conn()
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn compaction_of(thread: &crate::ai::AiThread) -> crate::ai::memory::Compaction {
+        crate::ai::memory::Compaction {
+            id: Uuid::new_v4(),
+            thread_id: thread.id,
+            topic: 1,
+            first_at: 0,
+            last_at: 10,
+            messages: 2,
+            summary: "s".into(),
+            summary_by: crate::ai::memory::SummaryBy::Rules,
+            connection_id: None,
+            database: None,
+            kinds: Vec::new(),
+            before: 10,
+            after: 2,
+            at: 11,
+            undone: false,
+            record: Default::default(),
+        }
+    }
+
+    #[test]
+    fn migration_6_adds_memory_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let t = thread("ungrouped", "kept", 5);
+        {
+            let s = AppStore::open(&path).unwrap();
+            s.save_ai_thread(&t).unwrap();
+            // Put the store back at schema 5.
+            for table in ["ai_topic", "ai_topic_fts", "ai_compaction", "ai_tool_use"] {
+                s.conn()
+                    .execute_batch(&format!("DROP TABLE {table}"))
+                    .unwrap();
+            }
+            s.conn().pragma_update(None, "user_version", 5).unwrap();
+        }
+        let s = AppStore::open(&path).unwrap();
+        let v: i64 =
+            s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(v, 7);
+        assert_eq!(s.list_ai_threads("ungrouped").unwrap(), vec![t]);
+        for table in ["ai_topic", "ai_topic_fts", "ai_compaction"] {
+            let n: i64 =
+                s.db.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+                    params![table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{table}");
+        }
+    }
+
+    #[test]
+    fn messages_capped_at_200_whole_turns() {
+        let (_d, s) = open_tmp();
+        let mut t = thread("ungrouped", "long", 1);
+        // Five notices, then 100 turns: 205 messages.
+        t.messages = (0..5)
+            .map(|i| crate::ai::AiMessage {
+                role: crate::ai::AiRole::Notice,
+                text: "n".into(),
+                context: Vec::new(),
+                at: i,
+                record: None,
+                topic: None,
+                connection_id: None,
+                database: None,
+                kinds: Vec::new(),
+                tables: Vec::new(),
+                action: None,
+            })
+            .collect();
+        for n in 0..100 {
+            t.messages.extend(turn(1, 100 + n * 10, "q"));
+        }
+        s.save_ai_thread(&t).unwrap();
+        let back = s.get_ai_thread(t.id).unwrap().unwrap();
+        assert_eq!(back.messages.len(), 200);
+        assert_eq!(back.messages[0].role, crate::ai::AiRole::User);
+
+        // A cut that lands on an answer drops that turn's question too.
+        let mut odd = thread("ungrouped", "odd", 2);
+        odd.messages = t.messages[..1].to_vec();
+        for n in 0..100 {
+            odd.messages.extend(turn(1, 100 + n * 10, "q"));
+        }
+        odd.messages.push(t.messages[0].clone());
+        assert_eq!(odd.messages.len(), 202);
+        assert_eq!(odd.messages[2].role, crate::ai::AiRole::Assistant);
+        s.save_ai_thread(&odd).unwrap();
+        let back = s.get_ai_thread(odd.id).unwrap().unwrap();
+        assert_eq!(back.messages.len(), 199);
+        assert_eq!(back.messages[0].role, crate::ai::AiRole::User);
+    }
+
+    #[test]
+    fn a_trim_drops_compactions_whose_range_is_gone() {
+        let (_d, s) = open_tmp();
+        let mut t = thread("ungrouped", "long", 1);
+        t.messages = (0..101).flat_map(|n| turn(1, 100 + n * 10, "q")).collect();
+        let gone = compaction_of(&t);
+        let mut live = compaction_of(&t);
+        live.first_at = 100;
+        live.last_at = 1_500;
+        s.save_ai_thread(&crate::ai::AiThread {
+            messages: Vec::new(),
+            ..t.clone()
+        })
+        .unwrap();
+        for c in [&gone, &live] {
+            crate::ai::memory::store::add_compaction(s.conn(), c).unwrap();
+        }
+        s.save_ai_thread(&t).unwrap();
+        let left = crate::ai::memory::store::compactions(s.conn(), t.id).unwrap();
+        assert_eq!(left.iter().map(|c| c.id).collect::<Vec<_>>(), vec![live.id]);
+    }
+
+    #[test]
+    fn threads_capped_at_50_per_place() {
+        let (_d, s) = open_tmp();
+        let other = thread("group:g1", "other", 1);
+        s.save_ai_thread(&other).unwrap();
+        let mut first = None;
+        for i in 0..51 {
+            let mut t = thread("ungrouped", "t", 10 + i);
+            t.messages = turn(1, 10 + i, "q");
+            first.get_or_insert(t.id);
+            s.save_ai_thread(&t).unwrap();
+            crate::ai::memory::store::add_compaction(s.conn(), &compaction_of(&t)).unwrap();
+        }
+        // The compaction of the 51st thread is added after its save; the oldest thread
+        // had its compaction removed when it fell out.
+        let list = s.list_ai_threads("ungrouped").unwrap();
+        assert_eq!(list.len(), 50);
+        assert!(list.iter().all(|t| Some(t.id) != first));
+        assert_eq!(count(&s, "ai_topic WHERE place = 'ungrouped'"), 50);
+        assert_eq!(count(&s, "ai_topic_fts WHERE place = 'ungrouped'"), 50);
+        assert!(
+            crate::ai::memory::store::topics(s.conn(), first.unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(s.list_ai_threads("group:g1").unwrap(), vec![other]);
+    }
+
+    #[test]
+    fn clear_removes_topics_and_compactions() {
+        let (_d, s) = open_tmp();
+        let make = |place: &str| {
+            let mut t = thread(place, "t", 1);
+            t.messages = turn(1, 1, "q");
+            s.save_ai_thread(&t).unwrap();
+            crate::ai::memory::store::add_compaction(s.conn(), &compaction_of(&t)).unwrap();
+            t
+        };
+        let sizes = |s: &AppStore| {
+            (
+                count(s, "ai_topic"),
+                count(s, "ai_topic_fts"),
+                count(s, "ai_compaction"),
+            )
+        };
+        let (a, b, c) = (make("p1"), make("p1"), make("p2"));
+        assert_eq!(sizes(&s), (3, 3, 3));
+        s.delete_ai_thread(a.id).unwrap();
+        assert_eq!(sizes(&s), (2, 2, 2));
+        s.clear_ai_threads("p1").unwrap();
+        assert_eq!(sizes(&s), (1, 1, 1));
+        assert!(s.get_ai_thread(b.id).unwrap().is_none());
+        assert!(s.get_ai_thread(c.id).unwrap().is_some());
+        s.clear_all_ai_threads().unwrap();
+        assert_eq!(sizes(&s), (0, 0, 0));
+    }
+
+    /// An assistant message carrying a diagram tool use, or (`file` empty) an outline call.
+    fn tooled(file: &str, at: i64) -> crate::ai::AiMessage {
+        use crate::ai::sent::{AnswerRecord, OutlineSent, SentRecord, ToolUse};
+        let record = if file.is_empty() {
+            AnswerRecord {
+                sent: Some(SentRecord {
+                    outline: Some(OutlineSent {
+                        tables: 10,
+                        picked_tables: 3,
+                        ..OutlineSent::default()
+                    }),
+                    ..SentRecord::default()
+                }),
+                ..AnswerRecord::default()
+            }
+        } else {
+            AnswerRecord {
+                tool_use: Some(ToolUse {
+                    tool: "propose_diagram_changes".into(),
+                    file: file.into(),
+                    input: "{}".into(),
+                    proposal: crate::ai::diagram::DiagramProposal {
+                        file: file.into(),
+                        base_hash: "h".into(),
+                        changes: Vec::new(),
+                    },
+                    outcome: None,
+                }),
+                ..AnswerRecord::default()
+            }
+        };
+        crate::ai::AiMessage {
+            role: crate::ai::AiRole::Assistant,
+            record: Some(record),
+            at,
+            ..turn(1, at, "q").remove(1)
+        }
+    }
+
+    fn tooled_thread(place: &str, n: i64) -> crate::ai::AiThread {
+        let mut t = thread(place, "t", n);
+        t.messages = vec![tooled("orders", n * 10), tooled("", n * 10 + 1)];
+        t
+    }
+
+    #[test]
+    fn migration_7_fills_tool_uses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let (a, b) = (
+            tooled_thread("ungrouped", 1),
+            thread("ungrouped", "plain", 2),
+        );
+        let mut c = thread("group:g1", "outline", 3);
+        c.messages = vec![tooled("", 30)];
+        {
+            let s = AppStore::open(&path).unwrap();
+            for t in [&a, &b, &c] {
+                s.save_ai_thread(t).unwrap();
+            }
+            // Put the store back at schema 6.
+            s.conn().execute_batch("DROP TABLE ai_tool_use").unwrap();
+            s.conn().pragma_update(None, "user_version", 6).unwrap();
+        }
+        let s = AppStore::open(&path).unwrap();
+        let v: i64 = s
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 7);
+        // One thread holds a tool use and an outline call, another an outline call.
+        assert_eq!(count(&s, "ai_tool_use"), 3);
+        let rows = tool_uses::recent(s.conn(), 10).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().any(|r| r.target == "orders.flow"));
+    }
+
+    #[test]
+    fn rows_follow_the_thread() {
+        let (_d, s) = open_tmp();
+        let (a, b, c) = (
+            tooled_thread("p1", 1),
+            tooled_thread("p1", 2),
+            tooled_thread("p2", 3),
+        );
+        for t in [&a, &b, &c] {
+            s.save_ai_thread(t).unwrap();
+        }
+        assert_eq!(count(&s, "ai_tool_use"), 6);
+        // A message that goes leaves its row.
+        let mut a2 = a.clone();
+        a2.messages.pop();
+        s.save_ai_thread(&a2).unwrap();
+        assert_eq!(count(&s, "ai_tool_use"), 5);
+        s.delete_ai_thread(a.id).unwrap();
+        assert_eq!(count(&s, "ai_tool_use"), 4);
+        s.clear_ai_threads("p1").unwrap();
+        assert_eq!(count(&s, "ai_tool_use"), 2);
+        s.clear_all_ai_threads().unwrap();
+        assert_eq!(count(&s, "ai_tool_use"), 0);
+
+        // Retention: the place's 51st thread drops the oldest with its rows.
+        for i in 0..=THREAD_LIMIT {
+            s.save_ai_thread(&tooled_thread("p3", i + 1)).unwrap();
+        }
+        assert_eq!(count(&s, "ai_tool_use"), 2 * THREAD_LIMIT);
+        let orphans: i64 = s
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM ai_tool_use
+                 WHERE thread_id NOT IN (SELECT id FROM ai_threads)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0);
+
+        // Retention of messages: a trimmed message leaves its row.
+        let mut long = thread("p4", "long", 1);
+        long.messages = (0..MESSAGE_LIMIT as i64 + 20)
+            .flat_map(|i| {
+                let mut pair = turn(1, i * 2 + 1000, "q");
+                pair[1] = tooled("orders", i * 2 + 1001);
+                pair
+            })
+            .collect();
+        s.save_ai_thread(&long).unwrap();
+        let kept = s.get_ai_thread(long.id).unwrap().unwrap();
+        let rows: i64 = s
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM ai_tool_use WHERE thread_id = ?1",
+                params![long.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows as usize, kept.messages.len() / 2);
     }
 }

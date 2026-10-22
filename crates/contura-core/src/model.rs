@@ -157,6 +157,36 @@ pub struct UiPrefs {
     pub inline_suggestions: bool,
     #[serde(default)]
     pub history_keep_days: Option<u32>,
+    /// The diagram tab's side panel, kept across restarts.
+    #[serde(default)]
+    pub flow_side_panel: FlowSidePanel,
+    /// How the diagram assistant's changes land: reviewed first, or applied at once.
+    #[serde(default)]
+    pub flow_assist_mode: FlowAssistMode,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowAssistMode {
+    #[default]
+    Review,
+    Auto,
+}
+
+/// Which tab the diagram side panel shows, and whether it is hidden to its rail.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FlowSidePanel {
+    pub hidden: bool,
+    pub tab: FlowSideTab,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowSideTab {
+    #[default]
+    Editor,
+    Assistant,
 }
 
 /// Shortcut overrides by command id; an empty list unbinds the command.
@@ -310,6 +340,56 @@ pub enum FullValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flow_side_panel_round_trips_and_defaults() {
+        let prefs = UiPrefs {
+            flow_side_panel: FlowSidePanel {
+                hidden: true,
+                tab: FlowSideTab::Assistant,
+            },
+            ..UiPrefs::default()
+        };
+        let json = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(
+            json["flowSidePanel"],
+            serde_json::json!({ "hidden": true, "tab": "assistant" })
+        );
+        let back: UiPrefs = serde_json::from_value(json).unwrap();
+        assert_eq!(back, prefs);
+        // Prefs stored before the side panel load with it shown on the Editor tab.
+        let old: UiPrefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert_eq!(
+            old.flow_side_panel,
+            FlowSidePanel {
+                hidden: false,
+                tab: FlowSideTab::Editor,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(FlowSidePanel::default()).unwrap(),
+            serde_json::json!({ "hidden": false, "tab": "editor" })
+        );
+    }
+
+    #[test]
+    fn flow_assist_mode_round_trips_and_defaults() {
+        let prefs = UiPrefs {
+            flow_assist_mode: FlowAssistMode::Auto,
+            ..UiPrefs::default()
+        };
+        let json = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(json["flowAssistMode"], "auto");
+        let back: UiPrefs = serde_json::from_value(json).unwrap();
+        assert_eq!(back, prefs);
+        assert_eq!(
+            serde_json::to_value(UiPrefs::default()).unwrap()["flowAssistMode"],
+            "review"
+        );
+        // Prefs stored before the choice existed load Review.
+        let old: UiPrefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert_eq!(old.flow_assist_mode, FlowAssistMode::Review);
+    }
 
     #[test]
     fn group_color_reads_all_nine_old_names() {

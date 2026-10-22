@@ -21,6 +21,9 @@ use crate::schema_model::SchemaModel;
 use crate::sql_schema::SqlSchema;
 use crate::sqlite::SqliteDialect;
 
+/// Step 11f: how long a sample read may run, in every Dialect.
+pub const SAMPLE_TIMEOUT_MS: u64 = 5_000;
+
 #[async_trait::async_trait]
 pub trait Dialect: Send + Sync {
     async fn server_version(&self) -> Result<String>;
@@ -31,6 +34,17 @@ pub trait Dialect: Send + Sync {
     async fn object_definition(&self, kind: ObjectKind, path: &ObjectPath) -> Result<String>;
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page>;
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue>;
+    /// Step 11f: up to `limit` live rows of one base table for an AI Ask, as the grid
+    /// reads them (same select list and cells). No ORDER BY, no OFFSET, no filter,
+    /// `has_more` false. Runs in a read-only transaction on a connection that is not
+    /// the browse one, with a 5 s limit. `InvalidInput("not a table")` for a view or
+    /// any other kind, `NotFound` for a missing table.
+    async fn sample_rows(&self, path: &ObjectPath, limit: u32) -> Result<Page> {
+        let _ = (path, limit);
+        Err(crate::error::Error::InvalidInput(
+            "sample rows are not available here".into(),
+        ))
+    }
     /// Reads one database (MySQL, SQLite) or one schema (Postgres) as a Schema Model. Read only.
     async fn schema_snapshot(&self, database: &str, schema: Option<&str>) -> Result<SchemaModel>;
     /// A short text that changes when the structure `schema_snapshot` reads changes

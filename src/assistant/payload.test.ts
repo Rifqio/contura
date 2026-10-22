@@ -21,7 +21,7 @@ describe("toAskRequest", () => {
       groupId: "g1",
       connectionId: "c1",
       database: "kfc",
-      schema: null,
+      schema: "sales",
       action: "explain",
       question: "why slow?",
       threadId: null,
@@ -30,6 +30,16 @@ describe("toAskRequest", () => {
       off: ["cards"],
     });
     expect(r.requestId).not.toBe("");
+  });
+
+  it("schema_from_focus_tables", () => {
+    const sw = { rows: false, values: false };
+    const ask = (tables: { schema: string | null; name: string }[]) => toAskRequest({ ...sqlCtx, tables }, "q", [], sw, { groupId: null }).schema;
+    expect(ask([{ schema: "billing", name: "invoices" }, { schema: "billing", name: "customers" }])).toBe("billing");
+    expect(ask([{ schema: "billing", name: "invoices" }, { schema: "sales", name: "orders" }])).toBeNull();
+    expect(ask([{ schema: "billing", name: "invoices" }, { schema: null, name: "t" }])).toBeNull();
+    expect(ask([{ schema: null, name: "t" }])).toBeNull();
+    expect(ask([])).toBeNull();
   });
 
   it("maps_filter_error_card_and_no_connection", () => {

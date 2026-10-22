@@ -108,6 +108,7 @@ export function settingsRoutes(
     ai_known_models: () => modelList([]),
     set_ai_model_prefs: () => undefined,
     ai_context_status: () => [],
+    ai_recent_tool_uses: () => [],
     clear_ai_threads: () => undefined,
     ai_clear_all: () => undefined,
     data_folder_info: () => FOLDER,

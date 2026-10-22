@@ -18,6 +18,8 @@ interface Props {
   onCopy(sql: string): void;
   /** What the user did with a block's SQL, for the answer's record. */
   onAction?(kind: AnswerActionKind): void;
+  /** False shows every code block as plain code, never as SQL with its actions (a diagram answer). */
+  sqlBlocks?: boolean;
 }
 
 function Inlines({ inlines }: { inlines: Inline[] }) {
@@ -31,7 +33,7 @@ function Inlines({ inlines }: { inlines: Inline[] }) {
 }
 
 /** An answer in the strict subset (R5.1): text is only ever text, never HTML or links; SQL blocks get their label and actions. */
-export default function AnswerText({ text, blocks, notes = [], streaming = false, dialect, target, onOpenInNewTab, onCopy, onAction }: Props) {
+export default function AnswerText({ text, blocks, notes = [], streaming = false, dialect, target, onOpenInNewTab, onCopy, onAction, sqlBlocks = true }: Props) {
   const parsed = useMemo(() => parseAnswer(text), [text]);
   const known = streaming ? null : (blocks ?? null);
   return (
@@ -68,7 +70,7 @@ export default function AnswerText({ text, blocks, notes = [], streaming = false
           }
           case "code": {
             const check = known?.find((c) => c.fence === b.fence) ?? null;
-            const sql = known ? check !== null : looksLikeSql(b);
+            const sql = sqlBlocks && (known ? check !== null : looksLikeSql(b));
             if (sql && b.text.trim())
               return (
                 <AnswerSql

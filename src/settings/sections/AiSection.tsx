@@ -31,10 +31,12 @@ import Icon from "../../components/Icon";
 import Kbd from "../../components/Kbd";
 import Select from "../../components/Select";
 import { agoText } from "../../format/units";
+import { dataFolderText, keyringText, thisComputer } from "../../platform";
 import { usePrefs } from "../../prefs/usePrefs";
 import AccessTable from "../ai/AccessTable";
 import { AI_ACCESS_OPTIONS, formatWindow, PROVIDER_ORDER, PROVIDERS, providerDefaults } from "../ai/providers";
 import { Row, type RowKey, Section, SwitchRow, useRowShown } from "./layout";
+import ToolUses from "./ToolUses";
 
 const ROW = {
   group: { label: "Use different settings for", terms: "Group" },
@@ -43,7 +45,7 @@ const ROW = {
   baseUrl: { label: "Base URL", terms: "proxy endpoint Ollama LM Studio" },
   model: { label: "Model" },
   contextWindow: { label: "Context window", terms: "tokens" },
-  key: { label: "API key", terms: "test Credential Manager" },
+  key: { label: "API key", terms: "test OS keyring Credential Manager Secret Service" },
   caching: { label: "Use prompt caching when the model supports it" },
   thinking: { label: "Default thinking level" },
   shareThinking: { label: "Ask models to share their thinking when they support it" },
@@ -51,10 +53,12 @@ const ROW = {
   inline: { label: "Inline suggestions" },
   inlineAsk: { label: "Inline Ask", terms: "select SQL cells" },
   errorAsk: { label: "Ask on errors", terms: "failed queries" },
-  access: { label: "What AI can see, per Connection", terms: "AI access" },
+  access: { label: "What AI can see, per Connection", terms: "AI access Plus sample rows" },
   keepExactText: { label: "Keep the exact text sent with each answer", terms: "Privacy" },
+  autoCompact: { label: "Compact the thread when the context window is nearly full", terms: "Privacy auto-compact summary Undo" },
   pickTables: { label: "Let the assistant pick tables in large databases", terms: "Privacy pick tables outline tools" },
-  tools: { label: "Tools the assistant can use", terms: "pick tables outline tools Run SQL read rows" },
+  tools: { label: "Tools the assistant can use", terms: "pick tables outline tools Run SQL read rows sample rows diagram propose changes flow recent tool uses" },
+  diagramTool: { label: "Propose diagram changes", terms: "tools diagram propose flow Diagram assistant" },
   clearAi: { label: "Clear AI history", terms: "Privacy Clear all AI data threads AI Context" },
 } satisfies Record<string, RowKey>;
 export const AI_ROWS: readonly RowKey[] = Object.values(ROW);
@@ -163,6 +167,8 @@ function ModelFacts({ info, fetchedAt, now }: { info: ModelInfo | null; fetchedA
 interface PrivacyProps {
   /** The Keep the exact text switch; null leaves it out (a Group's own settings). */
   keepExactText: { checked: boolean; onChange: (keepExactText: boolean) => void } | null;
+  /** The auto-compact switch; null leaves it out with the other global switches. */
+  autoCompact: { checked: boolean; onChange: (autoCompact: boolean) => void } | null;
   /** The Pick tables switch; null leaves it out with the other global switches. */
   pickTables: { checked: boolean; onChange: (pickTables: boolean) => void } | null;
   groupId: GroupId | null;
@@ -170,13 +176,14 @@ interface PrivacyProps {
 }
 
 /** Keep the exact text, then the clear actions; those are not settings, so a Group's own settings keep them. */
-function PrivacyBlock({ keepExactText, pickTables, groupId, groupName }: PrivacyProps) {
+function PrivacyBlock({ keepExactText, autoCompact, pickTables, groupId, groupName }: PrivacyProps) {
   const switchShown = useRowShown(ROW.keepExactText);
+  const compactShown = useRowShown(ROW.autoCompact);
   const pickShown = useRowShown(ROW.pickTables);
   const clearShown = useRowShown(ROW.clearAi);
   const [asking, setAsking] = useState<"history" | "all" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  if (!(keepExactText && switchShown) && !(pickTables && pickShown) && !clearShown) return null;
+  if (!(keepExactText && switchShown) && !(autoCompact && compactShown) && !(pickTables && pickShown) && !clearShown) return null;
   // The history is kept per place: the Group this window shows, or Ungrouped.
   const place = groupId === null ? "ungrouped" : `group:${groupId}`;
   const placeName = groupName ?? (groupId === null ? "Ungrouped" : "this Group");
@@ -203,7 +210,15 @@ function PrivacyBlock({ keepExactText, pickTables, groupId, groupName }: Privacy
           {...ROW.keepExactText}
           checked={keepExactText.checked}
           onChange={keepExactText.onChange}
-          hint={String.raw`The text can contain your schema and SQL. data\ is portable and not encrypted.`}
+          hint={`The text can contain your schema and SQL. ${dataFolderText()} is portable and not encrypted.`}
+        />
+      )}
+      {autoCompact && (
+        <SwitchRow
+          {...ROW.autoCompact}
+          checked={autoCompact.checked}
+          onChange={autoCompact.onChange}
+          hint="At 85% of the model's window, older messages become a short summary written by the same model. Sends only text this thread already sent. The summary shows in the thread, and Undo brings the messages back."
         />
       )}
       {pickTables && (
@@ -255,11 +270,12 @@ function PrivacyBlock({ keepExactText, pickTables, groupId, groupName }: Privacy
 }
 
 /** What the assistant may ask Contura to do (board 11.4): Pick tables is a step, Run SQL is never offered. */
-function ToolsBlock() {
+function ToolsBlock({ diagramTool, connections }: { diagramTool: { checked: boolean; onChange: (on: boolean) => void } | null; connections: ConnectionConfig[] }) {
   const id = useId();
+  const labelId = useId();
   if (!useRowShown(ROW.tools)) return null;
   return (
-    <div className="ssub">
+    <div className="ssub" data-row="tools">
       <h3 id={id}>{ROW.tools.label}</h3>
       <p className="muted">
         A tool is an action a model may ask Contura to take. Contura checks and runs it, never the model, and every use shows here and in Show log.
@@ -276,6 +292,31 @@ function ToolsBlock() {
         <tbody>
           <tr>
             <td>
+              <span className="tool-name" id={labelId}>
+                {ROW.diagramTool.label}
+              </span>
+              <span className="tool-sub mono-small">propose_diagram_changes</span>
+            </td>
+            <td>Suggests edits to the open .flow file as a list you can review. It cannot read or write a database.</td>
+            <td>Diagram assistant</td>
+            <td>
+              <span className="tool-state">
+                {diagramTool && (
+                  <button
+                    type="button"
+                    role="switch"
+                    className={diagramTool.checked ? "sw on" : "sw"}
+                    aria-checked={diagramTool.checked}
+                    aria-labelledby={labelId}
+                    onClick={() => diagramTool.onChange(!diagramTool.checked)}
+                  />
+                )}
+                {diagramTool ? (diagramTool.checked ? "On" : "Off") : "Same for every Group"}
+              </span>
+            </td>
+          </tr>
+          <tr>
+            <td>
               <span className="tool-name">Pick tables</span>
               <span className="tool-sub">a step, not a tool</span>
             </td>
@@ -288,7 +329,11 @@ function ToolsBlock() {
               <span className="tool-name">Run SQL or read rows</span>
               <span className="tool-sub">not available</span>
             </td>
-            <td>No model can run anything on a database. Answers are text: only Run in the editor touches a database.</td>
+            <td>
+              No model can run anything on a database. Answers are text: only Run in the editor touches a database. <strong>Sample rows</strong> are
+              read by Contura, not the model: at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and
+              never kept.
+            </td>
             <td>Nowhere</td>
             <td>
               <span className="tool-never">
@@ -299,6 +344,7 @@ function ToolsBlock() {
           </tr>
         </tbody>
       </table>
+      <ToolUses connections={connections} />
     </div>
   );
 }
@@ -309,7 +355,7 @@ function AccessBlock({ connections, onConnectionSaved }: Pick<Props, "connection
   return (
     <div className="ssub">
       <h3 id={id}>{ROW.access.label}</h3>
-      <p className="muted">Each Connection decides what may leave this PC. The same choice is on each Connection's form.</p>
+      <p className="muted">{`Each Connection decides what may leave ${thisComputer()}. The same choice is on each Connection's form.`}</p>
       <AccessTable connections={connections} onSaved={onConnectionSaved} labelledBy={id} />
     </div>
   );
@@ -383,9 +429,11 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
   }, [groupId, apply]);
 
   // With a saved key the provider's own list replaces the built-in one; it is fetched again when
-  // the Group, provider, preset, base URL or key changes, after the saves on their way.
+  // the Group, provider, preset, base URL or key changes, after the saves on their way. A Custom server
+  // (a local one, often) lists its models without a key, so the Ask picker can offer them (P11-17).
+  const listable = settings?.provider === "custom" || view?.keySaved === true;
   const fetchKey =
-    settings?.provider && view?.keySaved ? [groupId, settings.provider, settings.preset, settings.baseUrl, keySaves].join("\n") : null;
+    settings?.provider && listable ? [groupId, settings.provider, settings.preset, settings.baseUrl, keySaves].join("\n") : null;
   useEffect(() => {
     if (fetchKey === null) return;
     let live = true;
@@ -725,7 +773,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
           )}
         </Row>
       )}
-      <Row {...ROW.key} hint="Kept in Windows Credential Manager, never in the data folder.">
+      <Row {...ROW.key} hint={`Kept in ${keyringText()}, never in the data folder.`}>
         {({ hintId }) => (
           <>
             <span className="keyfield srow-grow">
@@ -838,7 +886,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
         {...ROW.inline}
         checked={prefs.inlineSuggestions}
         onChange={(inlineSuggestions) => update({ inlineSuggestions })}
-        hint="Suggests the rest of a statement where you are typing. Uses the Connection's AI access. Arrives with step 11."
+        hint="Suggests the rest of a statement where you are typing. Uses the Connection's AI access."
       />
       <SwitchRow
         {...ROW.inlineAsk}
@@ -860,9 +908,13 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
       {groupOwn && (
         <p className="muted srow-wide">Privacy and thinking settings are the same for every Group. Change them without a Group open.</p>
       )}
-      <ToolsBlock />
+      <ToolsBlock
+        diagramTool={groupOwn ? null : { checked: s.diagramTool ?? true, onChange: (diagramTool) => void save({ ...s, diagramTool }) }}
+        connections={connections}
+      />
       <PrivacyBlock
         keepExactText={groupOwn ? null : { checked: s.keepExactText, onChange: (keepExactText) => void save({ ...s, keepExactText }) }}
+        autoCompact={groupOwn ? null : { checked: s.autoCompact ?? true, onChange: (autoCompact) => void save({ ...s, autoCompact }) }}
         pickTables={groupOwn ? null : { checked: s.pickTables ?? true, onChange: (pickTables) => void save({ ...s, pickTables }) }}
         groupId={groupId}
         groupName={groupName}

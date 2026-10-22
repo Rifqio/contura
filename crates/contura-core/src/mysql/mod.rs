@@ -76,6 +76,23 @@ impl MySqlDialect {
         conn.query_first(sql).await.map_err(query_err)
     }
 
+    /// Runs `sql` inside the sample read's setup (a read-only transaction on one pooled
+    /// connection, rolled back) in `database`. Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn sample_probe(&self, database: &str, sql: &str) -> Result<()> {
+        let mut conn = self.pool.get_conn().await.map_err(query_err)?;
+        conn.query_drop(format!("USE {}", quote::quote_ident(database)))
+            .await
+            .map_err(query_err)?;
+        conn.query_drop("START TRANSACTION READ ONLY")
+            .await
+            .map_err(query_err)?;
+        let out = conn.query_drop(sql).await.map_err(query_err);
+        let _ = conn.query_drop("ROLLBACK").await;
+        out
+    }
+
     /// `table_design` on a pooled connection after `session_sql` ran on it, such as
     /// a `SET SESSION sql_mode`. Public only for integration tests.
     #[cfg(any(test, feature = "test-util"))]
@@ -316,6 +333,10 @@ impl Dialect for MySqlDialect {
 
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page> {
         browse_result(page::fetch_page(&self.pool, req).await, self.read_only)
+    }
+
+    async fn sample_rows(&self, path: &ObjectPath, limit: u32) -> Result<Page> {
+        page::sample_rows(&self.pool, path, limit).await
     }
 
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {

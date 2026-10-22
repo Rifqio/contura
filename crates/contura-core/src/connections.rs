@@ -1530,6 +1530,12 @@ impl ConnectionService {
         if let Some(d) = field(&value, "historyKeepDays") {
             p.history_keep_days = d;
         }
+        if let Some(s) = field(&value, "flowSidePanel") {
+            p.flow_side_panel = s;
+        }
+        if let Some(m) = field(&value, "flowAssistMode") {
+            p.flow_assist_mode = m;
+        }
         if p.row_height.0 != 24 {
             p.row_height = RowHeight(28);
         }
@@ -2122,7 +2128,20 @@ impl CatalogReader for ConnectionService {
             .await
     }
 
+    async fn sample_rows(
+        &self,
+        id: ConnectionId,
+        path: &crate::model::ObjectPath,
+        limit: u32,
+    ) -> Result<crate::model::Page> {
+        self.session(id).await?.sample_rows(path, limit).await
+    }
+
     fn context(&self) -> &dyn crate::ai::context::store::ContextStore {
+        self
+    }
+
+    fn threads(&self) -> &dyn crate::ai::memory::ThreadStore {
         self
     }
 

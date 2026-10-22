@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Contura Query Tools</title>
+<meta name="description" content="The SQL editor that runs the statement you are in, a data grid whose changes wait as Pending Edits, and Visual Query, which joins tables by drag. Live in the page.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+<script src="site.js"></script>
+<script src="kit.js" defer></script>
+<script src="demos.js" defer></script>
+<script src="query-play.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="Contura home">
+      <svg viewBox="0 0 256 256" aria-hidden="true"><path fill="var(--ink)" d="M52 40A60 12 0 0 1 172 40V80A60 12 0 0 1 52 80Z"/><path fill="var(--ink)" d="M52 172A60 12 0 0 0 172 172V212A60 12 0 0 1 52 212Z"/><path fill="var(--accent)" d="M84 104A60 12 0 0 0 204 104V148A60 12 0 0 1 84 148Z"/></svg>
+      Contura <small>v0.7.0</small>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="index.html">Home</a>
+      <a href="query.html" aria-current="page">Query</a>
+      <a href="model.html">Model</a>
+      <a href="data.html">Data</a>
+      <a href="ai.html">AI</a>
+      <a href="safety.html">Safety</a>
+    </nav>
+    <a class="nav-dl" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="stmt hero" id="top" data-name="Query" aria-labelledby="h-hero">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">1</span></div>
+      <div class="body">
+        <p class="eyebrow"><i aria-hidden="true">~</i>Query · SQL editor, data grid, Visual Query</p>
+        <h1 class="display" id="h-hero">Three ways in. <span class="tail">One Run.</span></h1>
+        <div class="hero-row">
+          <p class="lede">Type SQL with completion and VS Code keys, change rows right in the grid, or drag tables onto a canvas. Each way ends the same: you read the SQL, then you decide.</p>
+          <p class="hero-act meta">Three live windows below, each working on the same sample copy of billing in this page. A change saved in one shows up in the others.</p>
+        </div>
+        <ol class="cells three jump">
+          <li data-reveal><a href="#editor"><span class="no">01</span><b>SQL editor</b><span>Ctrl+Enter runs the statement you are in, and a write with no WHERE asks first.</span></a></li>
+          <li data-reveal style="--d:90ms"><a href="#grid"><span class="no">02</span><b>Data grid</b><span>Edits wait as Pending Edits. Preview the SQL, then save once.</span></a></li>
+          <li data-reveal style="--d:180ms"><a href="#visual"><span class="no">03</span><b>Visual Query</b><span>Drag tables onto a canvas and the joins come from your Foreign Keys.</span></a></li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="editor" data-name="SQL editor" aria-labelledby="h-editor">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">2</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>01 · SQL editor</p>
+            <h2 class="headline" id="h-editor">Run the statement you are in.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Ctrl+Enter runs the current statement, the one where you are typing, and leaves the rest of the file alone. Ctrl+Shift+Enter runs them all.</p>
+            <p>An UPDATE or DELETE with no WHERE would change every row, so it stops and asks: Add WHERE, Cancel, or run it anyway. Try it on the last line below.</p>
+            <dl class="kv">
+              <div><dt>Writing</dt><dd>Completion, inspections and VS Code keys.</dd></div>
+              <div><dt>Keeping</dt><dd>Query History keeps the last 1,000 statements per Connection. Saved Queries keep the ones you name.</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figure class="win-wrap" data-reveal>
+          <div class="win-host" data-editor role="region" aria-label="Contura SQL editor: Query 1 on freight-stg with a result grid"></div>
+          <figcaption>Query 1 on freight-stg. Click into a statement and press Run or Ctrl+Enter; edit the text as you like. Results come from a sample copy of billing in this page.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="grid" data-name="Data grid" aria-labelledby="h-grid">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">3</span></div>
+      <div class="body">
+        <div class="split-head flip">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>02 · Data grid and Pending Edits</p>
+            <h2 class="headline" id="h-grid">Change rows, read the SQL, save once.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Edited cells, new rows and deleted rows wait as Pending Edits, marked in the grid and counted in the bar below it. Nothing is written yet.</p>
+            <p>Preview SQL shows the statements Save will run, and Save runs them all in one transaction. On a Production Connection, Save becomes Save on PROD and asks before it writes.</p>
+          </div>
+        </div>
+        <figure class="win-wrap" data-reveal>
+          <div class="win-host" data-grid="grid-conn" role="region" aria-label="Contura data grid: billing.invoices with Pending Edits"></div>
+          <div class="win-ctl"><span id="grid-conn-l">Connection</span><div class="seg" id="grid-conn" role="group" aria-labelledby="grid-conn-l"><button type="button" data-conn="stg" aria-pressed="true">freight-stg</button><button type="button" data-conn="prod" aria-pressed="false">freight-prod <span class="pill prod">PROD</span></button></div></div>
+          <figcaption>billing.invoices. Double-click a cell or press Enter to edit it, use Add row and Delete row, then Preview SQL and Save. Switch to freight-prod to see Save ask first.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="visual" data-name="Visual Query" aria-labelledby="h-visual">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">4</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>03 · Visual Query</p>
+            <h2 class="headline" id="h-visual">Drag, drop, joined.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Pull tables from the tree onto the canvas and Contura draws the joins from your Foreign Keys. Where no key fits, drag one column onto another.</p>
+            <p>Tick columns, add filters and sorting, and the SQL below updates as you go. What it builds is a SELECT, so Run reads and never writes.</p>
+          </div>
+        </div>
+        <figure class="win-wrap" data-reveal>
+          <div class="win-host" data-playground role="region" aria-label="Contura Visual Query with the Ask panel"></div>
+          <figcaption>Visual Query 1 on freight-stg. Drag payments onto the canvas, or drag a column onto a column in another card. The assistant's answers are pre-written for this demo.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt finale" id="download" data-name="Download" aria-labelledby="h-dl">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">5</span></div>
+      <div class="body">
+        <div class="dl-row" style="margin-top:0">
+          <div data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>Download</p>
+            <h2 id="h-dl">All three are in v0.7.0. For Windows and Linux.</h2>
+          </div>
+          <div class="dl-box" data-reveal style="--d:120ms">
+            <div class="dl-btns">
+              <button class="btn" type="button" data-download aria-label="Download for Windows">
+              <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
+                <span><span class="dl-pre">Download for </span>Windows</span>
+            </button>
+              <button class="btn" type="button" data-download aria-label="Download for Linux">
+                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 .8C6 .8 4.9 2.4 4.9 4.5c0 1-.4 1.8-1 2.7C3 8.4 2.3 9.7 2.3 11.2c0 .8.2 1.4.5 1.9h10.4c.3-.5.5-1.1.5-1.9 0-1.5-.7-2.8-1.6-4-.6-.9-1-1.7-1-2.7C11.1 2.4 10 .8 8 .8zM8 7.6c-1.4 0-2.4 1.5-2.4 3.4S6.6 13.6 8 13.6s2.4-.7 2.4-2.6S9.4 7.6 8 7.6zM6.9 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4zM9.1 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4z"/><path fill="currentColor" d="M7 5.6h2L8 6.7z"/><path fill="currentColor" d="M2.6 13.4c.5-.8 2.1-.9 2.9-.4.5.3.6 1 .2 1.4-.7.7-2.7.6-3.2 0-.2-.3-.1-.7.1-1zM13.4 13.4c-.5-.8-2.1-.9-2.9-.4-.5.3-.6 1-.2 1.4.7.7 2.7.6 3.2 0 .2-.3.1-.7-.1-1z"/></svg>
+                <span><span class="dl-pre">Download for </span>Linux</span>
+              </button>
+            </div>
+            <p class="meta">v0.7.0 prototype · portable, runs from any folder · Windows 10 and 11 · Linux, AppImage or .deb · 64-bit · about 20&nbsp;MB</p>
+            <p class="note" data-note role="status" hidden></p>
+            <a class="ghost" href="model.html">Next: Model, Compare and Diagram<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <nav class="foot-nav" aria-label="All pages">
+      <a href="index.html">Home</a><a href="query.html">Query</a><a href="model.html">Model</a><a href="data.html">Data</a><a href="ai.html">AI</a><a href="safety.html">Safety</a>
+    </nav>
+    <p>Core in Rust, the window in Tauri 2 with React. Nothing leaves the PC except what you send to an AI provider you set up yourself.</p>
+    <p>The windows on these pages are the app's own screens, drawn live. Every name and number in them is sample data.</p>
+  </div>
+</footer>
+
+<div class="status" role="contentinfo" aria-label="Page status">
+  <div class="in">
+    <p class="l"><b data-ln>Ln 1</b><span data-sec>Query</span><span class="hide-s">query.html</span></p>
+    <div class="r">
+      <span class="pending" data-pending aria-live="polite">1 pending</span>
+      <button class="theme-btn" type="button" data-theme-btn aria-label="Switch theme">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.2 1.1a.6.6 0 0 1 .2.7A5.6 5.6 0 0 0 14.2 9.6a.6.6 0 0 1 .8.6A7 7 0 1 1 5.6 1a.6.6 0 0 1 .6.1z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

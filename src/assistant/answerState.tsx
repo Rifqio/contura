@@ -1,6 +1,7 @@
 import { type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
 import type { AiError, AiProviderKind, AiSettings, ModelInfo, ModelPicks } from "../api/types";
-import { errorText, openUrl } from "../api/client";
+import { errorText, openUrl, providerMessage } from "../api/client";
+import { keyringText, thisComputer } from "../platform";
 import Icon, { type IconName } from "../components/Icon";
 import { formatWindow, PROVIDERS } from "../settings/ai/providers";
 import { secondsText } from "./answerStream";
@@ -16,6 +17,8 @@ interface Options {
   models?: ModelInfo[];
   /** The Connection the Ask was about, for "Nothing ran on <connection>". */
   connectionName?: string;
+  /** The sample SELECTs that ran on the database (`sampleReads`), when any did: the card says Contura read them, read only. */
+  rowsRead?: number | null;
   /** The host the base URL points to, for a connect timeout. */
   host?: string;
   /** How many tables the schema has, for a question too big for the window. */
@@ -28,6 +31,8 @@ interface Options {
   onPickTables?(): void;
   onShowLog?(): void;
   onNewChat?(): void;
+  /** Back to the question box with the question whose answer was cut, not sent. */
+  onAskAgain?(): void;
   /** Binds the saved key to `host`, then asks again. */
   onConfirmKeyHost?(host: string): void;
   /** The confirm is on its way: its button is disabled until it settles. */
@@ -43,6 +48,14 @@ interface Options {
   tries?: number;
   /** The outline step's request left this PC before the failure: the cards that say nothing was sent say so instead. */
   outlineSent?: boolean;
+  /** Whether an API key is saved for the provider; false turns a refused key into "it may need an API key". */
+  keySaved?: boolean;
+  /** Compact now on a full thread: compacts the older messages, then asks again. */
+  onCompactNow?(): void;
+  /** Turns on auto-compact in the global settings, then asks again. */
+  onTurnOnAutoCompact?(): void;
+  /** A compaction or the settings save is on its way: the actions that start one are disabled. */
+  compacting?: boolean;
 }
 
 const AI_ERROR_KINDS: string[] = [
@@ -67,6 +80,12 @@ const AI_ERROR_KINDS: string[] = [
   "tooBig",
   "tls",
   "busy",
+  "nothingToContinue",
+  "fileChanged",
+  "toolRejected",
+  "badToolInput",
+  "toolOff",
+  "badFileName",
   "internal",
 ] satisfies AiError["kind"][];
 
@@ -83,7 +102,21 @@ export function aiErrorOf(error: unknown): AiError | null {
 }
 
 /** The kinds a second attempt can fix: the network, the provider's load, a reply that could not be read. */
-const RETRYABLE: ReadonlySet<string> = new Set(["network", "timeout", "badResponse", "overloaded", "provider", "offline", "outOfCredit"]);
+const RETRYABLE: ReadonlySet<string> = new Set(["network", "timeout", "badResponse", "overloaded", "provider", "offline", "outOfCredit", "toolRejected", "badToolInput"]);
+
+type FileChanged = Extract<AiError, { kind: "fileChanged" }>;
+
+/** The title of the card for a diagram file that changed on disk while the model worked (board 11.5, e-stale). */
+export const changedTitle = (file: string): string => `${file}.flow changed on disk while I worked`;
+
+/** What that card says; `reads` is the text the line now holds (shown bold), null when the Core could not quote it. */
+export function changedBody(e: Pick<FileChanged, "line" | "nowReads">): { before: string; reads: string | null; after: string } {
+  const verdict = "These changes were made against the old text, so none of them were applied.";
+  if (e.line === null) return { before: `Another program changed the file after you asked. ${verdict}`, reads: null, after: "" };
+  const lead = `Another program changed the file after you asked (line ${e.line.toLocaleString("en-US")}`;
+  if (e.nowReads === null) return { before: `${lead} changed, a git pull perhaps). ${verdict}`, reads: null, after: "" };
+  return { before: `${lead} now reads `, reads: e.nowReads, after: `, a git pull perhaps). ${verdict}` };
+}
 
 type Tone = "warn" | "bad" | "neu" | "info";
 
@@ -97,6 +130,8 @@ interface Action {
 }
 
 interface CardProps {
+  /** The case's name above the title, as board 11.6 names it: "Rate limited", "Key refused". */
+  kicker: string;
   tone: Tone;
   icon: IconName;
   title: string;
@@ -108,11 +143,15 @@ interface CardProps {
   children?: ReactNode;
 }
 
-/** The error card of board 11.6: tone icon, title, one body line, actions, Show log on the right, "Try N" from 2 on. */
-function Card({ tone, icon, title, body, tries, actions = [], onShowLog, children }: CardProps) {
+/**
+ * The error card of board 11.6: the case's kicker, tone icon, title, one body line, actions, Show log on the
+ * right, "Try N" from 2 on.
+ */
+function Card({ kicker, tone, icon, title, body, tries, actions = [], onShowLog, children }: CardProps) {
   const shown = actions.filter((a): a is Action => !!a && !!a.run);
   return (
     <div className={`errc ${tone}`} role="alert">
+      <span className="errc-kick">{kicker}</span>
       <div className="errc-head">
         <Icon name={icon} size={14} />
         <span className="errc-title">{title}</span>
@@ -172,15 +211,16 @@ export function waitText(secs: number): string {
 }
 
 /**
- * A rate limit counts down live and asks again at zero; a wait over 10m is only shown, and Retry is left to the
- * user. Remounted (by `key`) for every new failure.
+ * A rate limit counts down live and asks again at zero, once: a second rate limit in a row (`tries` 2 and up), a
+ * wait over 10m, or Stop shows the wait only and leaves Retry to the user. Remounted (by `key`) for every new failure.
  */
 function RateLimited({ who, wait: asked, tries, onRetry, onShowLog }: { who: string; wait: number; tries?: number; onRetry?(): void; onShowLog?(): void }) {
   const wait = Math.max(1, Math.ceil(asked));
   const [remain, setRemain] = useState(wait);
+  const [stopped, setStopped] = useState(false);
   const retry = useRef(onRetry);
   retry.current = onRetry;
-  const auto = onRetry !== undefined && wait <= AUTO_RETRY_MAX;
+  const auto = onRetry !== undefined && wait <= AUTO_RETRY_MAX && (tries ?? 1) <= 1 && !stopped;
   useEffect(() => {
     if (!auto) return;
     const until = Date.now() + wait * 1000;
@@ -197,6 +237,7 @@ function RateLimited({ who, wait: asked, tries, onRetry, onShowLog }: { who: str
   const lead = remain > 0 ? `Retrying in ${waitText(remain)}. ` : "Retrying now. ";
   return (
     <Card
+      kicker="Rate limited"
       tone="warn"
       icon="history"
       title={`${who} is limiting requests.`}
@@ -206,7 +247,7 @@ function RateLimited({ who, wait: asked, tries, onRetry, onShowLog }: { who: str
           : `${who} asks to wait ${waitText(wait)}. Retry when the wait is over. Nothing was answered yet.`
       }
       tries={tries}
-      actions={[{ label: auto ? "Retry now" : "Retry", run: onRetry }]}
+      actions={auto ? [{ label: "Retry now", run: onRetry }, { label: "Stop", run: () => setStopped(true) }] : [{ label: "Retry", run: onRetry }]}
       onShowLog={onShowLog}
     >
       {auto && (
@@ -221,21 +262,15 @@ function RateLimited({ who, wait: asked, tries, onRetry, onShowLog }: { who: str
   );
 }
 
-/** A question kept while offline goes out on the window's `online` event. */
+/** A question kept while offline; whoever shows this card queues it (`queueOffline`) and sends it on the `online` event. */
 function Offline({ tries, onSendNow, onCancelQueued, onShowLog }: Pick<Options, "tries" | "onSendNow" | "onCancelQueued" | "onShowLog">) {
-  const send = useRef(onSendNow);
-  send.current = onSendNow;
-  useEffect(() => {
-    const online = () => send.current?.();
-    window.addEventListener("online", online);
-    return () => window.removeEventListener("online", online);
-  }, []);
   return (
     <Card
+      kicker="No internet"
       tone="neu"
       icon="link"
       title="No internet connection."
-      body="Your question is kept and goes out as soon as this PC is back online."
+      body={`Your question is kept and goes out as soon as ${thisComputer()} is back online.`}
       tries={tries}
       actions={[
         { label: "Send now", run: onSendNow },
@@ -268,6 +303,19 @@ function timeoutTitle(phase: string, who: string, host: string | undefined): str
   }
 }
 
+/** The kicker of the cards that show the Core's own sentence as their title. */
+const DEFAULT_KICKER: Partial<Record<AiError["kind"], string>> = {
+  insecureUrl: "Plain http",
+  badResponse: "Provider error",
+  cancelled: "Stopped by you",
+  contextUnavailable: "Schema check failed",
+  toolRejected: "Tool refused",
+  badToolInput: "Tool refused",
+  toolOff: "Tool off",
+  badFileName: "File name",
+  internal: "Error",
+};
+
 /** What the thread shows when a question could not be answered. */
 export default function answerState(error: unknown, opts: Options = {}): ReactElement {
   const ai = aiErrorOf(error);
@@ -287,7 +335,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
           <span className="t">Connect an AI provider in Settings</span>
           <span className="muted">
             Then the assistant can explain SQL, fix errors and draft DBML from what you have open. Groq and DeepSeek
-            have free or low-cost plans. The key is kept in Windows Credential Manager.
+            have free or low-cost plans. {`The key is kept in ${keyringText()}.`}
           </span>
           <button type="button" className="button button-primary button-small" onClick={opts.onOpenSettings}>
             <Icon name="plug" />
@@ -311,6 +359,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
       const use = fastest && fastest.id !== current?.id && opts.onUseModel;
       return (
         <Card
+          kicker="Provider busy"
           tone="warn"
           icon="alert"
           title={`${PROVIDERS[ai.provider].name} is busy right now.`}
@@ -323,13 +372,20 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
     }
     case "timeout": {
       const connect = ai.phase === "connect";
-      const ran = opts.connectionName ? ` Nothing ran on ${opts.connectionName}.` : "";
+      const read = opts.rowsRead;
+      const ran = read
+        ? ` Contura read sample rows from ${read.toLocaleString("en-US")} ${read === 1 ? "table" : "tables"}, read only.` +
+          (opts.connectionName ? ` Nothing else ran on ${opts.connectionName}.` : "")
+        : opts.connectionName
+          ? ` Nothing ran on ${opts.connectionName}.`
+          : "";
       return (
         <Card
+          kicker="No reply"
           tone="warn"
           icon="history"
           title={timeoutTitle(ai.phase, who, opts.host)}
-          body={connect ? nothingSent : `The request left this PC but nothing came back.${ran}`}
+          body={connect ? nothingSent : `The request left ${thisComputer()} but nothing came back.${ran}`}
           tries={tries}
           actions={[retry]}
           onShowLog={log}
@@ -339,12 +395,25 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
     case "offline":
       return <Offline key="offline" tries={tries} onSendNow={opts.onSendNow} onCancelQueued={opts.onCancelQueued} onShowLog={log} />;
     case "badKey":
-      return (
+      // No key was ever saved (a Custom provider that may not need one): the provider wants one, nothing was revoked.
+      return opts.keySaved === false ? (
         <Card
+          kicker="Key refused"
+          tone="bad"
+          icon="key"
+          title="The provider refused the request: it may need an API key."
+          body="Add one in AI settings."
+          tries={tries}
+          actions={[{ ...settings, primary: true }, retry]}
+          onShowLog={log}
+        />
+      ) : (
+        <Card
+          kicker="Key refused"
           tone="bad"
           icon="key"
           title={`${who} refused the API key.`}
-          body="The key in Windows Credential Manager was revoked or mistyped. Fix it in Settings, then retry."
+          body={`The key in ${keyringText()} was revoked or mistyped. Fix it in Settings, then retry.`}
           tries={tries}
           actions={[{ ...settings, primary: true }, retry]}
           onShowLog={log}
@@ -355,6 +424,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
       const site = isAddress(p.console) ? `https://${p.console}` : null;
       return (
         <Card
+          kicker="Out of credit"
           tone="bad"
           icon="alert"
           title={`Your ${p.name} account is out of credit.`}
@@ -370,6 +440,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
       const use = first !== undefined && first !== ai.model && opts.onUseModel !== undefined;
       return (
         <Card
+          kicker="Model retired"
           tone="bad"
           icon="alert"
           title={`${nameOf(ai.model, models)} is no longer offered.`}
@@ -392,6 +463,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
           : "The schema does not fit.";
       return (
         <Card
+          kicker="Too big for the window"
           tone="warn"
           icon="cards"
           title={`This question needs ${formatTokens(ai.needed)} tokens. ${nameOf(ai.model, models)} holds ${formatWindow(ai.window)}.`}
@@ -409,21 +481,33 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
         />
       );
     }
-    case "contextFull":
+    case "contextFull": {
+      const n = ai.messages;
       return (
         <Card
+          kicker="Thread fills the window"
           tone="warn"
           icon="cards"
           title={`This thread fills ${Math.round((ai.used / ai.window) * 100)}% of ${nameOf(ai.model, models)}'s ${formatWindow(ai.window)} window.`}
-          body="New chat starts empty with the same context."
+          body={
+            n === undefined || n === 0
+              ? "Auto-compact is off, so nothing was sent. New chat starts empty with the same context."
+              : `Auto-compact is off, so nothing was sent. Compact now turns the ${n.toLocaleString("en-US")} older ${n === 1 ? "message" : "messages"} into a summary written by the model. New chat starts empty with the same context.`
+          }
           tries={tries}
-          actions={[{ label: "New chat", run: opts.onNewChat }]}
+          actions={[
+            n !== undefined && n > 0 && { label: "Compact now", run: opts.onCompactNow, primary: true, disabled: opts.compacting },
+            { label: "New chat", run: opts.onNewChat },
+            { label: "Turn on auto-compact", run: opts.onTurnOnAutoCompact, disabled: opts.compacting },
+          ]}
           onShowLog={log}
         />
       );
+    }
     case "tooLarge":
       return (
         <Card
+          kicker="Too big for the window"
           tone="warn"
           icon="cards"
           title={`This Ask is over the size ${current?.name ?? "this model"} accepts, even after trimming.`}
@@ -435,6 +519,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
       const host = ai.host;
       return (
         <Card
+          kicker="Key held back"
           tone="bad"
           icon="key"
           title={`The base URL now points to ${host}. Save the key again to send it there.`}
@@ -455,6 +540,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
     case "tls":
       return (
         <Card
+          kicker="Certificate"
           tone="bad"
           icon="lock"
           title={`Could not check the certificate of ${ai.host}.`}
@@ -467,6 +553,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
     case "busy":
       return (
         <Card
+          kicker="Still answering"
           tone="neu"
           icon="alert"
           title="An answer is still being written. Stop it first."
@@ -475,9 +562,25 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
           onShowLog={log}
         />
       );
+    case "nothingToContinue":
+      return (
+        <Card
+          kicker="Nothing to continue"
+          tone="neu"
+          icon="alert"
+          title="Nothing to continue."
+          tries={tries}
+          actions={[
+            { label: "New chat", run: opts.onNewChat },
+            { label: "Ask again", run: opts.onAskAgain },
+          ]}
+          onShowLog={log}
+        />
+      );
     case "network":
       return (
         <Card
+          kicker="No connection"
           tone="warn"
           icon="link"
           title={`Could not reach ${ai.host}.`}
@@ -490,6 +593,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
     case "urlHasCredentials":
       return (
         <Card
+          kicker="Base URL problem"
           tone="bad"
           icon="lock"
           title={`The base URL for ${ai.host} has a user name and password.`}
@@ -499,11 +603,30 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
           onShowLog={log}
         />
       );
+    case "fileChanged": {
+      const b = changedBody(ai);
+      return <Card kicker="File changed" tone="warn" icon="alert" title={changedTitle(ai.file)} body={`${b.before}${b.reads ?? ""}${b.after}`} tries={tries} onShowLog={log} />;
+    }
     case undefined:
-      return <Card tone="bad" icon="error" title="Something went wrong" body={errorText(error)} tries={tries} onShowLog={log} />;
+      return <Card kicker="Error" tone="bad" icon="error" title="Something went wrong" body={errorText(error)} tries={tries} onShowLog={log} />;
+    case "provider":
+      // Board 11.6's provider shape: the status goes in the body, the title names who answered.
+      return (
+        <Card
+          kicker="Provider error"
+          tone="bad"
+          icon="error"
+          title={`${who} returned an error.`}
+          body={`It answered with status ${ai.status}: ${providerMessage(ai.message)}`}
+          tries={tries}
+          actions={[retry]}
+          onShowLog={log}
+        />
+      );
     default:
       return (
         <Card
+          kicker={(ai && DEFAULT_KICKER[ai.kind]) ?? "Error"}
           tone="bad"
           icon="error"
           title={errorText(error)}
@@ -539,19 +662,24 @@ interface EndOptions {
   output?: number | null;
   /** How long the answer ran before it was stopped. */
   millis?: number | null;
+  /** Stopped before any of the answer arrived: there is no part above to keep. */
+  nothing?: boolean;
   /** Absent when the action does not apply, such as under an older answer. */
   onRetry?(): void;
   onEdit?(): void;
+  /** Asks the model to go on where a length-limited answer stopped; only under the last turn. */
+  onContinue?(): void;
   onShowLog?(): void;
 }
 
 /**
- * The card under a SQL block that writes in an answer to Explain, Optimize or Suggest indexes (board 11.6,
- * "Answer writes"). `writes` is what it does, such as "1 delete" or "2 updates, 1 delete".
+ * The card under a SQL block that writes (board 11.6, "Answer writes"): Insert puts it in the editor
+ * commented out. `writes` is what it does, such as "1 delete" or "2 updates, 1 delete".
  */
 export function answerWrites(writes: string, o: { onInsert?(): void; onCopy?(): void }): ReactElement {
   return (
     <Card
+      kicker="Answer writes"
       tone="warn"
       icon="alert"
       title={`This answer writes to the database: ${writes}.`}
@@ -571,6 +699,7 @@ export function answerEnd(kind: EndKind, o: EndOptions = {}): ReactElement {
     case "dropped":
       return (
         <Card
+          kicker="Cut off mid answer"
           tone="warn"
           icon="alert"
           title="The connection dropped mid answer."
@@ -582,20 +711,23 @@ export function answerEnd(kind: EndKind, o: EndOptions = {}): ReactElement {
     case "length":
       return (
         <Card
+          kicker="Output limit"
           tone="info"
           icon="info"
           title="The answer reached its length limit."
           body={
             o.output != null
-              ? `It stopped at ${o.output.toLocaleString("en-US")} output tokens.`
+              ? `It stopped at ${o.output.toLocaleString("en-US")} output tokens.${o.onContinue ? " Continue asks the model to carry on from the last word." : ""}`
               : "It stopped at the model's output limit."
           }
+          actions={[o.onContinue && { label: "Continue", run: o.onContinue }]}
           onShowLog={o.onShowLog}
         />
       );
     case "refusal":
       return (
         <Card
+          kicker="Model declined"
           tone="neu"
           icon="close"
           title="The model declined to answer this."
@@ -607,13 +739,18 @@ export function answerEnd(kind: EndKind, o: EndOptions = {}): ReactElement {
     case "stopped":
       return (
         <Card
+          kicker="Stopped by you"
           tone="neu"
           icon="close"
           title="Stopped."
           body={
-            o.millis != null
-              ? `You stopped the answer after ${secondsText(o.millis)}. The part above is kept.`
-              : "The part above is kept."
+            o.nothing
+              ? o.millis != null
+                ? `You stopped the answer after ${secondsText(o.millis)}, before anything arrived.`
+                : "You stopped the answer before anything arrived."
+              : o.millis != null
+                ? `You stopped the answer after ${secondsText(o.millis)}. The part above is kept.`
+                : "The part above is kept."
           }
           actions={[{ label: "Retry", run: o.onRetry }]}
           onShowLog={o.onShowLog}

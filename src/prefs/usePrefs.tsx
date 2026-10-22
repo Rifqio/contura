@@ -1,6 +1,6 @@
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { saveUiPrefs, uiPrefs } from "../api/client";
-import { DEFAULT_UI_PREFS, type UiPrefs } from "../api/types";
+import { DEFAULT_UI_PREFS, type FlowAssistMode, type FlowSidePanelPref, type UiPrefs } from "../api/types";
 import { readMirror } from "../theme/theme";
 
 /** Density, brighter comments and the editor font, on `root` (the theme is `useTheme`'s). */
@@ -19,7 +19,12 @@ export function applyPrefs(root: HTMLElement, p: UiPrefs): void {
 
 /** Stored prefs over the defaults, so a field the Core leaves out keeps its default. */
 function withDefaults(p: Partial<UiPrefs> | null | undefined): UiPrefs {
-  return { ...DEFAULT_UI_PREFS, ...p, editor: { ...DEFAULT_UI_PREFS.editor, ...p?.editor } };
+  return {
+    ...DEFAULT_UI_PREFS,
+    ...p,
+    editor: { ...DEFAULT_UI_PREFS.editor, ...p?.editor },
+    flowSidePanel: { ...DEFAULT_UI_PREFS.flowSidePanel, ...p?.flowSidePanel },
+  };
 }
 
 interface PrefsValue {
@@ -105,4 +110,39 @@ export function usePrefs(): PrefsValue {
   const v = useContext(PrefsContext);
   if (!v) throw new Error("usePrefs needs a PrefsProvider");
   return v;
+}
+
+/**
+ * The diagram tab's side panel choice, kept in the prefs so it is the same across tabs and restarts. Without a
+ * provider (a tab drawn on its own) it lives in the component.
+ */
+export function useFlowSidePanel(): [FlowSidePanelPref, (patch: Partial<FlowSidePanelPref>) => void] {
+  const ctx = useContext(PrefsContext);
+  const [local, setLocal] = useState<FlowSidePanelPref>(DEFAULT_UI_PREFS.flowSidePanel);
+  const stored = ctx?.prefs.flowSidePanel;
+  const update = ctx?.update;
+  const set = useCallback(
+    (patch: Partial<FlowSidePanelPref>) => {
+      if (update) update({ flowSidePanel: { ...(stored ?? DEFAULT_UI_PREFS.flowSidePanel), ...patch } });
+      else setLocal((l) => ({ ...l, ...patch }));
+    },
+    [update, stored],
+  );
+  return [stored ?? local, set];
+}
+
+/** "Review first" or "Auto-apply" for the diagram assistant, kept in the prefs; without a provider it lives in the component. */
+export function useFlowAssistMode(): [FlowAssistMode, (mode: FlowAssistMode) => void] {
+  const ctx = useContext(PrefsContext);
+  const [local, setLocal] = useState<FlowAssistMode>(DEFAULT_UI_PREFS.flowAssistMode);
+  const stored = ctx?.prefs.flowAssistMode;
+  const update = ctx?.update;
+  const set = useCallback(
+    (mode: FlowAssistMode) => {
+      if (update) update({ flowAssistMode: mode });
+      else setLocal(mode);
+    },
+    [update],
+  );
+  return [stored === "auto" || stored === "review" ? stored : local, set];
 }

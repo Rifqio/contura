@@ -68,11 +68,18 @@ pub enum StepKind {
     Schema,
     Outline,
     Tables,
+    Rows,
     Cleaning,
+    /// A compaction or a Topic summary ran before the request.
+    Compact,
     Request,
     Thinking,
     Answer,
     SqlCheck,
+    /// A diagram Ask: the .flow text it sends, under no AI access level.
+    Diagram,
+    /// A diagram Ask: the proposed changes checked against the file.
+    ToolCheck,
 }
 
 /// A Steps row, in fixed wording filled from what ran.
@@ -236,6 +243,18 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&step).unwrap(),
             serde_json::json!({ "step": "sqlCheck", "atMs": 5, "value": "v", "rule": "r", "evidence": [["a", "b", "c"]], "byModel": false })
+        );
+    }
+
+    #[test]
+    fn diagram_steps_serialize() {
+        assert_eq!(
+            serde_json::to_value(StepKind::Diagram).unwrap(),
+            serde_json::json!("diagram")
+        );
+        assert_eq!(
+            serde_json::to_value(StepKind::ToolCheck).unwrap(),
+            serde_json::json!("toolCheck")
         );
     }
 

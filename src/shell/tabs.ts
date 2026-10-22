@@ -103,8 +103,11 @@ export interface CompareSeed {
 /** A tab of the window. */
 export type WindowTab =
   | { kind: "home" }
-  /** `seq` counts the requests, so asking for the section shown last moves there again. */
-  | { kind: "settings"; section: SettingsSection; seq?: number }
+  /**
+   * `seq` counts the requests, so asking for the section shown last moves there again; `row` names a block in the
+   * section to scroll to instead, such as the AI settings' tools table.
+   */
+  | { kind: "settings"; section: SettingsSection; seq?: number; row?: string }
   | { kind: "schema"; id: string; doc: ModelDoc }
   /** A diagram, `<name>.flow` in Contura's diagrams folder; one tab per name. */
   | { kind: "flow"; name: string }

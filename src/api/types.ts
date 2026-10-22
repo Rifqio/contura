@@ -47,6 +47,15 @@ export interface EditorPrefs {
   ligatures: boolean;
 }
 
+/** How the diagram assistant's accepted changes land: after a review, or at once. */
+export type FlowAssistMode = "review" | "auto";
+
+/** The diagram tab's side panel: hidden to its rail or not, and the tab it shows. */
+export interface FlowSidePanelPref {
+  hidden: boolean;
+  tab: "editor" | "assistant";
+}
+
 export interface UiPrefs {
   theme: ThemeChoice;
   rowHeight: RowHeight;
@@ -55,6 +64,9 @@ export interface UiPrefs {
   inlineSuggestions: boolean;
   /** `null` keeps history forever. */
   historyKeepDays: number | null;
+  flowSidePanel: FlowSidePanelPref;
+  /** How the diagram assistant's changes land: "Review first" (the start) or "Auto-apply". */
+  flowAssistMode: FlowAssistMode;
 }
 
 /** Mirrors the Core defaults; used before the Core answers. */
@@ -65,6 +77,8 @@ export const DEFAULT_UI_PREFS: UiPrefs = {
   brighterComments: false,
   inlineSuggestions: false,
   historyKeepDays: null,
+  flowSidePanel: { hidden: false, tab: "editor" },
+  flowAssistMode: "review",
 };
 
 /** Shortcut overrides by command id; an empty list unbinds the command. */
@@ -929,6 +943,10 @@ export interface AiSettings {
   keepExactText: boolean;
   /** "Let the assistant pick tables in large databases": sends an outline of table names (step 11d). */
   pickTables: boolean;
+  /** "Compact long chats automatically": privacy switch, always the global value. */
+  autoCompact?: boolean;
+  /** "Let the assistant propose diagram changes" (step 11h): privacy switch, always the global value; absent reads as on. */
+  diagramTool?: boolean;
   /** The picks remembered per model id, already clamped by the Core. */
   modelPrefs: Record<string, ModelPicks>;
 }
@@ -994,7 +1012,8 @@ export type AiError =
   | { kind: "notConfigured" }
   | { kind: "badKey" }
   | { kind: "rateLimited"; retryAfterSecs: number | null }
-  | { kind: "network"; host: string }
+  /** `connect`: the request never reached the host (a refused or reset connection before it was written). */
+  | { kind: "network"; host: string; connect?: boolean }
   | { kind: "keyHostChanged"; host: string }
   | { kind: "insecureUrl"; host: string }
   | { kind: "timeout"; phase: string }
@@ -1009,18 +1028,31 @@ export type AiError =
   | { kind: "offline" }
   | { kind: "outOfCredit"; provider: AiProviderKind }
   | { kind: "modelRetired"; model: string }
-  | { kind: "contextFull"; used: number; window: number; model: string }
+  /** `messages`: the open Topic's visible messages Compact now would fold (all but the last 2 turns). */
+  | { kind: "contextFull"; used: number; window: number; model: string; messages?: number }
   | { kind: "tooBig"; needed: number; window: number; model: string }
   /** The TLS handshake failed: an untrusted certificate, or a proxy inspecting https. */
   | { kind: "tls"; host: string }
   /** Another Ask in this place is still being written. */
   | { kind: "busy" }
+  /** A Continue with no cut answer in what the Ask would send; nothing was sent. */
+  | { kind: "nothingToContinue" }
+  /** The .flow file changed outside Contura while the model worked (or is gone). `line` is the first line that differs. */
+  | { kind: "fileChanged"; file: string; line: number | null; nowReads: string | null }
+  /** The model called a tool Contura does not offer; `name` is cut to 64 characters. */
+  | { kind: "toolRejected"; name: string }
+  /** The tool input was malformed, over 64 KB, or named another file or base hash. */
+  | { kind: "badToolInput" }
+  /** "Let the assistant propose diagram changes" is off. */
+  | { kind: "toolOff" }
+  /** A diagram file name holding a control character, which cannot go in a request. */
+  | { kind: "badFileName" }
   | { kind: "internal" };
 
 // One Ask and its preview. Mirrors crates/contura-core/src/ai/{request,preview,budget,log}.rs.
 
 /** One kind of item an Ask can send. */
-export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline";
+export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline" | "history" | "summary" | "diagram";
 
 export interface TableRef {
   schema: string | null;
@@ -1109,8 +1141,85 @@ export interface Preview {
   log: LogLine[];
   /** The AI Context the preview read; null with no Connection, at AI access Never, or with the schema off or locked. */
   context: ContextInfo | null;
+  /** The sample rows the Ask would carry; null when none are on or none were read. */
+  rows: RowsSent | null;
   /** The outline step an Ask would send first, when the Core would run one; absent or null otherwise. */
   outline?: OutlinePreview | null;
+  /** What the thread's memory adds to this Ask; absent or null without a thread. */
+  memory?: MemoryInfo | null;
+  /** The summary or compaction call an Ask would make first; absent or null when none would be made. */
+  summary?: SummaryPreview | null;
+}
+
+/** Which call a summary step is. Mirrors `CallKind` (camelCase). */
+export type CallKind = "summary" | "compact";
+
+/** The summary step of a preview: the call the Ask would make and its exact text. Mirrors `SummaryPreview`. */
+export interface SummaryPreview {
+  kind: CallKind;
+  /** The Topic a `summary` call is about. */
+  topic: number | null;
+  title: string | null;
+  /** The messages the call sends. */
+  messages: number;
+  bytes: number;
+  tokens: number;
+  exact: string;
+  on: boolean;
+}
+
+/** The summary or compaction call of an Ask, measured from its request. Mirrors `SummarySent` in sent.rs. */
+export interface SummarySent {
+  kind: CallKind;
+  topic: number | null;
+  messages: number;
+  model: string;
+  bytes: number;
+  tokens: number;
+  hash: string;
+  millis: number;
+  usage: Usage | null;
+  /** The call's exact text, only with "Keep the exact text sent" on. */
+  exact: string | null;
+}
+
+/** Compact now: the open thread's older turns become one summary. Mirrors `CompactRequest` (camelCase). */
+export interface CompactRequest {
+  requestId: string;
+  place: string;
+  groupId: GroupId | null;
+  threadId: string;
+  model: string | null;
+}
+
+/** Why an Ask opened a new Topic. Mirrors `BreakReason` (camelCase). */
+export type BreakReason = "first" | "place" | "idle" | "subject";
+
+/** What the thread's memory adds to an Ask. Mirrors `MemoryInfo` in crates/contura-core/src/ai/memory. */
+export interface MemoryInfo {
+  topic: number;
+  opened: boolean;
+  reason: BreakReason | null;
+  title: string;
+  turns: number;
+  summaries: number;
+  /** Earlier messages held back because AI access is lower now. */
+  blocked: number;
+  /** Tokens the thread part of the request uses. */
+  tokens: number;
+}
+
+/** The memory stamp of one Ask: written on both its messages. Mirrors `TurnStamp`. */
+export interface TurnStamp {
+  topic: number;
+  opened: boolean;
+  reason: BreakReason | null;
+  title: string;
+  connectionId: ConnectionId | null;
+  database: string | null;
+  action: string;
+  tables: string[];
+  kinds: ItemKind[];
 }
 
 /** The outline step of a preview: how big the outline is and the exact text it would send. */
@@ -1130,6 +1239,13 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+}
+
+/** What the Core read for the sample rows of one Ask. Mirrors `RowsSent`; never holds a value. */
+export interface RowsSent {
+  tables: number;
+  rows: number;
+  bytes: number;
 }
 
 /** What one Ask sent, measured from the request itself (R7.1). Mirrors `SentRecord` in crates/contura-core/src/ai/sent.rs. */
@@ -1155,6 +1271,10 @@ export interface SentRecord {
    * the outline call went: the Ask ended before its main request was sent.
    */
   outline?: OutlineSent | null;
+  /** The summary or compaction call, once its request left this PC; absent when none was made. */
+  summary?: SummarySent | null;
+  /** The sample rows that went: how many tables and rows, and their bytes; absent or null when none went. */
+  rows?: RowsSent | null;
   /** The exact text, only with "Keep the exact text sent" on (R7.2). */
   exact: string | null;
 }
@@ -1175,7 +1295,7 @@ export interface OutlineSent {
 }
 
 /** One Steps row of the answer log. Mirrors `StepKind` (camelCase). */
-export type StepKind = "access" | "schema" | "tables" | "cleaning" | "request" | "thinking" | "answer" | "sqlCheck" | "outline";
+export type StepKind = "access" | "schema" | "tables" | "cleaning" | "request" | "thinking" | "answer" | "sqlCheck" | "outline" | "compact" | "rows" | "diagram" | "toolCheck";
 
 /** A Steps row in fixed wording, filled by the Core from what ran. Mirrors `ProcessStep`. */
 export interface ProcessStep {
@@ -1224,6 +1344,12 @@ export interface AnswerRecord {
   context: ContextInfo | null;
   /** The text of a failure that is not an AiError (a command that could not start), at most 2 KB. */
   commandError: string | null;
+  /** The diagram Ask's proposal and what the user did with it; absent on other answers and in older records. */
+  toolUse?: ToolUse | null;
+  /** True on a copy from a thread list or view whose log, steps, thinking and exact text were left out; `aiAnswerRecord` fetches the full one. */
+  trimmed?: boolean;
+  /** The `max_tokens` the request carried on the wire (the `done` event's); absent in older records. */
+  maxTokens?: number | null;
 }
 
 /** One event of a streamed Ask, in order. Mirrors `AiEvent` (serde tag "type"). */
@@ -1235,6 +1361,10 @@ export type AiEvent =
   | ({ type: "process" } & ProcessStep)
   /** The AI Context the Ask uses, once, right after the Schema row. */
   | { type: "context"; info: ContextInfo }
+  /** The Topic this Ask belongs to, right before the Sent record. */
+  | { type: "memory"; stamp: TurnStamp }
+  /** The thread was compacted before this Ask went out; the meter drops to `after`. */
+  | { type: "compacted"; compaction: Compaction }
   | { type: "status"; step: string }
   | { type: "thinking"; text: string }
   /** The whole thinking, redacted again over the joined chunks; replaces what the chunks built up. */
@@ -1251,7 +1381,14 @@ export type AiEvent =
       /** Shown above the answer: the injection note (R5.4), the query-share note, the unreadable schema note. */
       notes: string[];
       sqlBlocks: SqlBlock[];
+      /** The `max_tokens` the request carried on the wire: Max tokens or the Core's default, raised by an Anthropic thinking budget. */
+      maxTokens: number;
     }
+  /**
+   * The checked proposal of a diagram Ask, after the answer text and before `done`. `input` is the model's tool JSON
+   * (invisible characters stripped, at most 64 KB): the saved record's `toolUse.input`.
+   */
+  | { type: "proposal"; proposal: DiagramProposal; input: string }
   | { type: "error"; error: AiError; partial: boolean };
 
 /** What the output rail found in one statement of an answer (R5.3). Mirrors `Flag` (serde tag "kind"). */
@@ -1287,6 +1424,13 @@ export interface AiMessage {
   at: number;
   /** What an assistant answer sent and did, kept with the thread; absent on questions and older answers. */
   record?: AnswerRecord;
+  /** The memory stamp the Core writes: the Topic of the turn, its Connection and database, the kinds it carried. Absent before 11e. */
+  topic?: number;
+  connectionId?: ConnectionId;
+  database?: string;
+  kinds?: ItemKind[];
+  tables?: string[];
+  action?: string;
 }
 
 export interface AiThread {
@@ -1296,6 +1440,73 @@ export interface AiThread {
   title: string;
   messages: AiMessage[];
   updatedAt: number;
+}
+
+/** Who wrote a summary. Mirrors `SummaryBy` (serde tag "kind"). */
+export type SummaryBy = { kind: "none" } | { kind: "rules" } | { kind: "model"; model: string };
+
+/** One run of a thread's turns on one subject, in one Connection and database. */
+export interface Topic {
+  threadId: string;
+  seq: number;
+  title: string;
+  summary: string;
+  summaryBy: SummaryBy;
+  tables: string[];
+  connectionId: ConnectionId | null;
+  database: string | null;
+  kinds: ItemKind[];
+  firstAt: number;
+  lastAt: number;
+  messages: number;
+  closed: boolean;
+}
+
+/** A span of messages folded into a summary. */
+export interface Compaction {
+  id: string;
+  threadId: string;
+  topic: number;
+  firstAt: number;
+  lastAt: number;
+  messages: number;
+  summary: string;
+  summaryBy: SummaryBy;
+  connectionId: ConnectionId | null;
+  database: string | null;
+  kinds: ItemKind[];
+  before: number;
+  after: number;
+  at: number;
+  undone: boolean;
+  record: AnswerRecord;
+}
+
+/** A thread in a place's list: no messages. */
+export interface ThreadSummary {
+  id: string;
+  place: string;
+  title: string;
+  updatedAt: number;
+  messages: number;
+  topics: number;
+}
+
+/** An opened thread with its Topics and compactions; its records are trimmed. */
+export interface ThreadView {
+  thread: AiThread;
+  topics: Topic[];
+  compactions: Compaction[];
+}
+
+/** A Topic that matched a search of a place's chats. */
+export interface ThreadHit {
+  threadId: string;
+  title: string;
+  topic: number;
+  topicTitle: string;
+  snippet: string;
+  at: number;
 }
 
 export interface AiTestOk {
@@ -2297,4 +2508,149 @@ export interface SyncOutcome {
   elapsedMs: number;
   /** The target tables a statement changed or dropped, for the open tabs' "table changed" event. */
   tables: ObjectPath[];
+}
+
+// The diagram assistant (step 11h). Mirrors crates/contura-core/src/ai/{diagram_tool,diagram,sent,tool_uses}.rs.
+
+/**
+ * One change the model proposes, as it is on the wire: snake_case, externally tagged (`{ add_node: { ... } }`).
+ * Optional fields may be absent or null.
+ */
+export type DiagramOp =
+  | { add_node: { name: string; kind?: string | null; id?: string | null; group?: string | null } }
+  | { remove_node: { target: string } }
+  | { rename_node: { target: string; name: string } }
+  | { add_flow: { from: string; to: string; label?: string | null } }
+  | { remove_flow: { from: string; to: string; label?: string | null } }
+  | { relabel_flow: { from: string; to: string; label: string } }
+  /** A null `group` takes the shape out of every group. */
+  | { move_to_group: { target: string; group?: string | null } };
+
+/** The tool input (snake_case). */
+export interface ProposeInput {
+  file: string;
+  base_hash: string;
+  ops: DiagramOp[];
+}
+
+/** What the worker's outline holds about the open diagram (camelCase). `kinds` are the shape kinds this diagram takes. */
+export interface FlowOutline {
+  kind: string | null;
+  kinds: string[];
+  nodes: OutlineNode[];
+  groups: OutlineGroup[];
+  links: OutlineLink[];
+}
+
+export interface OutlineNode {
+  name: string;
+  id: string | null;
+  kind: string | null;
+  group: string | null;
+  /** 1-based. */
+  line: number;
+  /** True when the shape has a `table` attribute. */
+  table: boolean;
+}
+
+export interface OutlineGroup {
+  name: string;
+  group: string | null;
+  line: number;
+}
+
+export interface OutlineLink {
+  from: string;
+  to: string;
+  label: string | null;
+  line: number;
+}
+
+/** What the Ask may change: all of the diagram, or the selected shapes. */
+export type DiagramScope = { kind: "whole" } | { kind: "selection"; names: string[] };
+
+export type DropReason =
+  | "unknownShape"
+  | "unknownGroup"
+  | "unknownFlow"
+  | "nameTaken"
+  | "idReused"
+  | "emptyLabel"
+  | "badName"
+  | "unknownKind"
+  | "outsideSelection"
+  | "dependsOnDropped"
+  | "tooMany";
+
+export type TargetField = "target" | "from" | "to" | "group";
+
+export interface Candidate {
+  name: string;
+  id: string | null;
+  line: number;
+  /** `line <n>`, then `, <label of its first outgoing line>` when it has one. */
+  detail: string;
+}
+
+export type ChangeStatus =
+  | { kind: "ok" }
+  | { kind: "dropped"; reason: DropReason; message: string }
+  | { kind: "ambiguous"; field: TargetField; word: string; candidates: Candidate[] };
+
+export interface ProposedChange {
+  index: number;
+  /** Holds the resolved names: a target matched by id or by words is replaced by the shape's real name. */
+  op: DiagramOp;
+  status: ChangeStatus;
+  /** The indexes of earlier changes this one needs. */
+  dependsOn: number[];
+}
+
+export interface DiagramProposal {
+  file: string;
+  baseHash: string;
+  changes: ProposedChange[];
+}
+
+/** What the user did with a proposal; `at` is epoch milliseconds. */
+export interface ToolOutcome {
+  accepted: number;
+  rejected: number;
+  auto: boolean;
+  at: number;
+}
+
+export interface ToolUse {
+  tool: string;
+  file: string;
+  /** The model's JSON, at most 64 KB. */
+  input: string;
+  proposal: DiagramProposal;
+  outcome: ToolOutcome | null;
+}
+
+/** One Recent tool uses row. */
+export interface ToolUseRow {
+  threadId: string;
+  messageAt: number;
+  at: number;
+  tool: "proposeDiagramChanges" | "pickTables";
+  /** `<file>.flow`; empty for Pick tables (the UI writes "Ask on <Connection name>"). */
+  target: string;
+  connectionId: ConnectionId | null;
+  result: string;
+}
+
+/** The request of a diagram Ask and its preview. */
+export interface DiagramAskRequest {
+  requestId: string;
+  file: string;
+  /** The text as the tab holds it. */
+  text: string;
+  outline: FlowOutline;
+  question: string;
+  scope: DiagramScope;
+  threadId?: string | null;
+  model?: string | null;
+  picks?: ModelPicks | null;
 }

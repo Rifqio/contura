@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
 import { clearQueryHistory, dataFolderInfo, errorText, formatBytes, openDataFolder } from "../../api/client";
-import type { DataFolderInfo } from "../../api/types";
+import type { ConnectionConfig, DataFolderInfo } from "../../api/types";
 import Dialog from "../../components/Dialog";
 import Icon from "../../components/Icon";
 import Select from "../../components/Select";
+import { computerNoun, dataBesideProgram, keyringText, programText, thisComputer } from "../../platform";
 import { usePrefs } from "../../prefs/usePrefs";
 import { Row, type RowKey, Section, useRowShown } from "./layout";
 
 const ROW = {
-  location: { label: "Location", terms: "data folder path open folder portable Contura.exe" },
+  location: { label: "Location", terms: "data folder path open folder portable Contura.exe program" },
   contents: { label: "Contents", terms: "Connections Groups Saved Queries Query History size" },
   keep: { label: "Keep history for", terms: "Clear Query History days Forever" },
-  passwords: { label: "Passwords", terms: "Windows Credential Manager copy" },
+  passwords: { label: "Passwords", terms: "OS keyring Windows Credential Manager Secret Service copy" },
 } satisfies Record<string, RowKey>;
 export const DATA_FOLDER_ROWS: readonly RowKey[] = Object.values(ROW);
 
@@ -27,8 +28,10 @@ function Location({ info, onError }: { info: DataFolderInfo | null; onError: (e:
   return (
     <>
       <p className="muted">
-        Contura is portable. Connections, Groups, Saved Queries, Query History and these settings live in one folder next to Contura.exe.
-        Copy the folder to take everything to another PC.
+        {dataBesideProgram()
+          ? `Contura is portable. Connections, Groups, Saved Queries, Query History and these settings live in one folder next to ${programText()}.`
+          : "Connections, Groups, Saved Queries, Query History and these settings live in the folder below."}{" "}
+        {`Copy the folder to take everything to another ${computerNoun()}.`}
       </p>
       <div className="folder-row">
         <span className="folder-path mono" title={info?.path ?? undefined}>
@@ -65,11 +68,14 @@ function Contents({ info }: { info: DataFolderInfo | null }) {
 
 function PasswordsNote() {
   if (!useRowShown(ROW.passwords)) return null;
-  return <p className="srow-note-line">Passwords stay in Windows Credential Manager on this PC, so a copied folder asks for each one once.</p>;
+  return <p className="srow-note-line">{`Passwords stay in ${keyringText()} on ${thisComputer()}, so a copied folder asks for each one once.`}</p>;
 }
 
-/** Settings, Data folder: where everything lives, what it holds and how long history stays (D11). No Move. */
-export default function DataFolderSection() {
+/**
+ * Settings, Data folder: where everything lives, what it holds and how long history stays (D11). No Move.
+ * `connections` is the app's list: the counts are read again when a Connection is added or removed.
+ */
+export default function DataFolderSection({ connections }: { connections?: readonly ConnectionConfig[] }) {
   const { prefs, update } = usePrefs();
   const [info, setInfo] = useState<DataFolderInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,9 +87,10 @@ export default function DataFolderSection() {
     dataFolderInfo()
       .then(setInfo)
       .catch((e) => setError(errorText(e)));
-  useEffect(() => {
-    void load();
-  }, []);
+  // A Connection added or removed while Settings is open changes the counts: read them again.
+  const connectionIds = connections?.map((c) => c.id).join(",");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => void load(), [connectionIds]);
 
   const keep = prefs.historyKeepDays === null ? "forever" : String(prefs.historyKeepDays);
   const keepOptions = KEEP.some((o) => o.value === keep) ? KEEP : [...KEEP, { value: keep, label: `${keep} days` }];

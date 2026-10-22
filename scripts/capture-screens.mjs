@@ -22,11 +22,14 @@
 // CONTURA_DATA_DIR the exe was started with). They first ask the app for its
 // data folder and refuse, changing nothing, unless it is that folder: the
 // everyday app, left on a debug port, is never written to or emptied.
+// --ai-setup / --ai-cleanup do the same for the AI scenes (see "AI scenes" below): SQLite files in
+// a fresh "ai" folder beside the data folder, four Connections, and the provider set to the
+// loopback fixture server (scripts/ai-fixture-server.mjs, --fixture-port). --ai runs the AI scenes.
 // --only <name,name> captures a subset. Shots are <screen>-<theme>.png.
 // The run fails on any CDP error and on any Content Security Policy report.
 
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { copyFileSync, mkdirSync, realpathSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve, join } from "node:path";
 
 const args = parseArgs(process.argv.slice(2));
 const PORT = Number(args.port ?? 9222);
@@ -935,6 +938,8 @@ const CONTINUES = new Set(["menu-row", "run-confirm", "plan", "history", "save-q
 // Screens that start in Orbit Freight; FRESH ones also close every tab first.
 const IN_GROUP = new Set(["query-prod", "query-error", "ai-panel", "unsaved-changes", "toast-success", "readonly-editor", "readonly-table",
   "table-edits", "table-prod", "connection-form", "group-form", "saved-queries", "new-schema-model"]);
+// AI scenes open their own place; the ones that read the screen before them carry on.
+const AI_CONTINUES = new Set(["ai-steps", "ai-diagram", "ai-settings-privacy", "ai-settings-access", "ai-settings-tools", "diagram-ai-panel", "diagram-ai-review", "diagram-ai-autoapply"]);
 const FRESH = new Set(["query-prod", "readonly-editor", "table-edits", "saved-queries"]);
 
 // Closes the Query History and Ask panels and any open menu or dialog.
@@ -948,10 +953,11 @@ async function closePanels() {
 async function captureAll() {
   await appReady();
   await setTheme(THEME);
-  for (const [name, run] of SCREENS) {
+  const list = args.ai ? SCENES : ONLY ? [...SCREENS, ...SCENES] : SCREENS;
+  for (const [name, run] of list) {
     if (ONLY && !ONLY.has(name)) continue;
     try {
-      if (!CONTINUES.has(name)) await closePanels();
+      if (!CONTINUES.has(name) && !AI_CONTINUES.has(name)) await closePanels();
       if (IN_GROUP.has(name)) await goGroup("Orbit Freight");
       if (FRESH.has(name)) await closeAllTabs();
       await run();
@@ -988,6 +994,446 @@ async function cleanup() {
   }
 }
 
+// ---------------------------------------------------------------- AI scenes
+
+// The AI scenes run against the loopback fixture provider (scripts/ai-fixture-server.mjs): the
+// model id picks the answer or error, so no key is needed. Start it first:
+//   node scripts/ai-fixture-server.mjs --port 8765
+//   node scripts/capture-screens.mjs --port 9222 --data-dir <folder> --ai-setup --fixture-port 8765
+//   node scripts/capture-screens.mjs --port 9222 --out <dir> --theme dark --ai
+//   node scripts/capture-screens.mjs --port 9222 --data-dir <folder> --ai-cleanup
+// --ai runs every AI scene; --only <scene,scene> runs named ones (AI or not).
+
+const AI_NAMES = ["ai-shop", "ai-wide", "ai-prod", "ai-readonly"];
+const FIXTURE_URL = () => `http://127.0.0.1:${args["fixture-port"] ?? 8765}/v1`;
+// The folder for the SQLite files: beside the data folder, never inside it (the app refuses
+// a new database in its own data folder).
+const aiFolder = () => join(dirname(resolve(String(args["data-dir"]))), "ai");
+
+const SHOP_TABLES = {
+  orders: "id INTEGER PRIMARY KEY, customer_id INTEGER, total REAL, status TEXT",
+  customers: "id INTEGER PRIMARY KEY, name TEXT, city TEXT",
+  shipments: "id INTEGER PRIMARY KEY, order_id INTEGER, carrier TEXT, status TEXT",
+  carriers: "id INTEGER PRIMARY KEY, name TEXT, country TEXT",
+};
+const CARRIERS = ["DHL", "UPS", "FedEx", "GLS"];
+const WORDS = ["invoice", "payment", "refund", "ticket", "warehouse", "pallet", "route", "driver", "vehicle", "depot", "contract", "quote", "supplier", "return", "label", "manifest", "customs", "tariff", "address", "session"];
+
+function shopSql() {
+  const out = [];
+  for (const [t, cols] of Object.entries(SHOP_TABLES)) {
+    out.push(`CREATE TABLE ${t} (${cols});`);
+    for (let i = 1; i <= 20; i++) {
+      const v = {
+        orders: `${i}, ${1 + (i % 20)}, ${10 + i * 3.5}, '${i % 3 ? "paid" : "open"}'`,
+        customers: `${i}, 'Customer ${i}', 'City ${i % 5}'`,
+        shipments: `${i}, ${i}, '${CARRIERS[i % 4]}', '${i % 2 ? "delivered" : "in transit"}'`,
+        carriers: `${i}, 'Carrier ${i}', 'Country ${i % 6}'`,
+      }[t];
+      out.push(`INSERT INTO ${t} VALUES (${v});`);
+    }
+  }
+  return out;
+}
+
+function wideSql() {
+  const out = [];
+  for (let i = 0; i < 2000; i++) {
+    const name = `${WORDS[i % WORDS.length]}_${WORDS[(i * 7 + 3) % WORDS.length]}_${Math.floor(i / WORDS.length)}`;
+    out.push(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY, ref TEXT, created_at TEXT);`);
+  }
+  return out;
+}
+
+async function runScript(connectionId, statements) {
+  const session = await invoke("open_query_session", { id: connectionId, database: null });
+  try {
+    for (let i = 0; i < statements.length; i += 100) {
+      await invoke("execute_sql", { session, sql: statements.slice(i, i + 100).join("\n"), pass: null });
+    }
+  } finally {
+    await invoke("close_query_session", { session }).catch(() => {});
+  }
+}
+
+async function aiSetup() {
+  const port = args["fixture-port"];
+  if (!port) throw new Error("--ai-setup needs --fixture-port <n>");
+  await appReady();
+  const dir = aiFolder();
+  mkdirSync(dir); // fresh: fails when a previous run's folder is still there
+  const files = Object.fromEntries(AI_NAMES.filter((n) => n !== "ai-readonly").map((n) => [n, join(dir, `${n}.sqlite`)]));
+  for (const n of ["ai-shop", "ai-wide"]) await invoke("create_sqlite_database", { path: files[n] });
+  const conn = (name, file, extra = {}) =>
+    invoke("save_connection", {
+      input: {
+        id: null, name, dialect: "sqlite", host: "", port: 0, user: "", database: "", ssl: { mode: "disable" }, file,
+        password: { t: "none" }, groupId: null, queryTimeoutSecs: null, aiAccess: "schema", production: false, readOnly: false, ...extra,
+      },
+    });
+  const shop = await conn("ai-shop", files["ai-shop"], { aiAccess: "schemaQuery" });
+  await runScript(shop.id ?? shop, shopSql());
+  const wide = await conn("ai-wide", files["ai-wide"]);
+  await runScript(wide.id ?? wide, wideSql());
+  copyFileSync(files["ai-shop"], files["ai-prod"]);
+  await conn("ai-prod", files["ai-prod"], { production: true });
+  await conn("ai-readonly", files["ai-shop"], { readOnly: true });
+  const view = await invoke("ai_settings", { groupId: null });
+  await invoke("save_ai_settings", {
+    groupId: null, overrideGroup: false, key: { t: "keep" },
+    settings: { ...view.settings, provider: "custom", preset: null, baseUrl: FIXTURE_URL(), model: "fx-answer", inlineAsk: true, errorAsk: true },
+  });
+  await reload();
+  console.log("ai setup done");
+}
+
+async function aiCleanup() {
+  await appReady();
+  await closeAllTabs().catch(() => {});
+  for (const c of await invoke("list_connections")) if (AI_NAMES.includes(c.name)) await invoke("delete_connection", { id: c.id });
+  const view = await invoke("ai_settings", { groupId: null });
+  await invoke("save_ai_settings", {
+    groupId: null, overrideGroup: false, key: { t: "keep" },
+    settings: { ...view.settings, provider: null, preset: null, baseUrl: "", model: "" },
+  });
+  // Only what setup made: the three files and their SQLite side files, then the folder if it is empty.
+  for (const n of ["ai-shop", "ai-wide", "ai-prod"]) {
+    for (const ext of ["sqlite", "sqlite-wal", "sqlite-shm", "sqlite-journal"]) rmSync(join(aiFolder(), `${n}.${ext}`), { force: true });
+  }
+  try {
+    rmdirSync(aiFolder());
+  } catch (e) {
+    if (e.code === "ENOENT") {
+      // Already gone.
+    } else if (e.code === "ENOTEMPTY" || e.code === "EEXIST") console.log(`left ${aiFolder()}: it holds other files`);
+    else throw e;
+  }
+  console.log("ai cleanup done");
+}
+
+// ---- scene helpers
+
+async function useModel(id) {
+  const view = await invoke("ai_settings", { groupId: null });
+  await invoke("save_ai_settings", { groupId: null, overrideGroup: false, key: { t: "keep" }, settings: { ...view.settings, model: id } });
+}
+
+const panelOpen = () => exists({ sel: ".ai-panel", within: "body" });
+
+async function openPanel(connection = "ai-shop", sql = "SELECT * FROM shipments;") {
+  await goHome().catch(() => {});
+  await queryTabOn(connection, sql);
+  if (!(await panelOpen())) await press("Ctrl+Alt+i");
+  await waitFor(`document.querySelector('.ai-panel')`, "the Ask panel");
+  await sleep(500);
+}
+
+async function newChat() {
+  if (await exists({ sel: ".ai-panel button", label: "New chat", exact: false })) await click({ sel: ".ai-panel button", label: "New chat", exact: false });
+  await sleep(300);
+}
+
+async function askPanel(question) {
+  await fill({ sel: ".ai-panel textarea", label: "Message" }, question);
+  await click({ sel: ".ai-panel button", label: "Send" });
+}
+
+const answered = (timeout = 20000) =>
+  waitFor(`!document.querySelector('.ai-panel [aria-label="Stop"]') && document.querySelector('.ai-panel')`, "the answer to finish", timeout);
+
+// Ask on a model and shoot when the answer (or its error card) is in.
+async function askOn(model, question, name, { wait = answered, connection } = {}) {
+  await useModel(model);
+  await openPanel(connection);
+  await newChat();
+  await askPanel(question);
+  await wait();
+  await settle();
+  await shot(name);
+}
+
+const SCENE_QUESTION = "How many parcels does each carrier have?";
+
+async function inlineAsk(model, text) {
+  await useModel(model);
+  await queryTabOn("ai-shop", "SELECT * FROM shipments\nWHERE status = 'delivered';");
+  await press("Ctrl+a");
+  await press("Ctrl+i");
+  await waitFor(`document.querySelector('[role=dialog][aria-label="Ask AI"]')`, "the inline Ask");
+  if (text) {
+    await fill({ sel: "[role=dialog] textarea,[role=dialog] input", label: "Question" }, text);
+    await press("Enter");
+    await answered().catch(() => {});
+    await waitFor(`!document.querySelector('[role=dialog][aria-label="Ask AI"] .button[aria-busy=true]')`, "inline answer", 20000).catch(() => {});
+    await sleep(800);
+  }
+}
+
+const diagramPanel = async (model) => {
+  await useModel(model);
+  await goHome().catch(() => {});
+  await openConnection("ai-shop");
+  await rowMenu("ai-shop");
+  await menuPick("New Schema Model");
+  await waitFor(`document.querySelector('[role=dialog]')`, "New Schema Model");
+  await click({ sel: "[role=dialog] button", text: "Read the database" });
+  await waitFor(`document.querySelector('.react-flow__node')`, "the diagram canvas", 20000);
+  await sleep(800);
+  await click({ sel: "button[role=tab]", text: "Assistant" });
+  await sleep(500);
+};
+
+const askDiagram = async (question) => {
+  await fill({ sel: "textarea", label: "Message" }, question);
+  await click({ sel: "button", label: "Send" });
+  await answered(30000).catch(() => {});
+  await sleep(600);
+};
+
+// ---- scenes
+
+const ERROR_SCENES = [
+  ["ai-err-rate-limit", "fx-429"], ["ai-err-bad-key", "fx-401"], ["ai-err-model-retired", "fx-404"], ["ai-err-server", "fx-500"],
+  ["ai-err-cut-off", "fx-cut"], ["ai-err-length", "fx-length"], ["ai-err-declined", "fx-refusal"],
+];
+
+const SCENES = [
+  // 11.1
+  ["ai-panel-empty", async () => {
+    await useModel("fx-answer");
+    await openPanel();
+    await newChat();
+    await settle();
+    await shot("ai-panel-empty");
+  }],
+  ["ai-panel-answering", async () => {
+    await askOn("fx-long", SCENE_QUESTION, "ai-panel-answering", { wait: () => sleep(4000) });
+    await click({ sel: ".ai-panel button", label: "Stop" });
+    await sleep(500);
+  }],
+  ["ai-panel-answer", () => askOn("fx-answer", SCENE_QUESTION, "ai-panel-answer")],
+  ["ai-panel-sends", async () => {
+    await useModel("fx-answer");
+    await openPanel();
+    await fill({ sel: ".ai-panel textarea", label: "Message" }, SCENE_QUESTION);
+    await sleep(600);
+    await settle();
+    await shot("ai-panel-sends");
+  }],
+  ["ai-model-picker", async () => {
+    await useModel("fx-answer");
+    await openPanel();
+    await click({ sel: ".ai-panel button", label: "Model:", exact: false });
+    await waitFor(`document.querySelector('[role=dialog][aria-label="Model"]')`, "the model picker");
+    await settle();
+    await shot("ai-model-picker");
+    await escapeAll(2);
+  }],
+  ["ai-panel-history", async () => {
+    await askOn("fx-answer", SCENE_QUESTION, "ai-panel-answer-for-history");
+    await click({ sel: ".ai-panel button", label: "Show history" });
+    await waitFor(`document.querySelector('[role=dialog][aria-label="Chat history"]')`, "chat history");
+    await settle();
+    await shot("ai-panel-history");
+    await escapeAll(2);
+  }],
+  ["ai-panel-topics", async () => {
+    await useModel("fx-answer");
+    await openPanel();
+    await newChat();
+    await askPanel("How many parcels does each carrier have in shipments?");
+    await answered();
+    await askPanel("What is the average total in orders, per status?");
+    await answered();
+    await settle();
+    await shot("ai-panel-topics");
+  }],
+  // 11.2
+  ["ai-inline-answer", async () => {
+    await inlineAsk("fx-answer", "Group this by carrier");
+    await settle();
+    await shot("ai-inline-answer");
+    await escapeAll(2);
+  }],
+  ["ai-inline-insert-diff", async () => {
+    await inlineAsk("fx-answer", "Count by carrier instead");
+    await click({ sel: "[role=dialog] button", text: "Insert", exact: false });
+    await sleep(500);
+    await settle();
+    await shot("ai-inline-insert-diff");
+    await escapeAll(2);
+  }],
+  ["ai-inline-fix-error", async () => {
+    await useModel("fx-answer");
+    await queryTabOn("ai-shop", "SELECT carrier, count(*) FROM shipment GROUP BY carrier;");
+    await press("Ctrl+Shift+Enter");
+    await sleep(1500);
+    await click({ sel: "button", text: "Ask", exact: false });
+    await waitFor(`document.querySelector('[role=dialog][aria-label="Ask AI"]')`, "the inline Ask");
+    await click({ sel: "[role=dialog] button.act", text: "Fix", exact: false }).catch(() => {});
+    await answered().catch(() => {});
+    await sleep(800);
+    await settle();
+    await shot("ai-inline-fix-error");
+    await escapeAll(2);
+  }],
+  // 11.3
+  ["ai-log", async () => {
+    await askOn("fx-answer", SCENE_QUESTION, "ai-log-answer");
+    await click({ sel: ".ai-panel button", text: "Show log", exact: false });
+    await sleep(600);
+    await settle();
+    await shot("ai-log");
+  }],
+  ["ai-steps", async () => {
+    await click({ sel: "[role=tab]", text: "Steps" });
+    await sleep(400);
+    await settle();
+    await shot("ai-steps");
+  }],
+  ["ai-diagram", async () => {
+    await click({ sel: "[role=tab]", text: "Diagram" });
+    await sleep(400);
+    await settle();
+    await shot("ai-diagram");
+  }],
+  // 11.4
+  ["ai-settings", async () => {
+    await openSwitcher();
+    await menuPick("Settings");
+    await sleep(800);
+    await click({ sel: ".snav button", text: "AI" });
+    await sleep(600);
+    await settle();
+    await shot("ai-settings");
+  }],
+  ["ai-settings-privacy", async () => {
+    await ev("document.querySelector('.settings-page h3')?.scrollIntoView(), [...document.querySelectorAll('h3')].find((h) => h.textContent === 'Privacy')?.scrollIntoView(), true");
+    await sleep(400);
+    await settle();
+    await shot("ai-settings-privacy");
+  }],
+  ["ai-settings-access", async () => {
+    await ev("[...document.querySelectorAll('h3')].find((h) => /access/i.test(h.textContent))?.scrollIntoView(), true");
+    await sleep(400);
+    await settle();
+    await shot("ai-settings-access");
+  }],
+  ["ai-settings-tools", async () => {
+    await ev("[...document.querySelectorAll('h3')].find((h) => /tool/i.test(h.textContent))?.scrollIntoView(), true");
+    await sleep(400);
+    await settle();
+    await shot("ai-settings-tools");
+  }],
+  // 11.5: the diagram assistant
+  ["diagram-ai-switch", async () => {
+    await useModel("fx-diagram");
+    await diagramPanel("fx-diagram");
+    await settle();
+    await shot("diagram-ai-switch");
+  }],
+  ["diagram-ai-panel", async () => {
+    await askDiagram("Add an address check and rename Ship");
+    await settle();
+    await shot("diagram-ai-panel");
+  }],
+  ["diagram-ai-review", async () => {
+    await click({ sel: "button", text: "Review", exact: false });
+    await sleep(600);
+    await settle();
+    await shot("diagram-ai-review");
+  }],
+  ["diagram-ai-autoapply", async () => {
+    await click({ sel: "[role=switch]", label: "Apply", exact: false });
+    await sleep(500);
+    await settle();
+    await shot("diagram-ai-autoapply");
+  }],
+  // 11h error states the fixtures can produce: the rate limit, a retired model and a server error
+  ...[["diagram-ai-err-rate-limit", "fx-429"], ["diagram-ai-err-model-retired", "fx-404"], ["diagram-ai-err-server", "fx-500"]].map(([name, model]) => [name, async () => {
+    await diagramPanel(model);
+    await askDiagram("Add an address check");
+    await settle();
+    await shot(name);
+  }]),
+  // 11.6
+  ...ERROR_SCENES.map(([name, model]) => [name, () => askOn(model, SCENE_QUESTION, name)]),
+  ["ai-err-writes", async () => {
+    await askOn("fx-write", "Set the carrier of shipment 7 to DHL", "ai-err-writes");
+  }],
+  ["ai-err-stopped", async () => {
+    await useModel("fx-long");
+    await openPanel();
+    await newChat();
+    await askPanel(SCENE_QUESTION);
+    await sleep(3000);
+    await click({ sel: ".ai-panel button", label: "Stop" });
+    await sleep(800);
+    await settle();
+    await shot("ai-err-stopped");
+  }],
+  ["ai-err-stalled", () => askOn("fx-stall", SCENE_QUESTION, "ai-err-stalled", { wait: () => sleep(100_000) })],
+  ["ai-compacted", async () => {
+    await useModel("fx-compact");
+    await openPanel();
+    await newChat();
+    await askPanel(SCENE_QUESTION);
+    await answered();
+    await askPanel("And per status?");
+    await answered(40000);
+    await sleep(1500);
+    await settle();
+    await shot("ai-compacted");
+  }],
+  ["ai-err-context-full", async () => {
+    await useModel("fx-compact");
+    await openPanel();
+    for (let i = 0; i < 3; i++) {
+      await askPanel(`Question ${i + 1}: ${"more detail ".repeat(40)}`);
+      await answered(30000).catch(() => {});
+    }
+    await settle();
+    await shot("ai-err-context-full");
+  }],
+  // safety
+  ["ai-prod-confirm", async () => {
+    await useModel("fx-write");
+    await openPanel("ai-prod", "SELECT 1;");
+    await newChat();
+    await askPanel("Set the carrier of shipment 7 to DHL");
+    await answered();
+    await click({ sel: ".ai-panel button", label: "Insert", exact: false });
+    await click({ sel: "button", label: "Run", exact: false });
+    await waitFor(`/Written by the assistant/.test(document.querySelector('[role=dialog]')?.innerText ?? '')`, "the Run confirmation saying Written by the assistant");
+    await settle();
+    await shot("ai-prod-confirm");
+    await press("Escape");
+  }],
+  ["ai-prod-risky", async () => {
+    await useModel("fx-risky");
+    await openPanel("ai-prod", "SELECT 1;");
+    await newChat();
+    await askPanel("Wait a second");
+    await answered();
+    await click({ sel: ".ai-panel button", label: "Insert", exact: false });
+    await sleep(500);
+    await settle();
+    await shot("ai-prod-risky");
+  }],
+  ["ai-readonly-blocked", async () => {
+    await useModel("fx-write");
+    await openPanel("ai-readonly", "SELECT 1;");
+    await newChat();
+    await askPanel("Set the carrier of shipment 7 to DHL");
+    await answered();
+    await click({ sel: ".ai-panel button", label: "Insert", exact: false });
+    await press("Ctrl+Shift+Enter");
+    await sleep(800);
+    await settle();
+    await shot("ai-readonly-blocked");
+  }],
+];
+
 // ---------------------------------------------------------------- data folder guard
 
 // The same folder however it is written: resolved, links followed, case and trailing separators ignored.
@@ -1008,7 +1454,7 @@ function sameFolder(a, b) {
 async function guardDataFolder() {
   const want = args["data-dir"];
   if (typeof want !== "string" || want === "") {
-    throw new Error("--setup and --cleanup need --data-dir <folder>, the CONTURA_DATA_DIR the app was started with");
+    throw new Error("--setup, --cleanup, --ai-setup and --ai-cleanup need --data-dir <folder>, the CONTURA_DATA_DIR the app was started with");
   }
   const info = await invoke("data_folder_info");
   const have = info?.path ?? null;
@@ -1020,7 +1466,7 @@ async function guardDataFolder() {
 // ---------------------------------------------------------------- main
 
 await attach();
-if (args.setup || args.cleanup) {
+if (args.setup || args.cleanup || args["ai-setup"] || args["ai-cleanup"]) {
   try {
     await guardDataFolder();
   } catch (e) {
@@ -1033,6 +1479,8 @@ if (OUT) mkdirSync(OUT, { recursive: true });
 try {
   if (args.setup) await setup();
   else if (args.cleanup) await cleanup();
+  else if (args["ai-setup"]) await aiSetup();
+  else if (args["ai-cleanup"]) await aiCleanup();
   else await captureAll();
 } finally {
   cdp.close();

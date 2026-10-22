@@ -1,6 +1,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { PROVIDERS } from "../settings/ai/providers";
+import { keyringText, thisComputer } from "../platform";
+import { aiSettingsChanged, toolUsesChanged } from "./changes";
 import type {
+  DiagramAskRequest,
+  ToolOutcome,
   AiAccess,
   AiSyncMode,
   ContextInfo,
@@ -10,6 +14,13 @@ import type {
   AiSettings,
   AiSettingsView,
   AiThread,
+  AnswerRecord,
+  ThreadHit,
+  ThreadSummary,
+  ThreadView,
+  ToolUseRow,
+  CompactRequest,
+  Compaction,
   AiTestOk,
   AnswerAction,
   AnswerActionKind,
@@ -410,12 +421,10 @@ export const saveQueryTabs = (place: string, json: string): Promise<void> => inv
 
 export const aiSettings = (groupId: GroupId | null): Promise<AiSettingsView> => invoke("ai_settings", { groupId });
 
-export const saveAiSettings = (
-  groupId: GroupId | null,
-  settings: AiSettings,
-  overrideGroup: boolean,
-  key: KeyChange,
-): Promise<void> => invoke("save_ai_settings", { groupId, settings, overrideGroup, key });
+export const saveAiSettings = async (groupId: GroupId | null, settings: AiSettings, overrideGroup: boolean, key: KeyChange): Promise<void> => {
+  await invoke("save_ai_settings", { groupId, settings, overrideGroup, key });
+  aiSettingsChanged.emit();
+};
 
 export const aiTest = (groupId: GroupId | null): Promise<AiTestOk> => invoke("ai_test", { groupId });
 
@@ -426,8 +435,10 @@ export const aiModels = (groupId: GroupId | null): Promise<ModelList> => invoke(
 export const aiKnownModels = (groupId: GroupId | null): Promise<ModelList> => invoke("ai_known_models", { groupId });
 
 /** Remembers the thinking and caching picks for `model` and makes it the current model. */
-export const setAiModelPrefs = (groupId: GroupId | null, model: string, picks: ModelPicks): Promise<void> =>
-  invoke("set_ai_model_prefs", { groupId, model, picks });
+export const setAiModelPrefs = async (groupId: GroupId | null, model: string, picks: ModelPicks): Promise<void> => {
+  await invoke("set_ai_model_prefs", { groupId, model, picks });
+  aiSettingsChanged.emit();
+};
 
 /**
  * Binds the saved key to `host`, the host the keyHostChanged card named. Rejects with keyHostChanged for the
@@ -449,14 +460,68 @@ export async function aiAskStream(request: AskRequest, onEvent: (e: AiEvent) => 
   await invoke("ai_ask_stream", { request, events });
 }
 
+/**
+ * Compact now: the open Topic's older turns become one summary written by the model. Its events (log, status, sent)
+ * arrive on `onEvent`; resolves with the stored compaction, and rejects when it could not run (Busy, too few turns).
+ */
+export async function aiCompact(request: CompactRequest, onEvent: (e: AiEvent) => void): Promise<Compaction> {
+  const events = new Channel<AiEvent>();
+  events.onmessage = onEvent;
+  return invoke("ai_compact", { request, events });
+}
+
+/** What a diagram Ask would send, built by the Core with the global settings (R1.6). */
+export const aiDiagramPreview = (request: DiagramAskRequest): Promise<Preview> => invoke("ai_diagram_preview", { request });
+
+/**
+ * Starts a diagram Ask with its one tool; its events (the answer text, then `proposal` when the model proposed
+ * changes) arrive on `onEvent` and end with `done` or `error`. Registered under `diagram:<file>`, so
+ * `aiCancelPlace` stops it. Rejects when it could not start.
+ */
+export async function aiDiagramAsk(request: DiagramAskRequest, onEvent: (e: AiEvent) => void): Promise<void> {
+  const events = new Channel<AiEvent>();
+  events.onmessage = onEvent;
+  await invoke("ai_diagram_ask", { request, events });
+}
+
+/** Keeps what the user did with the proposal of the answer at `messageAt`; a second call replaces it. Null when that answer has none. */
+export const aiRecordToolResult = async (threadId: string, messageAt: number, outcome: ToolOutcome): Promise<ToolOutcome | null> => {
+  const kept = await invoke<ToolOutcome | null>("ai_record_tool_result", { threadId, messageAt, outcome });
+  toolUsesChanged.emit();
+  return kept;
+};
+
+/** Undoes a compaction: its messages come back. A second Undo returns the same view. */
+export const aiUndoCompact = (threadId: string, compactionId: string): Promise<ThreadView> =>
+  invoke("ai_undo_compact", { threadId, compactionId });
+
 /** Stops a running Ask; false when it had already ended. */
 export const aiCancel = (requestId: string): Promise<boolean> => invoke("ai_cancel", { requestId });
 
-export const listAiThreads = (place: string): Promise<AiThread[]> => invoke("list_ai_threads", { place });
+/** Stops every running Ask or Compact now of a place, the inline Ask too; false when none was running. */
+export const aiCancelPlace = (place: string): Promise<boolean> => invoke("ai_cancel_place", { place });
+
+export const listAiThreads = (place: string): Promise<ThreadSummary[]> => invoke("list_ai_threads", { place });
+
+/** One thread with its Topics and compactions; its records are trimmed. Null when it is gone. */
+export const getAiThread = (threadId: string): Promise<ThreadView | null> => invoke("get_ai_thread", { threadId });
+
+/** The full stored record of an answer, for Show log and the exact Sent record of a trimmed copy. */
+export const aiAnswerRecord = (threadId: string, messageAt: number): Promise<AnswerRecord | null> =>
+  invoke("ai_answer_record", { threadId, messageAt });
+
+/** The 20 newest tool uses across every thread, newest first (Settings, AI: Recent tool uses). */
+export const aiRecentToolUses = (): Promise<ToolUseRow[]> => invoke("ai_recent_tool_uses");
+
+/** The place's Topics that match `text`, best first. */
+export const aiSearchThreads = (place: string, text: string): Promise<ThreadHit[]> => invoke("ai_search_threads", { place, text });
 
 /** Saves a thread; `requestId` is the Ask whose answer this save adds, so the Core writes the AI Context it used. */
-export const saveAiThread = (thread: AiThread, requestId: string | null = null): Promise<void> =>
-  invoke("save_ai_thread", { thread, requestId });
+export const saveAiThread = async (thread: AiThread, requestId: string | null = null): Promise<ThreadView> => {
+  const view = await invoke<ThreadView>("save_ai_thread", { thread, requestId });
+  toolUsesChanged.emit();
+  return view;
+};
 
 /** Keeps what the user did with the SQL of the answer at `messageAt`; null for an answer kept before records were. */
 export const aiRecordAction = (threadId: string, messageAt: number, kind: AnswerActionKind): Promise<AnswerAction | null> =>
@@ -534,7 +599,7 @@ function clockText(ms: number): string {
 }
 
 /** The provider's own short message, capped at 200 characters. */
-function providerMessage(message: string): string {
+export function providerMessage(message: string): string {
   const capped = message.length > 200 ? `${message.slice(0, 199)}…` : message;
   return /[.!?…]$/.test(capped) ? capped : `${capped}.`;
 }
@@ -556,7 +621,7 @@ function aiErrorText(e: AiError): string {
     case "insecureUrl":
       return e.host === ""
         ? "The base URL is not a valid address."
-        : `Use https for ${e.host}. Plain http is allowed only on this PC or a private network.`;
+        : `Use https for ${e.host}. Plain http is allowed only on ${thisComputer()} or a private network.`;
     case "timeout":
       return "The provider did not answer in time.";
     case "cancelled":
@@ -587,6 +652,18 @@ function aiErrorText(e: AiError): string {
       return `Could not check the certificate of ${e.host}. A proxy or antivirus may be inspecting https.`;
     case "busy":
       return "An answer is still being written. Stop it first.";
+    case "nothingToContinue":
+      return "Nothing to continue.";
+    case "fileChanged":
+      return `${e.file}.flow changed while the assistant was working${e.line === null ? "" : `, from line ${e.line}`}. No change was made.`;
+    case "toolRejected":
+      return "The assistant asked for a tool Contura does not offer. Nothing was changed.";
+    case "badToolInput":
+      return "The assistant's changes could not be read. Nothing was changed.";
+    case "toolOff":
+      return "Propose diagram changes is off in Settings.";
+    case "badFileName":
+      return "This diagram's file name holds a character the assistant cannot send. Rename the file and ask again.";
     case "internal":
       return "Something went wrong before the question was sent.";
   }
@@ -651,7 +728,7 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
     case "store":
       return `Could not read or write saved settings: ${e.message}`;
     case "secret":
-      return `Could not use Windows Credential Manager: ${e.message}`;
+      return `Could not use ${keyringText()}: ${e.message}`;
     case "file": {
       // A whole sentence (a file's content, Q45) is shown as it is; a read gets read advice.
       const text = `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}`;

@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import type { AnswerActionKind, AnswerRecord, LogLine, ProcessStep, StepKind } from "../api/types";
 import Icon from "../components/Icon";
 import { mainNeverLeft, stepTime } from "./answerRecord";
-import { notSent, STEP_LABEL } from "./StepsView";
+import { notSent, sampleReads, STEP_LABEL, toolOutcomeText } from "./StepsView";
+import { thisComputer, yourComputer } from "../platform";
 
 interface Props {
   record: AnswerRecord;
@@ -18,6 +19,10 @@ interface Props {
   picked: number | null;
   onPick(index: number | null): void;
   onOpenInSteps(index: number): void;
+  /** A diagram Ask (board 11.12): no database, one tool, and the Tool check box opens its row in Steps. */
+  variant?: "diagram";
+  /** The diagram's name, `<file>.flow`, for the one-tool line. */
+  file?: string;
 }
 
 const count = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
@@ -63,6 +68,15 @@ function boxLabel(s: ProcessStep): string {
     const m = /from (\d[\d,]*)/.exec(s.value);
     return m ? `Outline, ${m[1]} ${m[1] === "1" ? "table" : "tables"}` : "Outline";
   }
+  if (s.step === "compact") {
+    const m = /^(\d[\d,]*) messages?/.exec(s.value);
+    return m ? `Compact, ${m[1]} ${m[1] === "1" ? "message" : "messages"}` : "Compact";
+  }
+  if (s.step === "rows") {
+    const asked = s.evidence.length;
+    const read = s.evidence.filter((e) => /^\d[\d,]* rows?,/.test(e[2])).length;
+    return asked > 0 ? `Rows, ${read} of ${asked} ${asked === 1 ? "table" : "tables"}` : "Rows";
+  }
   if (s.step === "sqlCheck") return `SQL check, ${s.value.split(", ")[0]}`;
   return STEP_LABEL[s.step];
 }
@@ -71,7 +85,7 @@ function boxLabel(s: ProcessStep): string {
  * The Diagram tab (board 11.3): the record drawn as DOM boxes in three zones, the one line that leaves the PC in the
  * accent, the database as a store box reached only for its catalog, and no path from the model to the database.
  */
-export default function DiagramView({ record, question, answer, providerName, connection, live, picked, onPick, onOpenInSteps }: Props) {
+export default function DiagramView({ record, question, answer, providerName, connection, live, picked, onPick, onOpenInSteps, variant, file = "" }: Props) {
   const at = (k: StepKind) => record.steps.findIndex((s) => s.step === k);
   const step = (k: StepKind) => record.steps[at(k)] ?? null;
   const box = (k: StepKind): ReactNode => {
@@ -103,11 +117,46 @@ export default function DiagramView({ record, question, answer, providerName, co
   const join = (nodes: ReactNode[]) =>
     nodes.filter(Boolean).flatMap((n, i) => (i === 0 ? [n] : [<div key={`l${i}`} className="vlink" />, n]));
   const sent = record.sent;
+  if (variant === "diagram") {
+    return (
+      <DiagramAskView
+        record={record}
+        question={question}
+        providerName={providerName}
+        file={file}
+        box={box}
+        join={join}
+        detail={(s) =>
+          s && (
+            <section className="ddetail" aria-label={STEP_LABEL[s.step]}>
+              <div className="ddetail-head">
+                <span className="t">{STEP_LABEL[s.step]}</span>
+                <span className={s.byModel ? "v model" : "v"}>{s.value}</span>
+                <span className="spacer" />
+                <span className="tm">{stepTime(s.atMs)}</span>
+              </div>
+              {s.rule && <p className="prule">{s.rule}</p>}
+              <button type="button" className="link-button" onClick={() => picked != null && onOpenInSteps(picked)}>
+                Open in Steps
+              </button>
+            </section>
+          )
+        }
+        chosen={picked != null ? (record.steps[picked] ?? null) : null}
+        onOpenInSteps={onOpenInSteps}
+      />
+    );
+  }
   const back = new TextEncoder().encode(answer).length;
   const chosen = picked != null ? (record.steps[picked] ?? null) : null;
   const outline = step("outline");
   const outlineIdx = at("outline");
   const outlineSent = sent?.outline ?? null;
+  const compact = step("compact");
+  const compactIdx = at("compact");
+  const summarySent = sent?.summary ?? null;
+  // The summary or compaction call crosses on its own, like the outline call (board 11.6).
+  const summaryCross = compact && summarySent;
   const out = notSent(record);
   const pcFirst: ReactNode[] = [
     <div key="q" className="dbox">
@@ -143,6 +192,31 @@ export default function DiagramView({ record, question, answer, providerName, co
       </div>
     ) : null,
   ];
+  const reads = sampleReads(record);
+  const rowsStep = step("rows");
+  // Board 11.10: the Rows box reaches the database with its own read-only line; the catalog box is not drawn then.
+  // With no SELECT run (no named table, every read failed), the Rows box has no read line and the catalog box stays.
+  const readRows = rowsStep !== null && reads !== null;
+  const rowsBox = !rowsStep ? null : !readRows ? (
+    box("rows")
+  ) : (
+    <div key="rows" className="drow">
+      {box("rows")}
+      <div className="dside">
+        <span className="dread" aria-hidden="true">
+          <Icon name="arrowLeft" size={14} />
+          <span className="ln" />
+        </span>
+        <div className="dbox store">
+          <Icon name="database" size={14} />
+          <span className="dstore2">
+            <span>{connection ?? "The database"}</span>
+            <span className="dnote">{`${count(reads ?? 0, "SELECT", "SELECTs")}, read only, by Contura`}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
   const pcAfter: ReactNode[] = [
     step("tables") && (
       <div key="tables" className="drow">
@@ -153,7 +227,9 @@ export default function DiagramView({ record, question, answer, providerName, co
         </div>
       </div>
     ),
+    rowsBox,
     box("cleaning"),
+    compact && !summaryCross && box("compact"),
   ];
   // The outline call crosses to the provider on its own (board 11.7), once its request left; a failed one shows why
   // it could not pick, with no picks.
@@ -172,7 +248,7 @@ export default function DiagramView({ record, question, answer, providerName, co
     </div>
   ));
 
-  const store = hasStore && (
+  const store = hasStore && !readRows && (
     <div className="dstore">
       <Icon name="database" size={14} />
       {connection ?? "The database"}
@@ -188,7 +264,7 @@ export default function DiagramView({ record, question, answer, providerName, co
   return (
     <div className="diag">
       <div className="zone">
-        <span className="zt">On this PC</span>
+        <span className="zt">{`On ${thisComputer()}`}</span>
         {onPC}
         {!outlineCross && store}
       </div>
@@ -196,7 +272,7 @@ export default function DiagramView({ record, question, answer, providerName, co
         <>
           <div className="dcross">
             <span className="dline accent" />
-            <span className="dchip accent">{`${bytes(outlineSent.bytes)} leave your PC`}</span>
+            <span className="dchip accent">{`${bytes(outlineSent.bytes)} leave ${yourComputer()}`}</span>
             <span className="dnote">outline call</span>
           </div>
           {providerZone(
@@ -223,16 +299,40 @@ export default function DiagramView({ record, question, answer, providerName, co
             ),
           )}
           <div className="zone">
-            <span className="zt">On this PC</span>
+            <span className="zt">{`On ${thisComputer()}`}</span>
             {onPCAfter}
             {store}
+          </div>
+        </>
+      )}
+      {summaryCross && (
+        <>
+          <div className="dcross">
+            <span className="dline accent" />
+            <span className="dchip accent">{`${bytes(summarySent.bytes)} leave ${yourComputer()}`}</span>
+            <span className="dnote">{summarySent.kind === "compact" ? "compaction call" : "summary call"}</span>
+          </div>
+          {providerZone(
+            <button
+              type="button"
+              className={`dbox model${picked === compactIdx ? " on" : ""}`}
+              aria-pressed={picked === compactIdx}
+              onClick={() => onPick(picked === compactIdx ? null : compactIdx)}
+            >
+              <span className="dlab">{`${summarySent.kind === "compact" ? "Compaction" : "Summary"}, ${count(summarySent.messages, "message", "messages")}`}</span>
+              <span className="dmodel">model</span>
+            </button>,
+          )}
+          <div className="zone">
+            <span className="zt">{`On ${thisComputer()}`}</span>
+            {box("compact")}
           </div>
         </>
       )}
       {left && (
         <div className="dcross">
           <span className="dline accent" />
-          <span className="dchip accent">{`${bytes(left.bytes)} leave your PC`}</span>
+          <span className="dchip accent">{`${bytes(left.bytes)} leave ${yourComputer()}`}</span>
         </div>
       )}
       {sent && !left && (
@@ -252,7 +352,7 @@ export default function DiagramView({ record, question, answer, providerName, co
       )}
       {(step("sqlCheck") || live || you.length > 0) && (
         <div className="zone">
-          <span className="zt">Back on this PC</span>
+          <span className="zt">{`Back on ${thisComputer()}`}</span>
           {join([box("sqlCheck"), ...you])}
         </div>
       )}
@@ -274,6 +374,120 @@ export default function DiagramView({ record, question, answer, providerName, co
           </button>
         </section>
       )}
+    </div>
+  );
+}
+
+/**
+ * The Diagram tab of a diagram Ask (board 11.12): the question, the .flow text and its cleaning on this PC, the one
+ * crossing, the model's answer and its proposal, then the Tool check and what the user did. No database box: the
+ * one tool can only suggest edits to the file.
+ */
+function DiagramAskView({
+  record,
+  question,
+  providerName,
+  file,
+  box,
+  join,
+  detail,
+  chosen,
+  onOpenInSteps,
+}: {
+  record: AnswerRecord;
+  question: string;
+  providerName: string;
+  file: string;
+  box(k: StepKind): ReactNode;
+  join(nodes: ReactNode[]): ReactNode[];
+  detail(s: ProcessStep | null): ReactNode;
+  chosen: ProcessStep | null;
+  onOpenInSteps(index: number): void;
+}) {
+  const sent = record.sent;
+  const left = sent && !mainNeverLeft(record) ? sent : null;
+  const diagramAt = record.steps.findIndex((s) => s.step === "diagram");
+  const checkAt = record.steps.findIndex((s) => s.step === "toolCheck");
+  const check = record.steps[checkAt] ?? null;
+  // What the model proposed, as the Tool check counted it ("4 proposed, 1 dropped"), else the stored proposal.
+  const counted = check ? /^(\d[\d,]*) proposed/.exec(check.value) : null;
+  const proposed = counted ? Number(counted[1].replace(/,/g, "")) : (record.toolUse?.proposal.changes.length ?? null);
+  const outcome = toolOutcomeText(record);
+  const diagramBox =
+    diagramAt >= 0 ? (
+      <div key="diagram" className="dbox">
+        <span className="dlab">Diagram</span>
+        <span className="t">{record.steps[diagramAt].value}</span>
+      </div>
+    ) : null;
+  return (
+    <div className="diag">
+      <div className="zone">
+        <span className="zt">{`On ${thisComputer()}`}</span>
+        {join([
+          <div key="q" className="dbox">
+            <span className="dlab">Your question</span>
+            {/* Opened from Settings, the question is not known: no count rather than "0 chars". */}
+            {question && <span className="t">{`${question.length.toLocaleString("en-US")} chars`}</span>}
+          </div>,
+          diagramBox,
+          box("cleaning"),
+        ])}
+      </div>
+      {left && (
+        <div className="dcross">
+          <span className="dline accent" />
+          <span className="dchip accent">{`${bytes(left.bytes)} leave ${yourComputer()}`}</span>
+        </div>
+      )}
+      {sent && !left && (
+        <div className="dcross">
+          <span className="dline" />
+          <span className="dchip">{sent.bytes === 0 ? "Not sent" : "Not sent, no connection"}</span>
+        </div>
+      )}
+      {sent && (
+        <div className="zone">
+          <span className="zt">{`${providerName}, ${sent.model}`}</span>
+          {join([
+            box("answer"),
+            proposed !== null && (
+              <div key="proposed" className="dbox model">
+                <span className="dlab">{`Proposed ${count(proposed, "change", "changes")}`}</span>
+                <span className="dmodel">model</span>
+              </div>
+            ),
+          ])}
+        </div>
+      )}
+      {(check || outcome) && (
+        <>
+          <div className="dcross">
+            <span className="dline" />
+          </div>
+          <div className="zone">
+            <span className="zt">{`Back on ${thisComputer()}`}</span>
+            {join([
+              check && (
+                <button key="check" type="button" className="dbox" aria-label={`Tool check, ${check.value}. Open in Steps`} onClick={() => onOpenInSteps(checkAt)}>
+                  <span className="dlab">Tool check</span>
+                  <span className="t">{check.value}</span>
+                </button>
+              ),
+              outcome && (
+                <div key="you" className="dbox you">
+                  <span className="dlab">{outcome}</span>
+                </div>
+              ),
+            ])}
+          </div>
+        </>
+      )}
+      <div className="dnopath dtool">
+        <Icon name="edit" size={14} />
+        {`One tool: it can only suggest edits to ${file}.flow.`}
+      </div>
+      {detail(chosen)}
     </div>
   );
 }

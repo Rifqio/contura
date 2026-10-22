@@ -146,3 +146,17 @@ test("changes_apply_without_save_or_cancel", async () => {
   expect((callsTo("save_ui_prefs")[0].prefs as UiPrefs).editor.ligatures).toBe(false);
   expect(screen.getByRole("switch", { name: "Ligatures" }).getAttribute("aria-checked")).toBe("false");
 });
+
+test("a_row_request_scrolls_to_that_block", async () => {
+  // The tools table sits 250 px into the AI section (board 11.12: Open Settings from a diagram's tool-off note).
+  const rect = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    if (this.getAttribute("data-row") !== "tools") return rect.call(this);
+    const top = 20 + 3 * 100 + 250 - (this.closest(".settings-scroll")?.scrollTop ?? 0);
+    return { top, left: 0, right: 0, bottom: top, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+  };
+  settingsRoutes();
+  renderWithProviders(<SettingsView section="ai" row="tools" groupId={null} groupName={null} connections={[]} onSection={() => {}} />);
+  await screen.findByRole("combobox", { name: "Provider" });
+  await waitFor(() => expect(page().scrollTop).toBe(550));
+});

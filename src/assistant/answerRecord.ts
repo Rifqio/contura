@@ -42,6 +42,7 @@ export function buildRecord(end: StreamEnd, live: LiveRecord): AnswerRecord {
     context: null,
     // AnswerRecord.error holds only an AiError, so another command error is kept as its plain text.
     commandError: end.error !== null && ai === null ? errorText(end.error) : null,
+    ...(done?.maxTokens != null ? { maxTokens: done.maxTokens } : {}),
   };
 }
 
@@ -69,6 +70,8 @@ export function recordOf(r: Partial<AnswerRecord> | undefined): AnswerRecord | n
     actions: r.actions ?? [],
     context: r.context ?? null,
     commandError: r.commandError ?? null,
+    ...(r.maxTokens != null ? { maxTokens: r.maxTokens } : {}),
+    ...(r.trimmed ? { trimmed: true } : {}),
   };
 }
 
@@ -92,8 +95,8 @@ export const providerName = (kind: AiProviderKind): string => PROVIDERS[kind]?.n
  */
 export function mainNeverLeft(record: AnswerRecord): boolean {
   const e = record.error;
-  if (record.sent?.outline && record.sent.bytes === 0) return true;
-  return e?.kind === "offline" || e?.kind === "tls" || (e?.kind === "timeout" && e.phase === "connect");
+  if ((record.sent?.outline || record.sent?.summary) && record.sent.bytes === 0) return true;
+  return e?.kind === "offline" || e?.kind === "tls" || (e?.kind === "network" && e.connect === true) || (e?.kind === "timeout" && e.phase === "connect");
 }
 
 /** The outline step's request left the PC but the main request did not. The Core keeps an outline record only once it left. */
@@ -102,9 +105,14 @@ export function onlyOutlineLeft(record: AnswerRecord): boolean {
   return !!o && o.left !== false && mainNeverLeft(record);
 }
 
-/** Nothing of the Ask left the PC: the main request never went, and no outline step went before it. */
+/** The summary or compaction call left the PC but the main request did not (no outline step went either). */
+export function onlySummaryLeft(record: AnswerRecord): boolean {
+  return !!record.sent?.summary && !onlyOutlineLeft(record) && mainNeverLeft(record);
+}
+
+/** Nothing of the Ask left the PC: the main request never went, and no outline or summary step went before it. */
 export function neverLeft(record: AnswerRecord): boolean {
-  return mainNeverLeft(record) && !onlyOutlineLeft(record);
+  return mainNeverLeft(record) && !onlyOutlineLeft(record) && !onlySummaryLeft(record);
 }
 
 /** A log line's time from the start, seconds and milliseconds: `00.214`, `01.912`, `123.400`. */
@@ -140,19 +148,28 @@ function clock(ms: number): string {
 /** A model id without its vendor folder: `openai/gpt-oss-20b` reads `gpt-oss-20b`. */
 export const shortModel = (id: string) => id.slice(id.lastIndexOf("/") + 1);
 
+/** Every byte the Ask sent: the main request, the outline step and the summary step (the Sent cell, the line, the Diagram). */
+export const sentBytes = (s: SentRecord): number => s.bytes + (s.outline?.bytes ?? 0) + (s.summary?.bytes ?? 0);
+
 /**
  * The line under an answer: "11:42 · Sent 2,314 B to Groq, gpt-oss-20b, 1.9s", plus ", 1,840 cached" when the
- * provider read from its cache; "Only the outline step was sent to Groq, 1,204 B" when the main request did not go.
+ * provider read from its cache; every call counts (the main request, the outline step, the summary step); "Only the outline step was sent to Groq, 1,204 B" when the main request did not go.
  * Null when there is no Sent record.
  */
-export function sentLine(record: AnswerRecord, at: number): string | null {
+export function sentLine(record: AnswerRecord, at: number, opts: { tool?: boolean } = {}): string | null {
   const s = record.sent;
   if (!s) return null;
   if (onlyOutlineLeft(record) && s.outline) {
     return `${clock(at)} · Only the outline step was sent to ${providerName(s.provider)}, ${s.outline.bytes.toLocaleString("en-US")} B`;
   }
+  if (onlySummaryLeft(record) && s.summary) {
+    const step = s.summary.kind === "compact" ? "compaction" : "summary";
+    return `${clock(at)} · Only the ${step} step was sent to ${providerName(s.provider)}, ${s.summary.bytes.toLocaleString("en-US")} B`;
+  }
   if (neverLeft(record)) return `${clock(at)} · Not sent to ${providerName(s.provider)}, no connection`;
-  const parts = [`${clock(at)} · Sent ${(s.bytes + (s.outline?.bytes ?? 0)).toLocaleString("en-US")} B to ${providerName(s.provider)}`, shortModel(s.model)];
+  const parts = [`${clock(at)} · Sent ${sentBytes(s).toLocaleString("en-US")} B to ${providerName(s.provider)}`, shortModel(s.model)];
+  // A diagram Ask carries one tool (board 11.12).
+  if (opts.tool) parts.push("one tool");
   if (record.millis != null) parts.push(secondsText(record.millis));
   const cached = record.usage?.cacheRead ?? 0;
   if (cached > 0) parts.push(`${cached.toLocaleString("en-US")} cached`);

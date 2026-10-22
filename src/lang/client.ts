@@ -6,6 +6,7 @@ import type {
   Diagnostic,
   FlowCompleteAnswer,
   FlowEditAnswer,
+  FlowOutlineAnswer,
   FlowRequestOp,
   FlowResult,
   FlowSpansResult,
@@ -160,6 +161,11 @@ export class LangClient {
   /** A canvas action as text edits on the text of `version`; `{ stale: true }` once the text has changed. */
   flowEdit(docId: string, version: number, edit: FlowRequestOp): Promise<FlowEditAnswer> {
     return this.ask((id) => ({ type: "flowEdit", id, docId, version, edit }));
+  }
+
+  /** The outline of the parse with `version`, for the diagram assistant; `{ stale: true }` once the text has changed. */
+  flowOutline(docId: string, version: number): Promise<FlowOutlineAnswer> {
+    return this.ask((id) => ({ type: "flowOutline", id, docId, version }));
   }
 
   /** Completion at `pos` in a .flow text, worked out in the worker; `stale` asks the caller to ask once more. */

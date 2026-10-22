@@ -234,9 +234,29 @@ async fn no_retry_after_first_byte() {
     let (got, result) = read_all(&http, resp).await;
     assert_eq!(got, b"data: a\n");
     let host = format!("127.0.0.1:{}", url.port().unwrap());
-    assert_eq!(ai(result.unwrap_err()), AiError::Network { host });
+    assert_eq!(
+        ai(result.unwrap_err()),
+        AiError::Network {
+            host,
+            connect: false
+        }
+    );
     assert_eq!(server.await.unwrap().len(), 1);
     assert!(retries(&log).is_empty());
+}
+
+#[tokio::test]
+async fn reset_after_headers_is_not_connect() {
+    let mut reply = MockReply::new(200, b"data: a\n");
+    reply.close_early = true;
+    let (url, _server) = serve(vec![reply]).await;
+    let http = http();
+    let resp = http.send(&call(&url, &[]), &mut Log::new()).await.unwrap();
+    let (_, result) = read_all(&http, resp).await;
+    assert!(matches!(
+        ai(result.unwrap_err()),
+        AiError::Network { connect: false, .. }
+    ));
 }
 
 #[tokio::test]
@@ -390,7 +410,7 @@ async fn key_header_never_in_debug() {
 }
 
 #[tokio::test]
-async fn connection_refused_is_network() {
+async fn refused_connection_is_connect_network() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -407,7 +427,8 @@ async fn connection_refused_is_network() {
     assert_eq!(
         ai(err),
         AiError::Network {
-            host: format!("127.0.0.1:{port}")
+            host: format!("127.0.0.1:{port}"),
+            connect: true
         }
     );
     let tries: Vec<_> = log.lines.iter().filter(|l| l.source == "http").collect();
@@ -560,6 +581,7 @@ fn chat() -> ChatRequest {
         temperature: None,
         thinking: Thinking::Off,
         max_tokens_field: MaxTokensField::MaxTokens,
+        tools: None,
     }
 }
 
@@ -1036,6 +1058,24 @@ async fn anthropic_models_page_with_limit() {
     );
 }
 
+#[tokio::test]
+async fn anthropic_models_reads_at_most_10_pages() {
+    // A server that always says `has_more` with a fresh `last_id` cannot keep us reading.
+    let page = |n: usize| {
+        format!(
+            r#"{{"data":[{{"type":"model","id":"claude-a-{n}"}},{{"type":"model","id":"claude-b-{n}"}}],
+            "has_more":true,"first_id":"claude-a-{n}","last_id":"claude-b-{n}"}}"#
+        )
+    };
+    let replies = (0..10)
+        .map(|n| MockReply::new(200, page(n).as_bytes()))
+        .collect();
+    let (url, server) = serve(replies).await;
+    let models = anthropic(&url).models(&mut Log::new()).await.unwrap();
+    assert_eq!(models.len(), 20);
+    assert_eq!(server.await.unwrap().len(), 10);
+}
+
 // ---- 11b-2: error kinds and provider carry-overs ----
 
 /// An OpenAI-compatible provider whose redact list holds nothing but its own key.
@@ -1148,7 +1188,7 @@ async fn mid_stream_error_without_code_is_bad_response() {
 
 #[tokio::test]
 async fn unknown_finish_reason_is_end_with_a_warning() {
-    let sse = b"data: {\"choices\":[{\"delta\":{\"content\":\"SELECT 1\"},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+    let sse = b"data: {\"choices\":[{\"delta\":{\"content\":\"SELECT 1\"},\"finish_reason\":\"function_call\"}]}\n\ndata: [DONE]\n\n";
     let (url, _server) = serve(vec![MockReply::new(200, sse)]).await;
     let p = openai(&url, Some(KEY), AiProviderKind::Groq);
     let mut got = Vec::new();
@@ -1165,7 +1205,7 @@ async fn unknown_finish_reason_is_end_with_a_warning() {
     assert_eq!(warning.level, Level::Warn);
     assert_eq!(
         warning.fields,
-        vec![("finish_reason".to_string(), "tool_calls".to_string())]
+        vec![("finish_reason".to_string(), "function_call".to_string())]
     );
     // A known reason logs nothing.
     let sse =

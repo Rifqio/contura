@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useOpenSignal } from "./useOpenSignal";
 import type { ModelInfo, ModelList, ModelPicks, ThinkingLevel } from "../api/types";
 import Icon from "../components/Icon";
 import { formatWindow } from "../settings/ai/providers";
@@ -15,6 +16,8 @@ interface Props {
   exact?: boolean;
   /** Opens the menu each time it changes to a number above 0, such as from the "Pick a model" card action. */
   openSignal?: number;
+  /** False drops the hover texts, for a place whose controls have none (the diagram tab's side panel). */
+  hoverText?: boolean;
 }
 
 const LEVELS: { key: ThinkingLevel; label: string }[] = [
@@ -40,15 +43,14 @@ const TIER_NOTE: Record<NonNullable<ModelInfo["tier"]>, string> = {
 const cachingOn = (m: ModelInfo) => m.caching === "automatic" || (m.caching === "breakpoints" && m.picks.caching);
 
 /** The model pill in the composer foot and its menu: models, thinking, prompt caching (board 11.1). */
-export default function ModelPicker({ list, onPick, providerName, used, parts = [], exact = false, openSignal = 0 }: Props) {
+export default function ModelPicker({ list, onPick, providerName, used, parts = [], exact = false, openSignal = 0, hoverText = true }: Props) {
+  const tip = (text: string) => (hoverText ? text : undefined);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const pill = useRef<HTMLButtonElement>(null);
   const current = list.models.find((m) => m.id === list.current) ?? null;
 
-  useEffect(() => {
-    if (openSignal > 0) setOpen(true);
-  }, [openSignal]);
+  useOpenSignal(openSignal, () => setOpen(true));
 
   useEffect(() => {
     if (!open) return;
@@ -88,18 +90,18 @@ export default function ModelPicker({ list, onPick, providerName, used, parts = 
         aria-label={`Model: ${name}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={`Model: ${current?.name ?? list.current}`}
+        title={tip(`Model: ${current?.name ?? list.current}`)}
         onClick={() => setOpen((o) => !o)}
       >
         <span className="mpill-name">{name}</span>
         {current && thinks(current) && (
-          <span className={off ? "mpill-think off" : "mpill-think"} title={off ? "Thinking off" : `Thinking: ${level?.label}`}>
+          <span className={off ? "mpill-think off" : "mpill-think"} title={tip(off ? "Thinking off" : `Thinking: ${level?.label}`)}>
             <Icon name="think" size={14} />
             {off ? "Off" : level?.label}
           </span>
         )}
         {current && cachingOn(current) && (
-          <span className="mpill-cache" title="Prompt caching on">
+          <span className="mpill-cache" title={tip("Prompt caching on")}>
             <Icon name="bolt" size={14} />
           </span>
         )}
@@ -193,7 +195,7 @@ export default function ModelPicker({ list, onPick, providerName, used, parts = 
           )}
 
           {current && used !== undefined && (
-            <div className="musage" title={`${exact ? "" : "About "}${used.toLocaleString("en-US")} tokens`}>
+            <div className="musage" title={tip(`${exact ? "" : "About "}${used.toLocaleString("en-US")} tokens`)}>
               <div className="musage-row">
                 <span className="meter-bar small">
                   <MeterFill used={used} window={current.contextWindow} />

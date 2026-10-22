@@ -63,6 +63,8 @@ export type FlowParse = {
   readonly defined: ReadonlyMap<string, number>;
   /** Every link that was read, kept while the text has errors; `link:<i>` spans index this list. */
   readonly links: readonly FlowLink[];
+  /** The 1-based line each entry of `links` is written on. */
+  readonly linkLines: readonly number[];
   /** The group a node or group is in: null at the top, undefined when the name is not defined. */
   parentOf(name: string): string | null | undefined;
   /** Names defined more than once (each is already a problem). */
@@ -259,6 +261,7 @@ class Parser {
       span,
       defined: defs,
       links: this.links,
+      linkLines: this.linkLines,
       parentOf,
       definedTwice: this.twice,
       rowsOf: (name: string) => this.rows.get(name) ?? [],

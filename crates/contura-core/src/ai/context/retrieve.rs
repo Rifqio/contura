@@ -13,6 +13,7 @@ use crate::ai::budget::{
 use crate::ai::context::build::split_words;
 use crate::ai::context::store::{ContextKey, ContextStore, FtsHit, GraphRow, StoredSavedQuery};
 use crate::ai::request::TableRef;
+use crate::ai::rows::MAX_SAMPLE_TABLES;
 use crate::error::Result;
 use crate::model::DialectKind;
 use crate::safety::identifiers;
@@ -97,6 +98,10 @@ pub struct Retrieval {
     pub ranked: bool,
     /// Whether any table got a name match (open tabs do not count).
     pub named: bool,
+    /// The tables whose rows an Ask may carry, in order with the reason each was named
+    /// (open tab or name match), kept to those sent in full or as names only. Filled in
+    /// tier 1 and tier 2 alike.
+    pub named_tables: Vec<(String, &'static str)>,
 }
 
 /// Words a question holds that say nothing about which table it means.
@@ -250,20 +255,28 @@ struct Ranked {
 }
 
 /// The graph's tables by name, and by lower-cased name.
-struct Index<'g> {
+pub(crate) struct Index<'g> {
+    graph: &'g [GraphRow],
     exact: HashMap<&'g str, usize>,
     folded: HashMap<String, Vec<usize>>,
+    /// The Context's schema; empty when it has none.
+    schema: &'g str,
 }
 
 impl<'g> Index<'g> {
-    fn new(graph: &'g [GraphRow]) -> Self {
+    pub(crate) fn new(graph: &'g [GraphRow], schema: &'g str) -> Self {
         let mut exact = HashMap::new();
         let mut folded: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, row) in graph.iter().enumerate() {
             exact.insert(row.table.as_str(), i);
             folded.entry(row.table.to_lowercase()).or_default().push(i);
         }
-        Self { exact, folded }
+        Self {
+            graph,
+            exact,
+            folded,
+            schema,
+        }
     }
 }
 
@@ -411,6 +424,59 @@ fn named_words(seeds: &Seeds) -> Vec<String> {
     named
 }
 
+/// Whether an open tab is in the Context's schema: its schema is unset, the Context has
+/// none, or they are equal. Shared by the ranking and `named_tables`.
+fn open_here(open: &TableRef, schema: &str) -> bool {
+    open.schema
+        .as_deref()
+        .is_none_or(|s| schema.is_empty() || s == schema)
+}
+
+/// The tables an Ask may carry rows for: open tabs in focus order, then the exact
+/// identifiers of the editor text in order of appearance, then the question's words, each
+/// resolved through the exact map, else the case-folded map when it gives one table. No
+/// plural forms, neighbours or word hits. Only tables for which `goes` holds (their card
+/// goes) count; duplicates dropped, at most `MAX_SAMPLE_TABLES`.
+pub(crate) fn named_tables(
+    index: &Index,
+    seeds: &Seeds,
+    goes: &dyn Fn(&str) -> bool,
+) -> Vec<(String, &'static str)> {
+    let mut out: Vec<(String, &'static str)> = Vec::new();
+    let mut add = |i: usize, rule: &'static str| {
+        let name = &index.graph[i].table;
+        if out.len() < MAX_SAMPLE_TABLES && goes(name) && !out.iter().any(|(t, _)| t == name) {
+            out.push((name.clone(), rule));
+        }
+    };
+    let resolve = |word: &str| -> Option<usize> {
+        index.exact.get(word).copied().or_else(|| {
+            match index.folded.get(&word.to_lowercase()).map(Vec::as_slice) {
+                Some(&[one]) => Some(one),
+                _ => None,
+            }
+        })
+    };
+    for open in seeds.open_tables {
+        if !open_here(open, index.schema) {
+            continue;
+        }
+        if let Some(i) = resolve(&open.name) {
+            add(i, OPEN_TAB);
+        }
+    }
+    let idents = seeds
+        .texts
+        .iter()
+        .flat_map(|t| identifiers(seeds.dialect, t));
+    for w in idents.chain(words(seeds.question).map(String::from)) {
+        if let Some(i) = resolve(&w) {
+            add(i, NAME_MATCH);
+        }
+    }
+    out
+}
+
 /// The tables and saved queries an Ask sends from the Context at `key`.
 ///
 /// Tier 1: when every card fits `schema_tokens`, all go in full. Tier 2 ranks tables by
@@ -428,14 +494,11 @@ pub fn retrieve(
     with_saved: bool,
 ) -> Result<Retrieval> {
     let graph = store.context_graph(key)?;
-    let index = Index::new(&graph);
+    let index = Index::new(&graph, &key.schema);
     let mut ranking = Ranking::new(&graph);
 
     for open in seeds.open_tables {
-        let here = open
-            .schema
-            .as_deref()
-            .is_none_or(|s| key.schema.is_empty() || s == key.schema);
+        let here = open_here(open, &key.schema);
         let hit = index.exact.get(open.name.as_str()).copied().or_else(|| {
             index
                 .folded
@@ -567,6 +630,10 @@ pub fn retrieve(
         Vec::new()
     };
 
+    let named_tables = named_tables(&index, seeds, &|t| {
+        filler.fit.full.iter().any(|f| f == t) || filler.fit.names_only.iter().any(|f| f == t)
+    });
+
     Ok(Retrieval {
         cards,
         lines: ranked_lines,
@@ -575,6 +642,7 @@ pub fn retrieve(
         best_score: hits.first().map(|h| h.score),
         ranked,
         named: ranking.picked.iter().any(|r| r.rule == NAME_MATCH),
+        named_tables,
     })
 }
 
@@ -813,5 +881,135 @@ mod tests {
         let terms = question_terms("payments with the biggest quantity");
         assert!(has(&terms, "pmt"), "{terms:?}");
         assert!(has(&terms, "qty"), "{terms:?}");
+    }
+
+    fn graph(names: &[&str]) -> Vec<GraphRow> {
+        names
+            .iter()
+            .map(|n| GraphRow {
+                table: n.to_string(),
+                tokens: 10,
+                rows_tokens: 0,
+                fk_out: Vec::new(),
+                fk_in: Vec::new(),
+            })
+            .collect()
+    }
+
+    fn named(
+        names: &[&str],
+        open: &[&str],
+        sql: Option<&str>,
+        question: &str,
+    ) -> Vec<(String, &'static str)> {
+        let g = graph(names);
+        let index = Index::new(&g, "");
+        let open: Vec<TableRef> = open
+            .iter()
+            .map(|n| TableRef {
+                schema: None,
+                name: n.to_string(),
+            })
+            .collect();
+        let seeds = Seeds {
+            dialect: DialectKind::MySql,
+            open_tables: &open,
+            texts: sql.into_iter().collect(),
+            question,
+            picked: &[],
+        };
+        named_tables(&index, &seeds, &|_| true)
+    }
+
+    #[test]
+    fn named_tables_cap_counts_only_tables_whose_card_goes() {
+        // 12 named, 3 of them with no card: the other 9 all go, under the cap of 10.
+        let all: Vec<String> = (0..12).map(|i| format!("t{i:02}")).collect();
+        let names: Vec<&str> = all.iter().map(String::as_str).collect();
+        let g = graph(&names);
+        let index = Index::new(&g, "");
+        let sql = format!("select * from {}", names.join(", "));
+        let seeds = Seeds {
+            dialect: DialectKind::MySql,
+            open_tables: &[],
+            texts: vec![sql.as_str()],
+            question: "",
+            picked: &[],
+        };
+        let no_card = ["t00", "t01", "t02"];
+        let got = named_tables(&index, &seeds, &|t| !no_card.contains(&t));
+        let order: Vec<&str> = got.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(
+            order,
+            [
+                "t03", "t04", "t05", "t06", "t07", "t08", "t09", "t10", "t11"
+            ]
+        );
+    }
+
+    #[test]
+    fn named_tables_order_and_cap() {
+        let all: Vec<String> = (0..14).map(|i| format!("t{i:02}")).collect();
+        let names: Vec<&str> = all.iter().map(String::as_str).collect();
+        let got = named(
+            &names,
+            &["t05"],
+            Some("select * from t03 join t01 on t01.x = t03.x"),
+            "and t09 then t02",
+        );
+        let order: Vec<&str> = got.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(order, ["t05", "t03", "t01", "t09", "t02"]);
+        assert_eq!(got[0].1, OPEN_TAB);
+        assert!(got[1..].iter().all(|(_, r)| *r == NAME_MATCH));
+        // A table both open and in the SQL keeps the open tab reason, once.
+        let got = named(&names, &["t05"], Some("select * from t05"), "");
+        assert_eq!(got, [("t05".to_string(), OPEN_TAB)]);
+        // 14 named names give 10.
+        let sql = format!("select * from {}", names.join(", "));
+        assert_eq!(named(&names, &[], Some(&sql), "").len(), MAX_SAMPLE_TABLES);
+    }
+
+    #[test]
+    fn named_tables_case_folded_once() {
+        let got = named(&["orders", "items"], &[], None, "rows of ORDERS");
+        assert_eq!(got, [("orders".to_string(), NAME_MATCH)]);
+        let both = ["Orders", "orders"];
+        assert_eq!(
+            named(&both, &[], Some("select * from orders"), ""),
+            [("orders".to_string(), NAME_MATCH)]
+        );
+        // Two tables fold alike and the word is neither: no pick.
+        assert!(named(&both, &[], None, "ORDERS").is_empty());
+    }
+
+    #[test]
+    fn named_tables_skip_other_schemas() {
+        let g = graph(&["orders"]);
+        let index = Index::new(&g, "public");
+        let open = [TableRef {
+            schema: Some("other".into()),
+            name: "orders".into(),
+        }];
+        let seeds = Seeds {
+            dialect: DialectKind::Postgres,
+            open_tables: &open,
+            texts: Vec::new(),
+            question: "",
+            picked: &[],
+        };
+        assert!(named_tables(&index, &seeds, &|_| true).is_empty());
+        // Control: the same name in the matching schema is named.
+        let open = [TableRef {
+            schema: Some("public".into()),
+            name: "orders".into(),
+        }];
+        let seeds = Seeds {
+            open_tables: &open,
+            ..seeds
+        };
+        assert_eq!(
+            named_tables(&index, &seeds, &|_| true),
+            [("orders".to_string(), OPEN_TAB)]
+        );
     }
 }

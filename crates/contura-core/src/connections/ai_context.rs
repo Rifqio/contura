@@ -2,7 +2,6 @@
 //! trigger runs. Each call holds the store lock for that call only.
 
 use super::{ConnectionService, same_target};
-use crate::ai::AiAccess;
 use crate::ai::context::build::query_tables;
 use crate::ai::context::cards::cleaner;
 use crate::ai::context::store::{
@@ -10,8 +9,11 @@ use crate::ai::context::store::{
     StoredSavedQuery,
 };
 use crate::ai::context::tree::Area;
+use crate::ai::memory::store as mem;
+use crate::ai::memory::{Compaction, CompactionId, SummaryBy, ThreadStore, Topic};
 use crate::ai::rails::Secrets;
 use crate::ai::redaction_secrets;
+use crate::ai::{AiAccess, AiThread, ThreadId};
 use crate::error::{Error, Result};
 use crate::model::{AiSyncMode, ConnectionConfig, ConnectionId, DialectKind};
 use crate::query::SavedQuery;
@@ -182,5 +184,36 @@ impl ContextStore for ConnectionService {
     }
     fn gates(&self) -> &crate::ai::context::sync::ContextGates {
         &self.context_gates
+    }
+}
+
+/// The thread memory over the Connection service's store connection.
+impl ThreadStore for ConnectionService {
+    fn thread(&self, id: ThreadId) -> Result<Option<AiThread>> {
+        mem::thread(self.store()?.conn(), id)
+    }
+    fn topics(&self, thread: ThreadId) -> Result<Vec<Topic>> {
+        mem::topics(self.store()?.conn(), thread)
+    }
+    fn compactions(&self, thread: ThreadId) -> Result<Vec<Compaction>> {
+        mem::compactions(self.store()?.conn(), thread)
+    }
+    fn match_topics(&self, thread: ThreadId, terms: &[String], limit: usize) -> Result<Vec<u32>> {
+        mem::match_topics(self.store()?.conn(), thread, terms, limit)
+    }
+    fn set_topic_summary(
+        &self,
+        thread: ThreadId,
+        seq: u32,
+        summary: &str,
+        by: &SummaryBy,
+    ) -> Result<()> {
+        mem::set_topic_summary(self.store()?.conn(), thread, seq, summary, by)
+    }
+    fn add_compaction(&self, c: &Compaction) -> Result<()> {
+        mem::add_compaction(self.store()?.conn(), c)
+    }
+    fn undo_compaction(&self, thread: ThreadId, id: CompactionId) -> Result<bool> {
+        mem::undo_compaction(self.store()?.conn(), thread, id)
     }
 }

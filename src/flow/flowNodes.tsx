@@ -509,7 +509,7 @@ function fixedGraph(doc: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes: 
   doc.links.forEach((l, i) => {
     if (!lay.positions[l.from] || !lay.positions[l.to]) return;
     const leaving = opts.states?.get(l.from) === "leaving" || opts.states?.get(l.to) === "leaving";
-    const cls = (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : "");
+    const cls = (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : "") + markClass(opts, i);
     if (doc.kind === "sequence") {
       const reply = l.arrow === "-->";
       edges.push({
@@ -549,7 +549,15 @@ export interface GraphOptions {
   fresh?: number;
   /** Item 21: sizes nodes were resized to. */
   sizes?: Record<string, { w: number; h: number }>;
+  /** The diagram assistant's review: links (by index) it would add or remove. */
+  marks?: ReadonlyMap<number, "add" | "del">;
 }
+
+/** The class a link takes from the assistant's review. */
+const markClass = (opts: GraphOptions, i: number) => {
+  const m = opts.marks?.get(i);
+  return m ? ` is-ai-${m}` : "";
+};
 
 /** The canvas nodes and edges of `doc`, at `positions` (a node without one is drawn at 0, 0 until it is placed). */
 export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLook, opts: GraphOptions = {}): { nodes: Node[]; edges: Edge[] } {
@@ -588,7 +596,7 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
       source: l.from,
       target: l.to,
       type: "flow",
-      className: (DASH[l.arrow] ?? "flow-line") + (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : ""),
+      className: (DASH[l.arrow] ?? "flow-line") + (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : "") + markClass(opts, i),
       markerEnd: m.end,
       markerStart: m.start,
       data,

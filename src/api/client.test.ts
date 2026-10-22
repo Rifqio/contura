@@ -10,7 +10,12 @@ import {
   aiResync,
   aiConfirmKeyHost,
   aiKnownModels,
+  aiAnswerRecord,
   aiModels,
+  aiSearchThreads,
+  getAiThread,
+  listAiThreads,
+  saveAiThread,
   connectionTarget,
   errorText,
   fileName,
@@ -32,6 +37,7 @@ import type { BackupRequest, ExportRequest, ImportRequest, JobEvent, RestoreRequ
 import { DEFAULT_BACKUP_INCLUDE, DEFAULT_EXPORT_OPTIONS, DEFAULT_IMPORT_OPTIONS } from "./types";
 import * as jobs from "./jobs";
 import { contextAge, contextText, formatWindow } from "../settings/ai/providers";
+import { setPlatformForTests } from "../platform";
 
 const exportReq: ExportRequest = {
   connectionId: "c1",
@@ -191,6 +197,11 @@ test("backup_and_restore_functions_invoke_the_step9_commands", async () => {
   expect(errorText({ kind: "backupRefused", message: { reason: "Line 2,041: DROP DATABASE is not run by Restore." } })).toBe(
     "Line 2,041: DROP DATABASE is not run by Restore.",
   );
+});
+
+test("tool_off_names_the_switch_in_settings", () => {
+  // The switch is in AI settings' Tools table, not in AI access.
+  expect(errorText({ kind: "ai", message: { kind: "toolOff" } })).toBe("Propose diagram changes is off in Settings.");
 });
 
 test("newJobId_makes_a_fresh_uuid", () => {
@@ -392,7 +403,7 @@ test("error_text_for_real_provider_errors", () => {
     "Could not check the certificate of api.groq.com. A proxy or antivirus may be inspecting https.",
   );
   expect(ai({ kind: "insecureUrl", host: "10.0.0.5" })).toBe(
-    "Use https for 10.0.0.5. Plain http is allowed only on this PC or a private network.",
+    "Use https for 10.0.0.5. Plain http is allowed only on this computer or a private network.",
   );
   expect(ai({ kind: "insecureUrl", host: "" })).toBe("The base URL is not a valid address.");
   expect(ai({ kind: "keyHostChanged", host: "api.example.com" })).toBe(
@@ -579,4 +590,41 @@ test("ai_context_commands_send_their_shapes", async () => {
   expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_context_status", { connectionId: "c1" });
   await aiResync("c1", "shop", null);
   expect(vi.mocked(invoke)).toHaveBeenLastCalledWith("ai_resync", { connectionId: "c1", database: "shop", schema: null });
+});
+
+test("thread_commands_pass_camel_case_arguments", async () => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValue(null);
+  await listAiThreads("ungrouped");
+  await getAiThread("t1");
+  await aiAnswerRecord("t1", 5);
+  await aiSearchThreads("ungrouped", "orders");
+  const thread = { id: "t1", place: "ungrouped", title: "x", messages: [], updatedAt: 1 };
+  await saveAiThread(thread);
+  await saveAiThread(thread, "r1");
+  expect(vi.mocked(invoke).mock.calls).toEqual([
+    ["list_ai_threads", { place: "ungrouped" }],
+    ["get_ai_thread", { threadId: "t1" }],
+    ["ai_answer_record", { threadId: "t1", messageAt: 5 }],
+    ["ai_search_threads", { place: "ungrouped", text: "orders" }],
+    ["save_ai_thread", { thread, requestId: null }],
+    ["save_ai_thread", { thread, requestId: "r1" }],
+  ]);
+});
+
+test("parity_P11_38_a_keyring_error_names_the_os_keyring", () => {
+  expect(errorText({ kind: "secret", message: "no Secret Service is running" })).toBe(
+    "Could not use the OS keyring (the Secret Service): no Secret Service is running",
+  );
+});
+
+test("parity_P11_38_plain_http_names_this_pc_on_windows", () => {
+  try {
+    setPlatformForTests("windows");
+    expect(errorText({ kind: "ai", message: { kind: "insecureUrl", host: "10.0.0.5" } })).toBe(
+      "Use https for 10.0.0.5. Plain http is allowed only on this PC or a private network.",
+    );
+  } finally {
+    setPlatformForTests(null);
+  }
 });

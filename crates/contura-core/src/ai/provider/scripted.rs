@@ -84,6 +84,7 @@ mod tests {
             temperature: Some(0.2),
             thinking: Thinking::Off,
             max_tokens_field: MaxTokensField::MaxTokens,
+            tools: None,
         }
     }
 

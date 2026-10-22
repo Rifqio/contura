@@ -20,7 +20,7 @@ test("an_unknown_provider_shows_its_id", () => {
 
 test("a_record_whose_connection_failed_says_nothing_left", () => {
   render(<SentRecord sent={sentRecord()} usage={null} notSent onClose={vi.fn()} />);
-  expect(screen.getByText("The connection failed before the request went out, so none of this left your PC.")).toBeTruthy();
+  expect(screen.getByText("The connection failed before the request went out, so none of this left your computer.")).toBeTruthy();
 });
 
 const OUTLINE = {
@@ -37,8 +37,8 @@ const OUTLINE = {
 
 test("a_record_where_only_the_outline_left_says_so", () => {
   render(<SentRecord sent={sentRecord({ outlineCall: true, outline: OUTLINE })} usage={null} notSent onClose={vi.fn()} />);
-  expect(screen.getByText("Only the outline step left your PC. The main request did not.")).toBeTruthy();
-  expect(screen.queryByText(/none of this left your PC/)).toBeNull();
+  expect(screen.getByText("Only the outline step left your computer. The main request did not.")).toBeTruthy();
+  expect(screen.queryByText(/none of this left your computer/)).toBeNull();
 });
 
 test("outline_line_and_kept_text", () => {
@@ -119,4 +119,59 @@ test("esc_closes_and_returns_focus", async () => {
   await user.click(screen.getByRole("textbox", { name: "Elsewhere" }));
   await user.keyboard("{Escape}");
   expect(screen.getByRole("dialog", { name: "Sent record" })).toBeTruthy();
+});
+
+const SUMMARY = {
+  kind: "summary" as const,
+  topic: 1,
+  messages: 4,
+  model: "openai/gpt-oss-20b",
+  bytes: 1204,
+  tokens: 344,
+  hash: "bb11cc22dd33ee44",
+  millis: 900,
+  usage: null,
+  exact: null,
+};
+
+test("summary_step_line_and_kept_text", () => {
+  const { unmount } = render(<SentRecord sent={sentRecord({ summaryCall: true, summary: SUMMARY })} usage={null} onClose={vi.fn()} />);
+  expect(screen.getByText("Summary step: 1,204 B, about 344 tokens, 4 messages")).toBeTruthy();
+  expect(screen.queryByLabelText("Exactly what the summary step sent")).toBeNull();
+  unmount();
+  const { unmount: again } = render(
+    <SentRecord sent={sentRecord({ summaryCall: true, exact: "main text", summary: { ...SUMMARY, messages: 1, exact: "summary text" } })} usage={null} onClose={vi.fn()} />,
+  );
+  expect(screen.getByText("Summary step: 1,204 B, about 344 tokens, 1 message")).toBeTruthy();
+  expect(screen.getByText("Summary step", { selector: ".sent-pop-exact-head" })).toBeTruthy();
+  expect(screen.getByLabelText("Exactly what the summary step sent").textContent).toBe("summary text");
+  again();
+  render(<SentRecord sent={sentRecord({ summaryCall: true, summary: { ...SUMMARY, kind: "compact", messages: 14 } })} usage={null} onClose={vi.fn()} />);
+  expect(screen.getByText("Compaction step: 1,204 B, about 344 tokens, 14 messages")).toBeTruthy();
+});
+
+test("a_record_where_only_the_summary_left_says_so", () => {
+  render(<SentRecord sent={sentRecord({ bytes: 0, summaryCall: true, summary: SUMMARY })} usage={null} notSent onClose={vi.fn()} />);
+  expect(screen.getByText("Only the summary step left your computer. The main request did not.")).toBeTruthy();
+});
+
+test("sent_record_rows_line", () => {
+  render(
+    <SentRecord
+      sent={sentRecord({ kinds: ["question", "rows"], rows: { tables: 2, rows: 10, bytes: 643 }, exact: "text\n[sample rows: not kept]" })}
+      usage={null}
+      onClose={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Sample rows: 10 rows from 2 tables, 643 B, read live by Contura")).toBeTruthy();
+  expect(
+    screen.getByText("Sample rows are never kept. The kept text shows [sample rows: not kept] where each table's rows went; Size and Hash count what was sent."),
+  ).toBeTruthy();
+  expect(document.body.textContent).not.toMatch(/[\u2013\u2014]|cursor|caret/i);
+});
+
+test("a_record_without_rows_has_no_rows_line", () => {
+  render(<SentRecord sent={sentRecord({ exact: "text" })} usage={null} onClose={vi.fn()} />);
+  expect(screen.queryByText(/read live by Contura/)).toBeNull();
+  expect(screen.queryByText(/never kept/)).toBeNull();
 });

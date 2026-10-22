@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { setPlatformForTests } from "../platform";
 import type { AiError, AiSettings } from "../api/types";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { modelInfo } from "../test/settingsRoutes";
@@ -33,6 +34,7 @@ test("aiErrorOf knows the provider error kinds", () => {
   expect(aiErrorOf({ kind: "ai", message: creds })).toEqual(creds);
   expect(aiErrorOf({ kind: "ai", message: { kind: "busy" } })).toEqual({ kind: "busy" });
   expect(aiErrorOf({ kind: "ai", message: { kind: "internal" } })).toEqual({ kind: "internal" });
+  expect(aiErrorOf({ kind: "ai", message: { kind: "nothingToContinue" } })).toEqual({ kind: "nothingToContinue" });
   expect(aiErrorOf({ kind: "ai", message: { kind: "nope" } })).toBeNull();
   expect(aiErrorOf({ kind: "ai", message: { kind: "notAvailable", provider: "groq" } })).toBeNull();
 });
@@ -42,7 +44,7 @@ test("rate_limited_card", () => {
   text("Groq is limiting requests.");
   text("Retrying in 20s. Contura retries on its own when the wait is over. Nothing was answered yet.");
   text("20s");
-  expect(buttons()).toEqual(["Retry now"]);
+  expect(buttons()).toEqual(["Retry now", "Stop"]);
 });
 
 test("rate_limit_counts_down_and_retries", () => {
@@ -92,9 +94,9 @@ test("overloaded_card_hides_use_when_the_fastest_is_current", () => {
 
 test("timeout_cards_name_the_phase", () => {
   const cases: [string, string, string][] = [
-    ["first byte", "No reply from Groq for 60s.", "The request left this PC but nothing came back. Nothing ran on Shop."],
-    ["idle", "Groq stopped sending for 30s.", "The request left this PC but nothing came back. Nothing ran on Shop."],
-    ["answer", "The answer took longer than 5 minutes.", "The request left this PC but nothing came back. Nothing ran on Shop."],
+    ["first byte", "No reply from Groq for 60s.", "The request left this computer but nothing came back. Nothing ran on Shop."],
+    ["idle", "Groq stopped sending for 30s.", "The request left this computer but nothing came back. Nothing ran on Shop."],
+    ["answer", "The answer took longer than 5 minutes.", "The request left this computer but nothing came back. Nothing ran on Shop."],
     ["connect", "Could not connect to api.groq.com in 10s.", "Nothing was sent."],
   ];
   for (const [phase, title, body] of cases) {
@@ -109,18 +111,19 @@ test("timeout_cards_name_the_phase", () => {
 test("offline_card", () => {
   render(answerState(ai({ kind: "offline" }), { ...groq, onSendNow: vi.fn(), onCancelQueued: vi.fn() }));
   text("No internet connection.");
-  text("Your question is kept and goes out as soon as this PC is back online.");
+  text("Your question is kept and goes out as soon as this computer is back online.");
   expect(buttons()).toEqual(["Send now", "Cancel"]);
 });
 
-test("offline_sends_when_online", () => {
+test("offline_card_does_not_listen_for_online", () => {
   const onSendNow = vi.fn();
   const onCancelQueued = vi.fn();
   render(answerState(ai({ kind: "offline" }), { ...groq, onSendNow, onCancelQueued }));
+  // The panel or the inline box queues the question; the card only offers its buttons.
   act(() => {
     window.dispatchEvent(new Event("online"));
   });
-  expect(onSendNow).toHaveBeenCalledTimes(1);
+  expect(onSendNow).not.toHaveBeenCalled();
   screen.getByRole("button", { name: "Cancel" }).click();
   expect(onCancelQueued).toHaveBeenCalled();
 });
@@ -129,7 +132,7 @@ test("bad_key_card", () => {
   const onOpenSettings = vi.fn();
   render(answerState(ai({ kind: "badKey" }), { ...groq, onOpenSettings, onRetry: vi.fn() }));
   text("Groq refused the API key.");
-  text("The key in Windows Credential Manager was revoked or mistyped. Fix it in Settings, then retry.");
+  text("The key in the OS keyring (the Secret Service) was revoked or mistyped. Fix it in Settings, then retry.");
   expect(buttons()).toEqual(["Open Settings", "Retry"]);
   screen.getByRole("button", { name: "Open Settings" }).click();
   expect(onOpenSettings).toHaveBeenCalled();
@@ -216,6 +219,51 @@ test("context_full_card", () => {
   expect(onNewChat).toHaveBeenCalled();
 });
 
+test("context_full_card_with_no_messages_to_fold", () => {
+  const on = { onNewChat: vi.fn(), onCompactNow: vi.fn(), onTurnOnAutoCompact: vi.fn() };
+  render(answerState(ai({ kind: "contextFull", used: 192_000, window: 200_000, model: "openai/gpt-oss-20b", messages: 0 }), { ...groq, ...on }));
+  text("This thread fills 96% of openai/gpt-oss-20b's 200K window.");
+  text("Auto-compact is off, so nothing was sent. New chat starts empty with the same context.");
+  expect(screen.queryByText(/Compact now turns/)).toBeNull();
+  expect(buttons()).toEqual(["New chat", "Turn on auto-compact"]);
+});
+
+test("context_full_card_texts_and_actions", () => {
+  const on = { onNewChat: vi.fn(), onCompactNow: vi.fn(), onTurnOnAutoCompact: vi.fn() };
+  render(
+    answerState(ai({ kind: "contextFull", used: 192_000, window: 200_000, model: "openai/gpt-oss-20b", messages: 14 }), {
+      ...groq,
+      ...on,
+    }),
+  );
+  text("This thread fills 96% of openai/gpt-oss-20b's 200K window.");
+  text(
+    "Auto-compact is off, so nothing was sent. Compact now turns the 14 older messages into a summary written by the model. New chat starts empty with the same context.",
+  );
+  expect(buttons()).toEqual(["Compact now", "New chat", "Turn on auto-compact"]);
+  expect(screen.getByRole("button", { name: "Compact now" }).className).toContain("button-primary");
+  screen.getByRole("button", { name: "Compact now" }).click();
+  screen.getByRole("button", { name: "New chat" }).click();
+  screen.getByRole("button", { name: "Turn on auto-compact" }).click();
+  expect(on.onCompactNow).toHaveBeenCalledTimes(1);
+  expect(on.onNewChat).toHaveBeenCalledTimes(1);
+  expect(on.onTurnOnAutoCompact).toHaveBeenCalledTimes(1);
+});
+
+test("context_full_card_while_compacting_disables_both_compact_actions", () => {
+  render(
+    answerState(ai({ kind: "contextFull", used: 192_000, window: 200_000, model: "openai/gpt-oss-20b", messages: 14 }), {
+      ...groq,
+      onNewChat: vi.fn(),
+      onCompactNow: vi.fn(),
+      onTurnOnAutoCompact: vi.fn(),
+      compacting: true,
+    }),
+  );
+  expect((screen.getByRole("button", { name: "Compact now" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Turn on auto-compact" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
 test("too_large_card", () => {
   render(answerState(ai({ kind: "tooLarge" }), groq));
   text("This Ask is over the size openai/gpt-oss-20b accepts, even after trimming.");
@@ -266,6 +314,19 @@ test("busy_card_stops_only_where_it_can", () => {
   expect(buttons()).toEqual([]);
 });
 
+test("nothing_to_continue_card", () => {
+  const onNewChat = vi.fn();
+  const onAskAgain = vi.fn();
+  render(answerState(ai({ kind: "nothingToContinue" }), { ...groq, onNewChat, onAskAgain, onRetry: vi.fn() }));
+  text("Nothing to continue.");
+  expect(screen.queryByText("Something went wrong before the question was sent.")).toBeNull();
+  expect(buttons()).toEqual(["New chat", "Ask again"]);
+  screen.getByRole("button", { name: "New chat" }).click();
+  screen.getByRole("button", { name: "Ask again" }).click();
+  expect(onNewChat).toHaveBeenCalledTimes(1);
+  expect(onAskAgain).toHaveBeenCalledTimes(1);
+});
+
 test("credentials_card", () => {
   const onOpenSettings = vi.fn();
   render(answerState(ai({ kind: "urlHasCredentials", host: "x.example" }), { onOpenSettings }));
@@ -279,7 +340,7 @@ test("network_card_never_claims_nothing_was_sent", () => {
   const { unmount } = render(answerState(network));
   text("Could not reach api.groq.com.");
   text("Check your internet connection or proxy settings.");
-  expect(screen.queryByText(/Nothing left this PC/)).toBeNull();
+  expect(screen.queryByText(/Nothing left this (PC|computer)/)).toBeNull();
   unmount();
   render(answerState(network, { partial: true }));
   text("Check your internet connection or proxy settings. The part that arrived is kept.");
@@ -294,6 +355,14 @@ test("show_log_sits_on_the_right_when_given", () => {
   unmount();
   render(answerState(ai({ kind: "badKey" }), groq));
   expect(screen.queryByRole("button", { name: "Show log" })).toBeNull();
+});
+
+test("length_card_has_continue", () => {
+  const onContinue = vi.fn();
+  render(answerEnd("length", { output: 4096, onContinue }));
+  expect(buttons()).toEqual(["Continue"]);
+  screen.getByRole("button", { name: "Continue" }).click();
+  expect(onContinue).toHaveBeenCalledTimes(1);
 });
 
 test("answer_states", () => {
@@ -379,4 +448,178 @@ test("model_to_use_falls_back_to_the_saved_picks_or_defaults", () => {
   } as unknown as AiSettings;
   expect(modelToUse("saved/model", [], settings)).toEqual({ id: "saved/model", picks: { thinking: "high", caching: true } });
   expect(modelToUse("other/model", [], settings)).toEqual({ id: "other/model", picks: { thinking: "low", caching: false } });
+});
+
+test("error_card_after_sample_read", () => {
+  const read = { ...groq, host: "api.groq.com", onRetry: vi.fn() };
+  render(answerState(ai({ kind: "timeout", phase: "idle" }), { ...read, rowsRead: 2 }));
+  text("The request left this computer but nothing came back. Contura read sample rows from 2 tables, read only. Nothing else ran on Shop.");
+});
+
+test("error_card_after_one_table_read", () => {
+  render(answerState(ai({ kind: "timeout", phase: "idle" }), { ...groq, rowsRead: 1 }));
+  text("The request left this computer but nothing came back. Contura read sample rows from 1 table, read only. Nothing else ran on Shop.");
+});
+
+test("error_card_without_rows_keeps_today", () => {
+  render(answerState(ai({ kind: "timeout", phase: "idle" }), { ...groq, rowsRead: null }));
+  text("The request left this computer but nothing came back. Nothing ran on Shop.");
+});
+
+test("tool_rejected_and_bad_input_texts", () => {
+  const onRetry = vi.fn();
+  render(answerState(ai({ kind: "toolRejected", name: "run_sql" }), { ...groq, onRetry }));
+  text("The assistant asked for a tool Contura does not offer. Nothing was changed.");
+  expect(buttons()).toEqual(["Retry"]);
+  act(() => card().querySelector("button")!.click());
+  expect(onRetry).toHaveBeenCalledTimes(1);
+  document.body.innerHTML = "";
+  render(answerState(ai({ kind: "badToolInput" }), { ...groq, onRetry }));
+  text("The assistant's changes could not be read. Nothing was changed.");
+  expect(buttons()).toEqual(["Retry"]);
+});
+
+test("bad_file_name_has_no_retry", () => {
+  document.body.innerHTML = "";
+  expect(aiErrorOf(ai({ kind: "badFileName" }))).toEqual({ kind: "badFileName" });
+  render(answerState(ai({ kind: "badFileName" }), { ...groq, onRetry: vi.fn() }));
+  text("This diagram's file name holds a character the assistant cannot send. Rename the file and ask again.");
+  expect(buttons()).toEqual([]);
+});
+
+test("file_changed_card_texts", () => {
+  document.body.innerHTML = "";
+  render(answerState(ai({ kind: "fileChanged", file: "fulfilment", line: 9, nowReads: "Pack order" }), groq));
+  text("fulfilment.flow changed on disk while I worked");
+  text("Another program changed the file after you asked (line 9 now reads Pack order, a git pull perhaps). These changes were made against the old text, so none of them were applied.");
+  document.body.innerHTML = "";
+  render(answerState(ai({ kind: "fileChanged", file: "fulfilment", line: null, nowReads: null }), groq));
+  text("Another program changed the file after you asked. These changes were made against the old text, so none of them were applied.");
+});
+
+// ---- Parity with board 11.6 (P11) ----
+
+const kicker = () => card().querySelector(".errc-kick")?.textContent;
+
+test("parity_P11_24_stop_ends_the_countdown_and_leaves_retry_to_the_user", () => {
+  vi.useFakeTimers();
+  const onRetry = vi.fn();
+  render(answerState(ai({ kind: "rateLimited", retryAfterSecs: 20 }), { ...groq, onRetry }));
+  text("Retrying in 20s. Contura retries on its own when the wait is over. Nothing was answered yet.");
+  act(() => screen.getByRole("button", { name: "Stop" }).click());
+  text("Groq asks to wait 20s. Retry when the wait is over. Nothing was answered yet.");
+  expect(document.querySelector(".errc-count")).toBeNull();
+  expect(buttons()).toEqual(["Retry"]);
+  act(() => vi.advanceTimersByTime(30_000));
+  expect(onRetry).not.toHaveBeenCalled();
+});
+
+test("parity_P11_24_a_second_rate_limit_does_not_retry_on_its_own", () => {
+  vi.useFakeTimers();
+  const onRetry = vi.fn();
+  render(answerState(ai({ kind: "rateLimited", retryAfterSecs: 20 }), { ...groq, onRetry, tries: 2 }));
+  text("Groq asks to wait 20s. Retry when the wait is over. Nothing was answered yet.");
+  expect(document.querySelector(".errc-count")).toBeNull();
+  act(() => vi.advanceTimersByTime(30_000));
+  expect(onRetry).not.toHaveBeenCalled();
+  expect(buttons()).toEqual(["Retry"]);
+});
+
+test("parity_P11_25_a_keyless_provider_is_asked_for_a_key", () => {
+  const onOpenSettings = vi.fn();
+  render(answerState(ai({ kind: "badKey" }), { providerName: "Custom", provider: "custom", keySaved: false, onOpenSettings, onRetry: vi.fn() }));
+  expect(kicker()).toBe("Key refused");
+  // The ruling's sentence, as the card's title and body.
+  expect(`${card().querySelector(".errc-title")?.textContent} ${card().querySelector(".errc-body")?.textContent}`).toBe(
+    "The provider refused the request: it may need an API key. Add one in AI settings.",
+  );
+  expect(card().textContent).not.toMatch(/Credential Manager|revoked/);
+  expect(buttons()[0]).toBe("Open Settings");
+  screen.getByRole("button", { name: "Open Settings" }).click();
+  expect(onOpenSettings).toHaveBeenCalled();
+});
+
+test("parity_P11_25_bad_key_names_the_windows_keyring_on_windows", () => {
+  try {
+    setPlatformForTests("windows");
+    render(answerState(ai({ kind: "badKey" }), { ...groq, keySaved: true, onOpenSettings: vi.fn() }));
+    text("The key in the OS keyring (Windows Credential Manager) was revoked or mistyped. Fix it in Settings, then retry.");
+  } finally {
+    setPlatformForTests(null);
+  }
+});
+
+test("parity_P11_26_a_500_has_the_provider_error_shape", () => {
+  const onRetry = vi.fn();
+  render(answerState(ai({ kind: "provider", status: 500, message: "Internal error" }), { providerName: "Custom", onRetry, onShowLog: vi.fn() }));
+  expect(kicker()).toBe("Provider error");
+  expect(card().querySelector(".errc-title")?.textContent).toBe("Custom returned an error.");
+  expect(card().querySelector(".errc-body")?.textContent).toBe("It answered with status 500: Internal error.");
+  expect(buttons()).toEqual(["Retry", "Show log"]);
+});
+
+test("parity_P11_27_every_error_card_has_a_kicker", () => {
+  const cases: [AiError, string][] = [
+    [{ kind: "rateLimited", retryAfterSecs: 20 }, "Rate limited"],
+    [{ kind: "overloaded", provider: "groq" }, "Provider busy"],
+    [{ kind: "timeout", phase: "first byte" }, "No reply"],
+    [{ kind: "offline" }, "No internet"],
+    [{ kind: "badKey" }, "Key refused"],
+    [{ kind: "outOfCredit", provider: "groq" }, "Out of credit"],
+    [{ kind: "modelRetired", model: "fx-404" }, "Model retired"],
+    [{ kind: "tooBig", needed: 300_000, window: 131_072, model: "openai/gpt-oss-20b" }, "Too big for the window"],
+    [{ kind: "contextFull", used: 120_000, window: 131_072, model: "openai/gpt-oss-20b", messages: 4 }, "Thread fills the window"],
+    [{ kind: "provider", status: 500, message: "Internal error" }, "Provider error"],
+    [{ kind: "network", host: "api.groq.com" }, "No connection"],
+    [{ kind: "badResponse" }, "Provider error"],
+    [{ kind: "cancelled" }, "Stopped by you"],
+    [{ kind: "urlHasCredentials", host: "x.example" }, "Base URL problem"],
+  ];
+  for (const [error, label] of cases) {
+    const { unmount } = render(answerState(ai(error), { ...groq, onRetry: vi.fn() }));
+    expect({ kind: error.kind, label: kicker() }).toEqual({ kind: error.kind, label });
+    unmount();
+  }
+  const ends: [Parameters<typeof answerEnd>[0], string][] = [
+    ["dropped", "Cut off mid answer"],
+    ["length", "Output limit"],
+    ["refusal", "Model declined"],
+    ["stopped", "Stopped by you"],
+  ];
+  for (const [kind, label] of ends) {
+    const { unmount } = render(answerEnd(kind, {}));
+    expect({ kind, label: kicker() }).toEqual({ kind, label });
+    unmount();
+  }
+});
+
+test("parity_P11_28_length_card_names_the_output_tokens", () => {
+  const { unmount } = render(answerEnd("length", { output: 4096, onContinue: vi.fn() }));
+  text("It stopped at 4,096 output tokens. Continue asks the model to carry on from the last word.");
+  expect(buttons()).toEqual(["Continue"]);
+  unmount();
+  render(answerEnd("length", {}));
+  text("It stopped at the model's output limit.");
+});
+
+test("parity_P11_38_timeout_and_offline_cards_name_the_machine_for_the_platform", () => {
+  const timeout = () => render(answerState(ai({ kind: "timeout", phase: "first byte" }), { ...groq, host: "api.groq.com", onRetry: vi.fn() }));
+  const offline = () => render(answerState(ai({ kind: "offline" }), { ...groq, onSendNow: vi.fn(), onCancelQueued: vi.fn() }));
+  try {
+    setPlatformForTests("linux");
+    let r = timeout();
+    text("The request left this computer but nothing came back. Nothing ran on Shop.");
+    r.unmount();
+    r = offline();
+    text("Your question is kept and goes out as soon as this computer is back online.");
+    r.unmount();
+    setPlatformForTests("windows");
+    r = timeout();
+    text("The request left this PC but nothing came back. Nothing ran on Shop.");
+    r.unmount();
+    offline();
+    text("Your question is kept and goes out as soon as this PC is back online.");
+  } finally {
+    setPlatformForTests(null);
+  }
 });

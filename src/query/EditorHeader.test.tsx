@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { AiAccess, ConnectionConfig } from "../api/types";
@@ -265,4 +265,123 @@ test("diagram_button_sits_after_format_with_its_key_and_is_pressed_while_open", 
 test("no_diagram_button_without_a_handler", () => {
   setup();
   expect(screen.queryByRole("button", { name: /^Diagram/ })).toBeNull();
+});
+
+/** P11-14: with the Ask panel open beside a PROD tab even the icon strip is too wide; the right end moves into More. */
+test("parity_P11_14_a_strip_still_too_wide_moves_its_right_end_into_more", async () => {
+  let width = 700;
+  const sizes = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("editor-header") ? width : 0;
+  });
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+    if (!this.classList.contains("editor-header")) return 0;
+    // Labelled 980 px, icons 760 px, icons with the right end in More 640 px.
+    if (this.querySelector("button[aria-label='More actions']")) return 640;
+    return this.querySelector("button[aria-label^='Explain']") ? 760 : 980;
+  });
+  let resize: () => void = () => {};
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(cb: () => void) {
+        resize = cb;
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const user = userEvent.setup();
+  try {
+    const p = setup({ production: true, writeHazard: true, compact: true, onToggleAssistant: vi.fn(), aiAccess: "schemaQuery" });
+    const strip = screen.getByRole("toolbar", { name: "Query" });
+    expect(within(strip).queryByRole("button", { name: "Save query (Ctrl+S)" })).toBeNull();
+    expect(within(strip).queryByRole("button", { name: "Query History" })).toBeNull();
+    expect(within(strip).queryByRole("button", { name: /AI: Schema and query text/ })).toBeNull();
+    await user.click(within(strip).getByRole("button", { name: "More actions" }));
+    const menu = screen.getByRole("menu", { name: "More actions" });
+    expect(Array.from(menu.querySelectorAll<HTMLElement>("[role^=menuitem]")).map((i) => i.querySelector(".menu-label")?.textContent)).toEqual([
+      "Assistant",
+      "Save query",
+      "Query History",
+    ]);
+    await user.click(within(menu).getByRole("menuitem", { name: /Save query/ }));
+    expect(p.onSave).toHaveBeenCalledTimes(1);
+    // Room again: the buttons come back into the strip.
+    width = 800;
+    act(() => resize());
+    expect(within(strip).getByRole("button", { name: "Save query (Ctrl+S)" })).toBeTruthy();
+    expect(within(strip).queryByRole("button", { name: "More actions" })).toBeNull();
+  } finally {
+    sizes.mockRestore();
+    scroll.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+/** Mocks a 700 px strip whose width needs follow its content; returns the restore and the resize trigger. */
+function crowdedStrip(need: (el: HTMLElement) => number) {
+  const sizes = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("editor-header") ? 700 : 0;
+  });
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("editor-header") ? need(this) : 0;
+  });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  return () => {
+    sizes.mockRestore();
+    scroll.mockRestore();
+    vi.unstubAllGlobals();
+  };
+}
+
+test("more_goes_away_when_the_content_narrows_without_a_resize", () => {
+  // Icons with PRODUCTION and Run on PROD need 760 px; without them 660 px; More always fits.
+  const restore = crowdedStrip((el) => {
+    if (el.querySelector("button[aria-label='More actions']")) return 600;
+    if (!el.querySelector("button[aria-label^='Explain']")) return 980;
+    return el.querySelector(".production-label") ? 760 : 660;
+  });
+  try {
+    const prod = { ...conn, production: true };
+    const p = setup({ connection: prod, production: true, writeHazard: true, compact: true });
+    const strip = screen.getByRole("toolbar", { name: "Query" });
+    expect(within(strip).getByRole("button", { name: "More actions" })).toBeTruthy();
+    // The tab moves to a dev Connection: the strip fits at the same width, so the right end comes back.
+    p.rerender(<EditorHeader {...p} connection={other} production={false} writeHazard={false} compact />);
+    expect(within(strip).queryByRole("button", { name: "More actions" })).toBeNull();
+    expect(within(strip).getByRole("button", { name: "Save query (Ctrl+S)" })).toBeTruthy();
+    // And back to PROD: it is crowded again.
+    p.rerender(<EditorHeader {...p} connection={prod} production writeHazard compact />);
+    expect(within(strip).getByRole("button", { name: "More actions" })).toBeTruthy();
+  } finally {
+    restore();
+  }
+});
+
+test("more_rows_keep_the_pressed_state_and_the_ai_row_opens_the_assistant", async () => {
+  const restore = crowdedStrip((el) => (el.querySelector("button[aria-label='More actions']") ? 600 : 760));
+  const user = userEvent.setup();
+  try {
+    setup({ compact: true, onToggleDiagram: vi.fn(), diagramOpen: true, onToggleAssistant: vi.fn(), assistantOpen: true, historyOpen: true });
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = screen.getByRole("menu", { name: "More actions" });
+    const rows = Array.from(menu.querySelectorAll<HTMLElement>("[role^=menuitem]"));
+    expect(rows.map((r) => [r.querySelector(".menu-label")?.textContent, r.getAttribute("aria-checked")])).toEqual([
+      ["Diagram", "true"],
+      ["Assistant", "true"],
+      ["Save query", null],
+      ["Query History", "true"],
+    ]);
+    // The AI row names the access level and says it opens the assistant.
+    expect(rows[1].textContent).toContain("AI: Schema only");
+    expect(rows[1].getAttribute("title")).toMatch(/^AI access for freight-prod\. Open the assistant/);
+  } finally {
+    restore();
+  }
 });

@@ -17,6 +17,12 @@ const newId = () =>
     ? crypto.randomUUID()
     : `r${Date.now()}${Math.random().toString(36).slice(2)}`;
 
+/** The schema every focus table names, when they all name the same one; else null and the Core decides. */
+export function sharedSchema(tables: AskContext["tables"]): string | null {
+  const first = tables[0]?.schema ?? null;
+  return first !== null && tables.every((t) => t.schema === first) ? first : null;
+}
+
 /** The Ask the Core previews and sends for a context: the Core builds the text, never the UI. */
 export function toAskRequest(
   ctx: AskContext,
@@ -32,7 +38,7 @@ export function toAskRequest(
     groupId: at.groupId,
     connectionId: ctx.connection?.id ?? null,
     database: ctx.connection?.database ?? null,
-    schema: null,
+    schema: sharedSchema(ctx.tables),
     action: at.action ?? "ask",
     question,
     threadId: at.threadId ?? null,

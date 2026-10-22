@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { AskRequest } from "../api/types";
-import { aiStream, delta, done, failed, line, sent, sentRecord, step } from "../test/aiStream";
+import { aiStream, delta, memory, done, failed, line, sent, sentRecord, step } from "../test/aiStream";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { type StreamEnd, secondsText, stopText, useAnswerStream } from "./answerStream";
 
@@ -71,6 +71,24 @@ test("stop_cancels_with_the_request_id_and_keeps_the_partial", async () => {
   stream.emit(delta(" answer"));
   expect(result.current.text).toBe("Half an");
   expect(result.current.stopped).toBe(true);
+});
+
+test("a_cancelled_error_from_the_core_ends_the_stream", async () => {
+  // Stop it in the panel stops the inline Ask too: the Core ends its stream with Cancelled.
+  stream.hold();
+  const { result } = renderHook(() => useAnswerStream());
+  let end: Promise<StreamEnd> | undefined;
+  act(() => {
+    end = result.current.start(request("r9"));
+  });
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  stream.emit(delta("Half"));
+  expect(result.current.running).toBe(true);
+  stream.emit({ type: "error", error: { kind: "cancelled" }, partial: false });
+  const ended = await end!;
+  expect(ended).toMatchObject({ text: "Half", stopped: true, error: null });
+  expect(result.current.running).toBe(false);
+  expect(callsTo("ai_cancel")).toEqual([]);
 });
 
 test("stop_before_start_settles_still_cancels", async () => {
@@ -203,4 +221,19 @@ test("thinking_kept_replaces_the_chunks", async () => {
   const ended = await end!;
   expect(result.current.thinking).toBe("key [redacted] and more");
   expect(ended.live.thinking).toBe("key [redacted] and more");
+});
+
+test("memory_event_kept", async () => {
+  stream.hold();
+  const { result } = renderHook(() => useAnswerStream());
+  let end: Promise<StreamEnd> | undefined;
+  act(() => {
+    end = result.current.start(request());
+  });
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(result.current.memory).toBeNull();
+  stream.emit(memory({ topic: 2, opened: true, reason: "subject", title: "Biggest customers" }), sent(), delta("Ok."), done());
+  expect(result.current.memory?.title).toBe("Biggest customers");
+  const ended = await end!;
+  expect(ended.stamp).toMatchObject({ topic: 2, opened: true, reason: "subject", kinds: ["question", "cards"] });
 });

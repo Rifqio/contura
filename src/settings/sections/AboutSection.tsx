@@ -1,11 +1,12 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useId, useState } from "react";
+import { dataBesideProgram, programText } from "../../platform";
 import { type RowKey, Section, useRowShown } from "./layout";
 
 const ROW = {
   version: { label: "Version", terms: "Contura" },
   licences: { label: "Licences", terms: "licenses JetBrains Mono Lucide Simple Icons OFL ISC CC0" },
-  note: { label: "Data folder", terms: "Contura.exe" },
+  note: { label: "Data folder", terms: "Contura.exe program" },
 } satisfies Record<string, RowKey>;
 export const ABOUT_ROWS: readonly RowKey[] = Object.values(ROW);
 
@@ -44,7 +45,13 @@ function Licences() {
 
 function Note() {
   if (!useRowShown(ROW.note)) return null;
-  return <p className="muted">Everything Contura keeps is in the data folder next to Contura.exe.</p>;
+  return (
+    <p className="muted">
+      {dataBesideProgram()
+        ? `Everything Contura keeps is in the data folder next to ${programText()}.`
+        : "Everything Contura keeps is in one data folder. Data folder above shows where it is."}
+    </p>
+  );
 }
 
 /** Settings, About Contura: the version, the licences and where the data lives (D12, ST5). */

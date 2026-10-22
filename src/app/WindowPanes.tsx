@@ -39,6 +39,10 @@ interface Props {
     onOpenInEditor: ComponentProps<typeof TransferTab>["onOpenInEditor"];
     onOpenTarget: ComponentProps<typeof TransferTab>["onOpenTarget"];
   };
+  flow: {
+    /** The AI settings at the tools table, from a diagram assistant's tool-off note. */
+    onOpenSettings(): void;
+  };
   compare: {
     /** Every Connection and Group: a compare may span two Groups. */
     connections: ConnectionConfig[];
@@ -51,7 +55,7 @@ interface Props {
 }
 
 /** The window tabs (Home, Settings, Schema Models, diagrams) as panes of the work area. */
-export default function WindowPanes({ windowTabs, activeKey, home, settings, schema, transfer, compare }: Props) {
+export default function WindowPanes({ windowTabs, activeKey, home, settings, schema, transfer, flow, compare }: Props) {
   return (
     <>
       {windowTabs.map((t) => {
@@ -69,6 +73,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
               <SettingsView
                 section={t.section}
                 sectionRequest={t.seq}
+                row={t.row}
                 onSection={(section) => settings.onSection(section)}
                 groupId={settings.groupId}
                 groupName={settings.groupName}
@@ -81,7 +86,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
         if (t.kind === "flow") {
           return (
             <div key={key} className="work-pane schema-main" data-flow-name={t.name} hidden={key !== activeKey}>
-              <FlowTab name={t.name} />
+              <FlowTab name={t.name} active={key === activeKey} onOpenSettings={flow.onOpenSettings} />
             </div>
           );
         }

@@ -23,3 +23,19 @@ The 150 MB budget covers idle use with one open Connection. A large Schema Model
 | After closing the model | 107.4 MB |
 
 The JS heaps are small (about 20 MB on the page and 3 MB in the DBML worker after garbage collection). The cost is the live DOM: about 13,000 nodes, roughly 44 per card. The canvas opens fitted to the whole model, so every card is in view and culling (`onlyRenderVisibleElements`) removes nothing. The user chose to accept this rather than add compact cards at low zoom or cap the opening zoom. Either remains the fix if large models become common.
+
+## AI assistant (2026-10-22)
+
+The AI assistant adds a local index and long answers, so it was measured on its own. The 150 MB budget above is a Windows figure: these readings were taken on Linux (WebKitGTK), where the webview is a different engine, so they are not directly comparable with it. Protocol: a release build on Linux, `scripts/measure-memory.sh --pid <n> --samples 3 --interval 3`, the minimum of three samples, with private and total MB summed over the app's processes, against a local fixture provider.
+
+| State | Private | Total |
+|---|---|---|
+| Idle | 271.1 MB | 546.2 MB |
+| During a long answer | 526.1 MB | 807.8 MB |
+| 30 s after the answer | 536.8 MB | 818.5 MB |
+| During a 2,000-table re-sync | 566.7 MB | 848.5 MB |
+| 30 s after the re-sync | 570.9 MB | 852.7 MB |
+
+Per process, the `contura` process held 61 MB private at idle and 83 MB at the last reading (30 s after the scripted AI session: the long answer and the 2,000-table re-sync), while WebKitWebProcess held 196 MB at idle and 711 MB at that reading. A 2,000-table re-sync finishes in under half a second, so its reading was taken while the re-sync was repeated.
+
+The Rust process stays well inside the budget; the webview's growth over a session is still under investigation, and the outcome will be recorded here before 1.0.

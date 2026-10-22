@@ -119,6 +119,14 @@ pub fn wire_thinking(info: &ModelInfo, level: ThinkingLevel, share: bool) -> Thi
     }
 }
 
+/// A tool the model may call, as it goes on the wire. The Ask carries at most one.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatRequest {
     pub model: String,
@@ -130,6 +138,8 @@ pub struct ChatRequest {
     pub thinking: Thinking,
     /// Which field carries `max_tokens` (OpenAI-compatible).
     pub max_tokens_field: MaxTokensField,
+    /// `None` sends no `tools` key at all (every database Ask).
+    pub tools: Option<ToolSpec>,
 }
 
 /// Token counts, the same for every provider: `input` excludes the tokens read from the
@@ -161,6 +171,11 @@ pub enum ProviderEvent {
     Text(String),
     Thinking(String),
     Usage(Usage),
+    /// One finished tool call: the tool's name and its input as the JSON text the model wrote.
+    ToolCall {
+        name: String,
+        input: String,
+    },
     Stop(StopReason),
 }
 
@@ -192,15 +207,24 @@ pub(crate) fn count(v: &serde_json::Value) -> Option<u32> {
         .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
 }
 
+/// The tool definition as one wire text, for the Sent record's bytes and hash.
+pub(crate) fn tool_text(req: &ChatRequest) -> Option<String> {
+    req.tools
+        .as_ref()
+        .and_then(|tool| serde_json::to_string(&[tool]).ok())
+}
+
 #[async_trait]
 pub trait AiProvider: Send + Sync {
     /// Each text `stream` puts on the wire for `req`, in order: the Sent record's bytes and
-    /// hash are taken over exactly these. By default each system block, then each message.
+    /// hash are taken over exactly these. By default each system block, then each message,
+    /// then the tool definition when there is one.
     fn wire_texts(&self, req: &ChatRequest) -> Vec<String> {
         req.system
             .iter()
             .map(|b| b.text.clone())
             .chain(req.messages.iter().map(|m| m.text.clone()))
+            .chain(tool_text(req))
             .collect()
     }
 

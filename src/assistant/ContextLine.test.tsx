@@ -7,7 +7,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { modelList } from "../test/settingsRoutes";
 import AssistantPanel from "./AssistantPanel";
 import ContextLine from "./ContextLine";
-import { contextLineText, contextNotice, contextTip, sendsAge } from "./contextText";
+import { contextLineText, contextNotice, contextTip, ctxName, sendsAge } from "./contextText";
 import type { AskContext } from "./context";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -175,7 +175,7 @@ test("failed_check_note_and_resync", async () => {
   expect(document.querySelector(".ctxalert.warnline")).toBeTruthy();
   const before = callsTo("ai_preview").length;
   await user.click(screen.getByRole("button", { name: "Re-sync" }));
-  await waitFor(() => expect(callsTo("ai_resync")).toEqual([{ connectionId: "c1", database: "freight", schema: null }]));
+  await waitFor(() => expect(callsTo("ai_resync")).toEqual([{ connectionId: "c1", database: "freight", schema: "public" }]));
   // A new preview is asked for, and the line goes once it says match.
   await waitFor(() => expect(callsTo("ai_preview").length).toBeGreaterThan(before));
   await waitFor(() => expect(document.querySelector(".ctxalert")).toBeNull());
@@ -187,6 +187,39 @@ test("resync_on_a_closed_connection_says_open_it", async () => {
   render(<AssistantPanel place="ungrouped" groupId={null} context={ctx} schema={null} onOpenSettings={vi.fn()} openIds={new Set()} />);
   await user.click(await screen.findByRole("button", { name: "Re-sync" }));
   expect(await screen.findByText("Open the Connection to re-sync.")).toBeTruthy();
+});
+
+test("resync_uses_the_schema_the_ask_uses", async () => {
+  const user = userEvent.setup();
+  const billing: AskContext = { ...ctx, tables: [{ schema: "billing", name: "invoices" }] };
+  render(<AssistantPanel place="ungrouped" groupId={null} context={billing} schema={null} onOpenSettings={vi.fn()} openIds={new Set(["c1"])} />);
+  await user.click(await screen.findByRole("button", { name: "Re-sync" }));
+  await waitFor(() => expect(callsTo("ai_resync")).toEqual([{ connectionId: "c1", database: "freight", schema: "billing" }]));
+  // The Ask asks for the same schema.
+  expect((callsTo("ai_preview")[0].request as AskRequest).schema).toBe("billing");
+});
+
+test("context_texts_name_a_schema_other_than_public", () => {
+  expect(ctxName(stg, info())).toBe("freight-stg");
+  expect(ctxName(stg, info({ schema: "" }))).toBe("freight-stg");
+  expect(ctxName(stg, info({ schema: "billing" }))).toBe("freight-stg.billing");
+  const billing = (over: Partial<ContextInfo> = {}) => info({ schema: "billing", ...over });
+  expect(contextLineText(billing({ check: { kind: "failed" } }), stg, NOW)?.text).toBe("Context: freight-stg.billing · could not check the schema");
+  expect(contextLineText(billing({ builtAt: null, check: { kind: "missing" } }), stg, NOW)?.text).toBe(
+    "Context: freight-stg.billing · could not read the schema",
+  );
+  expect(contextLineText(billing({ stale: true }), stg, NOW)?.text).toBe("Context: freight-stg.billing · the schema changed since the last sync");
+  expect(contextTip(billing(), stg, NOW)).toBe(
+    "Context: freight-stg.billing, 6 tables, synced 3m ago. It re-syncs on its own when the schema changes.",
+  );
+  expect(contextTip(billing({ builtAt: null, tableCount: 0, check: { kind: "missing" } }), stg, NOW)).toBe(
+    "Context: freight-stg.billing, not built yet.",
+  );
+  expect(contextTip(billing({ check: { kind: "failed" } }), stg, NOW)).toBe(
+    "Context: freight-stg.billing, 6 tables. The schema could not be checked, so the last context is used.",
+  );
+  // Public reads as the Connection alone, as before.
+  expect(contextLineText(info({ check: { kind: "failed" } }), stg, NOW)?.text).toBe("Context: freight-stg · could not check the schema");
 });
 
 test("missing_context_line_offers_resync", () => {
@@ -247,4 +280,39 @@ test("resync_error_shows_in_the_line", async () => {
   render(<AssistantPanel place="ungrouped" groupId={null} context={ctx} schema={null} onOpenSettings={vi.fn()} />);
   await user.click(await screen.findByRole("button", { name: "Re-sync" }));
   expect(await screen.findByText("AI access is Never for this Connection.")).toBeTruthy();
+});
+
+test("parity_P11_10_a_manual_context_shows_its_line_with_resync", async () => {
+  const user = userEvent.setup();
+  const manual = info({ sync: "manual", builtAt: NOW - 3 * MIN });
+  expect(contextLineText(manual, stg, NOW)).toEqual({
+    tone: "plain",
+    icon: "database",
+    text: "Context: freight-stg · 6 tables · synced 3m ago",
+    resync: true,
+  });
+  expect(contextLineText(info({ sync: "manual", builtAt: null }), stg, NOW)?.text).toBe("Context: freight-stg · not built yet");
+  // An automatic Context that is fresh stays quiet.
+  expect(contextLineText(info({ sync: "automatic" }), stg, NOW)).toBeNull();
+  const onResync = vi.fn();
+  render(<ContextLine info={manual} connection={stg} onResync={onResync} busy={false} now={NOW} />);
+  expect(screen.getByRole("status").textContent).toContain("Context: freight-stg · 6 tables · synced 3m ago");
+  await user.click(screen.getByRole("button", { name: "Re-sync" }));
+  expect(onResync).toHaveBeenCalledTimes(1);
+});
+
+test("parity_P11_10_the_panel_offers_resync_beside_a_manual_context", async () => {
+  const user = userEvent.setup();
+  routeInvoke({
+    ai_settings: () => view,
+    ai_known_models: () => modelList([]),
+    list_ai_threads: () => [],
+    ai_preview: (a) => ({ ...fakePreview(a.request as AskRequest), context: info({ sync: "manual", check: { kind: "match" } }) }),
+    ai_resync: () => info({ sync: "manual", check: { kind: "rebuilt", reason: "asked" } }),
+  });
+  render(<AssistantPanel place="ungrouped" groupId={null} context={ctx} schema={null} onOpenSettings={vi.fn()} openIds={new Set(["c1"])} />);
+  // The tip says to press Re-sync, and the button is on the Context line.
+  expect(await screen.findByText(/It re-syncs only when you press Re-sync\./)).toBeTruthy();
+  await user.click(await screen.findByRole("button", { name: "Re-sync" }));
+  await waitFor(() => expect(callsTo("ai_resync")).toEqual([{ connectionId: "c1", database: "freight", schema: "public" }]));
 });

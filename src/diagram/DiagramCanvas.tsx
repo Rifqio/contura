@@ -96,6 +96,11 @@ export interface DiagramCanvasProps {
    */
   livePositions?: LivePositions | null;
   /**
+   * A node to bring into view once it is drawn, such as the shape the assistant just added (P11-34): the view
+   * moves to it, at the zoom it has, only when the node is not wholly on screen. Asked again only for another id.
+   */
+  reveal?: string | null;
+  /**
    * A right-click on the empty canvas (`node` null) or on a node (item 20): where it was on screen and in flow
    * coordinates, and the canvas's own zoom to fit for the menu. The browser's menu never shows.
    */
@@ -270,8 +275,10 @@ function Flow(props: DiagramCanvasProps) {
   const detail = useStore((s) => detailFor(s.transform[2], props.nodes.length).detail);
   const detailValue = useMemo(() => ({ detail, fast }), [detail, fast]);
   const connectable = !readOnly && !fast && !!onConnectPorts;
-  const { zoomIn, zoomOut, screenToFlowPosition, setCenter, getZoom } = useReactFlow();
+  const { zoomIn, zoomOut, screenToFlowPosition, setCenter, getZoom, getInternalNode, getViewport } = useReactFlow();
   const fitRef = useRef<() => boolean>(() => false);
+  const viewWidth = useStore((s) => s.width);
+  const viewHeight = useStore((s) => s.height);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(props.nodes);
   const selectionRef = useRef(props.selection);
@@ -295,6 +302,28 @@ function Flow(props: DiagramCanvasProps) {
       }),
     [props.nodes, setNodes],
   );
+
+  // Brings `reveal` into view once React Flow has the node; a node already wholly on screen leaves the view as it is.
+  const reveal = props.reveal ?? null;
+  const revealed = useRef<string | null>(null);
+  useEffect(() => {
+    if (reveal === null) {
+      revealed.current = null;
+      return;
+    }
+    if (revealed.current === reveal || viewWidth === 0 || viewHeight === 0) return;
+    const n = getInternalNode(reveal);
+    if (!n) return;
+    revealed.current = reveal;
+    const at = n.internals.positionAbsolute;
+    const w = n.measured.width ?? n.width ?? n.initialWidth ?? 0;
+    const h = n.measured.height ?? n.height ?? n.initialHeight ?? 0;
+    const { x, y, zoom } = getViewport();
+    const left = at.x * zoom + x;
+    const top = at.y * zoom + y;
+    if (left >= 0 && top >= 0 && left + w * zoom <= viewWidth && top + h * zoom <= viewHeight) return;
+    void setCenter(at.x + w / 2, at.y + h / 2, { zoom, duration: motionMs("fit") });
+  }, [reveal, nodes, viewWidth, viewHeight, getInternalNode, getViewport, setCenter]);
 
   // A glide: each frame replaces only the gliding nodes; at its end they are drawn from the props again.
   const live = props.livePositions ?? null;

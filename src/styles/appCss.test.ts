@@ -499,5 +499,86 @@ test("the_feature_bar_cannot_widen_the_window", () => {
   const body = (selector: string) => rules(appCss).find((r) => r.selector === selector)?.body ?? "";
   expect(body(".app")).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   expect(body(".feature-bar")).toMatch(/min-width:\s*0/);
-  expect(body(".feature-bar")).toMatch(/overflow-x:\s*auto/);
+  // P11-36: the groups clip inside their own box instead of the bar scrolling Ask out of reach.
+  expect(body(".feature-groups")).toMatch(/overflow-x:\s*clip/);
+});
+
+/** P11-3: the AI access table keeps to the Settings column (512px) instead of widening the page. */
+test("parity_P11_3_access_table_fits_the_settings_column", () => {
+  const fit = bodyOf(".share-table-fit");
+  expect(fit).toMatch(/table-layout:\s*fixed/);
+  expect(fit).toMatch(/width:\s*100%/);
+  // The selects take their column's width, never a minimum wider than it.
+  const select = bodyOf(".share-table-fit .select");
+  expect(select).toMatch(/min-width:\s*0/);
+  expect(select).toMatch(/width:\s*100%/);
+  expect(bodyOf(".share-table-fit .sync-select")).toMatch(/min-width:\s*0/);
+  // The Connection name and the Context text give way with an ellipsis or a wrap, not overflow.
+  expect(bodyOf(".share-table-fit .cname")).toMatch(/min-width:\s*0/);
+  // An ellipsis shows only on text that does not wrap.
+  const name = bodyOf(".share-table-fit .cname-text");
+  expect(name).toMatch(/white-space:\s*nowrap/);
+  expect(name).toMatch(/text-overflow:\s*ellipsis/);
+  expect(bodyOf(".share-table-fit .share-dialect")).toMatch(/text-overflow:\s*ellipsis/);
+  expect(bodyOf(".share-table-fit .share-dialect")).toMatch(/white-space:\s*nowrap/);
+  expect(bodyOf(".share-table-fit .share-ctx")).toMatch(/white-space:\s*normal/);
+  const widths = ["conn", "dialect", "access", "sync", "ctx"].map((c) => /width:\s*(\d+)%/.exec(bodyOf(`.share-col-${c}`))?.[1]).map(Number);
+  expect(widths.reduce((a, b) => a + b, 0)).toBe(100);
+});
+
+/** P11-33: a diagram Sends row keeps the file name and its size on one line each. */
+test("parity_P11_33_sends_row_does_not_wrap_the_name_or_size", () => {
+  // A pill keeps one line and may shrink: a long label ends in an ellipsis instead of wrapping or overflowing.
+  const pill = bodyOf(".send-pill");
+  expect(pill).toMatch(/white-space:\s*nowrap/);
+  expect(pill).toMatch(/min-width:\s*0/);
+  expect(pill).not.toMatch(/flex:\s*none/);
+  const label = bodyOf(".send-pill-label");
+  expect(label).toMatch(/overflow:\s*hidden/);
+  expect(label).toMatch(/text-overflow:\s*ellipsis/);
+  // The outline pill's long label still wraps (board 11.7).
+  expect(bodyOf(".send-pill-tall .send-pill-label")).toMatch(/white-space:\s*normal/);
+  const size = bodyOf(".sends-item .sends-size");
+  expect(size).toMatch(/white-space:\s*nowrap/);
+  expect(size).toMatch(/flex:\s*none/);
+  // The reason takes only the room left (basis 0), so the pill's name gives way last.
+  expect(bodyOf(".sends-item .sends-lock")).toMatch(/flex:\s*1 1 0/);
+  expect(bodyOf(".sends-item .sends-lock")).toMatch(/min-width:\s*0/);
+});
+
+test("parity_P11_23_answer_log_labels_wrap_instead_of_cutting", () => {
+  // Diagram boxes wrap their time or detail under the label instead of ending it in an ellipsis.
+  expect(bodyOf(".dbox")).toMatch(/flex-wrap:\s*wrap/);
+  const t = bodyOf(".dbox .t");
+  expect(t).not.toMatch(/white-space:\s*nowrap/);
+  expect(t).not.toMatch(/text-overflow:\s*ellipsis/);
+  // The Log's source column is wide enough for the longest source, "rail.execution".
+  expect(bodyOf(".lrow")).toMatch(/grid-template-columns:\s*14px 44px 38px 14ch minmax\(0, 1fr\)/);
+});
+
+test("parity_P11_12_a_sends_label_stays_on_one_line_from_the_left", () => {
+  const pill = bodyOf(".send-pill");
+  expect(pill).toMatch(/white-space:\s*nowrap/);
+  expect(pill).toMatch(/text-align:\s*left/);
+});
+
+test("parity_P11_14_the_query_toolbar_never_widens_its_column", () => {
+  // One track that may shrink to nothing: the strip's min-content width cannot push the tab past its column.
+  expect(bodyOf(".query-tab")).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+  expect(bodyOf(".editor-header-more")).toMatch(/flex:\s*none/);
+});
+
+test("parity_P11_36_ask_stays_outside_the_feature_bar_overflow", () => {
+  // The groups clip inside their own box; Ask and More never shrink or scroll away.
+  const groups = bodyOf(".feature-groups");
+  expect(groups).toMatch(/min-width:\s*0/);
+  expect(groups).toMatch(/overflow-x:\s*clip/);
+  expect(groups).toMatch(/overflow-y:\s*visible/);
+  expect(bodyOf(".feature-bar")).not.toMatch(/overflow-x:\s*auto/);
+  expect(bodyOf(".feature-bar > .feature-button")).toMatch(/flex:\s*none/);
+  expect(bodyOf(".feature-groups .feature-button[data-overflow]")).toMatch(/visibility:\s*hidden/);
+});
+
+test("parity_P11_37_a_held_tooltip_does_not_show", () => {
+  expect(bodyOf(".feature-button[data-tip-off]::after")).toMatch(/opacity:\s*0/);
 });

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { agoShort, agoText, durationText } from "./units";
+import { agoShort, agoText, dayClock, durationText } from "./units";
 
 test("durationText_picks_the_compact_unit", () => {
   expect(durationText(38)).toBe("38ms");
@@ -27,4 +27,14 @@ test("ago_text_says_ago_with_compact_units_and_days", () => {
   expect(agoText(2 * 3_600_000)).toBe("2h ago");
   expect(agoText(26 * 3_600_000)).toBe("1d ago");
   expect(agoText(3 * 86_400_000 + 5)).toBe("3d ago");
+});
+
+test("day_clock_cases", () => {
+  const now = new Date(2026, 9, 22, 15, 5).getTime();
+  expect(dayClock(new Date(2026, 9, 22, 11, 42).getTime(), now)).toBe("Today 11:42");
+  expect(dayClock(new Date(2026, 9, 22, 0, 3).getTime(), now)).toBe("Today 00:03");
+  expect(dayClock(new Date(2026, 9, 21, 23, 59).getTime(), now)).toBe("Yesterday 23:59");
+  expect(dayClock(new Date(2026, 9, 18, 11, 42).getTime(), now)).toBe("Oct 18 11:42");
+  expect(dayClock(new Date(2026, 9, 22, 11, 42).getTime(), now, true)).toBe("Today 11:42, now");
+  expect(dayClock(new Date(2026, 9, 18, 11, 42).getTime(), now, true)).toBe("Oct 18 11:42, now");
 });

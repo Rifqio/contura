@@ -131,7 +131,7 @@ test("insert_into_an_empty_editor_adds", async () => {
 test("the_diff_repeats_the_flags", async () => {
   const user = userEvent.setup();
   renderSql({ sql: "UPDATE t SET a = 1", check: NO_WHERE });
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
+  await user.click(screen.getByRole("button", { name: "Insert commented out" }));
   expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("UPDATE without WHERE.");
 });
 
@@ -186,6 +186,28 @@ test("insert_commented_out_for_write_in_explain", async () => {
   expect(diff.textContent).toContain("This answer contains a write.");
   await user.click(screen.getByRole("button", { name: "Insert" }));
   expect(ed.now()).toBe("-- DELETE FROM invoices WHERE id = 3;\n");
+});
+
+test("parity_P11_30_an_answer_that_writes_inserts_commented_out", async () => {
+  const user = userEvent.setup();
+  const check: SqlBlock = {
+    fence: 0,
+    label: "1 statement: 1 write (UPDATE)",
+    statements: [{ text: "UPDATE shipments SET carrier = 'DHL' WHERE id = 7", class: "write", flags: [] }],
+  };
+  const ed = fakeEditor("", 0);
+  renderSql({ sql: "UPDATE shipments SET carrier = 'DHL' WHERE id = 7", check, target: { editor: () => ed.api, name: "Query 3" } });
+  // Board 11.6, "Answer writes": the note, and Insert only commented out.
+  const card = screen.getByRole("alert");
+  expect(card.textContent).toContain("This answer writes to the database: 1 update.");
+  expect(card.textContent).toContain("The SQL check found a write. Insert puts it in the editor commented out, so Run cannot pick it up by accident.");
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Insert commented out" }));
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  expect(ed.now()).toBe("-- UPDATE shipments SET carrier = 'DHL' WHERE id = 7;\n");
+  // Run finds no statement in it until the user uncomments it.
+  expect(splitStatements(ed.now(), "postgres")).toEqual([]);
+  expect(statementAt(splitStatements(ed.now(), "postgres"), 0)).toBeNull();
 });
 
 test("write_counts_name_each_verb", () => {

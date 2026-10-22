@@ -141,7 +141,55 @@ pub fn create_database(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Step 11f: runs `work` on a connection of its own to `file`, opened read-only, inside
+/// a transaction that is rolled back, with a 5 s busy timeout. A watchdog thread
+/// interrupts the statement after 5 s (SQLite has no statement timeout).
+async fn sample_session<T, F>(file: std::path::PathBuf, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let conn = Connection::open_with_flags(
+            &file,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| connect_err(&file, e))?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(query_err)?;
+        let handle = conn.get_interrupt_handle();
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            let limit = Duration::from_millis(crate::dialect::SAMPLE_TIMEOUT_MS);
+            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(limit) {
+                handle.interrupt();
+            }
+        });
+        let out = conn
+            .execute_batch("BEGIN")
+            .map_err(query_err)
+            .and_then(|()| work(&conn));
+        let _ = conn.execute_batch("ROLLBACK");
+        drop(stop);
+        let _ = watchdog.join();
+        out
+    })
+    .await
+    .map_err(|e| Error::Query(e.to_string()))?
+}
+
 impl SqliteDialect {
+    /// Runs `sql` inside the sample read's setup (its own read-only connection, in a
+    /// transaction that is rolled back). Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn sample_probe(&self, _database: &str, sql: &str) -> Result<()> {
+        let sql = sql.to_string();
+        sample_session(self.path.clone(), move |c| {
+            c.execute_batch(&sql).map_err(query_err)
+        })
+        .await
+    }
+
     /// The password is ignored: SQLite files have none.
     pub async fn connect(config: &ConnectionConfig) -> Result<Self> {
         let path = config
@@ -455,6 +503,14 @@ impl Dialect for SqliteDialect {
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page> {
         let req = req.clone();
         self.run(move |c| page::fetch_page(c, &req)).await
+    }
+
+    async fn sample_rows(&self, path: &ObjectPath, limit: u32) -> Result<Page> {
+        let path = path.clone();
+        sample_session(self.path.clone(), move |c| {
+            page::sample_rows(c, &path, limit)
+        })
+        .await
     }
 
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {

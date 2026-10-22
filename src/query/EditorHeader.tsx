@@ -95,21 +95,56 @@ export default function EditorHeader({
   const diagramKey = hintFor(map, "diagram.toggle");
   const strip = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
+  /** P11-14: even the icon strip does not fit (the Ask panel beside a PROD tab): the right end is under More. */
+  const [crowded, setCrowded] = useState(false);
   const icons = compact || narrow;
-  const state = useRef({ icons, narrow, need: 0 });
+  /** What sits in the strip besides the right end: when it changes while More is shown, the strip is measured again. */
+  const content = [
+    connection?.id,
+    connection?.name,
+    connection?.readOnly,
+    stateWord,
+    production,
+    writeHazard,
+    running,
+    databases ? database : null,
+    aiAccess,
+    !!onToggleDiagram,
+    !!onToggleAssistant,
+  ].join("|");
+  const state = useRef({ icons, narrow, crowded, need: 0, needIcons: 0, content, measured: content });
   state.current.icons = icons;
   state.current.narrow = narrow;
-  /** Turns the labels off when they would not fit, and back on once the strip is as wide as they needed. */
+  state.current.crowded = crowded;
+  state.current.content = content;
+  /**
+   * Turns the labels off when they would not fit, then moves the right end into More when the icons do not fit
+   * either; each comes back once the strip is as wide as it needed. A content change while More is shown (PRODUCTION
+   * and Run on PROD gone after a switch to a dev Connection) puts the right end back for one layout pass, so the next
+   * pass measures the strip as it now is instead of keeping a width the old content needed.
+   */
   const fit = useCallback(() => {
     const el = strip.current;
     const width = el?.clientWidth ?? 0;
     if (!el || width === 0) return;
     const s = state.current;
+    if (s.crowded && s.content !== s.measured) {
+      s.measured = s.content;
+      s.crowded = false;
+      setCrowded(false);
+      return;
+    }
     if (!s.icons) {
       if (width < COMPACT_BELOW_PX || el.scrollWidth > width + 1) {
         s.need = Math.max(el.scrollWidth, COMPACT_BELOW_PX);
         setNarrow(true);
       }
+    } else if (s.crowded) {
+      if (width >= s.needIcons) setCrowded(false);
+    } else if (el.scrollWidth > width + 1) {
+      s.needIcons = el.scrollWidth;
+      s.measured = s.content;
+      setCrowded(true);
     } else if (s.narrow && width >= s.need) setNarrow(false);
   }, []);
   // After every render: Run on PROD, a database or the AI chip can widen the strip without a resize.
@@ -152,7 +187,19 @@ export default function EditorHeader({
   };
 
   const chip = aiAccess ? AI_CHIP[aiAccess] : null;
+  const saveName = withHint("Save query", hintFor(map, "query.save"));
   const chipTitle = withHint(connection ? `AI access for ${connection.name}. Open the assistant` : "Open the assistant", hintFor(map, "assistant.toggle"));
+  /** The right end of the strip as menu rows, for More: the toggles keep their pressed state as checked rows. */
+  const moreItems: MenuItem[] = [
+    ...(onToggleDiagram
+      ? [{ key: "diagram", label: "Diagram", shortcut: diagramKey ?? undefined, icon: <Icon name="flow" size={14} />, checked: diagramOpen, onSelect: onToggleDiagram }]
+      : []),
+    ...(chip && onToggleAssistant
+      ? [{ key: "assistant", label: "Assistant", hint: chip.text, title: chipTitle, icon: <Icon name="msg" size={14} />, checked: assistantOpen, onSelect: onToggleAssistant }]
+      : []),
+    { key: "save", label: "Save query", shortcut: hintFor(map, "query.save") ?? undefined, icon: <Icon name="save" size={14} />, onSelect: onSave },
+    { key: "history", label: "Query History", icon: <Icon name="history" size={14} />, checked: historyOpen, onSelect: onToggleHistory },
+  ];
 
   return (
     <div className="editor-header" role="toolbar" aria-label="Query" ref={strip}>
@@ -216,8 +263,21 @@ export default function EditorHeader({
       {labelled("explain", "Explain", hintFor(map, "query.explain"), onExplain)}
       {labelled("format", "Format", hintFor(map, "query.format"), onFormat)}
       <span className="spacer" />
+      {crowded && (
+        <Menu
+          label="More actions"
+          align="end"
+          trigger={(p) => (
+            <button type="button" {...p} className="icon-button editor-header-more" aria-label="More actions" title="More actions">
+              <Icon name="moreHorizontal" size={14} />
+            </button>
+          )}
+          items={moreItems}
+          compact
+        />
+      )}
       {/* Frame 6.2: the diagram toggle opens the right-hand group, pressed while the pane is open. */}
-      {onToggleDiagram &&
+      {!crowded && onToggleDiagram &&
         (icons ? (
           <button
             type="button"
@@ -241,6 +301,7 @@ export default function EditorHeader({
           </button>
         ))}
       {chip &&
+        !crowded &&
         (onToggleAssistant ? (
           <button
             type="button"
@@ -258,19 +319,23 @@ export default function EditorHeader({
             {chip.text}
           </span>
         ))}
-      <button type="button" className="icon-button" aria-label={withHint("Save query", hintFor(map, "query.save"))} title={withHint("Save query", hintFor(map, "query.save"))} onClick={onSave}>
-        <Icon name="save" size={14} />
-      </button>
-      <button
-        type="button"
-        className={historyOpen ? "icon-button icon-button-on" : "icon-button"}
-        aria-label="Query History"
-        aria-pressed={historyOpen}
-        title="Query History"
-        onClick={onToggleHistory}
-      >
-        <Icon name="history" size={14} />
-      </button>
+      {!crowded && (
+        <>
+          <button type="button" className="icon-button" aria-label={saveName} title={saveName} onClick={onSave}>
+            <Icon name="save" size={14} />
+          </button>
+          <button
+            type="button"
+            className={historyOpen ? "icon-button icon-button-on" : "icon-button"}
+            aria-label="Query History"
+            aria-pressed={historyOpen}
+            title="Query History"
+            onClick={onToggleHistory}
+          >
+            <Icon name="history" size={14} />
+          </button>
+        </>
+      )}
     </div>
   );
 }

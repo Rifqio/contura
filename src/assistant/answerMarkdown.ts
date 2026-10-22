@@ -116,3 +116,16 @@ export function looksLikeSql(block: { lang: string | null; text: string }): bool
   if (block.lang !== null) return SQL_TAGS.has(block.lang.toLowerCase());
   return SQL_STARTS.has(leadingWord(block.text));
 }
+
+/**
+ * An answer as one line of plain text, for a preview: prose, list items and code all read as words, with no
+ * fences, backticks or bold marks, and runs of white space folded to one space.
+ */
+export function plainText(text: string): string {
+  const words = (inlines: Inline[]) => inlines.map((i) => i.text).join("");
+  return parseAnswer(text)
+    .map((b) => (b.kind === "para" ? words(b.inlines) : b.kind === "list" ? b.items.map(words).join("; ") : b.text))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}

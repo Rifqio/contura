@@ -4,7 +4,8 @@ use common::TestDb;
 use contura_core::Error;
 use contura_core::connections::{ConnectionInput, ConnectionService, GroupInput, PasswordChange};
 use contura_core::model::{
-    DialectKind, EditorPrefs, GroupColor, KeymapOverrides, RowHeight, SslMode, ThemeChoice, UiPrefs,
+    DialectKind, EditorPrefs, FlowSidePanel, FlowSideTab, GroupColor, KeymapOverrides, RowHeight,
+    SslMode, ThemeChoice, UiPrefs,
 };
 use contura_core::secrets::{MemorySecretStore, SecretStore};
 use contura_core::store::AppStore;
@@ -376,6 +377,11 @@ fn ui_prefs_round_trip_every_field() {
         brighter_comments: true,
         inline_suggestions: true,
         history_keep_days: Some(30),
+        flow_side_panel: FlowSidePanel {
+            hidden: true,
+            tab: FlowSideTab::Assistant,
+        },
+        flow_assist_mode: contura_core::model::FlowAssistMode::Auto,
     })
     .unwrap();
     drop(svc);
@@ -392,6 +398,61 @@ fn ui_prefs_round_trip_every_field() {
     assert!(p.brighter_comments);
     assert!(p.inline_suggestions);
     assert_eq!(p.history_keep_days, Some(30));
+    assert_eq!(
+        p.flow_side_panel,
+        FlowSidePanel {
+            hidden: true,
+            tab: FlowSideTab::Assistant,
+        }
+    );
+    assert_eq!(
+        p.flow_assist_mode,
+        contura_core::model::FlowAssistMode::Auto
+    );
+}
+
+#[test]
+fn ui_prefs_without_the_side_panel_read_the_default() {
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"theme":"light","historyKeepDays":7}"#);
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_eq!(p.history_keep_days, Some(7));
+    assert_eq!(
+        p.flow_side_panel,
+        FlowSidePanel {
+            hidden: false,
+            tab: FlowSideTab::Editor,
+        }
+    );
+    // A bad value keeps the rest.
+    let (_d, svc) = service_with_setting(
+        "ui_prefs",
+        r#"{"theme":"light","flowSidePanel":{"hidden":true,"tab":"chat"}}"#,
+    );
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_eq!(p.flow_side_panel, FlowSidePanel::default());
+}
+
+#[test]
+fn ui_prefs_flow_assist_mode_survives_and_falls_back() {
+    use contura_core::model::FlowAssistMode;
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"flowAssistMode":"auto"}"#);
+    assert_eq!(
+        svc.ui_prefs().unwrap().flow_assist_mode,
+        FlowAssistMode::Auto
+    );
+    // Missing or unknown: Review, and the rest is kept.
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"theme":"light"}"#);
+    assert_eq!(
+        svc.ui_prefs().unwrap().flow_assist_mode,
+        FlowAssistMode::Review
+    );
+    let (_d, svc) =
+        service_with_setting("ui_prefs", r#"{"theme":"light","flowAssistMode":"yolo"}"#);
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_eq!(p.flow_assist_mode, FlowAssistMode::Review);
 }
 
 #[test]

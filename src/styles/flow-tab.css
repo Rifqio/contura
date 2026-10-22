@@ -17,6 +17,199 @@
   flex: none;
   width: 420px;
 }
+/* The side panel (board 11.5): the Editor and Assistant switch, the hide button, and the 44 px rail. */
+.flow-side-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  background: var(--c-bg-panel);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: 7px 7px 0 0;
+  padding-right: 6px;
+}
+/* The panel's own flat buttons (board .btn): bare, a hover wash, a one pixel press, a focus ring. */
+.flow-side-head .btn,
+.srail .btn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background-color var(--motion-fast) var(--ease-enter), transform var(--motion-fast) var(--ease-enter);
+}
+.flow-side-head .btn:hover,
+.srail .btn:hover {
+  background: var(--c-bg-hover);
+}
+.flow-side-head .btn:active,
+.srail .btn:active {
+  background: var(--c-bg-active);
+  transform: translateY(1px);
+}
+.flow-side-head .btn:focus-visible,
+.srail .btn:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.flow-side-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.flow-side-pane[hidden] {
+  display: none;
+}
+.pswitch {
+  position: relative;
+  display: grid;
+  flex: 1;
+  grid-template-columns: 1fr 1fr;
+  min-width: 0;
+  height: 44px;
+  box-sizing: border-box;
+  padding: 6px;
+}
+.pthumb {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 6px;
+  width: calc(50% - 6px);
+  background: var(--c-bg-surface);
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform var(--motion-slow) var(--ease-enter);
+}
+.pswitch.right .pthumb {
+  transform: translateX(100%);
+}
+.pswitch::after {
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 50%;
+  width: 1px;
+  background: var(--c-border);
+  content: "";
+}
+.btn.ptab {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--c-text-subtle);
+  font-weight: 400;
+}
+.btn.ptab:hover {
+  color: var(--c-text);
+}
+.btn.ptab.on {
+  color: var(--c-text);
+  font-weight: 600;
+}
+.btn.ptab.on svg {
+  color: var(--c-accent);
+}
+.pcount {
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  color: var(--c-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  background: var(--c-bg-active);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.btn.ib {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--c-text-muted);
+}
+.btn.ib:hover {
+  color: var(--c-text);
+}
+.btn.pcol {
+  width: 30px;
+  height: 30px;
+  color: var(--c-text-subtle);
+}
+.srail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 44px;
+  box-sizing: border-box;
+  padding: 6px 0;
+  background: var(--c-bg-surface);
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-lg);
+  animation: rail-in var(--motion-slow) var(--ease-enter);
+}
+.rdiv {
+  width: 20px;
+  height: 1px;
+  margin: 2px 0;
+  background: var(--c-border);
+}
+.rbadge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 15px;
+  height: 15px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  color: var(--c-ink);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  background: var(--c-accent);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .srail {
+    animation: none;
+  }
+}
+.flow-side-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 22px 16px;
+  color: var(--c-text-subtle);
+  font-size: 12px;
+  line-height: 18px;
+}
+.flow-side-empty-title {
+  color: var(--c-text);
+  font-weight: 600;
+}
 .flow-pane-draw {
   flex: 1;
   background: var(--c-bg-panel);
@@ -855,4 +1048,583 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* The diagram assistant (board 11.5): the thread, the composer with its scope and land mode, the change card,
+   the remove question, the editor's banners and the canvas marks. */
+.plock {
+  display: inline-flex;
+  color: var(--c-text-subtle);
+}
+.pdot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--c-accent);
+  animation: ai-live calc(var(--motion-base) * 10) cubic-bezier(0.4, 0, 0.6, 1) infinite alternate;
+}
+@keyframes ai-live {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
+  }
+}
+.flow-assist {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.flow-chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px 14px 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.flow-chat .flow-side-empty {
+  padding: 8px 2px;
+}
+.flow-assist .umsg {
+  align-self: flex-end;
+  max-width: 86%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: var(--c-bg-active);
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+.flow-assist .amsg {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--c-text);
+  line-height: 19px;
+}
+.flow-assist .answer-p {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin: 0;
+}
+.flow-assist-none,
+.flow-assist-problem {
+  color: var(--c-text-subtle);
+  font-size: 12px;
+}
+.flow-assist .steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--c-text-subtle);
+  font-size: 12px;
+}
+.flow-assist .step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.flow-assist .step.now {
+  color: var(--c-text);
+}
+.flow-assist .sdot2 {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--c-accent);
+  animation: ai-live calc(var(--motion-base) * 10) cubic-bezier(0.4, 0, 0.6, 1) infinite alternate;
+}
+.flow-assist .btn,
+.flow-ebar .btn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+.flow-assist .btn:focus-visible,
+.flow-ebar .btn:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.btn.pbtn2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 4px;
+  color: var(--c-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.btn.pbtn2:hover {
+  background: var(--c-bg-hover);
+}
+.btn.pbtn2:active {
+  transform: translateY(1px);
+}
+.btn.pbtn2.pri {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-ink);
+  font-weight: 600;
+}
+.btn.pbtn2.dng {
+  background: var(--c-danger-solid);
+  border-color: var(--c-danger-solid);
+  color: var(--c-ink);
+  font-weight: 600;
+}
+.btn.pbtn2:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.btn.pbtn2 .kbd {
+  background: transparent;
+  border-color: currentColor;
+  color: inherit;
+}
+.ccard {
+  overflow: hidden;
+  background: var(--c-bg-panel);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 6px;
+}
+.ccard.warnc,
+.ccard.badc {
+  border-color: color-mix(in srgb, var(--c-danger-solid) 55%, var(--c-border));
+}
+.ccard .ehead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+.ccard.badc .ehead svg {
+  color: var(--c-danger-text);
+}
+.ccard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 6px 12px;
+}
+.ccard-title {
+  flex: 1;
+  font-weight: 600;
+}
+.btn.lnk2 {
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--c-accent-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.btn.lnk2:hover {
+  text-decoration: underline;
+}
+.crow {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 6px 2px 12px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.crow .mk {
+  font-family: var(--font-family-code);
+  font-weight: 600;
+  text-align: center;
+}
+.crow .mk.add {
+  color: var(--c-success-text);
+}
+.crow .mk.del {
+  color: var(--c-danger-text);
+}
+.crow .mk.drop {
+  color: var(--c-warning-text);
+}
+.crow .tx {
+  overflow: hidden;
+  color: var(--c-text-muted);
+  font-family: var(--font-family-code);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crow.off .tx,
+.crow.dropped .tx {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.crow-acts {
+  display: flex;
+  gap: 2px;
+}
+.btn.ib2 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--c-text-subtle);
+}
+.btn.ib2:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.btn.ib2[aria-pressed="true"] {
+  color: var(--c-text);
+}
+.ccard-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.ccard-foot.end {
+  justify-content: flex-end;
+}
+.ccard-note {
+  padding-left: 4px;
+  color: var(--c-text-subtle);
+  font-size: 12px;
+}
+.ccard.warnc2 {
+  border-color: color-mix(in srgb, var(--c-warning-solid) 50%, var(--c-border));
+}
+.ccard.warnc2 .ehead svg {
+  color: var(--c-warning-solid);
+}
+.ccard .ebody {
+  padding: 4px 12px 10px;
+  color: var(--c-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+.ccard .ebody b {
+  color: var(--c-text);
+  font-weight: 600;
+}
+.ccard .ccard-dropped,
+.ccard .ccard-outcome {
+  padding-top: 8px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.ccard .efoot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.btn.pickrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 12px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  text-align: left;
+}
+.btn.pickrow:hover {
+  background: var(--c-bg-hover);
+}
+.pickrow .pid {
+  width: 28px;
+  color: var(--c-text-subtle);
+  font-size: 11px;
+}
+.pickrow .pname {
+  flex: 1;
+  min-width: 0;
+}
+.pickrow .pnote {
+  color: var(--c-text-subtle);
+  font-size: 12px;
+}
+.crow .dtag {
+  padding-right: 6px;
+  color: var(--c-warning-text);
+  font-size: 11px;
+}
+.flow-assist-kept {
+  color: var(--c-text-subtle);
+  font-size: 12px;
+}
+.ccard-ask {
+  padding: 10px 12px 4px;
+  font-weight: 600;
+}
+.ccard-why {
+  padding: 0 12px 8px;
+  color: var(--c-text-subtle);
+  font-size: 12px;
+  line-height: 18px;
+}
+.flow-landed,
+.flow-landed-acts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.flow-landed-acts {
+  flex-direction: row;
+}
+.flow-landed .answer-p svg {
+  flex: none;
+  color: var(--c-success-text);
+}
+.flow-composer {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  color: var(--c-text-subtle);
+  font-size: 12px;
+}
+.flow-working > span {
+  flex: 1;
+}
+.flow-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn.scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 4px;
+  color: var(--c-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.flow-assist .seg {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  background: var(--c-bg-panel);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 6px;
+}
+.flow-assist .seg button {
+  all: unset;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--c-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 18px;
+}
+.flow-assist .seg button:hover {
+  color: var(--c-text);
+}
+.flow-assist .seg button.on {
+  background: var(--c-accent-subtle);
+  box-shadow: inset 0 0 0 1px var(--c-accent);
+  color: var(--c-text);
+  font-weight: 600;
+}
+.flow-assist .seg button:focus-visible {
+  outline: 2px solid var(--c-focus);
+}
+.cbox {
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg-panel);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 8px;
+}
+.cbox:focus-within {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 1px var(--c-accent);
+}
+.cin2 {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  height: 58px;
+  padding: 9px 10px 2px;
+  color: var(--c-text);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: pre-wrap;
+}
+.cin2::placeholder {
+  color: var(--c-text-faint);
+}
+.cbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 6px 10px;
+  color: var(--c-text-faint);
+  font-size: 11px;
+}
+.btn.sendb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--c-accent);
+  color: var(--c-ink);
+}
+.btn.sendb:disabled {
+  cursor: default;
+  background: var(--c-bg-active);
+  color: var(--c-text-faint);
+}
+.flow-ebar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  background: var(--c-bg-panel);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+  font-size: 12px;
+}
+.flow-ebar-text {
+  flex: 1;
+  min-width: 0;
+}
+.schema-text.is-locked {
+  opacity: 0.55;
+}
+.flow-aipres {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: 4px;
+  background: var(--c-accent);
+  color: var(--c-ink);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.flow-aipres .live {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: currentColor;
+  animation: ai-live calc(var(--motion-base) * 10) cubic-bezier(0.4, 0, 0.6, 1) infinite alternate;
+}
+/* The canvas marks: new in green and dashed with its badge, removed in red, just added ringed for a moment. */
+.flow-canvas .fnode-suggested {
+  border-style: dashed;
+  border-color: var(--c-success-solid);
+  background: color-mix(in srgb, var(--c-success-solid) 10%, var(--c-bg-canvas));
+}
+.flow-canvas .fnode-removed {
+  border-style: dashed;
+  border-color: var(--c-danger-solid);
+  opacity: 0.85;
+}
+.fnode-gtag {
+  position: absolute;
+  top: -10px;
+  right: 8px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--c-success-solid);
+  color: var(--c-bg-canvas);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.flow-canvas .fnode-airing {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 4px;
+  animation: ai-fade calc(var(--motion-base) * 15) cubic-bezier(0.4, 0, 1, 1) calc(var(--motion-base) * 5) both;
+}
+@keyframes ai-fade {
+  from {
+    outline-color: var(--c-accent);
+  }
+  to {
+    outline-color: transparent;
+  }
+}
+.flow-canvas .react-flow__edge.is-ai-add .react-flow__edge-path {
+  stroke: var(--c-success-solid);
+  stroke-dasharray: 5 4;
+}
+.flow-canvas .react-flow__edge.is-ai-del .react-flow__edge-path {
+  stroke: var(--c-danger-solid);
+  stroke-dasharray: 5 4;
+  opacity: 0.85;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pdot,
+  .flow-assist .sdot2,
+  .flow-aipres .live,
+  .flow-canvas .fnode-airing {
+    animation: none;
+  }
+}
+.flow-assist .step.done .sdot2 {
+  background: var(--c-success-solid);
+  animation: none;
+}
+/* While the assistant works, the drawing it edits has a dashed accent outline (board 11.5, aiarea). */
+.flow-canvas.is-ai-working::after {
+  position: absolute;
+  inset: 6px;
+  z-index: 11;
+  border-radius: 10px;
+  outline: 1.5px dashed var(--c-accent);
+  content: "";
+  pointer-events: none;
+}
+
+/* Board 11.12: Show log takes the side panel's place, and the tool-off note stands alone in the conversation. */
+.flow-assist > .alog {
+  flex: 1;
+  border-top: 0;
+}
+.flow-assist > .log-loading {
+  padding: 14px;
+}
+.flow-tooloff .ehead {
+  align-items: flex-start;
+  line-height: 18px;
+}
+.flow-tooloff .ehead svg {
+  flex: none;
+  margin-top: 2px;
 }

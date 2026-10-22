@@ -30,6 +30,7 @@ const previewOf = (exact: string): Preview => ({
   notes: [],
   log: [],
   context: null,
+  rows: null,
 });
 
 beforeEach(() => {

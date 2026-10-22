@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ai::context::sync::ContextInfo;
+use crate::ai::diagram::DiagramProposal;
+use crate::ai::diagram_tool::INPUT_CAP;
 use crate::ai::log::{LogLine, ProcessStep};
 use crate::ai::provider::{StopReason, Usage};
 use crate::ai::rails::cap_chars;
@@ -21,6 +23,8 @@ const EVIDENCE_CAP: usize = 200;
 const EXACT_CAP: usize = 200 * 1024;
 /// The outline call's exact text kept, in bytes.
 const OUTLINE_EXACT_CAP: usize = 64 * 1024;
+/// The summary call's exact text kept, in bytes: the most R1.5 lets a request carry.
+const SUMMARY_EXACT_CAP: usize = 200 * 1024;
 const NOTES_CAP: usize = 20;
 /// Characters kept per note.
 const NOTE_CHARS: usize = 300;
@@ -77,13 +81,29 @@ pub struct SentRecord {
     pub hash: String,
     /// Equals `outline.is_some()`.
     pub outline_call: bool,
+    /// Equals `summary.is_some()`.
     pub summary_call: bool,
     /// The outline call, only once its request left this PC: a call refused before it
     /// connected (a URL refusal, no connection, a failed TLS handshake) has none.
     #[serde(default)]
     pub outline: Option<OutlineSent>,
+    /// The summary or compaction call, only once its request left this PC.
+    #[serde(default)]
+    pub summary: Option<SummarySent>,
+    /// The sample rows that went, counted from the framed items; never the values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<RowsSent>,
     /// The exact text, only with "Keep the exact text sent" on (R7.2).
     pub exact: Option<String>,
+}
+
+/// The sample rows of an Ask, as Sent and Sends count them.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RowsSent {
+    pub tables: u32,
+    pub rows: u32,
+    pub bytes: u32,
 }
 
 impl Default for SentRecord {
@@ -101,9 +121,42 @@ impl Default for SentRecord {
             outline_call: false,
             summary_call: false,
             outline: None,
+            summary: None,
+            rows: None,
             exact: None,
         }
     }
+}
+
+/// What a summary call wrote: a closed Topic's summary, or a compaction of the open one.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CallKind {
+    #[default]
+    Summary,
+    Compact,
+}
+
+/// The summary call of an Ask or of Compact now (R4.1): measured from its request, like
+/// the main record.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SummarySent {
+    pub kind: CallKind,
+    /// The Topic summarised; `None` for a compaction.
+    pub topic: Option<u32>,
+    /// The messages the call summarised.
+    pub messages: u32,
+    pub model: String,
+    /// Every text as the provider put it on the wire.
+    pub bytes: u32,
+    /// About: an estimate from bytes.
+    pub tokens: u32,
+    pub hash: String,
+    pub millis: u32,
+    pub usage: Option<Usage>,
+    /// The exact text, only with "Keep the exact text sent" on.
+    pub exact: Option<String>,
 }
 
 /// The outline call of an Ask (R4.1): measured from its request, like the main record.
@@ -113,6 +166,8 @@ pub struct OutlineSent {
     pub bytes: u32,
     pub tokens: u32,
     pub hash: String,
+    /// The tables the outline listed.
+    pub tables: u32,
     pub picked_areas: u32,
     pub picked_tables: u32,
     pub dropped: u32,
@@ -160,6 +215,32 @@ pub struct AnswerAction {
     pub at: i64,
 }
 
+/// What the user did with a diagram proposal: the changes landed and rejected.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolOutcome {
+    pub accepted: u32,
+    pub rejected: u32,
+    /// Landed by Auto-apply, not by review.
+    pub auto: bool,
+    /// Epoch milliseconds.
+    pub at: i64,
+}
+
+/// The tool call of a diagram Ask, as it was checked.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolUse {
+    pub tool: String,
+    /// The diagram's name, without `.flow`.
+    pub file: String,
+    /// The model's JSON with invisible characters stripped, at most 64 KB.
+    pub input: String,
+    pub proposal: DiagramProposal,
+    /// `None` until the user lands or rejects the changes.
+    pub outcome: Option<ToolOutcome>,
+}
+
 /// Everything kept with an assistant message besides its text.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -185,12 +266,45 @@ pub struct AnswerRecord {
     /// The text of a failure that is not an `AiError` (a command that could not start),
     /// at most 2 KB.
     pub command_error: Option<String>,
+    /// True on a copy whose `log`, `steps`, `thinking` and `sent.exact` were left out
+    /// for listing.
+    #[serde(default)]
+    pub trimmed: bool,
+    /// The diagram Ask's tool call; kept by `trimmed_copy`.
+    #[serde(default)]
+    pub tool_use: Option<ToolUse>,
+    /// The `max_tokens` the request carried on the wire (the `Done` event's), so a
+    /// length stop without usage names the cap it was sent with; `None` in older records.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
 
 impl AnswerRecord {
+    /// The copy a listing carries: no `log`, `steps`, `thinking`, `sent.exact`,
+    /// `sent.outline.exact` or `sent.summary.exact`, and
+    /// `trimmed` set. Everything else is kept, `sql_blocks` included.
+    pub fn trimmed_copy(&self) -> AnswerRecord {
+        let mut c = self.clone();
+        c.log = Vec::new();
+        c.steps = Vec::new();
+        c.thinking = None;
+        if let Some(sent) = &mut c.sent {
+            sent.exact = None;
+            if let Some(outline) = &mut sent.outline {
+                outline.exact = None;
+            }
+            if let Some(summary) = &mut sent.summary {
+                summary.exact = None;
+            }
+        }
+        c.trimmed = true;
+        c
+    }
+
     /// Holds the record to its caps, so one message cannot grow a thread by much: 64 KB
     /// of thinking, 500 log lines, 200 evidence rows per Steps row (then "and N more"),
-    /// 200 KB of exact text, 20 notes of 300 characters, 64 SQL blocks of 256 statements.
+    /// 200 KB of exact text, 20 notes of 300 characters, 64 SQL blocks of 256 statements,
+    /// 64 KB of tool input.
     pub fn capped(mut self) -> Self {
         let cut = |t: &mut String, bytes: usize| {
             let keep = cap_chars(t, bytes).len();
@@ -222,8 +336,19 @@ impl AnswerRecord {
         {
             cut(exact, OUTLINE_EXACT_CAP);
         }
+        if let Some(exact) = self
+            .sent
+            .as_mut()
+            .and_then(|s| s.summary.as_mut())
+            .and_then(|o| o.exact.as_mut())
+        {
+            cut(exact, SUMMARY_EXACT_CAP);
+        }
         if let Some(t) = &mut self.command_error {
             cut(t, COMMAND_ERROR_CAP);
+        }
+        if let Some(t) = &mut self.tool_use {
+            cut(&mut t.input, INPUT_CAP);
         }
         self.notes.truncate(NOTES_CAP);
         for note in &mut self.notes {
@@ -263,6 +388,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn trimmed_copy_keeps_sql_blocks() {
+        let mut full = record();
+        full.sent.as_mut().unwrap().exact = Some("x".repeat(1000));
+        full.sent.as_mut().unwrap().outline = Some(OutlineSent {
+            exact: Some("o".repeat(1000)),
+            ..OutlineSent::default()
+        });
+        let t = full.trimmed_copy();
+        let outline = t.sent.as_ref().unwrap().outline.as_ref().unwrap();
+        assert!(outline.exact.is_none());
+        assert!(t.trimmed && !full.trimmed);
+        assert!(t.log.is_empty() && t.steps.is_empty() && t.thinking.is_none());
+        assert!(t.sent.as_ref().unwrap().exact.is_none());
+        assert_eq!(t.sql_blocks, full.sql_blocks);
+        assert_eq!(t.actions, full.actions);
+        assert_eq!(t.context, full.context);
+        assert_eq!(t.usage, full.usage);
+        assert_eq!(
+            t.sent.as_ref().unwrap().hash,
+            full.sent.as_ref().unwrap().hash
+        );
+    }
+
+    #[test]
+    fn sent_record_rows_round_trips() {
+        let none = serde_json::to_value(SentRecord::default()).unwrap();
+        assert!(none.get("rows").is_none(), "{none}");
+        let old: SentRecord = serde_json::from_value(none).unwrap();
+        assert_eq!(old.rows, None);
+        let with = SentRecord {
+            rows: Some(RowsSent {
+                tables: 2,
+                rows: 7,
+                bytes: 900,
+            }),
+            ..SentRecord::default()
+        };
+        let v = serde_json::to_value(&with).unwrap();
+        assert_eq!(
+            v["rows"],
+            serde_json::json!({"tables": 2, "rows": 7, "bytes": 900})
+        );
+        let back: SentRecord = serde_json::from_value(v).unwrap();
+        assert_eq!(back, with);
+    }
+
     fn record() -> AnswerRecord {
         AnswerRecord {
             sent: Some(SentRecord {
@@ -278,6 +450,8 @@ mod tests {
                 outline_call: false,
                 summary_call: false,
                 outline: None,
+                summary: None,
+                rows: None,
                 exact: None,
             }),
             usage: Some(Usage {
@@ -333,6 +507,9 @@ mod tests {
                 check: crate::ai::context::sync::SchemaCheck::Failed,
             }),
             command_error: Some("Connection refused".into()),
+            trimmed: false,
+            tool_use: None,
+            max_tokens: Some(28_672),
         }
     }
 
@@ -349,6 +526,12 @@ mod tests {
                     context: Vec::new(),
                     at: 1,
                     record: None,
+                    topic: None,
+                    connection_id: None,
+                    database: None,
+                    kinds: Vec::new(),
+                    tables: Vec::new(),
+                    action: None,
                 },
                 AiMessage {
                     role: AiRole::Assistant,
@@ -356,6 +539,12 @@ mod tests {
                     context: Vec::new(),
                     at: 2,
                     record: Some(record()),
+                    topic: None,
+                    connection_id: None,
+                    database: None,
+                    kinds: Vec::new(),
+                    tables: Vec::new(),
+                    action: None,
                 },
             ],
             updated_at: 2,
@@ -381,6 +570,7 @@ mod tests {
             value["messages"][1]["record"]["commandError"],
             "Connection refused"
         );
+        assert_eq!(value["messages"][1]["record"]["maxTokens"], 28_672);
 
         // A thread saved before records were kept still loads.
         let old = r#"{"id":"00000000-0000-0000-0000-000000000007","place":"ungrouped","title":"t","messages":[{"role":"assistant","text":"a","context":[],"at":2}],"updatedAt":2}"#;
@@ -392,6 +582,7 @@ mod tests {
         assert_eq!(partial.context, None);
         assert_eq!(partial.command_error, None);
         assert!(partial.steps.is_empty());
+        assert_eq!(partial.max_tokens, None);
     }
 
     #[test]
@@ -406,6 +597,7 @@ mod tests {
             bytes: 900,
             tokens: 250,
             hash: "af63dc4c8601ec8c".into(),
+            tables: 40,
             picked_areas: 2,
             picked_tables: 11,
             dropped: 1,
@@ -424,6 +616,9 @@ mod tests {
         // An outline saved before `left` existed went: it reads true.
         let older: OutlineSent = serde_json::from_str(r#"{"bytes":900}"#).unwrap();
         assert!(older.left);
+        // And one saved before `tables` existed lists none.
+        assert_eq!(older.tables, 0);
+        assert_eq!(json["sent"]["outline"]["tables"], 40);
         assert_eq!(json["sent"]["outline"]["pickedTables"], 11);
         let back: AnswerRecord = serde_json::from_value(json).unwrap();
         assert_eq!(back, r);

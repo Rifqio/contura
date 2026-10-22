@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aiAskStream, aiCancel } from "../api/client";
-import type { AiDone, AskRequest, ContextInfo, LogLine, ProcessStep, SentRecord, StopReason } from "../api/types";
+import type { AiDone, AskRequest, Compaction, ContextInfo, LogLine, ProcessStep, SentRecord, StopReason, TurnStamp } from "../api/types";
 import type { LiveRecord } from "./answerRecord";
 
 /** How one Ask ended. `error` has the command error shape, `{ kind: "ai", message }` for the Core's AiError. */
@@ -15,6 +15,10 @@ export interface StreamEnd {
   at: number;
   /** The Sent record, Steps rows, log lines and thinking that arrived before the end. */
   live: LiveRecord;
+  /** The memory stamp of the Ask, when the Core sent one. */
+  stamp?: TurnStamp | null;
+  /** The compaction the Core made before this Ask went out, when it did. */
+  compaction?: Compaction | null;
 }
 
 interface Live {
@@ -28,6 +32,10 @@ interface Live {
   steps: ProcessStep[];
   /** The AI Context the Ask uses, once the Core says. */
   context: ContextInfo | null;
+  /** The Topic the Ask belongs to, once the Core says. */
+  memory: TurnStamp | null;
+  /** The compaction made before this Ask went out, once the Core says. */
+  compaction: Compaction | null;
   done: AiDone | null;
   error: unknown;
   partial: boolean;
@@ -43,6 +51,8 @@ const IDLE: Live = {
   sent: null,
   steps: [],
   context: null,
+  memory: null,
+  compaction: null,
   done: null,
   error: null,
   partial: false,
@@ -54,6 +64,8 @@ interface Run {
   text: string;
   /** What arrived besides the text; kept as it was when the Ask ended. */
   live: LiveRecord;
+  stamp: TurnStamp | null;
+  compaction: Compaction | null;
   /** Settles when `ai_ask_stream` returns: true once the Core has registered the Ask, false when it refused it. */
   started: Promise<boolean>;
   end(patch: Partial<StreamEnd>): void;
@@ -101,6 +113,8 @@ export function useAnswerStream(): AnswerStream {
           id: request.requestId,
           text: "",
           live: { sent: null, steps: [], log: [], thinking: "", context: null },
+          stamp: null,
+          compaction: null,
           started: Promise.resolve(false),
           end(patch) {
             if (ended) return;
@@ -114,6 +128,8 @@ export function useAnswerStream(): AnswerStream {
               stopped: false,
               at: Date.now(),
               live: { ...r.live },
+              stamp: r.stamp,
+              compaction: r.compaction,
               ...patch,
             };
             update(() => ({
@@ -167,6 +183,14 @@ export function useAnswerStream(): AnswerStream {
             case "context":
               r.live.context = e.info;
               update(() => ({ context: e.info }));
+              break;
+            case "memory":
+              r.stamp = e.stamp;
+              update(() => ({ memory: e.stamp }));
+              break;
+            case "compacted":
+              r.compaction = e.compaction;
+              update(() => ({ compaction: e.compaction }));
               break;
             case "done":
               r.end({ done: e });

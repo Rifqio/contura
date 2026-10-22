@@ -1,8 +1,10 @@
 import { useId, useState } from "react";
-import type { ItemKind, Preview, PreviewItem } from "../api/types";
+import { useOpenSignal } from "./useOpenSignal";
+import type { ItemKind, Preview, PreviewItem, SummaryPreview } from "../api/types";
 import Icon, { type IconName } from "../components/Icon";
 import { type ContextConnection, contextTip, sendsAge } from "./contextText";
 import { sizeText, tablesLine, tokensText } from "./payload";
+import { thisComputer } from "../platform";
 
 interface Props {
   /** The Core's preview; null until the first one arrives. */
@@ -19,10 +21,16 @@ interface Props {
   /** Shows the AI Context tip; the inline box shows only the header age. */
   withTip?: boolean;
   now?: number;
+  /** The model that writes the summary, for the line under the rows. */
+  modelName?: string | null;
+  /** A slash command: each new value shows the exact text. */
+  openSignal?: number;
+  /**
+   * A diagram Ask (board 11.12): every row is locked on with its reason, shown once, and the file row keeps its size;
+   * no hover text, as in the diagram tab's side panel.
+   */
+  variant?: "diagram";
 }
-
-/** Why the sample rows item cannot be switched: no rows are fetched yet. */
-export const ROWS_LATER = "Sample rows arrive with a later step.";
 
 /** Each kind of item has its own icon. */
 const ICON: Record<ItemKind, IconName> = {
@@ -36,52 +44,100 @@ const ICON: Record<ItemKind, IconName> = {
   values: "pill",
   rows: "grid",
   outline: "layers",
+  history: "history",
+  summary: "history",
+  diagram: "flow",
 };
 
+/**
+ * Why an item is locked, in its own words. At "Schema and query text" the Literal values row is locked only because
+ * sample rows are off, so it says the values stay masked. Read from the item's kind and the Connection's
+ * access level, never from the Core's wording.
+ */
+function lockText(i: PreviewItem, connection: ContextConnection | null): string | null {
+  if (i.kind === "values" && i.locked !== null && connection?.access === "schemaQuery") return `Values stay masked for ${connection.name}`;
+  return i.locked;
+}
+
+/** "Summary step · last topic" or "Summary step · 14 older messages". */
+function summaryLabel(s: SummaryPreview): string {
+  return s.kind === "summary" ? "Summary step · last topic" : `Summary step · ${s.messages.toLocaleString("en-US")} older ${s.messages === 1 ? "message" : "messages"}`;
+}
+
 /** What one question would send, one row per item as the Core built it, with the exact text behind "Show exactly". */
-export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now() }: Props) {
+export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now(), modelName = null, openSignal = 0, variant }: Props) {
+  const diagram = variant === "diagram";
   const [shown, setShown] = useState(false);
+  useOpenSignal(openSignal, () => setShown(true));
   const id = useId();
   const tables = preview ? tablesLine(preview.tables) : null;
   const context = preview?.context ?? null;
   const outline = preview?.items.find((i) => i.kind === "outline");
+  const summary = preview?.summary ?? null;
+  const blocked = preview?.memory?.blocked ?? 0;
   const age = sendsAge(context, now);
   const tip = withTip && preview ? contextTip(context, connection, now) : null;
 
   const pill = (i: PreviewItem) => {
     const label = labelOf ? labelOf(i) : i.label;
+    if (diagram) {
+      // Locked on: nothing in a diagram Ask can be left out.
+      return (
+        <button type="button" className="send-pill" aria-pressed="true" aria-disabled="true">
+          <Icon name={ICON[i.kind]} size={14} />
+          <span className="send-pill-label">{label}</span>
+        </button>
+      );
+    }
     if (i.kind === "question") {
       return (
         <span className="send-pill">
           <Icon name={ICON.question} size={14} />
-          {label}
+          <span className="send-pill-label">{label}</span>
         </span>
       );
     }
-    const fixed = i.locked !== null || i.kind === "rows";
+    const fixed = i.locked !== null;
     return (
       <button
         type="button"
         className={i.kind === "outline" ? "send-pill send-pill-tall" : "send-pill"}
-        aria-pressed={i.kind === "rows" ? undefined : i.on}
+        aria-pressed={i.on}
         aria-disabled={fixed ? true : undefined}
-        title={i.locked ?? (i.kind === "rows" ? ROWS_LATER : undefined)}
+        title={lockText(i, connection) ?? (i.kind === "rows" ? (i.on ? "Sent with this Ask. Click to leave it out." : "Left out. Click to send up to 5 rows of each named table.") : undefined)}
         onClick={() => {
           if (!fixed) onToggle(i.kind);
         }}
       >
         <Icon name={i.locked ? "lock" : ICON[i.kind]} size={14} />
-        {label}
-        {!i.on && !i.locked ? " · off" : ""}
+        <span className="send-pill-label">
+          {label}
+          {!i.on && !i.locked ? " · off" : ""}
+        </span>
       </button>
     );
   };
 
+  /** A diagram row: its lock, its reason when no row above gave it, and the file's size on the file row. */
+  const lockedOn = (i: PreviewItem, n: number) => {
+    const above = preview!.items.slice(0, n);
+    const file = i.kind === "diagram" && !above.some((x) => x.kind === "diagram");
+    return (
+      <>
+        {i.locked && !above.some((x) => x.locked === i.locked) && <span className="sends-lock">{i.locked}</span>}
+        {file && <span className="sends-size">{sizeText(i.bytes)}</span>}
+        <span className="sends-locked-on" role="img" aria-label="Locked on">
+          <Icon name="lock" size={14} />
+        </span>
+      </>
+    );
+  };
+
   return (
-    <div className="sends">
+    <div className="sends" role={diagram ? "group" : undefined} aria-label={diagram ? "Sends" : undefined}>
       <div className="sends-row">
         <span className="sends-label">Sends</span>
-        {preview && <span className="sends-size">{sizeText(preview.totalBytes)}</span>}
+        {preview && <span className="sends-size">{sizeText(preview.totalBytes + (summary?.on ? summary.bytes : 0))}</span>}
         {age && <span className="sends-age">{age}</span>}
         <span className="spacer" />
         <button
@@ -100,8 +156,10 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
           {preview.items.map((i, n) => (
             <li key={`${i.kind}-${n}`} className="sends-item">
               {pill(i)}
-              {i.locked ? (
-                <span className="sends-lock">{i.locked}</span>
+              {diagram ? (
+                lockedOn(i, n)
+              ) : i.locked ? (
+                <span className="sends-lock">{lockText(i, connection)}</span>
               ) : (
                 i.on && (
                   <span className="sends-size">
@@ -111,9 +169,37 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
               )}
             </li>
           ))}
+          {summary && (
+            <li className="sends-item">
+              <button type="button" className="send-pill" aria-pressed={summary.on} onClick={() => onToggle("summary")}>
+                <Icon name={ICON.summary} size={14} />
+                <span className="send-pill-label">
+                  {summaryLabel(summary)}
+                  {summary.on ? "" : " · off"}
+                </span>
+              </button>
+              {summary.on && (
+                <span className="sends-size">
+                  {sizeText(summary.bytes)}, {tokensText(summary.tokens)}
+                </span>
+              )}
+            </li>
+          )}
         </ul>
       )}
+      {summary?.on && (
+        <p className="sends-note">
+          {summary.kind === "summary"
+            ? `+ 1 step: the last topic is summarised by ${modelName ?? "the model"} first.`
+            : `+ 1 step: ${summary.messages.toLocaleString("en-US")} older ${summary.messages === 1 ? "message" : "messages"} become one summary first.`}
+        </p>
+      )}
       {tables && <p className="sends-note">{tables}</p>}
+      {blocked > 0 && (
+        <p className="sends-note">
+          {blocked.toLocaleString("en-US")} earlier {blocked === 1 ? "message stays" : "messages stay"} on {thisComputer()}: AI access is lower now.
+        </p>
+      )}
       {preview?.notes.map((note) => (
         <p key={note} className="sends-note">
           {note}
@@ -125,6 +211,15 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
         <div id={id}>
           <p className="sends-note">{header}</p>
           <pre className="payload">{preview.exact}</pre>
+          {summary?.on && (
+            <>
+              <p className="sends-note sends-step-head">
+                Summary step
+                <span className="sends-size">{sizeText(summary.bytes)}</span>
+              </p>
+              <pre className="payload">{summary.exact}</pre>
+            </>
+          )}
           {preview.outline && outline?.on && (
             <>
               <p className="sends-note sends-step-head">

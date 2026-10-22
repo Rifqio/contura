@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use contura_core::ai::context::build::build_context;
 use contura_core::ai::context::store::{BuiltContext, ContextKey, ContextStore};
+use contura_core::ai::memory::ThreadStore;
+use contura_core::ai::memory::store::StoreThreads;
 use contura_core::ai::{AiAccess, AiMessage, AiRole, AiService, AiThread};
 use contura_core::connections::{ConnectionInput, ConnectionService, PasswordChange};
 use contura_core::design::Position;
@@ -339,6 +341,12 @@ async fn clear_all_ai_data() {
                 context: vec![],
                 at: 1,
                 record: None,
+                topic: None,
+                connection_id: None,
+                database: None,
+                kinds: Vec::new(),
+                tables: Vec::new(),
+                action: None,
             }],
             updated_at: 1,
         })
@@ -388,6 +396,7 @@ struct SyncCatalog {
     /// As a Contura DDL finishing while the catalog is read: marks the Context stale.
     mark_on_snapshot: AtomicBool,
     store: StoreContext,
+    threads: StoreThreads,
 }
 
 fn model(tables: &[&str]) -> SchemaModel {
@@ -447,6 +456,7 @@ fn sync_catalog_on(sync: AiSyncMode, store: AppStore) -> SyncCatalog {
         never_on_snapshot: AtomicBool::new(false),
         mark_on_snapshot: AtomicBool::new(false),
         store: StoreContext::new(store),
+        threads: StoreThreads::new(AppStore::open(std::path::Path::new(":memory:")).unwrap()),
     }
 }
 
@@ -505,6 +515,10 @@ impl CatalogReader for SyncCatalog {
 
     fn context(&self) -> &dyn ContextStore {
         &self.store
+    }
+
+    fn threads(&self) -> &dyn ThreadStore {
+        &self.threads
     }
 }
 
@@ -1105,7 +1119,7 @@ async fn ensure_over_the_service() {
     let f = fixture().await;
     f.svc.open(f.id).await.unwrap();
     let config = f.svc.list().unwrap().remove(0);
-    let k = contura_core::ai::context::sync::context_key(&config, None, None);
+    let k = contura_core::ai::context::sync::context_key(&config, None, None, &[]);
     let mut log = Log::new();
     let (info, _) = ensure(&*f.svc, &config, &k, Purpose::Ask, &keep, T0, &mut log).await;
     assert_eq!(info.check, rebuilt(RebuildReason::First));

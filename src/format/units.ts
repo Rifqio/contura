@@ -25,3 +25,15 @@ export function agoText(ms: number): string {
   if (ago < 86_400_000) return `${agoShort(ago, new Date())} ago`;
   return `${Math.floor(ago / 86_400_000)}d ago`;
 }
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A question's time: `Today 11:42`, `Yesterday 11:42`, `Oct 18 11:42`; `, now` while its answer is being written. */
+export function dayClock(at: number, now: number, answering = false): string {
+  const d = new Date(at);
+  const midnight = (t: Date) => new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+  const days = Math.round((midnight(new Date(now)) - midnight(d)) / 86_400_000);
+  const day = days === 0 ? "Today" : days === 1 ? "Yesterday" : `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `${day} ${time}${answering ? ", now" : ""}`;
+}

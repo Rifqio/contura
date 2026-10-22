@@ -9,6 +9,9 @@ use crate::ai::{AiProviderKind, AiSettings};
 
 /// The window of a model nothing is known about, when the settings leave it unset.
 const UNKNOWN_WINDOW: u32 = 8_000;
+/// The window of an Anthropic model neither the listing nor the built-in table knows, when
+/// the settings leave it unset: every Claude model has at least this.
+pub const UNKNOWN_ANTHROPIC_WINDOW: u32 = 200_000;
 
 /// Words in an id that mark a model that does not chat (speech, images, guards, embeddings).
 const NOT_CHAT: [&str; 11] = [
@@ -304,7 +307,7 @@ pub fn is_chat_id(id: &str) -> bool {
 
 /// The record for `id`: the listing wins for the window, the name and whether the model
 /// thinks; the built-in table fills the rest. A model neither knows gets the Custom
-/// window (or 8,000) and no thinking or caching controls.
+/// window (or 8,000; 200,000 for Anthropic) and no thinking or caching controls.
 pub fn info_for(
     kind: AiProviderKind,
     preset: Option<&str>,
@@ -318,7 +321,10 @@ pub fn info_for(
     let mut info = base.unwrap_or_else(|| ModelInfo {
         id: id.to_string(),
         name: id.to_string(),
-        context_window: settings.context_window.unwrap_or(UNKNOWN_WINDOW),
+        context_window: settings.context_window.unwrap_or(match kind {
+            AiProviderKind::Anthropic => UNKNOWN_ANTHROPIC_WINDOW,
+            _ => UNKNOWN_WINDOW,
+        }),
         max_output: None,
         thinking: ThinkingKind::None,
         thinking_off: ThinkingOff::Omit,
@@ -570,6 +576,31 @@ mod tests {
             None,
             &AiSettings::default(),
         );
+        assert_eq!(info.context_window, 8_000);
+    }
+
+    #[test]
+    fn unknown_anthropic_model_gets_200k() {
+        let info = info_for(
+            Anthropic,
+            None,
+            "claude-next-9",
+            None,
+            &AiSettings::default(),
+        );
+        assert!(!info.known);
+        assert_eq!(info.context_window, 200_000);
+        let set = AiSettings {
+            context_window: Some(50_000),
+            ..AiSettings::default()
+        };
+        let info = info_for(Anthropic, None, "claude-next-9", None, &set);
+        assert_eq!(info.context_window, 50_000);
+    }
+
+    #[test]
+    fn unknown_openai_model_keeps_8k() {
+        let info = info_for(OpenAi, None, "gpt-next-9", None, &AiSettings::default());
         assert_eq!(info.context_window, 8_000);
     }
 

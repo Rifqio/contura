@@ -12,10 +12,16 @@ export interface ContextConnection {
 /** The Context line above the composer box (board 11.1, `.ctxalert`). */
 export interface ContextLineText {
   tone: "warn" | "plain";
-  icon: "alert" | "lock";
+  icon: "alert" | "lock" | "database";
   text: string;
   /** Offers Re-sync. */
   resync: boolean;
+}
+
+/** The Connection as the Context names it: `<name>.<schema>` for a schema other than `public`. */
+export function ctxName(connection: ContextConnection, info: ContextInfo | null): string {
+  const schema = info?.schema ?? "";
+  return schema !== "" && schema !== "public" ? `${connection.name}.${schema}` : connection.name;
 }
 
 /** "3m ago", "2d ago"; "just now" under a minute. */
@@ -29,26 +35,35 @@ const isStale = (info: ContextInfo) => info.stale || info.check.kind === "stale"
 
 /**
  * The Context line, only when it needs attention: the schema changed (stale), the check failed, there is no Context
- * and none could be built, or the Connection sends nothing (AI access Never). Null otherwise, and with no Connection.
+ * and none could be built, the Connection sends nothing (AI access Never), or the Context re-syncs only by hand, so
+ * Re-sync is offered beside it (P11-10, board 11.1). Null otherwise, and with no Connection.
  */
 export function contextLineText(
   info: ContextInfo | null,
   connection: ContextConnection | null,
-  _now: number,
+  now: number,
 ): ContextLineText | null {
   if (!connection) return null;
   if (connection.access === "never") {
     return { tone: "plain", icon: "lock", text: "This Connection sends nothing. The assistant sees only your question.", resync: false };
   }
   if (!info) return null;
+  const name = ctxName(connection, info);
   if (info.check.kind === "failed") {
-    return { tone: "warn", icon: "alert", text: `Context: ${connection.name} · could not check the schema`, resync: true };
+    return { tone: "warn", icon: "alert", text: `Context: ${name} · could not check the schema`, resync: true };
   }
   if (info.check.kind === "missing") {
-    return { tone: "warn", icon: "alert", text: `Context: ${connection.name} · could not read the schema`, resync: true };
+    return { tone: "warn", icon: "alert", text: `Context: ${name} · could not read the schema`, resync: true };
   }
   if (isStale(info)) {
-    return { tone: "warn", icon: "alert", text: `Context: ${connection.name} · the schema changed since the last sync`, resync: true };
+    return { tone: "warn", icon: "alert", text: `Context: ${name} · the schema changed since the last sync`, resync: true };
+  }
+  if (info.sync !== "automatic") {
+    const text =
+      info.builtAt === null
+        ? `Context: ${name} · not built yet`
+        : `Context: ${name} · ${tablesText(info.tableCount)} · synced ${synced(info, now)}`;
+    return { tone: "plain", icon: "database", text, resync: true };
   }
   return null;
 }
@@ -58,14 +73,15 @@ export function contextTip(info: ContextInfo | null, connection: ContextConnecti
   if (!connection) return null;
   if (connection.access === "never") return `AI access on ${connection.name} is Never: only your question is sent.`;
   if (!info) return null;
-  if (info.builtAt === null) return `Context: ${connection.name}, not built yet.`;
+  const name = ctxName(connection, info);
+  if (info.builtAt === null) return `Context: ${name}, not built yet.`;
   if (isStale(info)) return "The schema changed since the last sync. Re-sync to refresh the context.";
   if (info.check.kind === "failed") {
-    return `Context: ${connection.name}, ${tablesText(info.tableCount)}. The schema could not be checked, so the last context is used.`;
+    return `Context: ${name}, ${tablesText(info.tableCount)}. The schema could not be checked, so the last context is used.`;
   }
   const how =
     info.sync === "automatic" ? "It re-syncs on its own when the schema changes." : "It re-syncs only when you press Re-sync.";
-  return `Context: ${connection.name}, ${tablesText(info.tableCount)}, synced ${synced(info, now)}. ${how}`;
+  return `Context: ${name}, ${tablesText(info.tableCount)}, synced ${synced(info, now)}. ${how}`;
 }
 
 /**

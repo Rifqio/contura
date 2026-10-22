@@ -26,10 +26,12 @@ function jsonValue(v: string): { text: string; cls: string } {
 interface Props {
   lines: LogLine[];
   onCopy(text: string): void;
+  /** False in the diagram tab's side panel, where controls have no hover text. */
+  hoverText?: boolean;
 }
 
 /** The Log tab (board 11.3): a Grafana-style view of the answer log, one monospace row per line. */
-export default function LogView({ lines, onCopy }: Props) {
+export default function LogView({ lines, onCopy, hoverText = true }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [wrap, setWrap] = useState(false);
@@ -88,13 +90,13 @@ export default function LogView({ lines, onCopy }: Props) {
           type="button"
           className={wrap ? "icon-button icon-button-on" : "icon-button"}
           aria-label={wrapLabel}
-          title={wrapLabel}
+          title={hoverText ? wrapLabel : undefined}
           aria-pressed={wrap}
           onClick={() => setWrap((w) => !w)}
         >
           <Icon name="list" size={14} />
         </button>
-        <button type="button" className="icon-button" aria-label="Copy the log" title="Copy the log" onClick={() => onCopy(logText(lines))}>
+        <button type="button" className="icon-button" aria-label="Copy the log" title={hoverText ? "Copy the log" : undefined} onClick={() => onCopy(logText(lines))}>
           <Icon name="copy" size={14} />
         </button>
       </div>

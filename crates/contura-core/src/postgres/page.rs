@@ -6,7 +6,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use tokio_postgres::types::Type;
-use tokio_postgres::{Client, SimpleQueryMessage};
+use tokio_postgres::{Client, GenericClient, SimpleQueryMessage};
 
 use super::query_err;
 use crate::common::{check_key, decode_hex, order_columns, quote_double, text_preview};
@@ -90,7 +90,11 @@ fn qualified(schema: &str, name: &str) -> String {
     format!("{}.{}", quote_double(schema), quote_double(name))
 }
 
-pub(super) async fn relation(client: &Client, schema: &str, name: &str) -> Result<Relation> {
+pub(super) async fn relation(
+    client: &impl GenericClient,
+    schema: &str,
+    name: &str,
+) -> Result<Relation> {
     let found = client
         .query_opt(RELATION_SQL, &[&schema, &name])
         .await
@@ -175,45 +179,20 @@ fn total_of(text: Option<&str>) -> Result<u64> {
         .map_err(|_| Error::Query("unexpected length from the server".into()))
 }
 
-pub(super) async fn fetch_page(client: &Client, req: &PageRequest) -> Result<Page> {
-    let schema = schema_of(&req.table)?;
-    let rel = relation(client, schema, &req.table.name).await?;
-    // Sort keys are qualified with the alias `t`: a bare name would resolve to
-    // the `"id"::text` output column first and sort numbers as text. A type
-    // with no ordering (json, xml, point) sorts by its text instead.
-    let mut order: Vec<String> = order_columns(&rel.columns, req.sort.as_ref())?
-        .into_iter()
-        .map(|(c, desc)| order_term(&rel, &c, desc))
-        .collect();
-    if !rel.columns.iter().any(|c| c.is_primary_key) && rel.has_ctid() {
-        order.push("t.tableoid ASC".into());
-        order.push("t.ctid ASC".into());
-    }
-    let mut sql = format!(
-        "SELECT {} FROM {} AS t",
-        select_list(&rel),
-        qualified(schema, &req.table.name)
-    );
-    sql.push_str(&req.where_sql());
-    if !order.is_empty() {
-        sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
-    }
-    let offset = u64::from(req.page) * u64::from(PAGE_SIZE);
-    sql.push_str(&format!(" LIMIT {} OFFSET {offset}", PAGE_SIZE + 1));
-    if req.has_filter() {
-        // The simple protocol runs every statement it is given; preparing the
-        // same text first refuses a filter that tries to add a second one.
-        client.prepare(&sql).await.map_err(query_err)?;
-    }
-
-    let messages = client.simple_query(&sql).await.map_err(query_err)?;
+/// Decodes up to `max` data rows of a `select_list` result; `has_more` is true when
+/// the server sent more.
+fn decode_rows(
+    messages: &[SimpleQueryMessage],
+    rel: &Relation,
+    max: usize,
+) -> Result<(Vec<Vec<Cell>>, bool)> {
     let mut rows = Vec::new();
     let mut has_more = false;
-    for message in &messages {
+    for message in messages {
         let SimpleQueryMessage::Row(row) = message else {
             continue;
         };
-        if rows.len() == PAGE_SIZE as usize {
+        if rows.len() == max {
             has_more = true;
             break;
         }
@@ -258,6 +237,69 @@ pub(super) async fn fetch_page(client: &Client, req: &PageRequest) -> Result<Pag
         }
         rows.push(cells);
     }
+    Ok((rows, has_more))
+}
+
+/// Step 11f: up to `limit` rows of one base table (`r` or `p`) on `client`, which the
+/// caller has put in a read-only transaction with its timeout. The grid's select list
+/// and cells; no ORDER BY, no OFFSET, no filter.
+pub(super) async fn sample_rows(
+    client: &impl GenericClient,
+    path: &ObjectPath,
+    limit: u32,
+) -> Result<Page> {
+    let schema = schema_of(path)?;
+    let rel = relation(client, schema, &path.name).await?;
+    if !matches!(rel.relkind.as_str(), "r" | "p") {
+        return Err(Error::InvalidInput("not a table".into()));
+    }
+    let sql = format!(
+        "SELECT {} FROM {} AS t LIMIT {limit}",
+        select_list(&rel),
+        qualified(schema, &path.name)
+    );
+    let messages = client.simple_query(&sql).await.map_err(query_err)?;
+    let (rows, _) = decode_rows(&messages, &rel, limit as usize)?;
+    Ok(Page {
+        columns: rel.columns,
+        rows,
+        has_more: false,
+    })
+}
+
+pub(super) async fn fetch_page(client: &Client, req: &PageRequest) -> Result<Page> {
+    let schema = schema_of(&req.table)?;
+    let rel = relation(client, schema, &req.table.name).await?;
+    // Sort keys are qualified with the alias `t`: a bare name would resolve to
+    // the `"id"::text` output column first and sort numbers as text. A type
+    // with no ordering (json, xml, point) sorts by its text instead.
+    let mut order: Vec<String> = order_columns(&rel.columns, req.sort.as_ref())?
+        .into_iter()
+        .map(|(c, desc)| order_term(&rel, &c, desc))
+        .collect();
+    if !rel.columns.iter().any(|c| c.is_primary_key) && rel.has_ctid() {
+        order.push("t.tableoid ASC".into());
+        order.push("t.ctid ASC".into());
+    }
+    let mut sql = format!(
+        "SELECT {} FROM {} AS t",
+        select_list(&rel),
+        qualified(schema, &req.table.name)
+    );
+    sql.push_str(&req.where_sql());
+    if !order.is_empty() {
+        sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
+    }
+    let offset = u64::from(req.page) * u64::from(PAGE_SIZE);
+    sql.push_str(&format!(" LIMIT {} OFFSET {offset}", PAGE_SIZE + 1));
+    if req.has_filter() {
+        // The simple protocol runs every statement it is given; preparing the
+        // same text first refuses a filter that tries to add a second one.
+        client.prepare(&sql).await.map_err(query_err)?;
+    }
+
+    let messages = client.simple_query(&sql).await.map_err(query_err)?;
+    let (rows, has_more) = decode_rows(&messages, &rel, PAGE_SIZE as usize)?;
     Ok(Page {
         columns: rel.columns,
         rows,

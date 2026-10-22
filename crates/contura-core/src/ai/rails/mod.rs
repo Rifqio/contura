@@ -1,6 +1,7 @@
 //! The rail pipeline: ordered checks over one Ask, each passing, changing or stopping it.
 //! The structure of NeMo Guardrails rebuilt in the Core, with no model calls.
 
+pub mod execution;
 pub mod functions;
 pub mod input;
 pub mod output;
@@ -10,8 +11,8 @@ pub use input::{
     InputRail, Secrets, allowed, cap_chars, lock_reason, redact_secrets, strip_invisible,
 };
 pub use retrieval::{
-    INJECTION_NOTE, RetrievalRail, SCHEMA_CLOSE, SCHEMA_OPEN, framed_text, new_boundary,
-    schema_text,
+    DIAGRAM_INJECTION_NOTE, INJECTION_NOTE, RetrievalRail, SCHEMA_CLOSE, SCHEMA_OPEN, framed_block,
+    framed_text, new_boundary, schema_text,
 };
 
 use crate::ai::AiAccess;
@@ -30,6 +31,9 @@ pub struct Ask {
     pub notes: Vec<String>,
     /// R1.4: an Ask with no Connection about a Schema Model not tied to one; its DBML may go.
     pub untied_model: bool,
+    /// A diagram Ask: its Diagram items go, under no AI access level; nothing of a
+    /// database is in it.
+    pub diagram: bool,
     /// What the input rail changed, one row per (where, rule, sent as): the Cleaning
     /// evidence.
     pub cleaned: Vec<[String; 3]>,
@@ -114,6 +118,7 @@ mod tests {
             dialect: None,
             notes: Vec::new(),
             untied_model: false,
+            diagram: false,
             cleaned: Vec::new(),
         };
         let mut log = Log::new();

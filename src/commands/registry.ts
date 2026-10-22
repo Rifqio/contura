@@ -19,6 +19,7 @@ export type CommandId =
   | "settings.open"
   | `group.open.${(typeof GROUP_IDS)[number]}`
   | "assistant.toggle"
+  | "assistant.newChat"
   | "editor.ask"
   | "editor.quickFix"
   | "editor.rename"
@@ -65,6 +66,7 @@ export const COMMANDS: readonly Command[] = [
   app("settings.open", "Settings", ["Ctrl+,"]),
   ...GROUP_IDS.map((n) => app(`group.open.${n}`, `Open Group ${n}`, [`Ctrl+${n}`])),
   app("assistant.toggle", "AI assistant", ["Ctrl+Alt+I"]),
+  app("assistant.newChat", "New chat in the Ask panel", ["Ctrl+Shift+N"]),
   editor("editor.ask", "Ask AI", ["Ctrl+I"]),
   editor("editor.quickFix", "Quick fix", ["Ctrl+.", "Alt+Enter"]),
   editor("editor.rename", "Rename", ["F2"]),

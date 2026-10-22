@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Contura Model</title>
+<meta name="description" content="The schema is text and the diagram comes free: a DBML Schema Builder, Schema Compare with a Sync Script you tick line by line, and nine kinds of diagram typed as .flow text.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+<link rel="stylesheet" href="model.css">
+<script src="site.js"></script>
+<script src="kit.js" defer></script>
+<script src="frames.js" defer></script>
+<script src="playback.js" defer></script>
+<script src="model.js" defer></script>
+</head>
+<body data-frames-src="frames-model.json">
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="Contura home">
+      <svg viewBox="0 0 256 256" aria-hidden="true"><path fill="var(--ink)" d="M52 40A60 12 0 0 1 172 40V80A60 12 0 0 1 52 80Z"/><path fill="var(--ink)" d="M52 172A60 12 0 0 0 172 172V212A60 12 0 0 1 52 212Z"/><path fill="var(--accent)" d="M84 104A60 12 0 0 0 204 104V148A60 12 0 0 1 84 148Z"/></svg>
+      Contura <small>v0.7.0</small>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="index.html">Home</a>
+      <a href="query.html">Query</a>
+      <a href="model.html" aria-current="page">Model</a>
+      <a href="data.html">Data</a>
+      <a href="ai.html">AI</a>
+      <a href="safety.html">Safety</a>
+    </nav>
+    <a class="nav-dl" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="stmt hero md-hero" id="top" data-name="Model" aria-labelledby="h-hero">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">1</span></div>
+      <div class="body">
+        <p class="eyebrow"><i aria-hidden="true">~</i>Model · Schema Builder, Schema Compare, Diagrams</p>
+        <h1 class="display" id="h-hero">The schema is text. <span class="tail">The diagram comes free.</span></h1>
+        <div class="hero-row">
+          <p class="lede">Write the model as DBML and Contura draws it. Compare two databases and tick the Sync Script line by line. Type any of nine kinds of diagram as a .flow file, and the canvas follows.</p>
+          <p class="hero-act meta">The demos below run in this page, on the same billing sample as the Query page. Nothing here talks to a server.</p>
+        </div>
+        <ol class="cells four jump">
+          <li data-reveal><a href="#builder"><span class="no">01</span><b>Schema Builder</b><span>DBML in, the model drawn, and every Ref a line you can follow.</span></a></li>
+          <li data-reveal style="--d:60ms"><a href="#compare"><span class="no">02</span><b>Schema Compare</b><span>Two databases, one Sync Script you tick line by line.</span></a></li>
+          <li data-reveal style="--d:120ms"><a href="#diagrams"><span class="no">03</span><b>Diagrams</b><span>Nine kinds of diagram, each one a .flow text file.</span></a></li>
+          <li data-reveal style="--d:180ms"><a href="#mermaid"><span class="no">04</span><b>Mermaid and Publish</b><span>Paste a Mermaid flowchart in. Publish a PNG or SVG out.</span></a></li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="builder" data-name="Schema Builder" aria-labelledby="h-builder">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">2</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>01 · Schema Builder</p>
+            <h2 class="headline" id="h-builder">Type the model. Watch it draw.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>The Schema Builder keeps a model as DBML, a short text format for tables, columns and the Refs between them. Contura draws the diagram from the text and keeps the two in step.</p>
+            <p>Start from an empty file, or reverse engineer a Connection into DBML. When the model is right, export it as a SQL script, or as an image of the diagram.</p>
+            <dl class="kv">
+              <div><dt>From a database</dt><dd>Reverse engineer any Connection into DBML.</dd></div>
+              <div><dt>Out of it</dt><dd>A SQL script to create the tables, or a PNG or SVG image.</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figure class="win-wrap" data-reveal id="fig-builder">
+          <div class="md-dbw" data-md-dbml role="region" aria-label="Schema Builder demo: DBML text and the model drawn from it"></div>
+          <div class="win-ctl"><span id="jc-dbml">Text</span><div class="seg" id="seg-dbml" role="group" aria-labelledby="jc-dbml"><button type="button" data-mode="type" aria-pressed="true">Typed in</button><button type="button" data-mode="edit" aria-pressed="false">Edit it</button></div></div>
+          <figcaption>billing, the six tables of the Query page's sample database, written as DBML. Point at a line, a column or a relation to see what matches it. Press Edit it to change the text: the cards redraw as you type.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="compare" data-name="Schema Compare" aria-labelledby="h-compare">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">3</span></div>
+      <div class="body">
+        <div class="split-head flip">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>02 · Schema Compare</p>
+            <h2 class="headline" id="h-compare">Tick the Sync Script, line by line.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Schema Compare reads two databases of the same Dialect and lists what is added, removed or changed. Every change becomes one statement in the Sync Script, with its own tick.</p>
+            <p>Unticking a change also unticks the changes that need it. A change that loses data starts unticked, and on a Production Connection Apply shows every statement before anything runs.</p>
+            <dl class="kv">
+              <div><dt>Same Dialect</dt><dd>Two databases of one Dialect, such as a development copy and staging.</dd></div>
+              <div><dt>Data loss</dt><dd>Starts unticked, and says how many rows it would touch.</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figure class="win-wrap" data-reveal id="fig-compare">
+          <div class="win-host md-cmp" data-md-compare role="region" aria-label="Schema Compare window, freight-dev against the target Connection"></div>
+          <div class="win-ctl"><span id="jc-cmp">Target</span><div class="seg" id="seg-cmp" role="group" aria-labelledby="jc-cmp"><button type="button" data-target="stg" aria-pressed="true">freight-stg</button><button type="button" data-target="prod" aria-pressed="false">freight-prod <span class="pill prod">PROD</span></button></div></div>
+          <figcaption>freight-dev against freight-stg or freight-prod, schema billing. Untick a change, tick the drop of fax, then switch to freight-prod and press Apply on PROD. Apply is scripted here, since this page has no server.</figcaption>
+        </figure>
+        <figure class="win-wrap md-frame-fig" data-reveal>
+          <div data-frame="s10-compare" data-v="diff" data-tabs-label="State" aria-label="The Schema Compare window"></div>
+          <figcaption>The Schema Compare window itself, in four states: Differences with both sides of the DDL, the Sync Script, Apply on Production, and No differences. A design frame with its own sample names.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="diagrams" data-name="Diagrams" aria-labelledby="h-diagrams">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">4</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>03 · Diagrams</p>
+            <h2 class="headline" id="h-diagrams">Nine kinds of diagram, typed as text.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>The first line of a .flow file picks the kind: flow, dfd, sequence, er, state, class, mindmap, timeline or cloud. The canvas redraws as you type, and a name that does not match shows as a problem under it.</p>
+            <p>Where each node sits lives in a .flow.layout.json beside the text, so moving a node leaves the text alone. A diagram stays one file you can read, diff and keep in git.</p>
+          </div>
+        </div>
+        <figure class="win-wrap" data-reveal id="fig-diagrams">
+          <div class="md-gal" data-md-diagrams data-src="model-diagrams.js" role="region" aria-label="Diagram gallery: nine kinds of .flow diagram, editable"><p class="md-gal-wait">The diagram gallery loads as you come near.</p></div>
+          <figcaption>Pick a kind, then edit its file: add a line, rename a node, or break a name to see the problem. The Assistant tab shows how an Ask proposes changes you review first; its answers are pre-written for this page.</figcaption>
+          <p class="md-credits">Diagram icons: AWS Architecture Icons, used as AWS allows for architecture diagrams; Google Cloud icons, offered by Google for architecture diagrams; Lucide (ISC). Amazon, AWS, Google Cloud and the service icons are trademarks of their owners and name services in the sample diagram only.</p>
+        </figure>
+        <ul class="md-share" aria-label="What every diagram kind shares" data-reveal>
+          <li><b>One text file</b><span>A diagram is a .flow file you can read, diff and keep in git.</span></li>
+          <li><b>Layout beside it</b><span>Node places live in a .flow.layout.json, so moving a node leaves the text alone.</span></li>
+          <li><b>Publish</b><span>Save or copy a diagram as PNG or SVG, in the Light or Dark colours.</span></li>
+          <li><b>From Mermaid</b><span>Paste a Mermaid flowchart and get a .flow file back.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="mermaid" data-name="Mermaid and Publish" aria-labelledby="h-mermaid">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">5</span></div>
+      <div class="body">
+        <div class="split-head flip">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>04 · From Mermaid, out to an image</p>
+            <h2 class="headline" id="h-mermaid">Paste a flowchart in. Publish a picture out.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>New flow from Mermaid reads a pasted flowchart and shows the diagram it becomes beside it. Anything without a match is listed with its line, and a line Contura cannot read is named before you create the file.</p>
+            <p>Publish saves or copies a diagram as PNG or SVG, in the Light or Dark colours, at the scale you pick.</p>
+          </div>
+        </div>
+        <div class="md-pair">
+          <figure class="win-wrap" data-reveal style="margin-top:0">
+            <div data-frame="s7-mermaid" data-v="ok" data-tabs-label="State" aria-label="New flow from Mermaid"></div>
+            <figcaption>New flow from Mermaid, in three states: converted, the .flow text it writes, and a line it cannot read.</figcaption>
+          </figure>
+          <figure class="win-wrap" data-reveal style="margin-top:0;--d:120ms">
+            <div data-frame="publish" aria-label="Publish image"></div>
+            <figcaption>Publish image, opened from the Schema Builder. Design frames with their own sample names.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt finale" id="download" data-name="Download" aria-labelledby="h-dl">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">6</span></div>
+      <div class="body">
+        <div class="dl-row" style="margin-top:0">
+          <div data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>Download</p>
+            <h2 id="h-dl">All of it is in v0.7.0. For Windows and Linux.</h2>
+          </div>
+          <div class="dl-box" data-reveal style="--d:120ms">
+            <div class="dl-btns">
+              <button class="btn" type="button" data-download aria-label="Download for Windows">
+              <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
+                <span><span class="dl-pre">Download for </span>Windows</span>
+            </button>
+              <button class="btn" type="button" data-download aria-label="Download for Linux">
+                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 .8C6 .8 4.9 2.4 4.9 4.5c0 1-.4 1.8-1 2.7C3 8.4 2.3 9.7 2.3 11.2c0 .8.2 1.4.5 1.9h10.4c.3-.5.5-1.1.5-1.9 0-1.5-.7-2.8-1.6-4-.6-.9-1-1.7-1-2.7C11.1 2.4 10 .8 8 .8zM8 7.6c-1.4 0-2.4 1.5-2.4 3.4S6.6 13.6 8 13.6s2.4-.7 2.4-2.6S9.4 7.6 8 7.6zM6.9 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4zM9.1 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4z"/><path fill="currentColor" d="M7 5.6h2L8 6.7z"/><path fill="currentColor" d="M2.6 13.4c.5-.8 2.1-.9 2.9-.4.5.3.6 1 .2 1.4-.7.7-2.7.6-3.2 0-.2-.3-.1-.7.1-1zM13.4 13.4c-.5-.8-2.1-.9-2.9-.4-.5.3-.6 1-.2 1.4.7.7 2.7.6 3.2 0 .2-.3.1-.7-.1-1z"/></svg>
+                <span><span class="dl-pre">Download for </span>Linux</span>
+              </button>
+            </div>
+            <p class="meta">v0.7.0 prototype · portable, runs from any folder · Windows 10 and 11 · Linux, AppImage or .deb · 64-bit · about 20&nbsp;MB</p>
+            <p class="note" data-note role="status" hidden></p>
+            <a class="ghost" href="data.html">Next: Data<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <nav class="foot-nav" aria-label="All pages">
+      <a href="index.html">Home</a><a href="query.html">Query</a><a href="model.html">Model</a><a href="data.html">Data</a><a href="ai.html">AI</a><a href="safety.html">Safety</a>
+    </nav>
+    <p>Core in Rust, the window in Tauri 2 with React. Nothing leaves the PC except what you send to an AI provider you set up yourself.</p>
+    <p>The demos on this page are drawn live or from the app's design frames. Every name and number in them is sample data. Diagram icons: AWS Architecture Icons, Google Cloud icons and Lucide (ISC); the cloud names are trademarks of their owners.</p>
+  </div>
+</footer>
+
+<div class="status" role="contentinfo" aria-label="Page status">
+  <div class="in">
+    <p class="l"><b data-ln>Ln 1</b><span data-sec>Model</span><span class="hide-s">model.html</span></p>
+    <div class="r">
+      <span class="pending" data-pending aria-live="polite">1 pending</span>
+      <button class="theme-btn" type="button" data-theme-btn aria-label="Switch theme">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.2 1.1a.6.6 0 0 1 .2.7A5.6 5.6 0 0 0 14.2 9.6a.6.6 0 0 1 .8.6A7 7 0 1 1 5.6 1a.6.6 0 0 1 .6.1z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

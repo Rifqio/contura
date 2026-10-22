@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { expect, test, vi } from "vitest";
 import type { ConnectionConfig } from "../api/types";
+import { setPlatformForTests } from "../platform";
 import { callsTo, routeInvoke } from "../test/invoke";
 import appCss from "../styles/app.css?raw";
 import ConnectionForm from "./ConnectionForm";
@@ -193,6 +194,41 @@ test("sqlite_hides_server_fields_and_saves_the_file", async () => {
     production: false,
     readOnly: false,
   });
+});
+
+test("parity_P11_38_ssl_ca_file_placeholder_follows_the_platform", async () => {
+  const caPlaceholder = async () => {
+    await userEvent.click(screen.getByRole("combobox", { name: "SSL" }));
+    await userEvent.click(screen.getByRole("option", { name: "Required, verify the CA" }));
+    return (screen.getByLabelText("CA certificate file") as HTMLInputElement).placeholder;
+  };
+  try {
+    setPlatformForTests("linux");
+    const first = render(<ConnectionForm connection={existing} groups={groups} defaultGroupId={null} onSaved={() => {}} onCancel={() => {}} />);
+    expect(await caPlaceholder()).toBe("/etc/ssl/certs/ca.pem");
+    first.unmount();
+    setPlatformForTests("windows");
+    render(<ConnectionForm connection={existing} groups={groups} defaultGroupId={null} onSaved={() => {}} onCancel={() => {}} />);
+    expect(await caPlaceholder()).toBe("C:\\certs\\ca.pem");
+  } finally {
+    setPlatformForTests(null);
+  }
+});
+
+test("parity_P11_1_sqlite_file_placeholder_follows_the_platform", async () => {
+  try {
+    setPlatformForTests("linux");
+    const first = render(<ConnectionForm groups={groups} defaultGroupId={null} onSaved={() => {}} onCancel={() => {}} />);
+    await chooseDialect("SQLite");
+    expect(fileInput().placeholder).toBe("/home/you/data/shop.db");
+    first.unmount();
+    setPlatformForTests("windows");
+    render(<ConnectionForm groups={groups} defaultGroupId={null} onSaved={() => {}} onCancel={() => {}} />);
+    await chooseDialect("SQLite");
+    expect(fileInput().placeholder).toBe("C:\\data\\shop.db");
+  } finally {
+    setPlatformForTests(null);
+  }
 });
 
 test("new_sqlite_file_is_created_then_filled", async () => {
@@ -517,6 +553,29 @@ test("ai_access_is_described_by_its_help_line", () => {
   renderNew();
   const help = document.getElementById(aiSelect().getAttribute("aria-describedby")!);
   expect(help?.textContent).toBe("What the AI assistant may send to your provider from this Connection.");
+});
+
+test("plus_sample_rows_help", async () => {
+  renderNew();
+  expect(screen.queryByText(/Contura reads at most 5 rows/)).toBeNull();
+  await chooseAi("Schema, query text and sample rows");
+  expect(
+    screen.getByText(
+      "Sample rows: Contura reads at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never keeps them. Cells are cut at 200 characters and binary values go as <binary>.",
+    ),
+  ).toBeTruthy();
+});
+
+test("plus_sample_rows_help_is_announced_with_the_ai_access_select", async () => {
+  renderNew();
+  const described = () => (aiSelect().getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+  expect(described()).toHaveLength(1);
+  await chooseAi("Schema, query text and sample rows");
+  const said = described().map((id) => document.getElementById(id)?.textContent);
+  expect(said).toEqual([
+    "What the AI assistant may send to your provider from this Connection.",
+    "Sample rows: Contura reads at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never keeps them. Cells are cut at 200 characters and binary values go as <binary>.",
+  ]);
 });
 
 test("a_chosen_ai_access_is_not_replaced_by_the_default", async () => {

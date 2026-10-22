@@ -3904,6 +3904,8 @@ textarea.input {
 /* Query tab (step 4a) */
 .query-tab {
   display: grid;
+  /* P11-14: one track that may shrink to nothing, so the strip's own width never widens the tab. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
   min-height: 0;
@@ -3920,6 +3922,9 @@ textarea.input {
   min-width: 0;
   white-space: nowrap;
   border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+}
+.editor-header-more {
+  flex: none;
 }
 .editor-header .spacer {
   flex: 1;
@@ -5324,6 +5329,46 @@ button.chip[aria-pressed="true"] {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* P11-3: board 11.4's four columns at set widths, so the table keeps to the 512px Settings column. */
+.share-table-fit {
+  table-layout: fixed;
+  width: 100%;
+}
+.share-col-conn {
+  width: 23%;
+}
+.share-col-dialect {
+  width: 15%;
+}
+.share-col-access {
+  width: 26%;
+}
+.share-col-sync {
+  width: 19%;
+}
+.share-col-ctx {
+  width: 17%;
+}
+.share-table-fit .select {
+  min-width: 0;
+  width: 100%;
+}
+.share-table-fit .sync-select {
+  min-width: 0;
+}
+.share-table-fit .cname {
+  min-width: 0;
+}
+.share-table-fit .cname-text,
+.share-table-fit .share-dialect {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-table-fit .share-ctx {
+  white-space: normal;
+}
 .warn-text {
   color: var(--c-warning-text);
 }
@@ -5373,6 +5418,43 @@ button.chip[aria-pressed="true"] {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.tools-table .tool-state {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+/* Recent tool uses, step 11h (board 11.4). */
+.uses-table {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  overflow: hidden;
+}
+.urow {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--spacing-md);
+  align-items: center;
+  height: 34px;
+  padding: 0 var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+}
+.urow:first-child {
+  border-top: 0;
+}
+.urow .subtle {
+  color: var(--c-text-subtle);
+}
+.urow .uname {
+  color: var(--c-text);
+}
+.tool-use-log .alog {
+  max-height: 60vh;
 }
 .privacy-actions {
   display: flex;
@@ -5696,6 +5778,7 @@ button.chip[aria-pressed="true"] {
 }
 /* A2: the Sends line above the input, 10 px 12 px 12 px, 8 px between. */
 .composer {
+  position: relative;
   display: grid;
   gap: var(--spacing-sm);
   padding: 10px var(--spacing-md) var(--spacing-md);
@@ -5738,6 +5821,29 @@ button.chip[aria-pressed="true"] {
   font: var(--font-small);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Board 11.9: with sample rows on, the foot line carries the grid icon in the info colour. */
+.comp-sub-rows {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--c-text-muted);
+}
+.comp-sub-rows svg {
+  flex-shrink: 0;
+  color: var(--c-info-text);
+}
+.sends-rows-on {
+  color: var(--c-text-muted);
+}
+.sent-pop-rows-line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.sent-pop-rows-line svg {
+  flex-shrink: 0;
+  color: var(--c-info-text);
 }
 .ai-send {
   display: grid;
@@ -6090,6 +6196,17 @@ button.chip[aria-pressed="true"] {
   background: transparent;
   color: var(--c-text-muted);
   font: var(--font-small);
+  /* P11-33: a pill keeps one line ("t7-customs.flow") and may shrink; its label then ends in an ellipsis. */
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  /* P11-12: a button centres its text by default; a label reads from the left like the others. */
+  text-align: left;
+}
+.send-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 button.send-pill {
   cursor: pointer;
@@ -6112,6 +6229,10 @@ button.send-pill:hover {
   padding-bottom: 2px;
   line-height: 16px;
   text-align: left;
+  white-space: normal;
+}
+.send-pill-tall .send-pill-label {
+  overflow: visible;
   white-space: normal;
 }
 .send-pill-tall .icon {
@@ -6160,10 +6281,26 @@ button.send-pill:hover {
   font: var(--font-small);
   color: var(--c-text-subtle);
 }
+/* Board 11.12: every row of a diagram Ask is locked on; the lock sits at the row's end. */
+.sends-locked-on {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  color: var(--c-text-subtle);
+}
 .sends-lock {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* P11-33: the size keeps one line; the reason between takes only the room left (basis 0), so the name gives way last. */
+.sends-item .sends-size {
+  flex: none;
+  white-space: nowrap;
+}
+.sends-item .sends-lock {
+  flex: 1 1 0;
+  min-width: 0;
 }
 .sends-note {
   margin: 0;
@@ -6270,6 +6407,16 @@ button.send-pill:hover {
 }
 .errc.bad {
   border-color: color-mix(in srgb, var(--c-danger-solid) 55%, var(--c-border));
+}
+/* P11-27: every card names its case above the title (board 11.6's labels: Rate limited, Key refused...). */
+.errc-kick {
+  display: block;
+  padding: 10px 12px 0 34px;
+  font: var(--font-label);
+  color: var(--c-text-subtle);
+}
+.errc-kick + .errc-head {
+  padding-top: 2px;
 }
 .errc-head {
   display: flex;
@@ -6707,7 +6854,8 @@ button.send-pill:hover {
 }
 .lrow {
   display: grid;
-  grid-template-columns: 14px 44px 38px 64px minmax(0, 1fr);
+  /* P11-23: the source column fits the longest source ("rail.execution") instead of cutting it. */
+  grid-template-columns: 14px 44px 38px 14ch minmax(0, 1fr);
   gap: 6px;
   align-items: start;
   padding: 3px var(--spacing-sm) 3px 4px;
@@ -6927,6 +7075,40 @@ button.send-pill:hover {
 .pthinking {
   margin-top: 4px;
 }
+/* Board 11.12, Tool check: a dropped change in the warning colour, then the stored tool input. */
+.ev-row.drop > span:nth-child(n + 2) {
+  color: var(--c-warning-text);
+}
+.jbox {
+  overflow: hidden;
+  margin-top: var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-panel);
+}
+.jhead {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 26px;
+  padding: 0 4px 0 var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-subtle);
+  font-size: 11px;
+}
+.jhead .t {
+  color: var(--c-text-muted);
+  font-weight: 600;
+}
+.jcode {
+  overflow-x: auto;
+  margin: 0;
+  padding: 6px var(--spacing-sm);
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  white-space: pre;
+}
 .pdone {
   display: flex;
   align-items: center;
@@ -6959,8 +7141,10 @@ button.send-pill:hover {
   font: var(--font-body-strong);
   font-size: 12px;
 }
+/* P11-23: a box too narrow for its label and detail wraps the detail under it; nothing is cut mid-word. */
 .dbox {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-sm);
   min-width: 0;
@@ -6998,13 +7182,11 @@ button.dbox:hover,
 }
 .dbox .t {
   margin-left: auto;
-  overflow: hidden;
+  min-width: 0;
   color: var(--c-text-subtle);
   font: var(--font-mono-micro);
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 .dmodel {
   color: var(--c-accent-text);
@@ -7096,6 +7278,18 @@ button.dbox:hover,
   border-top: var(--border-hairline) dashed var(--c-danger-solid);
   color: var(--c-danger-text);
   font: var(--font-small);
+}
+/* Board 11.12, a diagram Ask: the one tool's line in place of "No tools", and what the user did with the changes. */
+.dnopath.dtool {
+  border-top: 0;
+  color: var(--c-text-muted);
+}
+.dnopath.dtool svg {
+  flex: none;
+  color: var(--c-info-text);
+}
+.dbox.you {
+  border-color: var(--c-success-solid);
 }
 .ddetail {
   display: flex;
@@ -8569,7 +8763,8 @@ button.dbox:hover,
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 0;
+  /* The header row and three rows stay in view when the SQL island below gives way. */
+  min-height: 112px;
 }
 .design-scroll {
   flex: 1;
@@ -8743,11 +8938,11 @@ button.dbox:hover,
   font: var(--font-small);
 }
 .design-island {
-  flex: none;
+  /* Its set height in a tall window; in a short one (480 px minimum) it gives way down to its head and a few lines. */
+  flex: 0 1 var(--design-preview-height);
   display: flex;
   flex-direction: column;
-  height: var(--design-preview-height);
-  min-height: 0;
+  min-height: 108px;
   border-top: var(--border-hairline) solid var(--c-border);
   background: var(--c-bg-surface);
 }
@@ -8755,7 +8950,7 @@ button.dbox:hover,
   background: var(--c-prod-wash);
 }
 .design-ddl {
-  height: var(--design-ddl-height);
+  flex-basis: var(--design-ddl-height);
 }
 .design-island-head {
   flex: none;
@@ -8905,7 +9100,7 @@ button.dbox:hover,
 .vq-canvas {
   position: relative;
   flex: 1;
-  min-height: 0;
+  min-height: 120px;
   display: flex;
 }
 .vq-canvas > .diagram-canvas {
@@ -9115,12 +9310,12 @@ button.dbox:hover,
   color: var(--c-danger-text);
 }
 
-/* Below the canvas: the panel and the 480 px SQL pane, 318 px tall. */
+/* Below the canvas: the panel and the 480 px SQL pane, 318 px tall. In a short window (480 px minimum) it gives way
+   down to its tabs and a few rows, and the canvas above keeps its own minimum. */
 .vq-bottom {
   display: flex;
-  flex: none;
-  height: 318px;
-  min-height: 0;
+  flex: 0 1 318px;
+  min-height: 140px;
   border-top: var(--border-hairline) solid var(--c-border);
 }
 .vq-panel {
@@ -10052,14 +10247,28 @@ button.dbox:hover,
   background: var(--c-bg-panel);
   border: 1px solid var(--c-border-subtle);
   border-radius: var(--rounded-lg);
-  /* Wider fonts (no Segoe UI) can make the labelled bar wider than a 1024 px window: it then
-     scrolls sideways (Shift+wheel, arrow keys) instead of pushing the layout off screen. */
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
 }
-.feature-bar::-webkit-scrollbar {
-  display: none;
+/* P11-36: wider fonts (no Segoe UI) can make the labelled groups wider than a 1024 px window. They clip
+   inside their own box and the ones that do not fit are listed under More; Ask and More never shrink. */
+.feature-groups {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 100%;
+  /* Clipped sideways only: the tooltips under the buttons still show. */
+  overflow-x: clip;
+  overflow-y: visible;
+}
+.feature-groups .feature-button[data-overflow] {
+  visibility: hidden;
+}
+.feature-bar > .feature-button,
+.feature-bar > .menu-root {
+  flex: none;
 }
 .feature-bar.is-compact {
   height: 44px;
@@ -10165,6 +10374,11 @@ button.dbox:hover,
   transition:
     opacity var(--motion-base) var(--ease-enter) 500ms,
     transform var(--motion-base) var(--ease-enter) 500ms;
+}
+/* P11-37: after a click, a scroll or the window losing focus the tooltip stays hidden until the pointer leaves. */
+.feature-button[data-tip-off]::after {
+  opacity: 0;
+  transition: none;
 }
 .feature-bar > .feature-button:last-of-type::after {
   left: auto;
@@ -10718,4 +10932,293 @@ button.dbox:hover,
     border-left: 0;
     border-top: 1px solid var(--c-border-subtle);
   }
+}
+
+/* Board 11.1: the Ask header carries New chat, Show history and Close; a question's time sits under its bubble. */
+.ai-panel-head .menu-root {
+  display: flex;
+}
+.history-menu {
+  width: 320px;
+  max-width: calc(100vw - 24px);
+}
+.history-search {
+  width: 100%;
+  height: 28px;
+  margin-bottom: var(--spacing-xs);
+  padding: 0 var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.history-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.history-empty {
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.history-hit {
+  height: auto;
+  padding-top: var(--spacing-xs);
+  padding-bottom: var(--spacing-xs);
+  white-space: normal;
+}
+.history-hit .menu-label {
+  display: grid;
+}
+.history-hit .menu-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-confirm {
+  display: grid;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
+}
+.history-confirm p {
+  margin: 0;
+  font: var(--font-body);
+}
+.history-confirm-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+/* The time of a question: small, quiet, right-aligned under the bubble. */
+.msg-user + .ts {
+  justify-self: end;
+  margin-top: calc(var(--spacing-xs) * -1);
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A closed Topic folded in the thread (board 11.1): chevron, bold title, summary line, start time on the right. */
+.topic {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.topic:hover {
+  border-color: var(--c-border-strong);
+}
+.topic > svg {
+  flex: none;
+  color: var(--c-text-subtle);
+}
+.topic-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.topic-title {
+  font-weight: 600;
+}
+.topic-sum {
+  display: flex;
+  min-width: 0;
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+  white-space: nowrap;
+}
+.topic-preview {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topic-count {
+  flex: none;
+  margin-left: 0.3em;
+}
+.topic-time {
+  flex: none;
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+/* "New topic" and its title, between hairlines, before the open Topic. */
+.tdiv {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+.tdiv::before,
+.tdiv::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--c-border);
+}
+.tdiv b {
+  font-weight: 600;
+  color: var(--c-text-muted);
+}
+
+/* A compaction in the thread (board 11.6): a dashed note with the before and after figures, its links, the open summary. */
+.cnote-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+.cnote {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--c-info-solid) 45%, var(--c-border));
+  border-radius: var(--rounded-md);
+  background: color-mix(in srgb, var(--c-info-subtle) 45%, transparent);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+}
+.cnote > svg {
+  flex: none;
+  color: var(--c-info-text);
+}
+.cnote-text {
+  flex: 1;
+  min-width: 0;
+}
+.cfig {
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  color: var(--c-info-text);
+  font-variant-numeric: tabular-nums;
+}
+.cnote-links {
+  display: flex;
+  gap: var(--spacing-md);
+  padding-left: 22px;
+}
+.csum {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: 8px 10px;
+  border-left: 2px solid var(--c-info-solid);
+  border-radius: 0 var(--rounded-sm) var(--rounded-sm) 0;
+  background: var(--c-bg-surface);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+  white-space: pre-wrap;
+}
+.cst {
+  color: var(--c-text-subtle);
+}
+/* The Continue turn's question: the same bubble in the muted text. */
+.msg-user.msg-user-muted {
+  color: var(--c-text-muted);
+}
+
+/* Slash commands above the Ask composer (board 11.8): a listbox in the Menu look. */
+.slash-menu {
+  top: auto;
+  bottom: calc(100% - var(--spacing-sm));
+  left: var(--spacing-md);
+  right: var(--spacing-md);
+  min-width: 0;
+  z-index: 90;
+  transform-origin: bottom left;
+  animation-name: slash-in;
+}
+@keyframes slash-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.slash-row {
+  grid-template-columns: 92px minmax(0, 1fr);
+  min-height: 32px;
+  height: auto;
+}
+.slash-name {
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  font-weight: 600;
+  color: var(--c-accent-text, var(--c-accent));
+}
+.slash-row.menu-item-current .slash-name {
+  color: inherit;
+}
+.slash-hint {
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slash-row.menu-item-current .slash-hint {
+  color: inherit;
+}
+.slash-row-off {
+  color: var(--c-text-subtle);
+  cursor: default;
+}
+.slash-row-off:hover {
+  background: transparent;
+}
+.slash-empty {
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+@media (prefers-reduced-motion: reduce) {
+  .slash-menu {
+    animation: none;
+  }
+}
+/* The Rows box reaches the database with its own read-only line (board 11.10). */
+.dread {
+  display: flex;
+  align-items: center;
+  flex: none;
+  color: var(--c-info-text);
+}
+.dread .ln {
+  width: 14px;
+  height: 2px;
+  background: currentColor;
+}
+.dbox.store {
+  gap: 6px;
+  margin-left: 4px;
+  padding: 4px 6px;
+  color: var(--c-text);
+}
+.dbox.store svg {
+  flex: none;
+}
+.dstore2 {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dstore2 .dnote {
+  padding-left: 0;
+  white-space: normal;
 }

@@ -89,10 +89,40 @@ impl PostgresDialect {
         }
     }
 
+    /// Runs `sql` inside the sample read's setup on a client of its own. Public only for
+    /// integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn sample_probe(&self, database: &str, sql: &str) -> Result<()> {
+        let mut client = open_client(&self.settings, database).await?;
+        let tx = sample_transaction(&mut client).await?;
+        let out = tx.batch_execute(sql).await.map_err(query_err);
+        let _ = tx.rollback().await;
+        out
+    }
+
     fn cached(&self, database: &str) -> Result<Option<Arc<Client>>> {
         let clients = self.clients.lock().map_err(|_| poisoned())?;
         Ok(clients.get(database).filter(|c| !c.is_closed()).cloned())
     }
+}
+
+/// Step 11f: a read-only transaction with the sample timeout, for the kind check and
+/// the SELECT alike.
+async fn sample_transaction(client: &mut Client) -> Result<tokio_postgres::Transaction<'_>> {
+    let tx = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(query_err)?;
+    tx.batch_execute(&format!(
+        "SET LOCAL statement_timeout = {}",
+        crate::dialect::SAMPLE_TIMEOUT_MS
+    ))
+    .await
+    .map_err(query_err)?;
+    Ok(tx)
 }
 
 fn poisoned() -> Error {
@@ -546,6 +576,16 @@ impl Dialect for PostgresDialect {
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page> {
         let client = self.client(&req.table.database).await?;
         browse_result(page::fetch_page(&client, req).await, self.read_only)
+    }
+
+    async fn sample_rows(&self, path: &ObjectPath, limit: u32) -> Result<Page> {
+        // A client of its own, never the shared browse one: the transaction and its
+        // timeout die with it.
+        let mut client = open_client(&self.settings, &path.database).await?;
+        let tx = sample_transaction(&mut client).await?;
+        let page = page::sample_rows(&tx, path, limit).await;
+        let _ = tx.rollback().await;
+        page
     }
 
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {

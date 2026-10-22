@@ -5,6 +5,8 @@ import { completeFlow, type FlowCompletionResult } from "./complete";
 import type { TextEdit } from "../protocol";
 import { applyFlowEdit, type FlowEditOp, type FlowEditResult } from "./edits";
 import type { FlowDoc } from "./model";
+import { flowOutline } from "./outline";
+import type { FlowOutline } from "../../api/types";
 import { type FlowParse, type FlowSpan, parseFlow } from "./parse";
 import type { FlowProblem } from "./problems";
 
@@ -37,7 +39,7 @@ export type FlowBatchOp = { op: "batch"; ops: FlowEditOp[] };
 export type FlowRequestOp = FlowEditOp | FlowBatchOp;
 
 /** Applies sorted, non-overlapping edits to `text`. */
-function applyEdits(text: string, edits: readonly TextEdit[]): string {
+export function applyEdits(text: string, edits: readonly TextEdit[]): string {
   let out = text;
   for (const e of [...edits].sort((a, b) => b.from - a.from)) out = out.slice(0, e.from) + e.insert + out.slice(e.to);
   return out;
@@ -48,21 +50,37 @@ function applyEdits(text: string, edits: readonly TextEdit[]): string {
  * against the original text. An op that does not apply refuses the whole batch (an empty list).
  */
 export function applyFlowBatch(text: string, parse: FlowParse, ops: readonly FlowEditOp[]): FlowEditResult {
+  // Only the edits: the worker answers a canvas batch without posting the whole text back.
+  const { edits } = applyFlowSteps(text, parse, ops.length, (_, i) => ops[i]);
+  return { edits };
+}
+
+/**
+ * Like `applyFlowBatch`, but each op is made from the parse of the text the steps before it left, so an op that
+ * names a link by its index sees the right one. `opAt` returning null refuses the whole batch. The final text
+ * comes back with the edit, so a caller that wants it need not apply the edit again.
+ */
+export function applyFlowSteps(text: string, parse: FlowParse, count: number, opAt: (parse: FlowParse, i: number) => FlowEditOp | null): FlowEditResult & { text?: string } {
   let t = text;
   let p = parse;
-  for (let i = 0; i < ops.length; i++) {
-    const r = applyFlowEdit(t, p, ops[i]);
+  for (let i = 0; i < count; i++) {
+    const op = opAt(p, i);
+    if (!op) return { edits: [] };
+    const r = applyFlowEdit(t, p, op);
     if (r.edits.length === 0) return { edits: [] };
     t = applyEdits(t, r.edits);
-    if (i < ops.length - 1) p = parseFlow(t);
+    if (i < count - 1) p = parseFlow(t);
   }
   if (t === text) return { edits: [] };
   let a = 0;
   while (a < t.length && a < text.length && t[a] === text[a]) a++;
   let b = 0;
   while (b < t.length - a && b < text.length - a && t[t.length - 1 - b] === text[text.length - 1 - b]) b++;
-  return { edits: [{ from: a, to: text.length - b, insert: t.slice(a, t.length - b) }] };
+  return { edits: [{ from: a, to: text.length - b, insert: t.slice(a, t.length - b) }], text: t };
 }
+
+/** The outline of the text of `version`, or `{ stale: true }` once the text has changed. */
+export type FlowOutlineAnswer = { stale: true } | { stale: false; outline: FlowOutline };
 
 /** Edits for a canvas action, or `{ stale: true }` when the text has changed since the version it was planned on. */
 export type FlowEditAnswer = { stale: true } | ({ stale: false } & FlowEditResult);
@@ -120,6 +138,13 @@ export function createFlowService() {
       const lineOf = Object.create(null) as Record<string, number | null>;
       for (const n of names) lineOf[n] = c.parse.defined.get(n) ?? null;
       return { stale: false, spans, lineOf };
+    },
+
+    /** The outline the diagram assistant sends and checks against, from the parse of `version`. */
+    outline(docId: string, version: number): FlowOutlineAnswer {
+      const c = current(docId, version);
+      if (!c) return { stale: true };
+      return { stale: false, outline: flowOutline(c.parse, c.lastValid) };
     },
 
     /** Runs a canvas action on the text of `version`; works while that text has errors. */

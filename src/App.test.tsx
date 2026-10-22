@@ -1210,8 +1210,9 @@ test("an_answer_goes_into_the_editor_through_the_diff_and_runs_nothing", async (
     list_connections: () => [{ ...pg, production: true }],
     load_query_tabs: ({ place }) => (place === "group:g1" ? JSON.stringify({ version: 1, tabs: draft }) : null),
     ai_settings: aiSettingsReply,
-    list_ai_threads: () => [
-      {
+    list_ai_threads: () => [{ id: "t1", place: "group:g1", title: "fix", updatedAt: 2, messages: 2, topics: 1 }],
+    get_ai_thread: () => ({
+      thread: {
         id: "t1",
         place: "group:g1",
         title: "fix",
@@ -1221,7 +1222,9 @@ test("an_answer_goes_into_the_editor_through_the_diff_and_runs_nothing", async (
           { role: "assistant", text: answer, context: [], at: 2 },
         ],
       },
-    ],
+      topics: [],
+      compactions: [],
+    }),
     save_ai_thread: () => null,
     classify_sql: () => "write",
     prepare_run: ({ statements }) => ({

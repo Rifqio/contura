@@ -1,5 +1,7 @@
 //! The OpenAI-compatible chat API: OpenAI, Groq, OpenRouter, DeepSeek and Custom.
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 use url::Url;
@@ -8,11 +10,12 @@ use super::http::{self, Call, Http};
 use super::sse::{SseEvent, SseParser};
 use super::{
     AiProvider, ChatRequest, ChatRole, ListedModel, ProviderEvent, StopReason, Thinking, Usage,
-    count, sorted_models,
+    count, sorted_models, tool_text,
 };
+use crate::ai::diagram_tool::INPUT_CAP;
 use crate::ai::log::{Level, Log};
 use crate::ai::models::MaxTokensField;
-use crate::ai::rails::input::{Secrets, redact_secrets, strip_invisible};
+use crate::ai::rails::input::{Secrets, cap_chars, redact_secrets, strip_invisible};
 use crate::ai::{AiError, AiProviderKind};
 use crate::error::{Error, Result};
 
@@ -26,8 +29,6 @@ pub struct OpenAi {
     pub http: &'static Http,
 }
 
-/// The `chat/completions` body. Never has a `tools` key or a cache field: the system
-/// blocks go as one system message, left out when there are none.
 /// The system blocks as one system message: an OpenAI-compatible body has no blocks.
 fn system_text(req: &ChatRequest) -> String {
     req.system
@@ -37,16 +38,21 @@ fn system_text(req: &ChatRequest) -> String {
         .join("\n\n")
 }
 
-/// Each message's content as `body` puts it on the wire, in order.
+/// Each message's content as `body` puts it on the wire, in order, then the tool definition
+/// when there is one.
 pub fn wire_texts(req: &ChatRequest) -> Vec<String> {
     let system = system_text(req);
     (!system.is_empty())
         .then_some(system)
         .into_iter()
         .chain(req.messages.iter().map(|m| m.text.clone()))
+        .chain(tool_text(req))
         .collect()
 }
 
+/// The `chat/completions` body. Has `tools` (one function) and `tool_choice` only when the
+/// request carries a tool, and no cache field: the system blocks go as one system message,
+/// left out when there are none.
 pub fn body(req: &ChatRequest) -> Value {
     let system = system_text(req);
     let mut messages = Vec::new();
@@ -78,8 +84,45 @@ pub fn body(req: &ChatRequest) -> Value {
     if let Thinking::Effort(effort) = &req.thinking {
         body.insert("reasoning_effort".into(), json!(effort));
     }
+    if let Some(tool) = &req.tools {
+        body.insert(
+            "tools".into(),
+            json!([{
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                },
+            }]),
+        );
+        body.insert("tool_choice".into(), json!("auto"));
+    }
     Value::Object(body)
 }
+
+/// The running stream: the finish reason so far and the tool calls being gathered, by
+/// `index`, each as its name and the arguments text so far.
+#[derive(Default)]
+struct State {
+    stop: Option<StopReason>,
+    tools: BTreeMap<u64, (String, String)>,
+}
+
+impl State {
+    /// Hands each gathered call to `sink`, in index order.
+    fn flush_tools(&mut self, sink: &mut (dyn FnMut(ProviderEvent) + Send)) {
+        for (name, input) in std::mem::take(&mut self.tools).into_values() {
+            sink(ProviderEvent::ToolCall { name, input });
+        }
+    }
+}
+
+/// The most tool calls gathered from one stream; later indexes are ignored with nothing
+/// buffered, so the buffers stay bounded (8 names and 8 inputs of at most 64 KB).
+const MAX_TOOL_CALLS: usize = 8;
+/// The most of a tool name kept, in bytes.
+const TOOL_NAME_BYTES: usize = 64;
 
 /// The longest finish reason kept in the log line for one the client does not know.
 const REASON_CHARS: usize = 40;
@@ -151,12 +194,13 @@ impl OpenAi {
         &self,
         ev: &SseEvent,
         model: &str,
-        stop: &mut Option<StopReason>,
+        state: &mut State,
         log: &mut Log,
         sink: &mut (dyn FnMut(ProviderEvent) + Send),
     ) -> Result<bool> {
         let data = ev.data.trim();
         if data == "[DONE]" {
+            state.flush_tools(sink);
             return Ok(true);
         }
         let chunk: Value =
@@ -173,6 +217,11 @@ impl OpenAi {
                 Some(status) => {
                     http::map_status(status, None, data, self.kind, model, &self.redact_list())
                 }
+                None if chunk.pointer("/error/code").and_then(Value::as_str)
+                    == Some(http::TOOL_USE_FAILED) =>
+                {
+                    AiError::BadToolInput
+                }
                 None => AiError::BadResponse,
             }));
         }
@@ -187,9 +236,31 @@ impl OpenAi {
             if let Some(text) = delta["content"].as_str().filter(|t| !t.is_empty()) {
                 sink(ProviderEvent::Text(text.to_string()));
             }
+            for call in delta["tool_calls"].as_array().into_iter().flatten() {
+                let index = call["index"].as_u64().unwrap_or(0);
+                if !state.tools.contains_key(&index) && state.tools.len() >= MAX_TOOL_CALLS {
+                    continue;
+                }
+                let (name, input) = state.tools.entry(index).or_default();
+                if let Some(part) = call.pointer("/function/name").and_then(Value::as_str) {
+                    let room = TOOL_NAME_BYTES - name.len();
+                    name.push_str(cap_chars(part, room));
+                }
+                if let Some(part) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                    input.push_str(part);
+                }
+                if input.len() > INPUT_CAP {
+                    // Too much to be a proposal: stop reading and send the calls once, as
+                    // read so far, so the execution rail refuses the one over the cap.
+                    state.flush_tools(sink);
+                    state.stop = Some(StopReason::TooLong);
+                    return Ok(true);
+                }
+            }
             if let Some(reason) = choice["finish_reason"].as_str() {
-                *stop = Some(match reason {
-                    "stop" => StopReason::End,
+                state.flush_tools(sink);
+                state.stop = Some(match reason {
+                    "stop" | "tool_calls" => StopReason::End,
                     "length" => StopReason::Length,
                     "content_filter" => StopReason::Refusal,
                     other => {
@@ -247,7 +318,7 @@ impl AiProvider for OpenAi {
         let resp = self.http.send(&call, log).await?;
         sink(ProviderEvent::FirstByte);
         let mut parser = SseParser::new();
-        let mut stop = None;
+        let mut state = State::default();
         let mut done = false;
         let mut failed = None;
         self.http
@@ -260,7 +331,7 @@ impl AiProvider for OpenAi {
                     }
                 };
                 for ev in &events {
-                    match self.on_event(ev, &req.model, &mut stop, log, sink) {
+                    match self.on_event(ev, &req.model, &mut state, log, sink) {
                         Ok(false) => {}
                         Ok(true) => {
                             done = true;
@@ -280,9 +351,9 @@ impl AiProvider for OpenAi {
         }
         // The body ended: a last event with no blank line after it still counts.
         if !done && let Some(ev) = parser.finish().map_err(Error::Ai)? {
-            done = self.on_event(&ev, &req.model, &mut stop, log, sink)?;
+            done = self.on_event(&ev, &req.model, &mut state, log, sink)?;
         }
-        sink(ProviderEvent::Stop(final_stop(stop, done)));
+        sink(ProviderEvent::Stop(final_stop(state.stop, done)));
         Ok(())
     }
 
@@ -326,7 +397,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ai::provider::{ChatMessage, PromptBlock};
+    use crate::ai::provider::{ChatMessage, PromptBlock, ToolSpec};
 
     fn request(thinking: Thinking, temperature: Option<f32>) -> ChatRequest {
         ChatRequest {
@@ -346,6 +417,7 @@ mod tests {
             temperature,
             thinking,
             max_tokens_field: MaxTokensField::MaxTokens,
+            tools: None,
         }
     }
 
@@ -370,14 +442,14 @@ mod tests {
     fn play(fixture: &str) -> (Vec<ProviderEvent>, Result<()>) {
         let p = provider();
         let mut parser = SseParser::new();
-        let mut stop = None;
+        let mut state = State::default();
         let mut log = Log::new();
         let mut got = Vec::new();
         let mut sink = |e| got.push(e);
         let mut result = Ok(());
         let mut done = false;
         for ev in parser.push(fixture.as_bytes()).unwrap() {
-            match p.on_event(&ev, "m", &mut stop, &mut log, &mut sink) {
+            match p.on_event(&ev, "m", &mut state, &mut log, &mut sink) {
                 Ok(true) => {
                     done = true;
                     break;
@@ -390,7 +462,7 @@ mod tests {
             }
         }
         if result.is_ok() {
-            sink(ProviderEvent::Stop(final_stop(stop, done)));
+            sink(ProviderEvent::Stop(final_stop(state.stop, done)));
         }
         (got, result)
     }
@@ -440,10 +512,175 @@ mod tests {
         assert!(b.get("thinking").is_none());
     }
 
+    fn tool() -> ToolSpec {
+        ToolSpec {
+            name: "propose_diagram_changes".into(),
+            description: "Proposes edits.".into(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        }
+    }
+
     #[test]
-    fn body_never_has_tools() {
+    fn body_with_tool_snapshot() {
+        let mut req = request(Thinking::Off, None);
+        req.tools = Some(tool());
+        assert_eq!(
+            body(&req),
+            json!({
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": "You write SQL."},
+                    {"role": "user", "content": "count users"},
+                    {"role": "assistant", "content": "SELECT count(*) FROM users;"}
+                ],
+                "stream": true,
+                "stream_options": {"include_usage": true},
+                "max_tokens": 4096,
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "propose_diagram_changes",
+                        "description": "Proposes edits.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                }],
+                "tool_choice": "auto"
+            })
+        );
+    }
+
+    #[test]
+    fn wire_texts_count_the_tool() {
+        let mut req = request(Thinking::Off, None);
+        let plain = provider().wire_texts(&req);
+        assert_eq!(plain, wire_texts(&req));
+        assert_eq!(plain.len(), 3);
+        req.tools = Some(tool());
+        let with = provider().wire_texts(&req);
+        assert_eq!(with[..3], plain[..]);
+        assert_eq!(with.len(), 4);
+        assert_eq!(with[3], serde_json::to_string(&[tool()]).unwrap());
+    }
+
+    const TOOL_INPUT: &str =
+        r#"{"file":"a.flow","base_hash":"00ff","ops":[{"remove_node":{"target":"A"}}]}"#;
+
+    #[test]
+    fn openai_tool_calls_stream() {
+        let (got, result) = play(include_str!(
+            "../../../tests/fixtures/ai/openai_tool_calls.sse"
+        ));
+        result.unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ProviderEvent::ToolCall {
+                    name: "propose_diagram_changes".into(),
+                    input: TOOL_INPUT.into(),
+                },
+                ProviderEvent::Usage(Usage {
+                    input: 900,
+                    output: 40,
+                    ..Usage::default()
+                }),
+                ProviderEvent::Stop(StopReason::End),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_and_tool_in_one_answer() {
+        let (got, result) = play(concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Removing \"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"A.\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"propose_diagram_changes\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        ));
+        result.unwrap();
+        // No finish reason: the call goes out at `[DONE]`.
+        assert_eq!(
+            got,
+            vec![
+                ProviderEvent::Text("Removing ".into()),
+                ProviderEvent::Text("A.".into()),
+                ProviderEvent::ToolCall {
+                    name: "propose_diagram_changes".into(),
+                    input: "{}".into(),
+                },
+                ProviderEvent::Stop(StopReason::End),
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_buffer_over_cap_stops() {
+        let piece = "x".repeat(crate::ai::diagram_tool::INPUT_CAP / 2 + 1);
+        let chunk = |name: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"function\":{{{name}\"arguments\":\"{piece}\"}}}}]}}}}]}}\n\n"
+            )
+        };
+        let body = format!(
+            "{}{}{}data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
+            chunk("\"name\":\"propose_diagram_changes\","),
+            chunk(""),
+            chunk("")
+        );
+        let (got, result) = play(&body);
+        result.unwrap();
+        // The call that crossed 64 KB is sent once, holding the chunk that crossed and no
+        // more, so the execution rail refuses it with its Warn line.
+        assert_eq!(
+            got,
+            vec![
+                ProviderEvent::ToolCall {
+                    name: "propose_diagram_changes".into(),
+                    input: format!("{piece}{piece}"),
+                },
+                ProviderEvent::Stop(StopReason::TooLong),
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_calls_and_names_are_capped() {
+        let long = "n".repeat(100);
+        let mut body = String::new();
+        for i in 0..12 {
+            let name = if i == 0 {
+                long.clone()
+            } else {
+                format!("t{i}")
+            };
+            body.push_str(&format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":{i},\"function\":{{\"name\":\"{name}\",\"arguments\":\"{{}}\"}}}}]}}}}]}}\n\n"
+            ));
+        }
+        // A second name part for the first call is cut too.
+        body.push_str("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"more\"}}]}}]}\n\n");
+        body.push_str("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n");
+        let (got, result) = play(&body);
+        result.unwrap();
+        let calls: Vec<(String, String)> = got
+            .iter()
+            .filter_map(|e| match e {
+                ProviderEvent::ToolCall { name, input } => Some((name.clone(), input.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), MAX_TOOL_CALLS);
+        assert_eq!(calls[0].0, "n".repeat(TOOL_NAME_BYTES));
+        let names: Vec<&str> = calls[1..].iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["t1", "t2", "t3", "t4", "t5", "t6", "t7"]);
+        assert!(calls.iter().all(|(_, input)| input == "{}"));
+    }
+
+    #[test]
+    fn body_without_tools_has_no_tools_key() {
         for thinking in [
             Thinking::Off,
+            Thinking::Disabled,
+            Thinking::BetweenTools,
             Thinking::Budget(1024),
             Thinking::Effort("high".into()),
         ] {
@@ -622,13 +859,13 @@ mod tests {
     #[test]
     fn done_ends_even_with_more_after() {
         let p = provider();
-        let mut stop = None;
+        let mut state = State::default();
         let ev = SseEvent {
             event: None,
             data: "[DONE]".into(),
         };
         assert!(
-            p.on_event(&ev, "m", &mut stop, &mut Log::new(), &mut |_| {})
+            p.on_event(&ev, "m", &mut state, &mut Log::new(), &mut |_| {})
                 .unwrap()
         );
     }
@@ -651,6 +888,18 @@ mod tests {
         };
         assert_eq!(status, 502);
         assert_eq!(message, "Upstream failed for key [redacted]");
+    }
+
+    #[test]
+    fn a_tool_call_the_server_could_not_parse_is_bad_tool_input() {
+        // Groq ends the stream this way when the model writes arguments that are not JSON.
+        let (_, result) = play(
+            "data: {\"error\":{\"message\":\"Failed to parse tool call arguments as JSON\",\"type\":\"invalid_request_error\",\"code\":\"tool_use_failed\"}}\n\n",
+        );
+        assert!(
+            matches!(result, Err(Error::Ai(AiError::BadToolInput))),
+            "{result:?}"
+        );
     }
 
     #[test]

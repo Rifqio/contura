@@ -108,6 +108,14 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
           fail([m.id], e);
         }
         return;
+      case "flowOutline":
+        if (flushFlow(m.docId)) return post({ type: "flowOutline", ids: [m.id], result: { stale: true } });
+        try {
+          post({ type: "flowOutline", ids: [m.id], result: flow.outline(m.docId, m.version) });
+        } catch (e) {
+          fail([m.id], e);
+        }
+        return;
       case "flowComplete":
         if (flushFlow(m.docId)) return post({ type: "flowCompletion", ids: [m.id], result: { from: m.pos, items: [], stale: true } });
         try {

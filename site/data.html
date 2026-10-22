@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Contura Data Jobs</title>
+<meta name="description" content="Transfer, Import, Export, Backup and Restore, Lineage and Explain. Each job shows its plan before it runs: the type mapping, the first lines, the checks, and a Transfer that rolls back to zero rows when a row does not fit.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+<link rel="stylesheet" href="data.css">
+<script src="site.js"></script>
+<script src="kit.js" defer></script>
+<script src="frames.js" defer></script>
+<script src="playback.js" defer></script>
+<script src="data.js" defer></script>
+</head>
+<body data-frames-src="frames-data.json">
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="Contura home">
+      <svg viewBox="0 0 256 256" aria-hidden="true"><path fill="var(--ink)" d="M52 40A60 12 0 0 1 172 40V80A60 12 0 0 1 52 80Z"/><path fill="var(--ink)" d="M52 172A60 12 0 0 0 172 172V212A60 12 0 0 1 52 212Z"/><path fill="var(--accent)" d="M84 104A60 12 0 0 0 204 104V148A60 12 0 0 1 84 148Z"/></svg>
+      Contura <small>v0.7.0</small>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="index.html">Home</a>
+      <a href="query.html">Query</a>
+      <a href="model.html">Model</a>
+      <a href="data.html" aria-current="page">Data</a>
+      <a href="ai.html">AI</a>
+      <a href="safety.html">Safety</a>
+    </nav>
+    <a class="nav-dl" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="stmt hero" id="top" data-name="Data" aria-labelledby="h-hero">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">1</span></div>
+      <div class="body">
+        <p class="eyebrow"><i aria-hidden="true">~</i>Data · Transfer, Import, Export, Backup, Restore, Lineage, Explain</p>
+        <h1 class="display" id="h-hero">Six jobs. <span class="tail">None blind.</span></h1>
+        <div class="hero-row">
+          <p class="lede">Every job that moves data shows you its plan first: the type of each column, the first lines of the file, the checks a restore runs. Then you decide.</p>
+          <p class="hero-act meta">The demos below are drawn from the app's own screens and play in this page. The rows in Export are the same sample invoices as on the Query page.</p>
+        </div>
+        <ol class="cells three jump dj-six">
+          <li data-reveal><a href="#transfer"><span class="no">01</span><b>Transfer</b><span>MySQL or SQLite into PostgreSQL, every type reviewed, one transaction.</span></a></li>
+          <li data-reveal style="--d:60ms"><a href="#import"><span class="no">02</span><b>Import</b><span>Each file column matched and every row checked before one goes in.</span></a></li>
+          <li data-reveal style="--d:120ms"><a href="#export"><span class="no">02</span><b>Export</b><span>The file's first lines and its size, before it is written.</span></a></li>
+          <li data-reveal style="--d:60ms"><a href="#backup"><span class="no">03</span><b>Backup and Restore</b><span>A plain SQL script you can read, and a restore that checks it first.</span></a></li>
+          <li data-reveal style="--d:120ms"><a href="#lineage"><span class="no">04</span><b>Lineage</b><span>What a delete takes with it, in one sentence per Foreign Key.</span></a></li>
+          <li data-reveal style="--d:180ms"><a href="#explain"><span class="no">04</span><b>Explain</b><span>The server's plan, read without running the query.</span></a></li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="transfer" data-name="Transfer" aria-labelledby="h-transfer">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">2</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>01 · Data Transfer</p>
+            <h2 class="headline" id="h-transfer">Every type reviewed, then one transaction.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Data Transfer copies structure, rows or both between Connections, also across Dialects. Each column's source type sits beside the type it will become, and a column with no safe match waits for your choice.</p>
+            <p>Into PostgreSQL the whole copy runs as one transaction. If a single row does not fit its new type, the run stops at that row and rolls back, so nothing is written.</p>
+            <dl class="kv">
+              <div><dt>Across Dialects</dt><dd>MySQL, PostgreSQL and SQLite, in any direction the types allow.</dd></div>
+              <div><dt>On failure</dt><dd>The row number and the value that did not fit, and zero rows written.</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figure class="win-wrap dj-fig" data-reveal id="fig-transfer">
+          <div class="plan-box" id="planner" role="region" aria-labelledby="plan-h">
+            <div class="plan-head"><p class="plan-t" id="plan-h">Data Transfer</p><span class="plan-sp"></span><span class="plan-m">orders into PostgreSQL</span></div>
+            <div class="plan-fields">
+              <div class="plan-f"><small>From</small><span class="plan-db" id="plan-from">MySQL · shop.orders</span>
+                <div class="seg" role="group" aria-label="Source database"><button type="button" data-src="mysql" aria-pressed="true">MySQL</button><button type="button" data-src="sqlite" aria-pressed="false">SQLite</button></div>
+              </div>
+              <div class="plan-arrow" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></div>
+              <div class="plan-f"><small>To</small><span class="plan-db">PostgreSQL · freight.orders</span><span class="plan-why">Structure and rows in one transaction.</span></div>
+            </div>
+            <div class="plan-route" id="plan-route" aria-hidden="true"></div>
+            <p class="sr" id="plan-text" aria-live="polite"></p>
+            <div class="plan-decide" id="plan-decide"></div>
+            <div class="plan-foot">
+              <button type="button" class="plan-run" id="plan-run" disabled>Run, one transaction</button>
+              <label class="plan-fail"><input type="checkbox" id="plan-failt"> Try a row that does not fit</label>
+              <p class="plan-st" id="plan-st" role="status">Waiting for your choice at the review step.</p>
+            </div>
+          </div>
+          <figcaption>A sample orders table of 1,204 rows. Pick the source, choose a type for is_paid, then Run. Tick "Try a row that does not fit" to see the rollback. The PostgreSQL types and the run are scripted, since this page has no server.</figcaption>
+        </figure>
+        <figure class="win-wrap dj-frame-fig" data-reveal>
+          <div data-frame="s8-transfer" data-v="tables" data-tabs-label="State" aria-label="The Data Transfer window"></div>
+          <figcaption>The Data Transfer window itself, in four states: tables in load order, type mapping, running, and a failed run rolled back.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="import" data-name="Import and Export" aria-labelledby="h-import">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">3</span></div>
+      <div class="body">
+        <div class="split-head flip">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>02 · Import and Export</p>
+            <h2 class="headline" id="h-import">Matched before it goes in. Shown before it goes out.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Import reads CSV, JSON, Excel and SQL. File columns match by name, and every row is checked against its new column before a single one is written.</p>
+            <p>Export writes CSV, JSON, Excel and SQL INSERT. The preview shows the opening lines exactly as they will land in the file, with an estimate of its size.</p>
+          </div>
+        </div>
+        <div class="dj-pair">
+          <figure class="win-wrap dj-fig" data-reveal id="fig-import">
+            <div class="dj-sl" data-job="import" role="group" aria-label="Import: Columns step and the check pass"></div>
+            <div class="win-ctl"><span id="jc-import">Into</span><div class="seg" id="seg-import" role="group" aria-labelledby="jc-import"><button type="button" data-v="stg" aria-pressed="true">freight-stg</button><button type="button" data-v="prod" aria-pressed="false">freight-prod <span class="pill prod">PROD</span></button><button type="button" data-v="ro" aria-pressed="false">freight-report <span class="pill ro">Read-only</span></button></div></div>
+            <figcaption>Import of a payments file into billing.payments. On Production the run asks first; on a Read-only Connection it is refused.</figcaption>
+          </figure>
+          <figure class="win-wrap dj-fig" data-reveal style="--d:120ms" id="export">
+            <div class="dj-sl" data-job="export" role="group" aria-label="Export preview of billing.invoices"></div>
+            <div class="win-ctl dj-ctl2">
+              <span id="jc-export">Format</span><div class="seg" id="seg-export" role="group" aria-labelledby="jc-export"><button type="button" data-v="csv" aria-pressed="true">CSV</button><button type="button" data-v="json" aria-pressed="false">JSON</button><button type="button" data-v="xlsx" aria-pressed="false">Excel</button><button type="button" data-v="sql" aria-pressed="false">SQL INSERT</button></div>
+              <span class="dj-sub" id="jc-json" hidden><span id="jc-json-l">JSON as</span><span class="seg" id="seg-json" role="group" aria-labelledby="jc-json-l"><button type="button" data-v="array" aria-pressed="true">JSON array</button><button type="button" data-v="lines" aria-pressed="false">JSON Lines (.jsonl)</button></span></span>
+            </div>
+            <figcaption>Export of billing.invoices. The lines are the real sample rows of this site, written in the chosen format, and the size is counted from all of them.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="backup" data-name="Backup and Restore" aria-labelledby="h-backup">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">4</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>03 · Backup and Restore</p>
+            <h2 class="headline" id="h-backup">A backup you can read. A restore that checks first.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Backup writes Contura's own SQL script, plain text from one snapshot, with no pg_dump or mysqldump needed. Its header says what made it and what it leaves out.</p>
+            <p>Restore reads that header and checks it against the target before anything runs. On Production it asks once more, naming the file by its fingerprint, so a file changed after the check asks again.</p>
+            <dl class="kv">
+              <div><dt>Backup</dt><dd>Only reads, so it needs no confirmation, even on Production.</dd></div>
+              <div><dt>Restore</dt><dd>Shows the exact SQL from the file, then writes in one transaction.</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figure class="win-wrap dj-fig" data-reveal id="fig-backup">
+          <div class="dj-sl dj-wide" data-job="backup" role="group" aria-label="Backup file header and Restore checks"></div>
+          <div class="win-ctl"><span id="jc-backup">Step</span><div class="seg" id="seg-backup" role="group" aria-labelledby="jc-backup"><button type="button" data-v="backup" aria-pressed="true">Back up</button><button type="button" data-v="restore" aria-pressed="false">Restore</button></div></div>
+          <figcaption>A backup of freight, then a restore of that file into freight-prod. Press Restore on PROD to see the confirm.</figcaption>
+        </figure>
+        <figure class="win-wrap dj-frame-fig" data-reveal>
+          <div data-frame="s9-backup" data-v="backup" data-tabs-label="Dialog" aria-label="The Back up and Restore dialogs"></div>
+          <figcaption>The Back up and Restore dialogs themselves, on freight-prod.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="lineage" data-name="Lineage and Explain" aria-labelledby="h-lineage">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">5</span></div>
+      <div class="body">
+        <div class="split-head flip">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>04 · Lineage and Explain</p>
+            <h2 class="headline" id="h-lineage">Know what a delete takes. Read the plan first.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Lineage reads every Foreign Key into and out of a table as one plain sentence: which rows stop a delete, and which rows go with it.</p>
+            <p>Explain asks the server for its plan and never adds ANALYZE, so the query itself does not run. Full scans of big tables and the step that carries most of the cost get a mark.</p>
+          </div>
+        </div>
+        <div class="dj-pair">
+          <figure class="win-wrap dj-fig" data-reveal id="fig-lineage">
+            <div class="dj-sl" data-job="lineage" role="group" aria-label="Lineage of billing.customers"></div>
+            <figcaption>Lineage of billing.customers. Click a key to read what it does. Row counts come from the sample data; the delete rules are part of the sample schema.</figcaption>
+          </figure>
+          <figure class="win-wrap dj-fig" data-reveal style="--d:120ms" id="explain">
+            <div class="dj-sl" data-job="explain" role="group" aria-label="Explain plan tree"></div>
+            <div class="win-ctl"><span id="jc-explain">invoices.issued_at</span><div class="seg" id="seg-explain" role="group" aria-labelledby="jc-explain"><button type="button" data-v="scan" aria-pressed="true">No index</button><button type="button" data-v="index" aria-pressed="false">Index</button></div></div>
+            <figcaption>A PostgreSQL plan, scripted for this page: the live demos here run on SQLite, which plans differently.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt finale" id="download" data-name="Download" aria-labelledby="h-dl">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">6</span></div>
+      <div class="body">
+        <div class="dl-row" style="margin-top:0">
+          <div data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>Download</p>
+            <h2 id="h-dl">All six jobs are in v0.7.0. For Windows and Linux.</h2>
+          </div>
+          <div class="dl-box" data-reveal style="--d:120ms">
+            <div class="dl-btns">
+              <button class="btn" type="button" data-download aria-label="Download for Windows">
+              <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
+                <span><span class="dl-pre">Download for </span>Windows</span>
+            </button>
+              <button class="btn" type="button" data-download aria-label="Download for Linux">
+                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 .8C6 .8 4.9 2.4 4.9 4.5c0 1-.4 1.8-1 2.7C3 8.4 2.3 9.7 2.3 11.2c0 .8.2 1.4.5 1.9h10.4c.3-.5.5-1.1.5-1.9 0-1.5-.7-2.8-1.6-4-.6-.9-1-1.7-1-2.7C11.1 2.4 10 .8 8 .8zM8 7.6c-1.4 0-2.4 1.5-2.4 3.4S6.6 13.6 8 13.6s2.4-.7 2.4-2.6S9.4 7.6 8 7.6zM6.9 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4zM9.1 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4z"/><path fill="currentColor" d="M7 5.6h2L8 6.7z"/><path fill="currentColor" d="M2.6 13.4c.5-.8 2.1-.9 2.9-.4.5.3.6 1 .2 1.4-.7.7-2.7.6-3.2 0-.2-.3-.1-.7.1-1zM13.4 13.4c-.5-.8-2.1-.9-2.9-.4-.5.3-.6 1-.2 1.4.7.7 2.7.6 3.2 0 .2-.3.1-.7-.1-1z"/></svg>
+                <span><span class="dl-pre">Download for </span>Linux</span>
+              </button>
+            </div>
+            <p class="meta">v0.7.0 prototype · portable, runs from any folder · Windows 10 and 11 · Linux, AppImage or .deb · 64-bit · about 20&nbsp;MB</p>
+            <p class="note" data-note role="status" hidden></p>
+            <a class="ghost" href="ai.html">Next: AI<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <nav class="foot-nav" aria-label="All pages">
+      <a href="index.html">Home</a><a href="query.html">Query</a><a href="model.html">Model</a><a href="data.html">Data</a><a href="ai.html">AI</a><a href="safety.html">Safety</a>
+    </nav>
+    <p>Core in Rust, the window in Tauri 2 with React. Nothing leaves the PC except what you send to an AI provider you set up yourself.</p>
+    <p>The demos on this page are drawn from the app's own screens. Every name and number in them is sample data.</p>
+  </div>
+</footer>
+
+<div class="status" role="contentinfo" aria-label="Page status">
+  <div class="in">
+    <p class="l"><b data-ln>Ln 1</b><span data-sec>Data</span><span class="hide-s">data.html</span></p>
+    <div class="r">
+      <span class="pending" data-pending aria-live="polite">1 pending</span>
+      <button class="theme-btn" type="button" data-theme-btn aria-label="Switch theme">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.2 1.1a.6.6 0 0 1 .2.7A5.6 5.6 0 0 0 14.2 9.6a.6.6 0 0 1 .8.6A7 7 0 1 1 5.6 1a.6.6 0 0 1 .6.1z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

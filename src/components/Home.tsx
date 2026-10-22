@@ -14,6 +14,7 @@ import Icon from "./Icon";
 import Kbd from "./Kbd";
 import Menu, { type MenuItem } from "./Menu";
 import SafetyTag from "./SafetyTag";
+import { thisComputer } from "../platform";
 
 interface Props {
   groups: Group[];
@@ -255,10 +256,10 @@ export default function Home({
   }
 
   const suggestionBox = (suggestions.length > 0 || suggestionError) && (
-    <section className="home-suggested" aria-label="Found on this PC">
+    <section className="home-suggested" aria-label={`Found on ${thisComputer()}`}>
       <p className="home-suggested-head">
         <Icon name="search" size={14} />
-        Found on this PC in Laragon. Nothing is saved until you add it.
+        {`Found on ${thisComputer()} in Laragon. Nothing is saved until you add it.`}
       </p>
       {suggestionError ? (
         <p className="error-text">{suggestionError}</p>

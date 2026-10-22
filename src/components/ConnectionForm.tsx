@@ -37,6 +37,7 @@ import Kbd from "./Kbd";
 import Segmented from "./Segmented";
 import Select from "./Select";
 import Switch from "./Switch";
+import { caFileExample, sqliteFileExample } from "../platform";
 
 interface Props {
   /** The Connection being edited; absent for a new one. */
@@ -437,7 +438,7 @@ export default function ConnectionForm({
                   className="input input-mono"
                   aria-labelledby={f("file-label")}
                   value={file}
-                  placeholder="C:\data\shop.db"
+                  placeholder={sqliteFileExample()}
                   onChange={(e) => setFile(e.target.value)}
                 />
                 <button type="button" className="button" onClick={onBrowse} disabled={busy !== null}>
@@ -555,7 +556,7 @@ export default function ConnectionForm({
                     id={f("ca")}
                     className="input input-mono"
                     value={caPath}
-                    placeholder={ssl === "verifyFull" ? "Empty to trust the public CAs" : "C:\\certs\\ca.pem"}
+                    placeholder={ssl === "verifyFull" ? "Empty to trust the public CAs" : caFileExample()}
                     onChange={(e) => setCaPath(e.target.value)}
                   />
                 </div>
@@ -590,7 +591,7 @@ export default function ConnectionForm({
             <Select
               value={access}
               label="AI access"
-              describedBy={f("ai-access-help")}
+              describedBy={access === "schemaQueryRows" ? `${f("ai-access-help")} ${f("ai-rows-help")}` : f("ai-access-help")}
               disabled={productionIsNew}
               onChange={(v) => {
                 aiChosen.current = true;
@@ -606,6 +607,12 @@ export default function ConnectionForm({
                 ? "Production Connections send nothing to the assistant unless you change this"
                 : "What the AI assistant may send to your provider from this Connection."}
           </span>
+          {access === "schemaQueryRows" && (
+            <span id={f("ai-rows-help")} className="field-hint field-wide">
+              Sample rows: Contura reads at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never
+              keeps them. Cells are cut at 200 characters and binary values go as &lt;binary&gt;.
+            </span>
+          )}
           {production && !productionIsNew && aiAccess !== "never" && (
             <p className="ai-warn field-wide" role="status">
               <Icon name="warning" />

@@ -1,12 +1,19 @@
 use contura_core::Error;
+use contura_core::ai::compact::{CompactRequest, compact_now};
 use contura_core::ai::context::sync::{ContextInfo, ContextStatusRow, context_status, resync};
+use contura_core::ai::diagram::{
+    DiagramAskRequest, diagram_ask_stream, diagram_place, diagram_preview,
+};
+use contura_core::ai::memory::{Compaction, CompactionId, ThreadHit, ThreadSummary, ThreadView};
 use contura_core::ai::models::{ModelList, ModelPicks};
 use contura_core::ai::preview::{Preview, preview};
 use contura_core::ai::request::AskRequest;
-use contura_core::ai::sent::{AnswerAction, AnswerActionKind};
+use contura_core::ai::sent::{AnswerAction, AnswerActionKind, AnswerRecord, ToolOutcome};
 use contura_core::ai::stream::{AiEvent, ask_stream};
+use contura_core::ai::tool_uses::ToolUseRow;
 use contura_core::ai::{
-    AiAccess, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread, KeyChange, ThreadId,
+    AiAccess, AiError, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread, KeyChange,
+    ThreadId,
 };
 use contura_core::connections::{
     ConnectionInput, ConnectionService, DataFolderInfo, DesignVerdict, EditOutcome, EditPlan,
@@ -914,6 +921,45 @@ pub fn set_ai_model_prefs(
     ai.set_model_prefs(group_id, &model, picks)
 }
 
+/// Ends a stream that was stopped from the Core's side: Stop it (`ai_cancel_place`) aborts
+/// the task at its next wait, so the Ask sends no `done` or `error` of its own and the
+/// webview would keep showing it as writing. Dropped before `ended`, it sends
+/// `Error{Cancelled}`, the shape a Stop ends with.
+struct EndOnDrop<F: Fn(AiEvent)> {
+    send: F,
+    ended: bool,
+}
+
+impl<F: Fn(AiEvent)> EndOnDrop<F> {
+    fn new(send: F) -> Self {
+        Self { send, ended: false }
+    }
+
+    /// The work ran to its end and sent its own last event.
+    fn ended(&mut self) {
+        self.ended = true;
+    }
+}
+
+impl<F: Fn(AiEvent)> Drop for EndOnDrop<F> {
+    fn drop(&mut self) {
+        if !self.ended {
+            (self.send)(AiEvent::Error {
+                error: AiError::Cancelled,
+                partial: false,
+            });
+        }
+    }
+}
+
+/// Sends `event` to the webview; a page that has gone away is not an error.
+fn send_to(events: &Channel<AiEvent>) -> impl Fn(AiEvent) + Send + Sync + 'static {
+    let events = events.clone();
+    move |e| {
+        let _ = events.send(e);
+    }
+}
+
 /// Removes a running Ask from the AI service when its task ends, however it ends:
 /// done, failed, or aborted by Stop (dropping the task drops this).
 struct Finish {
@@ -966,6 +1012,7 @@ pub async fn ai_ask_stream(
             app: task_app.clone(),
             request_id: request.request_id.clone(),
         };
+        let mut end = EndOnDrop::new(send_to(&events));
         let catalog = task_app.state::<ConnectionService>();
         let asks = task_app.state::<AiService>();
         let emit = |e: AiEvent| {
@@ -987,6 +1034,7 @@ pub async fn ai_ask_stream(
             &*provider, &*catalog, &settings, &model, &secrets, &request, &emit,
         )
         .await;
+        end.ended();
     });
     let ai = app.state::<AiService>();
     if let Err(e) = ai.start(&place, &request_id, task.inner().abort_handle()) {
@@ -997,32 +1045,235 @@ pub async fn ai_ask_stream(
     Ok(())
 }
 
+/// What a diagram Ask would send, built in the Core: the Sends list and "Show exactly".
+/// The diagram is not database data, so only the global settings apply.
+#[tauri::command]
+pub async fn ai_diagram_preview(
+    app: tauri::AppHandle,
+    request: DiagramAskRequest,
+) -> Result<Preview, Error> {
+    let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
+    let (settings, model, secrets) = off_runtime(move || {
+        let ai = app.state::<AiService>();
+        let settings = ai.settings(None)?.settings;
+        let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&settings.model))?;
+        let connections = app.state::<ConnectionService>().list()?;
+        Ok((settings, model, ai.secrets_for_redaction(&connections)?))
+    })
+    .await?;
+    diagram_preview(
+        &settings,
+        &model,
+        &secrets,
+        &request,
+        &mut contura_core::ai::log::Log::new(),
+    )
+}
+
+/// Starts a diagram Ask and returns once it is registered, under the diagram's place so
+/// one runs per diagram and `ai_cancel` stops it; its events end with `done` or `error`.
+/// The .flow file is read off the runtime, before the model is asked and again after.
+#[tauri::command]
+pub async fn ai_diagram_ask(
+    app: AppHandle,
+    data: State<'_, DataDir>,
+    request: DiagramAskRequest,
+    events: Channel<AiEvent>,
+) -> Result<(), Error> {
+    let reader = app.clone();
+    let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
+    let (provider, model, settings, secrets) = off_runtime(move || {
+        let ai = reader.state::<AiService>();
+        let (provider, settings, model) = ai.provider_for(None)?;
+        let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&model))?;
+        let connections = reader.state::<ConnectionService>().list()?;
+        Ok((
+            provider,
+            model,
+            settings,
+            ai.secrets_for_redaction(&connections)?,
+        ))
+    })
+    .await?;
+    let place = diagram_place(&request.file);
+    let request_id = request.request_id.clone();
+    let dir = data.0.clone();
+    let (go, registered) = tokio::sync::oneshot::channel::<()>();
+    let task_app = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        if registered.await.is_err() {
+            return;
+        }
+        let _finish = Finish {
+            app: task_app,
+            request_id: request.request_id.clone(),
+        };
+        let mut end = EndOnDrop::new(send_to(&events));
+        // A page that has gone away is not an error.
+        let emit = |e: AiEvent| {
+            let _ = events.send(e);
+        };
+        let file = request.file.clone();
+        let disk = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, Error>> + Send>> {
+            let (dir, file) = (dir.clone(), file.clone());
+            Box::pin(async move {
+                tauri::async_runtime::spawn_blocking(move || {
+                    contura_core::diagrams::read_diagram(&dir, &file).map(|files| files.text)
+                })
+                .await
+                .map_err(|e| Error::File(format!("cannot read the diagram: {e}")))?
+            })
+        };
+        // Every error has already been sent as the last event.
+        let _ = diagram_ask_stream(
+            &*provider, &settings, &model, &secrets, &request, &disk, &emit,
+        )
+        .await;
+        end.ended();
+    });
+    let ai = app.state::<AiService>();
+    if let Err(e) = ai.start(&place, &request_id, task.inner().abort_handle()) {
+        task.abort();
+        return Err(e);
+    }
+    let _ = go.send(());
+    Ok(())
+}
+
+/// Keeps what the user did with the changes a diagram answer proposed. `None` for an
+/// answer with no tool call.
+#[tauri::command]
+pub fn ai_record_tool_result(
+    ai: Ai<'_>,
+    thread_id: ThreadId,
+    message_at: i64,
+    outcome: ToolOutcome,
+) -> Result<Option<ToolOutcome>, Error> {
+    ai.record_tool_result(thread_id, message_at, outcome)
+}
+
+/// The 20 newest tool uses, for Recent tool uses.
+#[tauri::command]
+pub fn ai_recent_tool_uses(ai: Ai<'_>) -> Result<Vec<ToolUseRow>, Error> {
+    ai.recent_tool_uses(20)
+}
+
+/// Compact now: folds the open Topic's older turns into one summary, whatever the 85%.
+/// Registered like an Ask (`Busy` while one runs in the place, stopped by `ai_cancel`);
+/// its log, status, Compact row and Sent record go to `events`, and a Stop ends them with
+/// `Error{Cancelled}`. Returns the compaction once it is stored, its record trimmed as in
+/// the `compacted` event.
+#[tauri::command]
+pub async fn ai_compact(
+    app: AppHandle,
+    request: CompactRequest,
+    events: Channel<AiEvent>,
+) -> Result<Compaction, Error> {
+    let group = request.group_id;
+    let reader = app.clone();
+    let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
+    let (provider, model, settings, secrets) = off_runtime(move || {
+        let ai = reader.state::<AiService>();
+        let (provider, settings, model) = ai.provider_for(group)?;
+        let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&model))?;
+        let connections = reader.state::<ConnectionService>().list()?;
+        Ok((
+            provider,
+            model,
+            settings,
+            ai.secrets_for_redaction(&connections)?,
+        ))
+    })
+    .await?;
+    let place = request.place.clone();
+    let request_id = request.request_id.clone();
+    let task_app = app.clone();
+    let work = async move {
+        let catalog = task_app.state::<ConnectionService>();
+        let mut end = EndOnDrop::new(send_to(&events));
+        let emit = |e: AiEvent| {
+            // A page that has gone away is not an error.
+            let _ = events.send(e);
+        };
+        let out = compact_now(
+            &*provider, &*catalog, &settings, &model, &secrets, &request, &emit,
+        )
+        .await;
+        end.ended();
+        out
+    };
+    // As the `compacted` event: the record trimmed (the full one is fetched on demand).
+    app.state::<AiService>()
+        .run_registered(&place, &request_id, work)
+        .await
+        .map(|c| c.trimmed_copy())
+}
+
+/// Undoes a compaction: its messages show and go again. A second Undo returns the same
+/// view.
+#[tauri::command]
+pub fn ai_undo_compact(
+    ai: Ai<'_>,
+    thread_id: ThreadId,
+    compaction_id: CompactionId,
+) -> Result<ThreadView, Error> {
+    ai.undo_compaction(thread_id, compaction_id)
+}
+
 /// Stops a running Ask; false when it had already ended.
 #[tauri::command]
 pub fn ai_cancel(ai: Ai<'_>, request_id: String) -> bool {
     ai.cancel(&request_id)
 }
 
+/// Stops every running Ask or Compact now of the place; false when none was running.
+#[tauri::command]
+pub fn ai_cancel_place(ai: Ai<'_>, place: String) -> bool {
+    ai.cancel_place(&place)
+}
+
+/// The place's threads as summaries. The Core reads every stored thread of the place
+/// itself to register their SQL again (stored answers can be inserted and run), so no
+/// message crosses IPC.
 #[tauri::command]
 pub fn list_ai_threads(
     ai: Ai<'_>,
     connections: State<'_, ConnectionService>,
     place: String,
-) -> Result<Vec<AiThread>, Error> {
-    let threads = ai.list_threads(&place)?;
-    // Stored answers can be inserted and run again, so their SQL is registered again.
-    connections.register_ai_threads(&threads);
-    Ok(threads)
+) -> Result<Vec<ThreadSummary>, Error> {
+    ai.list_threads_registering(&place, &connections)
 }
 
-/// Saves a thread; `request_id` is the Ask whose answer this save adds, so the Core writes
-/// the AI Context that Ask used into the answer's record.
+/// A thread with its Topics and compactions; every record is trimmed.
+#[tauri::command]
+pub fn get_ai_thread(ai: Ai<'_>, thread_id: ThreadId) -> Result<Option<ThreadView>, Error> {
+    ai.thread_view(thread_id)
+}
+
+/// The full stored record of the answer at `message_at`.
+#[tauri::command]
+pub fn ai_answer_record(
+    ai: Ai<'_>,
+    thread_id: ThreadId,
+    message_at: i64,
+) -> Result<Option<AnswerRecord>, Error> {
+    ai.answer_record(thread_id, message_at)
+}
+
+/// Searches the Topics of a place's threads.
+#[tauri::command]
+pub fn ai_search_threads(ai: Ai<'_>, place: String, text: String) -> Result<Vec<ThreadHit>, Error> {
+    ai.search_threads(&place, &text)
+}
+
+/// Saves a thread and returns its view; `request_id` is the Ask whose answer this save
+/// adds, so the Core writes the AI Context that Ask used into the answer's record.
 #[tauri::command]
 pub fn save_ai_thread(
     ai: Ai<'_>,
     thread: AiThread,
     request_id: Option<String>,
-) -> Result<(), Error> {
+) -> Result<ThreadView, Error> {
     ai.save_thread_for(&thread, request_id.as_deref())
 }
 
@@ -1092,7 +1343,7 @@ pub async fn open_url(url: String) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
 
     /// On a one-thread runtime, `f` waits for a task on that runtime. It only gets its
@@ -1116,5 +1367,149 @@ mod tests {
             got
         });
         assert_eq!(got.unwrap(), "read");
+    }
+
+    fn sink() -> (
+        Arc<Mutex<Vec<AiEvent>>>,
+        impl Fn(AiEvent) + Send + Sync + 'static,
+    ) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let into = events.clone();
+        (events, move |e| into.lock().unwrap().push(e))
+    }
+
+    /// Stop it aborts the task, so the Ask sends nothing of its own: the guard ends the
+    /// stream, or the inline box keeps writing.
+    #[test]
+    fn an_aborted_stream_ends_with_cancelled() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (events, send) = sink();
+        rt.block_on(async move {
+            let task = tokio::spawn(async move {
+                let _end = EndOnDrop::new(send);
+                std::future::pending::<()>().await;
+            });
+            tokio::task::yield_now().await;
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        });
+        let events = events.lock().unwrap();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [AiEvent::Error {
+                    error: AiError::Cancelled,
+                    partial: false
+                }]
+            ),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn a_finished_stream_sends_nothing_more() {
+        let (events, send) = sink();
+        let mut end = EndOnDrop::new(send);
+        end.ended();
+        drop(end);
+        assert!(events.lock().unwrap().is_empty());
+    }
+}
+
+/// Rules about how the commands are written, checked on this file's own text.
+#[cfg(test)]
+mod source_rules {
+    /// Each command body, from its `pub async fn <name>(` or `pub fn <name>(` up to the
+    /// next line that is exactly `}`.
+    fn bodies() -> Vec<(String, Vec<&'static str>)> {
+        let source: &'static str = include_str!("commands.rs");
+        // The rules' own text is not a command.
+        let source = &source[..source.find("mod source_rules").unwrap()];
+        let lines: Vec<&str> = source.lines().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            let rest = line
+                .strip_prefix("pub async fn ")
+                .or_else(|| line.strip_prefix("pub fn "));
+            if let Some(rest) = rest {
+                let name = rest.split('(').next().unwrap().to_string();
+                let end = (i..lines.len()).find(|&j| lines[j] == "}").unwrap();
+                out.push((name, lines[i..=end].to_vec()));
+                i = end;
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn named(name: &str) -> Vec<&'static str> {
+        bodies()
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("no command {name}"))
+            .1
+    }
+
+    #[test]
+    fn store_writes_stay_off_the_runtime() {
+        let mut found = 0;
+        for (name, body) in bodies() {
+            if !line_starts_async(&body) {
+                continue;
+            }
+            // Inside an `off_runtime(move ||` closure from where it opens to the
+            // `.await` that ends the call.
+            let mut opened = false;
+            for line in &body {
+                if line.contains("off_runtime(move ||") {
+                    opened = true;
+                }
+                let writes = ["store_listing(", "save_settings(", "set_model_prefs("]
+                    .iter()
+                    .any(|w| line.contains(w));
+                if writes {
+                    found += 1;
+                    assert!(
+                        opened || line.contains("off_runtime("),
+                        "{name}: a store write on the runtime: {line}"
+                    );
+                }
+                if line.contains(".await") {
+                    opened = false;
+                }
+            }
+        }
+        assert!(found > 0, "the rule matched no store write");
+    }
+
+    fn line_starts_async(body: &[&str]) -> bool {
+        body[0].starts_with("pub async fn ")
+    }
+
+    #[test]
+    fn asks_read_settings_once() {
+        for name in [
+            "ai_ask_stream",
+            "ai_preview",
+            "ai_diagram_ask",
+            "ai_diagram_preview",
+            "ai_compact",
+        ] {
+            let body = named(name).join("\n");
+            assert!(body.contains("model_info_in("), "{name} reads twice");
+            assert!(!body.contains(".model_info("), "{name} reads twice");
+        }
+    }
+
+    #[test]
+    fn the_rules_see_the_commands() {
+        let names: Vec<String> = bodies().into_iter().map(|(n, _)| n).collect();
+        for want in ["ai_models", "ai_ask_stream", "ai_preview", "ai_diagram_ask"] {
+            assert!(names.iter().any(|n| n == want), "{want}");
+        }
     }
 }

@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Contura for Windows and Linux</title>
+<meta name="description" content="Contura is a portable database client for Windows and Linux. Write SQL, drag tables together or ask in plain words, and read what will happen before anything runs. MySQL, PostgreSQL and SQLite.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+<script src="site.js"></script>
+<script src="kit.js" defer></script>
+<script src="home-play.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="Contura home">
+      <svg viewBox="0 0 256 256" aria-hidden="true"><path fill="var(--ink)" d="M52 40A60 12 0 0 1 172 40V80A60 12 0 0 1 52 80Z"/><path fill="var(--ink)" d="M52 172A60 12 0 0 0 172 172V212A60 12 0 0 1 52 212Z"/><path fill="var(--accent)" d="M84 104A60 12 0 0 0 204 104V148A60 12 0 0 1 84 148Z"/></svg>
+      Contura <small>v0.7.0</small>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="query.html">Query</a>
+      <a href="model.html">Model</a>
+      <a href="data.html">Data</a>
+      <a href="ai.html">AI</a>
+      <a href="safety.html">Safety</a>
+    </nav>
+    <a class="nav-dl" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="stmt hero" id="top" data-name="Review, then run" aria-labelledby="h-hero">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">1</span></div>
+      <div class="body">
+        <p class="eyebrow"><i aria-hidden="true">~</i>v0.7.0, a prototype pre-release for Windows and Linux</p>
+        <h1 class="display" id="h-hero">Review, <span class="tail">then run.</span></h1>
+        <div class="hero-row">
+          <p class="lede">Contura is a database client for MySQL, PostgreSQL and SQLite. Write SQL, drag tables together or ask in plain words, then read exactly what will happen before anything touches your data.</p>
+          <div class="hero-act dl-box">
+            <div class="row">
+              <div class="dl-btns">
+              <button class="btn" type="button" data-download aria-describedby="dl-meta" aria-label="Download for Windows">
+                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
+                <span><span class="dl-pre">Download for </span>Windows</span>
+              </button>
+              <button class="btn" type="button" data-download aria-describedby="dl-meta" aria-label="Download for Linux">
+                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 .8C6 .8 4.9 2.4 4.9 4.5c0 1-.4 1.8-1 2.7C3 8.4 2.3 9.7 2.3 11.2c0 .8.2 1.4.5 1.9h10.4c.3-.5.5-1.1.5-1.9 0-1.5-.7-2.8-1.6-4-.6-.9-1-1.7-1-2.7C11.1 2.4 10 .8 8 .8zM8 7.6c-1.4 0-2.4 1.5-2.4 3.4S6.6 13.6 8 13.6s2.4-.7 2.4-2.6S9.4 7.6 8 7.6zM6.9 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4zM9.1 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4z"/><path fill="currentColor" d="M7 5.6h2L8 6.7z"/><path fill="currentColor" d="M2.6 13.4c.5-.8 2.1-.9 2.9-.4.5.3.6 1 .2 1.4-.7.7-2.7.6-3.2 0-.2-.3-.1-.7.1-1zM13.4 13.4c-.5-.8-2.1-.9-2.9-.4-.5.3-.6 1-.2 1.4.7.7 2.7.6 3.2 0 .2-.3.1-.7-.1-1z"/></svg>
+                <span><span class="dl-pre">Download for </span>Linux</span>
+              </button>
+              </div>
+              <a class="ghost" href="#demo">Try it in the page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></a>
+            </div>
+            <p class="meta" id="dl-meta">v0.7.0 · Windows 10 and 11 · Linux, AppImage or .deb · 64-bit · about 20&nbsp;MB · no installer on Windows</p>
+            <p class="note" data-note role="status" hidden></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec flush" id="habit" data-name="The habit" aria-labelledby="h-habit">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">2</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>The habit</p>
+            <h2 class="headline" id="h-habit">One habit for everyone who opens the database.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>Developers write the SQL. Analysts drag tables onto a canvas. Support and product people ask a question in plain words.</p>
+            <p class="muted">Contura treats all three the same way: it shows you the SQL first, then waits for you to press Run.</p>
+          </div>
+        </div>
+        <ol class="cells three">
+          <li data-reveal><span class="no">01</span><h3>Say what you need</h3><p>Type SQL with completion, drag tables so Contura draws the joins from your Foreign Keys, or ask the assistant. All three end as SQL you can read.</p></li>
+          <li data-reveal style="--d:90ms"><span class="no">02</span><h3>Read what will happen</h3><p>Grid edits wait as Pending Edits with their SQL one click away. A statement that would change every row asks first. On a Production Connection, every write is shown in full before it runs.</p></li>
+          <li data-reveal style="--d:180ms"><span class="no">03</span><h3>Run it, or don't</h3><p>Nothing runs until you press Run or Save. The assistant writes SQL and never runs it. Pending Edits save together, in one transaction.</p></li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec" id="demo" data-name="Live demo" aria-labelledby="h-demo">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">3</span></div>
+      <div class="body">
+        <div class="split-head flip">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow live"><span class="live-dot" aria-hidden="true"></span><b>Live, in this page</b></p>
+            <h2 class="headline" id="h-demo">Drag two tables. Read the SQL. Press Run.</h2>
+          </div>
+          <div class="sh-b copy" data-reveal style="--d:120ms">
+            <p>This is Contura's own window, working. Drag a table from the tree onto the canvas and the join appears from its Foreign Key. Tick columns and the SQL below follows. Run reads from a small sample copy of billing that lives in this page.</p>
+            <p class="muted">The assistant's answers are pre-written for this demo, and nothing leaves the page.</p>
+          </div>
+        </div>
+        <figure class="win-wrap" data-reveal>
+          <div class="win-host" data-playground role="region" aria-label="Contura playground: a Visual Query tab with the Ask panel"></div>
+          <figcaption>Visual Query 1 on freight-stg, schema billing. Drag or tap a table, tick columns, press Run, or pick a question in the Ask panel.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt sec flush" id="pages" data-name="Features" aria-labelledby="h-pages">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">4</span></div>
+      <div class="body">
+        <div class="split-head">
+          <div class="sh-a" data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>Five pages</p>
+            <h2 class="headline" id="h-pages">Everything else, one page each.</h2>
+          </div>
+          <p class="sh-b muted" data-reveal style="--d:120ms">Each page shows the real window doing the job, with sample data you can change.</p>
+        </div>
+        <ul class="bento">
+          <li class="b-query" data-reveal>
+            <a href="query.html">
+              <span class="no"><i aria-hidden="true">~</i>01 · Query</span>
+              <h3>Write it, edit it in the grid, or drag it together.</h3>
+              <p>The SQL editor runs the statement you are in. The data grid holds every change as a Pending Edit until you save. Visual Query joins tables by drag.</p>
+              <div class="vis code" aria-hidden="true"><ol>
+                <li><span><span class="k">SELECT</span> number, total, issued_at</span></li>
+                <li><span><span class="k">FROM</span> billing.invoices <span class="k">WHERE</span> status = <span class="s">'open'</span>;</span></li>
+                <li><span> </span></li>
+                <li class="w"><span><span class="k">UPDATE</span> billing.invoices <span class="k">SET</span> status = <span class="s">'void'</span>;</span></li>
+                <li><span class="c">-- no WHERE: Contura asks before it runs</span></li>
+              </ol></div>
+              <span class="go">Open the Query page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
+            </a>
+          </li>
+          <li class="b-model" data-reveal style="--d:90ms">
+            <a href="model.html">
+              <span class="no"><i aria-hidden="true">~</i>02 · Model</span>
+              <h3>The schema in text, the diagram for free.</h3>
+              <p>DBML models, Schema Compare with a Sync Script you tick line by line, and nine kinds of diagram typed as .flow text.</p>
+              <div class="vis chips" aria-hidden="true"><span>billing.dbml</span><span>Sync Script</span><span>checkout.flow</span></div>
+              <span class="go">Open the Model page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
+            </a>
+          </li>
+          <li class="b-data" data-reveal style="--d:180ms">
+            <a href="data.html">
+              <span class="no"><i aria-hidden="true">~</i>03 · Data</span>
+              <h3>Move data, and see the plan first.</h3>
+              <p>Import, Export, Transfer, Backup and Restore, Lineage and Explain. Each one shows what it will do before it does it.</p>
+              <div class="vis chips" aria-hidden="true"><span>CSV</span><span>JSON</span><span>Excel</span><span>SQL INSERT</span></div>
+              <span class="go">Open the Data page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
+            </a>
+          </li>
+          <li class="b-ai" data-reveal>
+            <a href="ai.html">
+              <span class="no"><i aria-hidden="true">~</i>04 · AI</span>
+              <h3>AI that shows every byte it sends.</h3>
+              <p>Bring your own provider and key. Set what the assistant sees per Connection, and read the Sends line before you ask.</p>
+              <div class="vis meter" aria-hidden="true">
+                <div><i style="--f:0%"></i><span>Nothing</span></div>
+                <div><i style="--f:33.4%"></i><span>Schema only</span></div>
+                <div><i style="--f:66.7%"></i><span>Schema and query text</span></div>
+                <div><i style="--f:100%"></i><span>Plus sample rows</span></div>
+              </div>
+              <span class="go">Open the AI page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
+            </a>
+          </li>
+          <li class="b-safe" data-reveal style="--d:90ms">
+            <a href="safety.html">
+              <span class="no"><i aria-hidden="true">~</i>05 · Safety</span>
+              <h3>Production asks. Read-only refuses.</h3>
+              <p>Mark a Connection Production and every write waits for your yes. Mark it Read-only and the app blocks writes, with the server session opened read-only as a backstop. Passwords sit in the system keyring: Windows Credential Manager, or the Secret Service on Linux.</p>
+              <div class="vis chips" aria-hidden="true"><span class="pill prod">PROD</span><span class="pill ro">Read-only</span></div>
+              <span class="go">Open the Safety page<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M8.5 3.5 13 8l-4.5 4.5"/></svg></span>
+            </a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="stmt finale" id="download" data-name="Download" aria-labelledby="h-dl">
+    <div class="wrap">
+      <div class="ln" aria-hidden="true"><span class="mk">+</span><span class="no">5</span></div>
+      <div class="body">
+        <p class="word" aria-hidden="true" data-reveal>Cont<span class="o">u</span>ra</p>
+        <div class="dl-row">
+          <div data-reveal>
+            <p class="eyebrow"><i aria-hidden="true">~</i>Download</p>
+            <h2 id="h-dl">For Windows and Linux. Run it from any folder you like.</h2>
+          </div>
+          <div class="dl-box" data-reveal style="--d:120ms">
+            <p class="copy">On Windows, Contura is one exe with no installer. On Linux it is one AppImage, or a .deb if you prefer a package. Settings, Connections, Query History and Saved Queries live in a <code>data</code> folder beside the exe or the AppImage, so copying the folder takes your setup along.</p>
+            <div class="dl-btns">
+              <button class="btn" type="button" data-download aria-label="Download for Windows">
+              <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z"/></svg>
+                <span><span class="dl-pre">Download for </span>Windows</span>
+            </button>
+              <button class="btn" type="button" data-download aria-label="Download for Linux">
+                <svg class="win" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M8 .8C6 .8 4.9 2.4 4.9 4.5c0 1-.4 1.8-1 2.7C3 8.4 2.3 9.7 2.3 11.2c0 .8.2 1.4.5 1.9h10.4c.3-.5.5-1.1.5-1.9 0-1.5-.7-2.8-1.6-4-.6-.9-1-1.7-1-2.7C11.1 2.4 10 .8 8 .8zM8 7.6c-1.4 0-2.4 1.5-2.4 3.4S6.6 13.6 8 13.6s2.4-.7 2.4-2.6S9.4 7.6 8 7.6zM6.9 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4zM9.1 3.6a.6.7 0 1 0 0 1.4.6.7 0 0 0 0-1.4z"/><path fill="currentColor" d="M7 5.6h2L8 6.7z"/><path fill="currentColor" d="M2.6 13.4c.5-.8 2.1-.9 2.9-.4.5.3.6 1 .2 1.4-.7.7-2.7.6-3.2 0-.2-.3-.1-.7.1-1zM13.4 13.4c-.5-.8-2.1-.9-2.9-.4-.5.3-.6 1-.2 1.4.7.7 2.7.6 3.2 0 .2-.3.1-.7-.1-1z"/></svg>
+                <span><span class="dl-pre">Download for </span>Linux</span>
+              </button>
+            </div>
+            <p class="meta">v0.7.0 prototype · portable · Windows 10 and 11 · Linux, AppImage or .deb · 64-bit</p>
+            <p class="note" data-note role="status" hidden></p>
+            <div class="facts">
+              <div><b>1</b><span>file: an exe or an AppImage</span></div>
+              <div><b>3</b><span>engines: MySQL, PostgreSQL, SQLite</span></div>
+              <div><b>20&nbsp;MB</b><span>about, on disk</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <nav class="foot-nav" aria-label="All pages">
+      <a href="index.html">Home</a><a href="query.html">Query</a><a href="model.html">Model</a><a href="data.html">Data</a><a href="ai.html">AI</a><a href="safety.html">Safety</a>
+    </nav>
+    <p>Core in Rust, the window in Tauri 2 with React. Nothing leaves the PC except what you send to an AI provider you set up yourself.</p>
+    <p>The windows on these pages are the app's own screens, drawn live. Every name and number in them is sample data.</p>
+  </div>
+</footer>
+
+<div class="status" role="contentinfo" aria-label="Page status">
+  <div class="in">
+    <p class="l"><b data-ln>Ln 1</b><span data-sec>Review, then run</span><span class="hide-s">index.html</span></p>
+    <div class="r">
+      <span class="pending" data-pending aria-live="polite">1 pending</span>
+      <button class="theme-btn" type="button" data-theme-btn aria-label="Switch theme">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.2 1.1a.6.6 0 0 1 .2.7A5.6 5.6 0 0 0 14.2 9.6a.6.6 0 0 1 .8.6A7 7 0 1 1 5.6 1a.6.6 0 0 1 .6.1z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -137,3 +137,88 @@ test("item_16_right_click_hides_the_labels_and_the_choice_is_kept", async () => 
 test("a_tip_without_a_key_is_just_the_words", () => {
   expect(featureTip({ id: "model", label: "Model", tip: "New Schema Model" })).toBe("New Schema Model");
 });
+
+/** P11-36: at the minimum window width the groups clip inside their own box; Ask stays and the rest is under More. */
+test("parity_P11_36_ask_stays_reachable_and_the_overflow_moves_into_more", async () => {
+  const user = userEvent.setup();
+  const groupsOf = () => Array.from(document.querySelectorAll<HTMLElement>(".feature-groups .feature-button"));
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("feature-groups") ? 500 : 0;
+  });
+  const left = vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (this: HTMLElement) {
+    return Math.max(0, groupsOf().indexOf(this)) * 70;
+  });
+  const wide = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("feature-button") ? 64 : 0;
+  });
+  try {
+    const d = deps(true);
+    const f = featureGroups(d);
+    render(<FeatureBar groups={f.groups} end={f.end} />);
+    const bar = screen.getByRole("toolbar", { name: "Features" });
+    // Ask is outside the clipped groups, at the right end.
+    const ask = within(bar).getByRole("button", { name: "Ask" });
+    expect(ask.closest(".feature-groups")).toBeNull();
+    await user.click(ask);
+    expect(d.ask).toHaveBeenCalledTimes(1);
+    // The seven that fit stay; the rest are hidden in the strip and listed under More.
+    expect(groupsOf().filter((b) => !b.hasAttribute("data-overflow")).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "New query",
+      "Visual Query",
+      "Table",
+      "View",
+      "Function",
+      "Import",
+      "Export",
+    ]);
+    await user.click(within(bar).getByRole("button", { name: "More features" }));
+    const menu = screen.getByRole("menu", { name: "More features" });
+    expect(within(menu).getAllByRole("menuitem").map((i) => i.querySelector(".menu-label")?.textContent)).toEqual([
+      "Transfer",
+      "Back up",
+      "Restore",
+      "Compare",
+      "Model",
+      "Diagram",
+      "History",
+    ]);
+    await user.click(within(menu).getByRole("menuitem", { name: /Diagram/ }));
+    expect(d.newDiagram).toHaveBeenCalledTimes(1);
+  } finally {
+    width.mockRestore();
+    left.mockRestore();
+    wide.mockRestore();
+  }
+});
+
+test("parity_P11_36_no_more_button_while_everything_fits", () => {
+  // A laid-out box exactly as wide as the last button's right edge: everything fits. Two pixels less and the last
+  // button moves into More, so this test fails if the fit check is off by more than its 1 px rounding allowance.
+  const groupsOf = () => Array.from(document.querySelectorAll<HTMLElement>(".feature-groups .feature-button"));
+  let slack = 0;
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("feature-groups") ? (groupsOf().length - 1) * 70 + 64 + slack : 0;
+  });
+  const left = vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (this: HTMLElement) {
+    return Math.max(0, groupsOf().indexOf(this)) * 70;
+  });
+  const wide = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("feature-button") ? 64 : 0;
+  });
+  try {
+    const f = featureGroups(deps(true));
+    const fits = render(<FeatureBar groups={f.groups} end={f.end} />);
+    expect(groupsOf().length).toBeGreaterThan(1);
+    expect(groupsOf().filter((b) => b.hasAttribute("data-overflow"))).toEqual([]);
+    expect(screen.queryByRole("button", { name: "More features" })).toBeNull();
+    fits.unmount();
+    slack = -2;
+    render(<FeatureBar groups={f.groups} end={f.end} />);
+    expect(groupsOf().filter((b) => b.hasAttribute("data-overflow"))).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "More features" })).toBeTruthy();
+  } finally {
+    width.mockRestore();
+    left.mockRestore();
+    wide.mockRestore();
+  }
+});

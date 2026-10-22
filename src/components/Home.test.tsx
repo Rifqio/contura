@@ -6,6 +6,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import App from "../App";
 import Home from "./Home";
 import appCss from "../styles/app.css?raw";
+import { setPlatformForTests } from "../platform";
 
 /** The tab strip's New query button (the feature bar has its own, item 16). */
 const stripNew = () => screen.getAllByRole("button", { name: "New query" }).find((b) => b.closest(".tab-strip")) ?? (() => { throw new Error("no New query in the tab strip"); })();
@@ -258,7 +259,7 @@ test("empty_state_follows_dn_with_the_laragon_box", async () => {
   renderHome({ groups: [], connections: [] });
   expect(screen.getByText("No Connections yet")).toBeTruthy();
   expect(screen.getByText("Add a Connection to browse, query and change a database.")).toBeTruthy();
-  expect(await screen.findByText("Found on this PC in Laragon. Nothing is saved until you add it.")).toBeTruthy();
+  expect(await screen.findByText("Found on this computer in Laragon. Nothing is saved until you add it.")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "New Connection" }));
   expect(await screen.findByRole("dialog", { name: "New Connection" })).toBeTruthy();
 });
@@ -267,7 +268,7 @@ test("empty_state_without_suggestions_has_no_laragon_box", async () => {
   routeInvoke({ suggested_connections: () => [] });
   renderHome({ groups: [], connections: [] });
   await waitFor(() => expect(callsTo("suggested_connections").length).toBeGreaterThan(0));
-  expect(screen.queryByText(/Found on this PC/)).toBeNull();
+  expect(screen.queryByText(/Found on this computer/)).toBeNull();
 });
 
 const suggest = [
@@ -396,7 +397,7 @@ test("suggestions_show_brand_mark_name_with_version_and_mono_host", async () => 
   expect(rulesOf(".home-suggested-target")).toMatch(/font:\s*var\(--font-mono-small\)/);
   expect(within(list).getByRole("img", { name: "MySQL" }).getAttribute("style")).toContain("var(--db-mysql)");
   expect(rulesOf(".home-suggested-row .button")).toMatch(/height:\s*24px/);
-  expect(screen.getByText("Found on this PC in Laragon. Nothing is saved until you add it.")).toBeTruthy();
+  expect(screen.getByText("Found on this computer in Laragon. Nothing is saved until you add it.")).toBeTruthy();
 });
 
 test("empty_new_connection_has_ctrl_n", () => {
@@ -473,4 +474,20 @@ test("item_11_a_dragged_connection_lifts_out_and_settles_into_its_new_group", as
   fireEvent.drop(orbit, { dataTransfer });
   await waitFor(() => expect(callsTo("move_connection")).toEqual([{ id: "c2", groupId: "g2" }]));
   expect(orbit.className).not.toContain("group-card-drop");
+});
+
+test("parity_P11_38_laragon_box_names_this_pc_on_windows", async () => {
+  routeInvoke({
+    suggested_connections: () => [
+      { name: "Laragon MySQL", dialect: "mysql", host: "127.0.0.1", port: 3306, user: "root", version: "8.0.30" },
+    ],
+  });
+  try {
+    setPlatformForTests("windows");
+    renderHome({ groups: [], connections: [] });
+    expect(await screen.findByText("Found on this PC in Laragon. Nothing is saved until you add it.")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Found on this PC" })).toBeTruthy();
+  } finally {
+    setPlatformForTests(null);
+  }
 });

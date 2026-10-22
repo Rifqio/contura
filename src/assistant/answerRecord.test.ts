@@ -91,7 +91,17 @@ test("build_record_from_a_done_answer", () => {
     actions: [],
     context: null,
     commandError: null,
+    maxTokens: 4096,
   });
+});
+
+test("the_record_keeps_the_max_tokens_the_core_sent", () => {
+  // A length stop without usage names this cap, whatever the settings say later.
+  const r = buildRecord(end({ done: done({ stop: "length", usage: null, maxTokens: 28_672 }), text: "x" }), NO_LIVE);
+  expect(r.maxTokens).toBe(28_672);
+  expect(recordOf(JSON.parse(JSON.stringify(r)))?.maxTokens).toBe(28_672);
+  // A record saved before the Core sent it has none.
+  expect(recordOf({ millis: 5 })?.maxTokens).toBeUndefined();
 });
 
 test("build_record_from_a_failure_keeps_the_ai_error", () => {
@@ -128,6 +138,18 @@ test("sent_line_when_the_connection_failed", () => {
   expect(sentLine(r, at)).toBe("11:42 · Not sent to Groq, no connection");
   const late = buildRecord(end({ error: { kind: "ai", message: { kind: "timeout", phase: "first byte" } } }), { ...NO_LIVE, sent: sentRecord() });
   expect(neverLeft(late)).toBe(false);
+});
+
+test("network_connect_never_left", () => {
+  const at = new Date(2026, 9, 19, 11, 42, 30).getTime();
+  const refused = buildRecord(end({ error: { kind: "ai", message: { kind: "network", host: "api.groq.com", connect: true } } }), { ...NO_LIVE, sent: sentRecord() });
+  expect(neverLeft(refused)).toBe(true);
+  expect(sentLine(refused, at)).toBe("11:42 · Not sent to Groq, no connection");
+  // A network failure after the request went is not one.
+  const late = buildRecord(end({ error: { kind: "ai", message: { kind: "network", host: "api.groq.com", connect: false } } }), { ...NO_LIVE, sent: sentRecord() });
+  expect(neverLeft(late)).toBe(false);
+  const old = buildRecord(end({ error: { kind: "ai", message: { kind: "network", host: "api.groq.com" } } }), { ...NO_LIVE, sent: sentRecord() });
+  expect(neverLeft(old)).toBe(false);
 });
 
 const OUTLINE_LEFT = { bytes: 1204, tokens: 300, hash: "00aa11bb22cc33dd", pickedAreas: 0, pickedTables: 0, dropped: 0, usage: null, exact: null, left: true };

@@ -108,12 +108,40 @@ A question put to the AI assistant, inline where the user is working or in the c
 _Avoid_: Prompt, query, chat message
 
 **Sends**:
-The line shown before an Ask, listing exactly what would leave the PC (question, schema, query text, sample rows). "Show exactly" opens the full text.
+The line shown before an Ask, listing exactly what would leave the PC (question, schema, query text, sample rows). The Core builds it, and the text it shows is the text that is sent. "Show exactly" opens the full text.
 _Avoid_: Payload, context, preview
 
 **AI access**:
 The per-Connection setting that decides what an Ask may send: nothing, schema only, schema and query text, or those plus sample rows.
 _Avoid_: AI permission, privacy mode, consent flag
+
+**AI Context**:
+The local index of one database's schema that the assistant keeps per Connection: one card per table, a Context Tree, and a full-text index. It lets an Ask send the tables the question needs instead of the whole schema.
+_Avoid_: Index, embeddings, cache
+
+**Context Tree**:
+The outline of an AI Context: Areas that group related tables, each with its tables below it. For a large schema the model is shown this outline once and picks the Areas and tables to read.
+_Avoid_: Schema map, table list
+
+**Area**:
+A named group of related tables in a Context Tree, such as the tables around orders.
+_Avoid_: Cluster, module, folder
+
+**Topic**:
+A stretch of a chat thread about one subject, with a short summary. A new Topic starts after a long pause, in a new place, or when the subject changes.
+_Avoid_: Session, conversation, chapter
+
+**Sent record**:
+What one Ask sent to the provider, kept with the answer: sizes, the items sent, and a hash of the text. It keeps the exact text only when the privacy switch for that is on.
+_Avoid_: Request log, history
+
+**answer log**:
+The steps and log lines of one answer, opened with "Show log". It lists what the Core checked and sent, and says that nothing ran on the database.
+_Avoid_: Raw log, process
+
+**compaction**:
+Folding the older turns of a thread into a summary when the thread nears the model's context window. The user can show the summary and undo it.
+_Avoid_: Truncation, trimming
 
 ### Changing databases
 

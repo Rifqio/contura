@@ -64,15 +64,9 @@ pub(super) fn has_usable_rowid(
         .is_some_and(|s| !s.to_ascii_uppercase().contains("WITHOUT ROWID")))
 }
 
-/// Primary keys are selected as-is. Every other column is cut to
-/// `PREVIEW_CHARS + 1` in the SQL, plus its full byte length.
-fn build_select(
-    path: &ObjectPath,
-    cols: &[ColumnInfo],
-    order_by: &[(String, bool)],
-    where_sql: &str,
-    offset: u64,
-) -> String {
+/// The grid's select list: primary keys whole, every other column cut in the SQL plus
+/// its full byte length.
+fn select_list(cols: &[ColumnInfo]) -> Vec<String> {
     let mut list = Vec::new();
     for c in cols {
         let q = quote_double(&c.name);
@@ -86,6 +80,19 @@ fn build_select(
             list.push(format!("length(CAST({q} AS BLOB))"));
         }
     }
+    list
+}
+
+/// Primary keys are selected as-is. Every other column is cut to
+/// `PREVIEW_CHARS + 1` in the SQL, plus its full byte length.
+fn build_select(
+    path: &ObjectPath,
+    cols: &[ColumnInfo],
+    order_by: &[(String, bool)],
+    where_sql: &str,
+    offset: u64,
+) -> String {
+    let list = select_list(cols);
     let mut sql = format!(
         "SELECT {} FROM {}",
         list.join(", "),
@@ -132,6 +139,68 @@ pub(super) fn cell_of(value: ValueRef<'_>, total: Option<i64>) -> Cell {
     }
 }
 
+/// One result row of a `select_list` query as cells.
+fn read_row(row: &rusqlite::Row<'_>, cols: &[ColumnInfo]) -> Result<Vec<Cell>> {
+    let mut idx = 0;
+    let mut cells = Vec::with_capacity(cols.len());
+    for c in cols {
+        let value = row.get_ref(idx).map_err(query_err)?;
+        if c.is_primary_key {
+            idx += 1;
+            cells.push(cell_of(value, None));
+        } else {
+            let total: Option<i64> = row.get(idx + 1).map_err(query_err)?;
+            idx += 2;
+            cells.push(cell_of(value, total));
+        }
+    }
+    Ok(cells)
+}
+
+/// Step 11f: up to `limit` rows of one base table on `conn`, which the caller opened
+/// read-only and put in a transaction. The grid's select list and cells; no ORDER BY,
+/// no OFFSET, no filter.
+pub(super) fn sample_rows(conn: &Connection, path: &ObjectPath, limit: u32) -> Result<Page> {
+    let kind_sql = format!(
+        "SELECT type FROM {}.sqlite_master WHERE name = ?1 COLLATE NOCASE \
+           AND type IN ('table', 'view')",
+        quote_double(&path.database)
+    );
+    let kind: Option<String> = conn
+        .query_row(&kind_sql, [path.name.as_str()], |r| r.get(0))
+        .optional()
+        .map_err(query_err)?;
+    match kind.as_deref() {
+        None => {
+            return Err(Error::NotFound(format!(
+                "table {}.{}",
+                path.database, path.name
+            )));
+        }
+        Some("table") => {}
+        Some(_) => return Err(Error::InvalidInput("not a table".into())),
+    }
+    let cols = table_columns(conn, path)?;
+    let sql = format!(
+        "SELECT {} FROM {} LIMIT {limit}",
+        select_list(&cols).join(", "),
+        sql_scoped(DialectKind::Sqlite, &path.database, &path.name)
+    );
+    let mut stmt = conn.prepare(&sql).map_err(query_err)?;
+    let mut raw = stmt.query([]).map_err(query_err)?;
+    let mut rows = Vec::new();
+    while let Some(row) = raw.next().map_err(query_err)? {
+        rows.push(read_row(row, &cols)?);
+    }
+    drop(raw);
+    drop(stmt);
+    Ok(Page {
+        columns: cols,
+        rows,
+        has_more: false,
+    })
+}
+
 pub(crate) fn fetch_page(conn: &Connection, req: &PageRequest) -> Result<Page> {
     let cols = table_columns(conn, &req.table)?;
     let mut order_by = order_columns(&cols, req.sort.as_ref())?;
@@ -150,20 +219,7 @@ pub(crate) fn fetch_page(conn: &Connection, req: &PageRequest) -> Result<Page> {
             has_more = true;
             break;
         }
-        let mut idx = 0;
-        let mut cells = Vec::with_capacity(cols.len());
-        for c in &cols {
-            let value = row.get_ref(idx).map_err(query_err)?;
-            if c.is_primary_key {
-                idx += 1;
-                cells.push(cell_of(value, None));
-            } else {
-                let total: Option<i64> = row.get(idx + 1).map_err(query_err)?;
-                idx += 2;
-                cells.push(cell_of(value, total));
-            }
-        }
-        rows.push(cells);
+        rows.push(read_row(row, &cols)?);
     }
     drop(raw);
     drop(stmt);

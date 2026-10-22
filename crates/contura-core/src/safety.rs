@@ -2443,6 +2443,133 @@ select 1",
             }
         }
     }
+
+    /// Separators `plain_tokens` sees: each `;` that ends a piece holding anything, as
+    /// `lex` drops a `;` that follows nothing.
+    fn plain_semis(d: DialectKind, s: &str, flip: bool) -> usize {
+        let mut open = false;
+        let mut n = 0;
+        for t in plain_tokens(d, s, flip) {
+            if t == PTok::Semi {
+                n += usize::from(open);
+                open = false;
+            } else {
+                open = true;
+            }
+        }
+        n
+    }
+
+    /// Separators `lex` sees: a range ends at its `;`, except the last, which ends at the
+    /// end of the text (and may end in a `;` inside an open string).
+    fn lex_semis(d: DialectKind, s: &str, flip: bool) -> usize {
+        lex(d, s, flip)
+            .ranges
+            .iter()
+            .filter(|r| r.end < s.len())
+            .count()
+    }
+
+    fn assert_tokenizers_agree(d: DialectKind, s: &str, flip: bool) {
+        // Deliberate: `plain_tokens` reads a MySQL `/*! */` body as code, since the server
+        // runs it, and `lex` skips it as a comment. The rail then sees more, never less.
+        if d == MY && (s.contains("/*!") || s.contains("/*M!")) {
+            let p = format!("{s}\n;select zz_probe(1)");
+            let seen = calls_in(&plain_tokens(d, &p, flip)).contains(&"zz_probe".to_string());
+            let code = lex(d, &p, flip).words.contains("ZZ_PROBE");
+            assert!(seen || !code, "{d:?} flip={flip}: {s:?}");
+            return;
+        }
+        assert_eq!(
+            plain_semis(d, s, flip),
+            lex_semis(d, s, flip),
+            "{d:?} flip={flip}: {s:?}"
+        );
+        let p = format!("{s}\n;select zz_probe(1)");
+        let seen = calls_in(&plain_tokens(d, &p, flip)).contains(&"zz_probe".to_string());
+        // The brief's `lex_semis(p) > lex_semis(s)` is false for a text holding nothing
+        // or ending in `;` (the probe's `;` then ends no piece) though the probe is code: ask `lex` for the
+        // probe as a word instead, which it keeps only when it reads it as code.
+        let code = lex(d, &p, flip).words.contains("ZZ_PROBE");
+        assert_eq!(seen, code, "probe {d:?} flip={flip}: {s:?}");
+    }
+
+    /// The AI output rail's tokenizer finds a statement boundary wherever 5a's lexer does.
+    #[test]
+    fn plain_tokens_agree_with_lex() {
+        const TRAPS: &[&str] = &[
+            "E'a\\';' ; select 1",
+            "select $t$ ; $t$",
+            "select $$;$$",
+            "/* /* */ ; */ select 1",
+            "# ; \nselect 1",
+            "--x;\nselect 1",
+            "select 1 --;\n",
+            "/*! select 1; */",
+            "select `a;b`",
+            "select \"a;b\"",
+            "select [a;b]",
+            "select x'3b'",
+            "select N';'",
+            "select U&';'",
+            "select B'0'",
+            "select 'it''s;'",
+            "select 'a\\';'",
+            "select 'abc",
+            "select \"abc",
+            "select 1 /* abc",
+            "select $q$ abc",
+        ];
+        let mut texts: Vec<String> = CASES.iter().map(|c| c.1.to_string()).collect();
+        texts.extend(TRAPS.iter().map(|t| t.to_string()));
+        let mut seed: u64 = 0x0dd5eed;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+        const JOINS: [&str; 4] = [";", "; ", ";\n", " ;"];
+        for _ in 0..2000 {
+            let n = 1 + next() % 5;
+            let mut sql = String::new();
+            for k in 0..n {
+                if k > 0 {
+                    sql.push_str(JOINS[next() % JOINS.len()]);
+                }
+                sql.push_str(CASES[next() % CASES.len()].1);
+            }
+            texts.push(sql);
+        }
+        for s in &texts {
+            for d in [PG, MY, SL] {
+                for flip in [false, true] {
+                    assert_tokenizers_agree(d, s, flip);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn keyword_names_called_as_functions_are_flagged() {
+        for d in [MY, PG] {
+            for name in ["index", "key", "match", "range", "cube", "time"] {
+                let calls = function_calls(d, &format!("select {name}(1)"));
+                assert!(calls.contains(&name.to_string()), "{d:?} {name}: {calls:?}");
+            }
+            for (sql, name) in [
+                ("create index i on t (a)", "index"),
+                ("select * from t use index (i)", "index"),
+                ("select * from t where match (a) against ('x')", "match"),
+                ("select a from t group by cube (a)", "cube"),
+                ("select cast(x as time(3))", "time"),
+                ("alter table t add primary key (a)", "key"),
+            ] {
+                let calls = function_calls(d, sql);
+                assert!(!calls.contains(&name.to_string()), "{d:?} {sql}: {calls:?}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

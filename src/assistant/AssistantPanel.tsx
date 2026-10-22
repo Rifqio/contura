@@ -1,13 +1,21 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { rowsLine, rowsState } from "./payload";
 import {
+  aiCompact,
   aiConfirmKeyHost,
   aiKnownModels,
   aiRecordAction,
   aiResync,
   aiSettings,
+  aiUndoCompact,
+  aiAnswerRecord,
+  aiCancelPlace,
   clearAiThreads,
+  deleteAiThread,
   errorText,
+  getAiThread,
   listAiThreads,
+  saveAiSettings,
   saveAiThread,
   setAiModelPrefs,
 } from "../api/client";
@@ -18,6 +26,7 @@ import type {
   AiThread,
   AnswerActionKind,
   AnswerRecord,
+  Compaction,
   ConnectionConfig,
   ContextInfo,
   ItemKind,
@@ -26,31 +35,46 @@ import type {
   Preview,
   PreviewItem,
   SqlSchema,
+  ThreadSummary,
+  Topic,
+  TurnStamp,
 } from "../api/types";
 import Icon from "../components/Icon";
 import Kbd from "../components/Kbd";
-import Menu, { type MenuItem } from "../components/Menu";
+import { useCommandKeys } from "../commands/useCommandKeys";
+import { dayClock } from "../format/units";
 import { PROVIDERS, resyncProblem } from "../settings/ai/providers";
-import { looksLikeSql, parseAnswer } from "./answerMarkdown";
+import { looksLikeSql, parseAnswer, plainText } from "./answerMarkdown";
 import AnswerLog from "./AnswerLog";
 import { buildRecord, mainNeverLeft, onlyOutlineLeft, providerName as nameOf, recordError, recordOf, sentLine, streamRecord } from "./answerRecord";
 import answerState, { aiErrorOf, answerEnd, endMark, modelToUse } from "./answerState";
 import { stopText, useAnswerStream } from "./answerStream";
+import CompactNote from "./CompactNote";
 import ContextMeter, { type MeterPart } from "./ContextMeter";
-import { type AskContext, toAskRequest } from "./context";
+import { type AskContext, sharedSchema, toAskRequest } from "./context";
+import { queueOffline } from "./offlineQueue";
 import ContextLine from "./ContextLine";
 import { contextNotice } from "./contextText";
 import ModelPicker from "./ModelPicker";
 import Sends from "./Sends";
+import { sampleReads } from "./StepsView";
 import SentRecord from "./SentRecord";
+import ThreadHistory from "./ThreadHistory";
+import TopicFold, { TopicDivider } from "./TopicFold";
+import { groupByTopic } from "./topics";
 import AnswerText from "./AnswerText";
 import type { InsertTarget } from "./InsertDiff";
+import SlashCommands, { optionId } from "./SlashCommands";
+import { matchSlash, type SlashCommand, slashKey } from "./slash";
 import { useAiPreview } from "./usePreview";
 import { onThreadsCleared } from "./threadsCleared";
+
 
 interface Props {
   /** The drafts place key: "ungrouped" or "group:<id>". */
   place: string;
+  /** What the place is called, for "Clear all chats in this place". */
+  placeName?: string;
   groupId: string | null;
   context: AskContext | null;
   /** Not read: the Core reads the schema for the preview itself. Kept until the callers drop it. */
@@ -94,9 +118,12 @@ function hostOf(url: string): string {
   }
 }
 
-/** The words of a Sends item in the composer line. */
-function sendsLabel(item: PreviewItem, ctx: AskContext): string {
-  const n = ctx.tables.length;
+/** The words of a Sends item in the composer line; the schema counts the tables the Core sends (P11-11). */
+function sendsLabel(item: PreviewItem, ctx: AskContext, preview: Preview | null): string {
+  const fit = preview?.tables;
+  // Full cards and names only go; a fit with no table at all was not worked out, so the focus tables count.
+  const offered = fit ? fit.full.length + fit.namesOnly.length + fit.leftOut.length : 0;
+  const n = fit && offered > 0 ? fit.full.length + fit.namesOnly.length : ctx.tables.length;
   switch (item.kind) {
     case "question":
       return "your question";
@@ -109,16 +136,25 @@ function sendsLabel(item: PreviewItem, ctx: AskContext): string {
     case "dbml":
       return "the DBML";
     case "rows":
-      return "Sample rows";
+      return item.label;
     default:
       return item.label;
   }
 }
 
+/** `fresh` over `known`, by id: a compaction the Core returned wins, one only this panel has seen stays. */
+function mergeCompactions(fresh: Compaction[], known: Compaction[]): Compaction[] {
+  return [...fresh, ...known.filter((k) => !fresh.some((f) => f.id === k.id))];
+}
+
 /** A question being answered: shown below the thread until its answer is saved. */
 interface Pending {
   q: string;
+  /** When it was asked. */
+  at: number;
   included: string[];
+  /** "continue" for the Continue button's turn. */
+  action?: string;
 }
 
 /** A failed Ask, kept for its card and Retry. */
@@ -132,16 +168,29 @@ interface Failure {
   saved: boolean;
   /** This attempt is that saved turn; false when a Retry failed before sending, so Show log shows it live. */
   kept: boolean;
+  /** The action of the turn ("continue"), so a Retry asks the same way. */
+  action?: string;
+  /** The saved turn's record, when the card is drawn from it rather than from the stream. */
+  record?: AnswerRecord;
 }
 
 /** Whose record Show log shows: a saved answer by its time, or the Ask being (or last) streamed. */
 type LogOf = { kind: "saved"; at: number } | { kind: "live"; q: string };
 
+/** A folded Topic's preview: its own last answer that has text, as plain text (P11-20). */
+function lastAnswerOf(messages: AiMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && m.text.trim() !== "") return plainText(m.text);
+  }
+  return undefined;
+}
+
 /** True when the answer has no complete SQL block. */
 const noSql = (text: string) => !parseAnswer(text).some((b) => b.kind === "code" && b.closed && looksLikeSql(b));
 
 /** What the context meter says is in use, in the words of the composer. */
-function meterParts(preview: Preview | null, ctx: AskContext): MeterPart[] {
+export function meterParts(preview: Preview | null, ctx: AskContext): MeterPart[] {
   const words: Partial<Record<ItemKind, string>> = {
     names: "schema",
     cards: "schema",
@@ -160,6 +209,12 @@ function meterParts(preview: Preview | null, ctx: AskContext): MeterPart[] {
     if (same) same.tokens += item.tokens;
     else out.push({ label, tokens: item.tokens });
   }
+  const thread = preview?.memory?.tokens ?? 0;
+  if (thread > 0) {
+    // The thread sits between the schema and the current statement, as the composer lists them.
+    const at = out.findIndex((p) => p.label === "current statement" || p.label === "filter");
+    out.splice(at < 0 ? out.length : at, 0, { label: "thread", tokens: thread });
+  }
   return out;
 }
 
@@ -171,6 +226,7 @@ function chipLabel(item: PreviewItem, ctx: AskContext): string {
 
 export default function AssistantPanel({
   place,
+  placeName,
   groupId,
   context,
   onOpenSettings,
@@ -192,12 +248,32 @@ export default function AssistantPanel({
   }, [seed, context, connections]);
   const conn = ctx.connection;
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
-  const [threads, setThreads] = useState<AiThread[]>([]);
+  /** The place's chats as summaries; the open one is fetched in full. */
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  /** The open chat, as the Core last returned it (its records are trimmed). */
+  const [current, setCurrent] = useState<AiThread | null>(null);
+  /** The open chat's Topics, from the Core's view of it. */
+  const [topics, setTopics] = useState<Topic[]>([]);
+  /** The open chat's compactions, from the Core's view of it and the Asks run in this panel. */
+  const [compactions, setCompactions] = useState<Compaction[]>([]);
+  /** The compaction whose Undo is on its way. */
+  const [undoing, setUndoing] = useState<string | null>(null);
+  /** What a Compact now or "Turn on auto-compact" from the full-thread card is doing, in words; null when neither runs. */
+  const [working, setWorking] = useState<string | null>(null);
+  /** The closed Topics the user has unfolded (by number). */
+  const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set());
+  /** Full records of trimmed answers fetched for Show log and the Sent record, by `threadId:at`, and why a fetch failed. */
+  const [fullRecords, setFullRecords] = useState<ReadonlyMap<string, AnswerRecord>>(new Map());
+  const [fullErrors, setFullErrors] = useState<ReadonlyMap<string, string>>(new Map());
+  const fetching = useRef(new Set<string>());
   const [question, setQuestion] = useState("");
   const [off, setOff] = useState<ItemKind[]>([]);
   const [values, setValues] = useState(false);
+  const [rows, setRows] = useState(false);
   const [failure, setFailure] = useState<Failure | null>(null);
+  /** Stopped before anything arrived (P11-29): nothing is saved, the question is back in the composer, the card says so. */
+  const [stoppedEarly, setStoppedEarly] = useState<{ q: string; millis: number; action?: string } | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   /** Show log is open, in place of the thread. */
   const [logOf, setLogOf] = useState<LogOf | null>(null);
@@ -207,13 +283,19 @@ export default function AssistantPanel({
   const [models, setModels] = useState<ModelList | null>(null);
   /** Bumped to open the model menu from a card. */
   const [pickerOpen, setPickerOpen] = useState(0);
+  /** The slash list: the active row, the draft it was closed on with Esc, and the requests to the history popover and the Sends list. */
+  const slashId = useId();
+  const [slashActive, setSlashActive] = useState(0);
+  const [slashClosedOn, setSlashClosedOn] = useState<string | null>(null);
+  const [historyCommand, setHistoryCommand] = useState({ n: 0, kind: "open" as "open" | "clear" });
+  const [sendsOpenSignal, setSendsOpenSignal] = useState(0);
   const sendsRef = useRef<HTMLDivElement>(null);
   /** "Send the saved key to <host>" is on its way. */
   const confirmingRef = useRef(false);
   const [confirming, setConfirming] = useState(false);
   /** Why the last model pick could not be saved. */
   const [pickError, setPickError] = useState<string | null>(null);
-  /** The input tokens the provider reported for the last answer, until the next question is typed. */
+  /** The tokens the provider reported for the last answer (in and out), until the next question is typed. */
   const [answered, setAnswered] = useState<number | null>(null);
   /** Re-sync from the Context line: running, why it did not work, and a count that asks for a new preview. */
   const [resyncing, setResyncing] = useState(false);
@@ -230,6 +312,51 @@ export default function AssistantPanel({
   const placeRef = useRef(place);
   placeRef.current = place;
   const input = useRef<HTMLTextAreaElement>(null);
+  const panel = useRef<HTMLElement>(null);
+  /** The thread, and whether it follows the newest turn: from each Send until the user scrolls up (P11-15). */
+  const threadRef = useRef<HTMLDivElement>(null);
+  const follow = useRef(false);
+  /** Counts opens, so only the last one's thread lands. */
+  const openSeq = useRef(0);
+  /** Why a chat could not be opened or cleared, shown where the thread is. */
+  const [chatError, setChatError] = useState<string | null>(null);
+
+  /** Opens a chat: the summary list has no messages, so the thread is fetched. */
+  function openThread(id: string | null) {
+    const seq = ++openSeq.current;
+    setChatError(null);
+    const show = (thread: AiThread | null, list: Topic[] = [], compacted: Compaction[] = []) => {
+      setCurrentId(thread?.id ?? null);
+      setCurrent(thread);
+      setTopics(list);
+      setCompactions(compacted);
+      setUndoing(null);
+      setUnfolded(new Set());
+      setFailure(null);
+      setStoppedEarly(null);
+      setLogOf(null);
+      setSentOpen(null);
+    };
+    if (id === null) {
+      show(null);
+      return;
+    }
+    // The previous chat stays open until the new one has arrived.
+    getAiThread(id).then(
+      (v) => {
+        if (openSeq.current !== seq) return;
+        if (v) {
+          show(v.thread, v.topics, v.compactions);
+          return;
+        }
+        setThreads((all) => all.filter((t) => t.id !== id));
+        setChatError("That chat is no longer stored.");
+      },
+      (e: unknown) => {
+        if (openSeq.current === seq) setChatError(errorText(e));
+      },
+    );
+  }
 
   // A Group's threads are its own: entering another place stops its answer, reloads them and starts a clean composer.
   useEffect(() => {
@@ -241,16 +368,24 @@ export default function AssistantPanel({
     setConfirmStop(false);
     setThreads([]);
     setCurrentId(null);
+    setCurrent(null);
+    setTopics([]);
+    setCompactions([]);
+    setWorking(null);
+    setChatError(null);
+    openSeq.current++;
     setFailure(null);
+    setStoppedEarly(null);
     setOff([]);
     setValues(false);
+    setRows(false);
     setAnswered(null);
     listAiThreads(place)
       .then((list) => {
         if (!live) return;
         const sorted = [...list].sort((a, b) => b.updatedAt - a.updatedAt);
         setThreads(sorted);
-        setCurrentId(sorted[0]?.id ?? null);
+        openThread(sorted[0]?.id ?? null);
       })
       .catch(() => {});
     return () => {
@@ -271,10 +406,7 @@ export default function AssistantPanel({
       onThreadsCleared((cleared) => {
         if (cleared !== null && cleared !== placeRef.current) return;
         setThreads([]);
-        setCurrentId(null);
-        setFailure(null);
-        setLogOf(null);
-        setSentOpen(null);
+        openThread(null);
         setLiveContexts(new Map());
       }),
     [],
@@ -341,6 +473,7 @@ export default function AssistantPanel({
     void ctxKey;
     setOff([]);
     setValues(false);
+    setRows(false);
     setAnswered(null);
     setResyncError(null);
   }, [ctxKey]);
@@ -349,7 +482,7 @@ export default function AssistantPanel({
     if (seed) setQuestion(seed.question);
   }, [seed]);
 
-  const switches = useMemo(() => ({ rows: false, values }), [values]);
+  const switches = useMemo(() => ({ rows, values }), [rows, values]);
   const modelId = model?.id ?? null;
   const picks = model?.picks ?? null;
   const previewed = useMemo(
@@ -366,7 +499,8 @@ export default function AssistantPanel({
     setResyncError(null);
     let problem: string | null;
     try {
-      const info = await aiResync(conn.id, conn.database, null);
+      // The schema the Ask uses, so Re-sync rebuilds the Context the Ask reads.
+      const info = await aiResync(conn.id, conn.database, sharedSchema(ctx.tables));
       problem = resyncProblem(info, openIds ? openIds.has(conn.id) : true);
     } catch (e) {
       problem = errorText(e, conn.dialect);
@@ -384,12 +518,64 @@ export default function AssistantPanel({
   const providerName = provider ? PROVIDERS[provider].name : undefined;
   const accessChip = conn ? ACCESS_CHIP[conn.access] : null;
 
-  const current = threads.find((t) => t.id === currentId) ?? null;
+  // A compaction made by the Ask that is running: its messages give way to the note at once.
+  const liveCompaction = stream.compaction;
+  useEffect(() => {
+    // What the panel already holds wins: the Core's view may have marked it undone since.
+    if (liveCompaction && liveCompaction.threadId === currentId) setCompactions((cs) => mergeCompactions(cs, [liveCompaction]));
+  }, [liveCompaction, currentId]);
+  const active = useMemo(() => compactions.filter((c) => !c.undone), [compactions]);
+  /** The compaction that hides a message, by its Topic and time. */
+  const hiddenBy = (m: AiMessage) => active.find((c) => m.topic === c.topic && m.at >= c.firstAt && m.at <= c.lastAt) ?? null;
+  /** Where each note stands: at the first message its compaction hides. */
+  const noteAt = useMemo(() => {
+    const at = new Map<string, number>();
+    for (const m of current?.messages ?? []) {
+      const c = active.find((x) => m.topic === x.topic && m.at >= x.firstAt && m.at <= x.lastAt);
+      if (c && !at.has(c.id)) at.set(c.id, m.at);
+    }
+    return at;
+  }, [active, current]);
+  /** The measured tokens of a compaction's summary: its own Sent record, or the one of the Ask that made it. */
+  const tokensOf = (c: Compaction): number | null => {
+    const own = c.record.sent?.summary;
+    if (own?.kind === "compact") return own.tokens;
+    if (stream.compaction?.id === c.id && stream.sent?.summary?.kind === "compact") return stream.sent.summary.tokens;
+    const after = current?.messages.find((m) => m.role === "assistant" && m.at > c.lastAt);
+    const made = recordOf(after?.record)?.sent?.summary;
+    return made?.kind === "compact" ? made.tokens : null;
+  };
+  const modelNameOf = (id: string) => models?.models.find((m) => m.id === id)?.name ?? id;
+  // While an Ask runs its compaction shows the figure after it; then the provider's count takes over.
+  // The next Ask's estimate counts its summary step too, as the Sends list does (P11-39).
+  const nextSend = preview ? preview.tokens + (preview.summary?.on ? preview.summary.tokens : 0) : 0;
+  const meterUsed = stream.running && liveCompaction ? liveCompaction.after : (answered ?? nextSend);
+
+  const rowsNow = rowsState(preview);
   const parts = useMemo(() => meterParts(preview, ctx), [preview, ctx]);
+  const groups = useMemo(() => groupByTopic(current?.messages ?? [], topics), [current, topics]);
+  // A live Ask that opens a new Topic shows its divider before the question once the Core has said so.
+  const liveDivider = stream.memory?.opened === true && (current?.messages.length ?? 0) > 0;
+
+  // After Send the thread keeps the new turn in view as it streams, then its card or the saved answer.
+  const turnCount = current?.messages.length ?? 0;
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el && follow.current) el.scrollTop = el.scrollHeight;
+  }, [pending, stream.text, stream.status, failure, stoppedEarly, turnCount, working]);
+  /** Scrolled up away from the end while it streams: the thread stays where the user put it. */
+  const onThreadScroll = () => {
+    const el = threadRef.current;
+    if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
 
   const toggle = (kind: ItemKind) => {
     if (kind === "values") {
       setValues((v) => !v);
+      return;
+    }
+    if (kind === "rows") {
+      setRows((v) => !v);
       return;
     }
     setOff((o) => (o.includes(kind) ? o.filter((k) => k !== kind) : [...o, kind]));
@@ -399,9 +585,12 @@ export default function AssistantPanel({
    * Streams the answer to `asked` (the composer's question when absent). `again` is the failed or stopped
    * turn being asked again: its saved turn is replaced, and a repeat of its failure counts as "Try 2".
    */
-  async function ask(asked?: string, again?: { saved: boolean; failure: Failure | null }, use?: { id: string; picks: ModelPicks }) {
+  async function ask(asked?: string, again?: { saved: boolean; failure: Failure | null }, use?: { id: string; picks: ModelPicks }, action?: string) {
     const q = (asked ?? question).trim();
     if (!q) return;
+    // A draft like "/compact" is a command, never a question.
+    if (matchSlash(q) !== null) return;
+    if (working !== null) return;
     if (stream.running) {
       setConfirmStop(true);
       return;
@@ -411,6 +600,7 @@ export default function AssistantPanel({
       threadId: currentId,
       model: use?.id ?? modelId,
       picks: use?.picks ?? picks,
+      action,
     });
     const included = (preview?.items ?? [])
       .filter((i) => i.on && !i.locked && RECORDED.has(i.kind))
@@ -419,16 +609,20 @@ export default function AssistantPanel({
     const base = current;
     const askedAt = Date.now();
     setFailure(null);
+    setStoppedEarly(null);
     setConfirmStop(false);
     setAnswered(null);
-    setPending({ q, included });
+    setPending({ q, included, at: askedAt, action });
+    follow.current = true;
     if (asked === undefined) setQuestion("");
-    // "Include values" is off at the start of every Ask.
+    // "Include values" and "Sample rows" are off at the start of every Ask.
     setValues(false);
+    setRows(false);
     const end = await stream.start(request);
     if (placeRef.current === forPlace) setPending(null);
     const usage = end.done?.usage;
-    if (usage && placeRef.current === forPlace) setAnswered(usage.input + usage.cacheRead);
+    // What the answer measured: what went in, what was read from the cache, and the answer itself (P11-39).
+    if (usage && placeRef.current === forPlace) setAnswered(usage.input + usage.cacheRead + usage.output);
 
     let saved = again?.saved ?? false;
     // A failure is kept as a turn once something was sent, so its record and card survive a reload.
@@ -437,10 +631,14 @@ export default function AssistantPanel({
       // Nothing came back: the question goes back into the composer.
       setQuestion((now) => now || q);
     }
+    if (!keep && end.stopped && end.error === null && placeRef.current === forPlace) {
+      // Stopped before anything arrived: the board's "Stopped." card, with nothing saved (P11-29).
+      setStoppedEarly({ q, millis: end.at - askedAt, action });
+    }
     if (keep) {
       const record = buildRecord(end, end.live);
       record.millis ??= end.at - askedAt;
-      const at = await persist(forPlace, base, saved, q, included, askedAt, end.text, end.at, record, request.requestId);
+      const at = await persist(forPlace, base, saved, q, included, askedAt, end.text, end.at, record, request.requestId, end.stamp ?? null, action);
       const used = end.live.context;
       if (used) setLiveContexts((all) => new Map(all).set(at, used));
       saved = true;
@@ -448,7 +646,7 @@ export default function AssistantPanel({
     if (end.error !== null && placeRef.current === forPlace) {
       const before = again?.failure;
       const same = before && aiErrorOf(before.error)?.kind === aiErrorOf(end.error)?.kind;
-      setFailure({ error: end.error, partial: end.partial, q, tries: same ? before.tries + 1 : 1, saved, kept: keep });
+      setFailure({ error: end.error, partial: end.partial, q, tries: same ? before.tries + 1 : 1, saved, kept: keep, action });
     }
   }
 
@@ -464,22 +662,143 @@ export default function AssistantPanel({
     answeredAt: number,
     record: AnswerRecord,
     requestId: string,
+    stamp: TurnStamp | null,
+    action?: string,
   ): Promise<number> {
     const at = Math.max(answeredAt, askedAt + 1);
+    const stamped = (m: AiMessage): AiMessage =>
+      stamp
+        ? {
+            ...m,
+            topic: stamp.topic,
+            ...(stamp.connectionId !== null && { connectionId: stamp.connectionId }),
+            ...(stamp.database !== null && { database: stamp.database }),
+            kinds: stamp.kinds,
+            tables: stamp.tables,
+            action: stamp.action,
+          }
+        : m;
+    // The Core's stamp carries the action; without one the Continue turn is still marked, so its bubble stays muted.
+    const asking = (m: AiMessage): AiMessage => (action === "continue" && m.action === undefined ? { ...m, action } : m);
     const add: AiMessage[] = [
-      { role: "user", text: q, context: included, at: askedAt },
-      { role: "assistant", text, context: [], at, record },
+      asking(stamped({ role: "user", text: q, context: included, at: askedAt })),
+      stamped({ role: "assistant", text, context: [], at, record }),
     ];
     const kept = base ? (replace ? base.messages.slice(0, -2) : base.messages) : [];
     const next: AiThread = base
       ? { ...base, messages: [...kept, ...add], updatedAt: askedAt }
       : { id: newId(), place: forPlace, title: q.length > 40 ? `${q.slice(0, 40)}…` : q, messages: add, updatedAt: askedAt };
-    await saveAiThread(next, requestId).catch(() => {});
+    // The Core's copy replaces ours: it holds the memory stamps and the trimmed records.
+    const returned = await saveAiThread(next, requestId).then(
+      (v) => v,
+      () => null,
+    );
+    const kept2 = returned?.thread ?? next;
     if (placeRef.current === forPlace) {
-      setThreads((all) => [next, ...all.filter((t) => t.id !== next.id)]);
-      setCurrentId(next.id);
+      const row: ThreadSummary = {
+        id: kept2.id,
+        place: kept2.place,
+        title: kept2.title,
+        updatedAt: kept2.updatedAt,
+        messages: kept2.messages.length,
+        topics: returned?.topics.length ?? 0,
+      };
+      setThreads((all) => [row, ...all.filter((t) => t.id !== row.id)]);
+      setCurrentId(kept2.id);
+      setCurrent(kept2);
+      if (returned) {
+        setTopics(returned.topics);
+        setCompactions((known) => mergeCompactions(returned.compactions, known));
+      }
     }
     return at;
+  }
+
+  /** Compact now from the full-thread card: the older messages become a summary, then the same Ask goes again. */
+  async function compactNow(f: Failure) {
+    const threadId = currentId;
+    if (!threadId || working !== null) return;
+    const forPlace = place;
+    setChatError(null);
+    setWorking("Compacting the thread");
+    let compaction: Compaction;
+    try {
+      compaction = await aiCompact({ requestId: newId(), place: forPlace, groupId, threadId, model: modelId }, (e) => {
+        if (e.type === "status") setWorking(e.step);
+      });
+    } catch (error) {
+      if (placeRef.current !== forPlace) return;
+      setWorking(null);
+      setFailure({ error, partial: false, q: f.q, tries: 1, saved: f.saved, kept: false, action: f.action });
+      return;
+    }
+    if (placeRef.current !== forPlace) return;
+    setWorking(null);
+    setCompactions((known) => mergeCompactions([compaction], known));
+    void ask(f.q, { saved: f.saved, failure: null }, undefined, f.action);
+  }
+
+  /** /compact: Compact now for the open chat, without asking again; a failure is said above the thread. */
+  async function compactChat() {
+    const threadId = currentId;
+    if (!threadId || working !== null || stream.running || undoing !== null) return;
+    const forPlace = place;
+    setChatError(null);
+    setWorking("Compacting the thread");
+    let compaction: Compaction;
+    try {
+      compaction = await aiCompact({ requestId: newId(), place: forPlace, groupId, threadId, model: modelId }, (e) => {
+        if (e.type === "status") setWorking(e.step);
+      });
+    } catch (error) {
+      if (placeRef.current !== forPlace) return;
+      setWorking(null);
+      setChatError(`Could not compact the chat. ${errorText(error)}`);
+      return;
+    }
+    if (placeRef.current !== forPlace) return;
+    setWorking(null);
+    setCompactions((known) => mergeCompactions([compaction], known));
+  }
+
+  /** "Turn on auto-compact" from the full-thread card: saved in the global settings, then the same Ask goes again. */
+  async function turnOnAutoCompact(f: Failure) {
+    if (working !== null) return;
+    const forPlace = place;
+    setChatError(null);
+    setWorking("Turning on auto-compact");
+    try {
+      // The switch is the same for every Group, so it is saved with the global settings.
+      const global = await aiSettings(null);
+      await saveAiSettings(null, { ...global.settings, autoCompact: true }, false, { t: "keep" });
+    } catch (error) {
+      if (placeRef.current !== forPlace) return;
+      setWorking(null);
+      setChatError(`Could not turn on auto-compact. ${errorText(error)}`);
+      return;
+    }
+    if (placeRef.current !== forPlace) return;
+    setWorking(null);
+    void ask(f.q, { saved: f.saved, failure: null }, undefined, f.action);
+  }
+
+  /** Undo on a note: the Core brings the messages back and returns the thread; a failure is said where the thread is. */
+  async function undoCompaction(c: Compaction) {
+    if (undoing !== null || stream.running || working !== null) return;
+    const forPlace = place;
+    setChatError(null);
+    setUndoing(c.id);
+    try {
+      const v = await aiUndoCompact(c.threadId, c.id);
+      if (placeRef.current !== forPlace) return;
+      setCurrent(v.thread);
+      setTopics(v.topics);
+      setCompactions(v.compactions);
+    } catch (e) {
+      if (placeRef.current === forPlace) setChatError(`Could not undo the compaction. ${errorText(e)}`);
+    } finally {
+      setUndoing(null);
+    }
   }
 
   /** Keeps what the user did with a saved answer's SQL in its record, here and in the Core (the Diagram's "You:" box). */
@@ -487,35 +806,82 @@ export default function AssistantPanel({
     void aiRecordAction(threadId, at, kind)
       .then((action) => {
         if (!action) return;
-        setThreads((all) =>
-          all.map((t) =>
-            t.id !== threadId
-              ? t
-              : {
-                  ...t,
-                  messages: t.messages.map((m) => {
-                    const r = m.role === "assistant" && m.at === at ? recordOf(m.record) : null;
-                    return r ? { ...m, record: { ...r, actions: [...r.actions, action] } } : m;
-                  }),
-                },
-          ),
+        setCurrent((t) =>
+          t === null || t.id !== threadId
+            ? t
+            : {
+                ...t,
+                messages: t.messages.map((m) => {
+                  const r = m.role === "assistant" && m.at === at ? recordOf(m.record) : null;
+                  return r ? { ...m, record: { ...r, actions: [...r.actions, action] } } : m;
+                }),
+              },
         );
       })
       .catch(() => {});
   }
 
+  /** Clear all chats: a failed delete keeps the list, since the chats are still stored. */
   async function clear() {
-    await clearAiThreads(place).catch(() => {});
+    try {
+      await clearAiThreads(place);
+    } catch (e) {
+      setChatError(errorText(e));
+      return;
+    }
     setThreads([]);
-    setCurrentId(null);
-    setFailure(null);
+    openThread(null);
   }
+
+  /** Clear this chat: the open chat is deleted and a new one starts. */
+  async function clearThread() {
+    const id = currentId;
+    if (!id) return;
+    try {
+      await deleteAiThread(id);
+    } catch (e) {
+      setChatError(errorText(e));
+      return;
+    }
+    setThreads((all) => all.filter((t) => t.id !== id));
+    openThread(null);
+  }
+
+  const newChat = () => {
+    if (!stream.running) openThread(null);
+  };
+  useCommandKeys({ "assistant.newChat": newChat }, { region: panel });
+
+  // Show log and the Sent record of a trimmed answer need the full stored record first.
+  const trimmedKey = (at: number | null) => {
+    if (at === null || !current) return null;
+    const m = current.messages.find((x) => x.role === "assistant" && x.at === at);
+    return m?.record?.trimmed ? `${current.id}:${at}` : null;
+  };
+  const wantedLog = trimmedKey(logOf?.kind === "saved" ? logOf.at : null);
+  const wantedSent = trimmedKey(sentOpen);
+  useEffect(() => {
+    for (const key of [wantedLog, wantedSent]) {
+      if (!key || fullRecords.has(key) || fullErrors.has(key) || fetching.current.has(key)) continue;
+      fetching.current.add(key);
+      const [threadId, at] = [key.slice(0, key.lastIndexOf(":")), Number(key.slice(key.lastIndexOf(":") + 1))];
+      aiAnswerRecord(threadId, at)
+        .then(
+          (r) => {
+            if (r) setFullRecords((all) => new Map(all).set(key, recordOf(r) as AnswerRecord));
+            else setFullErrors((all) => new Map(all).set(key, "This answer's record is no longer stored."));
+          },
+          (e: unknown) => setFullErrors((all) => new Map(all).set(key, errorText(e))),
+        )
+        .finally(() => fetching.current.delete(key));
+    }
+  }, [wantedLog, wantedSent, fullRecords, fullErrors]);
 
   /**
    * Under a saved answer, all from its stored record: the mark and the answer state card (its action only while it is
    * the last turn), the error card of a failed Ask, the Sent line with its record, and Show log.
    */
-  const answerFoot = (m: AiMessage, record: AnswerRecord, q: string, last: boolean) => {
+  const answerFoot = (m: AiMessage, record: AnswerRecord, q: string, last: boolean, action?: string) => {
     const live = last && !stream.running && pending === null;
     const showLog = () => setLogOf({ kind: "saved", at: m.at });
     let card: ReactNode = null;
@@ -525,11 +891,13 @@ export default function AssistantPanel({
       if (!(last && failure?.saved)) {
         card =
           live && failure === null
-            ? failureCard({ error, partial: m.text !== "", q, tries: 1, saved: true, kept: true })
+            ? failureCard({ error, partial: m.text !== "", q, tries: 1, saved: true, kept: true, action, record })
             : answerState(error, {
                 providerName,
                 provider,
+                keySaved: settings?.keySaved,
                 connectionName: conn?.name,
+                rowsRead: sampleReads(record),
                 partial: m.text !== "",
                 outlineSent: onlyOutlineLeft(record),
                 onShowLog: showLog,
@@ -538,9 +906,12 @@ export default function AssistantPanel({
     } else if (record.mark && record.mark !== "tooLong" && record.mark !== "failed") {
       card = answerEnd(record.mark, {
         sqlMissing: noSql(m.text),
-        output: record.usage?.output ?? null,
+        // The output tokens it stopped at; without usage, the cap the Core says the request carried. An older record
+        // without it says "the model's output limit".
+        output: record.usage?.output ?? record.maxTokens ?? undefined,
         millis: record.millis,
-        onRetry: live ? () => void ask(q, { saved: true, failure: null }) : undefined,
+        onRetry: live ? () => void ask(q, { saved: true, failure: null }, undefined, action) : undefined,
+        onContinue: live && record.mark === "length" ? () => void ask("Continue", undefined, undefined, "continue") : undefined,
         onEdit: live
           ? () => {
               setQuestion(q);
@@ -575,25 +946,76 @@ export default function AssistantPanel({
             </button>
           )}
         </div>
-        {sentOpen === m.at && record.sent && (
-          <SentRecord sent={record.sent} usage={record.usage} notSent={mainNeverLeft(record)} onClose={() => setSentOpen(null)} />
-        )}
+        {sentOpen === m.at && record.sent && sentRecord(m.at, record)}
       </>
     );
+  };
+
+  /** The Sent record of a saved answer; a trimmed one shows the fetched full record, or why it could not be loaded. */
+  const sentRecord = (at: number, record: AnswerRecord) => {
+    const key = record.trimmed && current ? `${current.id}:${at}` : null;
+    const full = key ? fullRecords.get(key) : undefined;
+    if (key && !full) {
+      const err = fullErrors.get(key);
+      return (
+        <p className="msg-notice" role={err ? "alert" : "status"}>
+          {err ?? "Loading the log..."}
+        </p>
+      );
+    }
+    const r = full ?? record;
+    return r.sent ? <SentRecord sent={r.sent} usage={r.usage} notSent={mainNeverLeft(r)} onClose={() => setSentOpen(null)} /> : null;
+  };
+
+  // A question kept while offline goes out through the shared queue: one online event sends the panel's and the inline box's.
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const offline = failure !== null && aiErrorOf(failure.error)?.kind === "offline" ? failure : null;
+  useEffect(() => {
+    if (!offline) return;
+    return queueOffline(`panel:${place}`, () => askRef.current(offline.q, { saved: offline.saved, failure: offline }, undefined, offline.action));
+  }, [offline, place]);
+
+  /** The busy card's "Stop it": every Ask of this place stops (the inline Ask too), then the waiting question goes out. */
+  async function stopPlace(f: Failure) {
+    const forPlace = place;
+    try {
+      await aiCancelPlace(forPlace);
+    } catch (e) {
+      if (placeRef.current === forPlace) setChatError(`Could not stop the answer. ${errorText(e)}`);
+      return;
+    }
+    if (placeRef.current !== forPlace) return;
+    void ask(f.q, { saved: f.saved, failure: f }, undefined, f.action);
+  }
+
+  /** The question of the thread's last answer that has text: the one a Continue would follow. */
+  const cutQuestion = () => {
+    const ms = current?.messages ?? [];
+    for (let i = ms.length - 1; i > 0; i--) {
+      if (ms[i].role === "assistant" && ms[i].text.trim() !== "" && ms[i - 1].role === "user") return ms[i - 1].text;
+    }
+    return "";
   };
 
   /** The card of a failed Ask and what its actions do. */
   const failureCard = (f: Failure) => {
     const again = { saved: f.saved, failure: f };
-    const retry = () => void ask(f.q, again);
-    const giveBack = () => setQuestion((now) => now || f.q);
+    const retry = () => void ask(f.q, again, undefined, f.action);
+    // A Continue's own text is "Continue", which means nothing outside its thread: give back the cut question.
+    const giveBack = () => {
+      const q = f.action === "continue" ? cutQuestion() : f.q;
+      setQuestion((now) => now || q);
+    };
     const fit = preview?.tables;
     return answerState(f.error, {
       providerName,
       provider,
+      keySaved: settings?.keySaved,
       model,
       models: models?.models ?? [],
       connectionName: conn?.name,
+      rowsRead: sampleReads(f.record ?? streamRecord(stream)),
       host: settings ? hostOf(settings.settings.baseUrl) : undefined,
       tables: fit && fit.full.length + fit.namesOnly.length + fit.leftOut.length > 0
         ? fit.full.length + fit.namesOnly.length + fit.leftOut.length
@@ -616,7 +1038,7 @@ export default function AssistantPanel({
       onUseModel: (id) => {
         const use = modelToUse(id, models?.models ?? [], settings?.settings ?? null);
         pickModel(use.id, use.picks);
-        void ask(f.q, again, use);
+        void ask(f.q, again, use, f.action);
       },
       onPickModel: () => setPickerOpen((n) => n + 1),
       onPickTables: () => {
@@ -625,10 +1047,17 @@ export default function AssistantPanel({
         pill?.focus();
       },
       onNewChat: () => {
-        setCurrentId(null);
-        setFailure(null);
+        openThread(null);
         giveBack();
       },
+      onAskAgain: () => {
+        setFailure(null);
+        setQuestion(cutQuestion());
+        input.current?.focus();
+      },
+      onCompactNow: () => void compactNow(f),
+      onTurnOnAutoCompact: () => void turnOnAutoCompact(f),
+      compacting: working !== null,
       confirmingKeyHost: confirming,
       onConfirmKeyHost: (host) => {
         // A second click while the first confirm is on its way would send the Ask twice.
@@ -653,52 +1082,97 @@ export default function AssistantPanel({
           },
         );
       },
-      onStop: () => {
-        stream.stop();
-        setFailure(null);
-      },
+      onStop: () => void stopPlace(f),
     });
   };
 
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      void ask();
+  // Slash commands: "/" first in the composer, no space yet. Each does what its control does.
+  const matches = matchSlash(question);
+  const slashOpen = matches !== null && slashClosedOn !== question;
+  const slashRow = matches ? Math.min(slashActive, Math.max(0, matches.length - 1)) : 0;
+  const lastAnswerAt = (() => {
+    const msgs = current?.messages ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === "assistant" && recordOf(msgs[i].record)) return msgs[i].at;
+    return null;
+  })();
+  const waiting = "Wait until the answer finishes";
+  const unavailable: Record<string, string> = {};
+  if (!currentId) unavailable.compact = "Nothing to compact yet";
+  else if (stream.running || working !== null || undoing !== null) unavailable.compact = waiting;
+  if (stream.running) unavailable.new = waiting;
+  if (lastAnswerAt === null && !pending) unavailable.log = "No answer yet";
+  if (!currentId) unavailable.clear = "No chat to clear";
+  else if (stream.running) unavailable.clear = waiting;
+
+  const runSlash = (c: SlashCommand) => {
+    if (unavailable[c.name]) return;
+    setQuestion("");
+    setSlashActive(0);
+    setSlashClosedOn(null);
+    switch (c.name) {
+      case "compact":
+        void compactChat();
+        break;
+      case "new":
+        newChat();
+        break;
+      case "history":
+        setHistoryCommand((h) => ({ n: h.n + 1, kind: "open" }));
+        break;
+      case "model":
+        setPickerOpen((n) => n + 1);
+        break;
+      case "sends":
+        setSendsOpenSignal((n) => n + 1);
+        break;
+      case "log":
+        if (lastAnswerAt !== null) setLogOf({ kind: "saved", at: lastAnswerAt });
+        else if (pending) setLogOf({ kind: "live", q: pending.q });
+        break;
+      case "clear":
+        setHistoryCommand((h) => ({ n: h.n + 1, kind: "clear" }));
+        break;
     }
   };
 
-  const historyItems: MenuItem[] = [
-    ...(threads.length > 0 ? [{ key: "chats", label: "Chats", heading: "Chats" }] : []),
-    ...threads.map((t) => ({
-      key: `thread-${t.id}`,
-      label: t.title,
-      current: t.id === currentId,
-      disabled: stream.running,
-      onSelect: () => {
-        setCurrentId(t.id);
-        setFailure(null);
-      },
-    })),
-    {
-      key: "new",
-      label: "New chat",
-      icon: <Icon name="plus" size={14} />,
-      separatorBefore: threads.length > 0,
-      disabled: stream.running,
-      onSelect: () => {
-        setCurrentId(null);
-        setFailure(null);
-      },
-    },
-    {
-      key: "clear",
-      label: "Clear chats",
-      icon: <Icon name="trash" size={14} />,
-      danger: true,
-      disabled: threads.length === 0 || stream.running,
-      onSelect: () => void clear(),
-    },
-  ];
+  /** Send and Enter: a "/word" draft runs its one matching command or does nothing; anything else is an Ask. */
+  const send = () => {
+    if (matches !== null) {
+      if (matches.length === 1) runSlash(matches[0]);
+      return;
+    }
+    void ask();
+  };
+
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (slashOpen && matches) {
+      const k = slashKey(e.key, slashRow, matches.length);
+      if (k !== null) {
+        e.preventDefault();
+        if (k === "close") {
+          // Only the list closes: the draft stays and no outer Esc handler sees the key.
+          e.stopPropagation();
+          setSlashClosedOn(question);
+        }
+        else if (k === "run") runSlash(matches[slashRow]);
+        else setSlashActive(k.active);
+        return;
+      }
+    }
+    if (e.key === "Escape" && stream.running) {
+      // "Stop Esc" (board 11.6): Esc where you type stops the answer being written.
+      e.preventDefault();
+      e.stopPropagation();
+      setConfirmStop(false);
+      stream.stop();
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
 
   const liveNotice = contextNotice(stream.context);
   const copySql = (sql: string) => void navigator.clipboard?.writeText(sql).catch(() => {});
@@ -709,10 +1183,21 @@ export default function AssistantPanel({
   if (logOf) {
     const msgs = current?.messages ?? [];
     const i = logOf.kind === "saved" ? msgs.findIndex((m) => m.at === logOf.at && m.role === "assistant") : -1;
-    const saved = i >= 0 ? recordOf(msgs[i].record) : null;
+    const stored = i >= 0 ? recordOf(msgs[i].record) : null;
+    const fullKey = stored?.trimmed && current ? `${current.id}:${logOf.kind === "saved" ? logOf.at : 0}` : null;
+    const saved = fullKey ? (fullRecords.get(fullKey) ?? null) : stored;
     const record = saved ?? streamRecord(stream);
     const q = i >= 0 ? (msgs[i - 1]?.role === "user" ? msgs[i - 1].text : "") : logOf.kind === "live" ? logOf.q : "";
-    logView = (
+    logView = fullKey && !saved ? (
+      <div className="log-loading">
+        <button type="button" className="link-button" onClick={() => setLogOf(null)}>
+          Back
+        </button>
+        <p className="msg-notice" role={fullErrors.has(fullKey) ? "alert" : "status"}>
+          {fullErrors.get(fullKey) ?? "Loading the log..."}
+        </p>
+      </div>
+    ) : (
       <AnswerLog
         question={q}
         answer={i >= 0 ? msgs[i].text : stream.text}
@@ -727,7 +1212,7 @@ export default function AssistantPanel({
   }
 
   return (
-    <aside className="ai-panel" aria-label="Ask">
+    <aside className="ai-panel" aria-label="Ask" ref={panel}>
       <header className="ai-panel-head">
         <span className="t">Ask</span>
         {accessChip && conn && (
@@ -736,24 +1221,41 @@ export default function AssistantPanel({
           </span>
         )}
         <span className="spacer" />
-        <Menu
-          label="History"
-          align="end"
-          items={historyItems}
-          trigger={(p) => (
-            <button type="button" className="icon-button" aria-label="History" title="History" {...p}>
-              <Icon name="history" size={14} />
-            </button>
-          )}
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="New chat"
+          title="New chat  Ctrl+Shift+N"
+          disabled={stream.running}
+          onClick={newChat}
+        >
+          <Icon name="plus" size={16} />
+        </button>
+        <ThreadHistory
+          place={place}
+          placeName={placeName}
+          threads={threads}
+          currentId={currentId}
+          busy={stream.running}
+          onOpen={openThread}
+          onNewChat={newChat}
+          onClearThread={() => void clearThread()}
+          onClearAll={() => void clear()}
+          command={historyCommand}
         />
-        <button type="button" className="icon-button" aria-label="Close" title="Close" onClick={onClose}>
-          <Icon name="close" size={14} />
+        <button type="button" className="icon-button" aria-label="Close the Ask panel" title="Close  Ctrl+Alt+I" onClick={onClose}>
+          <Icon name="close" size={16} />
         </button>
       </header>
 
       {logView ?? (
       <>
-      <div className="thread" aria-live="polite">
+      <div className="thread" aria-live="polite" ref={threadRef} onScroll={onThreadScroll}>
+        {chatError && (
+          <p className="msg-notice" role="alert">
+            {chatError}
+          </p>
+        )}
         {conn && conn.access === "never" && !current && (
           <div className="setup">
             <span className="t">
@@ -769,42 +1271,87 @@ export default function AssistantPanel({
             </button>
           </div>
         )}
-        {current?.messages.map((m, mi) =>
-          m.role === "user" ? (
-            <div key={`${m.at}-u`} className="msg-user">
-              {m.text}
-            </div>
-          ) : m.role === "assistant" ? (
-            (() => {
-              const record = recordOf(m.record);
-              const q = current.messages[mi - 1]?.role === "user" ? current.messages[mi - 1].text : "";
-              const notice = contextNotice(record?.context ?? liveContexts.get(m.at) ?? null);
-              return (
-                <div key={`${m.at}-a`} className="msg-ai">
-                  <AnswerText
-                    text={m.text}
-                    // The Core checked the SQL only when the answer finished; otherwise Insert stays commented out.
-                    blocks={record?.stop ? record.sqlBlocks : null}
-                    notes={notice ? [notice, ...(record?.notes ?? [])] : record?.notes}
-                    dialect={conn?.dialect ?? "postgres"}
-                    target={insertTarget}
-                    onOpenInNewTab={openInNewTab}
-                    onCopy={copySql}
-                    onAction={(kind) => recordAction(current.id, m.at, kind)}
-                  />
-                  {record && answerFoot(m, record, q, mi === current.messages.length - 1)}
-                </div>
-              );
-            })()
-          ) : (
-            <p key={`${m.at}-n`} className="msg-notice">
-              {m.text}
-            </p>
-          ),
-        )}
+        {groups.map((g, gi) => {
+          if (!current) return null;
+          const start = groups.slice(0, gi).reduce((n, x) => n + x.messages.length, 0);
+          const folded = g.topic?.closed === true;
+          const open = !folded || unfolded.has(g.topic?.seq ?? -1);
+          return (
+            <Fragment key={`${g.topic?.seq ?? "none"}-${gi}`}>
+              {folded && g.topic && (
+                <TopicFold
+                  topic={g.topic}
+                  preview={lastAnswerOf(g.messages)}
+                  open={open}
+                  onToggle={() =>
+                    setUnfolded((u) => {
+                      const next = new Set(u);
+                      if (!next.delete(g.topic!.seq)) next.add(g.topic!.seq);
+                      return next;
+                    })
+                  }
+                />
+              )}
+              {!folded && g.topic && gi > 0 && <TopicDivider title={g.topic.title} />}
+              {open &&
+                g.messages.map((m, j) => {
+                  const mi = start + j;
+                  const hidden = hiddenBy(m);
+                  if (hidden) {
+                    return noteAt.get(hidden.id) === m.at ? (
+                      <CompactNote
+                        key={`${hidden.id}-note`}
+                        compaction={hidden}
+                        modelName={hidden.summaryBy.kind === "model" ? modelNameOf(hidden.summaryBy.model) : null}
+                        tokens={tokensOf(hidden)}
+                        onUndo={stream.running ? undefined : () => void undoCompaction(hidden)}
+                        busy={undoing === hidden.id}
+                      />
+                    ) : null;
+                  }
+                  return (
+                m.role === "user" ? (
+                  <Fragment key={`${m.at}-u`}>
+                    <div className={m.action === "continue" ? "msg-user msg-user-muted" : "msg-user"}>{m.text}</div>
+                    <div className="ts">{dayClock(m.at, Date.now())}</div>
+                  </Fragment>
+                ) : m.role === "assistant" ? (
+                  (() => {
+                    const record = recordOf(m.record);
+                    const q = current.messages[mi - 1]?.role === "user" ? current.messages[mi - 1].text : "";
+                    const notice = contextNotice(record?.context ?? liveContexts.get(m.at) ?? null);
+                    return (
+                      <div key={`${m.at}-a`} className="msg-ai">
+                        <AnswerText
+                          text={m.text}
+                          // The Core checked the SQL only when the answer finished; otherwise Insert stays commented out.
+                          blocks={record?.stop ? record.sqlBlocks : null}
+                          notes={notice ? [notice, ...(record?.notes ?? [])] : record?.notes}
+                          dialect={conn?.dialect ?? "postgres"}
+                          target={insertTarget}
+                          onOpenInNewTab={openInNewTab}
+                          onCopy={copySql}
+                          onAction={(kind) => recordAction(current.id, m.at, kind)}
+                        />
+                        {record && answerFoot(m, record, q, mi === current.messages.length - 1, current.messages[mi - 1]?.action)}
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <p key={`${m.at}-n`} className="msg-notice">
+                    {m.text}
+                  </p>
+                )
+                  );
+                })}
+            </Fragment>
+          );
+        })}
         {pending && (
           <>
-            <div className="msg-user">{pending.q}</div>
+            {liveDivider && stream.memory && <TopicDivider title={stream.memory.title} />}
+            <div className={pending.action === "continue" ? "msg-user msg-user-muted" : "msg-user"}>{pending.q}</div>
+            <div className="ts">{dayClock(pending.at, Date.now(), true)}</div>
             <div className="msg-ai" aria-busy="true">
               {stream.thinking && (
                 <details className="msg-thinking">
@@ -831,7 +1378,24 @@ export default function AssistantPanel({
             </div>
           </>
         )}
+        {working !== null && (
+          <p className="msg-notice" role="status">
+            {working}
+          </p>
+        )}
         {failure !== null && failureCard(failure)}
+        {stoppedEarly !== null &&
+          !stream.running &&
+          answerEnd("stopped", {
+            millis: stoppedEarly.millis,
+            nothing: true,
+            onRetry: () => {
+              const { q, action } = stoppedEarly;
+              // The composer gives the question up to the Retry.
+              setQuestion((now) => (now === q ? "" : now));
+              void ask(q, undefined, undefined, action);
+            },
+          })}
         {confirmStop && (
           <div className="msg-mark" role="alert">
             <span>Stop the current answer?</span>
@@ -858,8 +1422,10 @@ export default function AssistantPanel({
           error={previewError}
           header={header}
           onToggle={toggle}
-          labelOf={(i) => sendsLabel(i, ctx)}
+          labelOf={(i) => sendsLabel(i, ctx, preview)}
           connection={conn}
+          modelName={model?.name ?? null}
+          openSignal={sendsOpenSignal}
         />
         {pickError && (
           <p className="sends-note" role="alert">
@@ -873,10 +1439,20 @@ export default function AssistantPanel({
           busy={resyncing}
           error={resyncError}
         />
+        {slashOpen && matches && (
+          <SlashCommands
+            id={slashId}
+            commands={matches}
+            active={slashRow}
+            unavailable={unavailable}
+            draft={question}
+            onRun={runSlash}
+          />
+        )}
         <div className="comp-box">
           {model && (
             <ContextMeter
-              used={answered ?? preview?.tokens ?? 0}
+              used={meterUsed}
               window={model.contextWindow}
               parts={parts}
               exact={answered !== null}
@@ -885,10 +1461,14 @@ export default function AssistantPanel({
           <textarea
             ref={input}
             aria-label="Message"
-            placeholder={`Ask about ${conn?.name ?? "your database"}`}
+            placeholder={`Ask about ${conn?.name ?? "your database"}, or type / for commands`}
             value={question}
+            aria-controls={slashOpen ? slashId : undefined}
+            aria-autocomplete="list"
+            aria-activedescendant={slashOpen && matches && matches.length > 0 ? optionId(slashId, matches[slashRow].name) : undefined}
             onChange={(e) => {
               setQuestion(e.target.value);
+              setSlashActive(0);
               if (e.target.value.trim()) setAnswered(null);
             }}
             onKeyDown={onKey}
@@ -900,20 +1480,23 @@ export default function AssistantPanel({
                 onPick={pickModel}
                 openSignal={pickerOpen}
                 providerName={providerName}
-                used={answered ?? preview?.tokens ?? 0}
+                used={meterUsed}
                 parts={parts}
                 exact={answered !== null}
               />
             )}
-            <span className="comp-sub">No sample rows are sent</span>
+            <span className={rowsNow.on ? "comp-sub comp-sub-rows" : "comp-sub"}>
+              {rowsNow.on && <Icon name="grid" size={14} />}
+              {rowsLine(rowsNow, preview?.rows ?? null)}
+            </span>
             <span className="spacer" />
-            <Kbd keys="Enter" />
+            <Kbd keys={stream.running ? "Esc" : "Enter"} />
             {stream.running ? (
               <button
                 type="button"
                 className="button ai-send"
                 aria-label="Stop"
-                title="Stop"
+                title="Stop  Esc"
                 onClick={() => {
                   setConfirmStop(false);
                   stream.stop();
@@ -927,7 +1510,7 @@ export default function AssistantPanel({
                 className="button button-primary ai-send"
                 aria-label="Send"
                 disabled={!question.trim()}
-                onClick={() => void ask()}
+                onClick={send}
               >
                 <Icon name="arrowUp" size={14} />
               </button>

@@ -228,7 +228,13 @@ impl Http {
             first = false;
             match tokio::time::timeout(wait, resp.chunk()).await {
                 Err(_) => return Err(timeout(phase)),
-                Ok(Err(_)) => return Err(Error::Ai(AiError::Network { host })),
+                Ok(Err(_)) => {
+                    // Headers came: the request reached the host.
+                    return Err(Error::Ai(AiError::Network {
+                        host,
+                        connect: false,
+                    }));
+                }
                 Ok(Ok(None)) => return Ok(()),
                 Ok(Ok(Some(bytes))) => {
                     if !on_bytes(&bytes) {
@@ -341,6 +347,9 @@ impl Http {
     }
 }
 
+/// The error code Groq sends when the model's tool call arguments are not JSON.
+pub const TOOL_USE_FAILED: &str = "tool_use_failed";
+
 /// The error for a non-2xx status, chosen by the code and the body's structured fields
 /// (`error.type`, `error.code`), never its message's wording; the message is only checked
 /// for the model's id. `model` is the one asked for.
@@ -360,6 +369,11 @@ pub fn map_status(
             .and_then(|v| v.pointer(path)?.as_str().map(str::to_string))
     };
     let kind = field("/error/type");
+    // Groq refuses a tool call whose arguments it could not parse: the model's tool input,
+    // not the response, could not be read.
+    if field("/error/code").as_deref() == Some(TOOL_USE_FAILED) {
+        return AiError::BadToolInput;
+    }
     // Anthropic names a spent balance by type, whatever the status.
     if kind.as_deref() == Some("billing_error") {
         return AiError::OutOfCredit { provider };
@@ -455,7 +469,10 @@ fn transport(e: &reqwest::Error, host: &str) -> Failed {
         } else if offline(e) {
             AiError::Offline
         } else {
-            AiError::Network { host: host.into() }
+            AiError::Network {
+                host: host.into(),
+                connect: true,
+            }
         };
         return Failed {
             error,
@@ -464,10 +481,33 @@ fn transport(e: &reqwest::Error, host: &str) -> Failed {
         };
     }
     Failed {
-        error: AiError::Network { host: host.into() },
+        error: AiError::Network {
+            host: host.into(),
+            // Refused before the request was written, though reqwest did not call it a
+            // connect error.
+            connect: refused_in(e),
+        },
         what: "network",
         retry: false,
     }
+}
+
+/// A refused connection anywhere in the error chain.
+fn refused_in(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = source {
+        source = match err.downcast_ref::<std::io::Error>() {
+            Some(io) => {
+                if io.kind() == std::io::ErrorKind::ConnectionRefused {
+                    return true;
+                }
+                io.get_ref()
+                    .map(|inner| inner as &(dyn std::error::Error + 'static))
+            }
+            None => err.source(),
+        };
+    }
+    false
 }
 
 /// The OS says there is no network at all, rather than that the host refused.
@@ -584,6 +624,13 @@ pub async fn read_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_use_failed_is_bad_tool_input() {
+        let body = r#"{"error":{"message":"Failed to call a function.","type":"invalid_request_error","code":"tool_use_failed"}}"#;
+        let e = map_status(400, None, body, AiProviderKind::Groq, "m", &[]);
+        assert_eq!(e, AiError::BadToolInput);
+    }
 
     #[test]
     fn private_http_goes_direct() {

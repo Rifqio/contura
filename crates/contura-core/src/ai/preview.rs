@@ -6,36 +6,41 @@ use serde::Serialize;
 use std::time::Instant;
 
 use crate::ai::budget::{
-    LEFT_OUT, NAMES_ONLY, OPEN_TAB, PAYLOAD_CAP, TableFit, budget, cap_payload, estimate_tokens,
+    Budget, LEFT_OUT, NAMES_ONLY, OPEN_TAB, PAYLOAD_CAP, TableFit, budget, cap_payload,
+    estimate_tokens,
 };
 use crate::ai::context::cards::cleaner;
 use crate::ai::context::outline::{
     OutlineRequest, Resolved, TablePicker, build_outline, parse_reply, resolve, should_outline,
 };
-use crate::ai::context::retrieve::{Retrieval, Seeds, retrieve};
+use crate::ai::context::retrieve::{Retrieval, Seeds, question_terms, retrieve};
 use crate::ai::context::store::{ContextKey, ContextStore};
 use crate::ai::context::sync::{ContextInfo, Purpose, context_key, ensure};
 use crate::ai::context::tree::{Area, areas_for};
 use crate::ai::log::{Level, Log, LogLine, ProcessStep, StepKind, error_kind};
+use crate::ai::memory::{
+    AskFacts, HistoryPick, HistorySummary, MemoryInfo, SummarySource, ThreadStore, TopicPick, Turn,
+    TurnStamp, closing_topic, select_history, topic_for,
+};
 use crate::ai::models::{ModelInfo, clamp};
 use crate::ai::prompt::outline_prompt;
-use crate::ai::provider::{max_tokens_on_wire, wire_thinking};
+use crate::ai::provider::{ChatRole, max_tokens_on_wire, wire_thinking};
 use crate::ai::rails::retrieval::outline_block;
 use crate::ai::rails::{
     Ask, InputRail, RetrievalRail, Secrets, allowed, cap_chars, framed_text, lock_reason,
     new_boundary, run_rails, schema_text,
 };
 use crate::ai::request::{AskRequest, Item, ItemKind, Switches};
-use crate::ai::sent::OutlineSent;
-use crate::ai::{AiAccess, AiSettings, now_ms};
+use crate::ai::rows::{SAMPLE_ROWS, SampleTable, fit_rows, format_rows};
+use crate::ai::sent::{CallKind, OutlineSent, RowsSent};
+use crate::ai::{AiAccess, AiRole, AiSettings, AiThread, now_ms};
 use crate::common::grouped;
-use crate::error::Result;
-use crate::model::{ConnectionConfig, ConnectionId, DialectKind};
+use crate::error::{Error, Result};
+use crate::model::{ConnectionConfig, ConnectionId, DialectKind, ObjectPath, Page};
 use crate::query::SavedQuery;
 use crate::schema_model::SchemaModel;
 
-/// R4.1: the answer's default `max_tokens` when the settings leave it unset.
-const DEFAULT_MAX_TOKENS: u32 = 4096;
+use crate::ai::stream::DEFAULT_MAX_TOKENS;
 
 /// Exact secrets shorter than this are not matched: a 1 to 3 character password would
 /// shred every text. The pattern shapes (R2.1) still catch them.
@@ -43,12 +48,13 @@ const MIN_SECRET_CHARS: usize = 4;
 
 /// The order context is cut in when the framed text is over the 200 KB cap. DBML has no
 /// budget share, so it goes before the fitted cards; the saved queries follow the cards in
-/// the schema share, so they go just before them; query text goes last; the question is
-/// never cut.
-const TRIM_ORDER: [ItemKind; 7] = [
+/// the schema share, so they go just before them; the thread goes after the saved queries
+/// (its summaries, then its oldest turns); query text goes last; the question is never cut.
+const TRIM_ORDER: [ItemKind; 8] = [
     ItemKind::Rows,
     ItemKind::Dbml,
     ItemKind::SavedQueries,
+    ItemKind::History,
     ItemKind::Cards,
     ItemKind::Names,
     ItemKind::Error,
@@ -56,6 +62,23 @@ const TRIM_ORDER: [ItemKind; 7] = [
 ];
 
 const UNREADABLE_NOTE: &str = "The AI Context could not be read, so no tables are sent.";
+
+/// Step 11f: the Sample rows Sends row with nothing to read.
+const ROWS_LABEL: &str = "Sample rows";
+const NO_NAMED_LABEL: &str = "Sample rows · no named table";
+const NO_NAMED_NOTE: &str =
+    "Sample rows go only for tables named in the editor or the question, or open in a tab.";
+/// How the retrieval rail's injection note names a rows item.
+const ROWS_NOTE_LEAD: &str = "Sample rows from ";
+/// The Ask's status while the rows are read.
+const READING_ROWS: &str = "Reading sample rows";
+const ROWS_RULE: &str = "Read live by Contura in a read-only transaction: at most 5 rows per named table, cells cut at 200 characters, binaries as <binary>. Never stored.";
+/// How long one sample read may take before it counts as failed: the Dialects' own 5 s
+/// limit and a little room for the round trip.
+const SAMPLE_READ_LIMIT: std::time::Duration =
+    std::time::Duration::from_millis(crate::dialect::SAMPLE_TIMEOUT_MS + 500);
+/// What `ConnectionService` says for a Connection that is not open.
+const NOT_OPEN: &str = "connection not open";
 
 /// The stored Connections and their schema, as the preview reads them.
 #[async_trait::async_trait]
@@ -77,9 +100,17 @@ pub trait CatalogReader: Send + Sync {
     ) -> Result<String>;
     /// Where the AI Contexts are kept.
     fn context(&self) -> &dyn ContextStore;
+    /// Where the threads' Topics and compactions are kept.
+    fn threads(&self) -> &dyn ThreadStore;
     /// The stored Saved Queries, for building a Context; no database call.
     async fn saved_queries(&self) -> Result<Vec<SavedQuery>> {
         Ok(Vec::new())
+    }
+    /// Step 11f: up to `limit` live rows of one base table, read only. Never opens a
+    /// closed Connection.
+    async fn sample_rows(&self, id: ConnectionId, path: &ObjectPath, limit: u32) -> Result<Page> {
+        let _ = (id, path, limit);
+        Err(Error::NotFound("sample rows are not available".into()))
     }
 }
 
@@ -95,30 +126,66 @@ pub struct PreviewItem {
     pub on: bool,
 }
 
-/// The two parts of what is sent besides the system prompt: the schema block, which goes
-/// in the cached prefix, and the turn (the per-request framed block, then the question),
-/// which goes as the user message.
+/// The parts of what is sent besides the system prompt: the schema block, which goes in
+/// the cached prefix, the thread's recent turns, and the turn (the per-request framed
+/// block, then the question), which goes as the last user message. The turns and the turn
+/// come after cache mark 2.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PromptParts {
     /// Empty when no cards go.
     pub schema: String,
+    /// The thread's turns as user and assistant messages, oldest first.
+    pub history: Vec<(ChatRole, String)>,
     pub turn: String,
 }
 
-impl PromptParts {
-    /// What "Show exactly" displays: the schema block, a blank line, the turn.
-    pub fn exact(&self) -> String {
-        if self.schema.is_empty() {
-            self.turn.clone()
-        } else {
-            format!("{}\n\n{}", self.schema, self.turn)
-        }
+/// The line "Show exactly" writes above a history message; it is not sent.
+fn role_line(role: ChatRole) -> &'static str {
+    match role {
+        ChatRole::User => "[user]\n",
+        ChatRole::Assistant => "[assistant]\n",
     }
 }
 
-fn compose(ask: &Ask, boundary: &str, question: &str) -> PromptParts {
+impl PromptParts {
+    /// What "Show exactly" displays: the schema block, a blank line, each history message
+    /// after a line `[user]` or `[assistant]` and before a blank line, then the turn.
+    pub fn exact(&self) -> String {
+        let mut out = String::new();
+        if !self.schema.is_empty() {
+            out.push_str(&self.schema);
+            out.push_str("\n\n");
+        }
+        for (role, text) in &self.history {
+            out.push_str(role_line(*role));
+            out.push_str(text);
+            out.push_str("\n\n");
+        }
+        out.push_str(&self.turn);
+        out
+    }
+
+    /// The bytes `exact` adds around the history messages that are never sent.
+    fn role_line_bytes(&self) -> usize {
+        self.history
+            .iter()
+            .map(|(role, _)| role_line(*role).len() + 2)
+            .sum()
+    }
+}
+
+fn compose(ask: &Ask, boundary: &str, question: &str, turns: &[Turn]) -> PromptParts {
     PromptParts {
         schema: schema_text(ask),
+        history: turns
+            .iter()
+            .flat_map(|t| {
+                [
+                    (ChatRole::User, t.question.clone()),
+                    (ChatRole::Assistant, t.answer.clone()),
+                ]
+            })
+            .collect(),
         turn: framed_text(ask, boundary, question),
     }
 }
@@ -161,6 +228,34 @@ pub struct Preview {
     /// The outline call, once it was made: only an Ask makes it.
     #[serde(skip)]
     pub outline_sent: Option<OutlineSent>,
+    /// The Topic and what the thread gives this Ask; `None` without a thread of this place.
+    pub memory: Option<MemoryInfo>,
+    /// The stamp the Ask emits as `Memory`, with or without a thread.
+    #[serde(skip)]
+    pub stamp: TurnStamp,
+    /// The summary step the Ask would make (a Topic summary or a compaction), never made
+    /// by a preview; `None` when the Ask would make no summary call.
+    pub summary: Option<SummaryPreview>,
+    /// The sample rows the Ask would send; `None` until they are read.
+    pub rows: Option<RowsSent>,
+}
+
+/// The summary step as Sends shows it: the call the Ask would make, not made.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryPreview {
+    pub kind: CallKind,
+    /// The Topic summarised; `None` for a compaction.
+    pub topic: Option<u32>,
+    /// That Topic's title.
+    pub title: Option<String>,
+    pub messages: u32,
+    pub bytes: u32,
+    pub tokens: u32,
+    /// What "Show exactly" displays: the call's user message.
+    pub exact: String,
+    /// False when the Summary row is switched off: Contura writes the summary by rules.
+    pub on: bool,
 }
 
 /// The outline step as Sends shows it.
@@ -233,7 +328,7 @@ fn open_sent(fit: &TableFit) -> usize {
 }
 
 /// A window as the UI writes it: `8K`, `131K`, `1M`, `1.5M`.
-fn window_text(tokens: u32) -> String {
+pub(crate) fn window_text(tokens: u32) -> String {
     if tokens >= 999_500 {
         let tenths = (u64::from(tokens) + 50_000) / 100_000;
         if tenths % 10 == 0 {
@@ -275,6 +370,7 @@ pub(crate) fn long_secrets(secrets: &Secrets) -> Secrets {
 /// The saved queries the AI Context picked, as `<name>: <masked sql>`: one item each, so
 /// each is framed alone, under one Sends row. `locked` gives that row with no query when
 /// the Context holds some but the AI access lets none go.
+#[derive(Clone, Debug)]
 struct SavedItems {
     texts: Vec<String>,
     locked: bool,
@@ -287,6 +383,7 @@ fn build_items(
     cards_label: Option<String>,
     cards: &str,
     saved: &SavedItems,
+    rows: &GatheredRows,
 ) -> Vec<Item> {
     let focus = &req.focus;
     let mut items = vec![new_item(ItemKind::Question, "Question", &req.question)];
@@ -328,26 +425,66 @@ fn build_items(
         values.on = req.switches.values;
         items.push(values);
     }
-    let mut rows = new_item(ItemKind::Rows, "Sample rows", "");
-    rows.on = req.switches.rows;
-    items.push(rows);
+    // One item per table that gave rows, so each is framed alone, under one Sends row.
+    if rows.tables.is_empty() {
+        let label = if rows.ran && rows.named.is_empty() {
+            NO_NAMED_LABEL
+        } else {
+            ROWS_LABEL
+        };
+        let mut empty = new_item(ItemKind::Rows, label, "");
+        empty.on = req.switches.rows;
+        items.push(empty);
+    } else {
+        let label = rows_label(rows.tables.len());
+        for t in &rows.tables {
+            items.push(new_item(ItemKind::Rows, &label, &t.text));
+        }
+    }
     items
+}
+
+fn rows_label(tables: usize) -> String {
+    format!("Sample rows · {}", count_of(tables, "table", "tables"))
+}
+
+/// The thread's turns as they go: none with the Thread row off.
+fn sent_turns(turns: &[Turn], on: bool) -> &[Turn] {
+    if on { turns } else { &[] }
 }
 
 /// Cuts framed items in `TRIM_ORDER` until the exact text fits 200 KB. Cutting `n` bytes
 /// of an item's text removes at least `n` bytes of its JSON line, so each cut closes the
-/// gap or empties the item. Cards are cut by whole lines and the fit is updated.
+/// gap or empties the item. Cards are cut by whole lines and the fit is updated. The
+/// thread is cut whole: its summaries one at a time, then its oldest turns one at a time.
 fn trim_to_cap(
     ask: &mut Ask,
     boundary: &str,
     question: &str,
     fit: &mut TableFit,
     line_tables: &[String],
+    turns: &mut Vec<Turn>,
+    history_on: bool,
 ) -> (PromptParts, usize) {
-    let mut parts = compose(ask, boundary, question);
+    let mut parts = compose(ask, boundary, question, sent_turns(turns, history_on));
     let mut exact = parts.exact();
     let mut trimmed = 0;
     for kind in TRIM_ORDER {
+        if kind == ItemKind::History {
+            while history_on && exact.len() > PAYLOAD_CAP {
+                if let Some(i) = ask.items.iter().rposition(|i| i.kind == ItemKind::History) {
+                    ask.items.remove(i);
+                } else if !turns.is_empty() {
+                    turns.remove(0);
+                } else {
+                    break;
+                }
+                trimmed += 1;
+                parts = compose(ask, boundary, question, sent_turns(turns, history_on));
+                exact = parts.exact();
+            }
+            continue;
+        }
         let picked: Vec<usize> = (0..ask.items.len())
             .rev()
             .filter(|&i| {
@@ -370,11 +507,23 @@ fn trim_to_cap(
                     .unwrap_or(0);
                 item.text.truncate(kept);
                 drop_cut_tables(fit, line_tables, item.text.lines().count());
+            } else if kind == ItemKind::Rows {
+                // A cut mid-line drops the partial last line: never a broken JSON line.
+                let whole = keep == item.text.len() || item.text.as_bytes()[keep] == b'\n';
+                item.text.truncate(keep);
+                if !whole {
+                    let at = item.text.rfind('\n').unwrap_or(0);
+                    item.text.truncate(at);
+                }
+                if !item.text.contains('\n') {
+                    // Only the header is left: no row to send.
+                    item.text.clear();
+                }
             } else {
                 item.text.truncate(keep);
             }
             trimmed += 1;
-            parts = compose(ask, boundary, question);
+            parts = compose(ask, boundary, question, sent_turns(turns, history_on));
             exact = parts.exact();
         }
     }
@@ -487,38 +636,48 @@ fn step(log: &Log, step: StepKind, value: String, rule: &str) -> ProcessStep {
     }
 }
 
-/// The Access row: what the stored level lets go.
+/// The Access row: what the stored level lets go. At Plus sample rows the rows row and
+/// the rule say the Ask's Sample rows switch (Board B).
 fn access_step(log: &Log, access: AiAccess, switches: Switches) -> ProcessStep {
     let kinds = [
-        ("schema", ItemKind::Cards),
-        ("query text", ItemKind::Sql),
-        ("sample rows", ItemKind::Rows),
+        ("schema", "schema", ItemKind::Cards),
+        ("query text", "query text", ItemKind::Sql),
+        ("sample rows", "rows", ItemKind::Rows),
     ];
+    let by_switch = access == AiAccess::SchemaQueryRows;
+    let switch = if switches.rows { "on" } else { "off" };
+    let mut open: Vec<&str> = Vec::new();
     let evidence: Vec<[String; 3]> = kinds
         .iter()
-        .map(|(name, kind)| {
-            let verdict = if allowed(access, *kind, switches) {
-                "allowed"
+        .map(|(name, short, kind)| {
+            let ok = allowed(access, *kind, switches);
+            if ok {
+                open.push(short);
+            }
+            let verdict = if ok { "allowed" } else { "blocked" };
+            let why = if by_switch && *kind == ItemKind::Rows {
+                format!("Sample rows switch {switch}")
             } else {
-                "blocked"
+                "AI access level".into()
             };
-            [name.to_string(), verdict.into(), "AI access level".into()]
+            [name.to_string(), verdict.into(), why]
         })
-        .collect();
-    let open: Vec<&str> = evidence
-        .iter()
-        .filter(|row| row[1] == "allowed")
-        .map(|row| row[0].as_str())
         .collect();
     let value = if open.is_empty() {
         "question only".to_string()
     } else {
         open.join(", ")
     };
-    let rule = format!(
-        "Read from the saved Connection: AI access is {}.",
-        access_label(access)
-    );
+    let level = access_label(access);
+    let rule = match (by_switch, switches.rows) {
+        (true, true) => format!(
+            "Read from the saved Connection: AI access is {level}, and Sample rows was on for this Ask."
+        ),
+        (true, false) => format!(
+            "Read from the saved Connection: AI access is {level}. Sample rows was off for this Ask."
+        ),
+        (false, _) => format!("Read from the saved Connection: AI access is {level}."),
+    };
     ProcessStep {
         evidence,
         ..step(log, StepKind::Access, value, &rule)
@@ -579,6 +738,8 @@ const PICKED_RULE: &str =
     "Picked from the outline, named in the question, open in a tab, or one key away.";
 const CLEANING_RULE: &str =
     "Values are masked unless Include values is on. Secrets are always replaced.";
+/// Board B: added to the Cleaning rule when sample rows went.
+const CLEANING_ROWS: &str = " Sample rows are cleaned like every other item.";
 
 const OUTLINE_LABEL: &str = "Outline";
 const OUTLINE_RULE: &str = "The model named the areas and tables it needs from an outline of table names. Contura kept only names in this database.";
@@ -660,11 +821,10 @@ async fn outline_step(
         dialect: Some(o.dialect),
         notes: Vec::new(),
         untied_model: false,
+        diagram: false,
         cleaned: Vec::new(),
     };
-    let input = InputRail {
-        secrets: o.secrets.clone(),
-    };
+    let input = InputRail::new(o.secrets.clone());
     let boundary = new_boundary();
     let retrieval = RetrievalRail {
         boundary: boundary.clone(),
@@ -739,6 +899,7 @@ async fn outline_step(
         }
     };
     let mut sent = reply.sent;
+    sent.tables = outline.tables;
     sent.exact = o.keep_exact.then_some(exact);
     let picked = parse_reply(&reply.text).map(|raw| {
         o.store
@@ -833,8 +994,359 @@ fn outline_row(log: &Log, run: &OutlineRun) -> Option<ProcessStep> {
     })
 }
 
+/// The outline step as gathered: its Sends row, its preview and its call once made.
+#[derive(Clone, Debug)]
+struct GatheredOutline {
+    item: PreviewItem,
+    preview: OutlinePreview,
+    sent: Option<OutlineSent>,
+}
+
+/// How the read of one named table went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadOutcome {
+    /// It gave rows; its text is in `GatheredRows::tables`.
+    Read,
+    /// It gave no rows: nothing to sample.
+    Empty,
+    /// Not one row fits `ROWS_ITEM_CAP`.
+    TooWide,
+    /// The read failed, or the Connection was not open.
+    Failed,
+}
+
+/// The sample rows stage of one Ask or preview (11f): read once in `gather`, so an Ask
+/// that assembles again after a compaction never reads again.
+#[derive(Clone, Default)]
+struct GatheredRows {
+    /// The stage ran: AI access, the switch and the Sends row allow rows and the AI
+    /// Context was read.
+    ran: bool,
+    /// Each named table in order, with the rule that named it and how its read went.
+    named: Vec<(String, &'static str, ReadOutcome)>,
+    /// The tables that gave rows, as text, in named order.
+    tables: Vec<SampleTable>,
+}
+
+/// Table names and counts only: a cell value never reaches a debug print.
+impl std::fmt::Debug for GatheredRows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatheredRows")
+            .field("ran", &self.ran)
+            .field("named", &self.named)
+            .field(
+                "tables",
+                &self
+                    .tables
+                    .iter()
+                    .map(|t| (t.table.as_str(), t.rows))
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+/// Reads up to `SAMPLE_ROWS` rows of each named table, one after another, through the
+/// read-only path. A failed read skips its table with a note and a Warn line; a
+/// Connection that is not open stops the reads with a note. Nothing here fails the Ask,
+/// and no cell value reaches the log.
+async fn read_rows(
+    catalog: &dyn CatalogReader,
+    config: &ConnectionConfig,
+    key: &ContextKey,
+    named: Vec<(String, &'static str)>,
+    status: &(dyn Fn(&str) + Sync),
+    notes: &mut Vec<String>,
+    log: &mut Log,
+) -> GatheredRows {
+    let mut out = GatheredRows {
+        ran: true,
+        ..GatheredRows::default()
+    };
+    if named.is_empty() {
+        notes.push(NO_NAMED_NOTE.to_string());
+        return out;
+    }
+    status(READING_ROWS);
+    let started = Instant::now();
+    let mut closed = false;
+    for (table, rule) in named {
+        if closed {
+            out.named.push((table, rule, ReadOutcome::Failed));
+            continue;
+        }
+        let path = ObjectPath {
+            database: key.database.clone(),
+            schema: (!key.schema.is_empty()).then(|| key.schema.clone()),
+            name: table.clone(),
+        };
+        // A client-side bound for every Dialect: MariaDB ignores the server hint, and the
+        // connect, kind check and column reads fall outside it. A timeout is a failed read.
+        let read = tokio::time::timeout(
+            SAMPLE_READ_LIMIT,
+            catalog.sample_rows(config.id, &path, SAMPLE_ROWS),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            let secs = SAMPLE_READ_LIMIT.as_secs();
+            Err(Error::TimedOut(u32::try_from(secs).unwrap_or(u32::MAX)))
+        });
+        let outcome = match read {
+            Ok(page) if page.rows.is_empty() => ReadOutcome::Empty,
+            Ok(page) => {
+                let text = format_rows(&table, rule, &page);
+                if text.rows == 0 {
+                    ReadOutcome::TooWide
+                } else {
+                    out.tables.push(text);
+                    ReadOutcome::Read
+                }
+            }
+            Err(Error::NotFound(m)) if m == NOT_OPEN => {
+                closed = true;
+                notes.push(format!("Open {} to send sample rows.", config.name));
+                ReadOutcome::Failed
+            }
+            Err(e) => {
+                log.push(
+                    Level::Warn,
+                    "rows",
+                    &[("table", table.clone()), ("error", error_kind(&e))],
+                );
+                notes.push(format!("Could not read sample rows from {table}."));
+                ReadOutcome::Failed
+            }
+        };
+        out.named.push((table, rule, outcome));
+    }
+    let read = rows_sent(out.tables.iter().map(|t| t.text.as_str()));
+    let read = read.unwrap_or_default();
+    log.push(
+        Level::Info,
+        "rows",
+        &[
+            ("tables", read.tables.to_string()),
+            ("rows", read.rows.to_string()),
+            ("bytes", read.bytes.to_string()),
+            ("readOnly", "true".into()),
+            ("ms", started.elapsed().as_millis().to_string()),
+        ],
+    );
+    out
+}
+
+/// The rows of a table's text: its lines after the header.
+fn text_rows(text: &str) -> u32 {
+    u32::try_from(text.lines().count().saturating_sub(1)).unwrap_or(u32::MAX)
+}
+
+/// What the rows texts hold, counted; `None` with no text.
+fn rows_sent<'a>(texts: impl Iterator<Item = &'a str>) -> Option<RowsSent> {
+    let mut sent = RowsSent::default();
+    for text in texts.filter(|t| !t.is_empty()) {
+        sent.tables += 1;
+        sent.rows = sent.rows.saturating_add(text_rows(text));
+        sent.bytes = sent.bytes.saturating_add(bytes_u32(text.len()));
+    }
+    (sent.tables > 0).then_some(sent)
+}
+
+/// R5.4: the retrieval rail scans the rows items before the budget fits them, so its
+/// note can name a table whose rows were then left out; only tables whose rows go keep it.
+fn drop_unsent_rows_notes(ask: &mut Ask) {
+    let sent: Vec<String> = ask
+        .items
+        .iter()
+        .filter(|i| i.kind == ItemKind::Rows && goes(i) && !i.text.is_empty())
+        .map(|i| {
+            format!(
+                "{}{}: ",
+                ROWS_NOTE_LEAD,
+                i.text.split('(').next().unwrap_or("").trim()
+            )
+        })
+        .collect();
+    ask.notes
+        .retain(|n| !n.starts_with(ROWS_NOTE_LEAD) || sent.iter().any(|s| n.starts_with(s)));
+}
+
+/// Whether an item is one that goes.
+fn goes(i: &Item) -> bool {
+    i.on && i.locked.is_none()
+}
+
+/// Fits the cleaned rows items into the rows share (re-measured after cleaning): the
+/// last rows of a table go first, then whole tables; what stays is put back in place of
+/// the items, relabelled with the tables left. Returns the tables kept, in order.
+fn fit_sample_rows(ask: &mut Ask, g: &Gathered, log: &mut Log) -> Vec<String> {
+    // Pair the items with their tables before dropping emptied ones: the input rail can
+    // empty one in the middle, and pairing after would shift every later table's name.
+    let all: Vec<usize> = (0..ask.items.len())
+        .filter(|&i| ask.items[i].kind == ItemKind::Rows && goes(&ask.items[i]))
+        .collect();
+    let paired: Vec<(usize, &SampleTable)> = all
+        .iter()
+        .copied()
+        .zip(&g.rows.tables)
+        .filter(|&(i, _)| !ask.items[i].text.is_empty())
+        .collect();
+    if paired.is_empty() {
+        return Vec::new();
+    }
+    // Every rows item that goes is replaced below, the emptied ones too.
+    let at = all;
+    let mut tables: Vec<SampleTable> = paired
+        .iter()
+        .map(|&(i, t)| SampleTable {
+            text: ask.items[i].text.clone(),
+            rows: text_rows(&ask.items[i].text),
+            ..t.clone()
+        })
+        .collect();
+    let fit = fit_rows(&mut tables, g.shares.rows);
+    if !fit.cut.is_empty() || !fit.left_out.is_empty() {
+        log.push(
+            Level::Info,
+            "rail.budget",
+            &[
+                ("trimmed", "rows".into()),
+                ("cut", fit.cut.len().to_string()),
+                ("leftOut", fit.left_out.len().to_string()),
+            ],
+        );
+    }
+    let first = at[0];
+    let template = ask.items[first].clone();
+    for &i in at.iter().rev() {
+        ask.items.remove(i);
+    }
+    if tables.is_empty() {
+        let empty = Item {
+            label: ROWS_LABEL.into(),
+            text: String::new(),
+            ..template
+        };
+        ask.items.insert(first, empty);
+        return Vec::new();
+    }
+    let label = rows_label(tables.len());
+    let kept: Vec<String> = tables.iter().map(|t| t.table.clone()).collect();
+    for (n, t) in tables.into_iter().enumerate() {
+        let item = Item {
+            label: label.clone(),
+            text: t.text,
+            ..template.clone()
+        };
+        ask.items.insert(first + n, item);
+    }
+    kept
+}
+
+/// The Rows Steps row, from what goes after every cut: one evidence row per named table.
+fn rows_step(log: &Log, rows: &GatheredRows, kept: &[String], items: &[Item]) -> ProcessStep {
+    let texts: Vec<&str> = if kept.is_empty() {
+        Vec::new()
+    } else {
+        items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Rows)
+            .map(|i| i.text.as_str())
+            .collect()
+    };
+    let sent_text = |table: &str| {
+        kept.iter()
+            .position(|t| t == table)
+            .and_then(|n| texts.get(n))
+            .filter(|t| !t.is_empty())
+    };
+    let evidence = rows
+        .named
+        .iter()
+        .map(|(table, rule, outcome)| {
+            let said = match outcome {
+                ReadOutcome::Read => match sent_text(table) {
+                    Some(text) => format!(
+                        "{}, {} B",
+                        count_of(text_rows(text) as usize, "row", "rows"),
+                        grouped(text.len() as u64)
+                    ),
+                    None => LEFT_OUT.into(),
+                },
+                ReadOutcome::Empty => "no rows".into(),
+                ReadOutcome::TooWide => LEFT_OUT.into(),
+                ReadOutcome::Failed => "could not read".into(),
+            };
+            [table.clone(), (*rule).to_string(), said]
+        })
+        .collect();
+    let sent = rows_sent(texts.iter().copied()).unwrap_or_default();
+    let value = format!(
+        "{} from {}",
+        count_of(sent.rows as usize, "row", "rows"),
+        count_of(sent.tables as usize, "table", "tables")
+    );
+    ProcessStep {
+        evidence,
+        ..step(log, StepKind::Rows, value, ROWS_RULE)
+    }
+}
+
+/// Everything an Ask's text is built from before the thread and the framing: the stored
+/// Connection's access (R1.2), the AI Context's cards, the saved queries and the outline
+/// step. `assemble` builds the text from it as often as it is asked, with no database or
+/// network call.
+#[derive(Clone, Debug)]
+pub struct Gathered {
+    pub req: AskRequest,
+    /// Where this Ask's lines start in the log.
+    first_line: usize,
+    config: Option<ConnectionConfig>,
+    /// Read from the stored Connection, never from the request; `Never` without one.
+    pub access: AiAccess,
+    untied_model: bool,
+    /// The secrets long enough to match exactly.
+    secrets: Secrets,
+    pub shares: Budget,
+    model_name: String,
+    window: u32,
+    notes: Vec<String>,
+    /// Access, Schema and Outline, as they ran.
+    steps: Vec<ProcessStep>,
+    fit: TableFit,
+    cards: String,
+    /// The table of each Cards line, in rank order, for the 200 KB cut.
+    line_tables: Vec<String>,
+    saved: SavedItems,
+    context: Option<ContextInfo>,
+    /// Once tables were picked: whether tier 2 ranked them.
+    picked: Option<bool>,
+    outline: Option<GatheredOutline>,
+    /// Whether the outline step's picks were used.
+    outlined: bool,
+    /// The tables the Ask sends in full, else its focus table names: the Topic rules read
+    /// them and the stamp carries them.
+    pub tables: Vec<String>,
+    /// The sample rows read for this Ask (11f).
+    rows: GatheredRows,
+}
+
+impl Gathered {
+    /// The secrets long enough to match exactly: the summary calls clean with them too.
+    pub(crate) fn secrets(&self) -> &Secrets {
+        &self.secrets
+    }
+
+    /// What Contura read from the database for this Ask, counted: the tables that gave
+    /// rows; `None` when no row was read.
+    pub(crate) fn rows_read(&self) -> Option<RowsSent> {
+        rows_sent(self.rows.tables.iter().map(|t| t.text.as_str()))
+    }
+}
+
 /// As `preview`, writing into the Ask's `log` and filling the Steps rows it ran.
 /// `purpose` says whether the AI Context may be checked: an Ask may, the preview never.
+/// The preview and the Ask both run `gather`, the memory stage and `assemble`, so the
+/// preview shows exactly what the Ask sends, thread included (R1.6).
 #[allow(clippy::too_many_arguments)]
 pub async fn preview_with_log(
     catalog: &dyn CatalogReader,
@@ -846,6 +1358,48 @@ pub async fn preview_with_log(
     picker: Option<&dyn TablePicker>,
     log: &mut Log,
 ) -> Result<Preview> {
+    precheck_continue(catalog, req)?;
+    let picker = picker.filter(|_| req.action != "continue");
+    let gathered = gather(
+        catalog,
+        settings,
+        model,
+        secrets,
+        req,
+        purpose,
+        picker,
+        &|_: &str| {},
+        log,
+    )
+    .await?;
+    let recall = recall(catalog, &gathered, log);
+    check_continue(req, &recall)?;
+    let mut preview = assemble(&gathered, &recall.pick, recall.memory.clone(), log)?;
+    // The summary step the Ask would make, under the same rules; no call is made here.
+    preview.summary =
+        crate::ai::compact::summary_preview(catalog, settings, model, &gathered, &recall, &preview)
+            .await;
+    if !recall.thread {
+        preview.memory = None;
+    }
+    Ok(preview)
+}
+
+/// Access, the AI Context, the tables, 11d's outline step and 11f's sample rows:
+/// everything the preview does before the thread and the framing. `status` tells the Ask
+/// what it is doing (a no-op for the preview).
+#[allow(clippy::too_many_arguments)]
+pub async fn gather(
+    catalog: &dyn CatalogReader,
+    settings: &AiSettings,
+    model: &ModelInfo,
+    secrets: &Secrets,
+    req: &AskRequest,
+    purpose: Purpose,
+    picker: Option<&dyn TablePicker>,
+    status: &(dyn Fn(&str) + Sync),
+    log: &mut Log,
+) -> Result<Gathered> {
     let first_line = log.lines.len();
     let mut notes = Vec::new();
     let mut steps = Vec::new();
@@ -911,11 +1465,18 @@ pub async fn preview_with_log(
     // The outline step, when tier 3 triggered; `outlined` once its picks were used.
     let mut outline: Option<OutlineRun> = None;
     let mut outlined = false;
+    // The tables an Ask may carry rows for, once the Context was read.
+    let mut named: Option<(ContextKey, Vec<(String, &'static str)>)> = None;
     if let Some(config) = &config
         && !req.off.contains(&ItemKind::Cards)
         && allowed(access, ItemKind::Cards, req.switches)
     {
-        let key = context_key(config, req.database.as_deref(), req.schema.as_deref());
+        let key = context_key(
+            config,
+            req.database.as_deref(),
+            req.schema.as_deref(),
+            &req.focus.tables,
+        );
         let clean = cleaner(&exact_secrets);
         let (info, schema_step) =
             ensure(catalog, config, &key, purpose, &clean, now_ms(), log).await;
@@ -1004,6 +1565,7 @@ pub async fn preview_with_log(
                         }
                     }
                     picked = Some(r.ranked);
+                    named = Some((key.clone(), std::mem::take(&mut r.named_tables)));
                     cards = r
                         .lines
                         .iter()
@@ -1029,15 +1591,317 @@ pub async fn preview_with_log(
         context = Some(info);
     }
 
-    let name = config.as_ref().map_or("", |c| c.name.as_str());
-    let cards_label = (config.is_some() || !req.focus.tables.is_empty()).then(|| tables_label(req));
-    let mut items = build_items(req, cards_label, &cards, &saved);
+    // 11f: rows only at the rows level, with the switch on and the Sends row on (R1.2:
+    // the level read from the stored Connection above), for the tables named.
+    let mut rows = GatheredRows::default();
+    if let (Some(config), Some((key, named))) = (&config, named)
+        && allowed(access, ItemKind::Rows, req.switches)
+        && !req.off.contains(&ItemKind::Rows)
+    {
+        rows = read_rows(catalog, config, &key, named, status, &mut notes, log).await;
+    }
+
+    let tables = if fit.full.is_empty() {
+        req.focus.tables.iter().map(|t| t.name.clone()).collect()
+    } else {
+        fit.full.clone()
+    };
+    Ok(Gathered {
+        req: req.clone(),
+        first_line,
+        config,
+        access,
+        untied_model,
+        secrets: exact_secrets,
+        shares,
+        model_name: model.name.clone(),
+        window: model.context_window,
+        notes,
+        steps,
+        fit,
+        cards,
+        line_tables,
+        saved,
+        context,
+        picked,
+        outline: outline.map(|run| GatheredOutline {
+            item: run.item,
+            preview: run.preview,
+            sent: run.sent,
+        }),
+        outlined,
+        tables,
+        rows,
+    })
+}
+
+/// What the memory stage found for one Ask.
+#[derive(Clone, Debug)]
+pub struct Recall {
+    pub pick: HistoryPick,
+    /// The Topic and the pick's counts; `assemble` sets what goes after the cut.
+    pub memory: MemoryInfo,
+    /// Whether the Ask had a thread of its own place to read.
+    pub thread: bool,
+    /// That thread as stored, for the 85% check and the summary step.
+    pub source: Option<AiThread>,
+    /// The Topic pick: the Topic this Ask closes, when it opens a new one.
+    pub topic: TopicPick,
+}
+
+/// The memory stage: the Topic this Ask belongs to and the history it may send. No
+/// `thread_id`, a thread that is not stored, or one of another place gives no history and
+/// Topic 1, `First`. At Never nothing of the thread goes, not even a question-only turn.
+/// Otherwise the open Topic's turns and matching summaries pass the gate on history with
+/// the access read from the stored Connection (R1.2, R1.7), cleaned by the input rail's
+/// cleaner (R2.1, R2.2); no masking, since the gate already holds values back. A store
+/// that cannot be read sends no history.
+pub fn recall(catalog: &dyn CatalogReader, g: &Gathered, log: &mut Log) -> Recall {
+    let req = &g.req;
+    let store = catalog.threads();
+    let warn = |log: &mut Log, e: &crate::error::Error| {
+        log.push(Level::Warn, "memory", &[("error", error_kind(e))]);
+    };
+    let thread = match req.thread_id.map(|id| store.thread(id)) {
+        Some(Ok(Some(t))) if t.place == req.place => Some(t),
+        Some(Err(e)) => {
+            warn(log, &e);
+            None
+        }
+        _ => None,
+    };
+    let facts = AskFacts {
+        connection_id: req.connection_id,
+        database: req.database.as_deref(),
+        action: &req.action,
+        tables: &g.tables,
+        now_ms: now_ms(),
+    };
+    let topic = topic_for(thread.as_ref(), &facts, &req.question);
+    let picked = topic.clone();
+    let mut pick = HistoryPick::default();
+    if let Some(t) = thread.as_ref().filter(|_| g.access != AiAccess::Never) {
+        let read = (|| {
+            let topics = store.topics(t.id)?;
+            let compactions = store.compactions(t.id)?;
+            let matches = store.match_topics(t.id, &question_terms(&req.question), 4)?;
+            Ok::<_, crate::error::Error>((topics, compactions, matches))
+        })();
+        match read {
+            Ok((mut topics, compactions, matches)) => {
+                // The Topic this Ask closes goes as a closed one (R1.6: the preview too).
+                if let Some(seq) = topic.closing {
+                    closing_topic(&mut topics, t, &compactions, seq);
+                }
+                let clean = cleaner(&g.secrets);
+                pick = select_history(
+                    Some(t),
+                    &topics,
+                    &compactions,
+                    &topic,
+                    &facts,
+                    g.access,
+                    req.switches,
+                    &matches,
+                    g.shares.history,
+                    &clean,
+                );
+            }
+            Err(e) => warn(log, &e),
+        }
+    }
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let memory = MemoryInfo {
+        topic: topic.seq,
+        opened: topic.opened,
+        reason: topic.reason,
+        title: topic.title,
+        turns: count(pick.turns.len()),
+        summaries: count(pick.summaries.len()),
+        blocked: pick.blocked,
+        tokens: pick.tokens,
+    };
+    Recall {
+        pick,
+        memory,
+        thread: thread.is_some(),
+        source: thread,
+        topic: picked,
+    }
+}
+
+fn nothing_to_continue() -> crate::error::Error {
+    crate::error::Error::Ai(crate::ai::AiError::NothingToContinue)
+}
+
+/// The cheap half of the Continue rule, run before anything is gathered or sent: the thread
+/// is stored, belongs to the place, and ends with a question and its answer (a Notice after
+/// them does not count). Other actions pass.
+pub fn precheck_continue(catalog: &dyn CatalogReader, req: &AskRequest) -> Result<()> {
+    if req.action != "continue" {
+        return Ok(());
+    }
+    let thread = match req.thread_id.map(|id| catalog.threads().thread(id)) {
+        Some(Ok(Some(t))) if t.place == req.place => t,
+        _ => return Err(nothing_to_continue()),
+    };
+    let mut shown = thread.messages.iter().filter(|m| m.role != AiRole::Notice);
+    let (answer, question) = (shown.next_back(), shown.next_back());
+    match (question, answer) {
+        (Some(q), Some(a))
+            if q.role == AiRole::User
+                && a.role == AiRole::Assistant
+                && !a.text.trim().is_empty() =>
+        {
+            Ok(())
+        }
+        _ => Err(nothing_to_continue()),
+    }
+}
+
+/// The Continue rule on the history pick (the one the Ask sends): it must end with the
+/// thread's last question and answer, the cut answer's turn. A Topic broken by Place or
+/// Idle, a gate that blocked it, a share that dropped it or the Thread row switched off
+/// leaves nothing to continue. Shared by the preview and the Ask, so both give the same
+/// error.
+pub fn check_continue(req: &AskRequest, recall: &Recall) -> Result<()> {
+    if req.action != "continue" {
+        return Ok(());
+    }
+    if req.off.contains(&ItemKind::History) {
+        return Err(nothing_to_continue());
+    }
+    let (Some(last), Some(thread)) = (recall.pick.turns.last(), recall.source.as_ref()) else {
+        return Err(nothing_to_continue());
+    };
+    let mut shown = thread.messages.iter().filter(|m| m.role != AiRole::Notice);
+    let (answer, question) = (shown.next_back(), shown.next_back());
+    match (question, answer) {
+        (Some(q), Some(a))
+            if q.role == AiRole::User && a.role == AiRole::Assistant && q.at == last.at =>
+        {
+            Ok(())
+        }
+        _ => Err(nothing_to_continue()),
+    }
+}
+
+/// The Thread row's label: `Thread · 2 turns, 1 summary`.
+fn thread_label(turns: usize, summaries: usize) -> String {
+    match (turns, summaries) {
+        (t, 0) => format!("Thread · {}", count_of(t, "turn", "turns")),
+        (0, s) => format!("Thread · {}", count_of(s, "summary", "summaries")),
+        (t, s) => format!(
+            "Thread · {}, {}",
+            count_of(t, "turn", "turns"),
+            count_of(s, "summary", "summaries")
+        ),
+    }
+}
+
+/// A summary as it is framed: `<label>: <summary>`.
+fn summary_text(s: &HistorySummary) -> String {
+    let label = match &s.source {
+        SummarySource::Topic {
+            title, first_at, ..
+        } => format!("Earlier topic \"{title}\" ({first_at})"),
+        SummarySource::Compaction { messages, .. } => format!(
+            "Earlier in this topic, {}",
+            count_of(*messages as usize, "message", "messages")
+        ),
+    };
+    format!("{label}: {}", s.text)
+}
+
+fn yes_no(b: bool) -> String {
+    if b { "yes" } else { "no" }.into()
+}
+
+fn break_id(memory: &MemoryInfo) -> String {
+    match memory.reason {
+        None => "none".into(),
+        Some(r) => serde_json::to_value(r)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default(),
+    }
+}
+
+/// The kinds of the items that go, each once.
+fn sent_kinds(items: &[PreviewItem]) -> Vec<ItemKind> {
+    let mut kinds: Vec<ItemKind> = Vec::new();
+    for i in items.iter().filter(|i| i.on && i.locked.is_none()) {
+        // An empty Sample rows item carried nothing: the turn is not a rows turn.
+        if i.kind == ItemKind::Rows && i.bytes == 0 {
+            continue;
+        }
+        if !kinds.contains(&i.kind) {
+            kinds.push(i.kind);
+        }
+    }
+    kinds
+}
+
+/// Frames what was gathered with `history`: the gate on items, the rails, the query share,
+/// the 200 KB cut (the thread before the cards) and "Show exactly". `memory` comes back
+/// with what goes of the thread after the cut. It reads no database and calls no provider.
+pub fn assemble(
+    g: &Gathered,
+    history: &HistoryPick,
+    memory: MemoryInfo,
+    log: &mut Log,
+) -> Result<Preview> {
+    assemble_with(g, history, memory, log, true)
+}
+
+/// The one `memory` log line: what the thread gives the Ask, counts only.
+pub(crate) fn memory_line(log: &mut Log, memory: &MemoryInfo) {
+    log.push(
+        Level::Info,
+        "memory",
+        &[
+            ("topic", memory.topic.to_string()),
+            ("opened", yes_no(memory.opened)),
+            ("break", break_id(memory)),
+            ("turns", memory.turns.to_string()),
+            ("summaries", memory.summaries.to_string()),
+            ("blocked", memory.blocked.to_string()),
+            ("tokens", memory.tokens.to_string()),
+        ],
+    );
+}
+
+/// As `assemble`; without `log_memory` the `memory` line is left for the caller, so an
+/// Ask that assembles again after a compaction logs it once.
+pub(crate) fn assemble_with(
+    g: &Gathered,
+    history: &HistoryPick,
+    mut memory: MemoryInfo,
+    log: &mut Log,
+    log_memory: bool,
+) -> Result<Preview> {
+    let req = &g.req;
+    let mut notes = g.notes.clone();
+    let mut steps = g.steps.clone();
+    let mut fit = g.fit.clone();
+    let history_on = !req.off.contains(&ItemKind::History);
+    let mut turns: Vec<Turn> = history.turns.clone();
+
+    let name = g.config.as_ref().map_or("", |c| c.name.as_str());
+    let cards_label =
+        (g.config.is_some() || !req.focus.tables.is_empty()).then(|| tables_label(req));
+    let mut items = build_items(req, cards_label, &g.cards, &g.saved, &g.rows);
+    // The summaries come first in the framed block, right after the question.
+    let label = thread_label(turns.len(), history.summaries.len());
+    for (n, s) in history.summaries.iter().enumerate() {
+        items.insert(1 + n, new_item(ItemKind::History, &label, &summary_text(s)));
+    }
     for item in &mut items {
-        item.locked = if untied_model && item.kind == ItemKind::Dbml {
+        item.locked = if g.untied_model && item.kind == ItemKind::Dbml {
             item.label = UNTIED_DBML.into();
             None
         } else {
-            lock_reason(access, item.kind, name)
+            lock_reason(g.access, item.kind, name)
         };
         let off = item.kind != ItemKind::Question && req.off.contains(&item.kind);
         if item.locked.is_some() || off {
@@ -1047,34 +1911,34 @@ pub async fn preview_with_log(
 
     let mut ask = Ask {
         items,
-        access,
-        dialect,
+        access: g.access,
+        dialect: g.config.as_ref().map(|c| c.dialect),
         notes: Vec::new(),
-        untied_model,
+        untied_model: g.untied_model,
+        diagram: false,
         cleaned: Vec::new(),
     };
-    let input = InputRail {
-        secrets: exact_secrets,
-    };
+    let input = InputRail::new(g.secrets.clone());
     let boundary = new_boundary();
     let retrieval = RetrievalRail {
         boundary: boundary.clone(),
     };
     run_rails(&[&input, &retrieval], &mut ask, log)?;
     let cleaning = cleaning_step(log, std::mem::take(&mut ask.cleaned));
-    if cap_query_share(&mut ask, shares.query) {
+    let rows_kept = fit_sample_rows(&mut ask, g, log);
+    if cap_query_share(&mut ask, g.shares.query) {
         log.push(
             Level::Info,
             "rail.budget",
             &[
                 ("trimmed", "query".into()),
-                ("share", shares.query.to_string()),
+                ("share", g.shares.query.to_string()),
             ],
         );
         notes.push(format!(
             "The current statement was shortened to fit {}'s {} window.",
-            model.name,
-            window_text(model.context_window)
+            g.model_name,
+            window_text(g.window)
         ));
     }
 
@@ -1084,7 +1948,15 @@ pub async fn preview_with_log(
         .find(|i| i.kind == ItemKind::Question)
         .map(|i| i.text.clone())
         .unwrap_or_default();
-    let (mut parts, trimmed) = trim_to_cap(&mut ask, &boundary, &question, &mut fit, &line_tables);
+    let (mut parts, trimmed) = trim_to_cap(
+        &mut ask,
+        &boundary,
+        &question,
+        &mut fit,
+        &g.line_tables,
+        &mut turns,
+        history_on,
+    );
     let sent = fit.full.len() + fit.names_only.len();
     log.push(
         Level::Info,
@@ -1096,13 +1968,26 @@ pub async fn preview_with_log(
             ("leftOut", fit.left_out.len().to_string()),
         ],
     );
-    if let Some(ranked) = picked {
-        steps.push(tables_step(log, &fit, ranked, outlined));
+    if let Some(ranked) = g.picked {
+        steps.push(tables_step(log, &fit, ranked, g.outlined));
         // Counted after the cut, so a left-out open tab is not "first".
         let label = sent_label(req, sent, open_sent(&fit));
         if let Some(cards) = ask.items.iter_mut().find(|i| i.kind == ItemKind::Cards) {
             cards.label = label;
         }
+    }
+    if g.rows.ran {
+        steps.push(rows_step(log, &g.rows, &rows_kept, &ask.items));
+    }
+    let rows = rows_sent(
+        ask.items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Rows && goes(i))
+            .map(|i| i.text.as_str()),
+    );
+    let mut cleaning = cleaning;
+    if rows.is_some() {
+        cleaning.rule.push_str(CLEANING_ROWS);
     }
     steps.push(cleaning);
     // The question is at most 16 KB, so trimming always fits; the cap is the last guard,
@@ -1126,14 +2011,32 @@ pub async fn preview_with_log(
         ],
     );
 
+    drop_unsent_rows_notes(&mut ask);
     notes.extend(ask.notes);
     let mut items: Vec<PreviewItem> = Vec::new();
+    // The thread's summaries and turns show as one Sends row.
+    let mut thread_row = PreviewItem {
+        kind: ItemKind::History,
+        label: String::new(),
+        bytes: 0,
+        tokens: 0,
+        locked: None,
+        on: history_on,
+    };
+    let mut summaries = 0usize;
     for i in ask.items {
         let bytes = bytes_u32(i.text.len());
         let tokens = estimate_tokens(&i.text, i.kind == ItemKind::Question);
-        // The saved queries go as one item each but show as one Sends row.
-        if i.kind == ItemKind::SavedQueries
-            && let Some(row) = items.iter_mut().find(|r| r.kind == ItemKind::SavedQueries)
+        if i.kind == ItemKind::History {
+            summaries += 1;
+            thread_row.bytes = thread_row.bytes.saturating_add(bytes);
+            thread_row.tokens = thread_row.tokens.saturating_add(tokens);
+            continue;
+        }
+        // The saved queries and the sample rows go as one item each but show as one
+        // Sends row each.
+        if matches!(i.kind, ItemKind::SavedQueries | ItemKind::Rows)
+            && let Some(row) = items.iter_mut().find(|r| r.kind == i.kind)
         {
             row.bytes = row.bytes.saturating_add(bytes);
             row.tokens = row.tokens.saturating_add(tokens);
@@ -1148,8 +2051,29 @@ pub async fn preview_with_log(
             on: i.on,
         });
     }
-    let mut total_bytes = bytes_u32(exact.len());
-    if let Some(run) = &outline {
+    for t in &turns {
+        thread_row.bytes = thread_row
+            .bytes
+            .saturating_add(bytes_u32(t.question.len() + t.answer.len()));
+        thread_row.tokens = thread_row.tokens.saturating_add(t.tokens);
+    }
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    (memory.turns, memory.summaries, memory.tokens) = if history_on {
+        (count(turns.len()), count(summaries), thread_row.tokens)
+    } else {
+        (0, 0, 0)
+    };
+    if !turns.is_empty() || summaries > 0 {
+        thread_row.label = thread_label(turns.len(), summaries);
+        items.insert(1.min(items.len()), thread_row);
+    }
+    if log_memory {
+        memory_line(log, &memory);
+    }
+
+    // Only the texts are sent: the role lines "Show exactly" adds are not counted.
+    let mut total_bytes = bytes_u32(exact.len() - parts.role_line_bytes());
+    if let Some(run) = &g.outline {
         let at = items
             .iter()
             .position(|i| i.kind == ItemKind::Cards)
@@ -1159,10 +2083,25 @@ pub async fn preview_with_log(
             total_bytes = total_bytes.saturating_add(run.item.bytes);
         }
     }
-    let (outline, outline_sent) = match outline {
-        Some(run) => (Some(run.preview), run.sent),
+    let (outline, outline_sent) = match &g.outline {
+        Some(run) => (Some(run.preview.clone()), run.sent.clone()),
         None => (None, None),
     };
+    let stamp = TurnStamp {
+        topic: memory.topic,
+        opened: memory.opened,
+        reason: memory.reason,
+        title: memory.title.clone(),
+        connection_id: req.connection_id,
+        database: req.database.clone(),
+        action: req.action.clone(),
+        tables: g.tables.clone(),
+        kinds: sent_kinds(&items)
+            .into_iter()
+            .filter(|k| *k != ItemKind::History)
+            .collect(),
+    };
+    let config = g.config.as_ref();
     Ok(Preview {
         items,
         tables: fit,
@@ -1170,18 +2109,21 @@ pub async fn preview_with_log(
         tokens,
         exact,
         notes,
-        log: log.lines[first_line..].to_vec(),
-        context,
+        log: log.lines[g.first_line.min(log.lines.len())..].to_vec(),
+        context: g.context.clone(),
         parts,
         dialect: config
-            .as_ref()
             .filter(|c| c.ai_access != AiAccess::Never)
             .map(|c| c.dialect),
         steps,
-        sql_dialect: config.as_ref().map(|c| c.dialect),
+        sql_dialect: config.map(|c| c.dialect),
         read_only: config.is_some_and(|c| c.read_only),
         outline,
         outline_sent,
+        memory: Some(memory),
+        stamp,
+        summary: None,
+        rows,
     })
 }
 
@@ -1201,6 +2143,74 @@ mod tests {
 
     fn own(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn gathered_rows_debug_holds_no_cell() {
+        let rows = GatheredRows {
+            ran: true,
+            named: vec![("orders".into(), "name match", ReadOutcome::Read)],
+            tables: vec![SampleTable {
+                table: "orders".into(),
+                reason: "name match".into(),
+                text: "orders(note)\n[\"zq-cell-7731\"]".into(),
+                rows: 1,
+                secret_columns: vec!["zq-col-1".into()],
+            }],
+        };
+        let shown = format!("{rows:?}");
+        assert!(shown.contains("orders") && shown.contains('1'), "{shown}");
+        assert!(!shown.contains("zq-cell-7731"), "{shown}");
+    }
+
+    #[test]
+    fn rows_cut_mid_line_drops_the_partial_line() {
+        let line = format!("[\"{}\"]", "x".repeat(40_000));
+        let text = format!("t(a)\n{}", [line.as_str(); 6].join("\n"));
+        let item = |kind, text: &str| Item {
+            kind,
+            label: String::new(),
+            text: text.into(),
+            locked: None,
+            on: true,
+        };
+        let mut ask = Ask {
+            items: vec![item(ItemKind::Question, "q"), item(ItemKind::Rows, &text)],
+            access: AiAccess::SchemaQueryRows,
+            dialect: None,
+            notes: Vec::new(),
+            untied_model: false,
+            diagram: false,
+            cleaned: Vec::new(),
+        };
+        let mut f = fit(&[], &[], &[]);
+        let (_, trimmed) = trim_to_cap(&mut ask, "b0", "q", &mut f, &[], &mut Vec::new(), true);
+        assert_eq!(trimmed, 1);
+        let kept = &ask.items[1].text;
+        assert!(kept.len() < text.len());
+        let rows: Vec<&str> = kept.lines().skip(1).collect();
+        assert!(!rows.is_empty() && rows.len() < 6, "{}", rows.len());
+        assert!(rows.iter().all(|l| *l == line), "a broken line was kept");
+        assert_eq!(text_rows(kept) as usize, rows.len());
+
+        // Only the header left: nothing to send.
+        let mut ask = Ask {
+            items: vec![
+                item(ItemKind::Question, "q"),
+                item(
+                    ItemKind::Rows,
+                    &format!("t(a)\n[\"{}\"]", "x".repeat(210_000)),
+                ),
+            ],
+            access: AiAccess::SchemaQueryRows,
+            dialect: None,
+            notes: Vec::new(),
+            untied_model: false,
+            diagram: false,
+            cleaned: Vec::new(),
+        };
+        trim_to_cap(&mut ask, "b0", "q", &mut f, &[], &mut Vec::new(), true);
+        assert_eq!(ask.items[1].text, "");
     }
 
     #[test]
@@ -1353,6 +2363,7 @@ mod tests {
             dialect: None,
             notes: Vec::new(),
             untied_model: false,
+            diagram: false,
             cleaned: Vec::new(),
         };
         assert!(cap_query_share(&mut ask, 202));
@@ -1387,6 +2398,7 @@ mod tests {
             dialect: None,
             notes: Vec::new(),
             untied_model: false,
+            diagram: false,
             cleaned: Vec::new(),
         };
         let mut f = fit(&["a", "b", "c"], &[], &[]);
@@ -1396,6 +2408,8 @@ mod tests {
             "q",
             &mut f,
             &own(&["a", "b", "c"]),
+            &mut Vec::new(),
+            true,
         );
         assert!(parts.exact().len() <= PAYLOAD_CAP);
         assert_eq!(trimmed, 1);

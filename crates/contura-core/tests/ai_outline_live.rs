@@ -16,6 +16,8 @@ use contura_core::ai::context::outline::{
 use contura_core::ai::context::store::{ContextStore, StoreContext};
 use contura_core::ai::context::sync::Purpose;
 use contura_core::ai::log::{Log, error_kind};
+use contura_core::ai::memory::ThreadStore;
+use contura_core::ai::memory::store::StoreThreads;
 use contura_core::ai::models::{ModelInfo, info_for};
 use contura_core::ai::preview::{CatalogReader, preview_with_log};
 use contura_core::ai::provider::openai::OpenAi;
@@ -98,7 +100,7 @@ impl TablePicker for LivePicker {
                 ProviderEvent::Stop(s) => stop = Some(s),
                 ProviderEvent::Usage(u) => usage = Some(u),
                 ProviderEvent::Thinking(t) => thinking_bytes += t.len(),
-                ProviderEvent::FirstByte => {}
+                ProviderEvent::FirstByte | ProviderEvent::ToolCall { .. } => {}
             })
             .await;
         if let Err(e) = result {
@@ -192,6 +194,7 @@ fn reject_reason(text: &str) -> &'static str {
 struct Catalog {
     schema: SchemaModel,
     context: StoreContext,
+    threads: StoreThreads,
 }
 
 #[async_trait::async_trait]
@@ -240,6 +243,10 @@ impl CatalogReader for Catalog {
     fn context(&self) -> &dyn ContextStore {
         &self.context
     }
+
+    fn threads(&self) -> &dyn ThreadStore {
+        &self.threads
+    }
 }
 
 fn ask_request(question: &str) -> AskRequest {
@@ -275,6 +282,7 @@ async fn groq_picks_tables_from_the_outline() {
     let catalog = Catalog {
         schema,
         context: StoreContext::new(AppStore::open(Path::new(":memory:")).unwrap()),
+        threads: StoreThreads::new(AppStore::open(Path::new(":memory:")).unwrap()),
     };
     let settings = AiSettings {
         provider: Some(AiProviderKind::Groq),

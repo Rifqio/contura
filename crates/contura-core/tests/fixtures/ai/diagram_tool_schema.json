@@ -1,0 +1,231 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "base_hash": {
+      "type": "string"
+    },
+    "file": {
+      "type": "string"
+    },
+    "ops": {
+      "items": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "add_node": {
+                "additionalProperties": false,
+                "properties": {
+                  "group": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "id": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "add_node"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "remove_node": {
+                "additionalProperties": false,
+                "properties": {
+                  "target": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "remove_node"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "rename_node": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "target": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target",
+                  "name"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "rename_node"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "add_flow": {
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "label": {
+                    "maxLength": 300,
+                    "type": "string"
+                  },
+                  "to": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "add_flow"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "remove_flow": {
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "label": {
+                    "maxLength": 300,
+                    "type": "string"
+                  },
+                  "to": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "remove_flow"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "relabel_flow": {
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "label": {
+                    "maxLength": 300,
+                    "type": "string"
+                  },
+                  "to": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "label"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "relabel_flow"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "move_to_group": {
+                "additionalProperties": false,
+                "properties": {
+                  "group": {
+                    "maxLength": 200,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "target": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "move_to_group"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "maxItems": 50,
+      "type": "array"
+    }
+  },
+  "required": [
+    "file",
+    "base_hash",
+    "ops"
+  ],
+  "type": "object"
+}

@@ -20,8 +20,15 @@ export interface NodeBaseProps {
   sized?: { w: number; h: number };
 }
 
-/** A node fading in from 96 percent after an add, or fading out before a delete. */
-export type NodeState = "entering" | "leaving";
+/**
+ * A node fading in from 96 percent after an add, or fading out before a delete. The diagram assistant's marks
+ * (board 11.5): `suggested` is new in its review (green, dashed, a "New" badge), `removed` is what it would remove
+ * (red), `airing` was just added by it (an accent ring that fades).
+ */
+export type NodeState = "entering" | "leaving" | "suggested" | "removed" | "airing";
+
+/** What the assistant's marks add to a node's accessible name. */
+const STATE_NOTE: Partial<Record<NodeState, string>> = { suggested: ", suggested by AI", removed: ", suggested by AI", airing: ", added by AI" };
 
 /** The kind's token pair as the custom properties the stylesheet reads (ADR 0008: tokens only). */
 export function kindStyle(kind: DrawnKind): CSSProperties {
@@ -85,8 +92,14 @@ interface ShellProps {
  * The node's outer box, at the engine's levels of detail: the full node, a name box zoomed out and in fast
  * mode (over 300 nodes), and a plain block in the stroke colour further out. Fast mode has no ports or hover.
  */
-export function NodeShell({ kind, family, look, selected, label, name, state, sized, children }: ShellProps) {
+export function NodeShell({ kind, family, look, selected, label: plain, name, state, sized, children }: ShellProps) {
   const { detail, fast } = useDetail();
+  const label = plain + ((state && STATE_NOTE[state]) ?? "");
+  const badge = state === "suggested" ? (
+    <span className="fnode-gtag" aria-hidden="true">
+      New
+    </span>
+  ) : null;
   const hover = useHoverPorts();
   const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "") + (sized ? " fnode-sized" : "");
   // The node itself takes the size, not React Flow's wrapper, which stays measured from it.
@@ -111,6 +124,7 @@ export function NodeShell({ kind, family, look, selected, label, name, state, si
     >
       {detail === "box" ? <span className="fnode-name">{name}</span> : placed ? children(ports) : children}
       {(detail === "box" || !placed) && ports}
+      {badge}
     </div>
   );
 }

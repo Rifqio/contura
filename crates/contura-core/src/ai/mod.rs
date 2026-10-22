@@ -1,16 +1,22 @@
 //! AI assistant settings, the provider key and the chat threads.
 
 pub mod budget;
+pub mod compact;
 pub mod context;
+pub mod diagram;
+pub mod diagram_tool;
 pub mod log;
+pub mod memory;
 pub mod models;
 pub mod preview;
 pub mod prompt;
 pub mod provider;
 pub mod rails;
 pub mod request;
+pub mod rows;
 pub mod sent;
 pub mod stream;
+pub mod tool_uses;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -28,9 +34,10 @@ use crate::ai::provider::openai::OpenAi;
 use crate::ai::provider::url::{check_base_url, host_of};
 use crate::ai::provider::{AiProvider, ChatMessage, ChatRequest, ChatRole, ListedModel, Thinking};
 use crate::ai::rails::Secrets;
-use crate::ai::sent::{AnswerAction, AnswerActionKind, AnswerRecord};
+use crate::ai::request::ItemKind;
+use crate::ai::sent::{AnswerAction, AnswerActionKind, AnswerRecord, ToolOutcome};
 use crate::error::{Error, Result};
-use crate::model::{ConnectionConfig, GroupId};
+use crate::model::{ConnectionConfig, ConnectionId, GroupId};
 use crate::secrets::SecretStore;
 use crate::store::AppStore;
 
@@ -41,6 +48,9 @@ const KEY_HOST_KEY: &str = "ai.keyhost";
 const OPENROUTER: &str = "OpenRouter";
 /// The last model listing per key account: `ai.models.<account>`.
 const MODELS_KEY: &str = "ai.models";
+/// The most characters of a listed model's name or id kept: a provider's text reaches the
+/// picker as it is, so it is capped when stored.
+pub(crate) const LISTED_TEXT_CHARS: usize = 200;
 /// What "Test" asks, with room for a one-word answer.
 const TEST_PROMPT: &str = "Reply with the single word ok.";
 const TEST_MAX_TOKENS: u32 = 8;
@@ -136,6 +146,15 @@ pub struct AiSettings {
     /// "Pick tables": a large database's outline may go to the model to pick the tables.
     /// Stored settings without it read on. A Privacy switch: always the global value.
     pub pick_tables: bool,
+    /// "Compact long threads on their own". Stored settings without it read on. A
+    /// Privacy switch: always the global value.
+    #[serde(default = "yes")]
+    pub auto_compact: bool,
+    /// "Propose diagram changes": a diagram Ask offers its one tool. Stored settings
+    /// without it read on. Global like the Privacy switches: a Group override never
+    /// changes it.
+    #[serde(default = "yes")]
+    pub diagram_tool: bool,
     /// The picks remembered per model id, already clamped.
     pub model_prefs: BTreeMap<String, ModelPicks>,
 }
@@ -153,6 +172,10 @@ impl AiSettings {
     pub fn key_account(&self) -> Option<String> {
         Some(key_account(self.provider?, self.preset.as_deref()))
     }
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for AiSettings {
@@ -174,6 +197,8 @@ impl Default for AiSettings {
             share_thinking: true,
             keep_exact_text: false,
             pick_tables: true,
+            auto_compact: true,
+            diagram_tool: true,
             model_prefs: BTreeMap::new(),
         }
     }
@@ -222,10 +247,18 @@ pub enum AiError {
     #[error("the provider is rate limiting requests")]
     RateLimited { retry_after_secs: Option<u32> },
     #[error("could not reach {host}")]
-    Network { host: String },
+    Network {
+        host: String,
+        /// True when the request never reached the host: a connection refused or reset
+        /// before it was written. False once it may have been read.
+        #[serde(default)]
+        connect: bool,
+    },
     #[error("the base URL now points to {host}; save the key again to send it there")]
     KeyHostChanged { host: String },
-    #[error("use https for {host}; plain http is allowed only on this PC or a private network")]
+    #[error(
+        "use https for {host}; plain http is allowed only on this computer or a private network"
+    )]
     InsecureUrl { host: String },
     /// `phase` names the wait that ran out (connect, first byte, between chunks).
     #[error("the provider did not answer in time")]
@@ -253,11 +286,14 @@ pub enum AiError {
     /// From a 404 whose structured fields say the model is gone.
     #[error("{model} is no longer offered")]
     ModelRetired { model: String },
+    /// With auto-compact off, an Ask at 85% of the window or more is not sent. `messages`
+    /// are the open Topic's messages Compact now would fold (all but the last 2 turns).
     #[error("the thread fills {used} of {model}'s {window} token window")]
     ContextFull {
         used: u32,
         window: u32,
         model: String,
+        messages: u32,
     },
     #[error("the question needs {needed} tokens; {model} holds {window}")]
     TooBig {
@@ -272,10 +308,51 @@ pub enum AiError {
     /// Another Ask in the same place is still running.
     #[error("An answer is still being written. Stop it first.")]
     Busy,
+    /// A Continue with no cut answer to follow in what the Ask would send: no thread, a
+    /// Topic that broke, a gate or a share that left the answer out, or the Thread row off.
+    #[error("Nothing to continue.")]
+    NothingToContinue,
     /// Contura itself failed (reading its own store) before anything was sent. Plain text
     /// only: the underlying message can name paths.
     #[error("something went wrong before the question was sent")]
     Internal,
+    /// The .flow file on disk is not the text the model was shown: changed outside
+    /// Contura while it worked, or gone. `line` is the first line (1-based) that differs
+    /// and `now_reads` its new text, cut to 120 characters; both `None` when the file is
+    /// gone.
+    #[error("{file} changed while I worked")]
+    FileChanged {
+        file: String,
+        line: Option<u32>,
+        now_reads: Option<String>,
+    },
+    /// The model called a tool this Ask does not offer. `name` is stripped of invisible
+    /// characters and cut to 64 characters.
+    #[error("the assistant asked for a tool it cannot use")]
+    ToolRejected { name: String },
+    /// The tool input was empty, over 64 KB, or not a proposal.
+    #[error("the proposed changes could not be read")]
+    BadToolInput,
+    /// "Propose diagram changes" is off in Settings: no diagram Ask is built.
+    #[error("the diagram assistant is off in Settings")]
+    ToolOff,
+    /// The diagram's file name holds a control character: nothing is built or sent.
+    #[error("the diagram's file name holds a control character")]
+    BadFileName,
+}
+
+/// The most `FileChanged.now_reads` keeps, in characters.
+pub const NOW_READS_CHARS: usize = 120;
+
+impl AiError {
+    /// `FileChanged` with `now_reads` cut to 120 characters.
+    pub fn file_changed(file: &str, line: Option<u32>, now_reads: Option<&str>) -> AiError {
+        AiError::FileChanged {
+            file: file.to_string(),
+            line,
+            now_reads: now_reads.map(|t| t.chars().take(NOW_READS_CHARS).collect()),
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -306,6 +383,21 @@ pub struct AiMessage {
     /// What an assistant answer sent and did: kept in the thread JSON with the message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<AnswerRecord>,
+    /// The Topic of the turn; both messages of a turn carry the same stamp. Messages
+    /// saved before 11e have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<ConnectionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    /// The kinds of item the turn carried.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<ItemKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }
 
 pub type ThreadId = uuid::Uuid;
@@ -347,6 +439,31 @@ const ASKED_KEPT: usize = 32;
 
 fn group_key(group: GroupId) -> String {
     format!("{SETTINGS_KEY}.{group}")
+}
+
+/// A listed name with invisible characters removed, other control characters made
+/// spaces, trimmed and cut to `LISTED_TEXT_CHARS`; `None` when nothing is left.
+fn clean_listed_name(name: &str) -> Option<String> {
+    let (visible, _) = crate::ai::rails::input::strip_invisible(name);
+    let spaced: String = visible
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cut: String = spaced.trim().chars().take(LISTED_TEXT_CHARS).collect();
+    (!cut.is_empty()).then_some(cut)
+}
+
+/// `models` with an over-long id dropped (a cut id would name another model) and each name
+/// cleaned of invisible and control characters and cut.
+fn clean_listing(models: Vec<ListedModel>) -> Vec<ListedModel> {
+    models
+        .into_iter()
+        .filter(|m| m.id.chars().count() <= LISTED_TEXT_CHARS)
+        .map(|mut m| {
+            m.name = m.name.and_then(|n| clean_listed_name(&n));
+            m
+        })
+        .collect()
 }
 
 /// Where the listing for `settings`' provider is kept: per key account, so OpenRouter has
@@ -455,6 +572,8 @@ impl AiService {
             own.keep_exact_text = global.keep_exact_text;
             own.share_thinking = global.share_thinking;
             own.pick_tables = global.pick_tables;
+            own.auto_compact = global.auto_compact;
+            own.diagram_tool = global.diagram_tool;
             return Ok((own, true));
         }
         Ok((global, false))
@@ -555,6 +674,8 @@ impl AiService {
                 settings.keep_exact_text = global.keep_exact_text;
                 settings.share_thinking = global.share_thinking;
                 settings.pick_tables = global.pick_tables;
+                settings.auto_compact = global.auto_compact;
+                settings.diagram_tool = global.diagram_tool;
             }
             let json = serde_json::to_string(&settings).map_err(|e| Error::Store(e.to_string()))?;
             if let Some(g) = group.filter(|_| !override_group) {
@@ -703,7 +824,7 @@ impl AiService {
         settings: &AiSettings,
         listed: Vec<ListedModel>,
     ) -> Result<ModelList> {
-        let models: Vec<ListedModel> = listed
+        let models: Vec<ListedModel> = clean_listing(listed)
             .into_iter()
             .filter(|m| m.chat != Some(false) && is_chat_id(&m.id))
             .collect();
@@ -773,6 +894,37 @@ impl AiService {
         Ok(Some(action))
     }
 
+    /// Keeps what the user did with the changes a diagram answer proposed: the changes
+    /// landed and rejected. A second call replaces the outcome. `None` when the answer has
+    /// no tool call (a database answer, or one kept before 11h).
+    pub fn record_tool_result(
+        &self,
+        thread: ThreadId,
+        message_at: i64,
+        outcome: ToolOutcome,
+    ) -> Result<Option<ToolOutcome>> {
+        let store = self.store()?;
+        let mut t = store
+            .get_ai_thread(thread)?
+            .ok_or_else(|| Error::InvalidInput("the chat is gone".into()))?;
+        let message = t
+            .messages
+            .iter_mut()
+            .find(|m| m.role == AiRole::Assistant && m.at == message_at)
+            .ok_or_else(|| Error::InvalidInput("the answer is gone".into()))?;
+        let Some(tool_use) = message.record.as_mut().and_then(|r| r.tool_use.as_mut()) else {
+            return Ok(None);
+        };
+        tool_use.outcome = Some(outcome);
+        store.save_ai_thread(&t)?;
+        Ok(Some(outcome))
+    }
+
+    /// The newest `limit` tool uses (diagram proposals and table picks), newest first.
+    pub fn recent_tool_uses(&self, limit: usize) -> Result<Vec<tool_uses::ToolUseRow>> {
+        tool_uses::recent(self.store()?.conn(), limit)
+    }
+
     /// Remembers `picks` for `model`, clamped to what it accepts, and makes it the current
     /// model, in the record the settings were read from (the Group's override or the
     /// global settings).
@@ -805,6 +957,11 @@ impl AiService {
         };
         let raw = self.store()?.get_setting(&key)?;
         let stored: Option<StoredListing> = raw.and_then(|raw| serde_json::from_str(&raw).ok());
+        // A listing stored before names were cleaned is cleaned on the way out too.
+        let stored = stored.map(|mut s| {
+            s.models = clean_listing(s.models);
+            s
+        });
         Ok(stored.filter(|s| s.host.is_none() || s.host == listing_host(settings)))
     }
 
@@ -843,6 +1000,34 @@ impl AiService {
         Ok(())
     }
 
+    /// Runs `work` as its own task registered like an Ask (Compact now): refused with `Busy`
+    /// while an Ask or another run is going in `place` or under `request_id`, stopped by
+    /// `cancel(request_id)` (then `Cancelled`). The work starts only once it is registered.
+    pub async fn run_registered<T, F>(&self, place: &str, request_id: &str, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: std::future::Future<Output = Result<T>> + Send + 'static,
+    {
+        let (go, registered) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            if registered.await.is_err() {
+                return Err(Error::Cancelled);
+            }
+            work.await
+        });
+        if let Err(e) = self.start(place, request_id, task.abort_handle()) {
+            task.abort();
+            return Err(e);
+        }
+        let _ = go.send(());
+        let out = task.await;
+        self.finish(request_id);
+        match out {
+            Ok(result) => result,
+            Err(_) => Err(Error::Cancelled),
+        }
+    }
+
     /// Called by the Ask's task when it ends, however it ends.
     pub fn finish(&self, request_id: &str) {
         self.running().remove(request_id);
@@ -860,6 +1045,23 @@ impl AiService {
         }
     }
 
+    /// Stops every running Ask and Compact now of `place`, as `cancel` does for one. False
+    /// when none runs there.
+    pub fn cancel_place(&self, place: &str) -> bool {
+        let mut running = self.running();
+        let ids: Vec<String> = running
+            .iter()
+            .filter(|(_, r)| r.place == place)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &ids {
+            if let Some(r) = running.remove(id) {
+                r.handle.abort();
+            }
+        }
+        !ids.is_empty()
+    }
+
     /// Text matched exactly and redacted before anything goes out (R2.1): every saved
     /// provider key (a Group may use another provider) and the saved password of each
     /// of `connections`.
@@ -867,8 +1069,60 @@ impl AiService {
         redaction_secrets(&*self.secrets, connections)
     }
 
-    pub fn list_threads(&self, place: &str) -> Result<Vec<AiThread>> {
-        self.store()?.list_ai_threads(place)
+    /// The place's threads as summaries, newest first, at most 50.
+    pub fn list_threads(&self, place: &str) -> Result<Vec<memory::ThreadSummary>> {
+        memory::store::list_summaries(self.store()?.conn(), place, crate::store::THREAD_LIMIT)
+    }
+
+    /// As `list_threads`, after registering the SQL of every stored thread of the place
+    /// with `connections` (R6.3): the register is memory only, and a stored answer can
+    /// still be inserted and run, opened or not.
+    pub fn list_threads_registering(
+        &self,
+        place: &str,
+        connections: &crate::connections::ConnectionService,
+    ) -> Result<Vec<memory::ThreadSummary>> {
+        let threads = self.store()?.list_ai_threads(place)?;
+        connections.register_ai_threads(&threads);
+        self.list_threads(place)
+    }
+
+    /// The thread with its Topics and compactions, every record trimmed.
+    pub fn thread_view(&self, id: ThreadId) -> Result<Option<memory::ThreadView>> {
+        let store = self.store()?;
+        let conn = store.conn();
+        let Some(mut thread) = memory::store::thread(conn, id)? else {
+            return Ok(None);
+        };
+        for m in &mut thread.messages {
+            m.record = m.record.as_ref().map(AnswerRecord::trimmed_copy);
+        }
+        let topics = memory::store::topics(conn, id)?;
+        let mut compactions = memory::store::compactions(conn, id)?;
+        for c in &mut compactions {
+            c.record = c.record.trimmed_copy();
+        }
+        Ok(Some(memory::ThreadView {
+            thread,
+            topics,
+            compactions,
+        }))
+    }
+
+    /// The full stored record of the answer at `message_at`.
+    pub fn answer_record(&self, thread: ThreadId, message_at: i64) -> Result<Option<AnswerRecord>> {
+        Ok(self.store()?.get_ai_thread(thread)?.and_then(|t| {
+            t.messages
+                .into_iter()
+                .find(|m| m.role == AiRole::Assistant && m.at == message_at)
+                .and_then(|m| m.record)
+        }))
+    }
+
+    /// The Topics of the place's threads that hold a word of `text`, best 20.
+    pub fn search_threads(&self, place: &str, text: &str) -> Result<Vec<memory::ThreadHit>> {
+        let terms = context::retrieve::question_terms(text);
+        memory::store::search_place(self.store()?.conn(), place, &terms, 20)
     }
 
     /// Keeps the AI Context the Ask `request_id` used (its `Context` event), for the save
@@ -884,7 +1138,11 @@ impl AiService {
 
     /// As `save_thread`, for the save that adds the answer to the Ask `request_id`: the
     /// Core writes the AI Context that Ask used into the last answer's record.
-    pub fn save_thread_for(&self, thread: &AiThread, request_id: Option<&str>) -> Result<()> {
+    pub fn save_thread_for(
+        &self,
+        thread: &AiThread,
+        request_id: Option<&str>,
+    ) -> Result<memory::ThreadView> {
         let used = request_id.and_then(|id| {
             let mut asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
             let at = asked.iter().position(|(r, _)| r == id)?;
@@ -906,20 +1164,68 @@ impl AiService {
         self.save_thread(&thread)
     }
 
-    /// Saves `thread`, each answer record held to its caps. The actions kept with an
-    /// answer (`record_action`) that the saved copy lacks are kept, and so is the AI
-    /// Context the Core wrote into it.
-    pub fn save_thread(&self, thread: &AiThread) -> Result<()> {
-        let store = self.store()?;
-        let before = store.get_ai_thread(thread.id)?;
+    /// Saves `thread`, each answer record held to its caps, and returns its view. The
+    /// actions kept with an answer (`record_action`) and its tool outcome
+    /// (`record_tool_result`) that the saved copy lacks are kept,
+    /// and so is the AI Context the Core wrote into it. A trimmed record takes back the
+    /// stored `log`, `steps`, `thinking` and exact text, and the stamp fields of a stored
+    /// message win over the saved copy's.
+    pub fn save_thread(&self, thread: &AiThread) -> Result<memory::ThreadView> {
+        {
+            let store = self.store()?;
+            let before = store.get_ai_thread(thread.id)?;
+            let thread = Self::merged(thread, before.as_ref());
+            store.save_ai_thread(&thread)?;
+        }
+        self.thread_view(thread.id)?
+            .ok_or_else(|| Error::Store("the saved thread is gone".into()))
+    }
+
+    fn merged(thread: &AiThread, before: Option<&AiThread>) -> AiThread {
         let mut thread = thread.clone();
         for m in &mut thread.messages {
-            let old = before
-                .as_ref()
-                .and_then(|b| b.messages.iter().find(|o| o.role == m.role && o.at == m.at))
-                .and_then(|o| o.record.as_ref());
+            let old_message =
+                before.and_then(|b| b.messages.iter().find(|o| o.role == m.role && o.at == m.at));
+            if let Some(o) = old_message {
+                if o.topic.is_some() {
+                    m.topic = o.topic;
+                    m.connection_id = o.connection_id;
+                    m.database = o.database.clone();
+                    m.kinds = o.kinds.clone();
+                    m.tables = o.tables.clone();
+                }
+                if o.action.is_some() {
+                    m.action = o.action.clone();
+                }
+            }
+            let old = old_message.and_then(|o| o.record.as_ref());
             let kept = old.map(|r| r.actions.as_slice()).unwrap_or_default();
             if let Some(r) = &mut m.record {
+                if r.trimmed
+                    && let Some(o) = old
+                {
+                    r.log = o.log.clone();
+                    r.steps = o.steps.clone();
+                    r.thinking = o.thinking.clone();
+                    if let Some(sent) = &mut r.sent {
+                        sent.exact = o.sent.as_ref().and_then(|s| s.exact.clone());
+                        if let Some(outline) = &mut sent.outline {
+                            outline.exact = o
+                                .sent
+                                .as_ref()
+                                .and_then(|s| s.outline.as_ref())
+                                .and_then(|x| x.exact.clone());
+                        }
+                        if let Some(summary) = &mut sent.summary {
+                            summary.exact = o
+                                .sent
+                                .as_ref()
+                                .and_then(|s| s.summary.as_ref())
+                                .and_then(|x| x.exact.clone());
+                        }
+                    }
+                    r.trimmed = false;
+                }
                 if r.context.is_none() {
                     r.context = old.and_then(|o| o.context.clone());
                 }
@@ -929,10 +1235,34 @@ impl AiService {
                     }
                 }
                 r.actions.sort_by_key(|a| a.at);
+                // The outcome `record_tool_result` kept, when the saved copy lacks it and is the
+                // same tool use (same base hash and input); a message replaced at the same
+                // `at` by another tool use keeps no old outcome.
+                if let (Some(tu), Some(old_tu)) =
+                    (r.tool_use.as_mut(), old.and_then(|o| o.tool_use.as_ref()))
+                    && tu.outcome.is_none()
+                    && tu.proposal.base_hash == old_tu.proposal.base_hash
+                    && tu.input == old_tu.input
+                {
+                    tu.outcome = old_tu.outcome;
+                }
             }
             m.record = m.record.take().map(AnswerRecord::capped);
         }
-        store.save_ai_thread(&thread)
+        thread
+    }
+
+    /// Undoes a compaction of `thread` (its messages show and go again) and returns the
+    /// thread's view. A compaction already undone, or one that is not there, changes
+    /// nothing: a second Undo returns the same view.
+    pub fn undo_compaction(
+        &self,
+        thread: ThreadId,
+        id: memory::CompactionId,
+    ) -> Result<memory::ThreadView> {
+        memory::store::undo_compaction(self.store()?.conn(), thread, id)?;
+        self.thread_view(thread)?
+            .ok_or_else(|| Error::InvalidInput("the chat is gone".into()))
     }
 
     pub fn delete_thread(&self, id: ThreadId) -> Result<()> {
@@ -1016,8 +1346,13 @@ pub async fn test_provider(provider: &dyn AiProvider, model: &str) -> Result<AiT
         temperature: None,
         thinking: Thinking::Off,
         max_tokens_field: MaxTokensField::MaxTokens,
+        // R0.1: the connection test carries no tools.
+        tools: rails::execution::tool_for(rails::execution::ToolsAllowed::None),
     };
-    provider.stream(&req, &mut Log::new(), &mut |_| {}).await?;
+    let mut log = Log::new();
+    rails::execution::ExecutionRail::new(rails::execution::ToolsAllowed::None)
+        .check_request(&req, &mut log)?;
+    provider.stream(&req, &mut log, &mut |_| {}).await?;
     Ok(AiTestOk {
         model: model.to_string(),
         millis: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -1028,6 +1363,27 @@ pub async fn test_provider(provider: &dyn AiProvider, model: &str) -> Result<AiT
 mod tests {
     use super::*;
     use crate::secrets::MemorySecretStore;
+
+    #[tokio::test]
+    async fn cancel_place_stops_every_ask_of_the_place() {
+        let (_dir, ai) = service();
+        let spawn = || tokio::spawn(std::future::pending::<()>());
+        let (a, b, c) = (spawn(), spawn(), spawn());
+        ai.start("g:1", "r1", a.abort_handle()).unwrap();
+        ai.start("g:2", "r2", b.abort_handle()).unwrap();
+        // A Compact now registers like an Ask, under its own id, once the Ask is gone.
+        assert!(ai.cancel_place("g:1"));
+        assert!(a.await.unwrap_err().is_cancelled());
+        ai.start("g:1", "r3", c.abort_handle()).unwrap();
+        assert!(!ai.cancel_place("nowhere"));
+        assert!(ai.cancel_place("g:1"));
+        assert!(c.await.unwrap_err().is_cancelled());
+        // The other place still runs, and its id is still cancellable.
+        assert!(!b.is_finished());
+        assert!(!ai.cancel_place("g:1"));
+        assert!(ai.cancel("r2"));
+        assert!(b.await.unwrap_err().is_cancelled());
+    }
 
     fn service() -> (tempfile::TempDir, AiService) {
         let dir = tempfile::tempdir().unwrap();
@@ -1217,6 +1573,99 @@ mod tests {
         assert_eq!(json["pickTables"], false);
         let back: AiSettings = serde_json::from_value(json).unwrap();
         assert!(!back.pick_tables);
+    }
+
+    #[test]
+    fn auto_compact_defaults_on_and_is_global() {
+        let (_dir, svc) = service();
+        let s: AiSettings = serde_json::from_str("{}").unwrap();
+        assert!(s.auto_compact);
+        assert!(AiSettings::default().auto_compact);
+        // A stored global record without the field reads on; a Group record that says
+        // off never changes the effective value.
+        let g = uuid::Uuid::new_v4();
+        {
+            let store = svc.store().unwrap();
+            store.set_setting(SETTINGS_KEY, r#"{"model":"m"}"#).unwrap();
+            store
+                .set_setting(&group_key(g), r#"{"model":"m","autoCompact":false}"#)
+                .unwrap();
+        }
+        let (effective, own) = svc.effective(Some(g)).unwrap();
+        assert!(own);
+        assert!(effective.auto_compact);
+        // Turning it off globally is what turns it off for a Group too.
+        svc.store()
+            .unwrap()
+            .set_setting(SETTINGS_KEY, r#"{"autoCompact":false}"#)
+            .unwrap();
+        assert!(!svc.effective(Some(g)).unwrap().0.auto_compact);
+        assert!(!svc.effective(None).unwrap().0.auto_compact);
+    }
+
+    #[test]
+    fn tool_errors_serialize_camel_case() {
+        let long = "x".repeat(300);
+        let e = AiError::file_changed("orders", Some(9), Some(&long));
+        assert_eq!(
+            serde_json::to_value(&e).unwrap(),
+            serde_json::json!({
+                "kind": "fileChanged",
+                "file": "orders",
+                "line": 9,
+                "nowReads": "x".repeat(NOW_READS_CHARS),
+            })
+        );
+        assert_eq!(e.to_string(), "orders changed while I worked");
+        assert_eq!(
+            serde_json::to_value(AiError::file_changed("orders", None, None)).unwrap(),
+            serde_json::json!({ "kind": "fileChanged", "file": "orders", "line": null, "nowReads": null })
+        );
+        assert_eq!(
+            serde_json::to_value(AiError::ToolRejected {
+                name: "run_sql".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "toolRejected", "name": "run_sql" })
+        );
+        assert_eq!(
+            serde_json::to_value(AiError::BadToolInput).unwrap(),
+            serde_json::json!({ "kind": "badToolInput" })
+        );
+        assert_eq!(
+            serde_json::to_value(AiError::ToolOff).unwrap(),
+            serde_json::json!({ "kind": "toolOff" })
+        );
+    }
+
+    #[tokio::test]
+    async fn the_connection_test_carries_no_tools() {
+        use crate::ai::provider::ProviderEvent;
+        use crate::ai::provider::scripted::ScriptedProvider;
+        let p = ScriptedProvider::new(vec![Ok(ProviderEvent::Text("ok".into()))]);
+        test_provider(&p, "m").await.unwrap();
+        assert_eq!(p.seen.lock().unwrap()[0].tools, None);
+    }
+
+    #[test]
+    fn diagram_tool_is_global() {
+        let (_dir, svc) = service();
+        let g = uuid::Uuid::new_v4();
+        {
+            let store = svc.store().unwrap();
+            store.set_setting(SETTINGS_KEY, r#"{"model":"m"}"#).unwrap();
+            store
+                .set_setting(&group_key(g), r#"{"model":"m","diagramTool":false}"#)
+                .unwrap();
+        }
+        let (effective, own) = svc.effective(Some(g)).unwrap();
+        assert!(own);
+        assert!(effective.diagram_tool);
+        svc.store()
+            .unwrap()
+            .set_setting(SETTINGS_KEY, r#"{"diagramTool":false}"#)
+            .unwrap();
+        assert!(!svc.effective(Some(g)).unwrap().0.diagram_tool);
     }
 
     #[test]

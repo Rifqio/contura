@@ -15,6 +15,11 @@ import Icon, { type IconName } from "../components/Icon";
 import DiagramCanvas, { type CanvasMenuAt } from "../diagram/DiagramCanvas";
 import type { MenuItem } from "../components/Menu";
 import { PlacedMenu, type PlacedMenuState } from "./DiagramMenu";
+import { useFlowAssistMode, useFlowSidePanel } from "../prefs/usePrefs";
+import SidePanel from "./SidePanel";
+import DiagramAssistant from "./ai/DiagramAssistant";
+import { useDiagramAsk } from "./ai/useDiagramAsk";
+import { acceptLabel } from "./ai/ProposalCard";
 import NodeEditor, { type NodeEdit, nodeEditOps } from "./NodeEditor";
 import PublishDialog from "../diagram/export/PublishDialog";
 import type { Box as SceneBox, Scene } from "../diagram/export/scene";
@@ -103,6 +108,9 @@ const NODE_ICON: Partial<Record<FlowNodeKind, IconName>> = {
   io: "io",
   service: "cube",
 };
+
+/** The first item of a set, or null when it is empty. */
+const firstOf = (set: ReadonlySet<string>): string | null => set.values().next().value ?? null;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -327,6 +335,8 @@ interface EditorProps {
   onLineClick(line: number): void;
   /** `icon:` was just typed inside brackets, ending at `pos` (the cloud picker opens there). */
   onIconSlot?(pos: number): void;
+  /** An undo or redo ran in the text's history. */
+  onHistory?(): void;
 }
 
 /** True when the line up to `pos` ends with `icon:` (the colon just typed) inside an open bracket list. */
@@ -336,11 +346,11 @@ export function atIconSlot(text: string, pos: number): boolean {
   return /(?:\[|,)\s*icon:$/.test(before) && before.lastIndexOf("[") > before.lastIndexOf("]");
 }
 
-function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, onIconSlot }: EditorProps) {
+function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, onIconSlot, onHistory }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const latest = useRef({ onLineClick, onIconSlot });
-  latest.current = { onLineClick, onIconSlot };
+  const latest = useRef({ onLineClick, onIconSlot, onHistory });
+  latest.current = { onLineClick, onIconSlot, onHistory };
 
   useEffect(() => {
     const view = new EditorView({
@@ -358,6 +368,7 @@ function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, o
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.contentAttributes.of({ "aria-label": "Diagram text" }),
           EditorView.updateListener.of((u) => {
+            if (u.transactions.some((tr) => tr.isUserEvent("undo") || tr.isUserEvent("redo"))) latest.current.onHistory?.();
             if (u.selectionSet && !u.docChanged && u.transactions.some((tr) => tr.isUserEvent("select.pointer"))) {
               latest.current.onLineClick(u.state.doc.lineAt(u.state.selection.main.head).number);
             }
@@ -468,11 +479,26 @@ interface Props {
   name: string;
   /** The language engine; the app's shared one when absent. */
   client?: LangClient;
+  /** The tab is on top of the window; false while another tab, such as Settings, is. */
+  active?: boolean;
+  /** Opens the AI settings at the tools table, from the assistant's tool-off note. */
+  onOpenSettings?(): void;
 }
 
-export default function FlowTab({ name, client: given }: Props) {
+export default function FlowTab({ name, client: given, active = true, onOpenSettings }: Props) {
   const client = given ?? appLang().client;
   const doc = useFlowDoc(name, client);
+  const [side, setSide] = useFlowSidePanel();
+  const [assistMode, setAssistMode] = useFlowAssistMode();
+  // The diagram assistant: while its Ask runs or its changes wait, the text is read-only and the canvas takes no edits.
+  const ai = useDiagramAsk(name, doc, client, assistMode);
+  const aiLock = useRef(false);
+  aiLock.current = ai.locked;
+  /** Lines "Show in the text" bands for the assistant's changes; a new Ask, a landing, Reject all and undo clear them. */
+  const [aiBands, setAiBands] = useState<number[]>([]);
+  const aiAsking = ai.working !== null;
+  const aiWaits = ai.waiting !== null;
+  useEffect(() => setAiBands([]), [aiAsking, aiWaits, ai.landed]);
   const { parsed, layout } = doc;
   const drawn = parsed?.drawn ?? null;
   const kind: DiagramKind | null = parsed?.result.kind ?? drawn?.kind ?? (doc.initialText !== null ? kindOfText(doc.initialText) : null);
@@ -568,16 +594,20 @@ export default function FlowTab({ name, client: given }: Props) {
     };
   }, [kind, client, reparse]);
 
+  // While the assistant's changes wait, the canvas draws them over the drawing (new in green, removed in red).
+  const review = ai.overlay;
+  const shown = review?.draw ?? drawn;
+
   // Nodes with no position yet are placed by dagre in the worker, in the layout's direction.
   // Every node it asks about gets a position (the worker's, else a row below the drawing), so it never asks twice.
   useEffect(() => {
     // A sequence, mind map or timeline is laid out from its text every time; it keeps no positions.
-    if (!drawn || FIXED_KINDS.has(drawn.kind)) return;
+    if (!shown || FIXED_KINDS.has(shown.kind)) return;
     const has = (n: string) => hasOwn(layout.nodes, n);
-    if (drawn.nodes.every((n) => has(n.name))) return;
-    const input = layoutInput(drawn, look);
+    if (shown.nodes.every((n) => has(n.name))) return;
+    const input = layoutInput(shown, look);
     const existing = emptyPositions();
-    for (const n of drawn.nodes) if (has(n.name)) existing[n.name] = layout.nodes[n.name];
+    for (const n of shown.nodes) if (has(n.name)) existing[n.name] = layout.nodes[n.name];
     let live = true;
     const place = (p: Positions | null) => {
       if (!live) return;
@@ -599,7 +629,7 @@ export default function FlowTab({ name, client: given }: Props) {
     return () => {
       live = false;
     };
-  }, [drawn, look, layout.nodes, layout.direction, client, doc.place]);
+  }, [shown, look, layout.nodes, layout.direction, client, doc.place]);
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -614,16 +644,36 @@ export default function FlowTab({ name, client: given }: Props) {
   const freshEdge = labelBox?.fresh ? labelBox.index : undefined;
   // Only placed nodes are drawn, so the first fit sees where everything is. A glide does not rebuild this: its
   // frames go to the canvas as live positions of the moving nodes only (ruling P20).
+  // The assistant's marks join the motion states: its review's new and removed shapes, and the shapes it just added.
+  const airing = ai.airing;
+  const shownStates = useMemo(() => {
+    if (!review && airing.size === 0) return states;
+    const next = new Map(states);
+    for (const n of airing) next.set(n, "airing");
+    if (review) {
+      for (const n of review.added) next.set(n, "suggested");
+      for (const n of review.removed) next.set(n, "removed");
+    }
+    return next;
+  }, [states, review, airing]);
+  const marks = useMemo(() => {
+    if (!review) return undefined;
+    const m = new Map<number, "add" | "del">();
+    for (const i of review.addedLinks) m.set(i, "add");
+    for (const i of review.removedLinks) m.set(i, "del");
+    return m;
+  }, [review]);
   const graph = useMemo(() => {
-    if (!drawn) return { nodes: [], edges: [] };
-    if (FIXED_KINDS.has(drawn.kind)) return buildFlowGraph(drawn, layout.nodes, look, { states, fresh: freshEdge });
-    const placed = drawn.nodes.filter((n) => hasOwn(layout.nodes, n.name));
-    return buildFlowGraph(placed.length === drawn.nodes.length ? drawn : { ...drawn, nodes: placed }, layout.nodes, look, {
-      states,
+    if (!shown) return { nodes: [], edges: [] };
+    if (FIXED_KINDS.has(shown.kind)) return buildFlowGraph(shown, layout.nodes, look, { states: shownStates, fresh: freshEdge, marks });
+    const placed = shown.nodes.filter((n) => hasOwn(layout.nodes, n.name));
+    return buildFlowGraph(placed.length === shown.nodes.length ? shown : { ...shown, nodes: placed }, layout.nodes, look, {
+      states: shownStates,
       fresh: freshEdge,
       sizes: layout.sizes,
+      marks,
     });
-  }, [drawn, layout.nodes, layout.sizes, look, states, freshEdge]);
+  }, [shown, layout.nodes, layout.sizes, look, shownStates, freshEdge, marks]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
 
@@ -822,7 +872,7 @@ export default function FlowTab({ name, client: given }: Props) {
     const d = drag.current;
     drag.current = null;
     overlay.set({ ghost: null, guides: [], hot: null });
-    if (!p) return;
+    if (!p || aiLock.current) return;
     const snapped = emptyPositions();
     for (const k of Object.keys(p)) snapped[k] = { x: snap(p[k].x), y: snap(p[k].y) };
     const ids = Object.keys(p);
@@ -864,6 +914,7 @@ export default function FlowTab({ name, client: given }: Props) {
   }
 
   async function add(tool: AddTool, at?: Point) {
+    if (aiLock.current) return;
     if (!kind || tool.kind === "group") return;
     let nodeKind: FlowNodeKind = tool.kind === "terminal" ? "start" : tool.kind;
     let base = tool.base;
@@ -928,7 +979,7 @@ export default function FlowTab({ name, client: given }: Props) {
   async function pickIcon(icon: string) {
     const p = picker;
     closePicker();
-    if (!p) return;
+    if (!p || aiLock.current) return;
     setNotice(null);
     if ("node" in p.target) {
       await doc.run({ op: "setAttr", name: p.target.node, key: "icon", value: icon });
@@ -951,6 +1002,7 @@ export default function FlowTab({ name, client: given }: Props) {
    * entry): the group's lines, then each service moved in.
    */
   async function groupSelected() {
+    if (aiLock.current) return;
     setNotice(null);
     const known = parsedRef.current?.result.doc ?? drawnRef.current;
     const names = known ? selectedRef.current.filter((n) => known.nodes.some((x) => x.name === n)) : [];
@@ -997,6 +1049,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   /** Enter keeps the label (one edit), Esc leaves the flow as it is. Planned only on the box's own parse. */
   async function finishLabel(box: LabelBoxState, keep: boolean, text: string) {
+    if (aiLock.current) return;
     setLabelBox((cur) => (cur === box ? null : cur));
     const label = text.trim();
     if (!keep || label === box.initial) return;
@@ -1005,6 +1058,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   /** A double-clicked flow's label, in the box: only on the drawing of the current text. */
   const onEdgeDoubleClick = useCallback((id: string) => {
+    if (aiLock.current) return;
     const p = parsedRef.current;
     const d = p?.result.doc;
     if (!p || !d || !id.startsWith("edge:")) return;
@@ -1014,6 +1068,7 @@ export default function FlowTab({ name, client: given }: Props) {
   }, []);
 
   async function connect(from: Port, to: Port) {
+    if (aiLock.current) return;
     setNotice(null);
     clearDrawGhost();
     if (from.node === to.node || from.node.startsWith("\u0000") || to.node.startsWith("\u0000")) return;
@@ -1112,6 +1167,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   /** "Add and connect": the node where the line ended, on the grid, and the flow to it, as one edit. */
   async function addAndConnect(tool: AddTool) {
+    if (aiLock.current) return;
     const q = quickRef.current;
     setQuick(null);
     stopPull.current();
@@ -1142,6 +1198,7 @@ export default function FlowTab({ name, client: given }: Props) {
   }
 
   async function rename(old: string, next: string) {
+    if (aiLock.current) return;
     setRenaming(null);
     setNotice(null);
     const target = next.trim();
@@ -1163,6 +1220,7 @@ export default function FlowTab({ name, client: given }: Props) {
    * of the text as it was when Delete was pressed, so a change during the fade makes it do nothing (ruling P20).
    */
   async function removeSelected() {
+    if (aiLock.current) return;
     setNotice(null);
     const names = selectedRef.current;
     if (names.length === 0 || deleting.current) return;
@@ -1208,6 +1266,7 @@ export default function FlowTab({ name, client: given }: Props) {
    * laid out, kept where the selection's top left corner was. One move, one undo entry; the text is unchanged.
    */
   async function tidy() {
+    if (aiLock.current) return;
     const d = drawnRef.current;
     if (!d || d.nodes.length === 0 || FIXED_KINDS.has(d.kind)) return;
     const names = new Set(d.nodes.map((n) => n.name));
@@ -1249,6 +1308,8 @@ export default function FlowTab({ name, client: given }: Props) {
   const onCanvasKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
     if (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+    // While the assistant holds the text the canvas takes no edits; undo works once it lets go.
+    if (aiLock.current && !((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a")) return;
     // The one history: Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z work on the canvas as in the text.
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const view = doc.view();
@@ -1309,6 +1370,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   /** Writes a shape's line at the end of the text, selected, with focus in the text, ready to fill in. */
   function writeTemplate(template: string) {
+    if (aiLock.current) return;
     const v = doc.view();
     if (!v) return;
     const text = v.state.doc.toString();
@@ -1320,6 +1382,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   /** Opens the name and details panel beside a node (item 22). */
   function editNode(name: string) {
+    if (aiLock.current) return;
     const d = drawnRef.current;
     if (!d?.nodes.some((n) => n.name === name) || isArea(name)) return;
     const n = instance.current?.getNode(name);
@@ -1334,6 +1397,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   /** Saves the panel: the attributes, then the name, as one batch and one undo entry. */
   async function saveNodeEdit(edit: NodeEdit) {
+    if (aiLock.current) return;
     const open = editingNode;
     const d = drawnRef.current;
     const node = d?.nodes.find((n) => n.name === open?.name);
@@ -1367,6 +1431,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   /** Item 20: right-click on the canvas gives its actions; on a node, that node's (frame Diagram, menus). */
   function openMenu(at: CanvasMenuAt) {
+    if (aiLock.current) return;
     const names = drawnRef.current?.nodes.map((n) => n.name) ?? [];
     if (at.node !== null && !isArea(at.node) && names.includes(at.node)) {
       const node = at.node;
@@ -1410,7 +1475,7 @@ export default function FlowTab({ name, client: given }: Props) {
 
   // The selected nodes' lines, and the new flow's line while its label box is open.
   const newLine = labelBox?.fresh ? labelBox.line : undefined;
-  const shownBands = useMemo(() => (newLine === undefined ? bandLines : [...bandLines, newLine]), [bandLines, newLine]);
+  const shownBands = useMemo(() => [...bandLines, ...aiBands, ...(newLine === undefined ? [] : [newLine])], [bandLines, aiBands, newLine]);
 
   // The label box sits on the middle of its flow's middle run, once both ends are drawn.
   const labelAt = useMemo(() => {
@@ -1419,6 +1484,11 @@ export default function FlowTab({ name, client: given }: Props) {
     const b = graph.nodes.find((n) => n.id === labelBox.to);
     return a && b ? routeOrthogonal(lineBoxOf(a), lineBoxOf(b)).mid : null;
   }, [labelBox, graph]);
+
+  /** Item 21's resize, refused while the assistant holds the text. */
+  const resize = (n: string, box: { x: number; y: number; w: number; h: number }) => {
+    if (!aiLock.current) doc.resize(n, box);
+  };
 
   if (doc.readError) {
     return (
@@ -1431,66 +1501,150 @@ export default function FlowTab({ name, client: given }: Props) {
   }
 
   return (
-    <div className="flow-tab">
-      <section className="schema-island flow-pane-text" aria-label={`${name}.flow text`}>
-        <div className="schema-pane-head flow-strip">
-          <h2 className="schema-pane-title">{kind ? KIND_TITLE[kind] : ""}</h2>
-          <span className="spacer" />
-          {doc.save.kind === "saved" ? (
-            <span className="schema-pane-saved flow-saved">
-              <Icon name="check" size={14} />
-              Saved
-            </span>
-          ) : doc.save.kind === "waiting" ? (
-            <span className="schema-pane-saved">Not saved</span>
-          ) : (
-            <span className="schema-pane-saved flow-save-failed" role="alert" title={doc.save.message}>
-              Not saved: {doc.save.message}
-            </span>
+    <div
+      className="flow-tab"
+      onKeyDown={(e) => {
+        // Esc stops the assistant's Ask; Ctrl+Enter lands the changes waiting for review.
+        if (e.key === "Escape" && ai.working) {
+          e.preventDefault();
+          ai.stop();
+          return;
+        }
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.defaultPrevented && ai.waiting?.step === "review") {
+          e.preventDefault();
+          ai.acceptAll();
+          return;
+        }
+        // As the Schema Builder's Hide DBML: Ctrl+B hides the side panel and brings it back.
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
+          e.preventDefault();
+          setSide({ hidden: !side.hidden });
+        }
+      }}
+    >
+      <SidePanel
+        tab={side.tab}
+        hidden={side.hidden}
+        pending={ai.pending}
+        locked={ai.locked}
+        working={ai.working !== null}
+        onTab={(tab) => setSide({ tab })}
+        onHide={() => setSide({ hidden: true })}
+        onShow={(tab) => setSide(tab ? { hidden: false, tab } : { hidden: false })}
+        editor={
+          <>
+          <div className="schema-pane-head flow-strip">
+            <h2 className="schema-pane-title">{kind ? KIND_TITLE[kind] : ""}</h2>
+            <span className="spacer" />
+            {doc.save.kind === "saved" ? (
+              <span className="schema-pane-saved flow-saved">
+                <Icon name="check" size={14} />
+                Saved
+              </span>
+            ) : doc.save.kind === "waiting" ? (
+              <span className="schema-pane-saved">Not saved</span>
+            ) : (
+              <span className="schema-pane-saved flow-save-failed" role="alert">
+                Not saved: {doc.save.message}
+              </span>
+            )}
+          </div>
+          {ai.working && (
+            <div className="flow-ebar" role="status">
+              <Icon name="lock" size={14} />
+              <span className="flow-ebar-text">The assistant is editing. The text is read-only until it finishes.</span>
+              <button type="button" className="btn pbtn2" onClick={ai.stop}>
+                Stop
+              </button>
+            </div>
           )}
-        </div>
-        <div className="schema-text">
-          {doc.initialText !== null && (
-            <FlowEditor
-              initialText={doc.initialText}
-              doc={doc}
-              client={client}
-              bandLines={shownBands}
-              ghost={ghost}
-              onLineClick={(l) => void onLineClick(l)}
-              onIconSlot={kind === "cloud" ? openTextPicker : undefined}
+          {ai.waiting && ai.pending > 0 && (
+            <div className="flow-ebar" role="status">
+              <span className="flow-ebar-text">
+                {ai.pending === 1 ? "1 change from the assistant is marked below." : `${ai.pending.toLocaleString("en-US")} changes from the assistant are marked below.`}
+              </span>
+              <button type="button" className="btn pbtn2" onClick={ai.rejectAll}>
+                Reject all
+              </button>
+              {/* The remove question answers for itself in the Assistant; here only Reject all stands for Cancel. */}
+              {ai.waiting.step === "review" && (
+                <button type="button" className="btn pbtn2 pri" onClick={ai.acceptAll}>
+                  {acceptLabel(ai.waiting.proposal.changes, ai.waiting.rejected)}
+                </button>
+              )}
+            </div>
+          )}
+          <div className={ai.working ? "schema-text is-locked" : "schema-text"}>
+            {doc.initialText !== null && (
+              <FlowEditor
+                initialText={doc.initialText}
+                doc={doc}
+                client={client}
+                bandLines={shownBands}
+                ghost={ai.ghost ?? ghost}
+                onLineClick={(l) => void onLineClick(l)}
+                onHistory={() => {
+                  setAiBands([]);
+                  const v = doc.view();
+                  if (v) ai.historyMoved(v.state.doc.toString());
+                }}
+                onIconSlot={kind === "cloud" ? openTextPicker : undefined}
+              />
+            )}
+          </div>
+          {parsed && (
+            <Problems
+              parsed={parsed}
+              onFix={(p, j) => {
+                if (aiLock.current) return;
+                setGhost(null);
+                doc.applyFix(p.fixes[j].edits, parsed.text);
+              }}
+              onHoverFix={(p, j) => setGhost(p ? { edits: p.fixes[j].edits, text: parsed.text } : null)}
+              onLine={(line) => {
+                const v = doc.view();
+                if (!v || line > v.state.doc.lines) return;
+                v.dispatch({ selection: { anchor: v.state.doc.line(line).from }, scrollIntoView: true });
+                v.focus();
+              }}
             />
           )}
-        </div>
-        {parsed && (
-          <Problems
-            parsed={parsed}
-            onFix={(p, j) => {
-              setGhost(null);
-              doc.applyFix(p.fixes[j].edits, parsed.text);
+          <div className="schema-pane-foot flow-foot">
+            {errors.length === 0 ? (
+              <span className="schema-problems">
+                <Icon name="check" size={14} />
+                No problems
+              </span>
+            ) : (
+              <span className="flow-problem-count">{plural(errors.length, "problem")}</span>
+            )}
+            <span className="spacer" />
+            {kind && counted && <span>{countsOf(kind, counted)}</span>}
+          </div>
+          </>
+        }
+        assistant={
+          <DiagramAssistant
+            ai={ai}
+            name={name}
+            kind={kind}
+            selected={selected}
+            mode={assistMode}
+            onMode={setAssistMode}
+            onShowText={(lines) => {
+              setAiBands(lines);
+              setSide({ tab: "editor" });
             }}
-            onHoverFix={(p, j) => setGhost(p ? { edits: p.fixes[j].edits, text: parsed.text } : null)}
-            onLine={(line) => {
+            onUndo={() => {
               const v = doc.view();
-              if (!v || line > v.state.doc.lines) return;
-              v.dispatch({ selection: { anchor: v.state.doc.line(line).from }, scrollIntoView: true });
-              v.focus();
+              if (v) undo(v);
+              setAiBands([]);
             }}
+            active={active && side.tab === "assistant" && !side.hidden}
+            onOpenSettings={onOpenSettings}
           />
-        )}
-        <div className="schema-pane-foot flow-foot">
-          {errors.length === 0 ? (
-            <span className="schema-problems">
-              <Icon name="check" size={14} />
-              No problems
-            </span>
-          ) : (
-            <span className="flow-problem-count">{plural(errors.length, "problem")}</span>
-          )}
-          <span className="spacer" />
-          {kind && counted && <span>{countsOf(kind, counted)}</span>}
-        </div>
-      </section>
+        }
+      />
 
       <section className="schema-island flow-pane-draw" aria-label={`${name}.flow drawing`}>
         <div className="schema-pane-head flow-strip">
@@ -1550,8 +1704,8 @@ export default function FlowTab({ name, client: given }: Props) {
             Publish
           </button>
         </div>
-        <div ref={canvasEl} className={stale ? "flow-canvas is-stale" : "flow-canvas"} tabIndex={-1} onKeyDown={onCanvasKey}>
-          <FlowResizeContext.Provider value={doc.resize}>
+        <div ref={canvasEl} className={`flow-canvas${stale ? " is-stale" : ""}${ai.working ? " is-ai-working" : ""}`} tabIndex={-1} onKeyDown={onCanvasKey}>
+          <FlowResizeContext.Provider value={resize}>
           <DiagramCanvas
             nodes={graph.nodes}
             edges={graph.edges}
@@ -1564,6 +1718,7 @@ export default function FlowTab({ name, client: given }: Props) {
             onDragCancel={onDragCancel}
             connectionLineComponent={connectionLine}
             snapWhileDragging={false}
+            readOnly={ai.locked}
             onDrag={onDrag}
             onMove={onMove}
             onSelect={onSelect}
@@ -1575,6 +1730,8 @@ export default function FlowTab({ name, client: given }: Props) {
             minimapJump
             boxSelect
             livePositions={glide}
+            // The first shape the assistant just added comes into view, so its ring is seen (P11-34).
+            reveal={firstOf(airing)}
             onInit={(i) => {
               instance.current = i;
             }}
@@ -1604,6 +1761,12 @@ export default function FlowTab({ name, client: given }: Props) {
                   else if (shape.template) writeTemplate(shape.template);
                 }}
               />
+            )}
+            {ai.working && (
+              <div className="flow-aipres" role="status">
+                <span className="live" aria-hidden="true" />
+                {`AI is editing ${drawn?.title || name}`}
+              </div>
             )}
             {stale && parsed?.errorLine != null && (
               <div className="flow-stale" role="status">

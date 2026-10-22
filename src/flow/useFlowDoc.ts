@@ -109,6 +109,20 @@ export interface FlowDocApi {
   linesOf(names: string[]): Promise<Record<string, number | null> | null>;
   /** Parses the editor's text again, as when the worker learns something new (the icon names). */
   reparse(): void;
+  /** Writes until nothing is due; true once the files on disk hold what the tab holds. */
+  flush(): Promise<boolean>;
+  /** Holds writes (and the text read-only with `readOnly`) until the returned release is called. */
+  hold(opts?: { readOnly?: boolean }): FlowHold;
+  /**
+   * Edits planned elsewhere on the text of parse `version` (the diagram assistant's landing), as one transaction and
+   * one undo entry. False, with nothing changed, when the editor no longer holds that version's text.
+   */
+  land(edits: TextEdit[], version: number): boolean;
+  /**
+   * Reads the file again and puts its text in the editor, as what the tab holds and what is on disk (the assistant's
+   * "Ask again on the current text"). False, with nothing changed, when it could not be read.
+   */
+  reload(): Promise<boolean>;
 }
 
 /** What one save writes: the layout file always, the text only when `textEdited`. */
@@ -170,6 +184,8 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   const inflight = useRef(new Set<Promise<boolean>>());
   /** Read-only while a rename runs (ruling P21). */
   const readOnlyRef = useRef(new Compartment());
+  /** The open document's flush and hold, made with its registry entry. */
+  const control = useRef<{ flush(): Promise<boolean>; hold(opts?: { readOnly?: boolean }): FlowHold } | null>(null);
 
   const setLayout = useCallback((next: FlowLayout) => {
     layoutRef.current = next;
@@ -343,7 +359,14 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         if (released) return;
         released = true;
         held.current--;
-        if (opts?.readOnly && alive.current) setReadOnly(false);
+        // Also after a close or a switch to another diagram: the editor may stay for the next one.
+        if (opts?.readOnly) {
+          try {
+            setReadOnly(false);
+          } catch {
+            // The view is already gone.
+          }
+        }
         if (held.current > 0) return;
         if (alive.current) {
           if (dueWhileHeld.current) {
@@ -385,6 +408,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       hold,
     });
     handle.current = unregister;
+    control.current = { flush, hold };
     readDiagram(name).then(
       (files) => {
         if (!alive.current) return;
@@ -422,6 +446,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       waiters.current.clear();
       unregister();
       handle.current = null;
+      control.current = null;
       client.closeFlow(docId);
       parsedRef.current = null;
     };
@@ -652,6 +677,45 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [client, docId],
   );
 
+  const land = useCallback(
+    (edits: TextEdit[], version: number) => {
+      const view = viewRef.current;
+      const cur = parsedRef.current;
+      if (!view || !cur || !alive.current || edits.length === 0) return false;
+      if (cur.result.version !== version || cur.text !== view.state.doc.toString()) return false;
+      dispatchEdits(view, edits);
+      return true;
+    },
+    [dispatchEdits],
+  );
+
+  const reload = useCallback(async (): Promise<boolean> => {
+    const view = viewRef.current;
+    if (!view || !alive.current) return false;
+    try {
+      const files = await readDiagram(name);
+      if (!alive.current || viewRef.current !== view) return false;
+      diskText.current = files.text;
+      crlf.current = isCrlf(files.text);
+      const text = files.text.replace(/\r\n?/g, "\n");
+      if (view.state.doc.toString() !== text) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      // What the editor holds is what the file has: nothing is due to be written back.
+      savedEdits.current = edits.current;
+      return true;
+    } catch {
+      return false;
+    }
+  }, [name]);
+
+  const flush = useCallback(() => control.current?.flush() ?? Promise.resolve(false), []);
+  const hold = useCallback((opts?: { readOnly?: boolean }): FlowHold => {
+    const h = control.current?.hold(opts);
+    if (h) return h;
+    const none = (() => {}) as FlowHold;
+    none.settled = Promise.resolve();
+    return none;
+  }, []);
+
   const reparse = useCallback(() => {
     const view = viewRef.current;
     if (view && alive.current) parse(view.state.doc.toString());
@@ -680,5 +744,9 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     setDirection,
     linesOf,
     reparse,
+    flush,
+    hold,
+    land,
+    reload,
   };
 }

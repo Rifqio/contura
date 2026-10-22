@@ -5,6 +5,7 @@ import {
   addLink,
   addNode,
   applyFlowEdit,
+  deleteLink,
   deleteNode,
   moveToGroup,
   renameNode,
@@ -481,8 +482,41 @@ describe("addGroup", () => {
     expect(doc(out).groups).toEqual([{ name: "Production", nodes: ["Gateway", "Lambda"], groups: [] }]);
   });
 
+  test("the batch answer carries the edits and no text", () => {
+    const r = applyFlowBatch(CLOUD, parseFlow(CLOUD), [{ op: "addGroup", name: "Production", group: null }]);
+    expect(r.edits.length).toBe(1);
+    expect(Object.keys(r)).toEqual(["edits"]);
+  });
+
   test("CRLF stays CRLF", () => {
     const crlf = CLOUD.replace(/\n/g, "\r\n");
     expect(run(crlf, (t, p) => addGroup(t, p, "Production"))).toContain("Lambda [icon: aws-lambda]\r\nProduction {\r\n}\r\n");
+  });
+});
+describe("deleteLink", () => {
+  test("delete_link_line_and_chain", () => {
+    // A line of its own goes whole, the rest stay byte for byte.
+    const i = parseFlow(CHECKOUT).links.findIndex((l) => l.from === "Orders" && l.to === "Checkout");
+    const after = run(CHECKOUT, (t, p) => deleteLink(t, p, i));
+    expect(after).not.toContain("Orders --> Checkout");
+    untouched(CHECKOUT, after, ["Orders --> Checkout: stock level"]);
+    expect(doc(after).links).toHaveLength(parseFlow(CHECKOUT).links.length - 1);
+
+    // In a chain the other links stay: the middle one splits it in two runs.
+    const chain = lines('diagram flow "x"', "A", "B", "C", "D", "A > B > C > D: end", "D > A");
+    const mid = run(chain, (t, p) => deleteLink(t, p, 1));
+    expect(mid).toBe(lines('diagram flow "x"', "A", "B", "C", "D", "A > B", "C > D: end", "D > A"));
+    // The first and the last (its label goes with it).
+    expect(run(chain, (t, p) => deleteLink(t, p, 0))).toContain("B > C > D: end\n");
+    expect(run(chain, (t, p) => deleteLink(t, p, 2))).toContain("A > B > C\nD > A");
+    // Out of range and a comment-only line change nothing.
+    expect(deleteLink(chain, parseFlow(chain), 9)).toEqual([]);
+    expect(deleteLink(chain, parseFlow(chain), -1)).toEqual([]);
+  });
+
+  test("delete_link_op_runs_through_the_editor_entry", () => {
+    const t = lines('diagram flow "x"', "A", "B", "A > B");
+    const r = applyFlowEdit(t, parseFlow(t), { op: "deleteLink", index: 0 });
+    expect(apply(t, r.edits)).toBe(lines('diagram flow "x"', "A", "B"));
   });
 });

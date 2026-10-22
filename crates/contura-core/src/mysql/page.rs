@@ -86,13 +86,9 @@ fn is_plain(c: &ColumnMeta) -> bool {
     c.info.is_primary_key || matches!(c.kind, ColumnKind::Number | ColumnKind::Bit)
 }
 
-fn build_select(
-    table: &ObjectPath,
-    cols: &[ColumnMeta],
-    order_by: &[(String, bool)],
-    where_sql: &str,
-    offset: u64,
-) -> String {
+/// The grid's select list: numbers and keys whole, every other column cut in the SQL
+/// plus its full byte length.
+fn select_list(cols: &[ColumnMeta]) -> Vec<String> {
     let mut list = Vec::new();
     for c in cols {
         let q = quote_ident(&c.info.name);
@@ -105,6 +101,17 @@ fn build_select(
             list.push(format!("OCTET_LENGTH({q})"));
         }
     }
+    list
+}
+
+fn build_select(
+    table: &ObjectPath,
+    cols: &[ColumnMeta],
+    order_by: &[(String, bool)],
+    where_sql: &str,
+    offset: u64,
+) -> String {
+    let list = select_list(cols);
     let mut sql = format!(
         "SELECT {} FROM {}",
         list.join(", "),
@@ -165,6 +172,55 @@ fn convert_row(row: &Row, cols: &[ColumnMeta]) -> Vec<Cell> {
         }
     }
     cells
+}
+
+/// Step 11f: up to `limit` rows of one base table in a read-only transaction on one
+/// pooled connection, with the server's own 5 s limit as a hint. The grid's select
+/// list and cells; no ORDER BY, no OFFSET, no filter. The transaction is always
+/// rolled back.
+pub(crate) async fn sample_rows(pool: &Pool, path: &ObjectPath, limit: u32) -> Result<Page> {
+    let mut conn = pool.get_conn().await.map_err(query_err)?;
+    conn.query_drop("START TRANSACTION READ ONLY")
+        .await
+        .map_err(query_err)?;
+    let out = sample_in_transaction(&mut conn, path, limit).await;
+    let _ = conn.query_drop("ROLLBACK").await;
+    out
+}
+
+async fn sample_in_transaction(conn: &mut Conn, path: &ObjectPath, limit: u32) -> Result<Page> {
+    let kind: Option<String> = conn
+        .exec_first(
+            "SELECT TABLE_TYPE FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+            (&path.database, &path.name),
+        )
+        .await
+        .map_err(query_err)?;
+    match kind.as_deref() {
+        None => {
+            return Err(Error::NotFound(format!(
+                "table {}.{}",
+                path.database, path.name
+            )));
+        }
+        Some("BASE TABLE") => {}
+        Some(_) => return Err(Error::InvalidInput("not a table".into())),
+    }
+    let cols = table_column_meta(conn, path).await?;
+    let sql = format!(
+        "SELECT /*+ MAX_EXECUTION_TIME({}) */ {} FROM {} LIMIT {limit}",
+        crate::dialect::SAMPLE_TIMEOUT_MS,
+        select_list(&cols).join(", "),
+        sql_scoped(DialectKind::MySql, &path.database, &path.name)
+    );
+    let raw: Vec<Row> = conn.query(sql).await.map_err(query_err)?;
+    let rows = raw.iter().map(|r| convert_row(r, &cols)).collect();
+    Ok(Page {
+        columns: cols.into_iter().map(|c| c.info).collect(),
+        rows,
+        has_more: false,
+    })
 }
 
 pub(crate) async fn fetch_page(pool: &Pool, req: &PageRequest) -> Result<Page> {

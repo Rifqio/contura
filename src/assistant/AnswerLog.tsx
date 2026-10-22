@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AnswerRecord } from "../api/types";
+import type { AnswerRecord, StepKind } from "../api/types";
 import Icon from "../components/Icon";
 import { logText } from "./answerRecord";
 import { secondsText } from "./answerStream";
@@ -25,10 +25,20 @@ interface Props {
   live?: boolean;
   /** The Ask's Connection, named in "Ran on" and "no path to". */
   connection?: string | null;
-  /** The Ask's database, named in "Ran on"; the Connection when absent. */
+  /** The Ask's database or schema, on the "Ran on" cell's detail line. */
   database?: string | null;
   providerName?: string;
-  onBack(): void;
+  /** Opens on the Steps tab with this step's row open (the first of that kind), as Open does from AI settings. */
+  initialStep?: StepKind;
+  /** Called by the back button; omitted when the log sits in a dialog that has its own Close, and no back button shows. */
+  onBack?(): void;
+  /**
+   * A diagram Ask (board 11.12): opens on Steps, with the Diagram and Tool check rows and no database; the Diagram tab
+   * draws the one tool. No hover text, as in the diagram tab's side panel.
+   */
+  variant?: "diagram";
+  /** The diagram's name, `<file>.flow`. */
+  file?: string;
 }
 
 const copy = (text: string) => void navigator.clipboard?.writeText(text).catch(() => {});
@@ -37,9 +47,11 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text).catch((
  * Show log (boards 11.3 and 11.6): the record of how one answer was made, in place of the thread. Three tabs over one
  * record: Log (opens first), Steps and Diagram.
  */
-export default function AnswerLog({ question, answer = "", record, live = false, connection = null, database = null, providerName, onBack }: Props) {
-  const [tab, setTab] = useState<Tab>("log");
-  const [openStep, setOpenStep] = useState<number | null>(null);
+export default function AnswerLog({ question, answer = "", record, live = false, connection = null, database = null, providerName, initialStep, onBack, variant, file }: Props) {
+  const diagram = variant === "diagram";
+  const first = initialStep ? record.steps.findIndex((s) => s.step === initialStep) : -1;
+  const [tab, setTab] = useState<Tab>(initialStep || diagram ? "steps" : "log");
+  const [openStep, setOpenStep] = useState<number | null>(first >= 0 ? first : null);
   const [picked, setPicked] = useState<number | null>(null);
   const [exact, setExact] = useState(false);
   const total = record.millis ?? (record.log.length ? record.log[record.log.length - 1].atMs : 0);
@@ -48,9 +60,11 @@ export default function AnswerLog({ question, answer = "", record, live = false,
   return (
     <section className="alog" aria-label="Answer log">
       <div className="alog-head">
-        <button type="button" className="icon-button" aria-label="Back to the answer" title="Back to the answer" onClick={onBack}>
-          <Icon name="chevronLeft" size={16} />
-        </button>
+        {onBack && (
+          <button type="button" className="icon-button" aria-label="Back to the answer" title={diagram ? undefined : "Back to the answer"} onClick={onBack}>
+            <Icon name="chevronLeft" size={16} />
+          </button>
+        )}
         <span className="t">Answer log</span>
         <span className="spacer" />
         <span className="alog-time">{secondsText(total)}</span>
@@ -73,19 +87,22 @@ export default function AnswerLog({ question, answer = "", record, live = false,
         ))}
       </div>
       <div className="alog-body">
-        <p className="alog-for">{`For: ${question}`}</p>
+        {question && <p className="alog-for">{`For: ${question}`}</p>}
         {exact ? (
           <section className="alog-exact" aria-label="Exactly what was sent">
             {record.sent?.exact != null ? <pre>{record.sent.exact}</pre> : <p className="alog-note">{NOT_KEPT}</p>}
           </section>
         ) : tab === "log" ? (
-          <LogView lines={record.log} onCopy={copy} />
+          <LogView lines={record.log} onCopy={copy} hoverText={!diagram} />
         ) : tab === "steps" ? (
           <StepsView
             record={record}
-            database={database ?? connection}
+            connection={connection}
+            database={database}
             open={openStep}
             onToggle={(s) => setOpenStep((o) => (o === s ? null : s))}
+            variant={variant}
+            onCopy={copy}
           />
         ) : (
           <DiagramView
@@ -101,6 +118,8 @@ export default function AnswerLog({ question, answer = "", record, live = false,
               setOpenStep(s);
               setTab("steps");
             }}
+            variant={variant}
+            file={file ?? record.toolUse?.file ?? ""}
           />
         )}
       </div>

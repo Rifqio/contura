@@ -1,8 +1,10 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, test, vi } from "vitest";
-import type { AiSettings, ConnectionConfig, UiPrefs } from "../../api/types";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { AiSettings, ConnectionConfig, ToolUseRow, UiPrefs } from "../../api/types";
 import { COMMANDS } from "../../commands/registry";
+import { aiRecordToolResult, saveAiThread } from "../../api/client";
+import { setPlatformForTests } from "../../platform";
 import { callsTo } from "../../test/invoke";
 import { aiView, GROQ, modelInfo, modelList, renderWithProviders, settingsRoutes } from "../../test/settingsRoutes";
 import AboutSection from "./AboutSection";
@@ -19,6 +21,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.7.0") }));
 const installed = vi.hoisted(() => new Set<string>());
 vi.mock("../fontDetect", () => ({ isInstalled: (family: string) => installed.has(family) }));
+
+afterEach(() => setPlatformForTests(null));
 
 beforeEach(() => {
   installed.clear();
@@ -71,27 +75,27 @@ const conn = (id: string, name: string, over: Partial<ConnectionConfig> = {}): C
 
 // ---- Appearance ----
 
-test("theme_cards_with_previews_and_follow_windows", async () => {
+test("parity_P11_38_theme_cards_with_previews_and_follow_the_system", async () => {
   settingsRoutes();
   renderWithProviders(<AppearanceSection />);
   const group = screen.getByRole("radiogroup", { name: "Theme" });
   const radios = within(group).getAllByRole("radio");
-  expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual(["Dark", "Light", "Follow Windows"]);
+  expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual(["Dark", "Light", "Follow the system"]);
   await waitFor(() => expect((within(group).getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(true));
 
-  // Each card draws real code in its own theme's tokens; Follow Windows shows both.
+  // Each card draws real code in its own theme's tokens; Follow the system shows both.
   const card = (name: string) => within(group).getByRole("radio", { name }).closest(".theme-card") as HTMLElement;
   expect(card("Dark").querySelectorAll(".theme-dark .theme-preview-code")).toHaveLength(1);
   expect(card("Dark").querySelector(".theme-light")).toBeNull();
   expect(card("Light").querySelectorAll(".theme-light .theme-preview-code")).toHaveLength(1);
-  expect(card("Follow Windows").querySelectorAll(".theme-light, .theme-dark")).toHaveLength(2);
+  expect(card("Follow the system").querySelectorAll(".theme-light, .theme-dark")).toHaveLength(2);
   expect(card("Dark").textContent).toContain("SELECT count(*)");
   expect(card("Dark").textContent).not.toMatch(/Dracula|Alucard/);
-  expect(screen.getByText("Follow Windows uses Light when Windows is light and Dark when it is dark.")).toBeTruthy();
+  expect(screen.getByText("Follow the system uses Light when the system is light and Dark when it is dark.")).toBeTruthy();
 
   await userEvent.click(within(group).getByRole("radio", { name: "Light" }));
   await waitFor(() => expect(lastPrefs()?.theme).toBe("light"));
-  await userEvent.click(within(group).getByRole("radio", { name: "Follow Windows" }));
+  await userEvent.click(within(group).getByRole("radio", { name: "Follow the system" }));
   await waitFor(() => expect(lastPrefs()?.theme).toBe("system"));
 });
 
@@ -278,10 +282,10 @@ test("ai_rows_provider_model_key_new_connections_inline", async () => {
   await screen.findByRole("combobox", { name: "Provider" });
   expect(await optionsOf("Provider")).toEqual(["None", "OpenAI-compatible", "Anthropic Claude", "Groq", "DeepSeek", "Custom"]);
   expect(screen.getByLabelText("API key")).toBeTruthy();
-  expect(screen.getByText("Kept in Windows Credential Manager, never in the data folder.")).toBeTruthy();
+  expect(screen.getByText("Kept in the OS keyring (the Secret Service), never in the data folder.")).toBeTruthy();
   expect(screen.getByText("Default AI access. Production Connections always start at Never send anything.")).toBeTruthy();
   expect(
-    screen.getByText("Suggests the rest of a statement where you are typing. Uses the Connection's AI access. Arrives with step 11."),
+    screen.getByText("Suggests the rest of a statement where you are typing. Uses the Connection's AI access."),
   ).toBeTruthy();
   // No Group open: no per-Group switch. Inline Ask and Ask on errors stay (PR25).
   expect(screen.queryByRole("switch", { name: /Use different settings/ })).toBeNull();
@@ -614,7 +618,7 @@ test("privacy_keep_exact_text", async () => {
   expect(await screen.findByRole("heading", { name: "Privacy" })).toBeTruthy();
   const keep = screen.getByRole("switch", { name: "Keep the exact text sent with each answer" });
   expect(keep.getAttribute("aria-checked")).toBe("false");
-  expect(screen.getByText(String.raw`The text can contain your schema and SQL. data\ is portable and not encrypted.`)).toBeTruthy();
+  expect(screen.getByText("The text can contain your schema and SQL. data/ is portable and not encrypted.")).toBeTruthy();
   await userEvent.click(keep);
   await waitFor(() => expect((lastAi().settings as AiSettings).keepExactText).toBe(true));
   expect(lastAi().settings).toMatchObject({ temperature: 0.5, maxTokens: 1024, modelPrefs: GROQ.modelPrefs });
@@ -643,7 +647,45 @@ test("pick_tables_in_a_groups_own_settings", async () => {
   expect(screen.queryByRole("switch", { name: "Keep the exact text sent with each answer" })).toBeNull();
 });
 
-test("tools_table_rows", async () => {
+test("auto_compact_switch_global_only", async () => {
+  const label = "Compact the thread when the context window is nearly full";
+  const help =
+    "At 85% of the model's window, older messages become a short summary written by the same model. Sends only text this thread already sent. The summary shows in the thread, and Undo brings the messages back.";
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, autoCompact: true } }) });
+  const { unmount } = renderAi();
+  const auto = await screen.findByRole("switch", { name: label });
+  // It sits in Privacy, right under Keep the exact text sent with each answer.
+  const privacy = auto.closest(".ssub") as HTMLElement;
+  expect(within(privacy).getByRole("heading", { name: "Privacy" })).toBeTruthy();
+  const switches = within(privacy).getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
+  expect(within(privacy).getAllByRole("switch")[0]).toBe(within(privacy).getByRole("switch", { name: "Keep the exact text sent with each answer" }));
+  expect(within(privacy).getAllByRole("switch")[1]).toBe(auto);
+  expect(switches.length).toBeGreaterThanOrEqual(3);
+  expect(auto.getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByText(help)).toBeTruthy();
+  await userEvent.click(auto);
+  await waitFor(() => expect((lastAi().settings as AiSettings).autoCompact).toBe(false));
+  expect(lastAi().settings).toMatchObject({ keepExactText: false, pickTables: true, modelPrefs: GROQ.modelPrefs });
+  unmount();
+
+  // Off in the settings it saved: the switch reads off. Not stored yet: the Core's default, on.
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, autoCompact: false } }) });
+  const second = renderAi();
+  expect((await screen.findByRole("switch", { name: label })).getAttribute("aria-checked")).toBe("false");
+  second.unmount();
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  const third = renderAi();
+  expect((await screen.findByRole("switch", { name: label })).getAttribute("aria-checked")).toBe("true");
+  third.unmount();
+
+  // A Group's own settings do not show it: the switch is the same for every Group.
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, autoCompact: true }, groupOverride: true }) });
+  renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: label })).toBeNull();
+});
+
+test("tools_row_mentions_sample_read", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
   renderAi();
   expect(await screen.findByRole("heading", { name: "Tools the assistant can use" })).toBeTruthy();
@@ -655,20 +697,41 @@ test("tools_table_rows", async () => {
   const table = screen.getByRole("table", { name: "Tools the assistant can use" });
   for (const head of ["Tool", "What it can do", "Where", "State"]) expect(within(table).getByRole("columnheader", { name: head })).toBeTruthy();
   const rows = within(table).getAllByRole("row");
-  expect(rows).toHaveLength(3);
-  const pick = within(rows[1]);
+  expect(rows).toHaveLength(4);
+  const pick = within(rows[2]);
   expect(pick.getByText("Pick tables")).toBeTruthy();
   expect(pick.getByText("a step, not a tool")).toBeTruthy();
   expect(pick.getByText("The model names the tables it needs from an outline of table names. Contura sends only those.")).toBeTruthy();
   expect(pick.getByText("Ask, large databases")).toBeTruthy();
   expect(pick.getByText("Follows the privacy switch")).toBeTruthy();
-  const run = within(rows[2]);
+  const run = within(rows[3]);
   expect(run.getByText("Run SQL or read rows")).toBeTruthy();
   expect(run.getByText("not available")).toBeTruthy();
-  expect(run.getByText("No model can run anything on a database. Answers are text: only Run in the editor touches a database.")).toBeTruthy();
+  expect(run.getByText(/No model can run anything on a database\. Answers are text: only Run in the editor touches a database\./)).toBeTruthy();
+  expect(run.getByText("Sample rows").tagName).toBe("STRONG");
+  expect(
+    run.getByText(
+      (_, el) =>
+        el?.tagName === "TD" &&
+        el.textContent?.includes(
+          "Sample rows are read by Contura, not the model: at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never kept.",
+        ) === true,
+    ),
+  ).toBeTruthy();
   expect(run.getByText("Nowhere")).toBeTruthy();
   expect(run.getByText("Never")).toBeTruthy();
-  expect(rows[2].className).toContain("off");
+  expect(rows[3].className).toContain("off");
+});
+
+test("settings_search_finds_sample_rows", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  renderWithProviders(
+    <SearchContext.Provider value="sample rows">
+      <AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />
+    </SearchContext.Provider>,
+  );
+  expect(await screen.findByRole("heading", { name: "Tools the assistant can use" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "What AI can see, per Connection" })).toBeTruthy();
 });
 
 test("settings_search_finds_pick_tables", async () => {
@@ -814,7 +877,8 @@ test("data_folder_shows_path_counts_and_history_size", async () => {
   expect(await screen.findByText("E:\\Apps\\Contura\\data")).toBeTruthy();
   expect(
     screen.getByText(
-      "Contura is portable. Connections, Groups, Saved Queries, Query History and these settings live in one folder next to Contura.exe. Copy the folder to take everything to another PC.",
+      // On Linux the folder is next to the program only for an AppImage or a writable copy: the copy points at the path.
+      "Connections, Groups, Saved Queries, Query History and these settings live in the folder below. Copy the folder to take everything to another computer.",
     ),
   ).toBeTruthy();
   const counts = screen.getByRole("list", { name: "What the data folder holds" });
@@ -827,7 +891,7 @@ test("data_folder_shows_path_counts_and_history_size", async () => {
   expect(screen.queryByRole("button", { name: /Move/ })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Open folder" }));
   expect(callsTo("open_data_folder")).toHaveLength(1);
-  expect(screen.getByText("Passwords stay in Windows Credential Manager on this PC, so a copied folder asks for each one once.")).toBeTruthy();
+  expect(screen.getByText("Passwords stay in the OS keyring (the Secret Service) on this computer, so a copied folder asks for each one once.")).toBeTruthy();
 });
 
 test("keep_history_for_saves_and_clear_asks_once", async () => {
@@ -896,7 +960,8 @@ test("about_has_version_licences_and_note", async () => {
     "Lucide icons, ISC",
     "Simple Icons, CC0 1.0",
   ]);
-  expect(screen.getByText("Everything Contura keeps is in the data folder next to Contura.exe.")).toBeTruthy();
+  expect(screen.getByText("Everything Contura keeps is in one data folder. Data folder above shows where it is.")).toBeTruthy();
+  expect(screen.queryByText(/next to the Contura program/)).toBeNull();
 });
 
 
@@ -1022,9 +1087,324 @@ test("clear_all_ai_data_confirms", async () => {
   off();
 });
 
+test("plus_sample_rows_help", async () => {
+  settingsRoutes();
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("table", { name: "What AI can see, per Connection" });
+  expect(
+    screen.getByText(
+      "Plus sample rows: Contura reads at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never keeps them.",
+    ),
+  ).toBeTruthy();
+});
+
 test("production_help_line", async () => {
   settingsRoutes();
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />);
   await screen.findByRole("table", { name: "What AI can see, per Connection" });
   expect(screen.getByText("Production Connections stay at Never: turning Production on also clears their AI Context.")).toBeTruthy();
+});
+
+// ---- Tools: Propose diagram changes and Recent tool uses (step 11h, board 11.4) ----
+
+const EMPTY_RECORD = {
+  sent: null,
+  usage: null,
+  millis: 1900,
+  stop: "end",
+  mark: null,
+  error: null,
+  sqlBlocks: [],
+  notes: [],
+  thinking: null,
+  log: [],
+  steps: [],
+  actions: [],
+  context: null,
+  commandError: null,
+};
+
+const useRow = (over: Partial<ToolUseRow>): ToolUseRow => ({
+  threadId: "t1",
+  messageAt: 1,
+  at: Date.now(),
+  tool: "proposeDiagramChanges",
+  target: "fulfilment.flow",
+  connectionId: null,
+  result: "4 proposed, 3 accepted",
+  ...over,
+});
+
+test("diagram_tool_row_and_switch", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, diagramTool: true } }) });
+  renderAi();
+  const sw = await screen.findByRole("switch", { name: "Propose diagram changes" });
+  const row = sw.closest("tr") as HTMLElement;
+  expect(within(row).getByText("propose_diagram_changes")).toBeTruthy();
+  expect(within(row).getByText("Suggests edits to the open .flow file as a list you can review. It cannot read or write a database.")).toBeTruthy();
+  expect(within(row).getByText("Diagram assistant")).toBeTruthy();
+  expect(sw.getAttribute("aria-checked")).toBe("true");
+  expect(row.textContent).toContain("On");
+  // It is the first row of the table.
+  expect(row.parentElement?.firstElementChild).toBe(row);
+  await userEvent.click(sw);
+  await waitFor(() => expect((lastAi().settings as AiSettings).diagramTool).toBe(false));
+  expect(lastAi().settings).toMatchObject({ pickTables: true, modelPrefs: GROQ.modelPrefs });
+  expect(row.textContent).toContain("Off");
+});
+
+test("diagram_tool_is_global_only", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, groupOverride: true }) });
+  renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("propose_diagram_changes")).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: "Propose diagram changes" })).toBeNull();
+  // A Group-level change saves without the global switch.
+  await userEvent.click(screen.getByRole("switch", { name: "Inline Ask" }));
+  await waitFor(() => expect(callsTo("save_ai_settings").length).toBeGreaterThan(0));
+  for (const call of callsTo("save_ai_settings")) expect(call.settings).not.toHaveProperty("diagramTool");
+});
+
+test("failed_tool_use_list_says_so", async () => {
+  settingsRoutes({
+    ai_recent_tool_uses: () => {
+      throw "The store is locked.";
+    },
+  });
+  renderAi();
+  expect(await screen.findByText(/Could not load tool uses\./)).toBeTruthy();
+  expect(screen.queryByText("No tool uses yet.")).toBeNull();
+});
+
+test("tool_use_time_older_days_and_deleted_connection", async () => {
+  const old = new Date();
+  old.setDate(old.getDate() - 5);
+  old.setHours(9, 5);
+  settingsRoutes({
+    ai_recent_tool_uses: () => [useRow({ at: old.getTime(), tool: "pickTables", target: "", connectionId: "gone", result: "1 of 2 tables" })],
+  });
+  renderAi();
+  await waitFor(() => expect(document.querySelectorAll(".urow")).toHaveLength(1));
+  const cells = Array.from(document.querySelector(".urow")!.children).map((c) => c.textContent);
+  expect(cells[0]).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/);
+  expect(cells[2]).toBe("Ask on a Connection");
+});
+
+test("failed_open_shows_the_error", async () => {
+  settingsRoutes({
+    ai_recent_tool_uses: () => [useRow({})],
+    ai_answer_record: () => {
+      throw "The record could not be read.";
+    },
+  });
+  renderAi();
+  await userEvent.click(await screen.findByRole("button", { name: /^Open Propose diagram changes/ }));
+  const dialog = await screen.findByRole("dialog");
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("The record could not be read.");
+});
+
+test("recent_tool_uses_rows", async () => {
+  const noon = new Date();
+  noon.setHours(10, 42, 0, 0);
+  const earlier = new Date(noon);
+  earlier.setHours(10, 31);
+  const yesterday = new Date(noon);
+  yesterday.setDate(yesterday.getDate() - 1);
+  settingsRoutes({
+    ai_recent_tool_uses: () => [
+      useRow({ at: noon.getTime() }),
+      useRow({ messageAt: 2, at: earlier.getTime(), tool: "pickTables", target: "", connectionId: "c1", result: "2 of 6 tables" }),
+      useRow({ messageAt: 3, at: yesterday.getTime(), target: "refund.flow", result: "Checker dropped 1 of 3" }),
+    ],
+  });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByRole("heading", { name: "Recent tool uses" })).toBeTruthy();
+  const rows = await waitFor(() => {
+    const list = document.querySelectorAll(".urow");
+    expect(list).toHaveLength(3);
+    return Array.from(list).map((r) => Array.from(r.children).map((c) => c.textContent));
+  });
+  expect(rows).toEqual([
+    ["10:42", "Propose diagram changes", "fulfilment.flow", "4 proposed, 3 accepted", "Open"],
+    ["10:31", "Pick tables", "Ask on freight-stg", "2 of 6 tables", "Open"],
+    ["Yesterday", "Propose diagram changes", "refund.flow", "Checker dropped 1 of 3", "Open"],
+  ]);
+  expect(document.querySelector(".urow .mono-small")?.textContent).toBe("fulfilment.flow");
+  expect(screen.getByText("Open shows the exact input the model sent and what Contura did with it.")).toBeTruthy();
+});
+
+test("open_shows_the_log_with_the_input", async () => {
+  const input = '{"changes":[{"op":"add_shape","name":"Refund"}]}';
+  const record = {
+    ...EMPTY_RECORD,
+    steps: [
+      { step: "answer", value: "Written", rule: "", evidence: [], byModel: true, atMs: 10 },
+      { step: "toolCheck", value: "1 of 1 passed", rule: "Contura checked each change.", evidence: [], byModel: false, atMs: 20 },
+    ],
+    toolUse: { tool: "propose_diagram_changes", file: "fulfilment.flow", input, proposal: { changes: [] }, outcome: null },
+  };
+  settingsRoutes({
+    ai_recent_tool_uses: () => [useRow({})],
+    ai_answer_record: () => record,
+  });
+  renderAi();
+  await userEvent.click(await screen.findByRole("button", { name: /^Open Propose diagram changes/ }));
+  const dialog = await screen.findByRole("dialog");
+  expect(await within(dialog).findByRole("tab", { name: "Steps" })).toBeTruthy();
+  expect(within(dialog).getByRole("tab", { name: "Steps" }).getAttribute("aria-selected")).toBe("true");
+  expect(await within(dialog).findByLabelText("Input the model sent")).toBeTruthy();
+  // Laid out as the board's stored tool input.
+  expect(within(dialog).getByLabelText("Input the model sent").textContent).toBe(JSON.stringify(JSON.parse(input), null, 2));
+  expect(callsTo("ai_answer_record")[0]).toEqual({ threadId: "t1", messageAt: 1 });
+  expect(within(dialog).queryByRole("button", { name: "Back to the answer" })).toBeNull();
+  // The Diagram tab draws the one tool; the question is not known here, so its box gives no count.
+  await userEvent.click(within(dialog).getByRole("tab", { name: "Diagram" }));
+  const question = [...dialog.querySelectorAll(".dbox")].find((b) => b.querySelector(".dlab")?.textContent === "Your question")!;
+  expect(question.textContent).toBe("Your question");
+  expect(within(dialog).queryByText(/0 chars/)).toBeNull();
+  expect(within(dialog).getByText("One tool: it can only suggest edits to fulfilment.flow.")).toBeTruthy();
+});
+
+test("empty_recent_text", async () => {
+  settingsRoutes({ ai_recent_tool_uses: () => [] });
+  renderAi();
+  expect(await screen.findByText("No tool uses yet.")).toBeTruthy();
+  expect(document.querySelector(".urow")).toBeNull();
+});
+
+test("settings_search_finds_the_tool", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  for (const query of ["tools", "diagram", "propose"]) {
+    const view = renderWithProviders(
+      <SearchContext.Provider value={query}>
+        <AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />
+      </SearchContext.Provider>,
+    );
+    expect(await screen.findByRole("switch", { name: "Propose diagram changes" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Recent tool uses" })).toBeTruthy();
+    view.unmount();
+  }
+});
+
+// ---- Parity with the step 11 boards (P11) ----
+
+test("parity_P11_38_windows_keeps_its_wording", async () => {
+  setPlatformForTests("windows");
+  settingsRoutes();
+  const about = renderWithProviders(<AboutSection />);
+  expect(await screen.findByText("Everything Contura keeps is in the data folder next to Contura.exe.")).toBeTruthy();
+  about.unmount();
+  const folder = renderWithProviders(<DataFolderSection />);
+  expect(await screen.findByText("E:\\Apps\\Contura\\data")).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Contura is portable. Connections, Groups, Saved Queries, Query History and these settings live in one folder next to Contura.exe. Copy the folder to take everything to another PC.",
+    ),
+  ).toBeTruthy();
+  expect(screen.getByText("Passwords stay in the OS keyring (Windows Credential Manager) on this PC, so a copied folder asks for each one once.")).toBeTruthy();
+  folder.unmount();
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  renderAi();
+  expect(await screen.findByText("Kept in the OS keyring (Windows Credential Manager), never in the data folder.")).toBeTruthy();
+  expect(screen.getByText(String.raw`The text can contain your schema and SQL. data\ is portable and not encrypted.`)).toBeTruthy();
+  // One word for the machine on the whole page: "this PC", as the Passwords row says.
+  expect(screen.getByText("Each Connection decides what may leave this PC. The same choice is on each Connection's form.")).toBeTruthy();
+});
+
+test("parity_P11_38_theme_reads_follow_the_system_on_windows_too", async () => {
+  setPlatformForTests("windows");
+  settingsRoutes();
+  renderWithProviders(<AppearanceSection />);
+  const group = screen.getByRole("radiogroup", { name: "Theme" });
+  expect(within(group).getAllByRole("radio").map((r) => r.getAttribute("aria-label"))).toEqual(["Dark", "Light", "Follow the system"]);
+  expect(screen.queryByText(/Follow Windows/)).toBeNull();
+});
+
+test("parity_P11_38_linux_wording_never_names_windows", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  const { container } = renderWithProviders(
+    <>
+      <AppearanceSection />
+      <AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />
+      <DataFolderSection />
+      <AboutSection />
+    </>,
+  );
+  await screen.findByText("Kept in the OS keyring (the Secret Service), never in the data folder.");
+  await screen.findByText("Contura 0.7.0");
+  expect(container.textContent).not.toMatch(/Windows|Contura\.exe|this PC|data\\/);
+});
+
+test("parity_P11_4_inline_suggestions_help_has_no_development_note", async () => {
+  settingsRoutes();
+  renderAi();
+  expect(await screen.findByText("Suggests the rest of a statement where you are typing. Uses the Connection's AI access.")).toBeTruthy();
+  expect(screen.queryByText(/Arrives with step/)).toBeNull();
+});
+
+test("parity_P11_3_access_table_keeps_its_columns_and_fits_its_column", async () => {
+  const a = conn("c1", "freight-stg", { aiAccess: "schemaQuery", aiSync: "automatic" });
+  settingsRoutes();
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a]} onConnectionSaved={() => {}} />);
+  const table = await screen.findByRole("table", { name: "What AI can see, per Connection" });
+  // The built columns stay (P11-2: keep as built), Dialect included.
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Connection", "Dialect", "AI can see", "Sync", "Context"]);
+  // Fixed layout with set column widths: the table never grows past the 512px column.
+  expect(table.classList.contains("share-table-fit")).toBe(true);
+  expect(Array.from(table.querySelectorAll("col")).map((c) => c.className)).toEqual([
+    "share-col-conn",
+    "share-col-dialect",
+    "share-col-access",
+    "share-col-sync",
+    "share-col-ctx",
+  ]);
+  // No hover text: the dialect has its own column.
+  expect(table.querySelector("[title]")).toBeNull();
+});
+
+test("parity_P11_5_recent_tool_uses_refresh_when_a_use_is_recorded", async () => {
+  let rows: ToolUseRow[] = [];
+  settingsRoutes({ ai_recent_tool_uses: () => rows, save_ai_thread: (a) => ({ thread: a.thread }), ai_record_tool_result: () => null });
+  renderAi();
+  expect(await screen.findByText("No tool uses yet.")).toBeTruthy();
+  // A diagram Ask saves its turn with the tool use while Settings stays open.
+  rows = [useRow({})];
+  await saveAiThread({ id: "t1", place: "flow:fulfilment", title: "add a check", messages: [], updatedAt: 1 });
+  await waitFor(() => expect(document.querySelectorAll(".urow")).toHaveLength(1));
+  expect(screen.queryByText("No tool uses yet.")).toBeNull();
+  // Accepting it records the outcome: the list is read again.
+  rows = [useRow({ result: "Accepted 1 of 1" })];
+  await aiRecordToolResult("t1", 1, { accepted: 1, rejected: 0, auto: false, at: 2 });
+  expect(await screen.findByText("Accepted 1 of 1")).toBeTruthy();
+});
+
+test("parity_P11_9_data_folder_counts_follow_the_connections", async () => {
+  let connections = 1;
+  settingsRoutes({ data_folder_info: () => ({ path: "/home/you/contura/data", connections, groups: 0, savedQueries: 0, historyBytes: 0 }) });
+  const one = [conn("c1", "ai-prod")];
+  const { rerender } = renderWithProviders(<DataFolderSection connections={one} />);
+  const counts = await screen.findByRole("list", { name: "What the data folder holds" });
+  await waitFor(() => expect(within(counts).getAllByRole("listitem")[0].textContent).toBe("Connections1"));
+  connections = 4;
+  rerender(<DataFolderSection connections={[...one, conn("c2", "ai-readonly"), conn("c3", "ai-shop"), conn("c4", "ai-wide")]} />);
+  await waitFor(() => expect(within(counts).getAllByRole("listitem")[0].textContent).toBe("Connections4"));
+  expect(callsTo("data_folder_info")).toHaveLength(2);
+});
+
+test("parity_P11_17_custom_lists_its_models_without_a_key", async () => {
+  const custom: AiSettings = { ...GROQ, provider: "custom", preset: null, baseUrl: "http://127.0.0.1:11434/v1", model: "llama3.1:8b" };
+  settingsRoutes({
+    ai_settings: () => aiView({ settings: custom, keySaved: false }),
+    ai_models: () => modelList([modelInfo({ id: "llama3.1:8b", name: "llama3.1:8b" }), modelInfo({ id: "qwen3:14b", name: "qwen3:14b" })], Date.now()),
+  });
+  renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  // A keyless local server still lists its models, so the Ask picker can offer them.
+  await waitFor(() => expect(callsTo("ai_models")).toEqual([{ groupId: "g1" }]));
+  expect(await screen.findByText("Fetched just now")).toBeTruthy();
+});
+
+test("parity_P11_17_a_keyless_hosted_provider_still_waits_for_a_key", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, keySaved: false }) });
+  renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  await screen.findByRole("combobox", { name: "Default thinking level" });
+  expect(callsTo("ai_models")).toHaveLength(0);
 });

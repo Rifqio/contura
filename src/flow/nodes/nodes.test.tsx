@@ -118,6 +118,22 @@ describe("looks", () => {
     expect(container.querySelector(".fnode")?.getAttribute("aria-label")).toBe("Process Checkout");
   });
 
+  test("the_assistant_marks_name_themselves_and_a_suggested_shape_has_its_badge", () => {
+    const { container } = render(
+      <>
+        <DfdNode kind="process" name="Fraud check" id="1.1" style="modern" selected={false} state="suggested" />
+        <DfdNode kind="process" name="Checkout" id="1.0" style="modern" selected={false} state="removed" />
+        <FlowchartNode kind="step" name="Pack" style="classic" selected={false} state="airing" />
+      </>,
+    );
+    const nodes = [...container.querySelectorAll(".fnode")];
+    expect(nodes.map((n) => n.getAttribute("aria-label"))).toEqual(["Process Fraud check, suggested by AI", "Process Checkout, suggested by AI", "Step Pack, added by AI"]);
+    expect(nodes.map((n) => n.querySelector(".fnode-gtag")?.textContent ?? null)).toEqual(["New", null, null]);
+    expect(nodes[0].classList.contains("fnode-suggested")).toBe(true);
+    expect(nodes[1].classList.contains("fnode-removed")).toBe(true);
+    expect(nodes[2].classList.contains("fnode-airing")).toBe(true);
+  });
+
   test("modern_store_names_its_table_and_outside_party_reads_in_words", () => {
     const { container } = render(
       <>

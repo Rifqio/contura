@@ -2,7 +2,7 @@
 // current text, so it works while the text has errors, and returns the smallest change: untouched lines stay
 // byte for byte. In the app they run in the language worker against its cached parse (ruling P5).
 import type { TextEdit } from "../protocol";
-import { ATTR_KEYS, type DiagramKind, type FlowArrow, type FlowAttrKey, type FlowNodeKind, flowLabel, flowName, flowValue, nodeStatement } from "./model";
+import { ATTR_KEYS, type DiagramKind, type FlowArrow, type FlowAttrKey, type FlowLink, type FlowNodeKind, flowLabel, flowName, flowValue, nodeStatement } from "./model";
 import type { FlowParse, FlowRange } from "./parse";
 
 /** One canvas action, as the worker is asked for it. */
@@ -29,7 +29,8 @@ export type FlowEditOp =
   | { op: "deleteNode"; name: string }
   | { op: "moveToGroup"; name: string; group: string | null }
   | { op: "setAttr"; name: string; key: "kind" | FlowAttrKey; value: string | null }
-  | { op: "setLinkLabel"; index: number; label: string | null };
+  | { op: "setLinkLabel"; index: number; label: string | null }
+  | { op: "deleteLink"; index: number };
 
 /** The edits, and for an add the name it used. An empty list means the action does not apply to this text. */
 export type FlowEditResult = { edits: TextEdit[]; name?: string };
@@ -148,7 +149,7 @@ function groupSpot(s: string, parse: FlowParse, group: string): { pos: number; i
   return { pos: sp.close ? lineStart(s, sp.close.from) : s.length, indent };
 }
 
-function nodeText(name: string, kind: FlowNodeKind | null, attrs: Record<string, string>, diagram: DiagramKind | null): string {
+export function nodeText(name: string, kind: FlowNodeKind | null, attrs: Record<string, string>, diagram: DiagramKind | null): string {
   // Step 12 kinds write their own statement (participant App, class Invoice, a dated timeline line, an indent).
   if (kind && diagram && diagram !== "dfd" && diagram !== "flow" && diagram !== "cloud") return nodeStatement(diagram, { name, kind, attrs });
   if (kind === "note") return nodeStatement(diagram, { name, kind, attrs, text: name });
@@ -291,13 +292,13 @@ export function deleteNode(text: string, parse: FlowParse, name: string): TextEd
   const removals: TextEdit[] = [removeStatement(text, sp.from, sp.to)];
   // An ER entity's columns and a class's members go with it.
   for (const row of parse.rowsOf(name)) removals.push(removeStatement(text, row.line.from, row.line.to));
-  removeLinks(text, parse, gone, removals, nl);
+  removeLinks(text, parse, (l) => gone.has(l.from) || gone.has(l.to), removals, nl);
   pruneGroups(text, parse, parse.parentOf(name), removals, gone);
   return normalize(text, removals);
 }
 
-/** Removes the links that touch `gone`; a chain statement is rewritten as the runs it keeps, one per line. */
-function removeLinks(s: string, parse: FlowParse, gone: Set<string>, edits: TextEdit[], nl: string) {
+/** Removes the links `drop` picks (by link and index); a chain statement is rewritten as the runs it keeps, one per line. */
+function removeLinks(s: string, parse: FlowParse, drop: (link: FlowLink, index: number) => boolean, edits: TextEdit[], nl: string) {
   const links = parse.links;
   let i = 0;
   while (i < links.length) {
@@ -306,7 +307,7 @@ function removeLinks(s: string, parse: FlowParse, gone: Set<string>, edits: Text
     let j = i + 1;
     while (j < links.length && line && parse.span(`link:${j}`)?.line?.from === line.from) j++;
     const keep: boolean[] = [];
-    for (let k = i; k < j; k++) keep.push(!gone.has(links[k].from) && !gone.has(links[k].to));
+    for (let k = i; k < j; k++) keep.push(!drop(links[k], k));
     if (line && keep.some((x) => !x)) {
       if (!keep.some((x) => x)) {
         edits.push(removeStatement(s, line.from, line.to));
@@ -417,6 +418,14 @@ function removeItem(s: string, item: FlowRange): TextEdit {
   return { from: item.from, to: item.to, insert: "" };
 }
 
+/** Deletes link `index`: its statement line, or from a chain (`A > B > C`) only that link, which keeps the others. Comments stay. */
+export function deleteLink(text: string, parse: FlowParse, index: number): TextEdit[] {
+  if (!Number.isInteger(index) || !parse.span(`link:${index}`)?.line) return [];
+  const edits: TextEdit[] = [];
+  removeLinks(text, parse, (_, i) => i === index, edits, lineBreak(text));
+  return normalize(text, edits);
+}
+
 /** Sets or removes (null or "") the label of link `index`; a label inside a chain splits the chain there. */
 export function setLinkLabel(text: string, parse: FlowParse, index: number, label: string | null): TextEdit[] {
   const sp = Number.isInteger(index) && index >= 0 ? parse.span(`link:${index}`) : null;
@@ -459,5 +468,7 @@ export function applyFlowEdit(text: string, parse: FlowParse, edit: FlowEditOp):
       return { edits: setAttr(text, parse, edit.name, edit.key, edit.value) };
     case "setLinkLabel":
       return { edits: setLinkLabel(text, parse, edit.index, edit.label) };
+    case "deleteLink":
+      return { edits: deleteLink(text, parse, edit.index) };
   }
 }

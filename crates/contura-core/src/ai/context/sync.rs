@@ -16,6 +16,7 @@ use crate::ai::context::store::{ContextKey, ContextMeta, ContextStore};
 use crate::ai::log::{Level, Log, ProcessStep, StepKind, error_kind};
 use crate::ai::preview::{CatalogReader, count_of, long_secrets};
 use crate::ai::rails::Secrets;
+use crate::ai::request::TableRef;
 use crate::error::{Error, Result};
 use crate::model::{AiSyncMode, ConnectionConfig, ConnectionId, DialectKind};
 
@@ -146,12 +147,14 @@ pub struct ContextStatusRow {
 }
 
 /// The Context an Ask on `config` uses: the request's database, else the Connection's,
-/// else the Dialect's default; the request's schema, else `public` on PostgreSQL, else
-/// `""`.
+/// else the Dialect's default. The schema is the request's, else on PostgreSQL the one
+/// schema every focus table names (all of them, at least one), else `public`; `""` on the
+/// other Dialects.
 pub fn context_key(
     config: &ConnectionConfig,
     database: Option<&str>,
     schema: Option<&str>,
+    focus: &[TableRef],
 ) -> ContextKey {
     let database = database
         .map(str::to_string)
@@ -166,7 +169,7 @@ pub fn context_key(
         });
     let schema = match (schema, config.dialect) {
         (Some(s), _) => s.to_string(),
-        (None, DialectKind::Postgres) => "public".into(),
+        (None, DialectKind::Postgres) => shared_schema(focus).unwrap_or("public").to_string(),
         (None, _) => String::new(),
     };
     ContextKey {
@@ -174,6 +177,15 @@ pub fn context_key(
         database,
         schema,
     }
+}
+
+/// The schema every table of `focus` names, when they all name the same one.
+fn shared_schema(focus: &[TableRef]) -> Option<&str> {
+    let first = focus.first()?.schema.as_deref()?;
+    focus
+        .iter()
+        .all(|t| t.schema.as_deref() == Some(first))
+        .then_some(first)
 }
 
 /// `ms` as whole minutes, hours or days; under a minute it is `None`.
@@ -634,7 +646,7 @@ pub async fn resync(
             "AI access is Never for this Connection.".into(),
         ));
     }
-    let key = context_key(&config, database, schema);
+    let key = context_key(&config, database, schema, &[]);
     let secrets = long_secrets(secrets);
     let clean = cleaner(&secrets);
     let (info, _) = ensure(
@@ -709,22 +721,52 @@ mod tests {
     #[test]
     fn context_key_cases() {
         let pg = config(DialectKind::Postgres, Some("shop"));
-        let k = context_key(&pg, None, None);
+        let k = context_key(&pg, None, None, &[]);
         assert_eq!((k.database.as_str(), k.schema.as_str()), ("shop", "public"));
-        let k = context_key(&pg, Some("crm"), Some("sales"));
+        let k = context_key(&pg, Some("crm"), Some("sales"), &[]);
         assert_eq!((k.database.as_str(), k.schema.as_str()), ("crm", "sales"));
         assert_eq!(k.connection_id, pg.id);
-        let k = context_key(&config(DialectKind::Postgres, None), None, None);
+        let k = context_key(&config(DialectKind::Postgres, None), None, None, &[]);
         assert_eq!(
             (k.database.as_str(), k.schema.as_str()),
             ("postgres", "public")
         );
-        let k = context_key(&config(DialectKind::Sqlite, None), None, None);
+        let k = context_key(&config(DialectKind::Sqlite, None), None, None, &[]);
         assert_eq!((k.database.as_str(), k.schema.as_str()), ("main", ""));
-        let k = context_key(&config(DialectKind::MySql, None), Some("shop"), None);
+        let k = context_key(&config(DialectKind::MySql, None), Some("shop"), None, &[]);
         assert_eq!((k.database.as_str(), k.schema.as_str()), ("shop", ""));
-        let k = context_key(&config(DialectKind::MySql, None), None, None);
+        let k = context_key(&config(DialectKind::MySql, None), None, None, &[]);
         assert_eq!((k.database.as_str(), k.schema.as_str()), ("", ""));
+    }
+
+    #[test]
+    fn context_key_schema_from_focus() {
+        use crate::ai::request::TableRef;
+        let t = |schema: Option<&str>, name: &str| TableRef {
+            schema: schema.map(str::to_string),
+            name: name.into(),
+        };
+        let pg = config(DialectKind::Postgres, Some("shop"));
+        let billing = [
+            t(Some("billing"), "invoices"),
+            t(Some("billing"), "customers"),
+        ];
+        assert_eq!(context_key(&pg, None, None, &billing).schema, "billing");
+        let mixed = [t(Some("billing"), "invoices"), t(Some("crm"), "customers")];
+        assert_eq!(context_key(&pg, None, None, &mixed).schema, "public");
+        let partly = [t(Some("billing"), "invoices"), t(None, "customers")];
+        assert_eq!(context_key(&pg, None, None, &partly).schema, "public");
+        assert_eq!(context_key(&pg, None, None, &[]).schema, "public");
+        // The request's schema wins.
+        assert_eq!(
+            context_key(&pg, None, Some("sales"), &billing).schema,
+            "sales"
+        );
+        // MySQL and SQLite are unchanged.
+        let my = config(DialectKind::MySql, None);
+        assert_eq!(context_key(&my, Some("shop"), None, &billing).schema, "");
+        let lite = config(DialectKind::Sqlite, None);
+        assert_eq!(context_key(&lite, None, None, &billing).schema, "");
     }
 
     #[test]

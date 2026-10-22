@@ -28,6 +28,16 @@ pub enum ItemKind {
     /// Literal values left unmasked.
     Values,
     Rows,
+    /// The thread's memory: the open Topic's recent turns and matching earlier summaries.
+    /// Each turn and summary passed the gate on history (R1.7) when it was picked.
+    History,
+    /// The summary step: a Topic summary or a compaction written by the model in its own
+    /// call before the Ask. Never an `Item` of the main Ask; switched off through `off`,
+    /// the call is not made and Contura writes the summary by rules.
+    Summary,
+    /// A diagram Ask's .flow text, or its selected shape names (one per line). Diagrams
+    /// are not database data: no AI access level applies, and only a diagram Ask sends it.
+    Diagram,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

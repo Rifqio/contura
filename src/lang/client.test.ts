@@ -217,6 +217,14 @@ test("lang_client_flow_resolves_with_the_parse_and_its_spans", async () => {
   if (spans.stale) throw new Error("expected spans");
   expect(spans.lineOf).toEqual({ A: 2 });
   expect(spans.spans["node:A"]?.values?.icon).toEqual({ from: text.indexOf("aws-s3"), to: text.indexOf("aws-s3") + 6 });
+  const outline = await client.flowOutline("d", r.version);
+  if (outline.stale) throw new Error("expected an outline");
+  expect(outline.outline.nodes).toEqual([{ name: "A", id: null, kind: "service", group: null, line: 2, table: false }]);
+  // Once the text changes, the old version is stale.
+  const next = await client.flow("d", `${text}B [icon: aws-s3]\n`);
+  expect(await client.flowOutline("d", r.version)).toEqual({ stale: true });
+  const again = await client.flowOutline("d", next.version);
+  expect(again.stale === false && again.outline.nodes.map((n) => n.name)).toEqual(["A", "B"]);
   client.closeFlow("d");
   client.openFlow("d");
   client.dispose();

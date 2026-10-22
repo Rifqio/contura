@@ -176,8 +176,11 @@ mod tests {
             serde_json::json!({"kind":"ai","message":{"kind":"rateLimited","retryAfterSecs":7}})
         );
         assert_eq!(
-            json(Error::Ai(AiError::Network { host: "h".into() })),
-            serde_json::json!({"kind":"ai","message":{"kind":"network","host":"h"}})
+            json(Error::Ai(AiError::Network {
+                host: "h".into(),
+                connect: false
+            })),
+            serde_json::json!({"kind":"ai","message":{"kind":"network","host":"h","connect":false}})
         );
         assert_eq!(
             json(Error::Ai(AiError::BadKey)),
@@ -252,10 +255,11 @@ mod tests {
             ai(AiError::ContextFull {
                 used: 192000,
                 window: 200000,
-                model: "m".into()
+                model: "m".into(),
+                messages: 14
             }),
             msg(
-                serde_json::json!({"kind":"contextFull","used":192000,"window":200000,"model":"m"})
+                serde_json::json!({"kind":"contextFull","used":192000,"window":200000,"model":"m","messages":14})
             )
         );
         assert_eq!(
@@ -276,6 +280,28 @@ mod tests {
 
     /// A stored answer record keeps its error: every kind reads back as written.
     #[test]
+    fn network_connect_json() {
+        let json = |e: Error| serde_json::to_value(e).unwrap();
+        assert_eq!(
+            json(Error::Ai(AiError::Network {
+                host: "h".into(),
+                connect: true
+            })),
+            serde_json::json!({"kind":"ai","message":{"kind":"network","host":"h","connect":true}})
+        );
+        // A record written before the flag existed reads as not connect.
+        let old: AiError =
+            serde_json::from_value(serde_json::json!({"kind":"network","host":"h"})).unwrap();
+        assert_eq!(
+            old,
+            AiError::Network {
+                host: "h".into(),
+                connect: false
+            }
+        );
+    }
+
+    #[test]
     fn ai_error_round_trips() {
         use crate::ai::AiProviderKind;
         let all = [
@@ -284,7 +310,10 @@ mod tests {
             AiError::RateLimited {
                 retry_after_secs: Some(7),
             },
-            AiError::Network { host: "h".into() },
+            AiError::Network {
+                host: "h".into(),
+                connect: true,
+            },
             AiError::KeyHostChanged { host: "h".into() },
             AiError::InsecureUrl { host: "h".into() },
             AiError::Timeout {
@@ -311,6 +340,7 @@ mod tests {
                 used: 1,
                 window: 2,
                 model: "m".into(),
+                messages: 4,
             },
             AiError::TooBig {
                 needed: 3,
@@ -319,7 +349,24 @@ mod tests {
             },
             AiError::Tls { host: "h".into() },
             AiError::Busy,
+            AiError::NothingToContinue,
             AiError::Internal,
+            AiError::FileChanged {
+                file: "orders".into(),
+                line: Some(9),
+                now_reads: Some("Pack order".into()),
+            },
+            AiError::FileChanged {
+                file: "orders".into(),
+                line: None,
+                now_reads: None,
+            },
+            AiError::ToolRejected {
+                name: "run_sql".into(),
+            },
+            AiError::BadToolInput,
+            AiError::ToolOff,
+            AiError::BadFileName,
         ];
         for e in all {
             let v = serde_json::to_value(&e).unwrap();

@@ -10,6 +10,7 @@ use super::{
     AiProvider, ChatRequest, ChatRole, ListedModel, ProviderEvent, StopReason, Thinking, Usage,
     count, effort_budget, sorted_models,
 };
+use crate::ai::diagram_tool::INPUT_CAP;
 use crate::ai::log::Log;
 use crate::ai::{AiError, AiProviderKind};
 use crate::error::{Error, Result};
@@ -52,8 +53,9 @@ pub struct Anthropic {
     pub http: &'static Http,
 }
 
-/// The `v1/messages` body. Never has a `tools` key. The system blocks go in order, each
-/// with a cache mark when asked, so the same pick sends the same prefix.
+/// The `v1/messages` body. Has a `tools` key (one tool) and `tool_choice` only when the
+/// request carries a tool. The system blocks go in order, each with a cache mark when
+/// asked, so the same pick sends the same prefix.
 pub fn body(req: &ChatRequest) -> Value {
     let messages: Vec<Value> = req
         .messages
@@ -117,6 +119,17 @@ pub fn body(req: &ChatRequest) -> Value {
     if !thinks && let Some(t) = req.temperature {
         body.insert("temperature".into(), json!(t));
     }
+    if let Some(tool) = &req.tools {
+        body.insert(
+            "tools".into(),
+            json!([{
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            }]),
+        );
+        body.insert("tool_choice".into(), json!({ "type": "auto" }));
+    }
     body.insert("max_tokens".into(), json!(max_tokens));
     Value::Object(body)
 }
@@ -136,11 +149,13 @@ fn error_status(kind: &str) -> u16 {
     }
 }
 
-/// The running stream: the usage so far and the stop reason `message_delta` gave.
+/// The running stream: the usage so far, the stop reason `message_delta` gave and the tool
+/// block being gathered (its name and the input text so far).
 #[derive(Default)]
 struct State {
     usage: Usage,
     stop: Option<StopReason>,
+    tool: Option<(String, String)>,
 }
 
 impl State {
@@ -205,7 +220,7 @@ impl Anthropic {
         })
     }
 
-    /// Hands one event's thinking, text and usage to `sink` and keeps its stop reason in
+    /// Hands one event's thinking, text, tool call and usage to `sink` and keeps its stop reason in
     /// `state`. True once `message_stop` arrives. `model` is the one asked for, named by a
     /// mid-stream `not_found_error`.
     fn on_event(
@@ -227,6 +242,18 @@ impl Anthropic {
                     sink(ProviderEvent::Usage(state.take_usage(usage)));
                 }
             }
+            "content_block_start" => {
+                let block = &event["content_block"];
+                if block["type"].as_str() == Some("tool_use") {
+                    let name = block["name"].as_str().unwrap_or_default();
+                    state.tool = Some((name.to_string(), String::new()));
+                }
+            }
+            "content_block_stop" => {
+                if let Some((name, input)) = state.tool.take() {
+                    sink(ProviderEvent::ToolCall { name, input });
+                }
+            }
             "content_block_delta" => {
                 // `signature_delta` and other block kinds carry nothing to show.
                 let delta = &event["delta"];
@@ -241,12 +268,30 @@ impl Anthropic {
                     Some("thinking_delta") => {
                         text("thinking").map(|t| sink(ProviderEvent::Thinking(t)))
                     }
+                    Some("input_json_delta") => {
+                        if let (Some((_, input)), Some(part)) =
+                            (state.tool.as_mut(), delta["partial_json"].as_str())
+                        {
+                            input.push_str(part);
+                            if input.len() > INPUT_CAP {
+                                // Too much to be a proposal: stop reading and send the call
+                                // once, as read so far, so the execution rail refuses it.
+                                if let Some((name, input)) = state.tool.take() {
+                                    sink(ProviderEvent::ToolCall { name, input });
+                                }
+                                state.stop = Some(StopReason::TooLong);
+                                return Ok(true);
+                            }
+                        }
+                        None
+                    }
                     _ => None,
                 };
             }
             "message_delta" => {
                 if let Some(reason) = event.pointer("/delta/stop_reason").and_then(Value::as_str) {
                     state.stop = Some(match reason {
+                        // `tool_use` ends the answer like `end_turn`.
                         "max_tokens" => StopReason::Length,
                         "refusal" => StopReason::Refusal,
                         _ => StopReason::End,
@@ -271,7 +316,7 @@ impl Anthropic {
                     &self.redact_list(),
                 )));
             }
-            // `ping`, `content_block_start`, `content_block_stop` and new types carry nothing.
+            // `ping` and new types carry nothing.
             _ => {}
         }
         Ok(false)
@@ -397,7 +442,7 @@ mod tests {
 
     use super::*;
     use crate::ai::models::MaxTokensField;
-    use crate::ai::provider::{ChatMessage, PromptBlock};
+    use crate::ai::provider::{ChatMessage, PromptBlock, ToolSpec};
 
     fn request(thinking: Thinking, max_tokens: u32) -> ChatRequest {
         ChatRequest {
@@ -417,6 +462,7 @@ mod tests {
             temperature: None,
             thinking,
             max_tokens_field: MaxTokensField::MaxTokens,
+            tools: None,
         }
     }
 
@@ -445,6 +491,11 @@ mod tests {
 
     /// Runs a fixture through the parser and `on_event`, as `stream` does.
     fn play(fixture: &str) -> (Vec<ProviderEvent>, Result<()>) {
+        play_chunks(&[fixture.as_bytes()])
+    }
+
+    /// As `play`, with the body arriving in `chunks`.
+    fn play_chunks(chunks: &[&[u8]]) -> (Vec<ProviderEvent>, Result<()>) {
         let p = provider();
         let mut parser = SseParser::new();
         let mut state = State::default();
@@ -452,16 +503,18 @@ mod tests {
         let mut sink = |e| got.push(e);
         let mut result = Ok(());
         let mut done = false;
-        for ev in parser.push(fixture.as_bytes()).unwrap() {
-            match p.on_event(&ev, "m", &mut state, &mut sink) {
-                Ok(true) => {
-                    done = true;
-                    break;
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    result = Err(e);
-                    break;
+        'chunks: for chunk in chunks {
+            for ev in parser.push(chunk).unwrap() {
+                match p.on_event(&ev, "m", &mut state, &mut sink) {
+                    Ok(true) => {
+                        done = true;
+                        break 'chunks;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        result = Err(e);
+                        break 'chunks;
+                    }
                 }
             }
         }
@@ -515,10 +568,168 @@ mod tests {
         assert!(body(&req).get("temperature").is_none());
     }
 
+    fn tool() -> ToolSpec {
+        ToolSpec {
+            name: "propose_diagram_changes".into(),
+            description: "Proposes edits.".into(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        }
+    }
+
     #[test]
-    fn body_never_has_tools() {
+    fn body_with_tool_snapshot() {
+        let mut req = request(Thinking::Off, 4096);
+        req.tools = Some(tool());
+        assert_eq!(
+            body(&req),
+            json!({
+                "model": "claude-sonnet-5-5",
+                "system": [{"type": "text", "text": "You write SQL."}],
+                "messages": [
+                    {"role": "user", "content": "count users"},
+                    {"role": "assistant", "content": "SELECT count(*) FROM users;"}
+                ],
+                "stream": true,
+                "tools": [{
+                    "name": "propose_diagram_changes",
+                    "description": "Proposes edits.",
+                    "input_schema": {"type": "object", "properties": {}}
+                }],
+                "tool_choice": {"type": "auto"},
+                "max_tokens": 4096
+            })
+        );
+        req.thinking = adaptive("medium", true);
+        let b = body(&req);
+        assert_eq!(b["tool_choice"], json!({"type": "auto"}));
+        assert_eq!(b["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn wire_texts_count_the_tool() {
+        let mut req = request(Thinking::Off, 4096);
+        let plain = provider().wire_texts(&req);
+        assert_eq!(plain.len(), 3);
+        req.tools = Some(tool());
+        let with = provider().wire_texts(&req);
+        assert_eq!(with[..3], plain[..]);
+        assert_eq!(with.len(), 4);
+        assert_eq!(with[3], serde_json::to_string(&[tool()]).unwrap());
+    }
+
+    const TOOL_INPUT: &str =
+        r#"{"file":"a.flow","base_hash":"00ff","ops":[{"remove_node":{"target":"A"}}]}"#;
+
+    #[test]
+    fn anthropic_tool_use_stream() {
+        let fixture = include_str!("../../../tests/fixtures/ai/anthropic_tool_use.sse");
+        // Split in the middle of a data line.
+        let cut = fixture.find("partial_json\":\"{").unwrap() + 9;
+        let (got, result) = play_chunks(&[&fixture.as_bytes()[..cut], &fixture.as_bytes()[cut..]]);
+        result.unwrap();
+        assert_eq!(
+            got[1..],
+            [
+                ProviderEvent::ToolCall {
+                    name: "propose_diagram_changes".into(),
+                    input: TOOL_INPUT.into(),
+                },
+                ProviderEvent::Usage(Usage {
+                    input: 900,
+                    output: 40,
+                    ..Usage::default()
+                }),
+                ProviderEvent::Stop(StopReason::End),
+            ]
+        );
+    }
+
+    /// One `content_block_delta` carrying `delta` for block `index`.
+    fn delta_event(index: usize, delta: &str) -> String {
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{index},\"delta\":{delta}}}\n\n"
+        )
+    }
+
+    fn start_event(index: usize, block: &str) -> String {
+        format!(
+            "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":{index},\"content_block\":{block}}}\n\n"
+        )
+    }
+
+    fn stop_event(index: usize) -> String {
+        format!(
+            "event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":{index}}}\n\n"
+        )
+    }
+
+    const TOOL_BLOCK: &str =
+        r#"{"type":"tool_use","id":"t","name":"propose_diagram_changes","input":{}}"#;
+
+    #[test]
+    fn text_and_tool_in_one_answer() {
+        let body = [
+            start_event(0, r#"{"type":"text","text":""}"#),
+            delta_event(0, r#"{"type":"text_delta","text":"Removing "}"#),
+            delta_event(0, r#"{"type":"text_delta","text":"A."}"#),
+            stop_event(0),
+            start_event(1, TOOL_BLOCK),
+            delta_event(1, r#"{"type":"input_json_delta","partial_json":"{}"}"#),
+            stop_event(1),
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n".into(),
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".into(),
+        ]
+        .concat();
+        let (got, result) = play(&body);
+        result.unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ProviderEvent::Text("Removing ".into()),
+                ProviderEvent::Text("A.".into()),
+                ProviderEvent::ToolCall {
+                    name: "propose_diagram_changes".into(),
+                    input: "{}".into(),
+                },
+                ProviderEvent::Stop(StopReason::End),
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_buffer_over_cap_stops() {
+        let piece = "x".repeat(crate::ai::diagram_tool::INPUT_CAP / 2 + 1);
+        let chunk = format!(r#"{{"type":"input_json_delta","partial_json":"{piece}"}}"#);
+        let body = [
+            start_event(0, TOOL_BLOCK),
+            delta_event(0, &chunk),
+            delta_event(0, &chunk),
+            delta_event(0, &chunk),
+            stop_event(0),
+        ]
+        .concat();
+        let (got, result) = play(&body);
+        result.unwrap();
+        // The call that crossed 64 KB is sent once, holding the chunk that crossed and no
+        // more, so the execution rail refuses it with its Warn line.
+        assert_eq!(
+            got,
+            vec![
+                ProviderEvent::ToolCall {
+                    name: "propose_diagram_changes".into(),
+                    input: format!("{piece}{piece}"),
+                },
+                ProviderEvent::Stop(StopReason::TooLong),
+            ]
+        );
+    }
+
+    #[test]
+    fn body_without_tools_has_no_tools_key() {
         for thinking in [
             Thinking::Off,
+            Thinking::Disabled,
+            Thinking::BetweenTools,
             Thinking::Budget(1024),
             Thinking::Effort("high".into()),
             adaptive("high", true),

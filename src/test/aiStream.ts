@@ -1,5 +1,5 @@
 import { act } from "@testing-library/react";
-import type { AiDone, AiError, AiEvent, AskRequest, LogLevel, ProcessStep, SentRecord, StepKind } from "../api/types";
+import type { TurnStamp, AiDone, AiError, AiEvent, AskRequest, LogLevel, ProcessStep, SentRecord, StepKind } from "../api/types";
 
 type Sink = { onmessage: (e: AiEvent) => void };
 
@@ -47,6 +47,7 @@ export const done = (over: Partial<AiDone> = {}): AiDone => ({
   millis: 1900,
   notes: [],
   sqlBlocks: [],
+  maxTokens: 4096,
   ...over,
 });
 
@@ -90,4 +91,21 @@ export const line = (atMs: number, level: LogLevel, source: string, ...fields: [
   level,
   source,
   fields,
+});
+
+/** The Core's memory event: the Topic the Ask belongs to. */
+export const memory = (over: Partial<TurnStamp> = {}): AiEvent => ({
+  type: "memory",
+  stamp: {
+    topic: 1,
+    opened: false,
+    reason: null,
+    title: "Late invoices",
+    connectionId: "c1",
+    database: "shop",
+    action: "ask",
+    tables: ["orders"],
+    kinds: ["question", "cards"],
+    ...over,
+  },
 });

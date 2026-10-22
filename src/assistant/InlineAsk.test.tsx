@@ -10,11 +10,17 @@ import SqlEditor, { type AskSelection, type SqlEditorApi } from "../query/SqlEdi
 import { KFC_SCHEMA } from "../lang/sql/fixtures";
 import { mockEditorDom } from "../test/editor";
 import { fakePreview } from "../test/aiPreview";
-import { aiStream, delta, done, failed, line, sent } from "../test/aiStream";
+import { aiStream, delta, done, failed, line, sent, step } from "../test/aiStream";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { type AskContext, type AskKit, type AskSetup, tablesIn } from "./context";
 import InlineAsk from "./InlineAsk";
+import { queueOffline } from "./offlineQueue";
+
+vi.mock("./offlineQueue", async (original) => {
+  const actual = await original<typeof import("./offlineQueue")>();
+  return { queueOffline: vi.fn(actual.queueOffline) };
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -304,11 +310,30 @@ test("an_inline_failure_retries_and_counts_tries", async () => {
   inline();
   await user.click(screen.getByRole("button", { name: "Explain" }));
   expect(await screen.findByText("No reply from Groq for 60s.")).toBeTruthy();
-  expect(screen.getByText("The request left this PC but nothing came back. Nothing ran on KFC shop.")).toBeTruthy();
+  expect(screen.getByText("The request left this computer but nothing came back. Nothing ran on KFC shop.")).toBeTruthy();
   expect(screen.queryByText("Try 2")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByText("Try 2")).toBeTruthy();
   expect(callsTo("ai_ask_stream")).toHaveLength(2);
+});
+
+test("an_inline_error_card_counts_the_sample_selects_that_ran", async () => {
+  // The budget left both tables out: no rows went, but two SELECTs ran on the database.
+  const rows = step("rows", "0 rows from 0 tables", {
+    evidence: [
+      ["orders", "name match", "left out: over the budget"],
+      ["customers", "name match", "left out: over the budget"],
+    ],
+  });
+  streaming(aiStream(() => [rows, sent(), failed({ kind: "timeout", phase: "first byte" })]));
+  const user = userEvent.setup();
+  inline();
+  await user.click(screen.getByRole("button", { name: "Explain" }));
+  expect(
+    await screen.findByText(
+      "The request left this computer but nothing came back. Contura read sample rows from 2 tables, read only. Nothing else ran on KFC shop.",
+    ),
+  ).toBeTruthy();
 });
 
 test("open_in_chat_carries_question_and_context", async () => {
@@ -424,6 +449,36 @@ test("inline_confirm_key_host_then_retry", async () => {
   expect(callsTo("ai_ask_stream")).toHaveLength(2);
 });
 
+test("offline_uses_the_queue", async () => {
+  const stream = aiStream((_, n) => (n === 1 ? [failed({ kind: "offline" })] : [delta("Fine."), done()]));
+  streaming(stream);
+  const user = userEvent.setup();
+  inline();
+  await user.click(screen.getByRole("button", { name: "Explain" }));
+  expect(await screen.findByText("No internet connection.")).toBeTruthy();
+  expect(vi.mocked(queueOffline)).toHaveBeenCalledWith("inline:ungrouped", expect.any(Function));
+  // The queue sends it on the online event; the card does not listen itself.
+  act(() => {
+    window.dispatchEvent(new Event("online"));
+  });
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
+  expect(await screen.findByText("Fine.")).toBeTruthy();
+  // Cancel takes it out of the queue.
+  expect(screen.queryByText("No internet connection.")).toBeNull();
+});
+
+test("offline_cancel_leaves_the_queue", async () => {
+  streaming(aiStream(() => [failed({ kind: "offline" })]));
+  const user = userEvent.setup();
+  inline();
+  await user.click(screen.getByRole("button", { name: "Explain" }));
+  await user.click(await screen.findByRole("button", { name: "Cancel" }));
+  act(() => {
+    window.dispatchEvent(new Event("online"));
+  });
+  expect(callsTo("ai_ask_stream")).toHaveLength(1);
+});
+
 test("inline_busy_has_no_stop", async () => {
   streaming(aiStream(() => [failed({ kind: "busy" })]));
   const user = userEvent.setup();
@@ -529,4 +584,59 @@ test("inline_show_log_in_place", async () => {
   expect(within(box).queryByText("It reads every order.")).toBeNull();
   await user.click(within(box).getByRole("button", { name: "Back to the answer" }));
   expect(within(box).getByText("It reads every order.")).toBeTruthy();
+});
+
+test("rows_switch_off_after_send", async () => {
+  const user = userEvent.setup();
+  inline();
+  const rows = () => screen.findByRole("button", { name: /^Sample rows/ });
+  await user.click(await rows());
+  await waitFor(() => expect(lastPreview().switches.rows).toBe(true));
+  expect(screen.getByText("Sends 10 sample rows from 2 tables, not kept")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Explain" }));
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect((callsTo("ai_ask_stream")[0].request as AskRequest).switches.rows).toBe(true);
+  await user.click(await screen.findByRole("button", { name: "Ask again" }));
+  await waitFor(() => expect(lastPreview().switches.rows).toBe(false));
+  expect((await rows()).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByText("No sample rows are sent")).toBeTruthy();
+});
+
+test("inline_state_line_follows_the_switch_and_the_copy_is_clean", async () => {
+  const user = userEvent.setup();
+  inline();
+  await screen.findByRole("button", { name: /^Sample rows/ });
+  expect(screen.getByText("Sample rows are off. They start off on every Ask.")).toBeTruthy();
+  const text = () => document.querySelector(".ask-pop")!.textContent ?? "";
+  expect(text()).not.toMatch(/[\u2013\u2014]|cursor|caret/i);
+  await user.click(screen.getByRole("button", { name: /^Sample rows/ }));
+  expect(await screen.findByText("Sample rows are on for this Ask only.")).toBeTruthy();
+  expect(text()).not.toMatch(/[\u2013\u2014]|cursor|caret/i);
+});
+
+test("inline_state_line_is_absent_when_rows_are_locked", async () => {
+  routeInvoke({
+    ai_settings: () => view(base),
+    ai_preview: (a) => fakePreview(a.request as AskRequest, "Shop shares schema only"),
+  });
+  inline();
+  await screen.findByRole("button", { name: /^Sample rows/ });
+  expect(screen.queryByText(/start off on every Ask/)).toBeNull();
+  expect(screen.queryByText(/for this Ask only/)).toBeNull();
+});
+
+test("inline_no_table_line_only_for_the_core_no_named_table_label", async () => {
+  routeInvoke({
+    ai_settings: () => view(base),
+    ai_preview: (a) => {
+      const p = fakePreview(a.request as AskRequest);
+      p.items = p.items.map((i) => (i.kind === "rows" && i.on ? { ...i, label: "Sample rows · no named table" } : i));
+      p.rows = null;
+      return p;
+    },
+  });
+  const user = userEvent.setup();
+  inline();
+  await user.click(await screen.findByRole("button", { name: /^Sample rows/ }));
+  expect(await screen.findByText("No sample rows are sent: no table is named")).toBeTruthy();
 });

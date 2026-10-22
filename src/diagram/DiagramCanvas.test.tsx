@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Edge, Node, NodeProps, ReactFlowInstance } from "@xyflow/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, onTestFinished, test, vi } from "vitest";
 import { mockReactFlowDom } from "../test/reactFlow";
 import CardFrame, { Ports } from "./CardFrame";
 import DiagramCanvas from "./DiagramCanvas";
@@ -285,4 +285,56 @@ test("an_orthogonal_edge_carries_a_join_badge", async () => {
   expect(screen.getByText("Inner").closest(".edge-badge")).not.toBeNull();
   expect(OrthogonalEdge).toBeTypeOf("function");
   expect(JoinBadge).toBeTypeOf("function");
+});
+
+test("parity_P11_34_reveal_brings_a_node_outside_the_view_into_it", async () => {
+  const { flow, rerender } = renderCanvas([card("stores", 0)]);
+  await waitFor(() => expect(percent()).toBe("100%"));
+  const far = card("far", 4000, 3000);
+  const inView = () => {
+    const { x, y, zoom } = flow().getViewport();
+    const left = (4000 * zoom + x) | 0;
+    const top = (3000 * zoom + y) | 0;
+    return left >= 0 && top >= 0 && left < 800 && top < 600;
+  };
+  rerender(
+    <div style={{ width: 800, height: 600 }}>
+      <DiagramCanvas nodes={[card("stores", 0), far]} edges={[]} nodeTypes={nodeTypes} onInit={() => {}} />
+    </div>,
+  );
+  expect(inView()).toBe(false);
+  const zoom = flow().getViewport().zoom;
+  rerender(
+    <div style={{ width: 800, height: 600 }}>
+      <DiagramCanvas nodes={[card("stores", 0), far]} edges={[]} nodeTypes={nodeTypes} onInit={() => {}} reveal="far" />
+    </div>,
+  );
+  await waitFor(() => expect(inView()).toBe(true));
+  // Kept at the zoom it had: only the view moves.
+  expect(flow().getViewport().zoom).toBe(zoom);
+});
+
+test("parity_P11_34_reveal_leaves_a_node_already_in_view_where_it_is", async () => {
+  // Nodes measure at their card size here (the shared mock gives every element 800 by 600).
+  const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth")!;
+  const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
+  const isNode = (el: HTMLElement) => el.classList.contains("react-flow__node");
+  Object.defineProperties(HTMLElement.prototype, {
+    offsetWidth: { get(this: HTMLElement) { return isNode(this) ? CARD_WIDTH : 800; }, configurable: true },
+    offsetHeight: { get(this: HTMLElement) { return isNode(this) ? cardHeight(COLS.length) : 600; }, configurable: true },
+  });
+  onTestFinished(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", width);
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", height);
+  });
+  const { flow, rerender } = renderCanvas([card("stores", 0), card("near", 300)]);
+  await waitFor(() => expect(percent()).toBe("100%"));
+  const before = flow().getViewport();
+  rerender(
+    <div style={{ width: 800, height: 600 }}>
+      <DiagramCanvas nodes={[card("stores", 0), card("near", 300)]} edges={[]} nodeTypes={nodeTypes} onInit={() => {}} reveal="near" />
+    </div>,
+  );
+  await act(async () => {});
+  expect(flow().getViewport()).toEqual(before);
 });

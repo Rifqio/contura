@@ -86,8 +86,9 @@ export default function AnswerSql({
   const statements = check?.statements ?? [];
   const warn = statements.some((s) => s.class === "write" || s.flags.length > 0);
   const flags = [...new Set(statements.flatMap((s) => s.flags.map(flagSentence)))];
-  // A write in an answer to Explain, Optimize or Suggest indexes goes in only commented out (board 11.6).
-  const writesInRead = statements.some((s) => s.flags.some((f) => f.kind === "writeInReadAnswer"));
+  // An answer whose SQL writes goes in only commented out, whatever was asked (board 11.6, "Answer writes"; P11-30):
+  // Run finds nothing in it until the user takes the comment marks off.
+  const writes = statements.some((s) => s.class === "write" || s.flags.some((f) => f.kind === "writeInReadAnswer"));
 
   const open = (text: string, commentedText: boolean) => {
     const editor = target?.editor();
@@ -95,7 +96,7 @@ export default function AnswerSql({
     setInserted(false);
     setDiff({ plan: planInsert(editor, target.name, text), remade: false, editor, commented: commentedText });
   };
-  const commented = writesInRead || unchecked;
+  const commented = writes || unchecked;
   const insertText = () => (commented ? commentedOut(answerText(sql)) : answerText(sql));
 
   const apply = () => {
@@ -145,7 +146,7 @@ export default function AnswerSql({
             </button>
           </div>
         )}
-        {!streaming && !unchecked && !writesInRead && (
+        {!streaming && !unchecked && !writes && (
           <div className="answer-sql-actions">
             <button
               type="button"
@@ -171,7 +172,7 @@ export default function AnswerSql({
         )}
       </div>
       {!streaming &&
-        writesInRead &&
+        writes &&
         answerWrites(writesText(statements), {
           onInsert: target ? () => open(commentedOut(answerText(sql)), true) : undefined,
           onCopy: () => onCopy(sql),

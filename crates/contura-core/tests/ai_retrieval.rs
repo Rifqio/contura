@@ -18,6 +18,8 @@ use contura_core::ai::context::retrieve::{PickSeed, Retrieval, Seeds, retrieve};
 use contura_core::ai::context::store::{ContextKey, ContextStore, StoreContext};
 use contura_core::ai::context::sync::Purpose;
 use contura_core::ai::log::Log;
+use contura_core::ai::memory::ThreadStore;
+use contura_core::ai::memory::store::StoreThreads;
 use contura_core::ai::models::info_for;
 use contura_core::ai::preview::{CatalogReader, preview_with_log};
 use contura_core::ai::rails::Secrets;
@@ -721,6 +723,7 @@ impl TablePicker for Oracle<'_> {
 struct Catalog {
     schema: SchemaModel,
     context: StoreContext,
+    threads: StoreThreads,
 }
 
 #[async_trait::async_trait]
@@ -765,6 +768,10 @@ impl CatalogReader for Catalog {
 
     fn context(&self) -> &dyn ContextStore {
         &self.context
+    }
+
+    fn threads(&self) -> &dyn ThreadStore {
+        &self.threads
     }
 }
 
@@ -832,6 +839,7 @@ async fn oracle_pick_lifts_vague_recall() {
         let catalog = Catalog {
             schema: model,
             context: StoreContext::new(AppStore::open(Path::new(":memory:")).unwrap()),
+            threads: StoreThreads::new(AppStore::open(Path::new(":memory:")).unwrap()),
         };
         let oracle = Oracle { cases: &cases };
         for kind in ["vague", "paraphrase"] {
@@ -865,4 +873,45 @@ async fn oracle_pick_lifts_vague_recall() {
             }
         }
     }
+}
+
+#[test]
+fn named_excludes_neighbours_and_word_hits() {
+    let store = stored(300);
+    let r = ask(
+        &store,
+        &[],
+        Some("select * from invoices"),
+        "customers with the biggest overdue amount",
+    );
+    assert!(r.ranked);
+    let names: Vec<&str> = r.named_tables.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(names, ["invoices", "customers"]);
+    // A table only one key away or hit by a word is ranked but not named.
+    assert!(r.fit.reasons.iter().any(|(_, rule, _)| rule == ONE_KEY));
+    assert!(r.fit.reasons.iter().any(|(_, rule, _)| rule == WORD_MATCH));
+    assert!(
+        r.named_tables
+            .iter()
+            .all(|(t, _)| full(&r, t) || r.fit.names_only.contains(t))
+    );
+}
+
+#[test]
+fn named_in_tier_1() {
+    let store = stored(12);
+    let r = ask(
+        &store,
+        &["orders"],
+        Some("select * from customers"),
+        "why is this slow",
+    );
+    assert!(!r.ranked);
+    assert_eq!(
+        r.named_tables,
+        [
+            ("orders".to_string(), OPEN_TAB),
+            ("customers".to_string(), NAME_MATCH)
+        ]
+    );
 }

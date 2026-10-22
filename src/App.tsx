@@ -963,13 +963,13 @@ function Workspace() {
     return true;
   }
 
-  /** Opens the Settings tab (one at most), scrolled to a section: the top unless asked otherwise. */
-  function openSettings(section: SettingsSection = "appearance") {
+  /** Opens the Settings tab (one at most), scrolled to a section (or a `row` block in it): the top unless asked otherwise. */
+  function openSettings(section: SettingsSection = "appearance", row?: string) {
     setForm({ kind: "none" });
     setWindowTabs((w) =>
       w.some((t) => t.kind === "settings")
-        ? w.map((t): WindowTab => (t.kind === "settings" ? { kind: "settings", section, seq: (t.seq ?? 0) + 1 } : t))
-        : [...w, { kind: "settings", section, seq: 0 }],
+        ? w.map((t): WindowTab => (t.kind === "settings" ? { kind: "settings", section, seq: (t.seq ?? 0) + 1, row } : t))
+        : [...w, { kind: "settings", section, seq: 0, row }],
     );
     setActiveKey("settings");
   }
@@ -1291,7 +1291,7 @@ function Workspace() {
                 groupName: group?.name ?? null,
                 connections,
                 onSection: (section) =>
-                  setWindowTabs((w) => w.map((x): WindowTab => (x.kind === "settings" ? { ...x, section } : x))),
+                  setWindowTabs((w) => w.map((x): WindowTab => (x.kind === "settings" ? { ...x, section, row: undefined } : x))),
                 onConnectionSaved: () => {
                   // Only the AI access changed, so open sessions and their transactions stay as they are.
                   void reload();
@@ -1320,6 +1320,7 @@ function Workspace() {
                   setReveal((r) => ({ connectionId, database: path.database, schema: path.schema, name: path.name, seq: (r?.seq ?? 0) + 1 }));
                 },
               }}
+              flow={{ onOpenSettings: () => openSettings("ai", "tools") }}
               compare={{
                 connections,
                 groups,
@@ -1581,6 +1582,7 @@ function Workspace() {
           {assistantShown && (
             <AssistantPanel
               place={placeKey(place)}
+              placeName={placeName}
               groupId={workspaceGroupId}
               context={assistantContext}
               schema={assistantSchema}

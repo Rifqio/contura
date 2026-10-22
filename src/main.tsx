@@ -13,10 +13,13 @@ import "./styles/flow.css";
 import "./styles/flow-canvas.css";
 import "./styles/lineage.css";
 import "./styles/flow-tab.css";
+import { installTooltipGuard } from "./components/tooltipGuard";
 import { applyStoredTheme } from "./theme/theme";
 
 // Paint the saved theme before the first render, so the window never flashes the other one.
 applyStoredTheme();
+// No tooltip outlives its trigger: a click, a scroll or leaving the window hides it (P11-37).
+installTooltipGuard();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

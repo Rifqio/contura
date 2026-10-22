@@ -28,6 +28,8 @@ interface Props {
   onSection: (s: SettingsSection) => void;
   /** Changes with every request to show `section`, so asking again scrolls back to it. */
   sectionRequest?: number;
+  /** A block of the section to scroll to instead (`data-row`), such as the AI settings' tools table. */
+  row?: string;
   /** The open Group, so its AI settings can differ from the global ones; null when none is open. */
   groupId: GroupId | null;
   groupName: string | null;
@@ -39,19 +41,33 @@ interface Props {
  * The Settings tab (D5, frame l): search and nav on the left, one scrolling page in two
  * columns on the right. Every change applies and is saved at once (D6).
  */
-export default function SettingsView({ section, onSection, sectionRequest = 0, groupId, groupName, connections, onConnectionSaved }: Props) {
+export default function SettingsView({ section, onSection, sectionRequest = 0, row, groupId, groupName, connections, onConnectionSaved }: Props) {
   const [query, setQuery] = useState("");
   const [jumps, setJumps] = useState(0);
   const page = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const box = page.current;
-    const el = box?.querySelector(`[data-section="${section}"]`);
-    if (!box || !el) return;
+    if (!box) return;
     // Only the page moves: scrollIntoView would also scroll the clipped boxes around the tab.
-    const offset = el.getBoundingClientRect().top - box.getBoundingClientRect().top - PAGE_PADDING;
-    box.scrollTop = Math.max(0, box.scrollTop + offset);
-  }, [section, sectionRequest, jumps]);
+    const scrollTo = (el: Element) => {
+      const offset = el.getBoundingClientRect().top - box.getBoundingClientRect().top - PAGE_PADDING;
+      box.scrollTop = Math.max(0, box.scrollTop + offset);
+    };
+    const rowEl = () => (row ? box.querySelector(`[data-section="${section}"] [data-row="${row}"]`) : null);
+    const target = rowEl() ?? box.querySelector(`[data-section="${section}"]`);
+    if (target) scrollTo(target);
+    if (!row || rowEl()) return;
+    // The block may draw once its section has loaded (the AI settings' tools table): go there when it does.
+    const seen = new MutationObserver(() => {
+      const el = rowEl();
+      if (!el) return;
+      seen.disconnect();
+      scrollTo(el);
+    });
+    seen.observe(box, { childList: true, subtree: true });
+    return () => seen.disconnect();
+  }, [section, sectionRequest, row, jumps]);
 
   const nothing = query.trim() !== "" && !SECTIONS.some((s) => sectionShown(query, s.label, s.rows));
 
@@ -105,7 +121,7 @@ export default function SettingsView({ section, onSection, sectionRequest = 0, g
               </div>
               <div className="settings-col">
                 <AiSection groupId={groupId} groupName={groupName} connections={connections} onConnectionSaved={onConnectionSaved ?? (() => {})} />
-                <DataFolderSection />
+                <DataFolderSection connections={connections} />
               </div>
             </div>
             <AboutSection />

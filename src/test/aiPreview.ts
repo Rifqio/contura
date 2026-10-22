@@ -30,6 +30,10 @@ export function fakePreview(req: AskRequest, locked: string | null = null): Prev
     const bytes = on ? new TextEncoder().encode(text).length : 0;
     return { kind, label, bytes, tokens: Math.ceil(bytes / 4), locked: lock, on };
   });
+  // The Core's rows item: merged into one, with the label it gives and what it read.
+  const rowsAt = items.findIndex((i) => i.kind === "rows");
+  const rowsOn = rowsAt >= 0 && items[rowsAt].on;
+  if (rowsOn) items[rowsAt] = { ...items[rowsAt], label: "Sample rows · 2 tables", bytes: 643, tokens: 161 };
   const exact = parts
     .filter((_, i) => items[i].on && parts[i][2] !== "")
     .map(([, label, text]) => `${label}:\n${text}`)
@@ -44,5 +48,6 @@ export function fakePreview(req: AskRequest, locked: string | null = null): Prev
     notes: [],
     log: [],
     context: null,
+    rows: rowsOn ? { tables: 2, rows: 10, bytes: 643 } : null,
   };
 }

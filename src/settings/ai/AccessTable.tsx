@@ -67,7 +67,15 @@ export default function AccessTable({ connections, onSaved, labelledBy }: Props)
   // Not in a scrolling box: each row's list opens below the table without being cut off.
   return (
     <>
-      <table className="share-table" aria-labelledby={labelledBy}>
+      {/* The built columns at set widths: the table keeps to the 512px Settings column (P11-3). */}
+      <table className="share-table share-table-fit" aria-labelledby={labelledBy}>
+        <colgroup>
+          <col className="share-col-conn" />
+          <col className="share-col-dialect" />
+          <col className="share-col-access" />
+          <col className="share-col-sync" />
+          <col className="share-col-ctx" />
+        </colgroup>
         <thead>
           <tr>
             <th scope="col">Connection</th>
@@ -90,10 +98,10 @@ export default function AccessTable({ connections, onSaved, labelledBy }: Props)
                 <td>
                   <span className="cname">
                     <DbMark dialect={c.dialect} open size={14} label={null} />
-                    {c.name}
+                    <span className="cname-text">{c.name}</span>
                   </span>
                 </td>
-                <td className="muted">{DIALECT_LABEL[c.dialect]}</td>
+                <td className="muted share-dialect">{DIALECT_LABEL[c.dialect]}</td>
                 <td>
                   <Select<AiAccess>
                     label={`What AI can see in ${c.name}`}
@@ -133,6 +141,10 @@ export default function AccessTable({ connections, onSaved, labelledBy }: Props)
           })}
         </tbody>
       </table>
+      <p className="share-help">
+        Plus sample rows: Contura reads at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never keeps
+        them.
+      </p>
       <p className="share-help">Production Connections stay at Never: turning Production on also clears their AI Context.</p>
     </>
   );

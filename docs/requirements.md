@@ -142,7 +142,7 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 
 ## AI assistant
 
-The assistant UI is built; real providers come in a later step (ADR 0010).
+Answers come from a real provider that the user sets up. The decisions are in ADR 0010 (providers and consent), ADR 0023 (the diagram tool), ADR 0024 (the AI Context and thread memory) and ADR 0025 (guardrails).
 
 - **Placement**
   - Inline Ask: a small "Ask" button at the end of a non-empty SQL selection, and Ctrl+I, offering actions that fit (Explain, Fix this error, Optimize, Suggest indexes). It also appears on a failed query ("Ask AI" in the error), the grid filter box (Write a WHERE for this filter) and a Schema Builder table card.
@@ -152,13 +152,35 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
   - AI-written SQL is never run automatically. Running it follows the normal rules (Production confirmation, Read-only, UPDATE or DELETE without WHERE).
   - Before anything could be sent, the prompt shows a "Sends" line, and "Show exactly" opens the full text. The text is capped at 200 KB.
   - Per Connection, **AI access** is one of four levels: "Never send anything", "Schema only", "Schema and query text", "Schema, query text and sample rows". With "Never send anything" only the question goes, and the panel says what it cannot see. When rows are allowed, each question has a switch to leave them out.
-  - Production Connections will default to "Never send anything" (step 5).
+  - A Connection marked Production starts at "Never send anything".
 - **Providers**
-  - One provider for everything, optionally overridden per Group. Settings has a provider picker (OpenAI-compatible, Anthropic Claude, Groq, DeepSeek, Custom), presets for the base URL and model, optional temperature and max tokens, and a Test button.
-  - The API key is stored in Windows Credential Manager (`AI/<provider id>`), never in `data\`. After saving, the form shows only its last 4 characters.
-  - Provider calls are made from the Core, not the WebView.
-- **Placeholder phase**
-  - No network calls. With no provider saved, asking shows "Connect an AI provider in Settings" with a button that opens Settings. With one saved, it says answers arrive in a later Contura version and that nothing was sent.
+  - One provider for everything, optionally overridden per Group. Settings has a provider picker (OpenAI-compatible, Anthropic Claude, Groq, DeepSeek, Custom), presets for the base URL and model, optional temperature and max tokens, and a Test button that sends only a short test prompt.
+  - The API key is stored in the OS keyring (Windows Credential Manager, the Secret Service on Linux) as `AI/<provider id>`, never in `data\`. After saving, the form shows only its last 4 characters. The key is bound to the host it was saved for: a new host needs a confirmation before the key goes there. It never appears in an error, a log or a saved record.
+  - Provider calls are made from the Core, not the WebView. A base URL with credentials in it is refused. Plain `http://` is allowed only on this computer or a private network: `localhost`, loopback, private IPv4 (10/8, 172.16/12, 192.168/16), link-local, and IPv6 unique local and link-local addresses (Ollama or LM Studio on this computer or the LAN). Every other host needs `https://`.
+- **AI Context**
+  - For each Connection and database the assistant keeps a local AI Context: a card per table and a Context Tree of Areas. Nothing is sent to build it, and it holds no embeddings.
+  - Each Connection has a sync mode. Automatic (the default) checks for a changed schema when an Ask starts, at most once a minute, and after DDL, an applied Pending Edits set or a tree Refresh. Manual never checks until the user chooses Re-sync.
+  - Re-sync rebuilds the AI Context and Clear deletes it. Clear also happens when AI access is set to "Never send anything" and when the Connection is deleted.
+  - The footer of the Sends list says which Connection and how many tables are indexed, when it last synced and how it stays current. A Context line under the Sends rows appears only when the AI Context needs attention (the schema changed, the check failed, it could not be read, the Connection sends nothing) or when it re-syncs only by hand, with Re-sync beside it.
+  - Small schemas go in full. For a larger one the best-matching tables go in. Above 150 tables, a model with a large enough window is shown the Context Tree and picks the Areas and tables to use (the outline pick); a table name that is not in the AI Context is dropped.
+- **Thread memory**
+  - A thread is split into Topics by rule (a long pause, a new place or Connection, a changed subject). Each Topic has a summary, and earlier turns are sent only as far as the Connection's AI access allows.
+  - At 85% of the model's context window the older turns are compacted into a summary (auto-compact). The user can show the summary and undo it.
+  - Threads keep at most 50 per place and 200 messages each, cut in whole turns.
+- **Sample rows**
+  - At the top access level, sample rows are read live from the database when the question is asked: 5 rows per table, each cell cut at 200 characters, secret columns redacted. They are never written to the data folder.
+- **The answer log**
+  - Each answer has a log, opened with "Show log": the steps, what was sent and each safety check. It shows that nothing ran on the database. The Sent record keeps the sizes and a hash of what was sent, and the exact text only when "Keep the exact text sent with each answer" is on.
+- **SQL labels and guardrails**
+  - SQL in an answer is split into statements and labelled: read or write, and a flag for risky or non-built-in functions. An Explain answer that writes is flagged.
+  - "Insert into the editor" shows a diff of what will be added and nothing runs. The user presses Run, and the normal rules apply.
+  - On a Production Connection, a statement the assistant wrote and that was flagged is treated as a write, so Run asks for confirmation first. On a Read-only Connection a write is marked as one that will not run.
+  - The rules are code in the Core, with no model in the loop. Text that looks like instructions to the assistant gets a note above the answer; nothing is blocked because of it.
+- **Diagram assistant**
+  - On a `.flow` diagram the assistant can propose changes to the diagram text with one tool, `propose_diagram_changes`. It never touches a database. Changes are checked in the Core and shown for review, then added as one undo step. A setting lets small sets land without review, and removing more than 3 shapes always asks.
+  - A switch for this tool is in the AI settings, on by default. Settings also lists Recent tool uses.
+- **Privacy**
+  - Settings, AI assistant has global switches: ask models to share their thinking when they support it, and keep the exact text sent with each answer. There are clear actions for the saved threads and the kept text.
 - **Chat history**
   - Threads are kept in `data\` per Group (and for Ungrouped), with a Clear action.
 
@@ -189,7 +211,7 @@ The assistant UI is built; real providers come in a later step (ADR 0010).
 8. Data Transfer (done: copies across Dialects with a type mapping reviewed per column, per-target transaction rules, the Job pass on the target, ADR 0020)
 9. Backup/Restore (done: Contura's own script from one snapshot with a not-included header, the optional SQLite file copy, Restore checks, three modes and the Job pass bound to the file's SHA-256, ADR 0021)
 10. Schema Compare, plus applying a Schema Model to a Connection (done: a structural diff of the same Dialect with what is not compared named on both sides, a Sync Script built only in the Core with data-loss items unticked, Apply under the exact-set Sync pass and `PlanChanged`, ADR 0022)
-11. AI answers: real provider calls (Anthropic and OpenAI-compatible, incl. local Ollama), access levels enforced in the Core, rule-based guardrails, schema context with an on-disk index and sync, chat memory. All in the Rust Core, no Python (research in docs/research/2026-10-17-ai-*.md)
+11. AI answers (done, ADR 0010, ADR 0023 to 0025): real provider calls (Anthropic and OpenAI-compatible, incl. local Ollama), access levels enforced in the Core, rule-based guardrails, schema context with an on-disk index and sync, chat memory. All in the Rust Core, no Python
    - then sequence diagrams; cloud sharing later
 12. Refinements: UI and UX polish from the user's critique, always the last step after every feature step (list in docs/step12-refinements.md, kept growing until then)
 

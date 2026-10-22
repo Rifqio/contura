@@ -38,14 +38,47 @@ fn only_http_rs_names_reqwest() {
 }
 
 #[test]
-fn provider_names_no_database_type() {
+fn provider_names_no_catalog() {
     let mut files = Vec::new();
     rust_files(&src().join("ai").join("provider"), &mut files);
     assert!(!files.is_empty());
     for path in &files {
         let text = fs::read_to_string(path).unwrap();
-        for name in ["ConnectionService", "SessionHandle", "Dialect"] {
+        for name in [
+            "ConnectionService",
+            "SessionHandle",
+            "Dialect",
+            "CatalogReader",
+            "sample_rows",
+        ] {
             assert!(!text.contains(name), "{} names {name}", relative(path));
         }
     }
+}
+
+#[test]
+fn only_execution_builds_a_tool_spec() {
+    let mut files = Vec::new();
+    rust_files(&src(), &mut files);
+    let building: Vec<String> = files
+        .iter()
+        .map(|p| relative(p))
+        .filter(|r| !r.starts_with("ai/provider/"))
+        .filter(|r| {
+            fs::read_to_string(src().join(r))
+                .unwrap()
+                .contains("ToolSpec {")
+        })
+        .collect();
+    assert_eq!(building, vec!["ai/rails/execution.rs".to_string()]);
+}
+
+#[test]
+fn no_aws_lc_in_cargo_lock() {
+    let lock = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
+    let text = fs::read_to_string(lock).unwrap();
+    assert!(
+        !text.contains("name = \"aws-lc"),
+        "aws-lc entered Cargo.lock; AI TLS is rustls with ring"
+    );
 }
