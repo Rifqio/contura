@@ -6,7 +6,11 @@ export type GroupId = string;
 
 export type DialectKind = "mysql" | "postgres" | "sqlite";
 
-export type SslMode = { mode: "disable" } | { mode: "require" } | { mode: "verifyCa"; caPath: string };
+export type SslMode =
+  | { mode: "disable" }
+  | { mode: "require" }
+  | { mode: "verifyCa"; caPath: string }
+  | { mode: "verifyFull"; caPath: string | null };
 
 export interface ConnectionConfig {
   id: ConnectionId;

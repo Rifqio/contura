@@ -36,8 +36,18 @@ pub enum DialectKind {
 )]
 pub enum SslMode {
     Disable,
+    /// Encrypt, but accept any certificate.
     Require,
-    VerifyCa { ca_path: PathBuf },
+    /// The chain must lead to a CA from `ca_path`; the host name is not checked.
+    VerifyCa {
+        ca_path: PathBuf,
+    },
+    /// The chain and the host name are both checked. With `ca_path`, only those CAs are
+    /// trusted (a private CA); without, the public roots are (a cloud server).
+    VerifyFull {
+        #[serde(default)]
+        ca_path: Option<PathBuf>,
+    },
 }
 
 /// A saved Connection. It has no password field, by design: passwords live
@@ -363,6 +373,13 @@ mod tests {
             serde_json::to_value(&s).unwrap(),
             serde_json::json!({"mode":"verifyCa","caPath":"C:/ca.pem"})
         );
+        let s = SslMode::VerifyFull { ca_path: None };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            serde_json::json!({"mode":"verifyFull","caPath":null})
+        );
+        let read: SslMode = serde_json::from_str(r#"{"mode":"verifyFull"}"#).unwrap();
+        assert_eq!(read, SslMode::VerifyFull { ca_path: None });
     }
 
     #[test]

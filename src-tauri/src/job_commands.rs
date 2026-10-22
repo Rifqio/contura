@@ -388,27 +388,11 @@ fn select_arg(path: &std::path::Path) -> Result<String, Error> {
     Ok(format!("/select,\"{text}\""))
 }
 
-/// Opens Explorer with the file selected.
+/// Shows the file in its folder (selected where the file manager can).
 #[tauri::command]
 pub fn reveal_in_folder(path: PathBuf) -> Result<(), Error> {
     let arg = select_arg(&path)?;
-    let mut command = std::process::Command::new("explorer.exe");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // Explorer reads `/select,"<path>"` itself; Rust's own quoting of the whole
-        // argument breaks it for paths with spaces.
-        command.raw_arg(arg);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = arg;
-        command.arg(&path);
-    }
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| Error::File(format!("cannot open the folder of {}: {e}", path.display())))
+    crate::folders::reveal(&path, &arg)
 }
 
 /// Reads a small UTF-8 text file the user chose, such as a Mermaid `.mmd` file (1 MiB at most).

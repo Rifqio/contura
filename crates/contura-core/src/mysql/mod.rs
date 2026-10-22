@@ -107,6 +107,15 @@ fn build_opts(config: &ConnectionConfig, password: Option<&str>) -> OptsBuilder 
                 .with_disable_built_in_roots(true)
                 .with_danger_skip_domain_validation(true),
         ),
+        // Domain validation stays on. A given CA replaces the built-in public roots.
+        SslMode::VerifyFull {
+            ca_path: Some(ca_path),
+        } => Some(
+            SslOpts::default()
+                .with_root_certs(vec![ca_path.clone().into()])
+                .with_disable_built_in_roots(true),
+        ),
+        SslMode::VerifyFull { ca_path: None } => Some(SslOpts::default()),
     };
     // `setup` runs at connect and again after every pool reset (COM_RESET_CONNECTION
     // restores the server default), so pooled connections stay read-only on reuse.
@@ -523,6 +532,29 @@ mod tests {
         assert!(
             ssl.disable_built_in_roots(),
             "public CAs must not satisfy verify-CA"
+        );
+        assert!(ssl.skip_domain_validation());
+    }
+
+    #[test]
+    fn verify_full_checks_the_host_name() {
+        let config = config_with(SslMode::VerifyFull {
+            ca_path: Some("C:/ca.pem".into()),
+        });
+        let opts: mysql_async::Opts = build_opts(&config, None).into();
+        let ssl = opts.ssl_opts().expect("ssl on");
+        assert!(!ssl.skip_domain_validation());
+        assert!(!ssl.accept_invalid_certs());
+        assert!(ssl.disable_built_in_roots(), "only the given CA");
+
+        let config = config_with(SslMode::VerifyFull { ca_path: None });
+        let opts: mysql_async::Opts = build_opts(&config, None).into();
+        let ssl = opts.ssl_opts().expect("ssl on");
+        assert!(!ssl.skip_domain_validation());
+        assert!(!ssl.accept_invalid_certs());
+        assert!(
+            !ssl.disable_built_in_roots(),
+            "public roots for a cloud server"
         );
     }
 

@@ -221,6 +221,8 @@ ul {
   display: grid;
   /* Title bar, the feature bar (item 16), the body, the status bar. */
   grid-template-rows: var(--title-bar-height) auto minmax(0, 1fr) var(--status-bar-height);
+  /* One column the width of the window: no row's content can make the whole layout wider. */
+  grid-template-columns: minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   background: var(--c-bg-app);
@@ -10050,6 +10052,14 @@ button.dbox:hover,
   background: var(--c-bg-panel);
   border: 1px solid var(--c-border-subtle);
   border-radius: var(--rounded-lg);
+  /* Wider fonts (no Segoe UI) can make the labelled bar wider than a 1024 px window: it then
+     scrolls sideways (Shift+wheel, arrow keys) instead of pushing the layout off screen. */
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.feature-bar::-webkit-scrollbar {
+  display: none;
 }
 .feature-bar.is-compact {
   height: 44px;

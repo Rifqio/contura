@@ -29,7 +29,7 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 ## Connections
 
 - The user can create, edit, delete and test Connections.
-- SSL modes: disable, require, verify-CA with a CA file.
+- SSL modes: disable, require, verify-CA with a CA file, and verify-full (CA and host name; the CA file is optional, else the public CAs are trusted).
 - No SSH tunnels in v1.
 - Several Connections can be open at once.
 - A SQLite Connection opens an existing file or creates a new empty one. Contura never overwrites an existing file.

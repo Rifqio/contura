@@ -119,6 +119,9 @@ fn build_settings(config: &ConnectionConfig, password: Option<&str>) -> Result<S
         SslMode::Disable => None,
         SslMode::Require => Some(MakeRustlsConnect::new(tls::accept_any_certificate())),
         SslMode::VerifyCa { ca_path } => Some(MakeRustlsConnect::new(tls::trust_only_ca(ca_path)?)),
+        SslMode::VerifyFull { ca_path } => Some(MakeRustlsConnect::new(tls::verify_full(
+            ca_path.as_deref(),
+        )?)),
     };
     base.ssl_mode(if tls.is_some() {
         tokio_postgres::config::SslMode::Require
@@ -330,10 +333,12 @@ fn version_number(version: &str) -> &str {
     version.split(' ').next().unwrap_or(version)
 }
 
-/// rustls client configs for the two TLS modes, on the `ring` provider.
+/// rustls client configs for the TLS modes, on the `ring` provider.
 mod tls {
     use std::path::Path;
     use std::sync::Arc;
+
+    use rustls_platform_verifier::BuilderVerifierExt;
 
     use rustls::client::WebPkiServerVerifier;
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -365,6 +370,24 @@ mod tls {
     /// `VerifyCa`: the chain must lead to a CA from `ca_path` (and only those),
     /// but a host name mismatch is ignored, as MySQL's `VerifyCa` does.
     pub(super) fn trust_only_ca(ca_path: &Path) -> Result<ClientConfig> {
+        Ok(config_with(Arc::new(IgnoreName(ca_verifier(ca_path)?))))
+    }
+
+    /// `VerifyFull`: the chain and the host name are both checked. With `ca_path`, only
+    /// those CAs are trusted; without, the OS trust store is, as for the AI providers.
+    pub(super) fn verify_full(ca_path: Option<&Path>) -> Result<ClientConfig> {
+        match ca_path {
+            Some(path) => Ok(config_with(ca_verifier(path)?)),
+            None => ClientConfig::builder_with_provider(provider())
+                .with_safe_default_protocol_versions()
+                .and_then(|b| b.with_platform_verifier())
+                .map(|b| b.with_no_client_auth())
+                .map_err(|e| Error::Connect(format!("cannot load the system trust store: {e}"))),
+        }
+    }
+
+    /// A verifier that trusts only the CAs in `ca_path`.
+    fn ca_verifier(ca_path: &Path) -> Result<Arc<WebPkiServerVerifier>> {
         let unreadable = |e: &dyn std::fmt::Display| {
             Error::InvalidInput(format!("cannot read CA file {}: {e}", ca_path.display()))
         };
@@ -377,10 +400,9 @@ mod tls {
         if roots.is_empty() {
             return Err(unreadable(&"no certificates found"));
         }
-        let inner = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider())
+        WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider())
             .build()
-            .map_err(|e| unreadable(&e))?;
-        Ok(config_with(Arc::new(IgnoreName(inner))))
+            .map_err(|e| unreadable(&e))
     }
 
     #[derive(Debug)]
@@ -739,5 +761,14 @@ mod tests {
             Err(other) => panic!("got {other:?}"),
             Ok(_) => panic!("expected an error"),
         }
+        assert!(matches!(
+            tls::verify_full(Some(&path)),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn verify_full_without_a_ca_uses_the_system_store() {
+        assert!(tls::verify_full(None).is_ok());
     }
 }

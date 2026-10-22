@@ -116,7 +116,9 @@ export default function ConnectionForm({
   const [removePassword, setRemovePassword] = useState(false);
   const [database, setDatabase] = useState(base?.database ?? "");
   const [ssl, setSsl] = useState<SslChoice>(base?.ssl.mode ?? "disable");
-  const [caPath, setCaPath] = useState(base?.ssl.mode === "verifyCa" ? base.ssl.caPath : "");
+  const [caPath, setCaPath] = useState(
+    base?.ssl.mode === "verifyCa" || base?.ssl.mode === "verifyFull" ? (base.ssl.caPath ?? "") : "",
+  );
   const [file, setFile] = useState(base?.file ?? "");
   const [groupId, setGroupId] = useState<GroupId | "">((base ? base.groupId : defaultGroupId) ?? "");
   const [aiAccess, setAiAccess] = useState<AiAccess>(base?.aiAccess ?? "schema");
@@ -235,7 +237,12 @@ export default function ConnectionForm({
       return null;
     }
     setPortError(null);
-    const sslMode: SslMode = ssl === "verifyCa" ? { mode: "verifyCa", caPath: caPath.trim() } : { mode: ssl };
+    const sslMode: SslMode =
+      ssl === "verifyCa"
+        ? { mode: "verifyCa", caPath: caPath.trim() }
+        : ssl === "verifyFull"
+          ? { mode: "verifyFull", caPath: caPath.trim() === "" ? null : caPath.trim() }
+          : { mode: ssl };
     return {
       ...common,
       dialect,
@@ -535,10 +542,11 @@ export default function ConnectionForm({
                     { value: "disable", label: "Off" },
                     { value: "require", label: "Required" },
                     { value: "verifyCa", label: "Required, verify the CA" },
+                    { value: "verifyFull", label: "Required, verify the CA and host" },
                   ]}
                 />
               </div>
-              {ssl === "verifyCa" && (
+              {(ssl === "verifyCa" || ssl === "verifyFull") && (
                 <div className="field field-wide">
                   <label className="fl" htmlFor={f("ca")}>
                     CA certificate file
@@ -547,7 +555,7 @@ export default function ConnectionForm({
                     id={f("ca")}
                     className="input input-mono"
                     value={caPath}
-                    placeholder="C:\certs\ca.pem"
+                    placeholder={ssl === "verifyFull" ? "Empty to trust the public CAs" : "C:\\certs\\ca.pem"}
                     onChange={(e) => setCaPath(e.target.value)}
                   />
                 </div>

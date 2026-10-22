@@ -556,7 +556,47 @@ test("group_and_ssl_use_the_themed_select_and_the_group_square", async () => {
   expect(screen.getByRole("option", { name: "Ungrouped" }).querySelector(".group-badge")).not.toBeNull();
   await userEvent.click(kfc);
   await userEvent.click(screen.getByRole("combobox", { name: "SSL" }));
-  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Off", "Required", "Required, verify the CA"]);
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+    "Off",
+    "Required",
+    "Required, verify the CA",
+    "Required, verify the CA and host",
+  ]);
+});
+
+async function saveVerifyFull(caFile: string) {
+  routeInvoke({ save_connection: (a) => ({ ...existing, ...(a.input as object) }) });
+  const onSaved = vi.fn();
+  render(<ConnectionForm connection={existing} groups={groups} defaultGroupId={null} onSaved={onSaved} onCancel={() => {}} />);
+  await userEvent.click(screen.getByRole("combobox", { name: "SSL" }));
+  await userEvent.click(screen.getByRole("option", { name: "Required, verify the CA and host" }));
+  const ca = screen.getByLabelText("CA certificate file") as HTMLInputElement;
+  expect(ca.placeholder).toBe("Empty to trust the public CAs");
+  if (caFile !== "") await userEvent.type(ca, caFile);
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  return (callsTo("save_connection")[0].input as { ssl: unknown }).ssl;
+}
+
+test("verify_full_without_a_ca_file_saves_null", async () => {
+  expect(await saveVerifyFull("")).toEqual({ mode: "verifyFull", caPath: null });
+});
+
+test("verify_full_saves_the_ca_file", async () => {
+  expect(await saveVerifyFull("/etc/ssl/db-ca.pem")).toEqual({ mode: "verifyFull", caPath: "/etc/ssl/db-ca.pem" });
+});
+
+test("editing_a_verify_full_connection_keeps_its_ca_file", () => {
+  render(
+    <ConnectionForm
+      connection={{ ...existing, ssl: { mode: "verifyFull", caPath: "/etc/ssl/db-ca.pem" } }}
+      groups={groups}
+      defaultGroupId={null}
+      onSaved={() => {}}
+      onCancel={() => {}}
+    />,
+  );
+  expect((screen.getByLabelText("CA certificate file") as HTMLInputElement).value).toBe("/etc/ssl/db-ca.pem");
 });
 
 test("safety_heading_and_short_lines", async () => {

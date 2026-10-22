@@ -260,6 +260,12 @@ fn fixture_sql(kind: DialectKind) -> Vec<String> {
             "INSERT INTO sales.orders SELECT * FROM public.orders WHERE id <> 6".to_string(),
         ]);
     }
+    if kind == DialectKind::MySql {
+        // The `names` case's model names "Customers". Windows servers fold table names, so
+        // that is `customers`; a server with case-sensitive names (Linux, CI) gets a copy with
+        // the same rows, so the hand-written query over `customers` still matches.
+        sql.push("CREATE TABLE IF NOT EXISTS Customers AS SELECT * FROM customers".to_string());
+    }
     if kind == DialectKind::Sqlite {
         // A computed view column has no declared type.
         sql.push(

@@ -184,7 +184,7 @@ export async function jobEvents(id: JobId, onEvent: OnJobEvent): Promise<JobId> 
   return id;
 }
 
-/** Opens Explorer with the file selected. */
+/** Shows the file in its folder: selected in Explorer or Finder; Linux opens the folder. */
 export function revealInFolder(path: string): Promise<void> {
   return invoke<void>("reveal_in_folder", { path });
 }

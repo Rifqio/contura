@@ -1,6 +1,7 @@
 mod browser;
 mod commands;
 mod fatal;
+mod folders;
 mod job_commands;
 mod paths;
 mod window_size;

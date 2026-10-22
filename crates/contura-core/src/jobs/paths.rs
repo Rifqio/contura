@@ -1076,6 +1076,9 @@ mod tests {
         assert!(!target.exists());
     }
 
+    /// Windows refuses to rename over a read-only file; elsewhere the rename only needs a
+    /// writable folder, so the commit succeeds and there is nothing to test.
+    #[cfg(windows)]
     #[test]
     fn commit_onto_read_only_target_keeps_old_file() {
         let dir = tempfile::tempdir().unwrap();

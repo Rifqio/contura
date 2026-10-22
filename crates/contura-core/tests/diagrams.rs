@@ -4,10 +4,12 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use contura_core::Error;
+#[cfg(windows)]
+use contura_core::diagrams::delete_diagram;
 use contura_core::diagrams::{
-    DiagramKind, NAME_REFUSAL, READ_MAX, check_diagram_name, delete_diagram, delete_diagram_with,
-    diagram_head, diagrams_dir, list_diagrams, read_diagram, rename_diagram, save_diagram_copy,
-    write_diagram, write_diagram_layout,
+    DiagramKind, NAME_REFUSAL, READ_MAX, check_diagram_name, delete_diagram_with, diagram_head,
+    diagrams_dir, list_diagrams, read_diagram, rename_diagram, save_diagram_copy, write_diagram,
+    write_diagram_layout,
 };
 
 fn put(data: &Path, name: &str, text: &[u8]) {
@@ -425,5 +427,8 @@ fn head_reads_the_step_12_kinds() {
         assert_eq!(k, kind, "{word}");
         assert_eq!(title.as_deref(), Some("Plan"));
     }
-    assert_eq!(diagram_head(&b"diagram gantt \"x\"\n"[..]).0, DiagramKind::Unknown);
+    assert_eq!(
+        diagram_head(&b"diagram gantt \"x\"\n"[..]).0,
+        DiagramKind::Unknown
+    );
 }

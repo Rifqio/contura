@@ -493,3 +493,11 @@ test("query_error_matches_frame_2", () => {
   expect(bodyOf(".query-error-quoted")).toMatch(/color:\s*var\(--c-syn-string\)/);
   expect(bodyOf(".query-error-near")).toMatch(/display:\s*flex/);
 });
+
+/** The window's minimum is 1024 px; a fixed bar wider than that must not widen the whole layout. */
+test("the_feature_bar_cannot_widen_the_window", () => {
+  const body = (selector: string) => rules(appCss).find((r) => r.selector === selector)?.body ?? "";
+  expect(body(".app")).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  expect(body(".feature-bar")).toMatch(/min-width:\s*0/);
+  expect(body(".feature-bar")).toMatch(/overflow-x:\s*auto/);
+});

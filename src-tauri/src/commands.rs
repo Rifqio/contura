@@ -801,14 +801,10 @@ pub fn data_folder_info(service: Service<'_>) -> Result<DataFolderInfo, Error> {
     service.data_folder_info()
 }
 
-/// Shows the data folder in Explorer.
+/// Shows the data folder in the system's file manager.
 #[tauri::command]
 pub fn open_data_folder(data: State<'_, DataDir>) -> Result<(), Error> {
-    std::process::Command::new("explorer.exe")
-        .arg(&data.0)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| Error::File(e.to_string()))
+    crate::folders::open_folder(&data.0)
 }
 
 #[tauri::command]
