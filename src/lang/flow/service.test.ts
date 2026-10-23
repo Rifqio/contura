@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { ICON_LOOKUP_BUDGET, parseFlow } from "./parse";
-import { createFlowService } from "./service";
+import { CLOSED_KEPT, createFlowService } from "./service";
 
 const CLOUD = ['diagram cloud "Order API"', "Orders [icon: aws-dynamdb]", "Assets [icon: aws-s3]", ""].join("\n");
 
@@ -78,4 +78,23 @@ test("the_misspelling_cache_drops_its_oldest_entry_not_everything", () => {
   expect(iconNear.has("old-1")).toBe(true);
   expect(iconNear.size).toBeLessThanOrEqual(2000);
   expect(counter.reads).toBe(1);
+});
+
+test("the_closed_ids_are_capped_and_a_just_closed_one_still_drops_late_parses", () => {
+  // The audit's probe: 1,000 diagrams opened, parsed and closed left 1,000 names in the set.
+  const flow = createFlowService();
+  for (let i = 0; i < 1000; i++) {
+    flow.open(`d${i}`);
+    flow.parse(`d${i}`, "diagram dfd\nprocess A");
+    flow.close(`d${i}`);
+  }
+  const closed = Array.from({ length: 1000 }, (_, i) => flow.isClosed(`d${i}`)).filter(Boolean);
+  expect(closed).toHaveLength(CLOSED_KEPT);
+  expect(flow.isClosed("d999")).toBe(true);
+  expect(flow.isClosed("d0")).toBe(false);
+  // Open again clears it; closing again makes it the newest.
+  flow.open("d999");
+  expect(flow.isClosed("d999")).toBe(false);
+  flow.close("d999");
+  expect(flow.isClosed("d999")).toBe(true);
 });

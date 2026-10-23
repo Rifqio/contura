@@ -224,6 +224,20 @@ export function removalCount(changes: ProposedChange[], accepted: ReadonlySet<nu
 }
 
 /** What a saved outcome says under a reloaded card: the landed summary of an Auto-apply, else "Accepted <k> of <n>." */
+/**
+ * An earlier proposal in one line: what became of it (applied, rejected, partly applied) or that it was not reviewed,
+ * with its changes counted as the card's title counts them.
+ */
+export function foldedOutcome(changes: ProposedChange[], outcome: ToolOutcome | null): string {
+  const ok = changes.filter((c) => c.status.kind === "ok").length;
+  const title = ok === changes.length ? plural(changes.length, "change", "changes") : `${ok.toLocaleString("en-US")} of ${plural(changes.length, "change", "changes")}`;
+  if (!outcome) return `Not reviewed: ${title}.`;
+  if (outcome.accepted === 0) return `Rejected: ${title}.`;
+  const decided = outcome.accepted + outcome.rejected;
+  if (outcome.accepted >= decided) return `Applied: ${title}.`;
+  return `Partly applied: ${outcome.accepted.toLocaleString("en-US")} of ${plural(decided, "change", "changes")}.`;
+}
+
 export function outcomeText(changes: ProposedChange[], outcome: ToolOutcome): string {
   if (outcome.auto && outcome.accepted > 0) return landedSummary(changes, new Set(changes.filter((c) => c.status.kind === "ok").map((c) => c.index)));
   return `Accepted ${outcome.accepted.toLocaleString("en-US")} of ${(outcome.accepted + outcome.rejected).toLocaleString("en-US")}.`;

@@ -3,7 +3,11 @@ import { type ReactNode, useRef } from "react";
 export interface SegmentedOption<V extends string> {
   value: V;
   label: string;
+  /** The spoken name when the label is a symbol a screen reader may skip, such as ∅. */
+  ariaLabel?: string;
   lead?: ReactNode;
+  /** After the label, such as a count. */
+  trail?: ReactNode;
   /** Shown but not choosable, such as Selected nodes with nothing selected. */
   disabled?: boolean;
 }
@@ -13,10 +17,12 @@ interface Props<V extends string> {
   options: SegmentedOption<V>[];
   onChange: (value: V) => void;
   label: string;
+  /** The id of the hint that describes the choice. */
+  describedBy?: string;
 }
 
 /** A small set of exclusive choices side by side. The arrows move and choose. */
-export default function Segmented<V extends string>({ value, options, onChange, label }: Props<V>) {
+export default function Segmented<V extends string>({ value, options, onChange, label, describedBy }: Props<V>) {
   const group = useRef<HTMLDivElement>(null);
 
   function onKey(e: React.KeyboardEvent) {
@@ -33,13 +39,14 @@ export default function Segmented<V extends string>({ value, options, onChange, 
   }
 
   return (
-    <div ref={group} className="segmented" role="radiogroup" aria-label={label} onKeyDown={onKey}>
+    <div ref={group} className="segmented" role="radiogroup" aria-label={label} aria-describedby={describedBy} onKeyDown={onKey}>
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           role="radio"
           aria-checked={o.value === value}
+          aria-label={o.ariaLabel}
           tabIndex={o.value === value ? 0 : -1}
           disabled={o.disabled}
           className={o.value === value ? "segmented-option segmented-on" : "segmented-option"}
@@ -47,6 +54,13 @@ export default function Segmented<V extends string>({ value, options, onChange, 
         >
           {o.lead}
           {o.label}
+          {o.trail !== undefined && (
+            <>
+              {/* Read as "All, 39", not "All39". */}
+              <span className="visually-hidden">, </span>
+              {o.trail}
+            </>
+          )}
         </button>
       ))}
     </div>

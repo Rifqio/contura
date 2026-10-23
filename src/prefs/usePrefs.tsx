@@ -2,11 +2,19 @@ import { type ReactNode, createContext, useCallback, useContext, useEffect, useM
 import { saveUiPrefs, uiPrefs } from "../api/client";
 import { DEFAULT_UI_PREFS, type FlowAssistMode, type FlowSidePanelPref, type UiPrefs } from "../api/types";
 import { readMirror } from "../theme/theme";
+import { setNullDisplay } from "./gridDisplay";
+import { applyInterfaceSize } from "./zoom";
 
-/** Density, brighter comments and the editor font, on `root` (the theme is `useTheme`'s). */
+/**
+ * Density, striped grid rows, brighter comments and the editor font, on `root`, and how grids draw NULL (the
+ * theme is `useTheme`'s, the interface size the provider's).
+ */
 export function applyPrefs(root: HTMLElement, p: UiPrefs): void {
   if (p.rowHeight === 24) root.setAttribute("data-density", "compact");
   else root.removeAttribute("data-density");
+  if (p.stripeRows) root.setAttribute("data-grid-stripes", "");
+  else root.removeAttribute("data-grid-stripes");
+  setNullDisplay(p.nullAs === "symbol" || p.nullAs === "blank" ? p.nullAs : "null");
   if (p.brighterComments) root.setAttribute("data-brighter-comments", "");
   else root.removeAttribute("data-brighter-comments");
   const e = p.editor;
@@ -63,6 +71,8 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
     const next = { ...(stored ?? current.current), ...pending };
     current.current = next;
     setPrefs(next);
+    // A size picked before the Core answered may equal the state already shown, so the effect would not run.
+    if (pending.interfaceSize !== undefined) applyInterfaceSize(next.interfaceSize);
     if (Object.keys(pending).length > 0) void save(next);
   };
 
@@ -91,6 +101,13 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => applyPrefs(document.documentElement, prefs), [prefs]);
+
+  // The Core zoomed the window to the saved size before the first paint; the defaults shown until it answers
+  // must not undo that, so only a size from the Core or a change made after it applies.
+  const size = prefs.interfaceSize;
+  useEffect(() => {
+    if (early.current === null) applyInterfaceSize(size);
+  }, [size]);
 
   const update = useCallback((patch: Partial<UiPrefs>) => {
     const next = { ...current.current, ...patch };
@@ -164,4 +181,31 @@ export function useVqPanelHeight(): [number | null, (h: number | null) => void] 
   );
   const stored = ctx?.prefs.vqPanelHeight;
   return [ctx ? (typeof stored === "number" ? stored : null) : local, set];
+}
+
+/** The name Ungrouped goes by when the user has not renamed it. */
+export const UNGROUPED = "Ungrouped";
+
+/** The longest name for Ungrouped, as in the Core. */
+export const UNGROUPED_LABEL_MAX = 60;
+
+/**
+ * What to call the place for Connections in no Group, and how to rename it. Without a provider (a part drawn on its
+ * own) the name is "Ungrouped" and a rename lives in the component.
+ */
+export function useUngroupedLabel(): { label: string; custom: string | null; set: (name: string | null) => void } {
+  const ctx = useContext(PrefsContext);
+  const [local, setLocal] = useState<string | null>(null);
+  const update = ctx?.update;
+  const set = useCallback(
+    (name: string | null) => {
+      const next = name?.trim() ? name.trim() : null;
+      if (update) update({ ungroupedLabel: next });
+      else setLocal(next);
+    },
+    [update],
+  );
+  const stored = ctx ? ctx.prefs.ungroupedLabel : local;
+  const custom = typeof stored === "string" && stored.trim() ? stored.trim() : null;
+  return { label: custom ?? UNGROUPED, custom, set };
 }

@@ -1,4 +1,4 @@
-import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { rowsLine, rowsState } from "./payload";
 import {
   aiCompact,
@@ -18,6 +18,8 @@ import {
   saveAiSettings,
   saveAiThread,
   setAiModelPrefs,
+  appendAiTurn,
+  withTurn,
 } from "../api/client";
 import type {
   AiAccess,
@@ -29,6 +31,7 @@ import type {
   Compaction,
   ConnectionConfig,
   ContextInfo,
+  DialectKind,
   ItemKind,
   ModelList,
   ModelPicks,
@@ -48,7 +51,7 @@ import { looksLikeSql, parseAnswer, plainText } from "./answerMarkdown";
 import AnswerLog from "./AnswerLog";
 import { buildRecord, mainNeverLeft, onlyOutlineLeft, providerName as nameOf, recordError, recordOf, sentLine, streamRecord } from "./answerRecord";
 import answerState, { aiErrorOf, answerEnd, endMark, modelToUse } from "./answerState";
-import { stopText, useAnswerStream } from "./answerStream";
+import { type AnswerStream, stopText, useAnswerStream, useStreamText } from "./answerStream";
 import CompactNote from "./CompactNote";
 import ContextMeter, { type MeterPart } from "./ContextMeter";
 import { type AskContext, sharedSchema, toAskRequest } from "./context";
@@ -57,11 +60,13 @@ import ContextLine from "./ContextLine";
 import { contextNotice } from "./contextText";
 import ModelPicker from "./ModelPicker";
 import Sends from "./Sends";
+import { saveSendsOpen } from "./sendsFold";
 import { sampleReads } from "./StepsView";
 import SentRecord from "./SentRecord";
 import ThreadHistory from "./ThreadHistory";
 import TopicFold, { TopicDivider } from "./TopicFold";
 import { groupByTopic } from "./topics";
+import { earlierLabel, SHOWN_TURNS, turnWindow } from "./turnWindow";
 import AnswerText from "./AnswerText";
 import type { InsertTarget } from "./InsertDiff";
 import SlashCommands, { optionId } from "./SlashCommands";
@@ -218,6 +223,26 @@ export function meterParts(preview: Preview | null, ctx: AskContext): MeterPart[
   return out;
 }
 
+/**
+ * The answer being written: its thinking, then its text or the Core's status. Only this follows the text as it
+ * streams, so a delta never draws the thread's earlier turns again; `onGrow` runs after each new piece is drawn.
+ */
+function LiveAnswer({ stream, notes, dialect, onCopy, onGrow }: { stream: AnswerStream; notes?: string[]; dialect: DialectKind; onCopy(sql: string): void; onGrow(): void }) {
+  const { text, thinking } = useStreamText(stream);
+  useEffect(() => onGrow(), [text, thinking, onGrow]);
+  return (
+    <>
+      {thinking && (
+        <details className="msg-thinking">
+          <summary>Thinking</summary>
+          <p>{thinking}</p>
+        </details>
+      )}
+      {text ? <AnswerText text={text} streaming notes={notes} dialect={dialect} onCopy={onCopy} /> : <p className="msg-notice">{stream.status ?? "Sending"}</p>}
+    </>
+  );
+}
+
 function chipLabel(item: PreviewItem, ctx: AskContext): string {
   if (item.kind === "sql" && ctx.kind !== "filter") return `Selected SQL · lines ${ctx.lines?.[0] ?? 1} to ${ctx.lines?.[1] ?? ctx.sql?.split("\n").length ?? 1}`;
   if (item.kind === "error") return "Error";
@@ -263,10 +288,14 @@ export default function AssistantPanel({
   const [working, setWorking] = useState<string | null>(null);
   /** The closed Topics the user has unfolded (by number). */
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set());
+  /** Turns shown beyond the newest `SHOWN_TURNS`, by "Show <n> earlier"; back to none on each Ask and chat opened. */
+  const [more, setMore] = useState(0);
   /** Full records of trimmed answers fetched for Show log and the Sent record, by `threadId:at`, and why a fetch failed. */
   const [fullRecords, setFullRecords] = useState<ReadonlyMap<string, AnswerRecord>>(new Map());
   const [fullErrors, setFullErrors] = useState<ReadonlyMap<string, string>>(new Map());
   const fetching = useRef(new Set<string>());
+  /** Chats whose last save failed: the next Ask saves them whole, since the Core may lack turns they show. */
+  const unsaved = useRef(new Set<string>());
   const [question, setQuestion] = useState("");
   const [off, setOff] = useState<ItemKind[]>([]);
   const [values, setValues] = useState(false);
@@ -290,6 +319,8 @@ export default function AssistantPanel({
   const [historyCommand, setHistoryCommand] = useState({ n: 0, kind: "open" as "open" | "clear" });
   const [sendsOpenSignal, setSendsOpenSignal] = useState(0);
   const sendsRef = useRef<HTMLDivElement>(null);
+  /** Pick tables was pressed: the first switch takes focus once the Sends rows are drawn (after the unfold, and the preview). */
+  const [pickTablesPending, setPickTablesPending] = useState(false);
   /** "Send the saved key to <host>" is on its way. */
   const confirmingRef = useRef(false);
   const [confirming, setConfirming] = useState(false);
@@ -308,6 +339,23 @@ export default function AssistantPanel({
    */
   const [liveContexts, setLiveContexts] = useState<ReadonlyMap<number, ContextInfo>>(new Map());
   const stream = useAnswerStream();
+  /** Show log on the answer being written follows its text; otherwise the panel does not draw again per delta. */
+  const liveLog = useStreamText(stream, logOf?.kind === "live");
+  // The AI Context of an answer given here is kept only while its answer is in the open chat.
+  useEffect(() => {
+    setLiveContexts((all) => {
+      if (all.size === 0) return all;
+      const ats = new Set(current?.messages.filter((m) => m.role === "assistant").map((m) => m.at) ?? []);
+      return [...all.keys()].every((at) => ats.has(at)) ? all : new Map([...all].filter(([at]) => ats.has(at)));
+    });
+  }, [current]);
+  // A finished answer's text, thinking and log are let go once it left the screen (its turn holds them). The card of
+  // a failed or stopped Ask and Show log on it keep them until they close.
+  const releaseAnswer = stream.release;
+  const answerShown = stream.running || pending !== null || failure !== null || stoppedEarly !== null || logOf?.kind === "live";
+  useEffect(() => {
+    if (!answerShown) releaseAnswer();
+  }, [answerShown, releaseAnswer]);
   const { stop: stopAnswer } = stream;
   const placeRef = useRef(place);
   placeRef.current = place;
@@ -332,6 +380,7 @@ export default function AssistantPanel({
       setCompactions(compacted);
       setUndoing(null);
       setUnfolded(new Set());
+      setMore(0);
       setFailure(null);
       setStoppedEarly(null);
       setLogOf(null);
@@ -380,6 +429,9 @@ export default function AssistantPanel({
     setValues(false);
     setRows(false);
     setAnswered(null);
+    setFullRecords(new Map());
+    setFullErrors(new Map());
+    setLiveContexts(new Map());
     listAiThreads(place)
       .then((list) => {
         if (!live) return;
@@ -490,6 +542,17 @@ export default function AssistantPanel({
     [ctx, question, off, switches, groupId, currentId, modelId, picks],
   );
   const { preview, error: previewError } = useAiPreview(previewed, `${conn?.access ?? ""}|${resyncs}`);
+  useEffect(() => {
+    if (!pickTablesPending) return;
+    // No preview to pick from: drop the request so a later one never takes focus from what the user does next.
+    if (previewError) return setPickTablesPending(false);
+    if (!preview) return;
+    const pill = sendsRef.current?.querySelector<HTMLElement>(".sends .send-pill[aria-pressed]");
+    if (!pill) return;
+    setPickTablesPending(false);
+    pill.scrollIntoView?.({ block: "nearest" });
+    pill.focus();
+  }, [pickTablesPending, preview, previewError]);
 
   /** Re-sync from the Context line: rebuilds the AI Context, then previews again. */
   async function resync() {
@@ -554,15 +617,18 @@ export default function AssistantPanel({
   const rowsNow = rowsState(preview);
   const parts = useMemo(() => meterParts(preview, ctx), [preview, ctx]);
   const groups = useMemo(() => groupByTopic(current?.messages ?? [], topics), [current, topics]);
+  /** The newest turns are drawn; earlier ones wait behind "Show <n> earlier". */
+  const shownTurns = useMemo(() => turnWindow(current?.messages ?? [], SHOWN_TURNS + more), [current, more]);
   // A live Ask that opens a new Topic shows its divider before the question once the Core has said so.
   const liveDivider = stream.memory?.opened === true && (current?.messages.length ?? 0) > 0;
 
   // After Send the thread keeps the new turn in view as it streams, then its card or the saved answer.
   const turnCount = current?.messages.length ?? 0;
-  useEffect(() => {
+  const followEnd = useCallback(() => {
     const el = threadRef.current;
     if (el && follow.current) el.scrollTop = el.scrollHeight;
-  }, [pending, stream.text, stream.status, failure, stoppedEarly, turnCount, working]);
+  }, []);
+  useEffect(followEnd, [pending, stream.status, failure, stoppedEarly, turnCount, working, followEnd]);
   /** Scrolled up away from the end while it streams: the thread stays where the user put it. */
   const onThreadScroll = () => {
     const el = threadRef.current;
@@ -613,6 +679,7 @@ export default function AssistantPanel({
     setConfirmStop(false);
     setAnswered(null);
     setPending({ q, included, at: askedAt, action });
+    setMore(0);
     follow.current = true;
     if (asked === undefined) setQuestion("");
     // "Include values" and "Sample rows" are off at the start of every Ask.
@@ -688,24 +755,38 @@ export default function AssistantPanel({
     const next: AiThread = base
       ? { ...base, messages: [...kept, ...add], updatedAt: askedAt }
       : { id: newId(), place: forPlace, title: q.length > 40 ? `${q.slice(0, 40)}…` : q, messages: add, updatedAt: askedAt };
+    // Only the new turn goes to the Core, which adds it to the stored thread (memory: the whole thread used to go
+    // both ways on each Ask). A chat whose last save failed goes whole once more: the Core may lack turns it shows.
     // The Core's copy replaces ours: it holds the memory stamps and the trimmed records.
-    const returned = await saveAiThread(next, requestId).then(
-      (v) => v,
-      () => null,
-    );
-    const kept2 = returned?.thread ?? next;
+    const replaceFrom = base && replace ? base.messages[base.messages.length - 2]?.at : undefined;
+    let returned: { thread: (now: AiThread | null) => AiThread; count: number; topics: Topic[]; compactions: Compaction[] } | null;
+    if (base && unsaved.current.has(base.id)) {
+      returned = await saveAiThread(next, requestId).then(
+        (v) => ({ thread: () => v.thread, count: v.thread.messages.length, topics: v.topics, compactions: v.compactions }),
+        () => null,
+      );
+    } else {
+      const turn = { threadId: next.id, place: next.place, title: next.title, updatedAt: askedAt, messages: add, replaceFrom };
+      returned = await appendAiTurn(turn, requestId).then(
+        // The open copy may have changed meanwhile (an action kept with an earlier answer): the turn goes after it.
+        (v) => ({ thread: (now: AiThread | null) => withTurn(now?.id === v.threadId ? now : base, v, replaceFrom), count: v.messageCount, topics: v.topics, compactions: v.compactions }),
+        () => null,
+      );
+    }
+    if (returned) unsaved.current.delete(next.id);
+    else unsaved.current.add(next.id);
     if (placeRef.current === forPlace) {
       const row: ThreadSummary = {
-        id: kept2.id,
-        place: kept2.place,
-        title: kept2.title,
-        updatedAt: kept2.updatedAt,
-        messages: kept2.messages.length,
+        id: next.id,
+        place: next.place,
+        title: next.title,
+        updatedAt: next.updatedAt,
+        messages: returned?.count ?? next.messages.length,
         topics: returned?.topics.length ?? 0,
       };
       setThreads((all) => [row, ...all.filter((t) => t.id !== row.id)]);
-      setCurrentId(kept2.id);
-      setCurrent(kept2);
+      setCurrentId(next.id);
+      setCurrent((now) => (returned ? returned.thread(now) : next));
       if (returned) {
         setTopics(returned.topics);
         setCompactions((known) => mergeCompactions(returned.compactions, known));
@@ -861,6 +942,13 @@ export default function AssistantPanel({
   const wantedLog = trimmedKey(logOf?.kind === "saved" ? logOf.at : null);
   const wantedSent = trimmedKey(sentOpen);
   useEffect(() => {
+    // Only the records on screen are kept (memory: a full record holds up to 64 KB of thinking, 200 KB of exact text
+    // and 500 log lines); one closed is fetched again when it is opened again.
+    const shown = (all: ReadonlyMap<string, unknown>) => [...all.keys()].every((k) => k === wantedLog || k === wantedSent);
+    const keepShown = <V,>(all: ReadonlyMap<string, V>): ReadonlyMap<string, V> =>
+      shown(all) ? all : new Map([...all].filter(([k]) => k === wantedLog || k === wantedSent));
+    if (!shown(fullRecords)) setFullRecords(keepShown);
+    if (!shown(fullErrors)) setFullErrors(keepShown);
     for (const key of [wantedLog, wantedSent]) {
       if (!key || fullRecords.has(key) || fullErrors.has(key) || fetching.current.has(key)) continue;
       fetching.current.add(key);
@@ -1042,9 +1130,9 @@ export default function AssistantPanel({
       },
       onPickModel: () => setPickerOpen((n) => n + 1),
       onPickTables: () => {
-        const pill = sendsRef.current?.querySelector<HTMLElement>(".sends .send-pill[aria-pressed]");
-        pill?.scrollIntoView?.({ block: "nearest" });
-        pill?.focus();
+        // The switches are drawn only while Sends is open; open it (remembered, as the chevron does), then focus.
+        saveSendsOpen(true);
+        setPickTablesPending(true);
       },
       onNewChat: () => {
         openThread(null);
@@ -1200,7 +1288,7 @@ export default function AssistantPanel({
     ) : (
       <AnswerLog
         question={q}
-        answer={i >= 0 ? msgs[i].text : stream.text}
+        answer={i >= 0 ? msgs[i].text : liveLog.text}
         record={record}
         live={saved === null && stream.running}
         connection={conn?.name ?? null}
@@ -1271,9 +1359,18 @@ export default function AssistantPanel({
             </button>
           </div>
         )}
+        {current && shownTurns.hidden > 0 && (
+          <div className="msg-mark">
+            <button type="button" className="link-button" onClick={() => setMore((n) => n + SHOWN_TURNS)}>
+              {earlierLabel(shownTurns.hidden)}
+            </button>
+          </div>
+        )}
         {groups.map((g, gi) => {
           if (!current) return null;
           const start = groups.slice(0, gi).reduce((n, x) => n + x.messages.length, 0);
+          // A Topic wholly before the newest turns waits behind "Show <n> earlier".
+          if (start + g.messages.length <= shownTurns.first) return null;
           const folded = g.topic?.closed === true;
           const open = !folded || unfolded.has(g.topic?.seq ?? -1);
           return (
@@ -1296,6 +1393,7 @@ export default function AssistantPanel({
               {open &&
                 g.messages.map((m, j) => {
                   const mi = start + j;
+                  if (mi < shownTurns.first) return null;
                   const hidden = hiddenBy(m);
                   if (hidden) {
                     return noteAt.get(hidden.id) === m.at ? (
@@ -1353,23 +1451,7 @@ export default function AssistantPanel({
             <div className={pending.action === "continue" ? "msg-user msg-user-muted" : "msg-user"}>{pending.q}</div>
             <div className="ts">{dayClock(pending.at, Date.now(), true)}</div>
             <div className="msg-ai" aria-busy="true">
-              {stream.thinking && (
-                <details className="msg-thinking">
-                  <summary>Thinking</summary>
-                  <p>{stream.thinking}</p>
-                </details>
-              )}
-              {stream.text ? (
-                <AnswerText
-                  text={stream.text}
-                  streaming
-                  notes={liveNotice ? [liveNotice] : undefined}
-                  dialect={conn?.dialect ?? "postgres"}
-                  onCopy={copySql}
-                />
-              ) : (
-                <p className="msg-notice">{stream.status ?? "Sending"}</p>
-              )}
+              <LiveAnswer stream={stream} notes={liveNotice ? [liveNotice] : undefined} dialect={conn?.dialect ?? "postgres"} onCopy={copySql} onGrow={followEnd} />
               <div className="msg-mark">
                 <button type="button" className="link-button" onClick={() => setLogOf({ kind: "live", q: pending.q })}>
                   Show log
@@ -1426,6 +1508,7 @@ export default function AssistantPanel({
           connection={conn}
           modelName={model?.name ?? null}
           openSignal={sendsOpenSignal}
+          foldable
         />
         {pickError && (
           <p className="sends-note" role="alert">

@@ -470,11 +470,10 @@ test(
     gate.hold = true;
     await userEvent.click(applyButton());
     await waitFor(() => expect(applyButton().textContent).toContain("Applying"));
-    // Cell edits, toggles, the toolbar, Ctrl+N, Discard and the leave ask's discard are all refused.
+    // Cell edits, toggles, the toolbar, Discard and the leave ask's discard are all refused.
     fireEvent.doubleClick(cell("email", "type"));
     expect(screen.queryByRole("combobox", { name: "Cell value" })).toBeNull();
     expect((screen.getByRole("button", { name: "Add column" }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.keyDown(screen.getByRole("tab", { name: /^Columns/ }), { key: "n", ctrlKey: true });
     expect(screen.getByRole("tab", { name: "Columns 5" })).toBeTruthy();
     expect((screen.getByRole("button", { name: "Discard changes" }) as HTMLButtonElement).disabled).toBe(true);
     // The leave ask's discard is refused, and says so, so the App keeps the tab.

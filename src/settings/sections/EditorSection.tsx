@@ -3,14 +3,16 @@ import type { EditorPrefs } from "../../api/types";
 import Select from "../../components/Select";
 import { usePrefs } from "../../prefs/usePrefs";
 import * as fontDetect from "../fontDetect";
-import { Row, type RowKey, Section, SwitchRow } from "./layout";
+import { Card, Row, SwitchRow, defineRows } from "./layout";
 
-const ROW = {
-  font: { label: "Font", terms: "family size line height JetBrains Mono Cascadia Mono Consolas" },
+const ROW = defineRows({
+  font: { label: "Font", terms: "family JetBrains Mono Cascadia Mono Consolas" },
+  fontSize: { label: "Font size" },
+  lineHeight: { label: "Line height" },
   ligatures: { label: "Ligatures" },
   brighter: { label: "Brighter comments", terms: "Dracula" },
-} satisfies Record<string, RowKey>;
-export const EDITOR_ROWS: readonly RowKey[] = Object.values(ROW);
+});
+export const EDITOR_ROWS = Object.values(ROW);
 
 /** JetBrains Mono ships with Contura; the others are offered only when Windows has them (D9, PR34). */
 const BUNDLED = "JetBrains Mono";
@@ -75,11 +77,15 @@ export default function EditorSection() {
   const options = (families.includes(e.family) ? families : [...families, e.family]).map((f) => ({ value: f, label: f }));
 
   return (
-    <Section id="editor" title="Editor" rows={EDITOR_ROWS}>
+    <Card>
       <Row {...ROW.font}>
-        <Select label="Font" value={e.family} options={options} onChange={(family) => set({ family })} mono className="srow-grow" />
+        <Select label="Font" value={e.family} options={options} onChange={(family) => set({ family })} mono className="srow-field" />
+      </Row>
+      <Row {...ROW.fontSize}>
         <NumberField label="Font size" min={11} max={20} value={e.size} unit="px" onChange={(size) => set({ size })} />
-        <NumberField label="Line height" min={16} max={28} value={e.lineHeight} unit="lh" onChange={(lineHeight) => set({ lineHeight })} />
+      </Row>
+      <Row {...ROW.lineHeight}>
+        <NumberField label="Line height" min={16} max={28} value={e.lineHeight} unit="px" onChange={(lineHeight) => set({ lineHeight })} />
       </Row>
       <SwitchRow
         {...ROW.ligatures}
@@ -100,6 +106,6 @@ export default function EditorSection() {
         hint="Dracula comments are faint by design. This swaps in a brighter blue, 5.5 to 1."
         note={prefs.theme === "light" ? "Used in Dracula only." : undefined}
       />
-    </Section>
+    </Card>
   );
 }

@@ -1,10 +1,10 @@
 // The engine's card: a 216 px card in full detail, a 100 x 48 name box zoomed out, a plain block further out.
-import { Handle, Position, useNodeId, useReactFlow } from "@xyflow/react";
+import { Handle, Position, useNodeId, useReactFlow, useStoreApi } from "@xyflow/react";
 import { createContext, type CSSProperties, type ReactNode, useContext } from "react";
 import Icon, { type IconName } from "../components/Icon";
 import { useDetail } from "./detail";
 import { cardHeight } from "./metrics";
-import { type Box, ResizeZones } from "./resize";
+import { type Box, liveResizes, ResizeZones } from "./resize";
 import { type CardKind, NODE_TOKENS } from "./types";
 
 const KIND_ICON: Record<CardKind, IconName> = { table: "table", view: "view", derived: "layers", result: "columns" };
@@ -16,12 +16,12 @@ export const ConnectableContext = createContext(true);
  * A column row's two ports: a target dot on the left and a source dot on the right, with handle ids
  * `{column}:t` and `{column}:s` (columnOfHandle in DiagramCanvas reads them back).
  */
-export function Ports({ column, connectable = true }: { column: string; connectable?: boolean }) {
+export function Ports({ column, connectable = true, className }: { column: string; connectable?: boolean; className?: string }) {
   const on = useContext(ConnectableContext) && connectable;
   return (
     <>
-      <Handle type="target" id={`${column}:t`} position={Position.Left} isConnectable={on} />
-      <Handle type="source" id={`${column}:s`} position={Position.Right} isConnectable={on} />
+      <Handle type="target" id={`${column}:t`} position={Position.Left} isConnectable={on} className={className} />
+      <Handle type="source" id={`${column}:s`} position={Position.Right} isConnectable={on} className={className} />
     </>
   );
 }
@@ -30,6 +30,8 @@ export function Ports({ column, connectable = true }: { column: string; connecta
 export const MAX_CARD_WIDTH = 480;
 /** Board B2 (items 25, 41): a card is dragged between these widths; one wider on its own may keep its width. */
 export const CARD_LIMITS = { minW: 216, maxW: 340 };
+/** A card may be dragged taller than its rows (its corners always resize both ways), up to this or its rows. */
+export const CARD_MAX_HEIGHT = 480;
 
 /**
  * Board B2 (items 25, 41): the pointer zones of a selected card that resizes. A drag is live: once a frame the node
@@ -38,6 +40,7 @@ export const CARD_LIMITS = { minW: 216, maxW: 340 };
 function CardZones({ width, height, fullHeight, onResize }: { width: number; height?: number; fullHeight?: number; onResize(box: Box): void }) {
   const id = useNodeId();
   const flow = useReactFlow();
+  const canvas = useStoreApi();
   return (
     <ResizeZones
       start={() => {
@@ -46,14 +49,23 @@ function CardZones({ width, height, fullHeight, onResize }: { width: number; hei
       }}
       limits={(from) => {
         const full = fullHeight ?? from.h;
-        return { minW: CARD_LIMITS.minW, maxW: Math.max(CARD_LIMITS.maxW, from.w), minH: Math.min(full, cardHeight(2)), maxH: full };
+        // The card's own box widens the limits, so a drag never jumps; every corner resizes both ways, so the
+        // card may also grow taller than its rows (the rest is empty).
+        return {
+          minW: Math.min(CARD_LIMITS.minW, from.w),
+          maxW: Math.max(CARD_LIMITS.maxW, from.w),
+          minH: Math.min(full, cardHeight(2), from.h),
+          maxH: Math.max(full, CARD_MAX_HEIGHT, from.h),
+        };
       }}
       onLive={(box, node) => {
         node?.classList.add("is-resizing");
         if (!id) return;
+        liveResizes(canvas.getState().domNode).set(id, box);
         flow.updateNode(id, { position: { x: box.x, y: box.y }, width: box.w, height: box.h });
       }}
       onDone={(box, from, node) => {
+        if (id) liveResizes(canvas.getState().domNode).delete(id);
         if (box.x === from.x && box.y === from.y && box.w === from.w && box.h === from.h) {
           node?.classList.remove("is-resizing");
           if (id) flow.updateNode(id, { position: { x: from.x, y: from.y }, width: undefined, height: undefined });
@@ -64,6 +76,7 @@ function CardZones({ width, height, fullHeight, onResize }: { width: number; hei
         onResize(box);
       }}
       onCancel={(from, node) => {
+        if (id) liveResizes(canvas.getState().domNode).delete(id);
         node?.classList.remove("is-resizing");
         if (id) flow.updateNode(id, { position: { x: from.x, y: from.y }, width: undefined, height: undefined });
       }}
@@ -106,6 +119,11 @@ export interface CardFrameProps {
   fullHeight?: number;
   /** The column list scrolled (a card shorter than its rows). */
   onRowsScroll?: (list: HTMLUListElement) => void;
+  /**
+   * The rows' ports, drawn in their own layer over the card's edges, outside the scrolling list, so neither the
+   * card's border nor its scrollbar ever covers them. The layer follows the list's scroll.
+   */
+  ports?: ReactNode;
 }
 
 export default function CardFrame({
@@ -126,6 +144,7 @@ export default function CardFrame({
   height,
   fullHeight,
   onRowsScroll,
+  ports,
 }: CardFrameProps) {
   const { detail } = useDetail();
   const tokens = NODE_TOKENS[kind];
@@ -162,12 +181,14 @@ export default function CardFrame({
     );
   }
 
-  // A card as tall as its rows, or taller, keeps no height of its own.
+  // A card shorter than its rows scrolls them; a taller one keeps its height with room under the rows; a card as
+  // tall as its rows keeps no height of its own.
   const scroll = height !== undefined && fullHeight !== undefined && height < fullHeight;
-  const sized: CSSProperties = { ...style, ...(width ? { width } : {}), ...(scroll ? { height } : {}) };
-  const zones = selected && onResize && width ? <CardZones width={width} height={scroll ? height! : undefined} fullHeight={fullHeight} onResize={onResize} /> : null;
+  const own = height !== undefined && height !== fullHeight;
+  const sized: CSSProperties = { ...style, ...(width ? { width } : {}), ...(own ? { height } : {}) };
+  const zones = selected && onResize && width ? <CardZones width={width} height={own ? height : undefined} fullHeight={fullHeight} onResize={onResize} /> : null;
   return (
-    <div className={`table-card${marks}${scroll ? " table-card-scroll" : ""}`} role="group" aria-label={label} style={sized}>
+    <div className={`table-card${marks}${scroll ? " table-card-scroll" : ""}${own && !scroll ? " table-card-tall" : ""}`} role="group" aria-label={label} style={sized}>
       <div className="table-card-header">
         <Icon name={KIND_ICON[kind]} className="table-card-icon" />
         {title}
@@ -180,6 +201,11 @@ export default function CardFrame({
       <ul className={scroll ? "table-card-columns nowheel" : "table-card-columns"} onScroll={onRowsScroll ? (e) => onRowsScroll(e.currentTarget) : undefined}>
         {rows}
       </ul>
+      {ports && (
+        <div className="card-ports" aria-hidden="true">
+          <div className="card-ports-track">{ports}</div>
+        </div>
+      )}
       {selected && <SelBox />}
       {zones}
     </div>

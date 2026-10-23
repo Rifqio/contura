@@ -27,7 +27,7 @@ pub const CHECK_EVERY_MS: i64 = 24 * 60 * 60 * 1000;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSettings {
-    /// None until the first-start prompt is answered: checks are off until then.
+    /// None until the first start guide (or Settings) answers: checks are off until then.
     #[serde(default)]
     pub checks: Option<bool>,
     #[serde(default)]
@@ -192,7 +192,7 @@ impl UpdateService {
         Ok(self.status_of(self.settings()?))
     }
 
-    /// The first-start prompt's answer, or the Settings switch.
+    /// The first start guide's answer, or the Settings switch.
     pub fn set_checks(&self, on: bool) -> Result<UpdateStatus> {
         let s = self.edit(|s| s.checks = Some(on))?;
         Ok(self.status_of(s))

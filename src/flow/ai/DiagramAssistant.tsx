@@ -3,13 +3,14 @@
 // each answer's proposal as its card, its remove question or what landed. Board 11.12 adds the Sends line from the
 // Core's preview, the Sent line and Show log under each answer, and the note when the tool is off in Settings. No
 // hover text: aria-labels only.
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { aiSettingsChanged } from "../../api/changes";
 import { aiAnswerRecord, aiKnownModels, aiSettings, errorText, setAiModelPrefs } from "../../api/client";
 import type { AiMessage, AiSettingsView, AnswerRecord, FlowAssistMode, ModelList, ModelPicks, Preview } from "../../api/types";
 import AnswerLog from "../../assistant/AnswerLog";
 import { mainNeverLeft, providerName as nameOf, recordError, recordOf, sentLine } from "../../assistant/answerRecord";
 import answerState, { aiErrorOf } from "../../assistant/answerState";
+import { type TextStore, useStoreText } from "../../assistant/answerStream";
 import AnswerText from "../../assistant/AnswerText";
 import ModelPicker from "../../assistant/ModelPicker";
 import Sends from "../../assistant/Sends";
@@ -18,7 +19,8 @@ import Icon from "../../components/Icon";
 import Kbd from "../../components/Kbd";
 import Menu from "../../components/Menu";
 import type { DiagramKind } from "../../lang/flow/model";
-import { outcomeText } from "./proposal";
+import { earlierLabel, SHOWN_TURNS, turnWindow } from "../../assistant/turnWindow";
+import { foldedOutcome, outcomeText } from "./proposal";
 import ProposalCard, { BrokenCard, PickCard, StaleCard } from "./ProposalCard";
 import RemoveDialog from "./RemoveDialog";
 import { type AskOptions, type DiagramAsk, firstAmbiguous } from "./useDiagramAsk";
@@ -81,6 +83,13 @@ function Said({ text, notes, streaming = false }: { text: string; notes?: string
   return <AnswerText text={text} notes={notes} streaming={streaming} blocks={[]} sqlBlocks={false} dialect="sqlite" onCopy={copy} />;
 }
 
+/** The answer being written. Only this follows the text as it streams; `onGrow` runs after each new piece is drawn. */
+function LiveSaid({ source, onGrow }: { source: TextStore; onGrow(): void }) {
+  const text = useStoreText(source);
+  useEffect(() => onGrow(), [text, onGrow]);
+  return <Said text={text} streaming />;
+}
+
 /** What a provider error says after it. Tool and file-name errors have their one line only. */
 function keptNote(kind: string | undefined): string | null {
   if (kind === "badFileName") return null;
@@ -116,9 +125,16 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
   const input = useRef<HTMLTextAreaElement>(null);
   /** Failed turns whose error card the user discarded. */
   const [discarded, setDiscarded] = useState<ReadonlySet<number>>(new Set());
+  /** Turns shown beyond the newest `SHOWN_TURNS`, by "Show <n> earlier"; back to none on each Ask. */
+  const [more, setMore] = useState(0);
   const mounted = useRef(Date.now());
   const { thread, working, waiting, landed, failure } = ai;
   const messages = thread?.messages ?? [];
+  const shown = turnWindow(messages, SHOWN_TURNS + more);
+  /** Answers before this one are older than the newest turns: a proposal card there shows as one line. */
+  const foldBefore = turnWindow(messages, SHOWN_TURNS).first;
+  const threadId = thread?.id;
+  useEffect(() => setMore(0), [threadId]);
   const n = selected.length;
   const bySelection = scope === "selection" && n > 0;
   /** The global AI settings: the provider for "Show exactly" and the diagram tool's switch. */
@@ -235,6 +251,10 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
   // Show log and the Sent record of a trimmed answer need the full stored record first.
   const trimmedAt = [logAt, sentOpen].filter((at): at is number => at !== null && !!messages.find((m) => m.role === "assistant" && m.at === at)?.record?.trimmed && !full.has(at));
   const fetchKey = thread && trimmedAt.length > 0 ? `${thread.id}:${trimmedAt.join(",")}` : null;
+  // Only the records on screen are kept (memory); one closed is fetched again when it is opened again.
+  useEffect(() => {
+    setFull((all) => ([...all.keys()].every((at) => at === logAt || at === sentOpen) ? all : new Map([...all].filter(([at]) => at === logAt || at === sentOpen))));
+  }, [logAt, sentOpen, threadId]);
   useEffect(() => {
     if (!fetchKey || !thread) return;
     let live = true;
@@ -279,10 +299,11 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
 
   // The newest turn stays in view.
   const turns = thread?.messages.length ?? 0;
-  useEffect(() => {
+  const toEnd = useCallback(() => {
     const el = chat.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [turns, working?.text, waiting, landed]);
+  }, []);
+  useEffect(toEnd, [turns, waiting, landed, toEnd]);
 
   const askOptions = (): AskOptions => ({ scope: bySelection ? { kind: "selection", names: [...selected] } : { kind: "whole" }, model: model?.id ?? null, picks: model?.picks ?? null });
 
@@ -292,6 +313,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
     // A new question starts its own count.
     retried.current = null;
     setQuestion("");
+    setMore(0);
     void ai.send(q, askOptions());
   }
 
@@ -312,6 +334,12 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
     return n;
   };
 
+  // A count is kept only while its failure is on screen: the failure card, or a turn still in the thread.
+  useEffect(() => {
+    const ats = new Set(messages.map((m) => m.at));
+    for (const id of [...triesOf.current.keys()]) if (id !== failure && !(typeof id === "number" && ats.has(id))) triesOf.current.delete(id);
+  }, [messages, failure]);
+
   // An answer that did not fail ends the run of failures: a later one, on any path, is the first again (P11-24).
   const newest = messages[messages.length - 1];
   const newestRecord = newest?.role === "assistant" ? recordOf(newest.record) : null;
@@ -325,6 +353,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
     if (working || waiting) return;
     retried.current = { kind: aiErrorOf(error)?.kind, tries };
     setQuestion("");
+    setMore(0);
     void ai.send(q, askOptions());
   }
 
@@ -333,6 +362,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
     if (working) return;
     retried.current = null;
     setQuestion("");
+    setMore(0);
     void ai.askAgain(q, opts);
   }
 
@@ -424,6 +454,8 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
               )}
             </div>
           </div>
+        ) : tool && at < foldBefore ? (
+          <p className="answer-p flow-assist-outcome">{foldedOutcome(tool.proposal.changes, tool.outcome)}</p>
         ) : tool ? (
           <ProposalCard changes={tool.proposal.changes} kind={kind} outcome={tool.outcome ? outcomeText(tool.proposal.changes, tool.outcome) : null} />
         ) : failed === null && record?.mark !== "stopped" ? (
@@ -514,7 +546,14 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
             <span>The assistant edits the text and the drawing together. While it works, the text is read-only.</span>
           </div>
         )}
-        {thread?.messages.map((m) =>
+        {shown.hidden > 0 && (
+          <div className="msg-mark">
+            <button type="button" className="link-button" onClick={() => setMore((n) => n + SHOWN_TURNS)}>
+              {earlierLabel(shown.hidden)}
+            </button>
+          </div>
+        )}
+        {messages.slice(shown.first).map((m) =>
           m.role === "user" ? (
             <div key={`u${m.at}`} className="umsg">
               {m.text}
@@ -543,7 +582,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
                   </div>
                 </div>
               )}
-              <Said text={working.text} streaming />
+              <LiveSaid source={ai.streamed} onGrow={toEnd} />
             </div>
           </>
         )}

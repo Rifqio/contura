@@ -1,14 +1,18 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import type { AiSettings, AiSettingsView, AskRequest, ContextInfo, SchemaCheck } from "../api/types";
 import { fakePreview } from "../test/aiPreview";
+import { patientFile } from "../test/load";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { modelList } from "../test/settingsRoutes";
 import AssistantPanel from "./AssistantPanel";
+import { SENDS_OPEN_KEY, saveSendsOpen } from "./sendsFold";
 import ContextLine from "./ContextLine";
 import { contextLineText, contextNotice, contextTip, ctxName, sendsAge } from "./contextText";
 import type { AskContext } from "./context";
+
+patientFile();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -310,6 +314,9 @@ test("parity_P11_10_the_panel_offers_resync_beside_a_manual_context", async () =
     ai_preview: (a) => ({ ...fakePreview(a.request as AskRequest), context: info({ sync: "manual", check: { kind: "match" } }) }),
     ai_resync: () => info({ sync: "manual", check: { kind: "rebuilt", reason: "asked" } }),
   });
+  // The tip sits under the Sends rows, which start folded.
+  saveSendsOpen(true);
+  onTestFinished(() => localStorage.removeItem(SENDS_OPEN_KEY));
   render(<AssistantPanel place="ungrouped" groupId={null} context={ctx} schema={null} onOpenSettings={vi.fn()} openIds={new Set(["c1"])} />);
   // The tip says to press Re-sync, and the button is on the Context line.
   expect(await screen.findByText(/It re-syncs only when you press Re-sync\./)).toBeTruthy();

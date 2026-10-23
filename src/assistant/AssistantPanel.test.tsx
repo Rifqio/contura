@@ -2,19 +2,34 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
-import type { AiAccess, AiError, AiEvent, AiSettings, AiSettingsView, AiThread, AnswerRecord, AskRequest, Compaction, CompactRequest, ContextInfo, ModelList, ModelPicks, SqlBlock, Topic } from "../api/types";
+import type { AiAccess, AiError, AiEvent, AiSettings, AiSettingsView, AiThread, AppendTurn, ThreadView, AnswerRecord, AskRequest, Compaction, CompactRequest, ContextInfo, ModelList, ModelPicks, SqlBlock, Topic } from "../api/types";
 import type { SqlEditorApi } from "../query/SqlEditor";
 import { splitStatements, statementAt } from "../query/statements";
 import { iconElement, type IconName } from "../components/Icon";
 import { fakePreview } from "../test/aiPreview";
 import { aiStream, delta, done, failed, line, memory, sent, sentRecord, step } from "../test/aiStream";
-import { summaryOf, viewOf } from "../test/aiThreads";
+import { summaryOf, turnViewOf, viewOf } from "../test/aiThreads";
+import { withTurn } from "../api/client";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { modelInfo, modelList } from "../test/settingsRoutes";
 import { useCommandKeys } from "../commands/useCommandKeys";
 import AssistantPanel, { meterParts } from "./AssistantPanel";
 import type { AskContext } from "./context";
 import { threadsCleared } from "./threadsCleared";
+import { SENDS_OPEN_KEY, saveSendsOpen } from "./sendsFold";
+
+/** How many times each answer text was drawn, by its text. */
+const answerDraws = vi.hoisted(() => new Map<string, number>());
+vi.mock("./AnswerText", async (load) => {
+  const real = await load<typeof import("./AnswerText")>();
+  return {
+    ...real,
+    default: (p: Parameters<typeof real.default>[0]) => {
+      answerDraws.set(p.text, (answerDraws.get(p.text) ?? 0) + 1);
+      return real.default(p);
+    },
+  };
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -104,7 +119,16 @@ let cancelPlace: (a: Record<string, unknown>) => boolean = () => true;
 /** `set_ai_model_prefs` rejects while this is set. */
 let pickFails = false;
 
+/** Each thread an Ask saved, as the Core holds it after the save (an appended turn on top of what it had). */
+let saved: { thread: AiThread; requestId: unknown }[] = [];
+/** The Core's save: what it returns for the thread it now holds. */
+let coreSave: (t: AiThread) => ThreadView = (t) => viewOf(t);
+const saves = () => saved;
+
 beforeEach(() => {
+  localStorage.removeItem(SENDS_OPEN_KEY);
+  saved = [];
+  coreSave = (t) => viewOf(t);
   threads = [];
   settings = none;
   askError = { kind: "notConfigured" };
@@ -153,7 +177,18 @@ function handlersNow(): Record<string, (a: Record<string, unknown>) => unknown> 
     delete_ai_thread: (a) => {
       threads = threads.filter((t) => t.id !== a.id);
     },
-    save_ai_thread: (a) => viewOf(a.thread as AiThread),
+    save_ai_thread: (a) => {
+      saved.push({ thread: a.thread as AiThread, requestId: a.requestId });
+      return coreSave(a.thread as AiThread);
+    },
+    ai_append_turn: (a) => {
+      const turn = a.turn as AppendTurn;
+      const before = [...saved].reverse().find((x) => x.thread.id === turn.threadId)?.thread ?? threads.find((t) => t.id === turn.threadId) ?? null;
+      const whole = withTurn(before, turnViewOf(turn, before), turn.replaceFrom);
+      saved.push({ thread: whole, requestId: a.requestId });
+      const v = coreSave(whole);
+      return { ...turnViewOf(turn, before, v.topics, v.compactions), title: v.thread.title, messages: v.thread.messages.slice(-turn.messages.length) };
+    },
     clear_ai_threads: (a) => {
       threads = threads.filter((t) => t.place !== a.place);
     },
@@ -207,6 +242,9 @@ const previews = () => callsTo("ai_preview").map((c) => c.request as AskRequest)
 const lastPreview = () => previews()[previews().length - 1];
 const askSent = () => callsTo("ai_ask_stream")[0].request as AskRequest;
 
+/** The Sends list starts folded; these tests read its rows, so it starts open as a user who opened it once. */
+const unfoldSends = () => saveSendsOpen(true);
+
 /** Waits for the first preview, then opens "Show exactly". */
 async function showExactly(user: ReturnType<typeof userEvent.setup>) {
   const button = (await screen.findByRole("button", { name: "Show exactly" })) as HTMLButtonElement;
@@ -255,6 +293,7 @@ test("the_preview_is_asked_for_with_the_context", async () => {
 });
 
 test("sends_items_can_be_switched_off_and_stay_off_while_typing", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   const { rerender } = renderPanel();
@@ -314,6 +353,7 @@ test("a_seeded_question_uses_the_connections_current_access", async () => {
 });
 
 test("show_exactly_reveals_the_payload", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   const first = renderPanel();
@@ -330,6 +370,7 @@ test("show_exactly_reveals_the_payload", async () => {
 });
 
 test("include_values_is_off_again_after_each_ask", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -360,7 +401,7 @@ test("asking_without_a_provider_shows_the_setup_card", async () => {
   expect(await screen.findByText("Connect an AI provider in Settings")).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "Connect a provider" }));
   expect(onOpenSettings).toHaveBeenCalled();
-  expect(callsTo("save_ai_thread")).toHaveLength(0);
+  expect(saves()).toHaveLength(0);
 });
 
 test("asking_with_a_provider_saves_the_thread", async () => {
@@ -371,10 +412,10 @@ test("asking_with_a_provider_saves_the_thread", async () => {
   await waitFor(() => expect(callsTo("ai_settings")).toHaveLength(1));
   await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
   expect(await screen.findByText("Use an index.")).toBeTruthy();
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
-  const saved = callsTo("save_ai_thread")[0].thread as AiThread;
+  await waitFor(() => expect(saves()).toHaveLength(1));
+  const saved = saves()[0].thread as AiThread;
   // The Ask's id goes with the save, so the Core writes the AI Context it used.
-  expect(callsTo("save_ai_thread")[0].requestId).toBe((callsTo("ai_ask_stream")[0].request as AskRequest).requestId);
+  expect(saves()[0].requestId).toBe((callsTo("ai_ask_stream")[0].request as AskRequest).requestId);
   expect(saved.place).toBe("ungrouped");
   expect(saved.messages.map((m) => [m.role, m.text])).toEqual([
     ["user", "why slow?"],
@@ -399,7 +440,7 @@ async function askHeld(
 }
 
 const lastSaved = () => {
-  const calls = callsTo("save_ai_thread");
+  const calls = saves();
   return calls[calls.length - 1].thread as AiThread;
 };
 
@@ -409,15 +450,16 @@ test("deltas_render_in_order", async () => {
   stream.emit({ type: "status", step: "Writing" });
   expect(screen.getByText("Writing")).toBeTruthy();
   stream.emit(delta("Add an "));
-  expect(screen.getByText("Add an")).toBeTruthy();
+  // The text is drawn on the next animation frame.
+  expect(await screen.findByText("Add an")).toBeTruthy();
   stream.emit(delta("index on "), delta("created_at."));
-  expect(screen.getByText("Add an index on created_at.")).toBeTruthy();
+  expect(await screen.findByText("Add an index on created_at.")).toBeTruthy();
   // The question shows while the answer is written, and Send turns into Stop.
   expect(screen.getByText("why slow?", { selector: ".msg-user" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-  expect(callsTo("save_ai_thread")).toHaveLength(0);
+  expect(saves()).toHaveLength(0);
   stream.emit(done());
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   expect(lastSaved().messages.map((m) => m.text)).toEqual(["why slow?", "Add an index on created_at."]);
   expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
 });
@@ -431,7 +473,7 @@ test("stop_keeps_partial_marked_stopped", async () => {
   await waitFor(() => expect(callsTo("ai_cancel")).toEqual([{ requestId: id }]));
   expect(await screen.findByText("Stopped")).toBeTruthy();
   expect(screen.getByText("Half an")).toBeTruthy();
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   expect(lastSaved().messages.map((m) => [m.role, m.text])).toEqual([
     ["user", "why slow?"],
     ["assistant", "Half an"],
@@ -450,7 +492,7 @@ test("error_card_keeps_partial_and_retries", async () => {
   expect(screen.getByText("Partly written")).toBeTruthy();
   expect(screen.queryByText("Try 2")).toBeNull();
   // Saved once, with the partial answer.
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   expect(lastSaved().messages.map((m) => m.text)).toEqual(["why slow?", "Partly written"]);
 
   reply = () => [failed({ kind: "network", host: "api.groq.com" })];
@@ -464,7 +506,7 @@ test("error_card_keeps_partial_and_retries", async () => {
   reply = () => [delta("Use an index."), done()];
   await user.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByText("Use an index.")).toBeTruthy();
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(2));
+  await waitFor(() => expect(saves()).toHaveLength(2));
   expect(lastSaved().messages.map((m) => m.text)).toEqual(["why slow?", "Use an index."]);
   expect(screen.queryByText("Could not reach api.groq.com.")).toBeNull();
 });
@@ -563,7 +605,7 @@ test("a_busy_place_shows_its_card", async () => {
   await waitFor(() => expect(callsTo("ai_settings")).toHaveLength(1));
   await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
   expect(await screen.findByText("An answer is still being written. Stop it first.")).toBeTruthy();
-  expect(callsTo("save_ai_thread")).toHaveLength(0);
+  expect(saves()).toHaveLength(0);
 });
 
 test("busy_stop_it_cancels_the_place", async () => {
@@ -625,6 +667,7 @@ test("changing_place_cancels", async () => {
 });
 
 test("panel_says_what_it_cannot_see", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   lockAll = "Shop prod shares nothing with AI";
@@ -648,6 +691,7 @@ test("panel_says_what_it_cannot_see", async () => {
 });
 
 test("rows_pill_toggles_when_allowed", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -663,6 +707,7 @@ test("rows_pill_toggles_when_allowed", async () => {
 });
 
 test("rows_pill_locked_below_rows_level", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -678,6 +723,7 @@ test("rows_pill_locked_below_rows_level", async () => {
 });
 
 test("rows_switch_off_after_send", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -696,6 +742,7 @@ test("rows_switch_off_after_send", async () => {
 });
 
 test("rows_switch_resets_on_new_context", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -707,6 +754,7 @@ test("rows_switch_resets_on_new_context", async () => {
 });
 
 test("foot_line_follows_rows", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -719,6 +767,7 @@ test("foot_line_follows_rows", async () => {
 });
 
 test("foot_line_after_a_failed_read_or_a_closed_connection_does_not_say_no_table_is_named", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -730,6 +779,7 @@ test("foot_line_after_a_failed_read_or_a_closed_connection_does_not_say_no_table
 });
 
 test("foot_line_with_a_closed_connection", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -741,6 +791,7 @@ test("foot_line_with_a_closed_connection", async () => {
 });
 
 test("foot_line_says_no_table_is_named", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -755,6 +806,7 @@ const openHistory = async (user: ReturnType<typeof userEvent.setup>) =>
   user.click(await screen.findByRole("button", { name: "Show history" }));
 
 test("threads_follow_the_group", async () => {
+  unfoldSends();
   const user = userEvent.setup();
   threads = [thread("a", "group:g1", "Group one chat", 1), thread("b", "group:g2", "Group two chat", 2)];
   const { rerender } = renderPanel({ place: "group:g1", groupId: "g1", context: ctx("schema", "One DB") });
@@ -942,17 +994,17 @@ test("save_uses_the_returned_view", async () => {
     title: "Title from the Core",
     messages: t.messages.map((m) => ({ ...m, topic: 3 })),
   });
-  routeInvoke({ ...handlersNow(), save_ai_thread: (a) => viewOf(stamped(a.thread as AiThread)) });
+  coreSave = (t) => viewOf(stamped(t));
   renderPanel();
   const input = await screen.findByRole("textbox", { name: "Message" });
   await user.type(input, "first{Enter}");
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   await user.type(input, "second{Enter}");
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(2));
-  const sent = callsTo("save_ai_thread")[1].thread as AiThread;
-  // The second save is built on the view the first returned: its stamp is still on the first turn.
+  await waitFor(() => expect(saves()).toHaveLength(2));
+  // The second Ask is built on the view the first returned: the Core's title, and its turn after the stamped one.
+  const sent = callsTo("ai_append_turn")[1].turn as AppendTurn;
   expect(sent.title).toBe("Title from the Core");
-  expect(sent.messages.slice(0, 2).map((m) => m.topic)).toEqual([3, 3]);
+  expect(saves()[1].thread.messages.map((m) => m.text)).toEqual(["first", "Use an index.", "second", "Use an index."]);
   await openHistory(user);
   expect(screen.getByRole("button", { name: /Title from the Core/ })).toBeTruthy();
 });
@@ -974,12 +1026,85 @@ test("composer_order_sends_line_input_subline_hint_and_send", async () => {
 });
 
 test("sends_items_have_their_own_icons", async () => {
+  unfoldSends();
   renderPanel({ context: ctx("schemaQuery") });
   const iconOf = (el: HTMLElement) => el.querySelector("path")?.getAttribute("d");
   const d = (name: IconName) => iconElement(name).querySelector("path")?.getAttribute("d");
   expect(iconOf(await screen.findByRole("button", { name: "schema of 1 table" }))).toBe(d("table"));
   expect(iconOf(screen.getByRole("button", { name: /^the current statement/ }))).toBe(d("fileQuery"));
   expect(iconOf(screen.getByText("your question").closest(".send-pill") as HTMLElement)).toBe(d("msg"));
+});
+
+/** The Sends line's fold button: the chevron and the word. */
+const sendsFold = () => screen.getByRole("button", { name: "Sends" });
+
+test("sends_is_folded_to_one_line_by_default", async () => {
+  renderPanel();
+  await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+  const fold = sendsFold();
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  // The size stays on the line; the rows, the notes and Show exactly wait behind the chevron.
+  await waitFor(() => expect(document.querySelector(".sends-row .sends-size")).toBeTruthy());
+  expect(document.querySelector(".sends-list")).toBeNull();
+  expect(screen.queryByRole("button", { name: "schema of 1 table" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Show exactly" })).toBeNull();
+});
+
+test("opening_sends_shows_the_rows_and_is_remembered", async () => {
+  const user = userEvent.setup();
+  renderPanel();
+  await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+  await user.click(sendsFold());
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("true");
+  expect(await screen.findByRole("button", { name: "schema of 1 table" })).toBeTruthy();
+  expect(sendsFold().getAttribute("aria-controls")).toBe(document.querySelector(".sends-list")?.id);
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("1");
+
+  // A new panel opens as it was left.
+  cleanup();
+  renderPanel();
+  expect(await screen.findByRole("button", { name: "schema of 1 table" })).toBeTruthy();
+  await user.click(sendsFold());
+  expect(screen.queryByRole("button", { name: "schema of 1 table" })).toBeNull();
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("0");
+  cleanup();
+  renderPanel();
+  await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("false");
+});
+
+test("sends_fold_toggles_with_enter_and_space", async () => {
+  const user = userEvent.setup();
+  renderPanel();
+  await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+  sendsFold().focus();
+  await user.keyboard("{Enter}");
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("true");
+  expect(await screen.findByRole("button", { name: "schema of 1 table" })).toBeTruthy();
+  await user.keyboard(" ");
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("button", { name: "schema of 1 table" })).toBeNull();
+});
+
+test("sends_error_shows_while_folded", async () => {
+  routeInvoke({
+    ...handlersNow(),
+    ai_preview: () => {
+      throw new Error("The Core could not build the preview.");
+    },
+  });
+  renderPanel();
+  expect(await screen.findByText("The Core could not build the preview.")).toBeTruthy();
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("false");
+});
+
+test("a_settings_change_opens_an_open_panels_sends", async () => {
+  renderPanel();
+  await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+  act(() => saveSendsOpen(true));
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("true");
+  act(() => saveSendsOpen(false));
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("false");
 });
 
 const FENCED = "Join them:\n```sql\nSELECT id FROM orders\n```\nThat is all.";
@@ -1089,7 +1214,7 @@ test("notes_show_above_answer", async () => {
   await askHeld(user);
   stream.emit(delta(LABELLED));
   // While streaming, the block has no label.
-  expect(document.querySelector(".answer-sql-head")!.textContent).toBe("");
+  await waitFor(() => expect(document.querySelector(".answer-sql-head")!.textContent).toBe(""));
   stream.emit(done({ notes: [note], sqlBlocks: [SLEEP_BLOCK] }));
   const shown = await screen.findByText(note);
   const answer = screen.getByText("Here:");
@@ -1333,6 +1458,20 @@ test("pick_a_model_opens_the_menu", async () => {
   expect(screen.getByRole("dialog", { name: "Model" })).toBeTruthy();
 });
 
+test("pick_tables_unfolds_sends_and_focuses_the_first_switch", async () => {
+  const user = userEvent.setup();
+  reply = () => [failed({ kind: "tooBig", needed: 1_300_000, window: 131_072, model: "llama-3.3-70b-versatile" })];
+  await askWith(user);
+  // Sends starts folded: the switches are not there until Pick tables opens it.
+  await user.click(await screen.findByRole("button", { name: "Pick tables" }));
+  expect(screen.getByRole("button", { name: "Sends" }).getAttribute("aria-expanded")).toBe("true");
+  // The preview is asked for again after the failure; focus lands once its switches are drawn.
+  await waitFor(() => expect(document.activeElement).toBe(document.querySelector(".sends .send-pill[aria-pressed]")));
+  expect(document.activeElement?.classList.contains("send-pill")).toBe(true);
+  // Remembered, as the chevron and /sends remember it.
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("1");
+});
+
 test("bad_key_card_counts_tries", async () => {
   const user = userEvent.setup();
   reply = () => [failed({ kind: "badKey" })];
@@ -1352,13 +1491,13 @@ test("retry_after_stopped", async () => {
   await user.click(screen.getByRole("button", { name: "Stop" }));
   expect(await screen.findByText("Stopped.")).toBeTruthy();
   expect(screen.getByText(/^You stopped the answer after \d+(\.\d)?s\. The part above is kept\.$/)).toBeTruthy();
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   await user.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
   expect((callsTo("ai_ask_stream")[1].request as AskRequest).question).toBe("why slow?");
   stream.emit(delta("Use an index."), done());
   expect(await screen.findByText("Use an index.")).toBeTruthy();
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(2));
+  await waitFor(() => expect(saves()).toHaveLength(2));
   // The retry replaces the stopped turn.
   expect(lastSaved().messages.map((m) => m.text)).toEqual(["why slow?", "Use an index."]);
   expect(screen.queryByText("Stopped.")).toBeNull();
@@ -1369,7 +1508,7 @@ test("save_after_place_change", async () => {
   const { rerender } = await askHeld(user);
   stream.emit(delta("Half an"));
   rerender(<AssistantPanel place="group:g2" groupId="g2" context={null} schema={null} onOpenSettings={() => {}} />);
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   // The stopped answer is saved to the place it was asked in, and the new place shows none of it.
   expect(lastSaved().place).toBe("ungrouped");
   expect(lastSaved().messages.map((m) => m.text)).toEqual(["why slow?", "Half an"]);
@@ -1443,15 +1582,15 @@ test("record_survives_reload", async () => {
   const first = await askHeld(user, "one");
   stream.emit(sent(), step("access", "schema", { atMs: 2 }), line(0, "info", "question", ["chars", "3"]), delta("Half an"));
   await user.click(screen.getByRole("button", { name: "Stop" }));
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
 
   await askMore(user, "two", 2);
   stream.emit(sent(), delta("The first half"), done({ stop: "length" }));
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(2));
+  await waitFor(() => expect(saves()).toHaveLength(2));
 
   await askMore(user, "three", 3);
   stream.emit(sent(), line(1806, "error", "http", ["kind", "badKey"], ["status", "401"]), failed({ kind: "badKey" }));
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(3));
+  await waitFor(() => expect(saves()).toHaveLength(3));
   // A failure after something was sent is saved as a turn, and the question stays out of the composer.
   expect((screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement).value).toBe("");
 
@@ -1493,7 +1632,7 @@ test("a_saved_answer_gets_its_sql_actions_back_from_the_record", async () => {
   const ed = fakeEditor("");
   await askHeld(user, "why slow?", { insertTarget: { editor: () => ed.api, name: "Query 1" } });
   stream.emit(sent(), delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK], notes: ["A stored note."] }));
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   const saved = lastSaved();
   cleanup();
   threads = [saved];
@@ -1508,7 +1647,7 @@ test("pre_send_failure_not_saved", async () => {
   await askHeld(user);
   stream.emit(line(3, "error", "request", ["kind", "tooBig"], ["phase", "build"]), failed({ kind: "tooBig", needed: 300_000, window: 131_072, model: "llama-3.3-70b-versatile" }));
   await screen.findByText(/This question needs/);
-  expect(callsTo("save_ai_thread")).toHaveLength(0);
+  expect(saves()).toHaveLength(0);
   expect((screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement).value).toBe("why slow?");
   // Its log is still there from the card.
   await user.click(screen.getByRole("button", { name: "Show log" }));
@@ -1558,7 +1697,7 @@ test("insert_and_open_are_kept_with_the_answer", async () => {
   const onOpenInNewTab = vi.fn();
   await askHeld(user, "why slow?", { insertTarget: { editor: () => ed.api, name: "Query 1" }, onOpenInNewTab });
   stream.emit(sent(), delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] }));
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   const saved = lastSaved();
   const answer = saved.messages[1];
   await user.click(await screen.findByRole("button", { name: "Insert into the editor" }));
@@ -1596,7 +1735,7 @@ test("context_event_is_kept_with_the_answer", async () => {
   // Shown above the answer while it is written.
   expect(await screen.findByText(NOTICE)).toBeTruthy();
   stream.emit(done());
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   // And after it is saved, above the answer text.
   const note = screen.getByText(NOTICE).closest(".answer-note")!;
   expect(note.compareDocumentPosition(screen.getByText("Use an index.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -1624,13 +1763,13 @@ test("failed_retry_show_log_is_live", async () => {
   const user = userEvent.setup();
   await askHeld(user);
   stream.emit(sent(), line(0, "info", "question", ["first", "attempt"]), failed({ kind: "network", host: "api.groq.com" }));
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   await user.click(await screen.findByRole("button", { name: "Retry" }));
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
   // The retry fails before anything is sent, so the saved turn stays as it was.
   stream.emit(line(3, "error", "request", ["kind", "tooBig"]), failed({ kind: "tooBig", needed: 300_000, window: 131_072, model: "m" }));
   await screen.findByText(/This question needs/);
-  expect(callsTo("save_ai_thread")).toHaveLength(1);
+  expect(saves()).toHaveLength(1);
   await user.click(screen.getByRole("button", { name: "Show log" }));
   // The new attempt's log, not the saved one.
   expect(document.querySelectorAll(".lrow")).toHaveLength(1);
@@ -1643,7 +1782,7 @@ test("a_saved_command_error_reloads_with_its_card", async () => {
   stream.emit(sent(), delta("Half"));
   // The command itself fails after the request went out (not an AiError).
   stream.emit({ type: "error", error: { kind: "internal" }, partial: true });
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   first.unmount();
   const saved = lastSaved();
   // Rewrite the turn as a non-AI command error would have saved it.
@@ -1672,7 +1811,7 @@ test("error_cards_count_the_sample_selects_that_ran", async () => {
   const said = /^The request left this computer but nothing came back\. Contura read sample rows from 2 tables, read only\./;
   expect(await screen.findByText(said)).toBeTruthy();
   // The saved turn's card, reloaded, says the same.
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   first.unmount();
   threads = [lastSaved()];
   renderPanel();
@@ -1684,7 +1823,7 @@ async function retrySaved(action: string | undefined, text: string) {
   const user = userEvent.setup();
   const first = await askHeld(user, text);
   stream.emit(sent(), failed({ kind: "timeout", phase: "first byte" }));
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   first.unmount();
   const saved = lastSaved();
   if (action) saved.messages[0] = { ...saved.messages[0], action };
@@ -1731,8 +1870,8 @@ test("a_failed_open_keeps_the_previous_chat_and_shows_why", async () => {
   // The next Ask continues the chat that is still open.
   askError = null;
   await user.type(screen.getByRole("textbox", { name: "Message" }), "more{Enter}");
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
-  expect((callsTo("save_ai_thread")[0].thread as AiThread).id).toBe("b");
+  await waitFor(() => expect(saves()).toHaveLength(1));
+  expect((saves()[0].thread as AiThread).id).toBe("b");
 });
 
 test("opening_a_chat_that_is_gone_drops_its_row", async () => {
@@ -1937,8 +2076,8 @@ test("persist_stamps_both_messages", async () => {
   renderPanel();
   await user.type(await screen.findByRole("textbox", { name: "Message" }), "why slow?{Enter}");
   await screen.findByText("Use an index.");
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
-  const saved = callsTo("save_ai_thread")[0].thread as AiThread;
+  await waitFor(() => expect(saves()).toHaveLength(1));
+  const saved = saves()[0].thread as AiThread;
   expect(saved.messages).toHaveLength(2);
   for (const m of saved.messages) {
     expect(m).toMatchObject({ topic: 2, connectionId: "c1", database: "shop", kinds: ["question", "cards"], tables: ["orders"], action: "ask" });
@@ -2231,6 +2370,10 @@ test("an_undone_compaction_stays_undone_after_reopening_the_chat", async () => {
       stored = [compactionOf()];
       return viewOf(a.thread as AiThread, false, topics, stored);
     },
+    ai_append_turn: (a) => {
+      stored = [compactionOf()];
+      return turnViewOf(a.turn as AppendTurn, t, topics, stored);
+    },
     ai_undo_compact: () => {
       stored = [compactionOf({ undone: true })];
       return viewOf(t, false, topics, stored);
@@ -2349,10 +2492,13 @@ test("each_command_runs_its_control", async () => {
   expect(await screen.findByRole("dialog", { name: "Model" })).toBeTruthy();
   cleanup();
 
-  // /sends opens the Sends list in full.
+  // /sends opens the Sends list in full, unfolding it, and the list stays open next time.
   user = await slashPanel();
+  expect(screen.getByRole("button", { name: "Sends" }).getAttribute("aria-expanded")).toBe("false");
   await user.type(composer(), "/sends{Enter}");
   expect(await screen.findByRole("button", { name: "Hide" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Sends" }).getAttribute("aria-expanded")).toBe("true");
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("1");
   cleanup();
 
   // /log opens the last answer's log.
@@ -2542,6 +2688,7 @@ test("escape_in_the_list_does_not_reach_outer_handlers", async () => {
 // ---- P11 part 2 ----
 
 test("parity_P11_11_the_schema_row_counts_the_tables_the_core_sends", async () => {
+  unfoldSends();
   // A statement that names no table: the Core still sends the schema it picked.
   const open: AskContext = { ...ctx("schemaQuery"), sql: "SELECT 1", tables: [] };
   routeInvoke({
@@ -2577,7 +2724,7 @@ test("parity_P11_15_the_thread_scrolls_to_the_new_turn_unless_scrolled_up", asyn
   await screen.findByText("Add an index. On created_at.");
   expect(top).toBe(300);
   stream.emit(done());
-  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  await waitFor(() => expect(saves()).toHaveLength(1));
   expect(top).toBe(300);
 });
 
@@ -2627,7 +2774,7 @@ test("parity_P11_29_a_stop_with_nothing_received_shows_stopped_and_keeps_the_que
   expect(await screen.findByText("Stopped.")).toBeTruthy();
   expect(screen.getByText(/^You stopped the answer after \d+(\.\d)?s, before anything arrived\.$/)).toBeTruthy();
   expect((screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement).value).toBe("count shipments by carrier");
-  expect(callsTo("save_ai_thread")).toHaveLength(0);
+  expect(saves()).toHaveLength(0);
   // Retry asks the same question again, and the card goes.
   await user.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
@@ -2649,4 +2796,102 @@ test("parity_P11_39_the_meter_counts_the_summary_step_of_the_next_send", async (
   });
   renderPanel();
   expect(await screen.findByTitle("About 19,742 of 131,072 tokens in use")).toBeTruthy();
+});
+
+test("a_delta_draws_only_the_live_answer_not_the_earlier_turns", async () => {
+  const user = userEvent.setup();
+  const earlier = thread("t1", "ungrouped", "Why is it slow?", 5);
+  earlier.messages.push({ role: "assistant", text: "An earlier answer.", context: [], at: 6 });
+  threads = [earlier];
+  await askHeld(user);
+  expect(await screen.findByText("An earlier answer.")).toBeTruthy();
+  const before = answerDraws.get("An earlier answer.");
+  let text = "";
+  for (const piece of ["Use ", "an ", "index ", "on ", "created_at."]) {
+    text += piece;
+    stream.emit(delta(piece));
+    expect(await screen.findByText(text.trim())).toBeTruthy();
+  }
+  expect(answerDraws.get("An earlier answer.")).toBe(before);
+});
+
+test("a_long_chat_draws_its_newest_20_turns_and_shows_earlier_ones_on_request", async () => {
+  const user = userEvent.setup();
+  const long = thread("t1", "ungrouped", "question 1", 1);
+  long.messages = [];
+  for (let n = 1; n <= 30; n++) {
+    long.messages.push({ role: "user", text: `question ${n}`, context: [], at: n * 10 }, { role: "assistant", text: `answer ${n}`, context: [], at: n * 10 + 1 });
+  }
+  threads = [long];
+  renderPanel();
+  expect(await screen.findByText("answer 30")).toBeTruthy();
+  expect(screen.getByText("question 11", { selector: ".msg-user" })).toBeTruthy();
+  expect(screen.queryByText("question 10", { selector: ".msg-user" })).toBeNull();
+  expect(document.querySelectorAll(".msg-user")).toHaveLength(20);
+  await user.click(screen.getByRole("button", { name: "Show 10 earlier" }));
+  expect(document.querySelectorAll(".msg-user")).toHaveLength(30);
+  expect(screen.getByText("answer 1")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /earlier/ })).toBeNull();
+});
+
+test("an_ask_sends_only_its_turn_and_a_chat_whose_save_failed_goes_whole_next_time", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  const old = thread("t1", "ungrouped", "earlier q", 5);
+  old.messages.push({ role: "assistant", text: "earlier a", context: [], at: 6 });
+  threads = [old];
+  let failAppend = true;
+  const routes = handlersNow();
+  routeInvoke({
+    ...routes,
+    ai_append_turn: (a) => {
+      if (failAppend) throw { kind: "store", message: "locked" };
+      return routes.ai_append_turn(a);
+    },
+  });
+  renderPanel();
+  await screen.findByText("earlier a");
+  const input = screen.getByRole("textbox", { name: "Message" });
+  await user.type(input, "first{Enter}");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(1));
+  // Only the new turn goes over IPC, never the stored one.
+  const turn = callsTo("ai_append_turn")[0].turn as AppendTurn;
+  expect(turn.threadId).toBe("t1");
+  expect(turn.messages.map((m) => m.text)).toEqual(["first", "Use an index."]);
+  await screen.findByText("first", { selector: ".msg-user" });
+  // That save failed: the next Ask saves the chat whole, so the Core gets the turn it lacks.
+  failAppend = false;
+  await user.type(input, "second{Enter}");
+  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  expect((callsTo("save_ai_thread")[0].thread as AiThread).messages.map((m) => m.text)).toEqual(["earlier q", "earlier a", "first", "Use an index.", "second", "Use an index."]);
+  // Saved again: back to one turn per Ask.
+  await user.type(input, "third{Enter}");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(2));
+  expect((callsTo("ai_append_turn")[1].turn as AppendTurn).messages.map((m) => m.text)).toEqual(["third", "Use an index."]);
+});
+
+test("a_full_record_is_kept_only_while_its_log_is_open", async () => {
+  const user = userEvent.setup();
+  threads = [
+    {
+      id: "a",
+      place: "ungrouped",
+      title: "Why?",
+      updatedAt: 10,
+      messages: [
+        { role: "user", text: "Why?", context: [], at: 10 },
+        { role: "assistant", text: "Because.", context: [], at: 11, record: { ...fullRecord("x"), log: [], trimmed: true } },
+      ],
+    },
+  ];
+  routeInvoke({ ...handlersNow(), ai_answer_record: () => fullRecord("the full log line") });
+  renderPanel();
+  await user.click(await screen.findByRole("button", { name: "Show log" }));
+  expect(await screen.findByText(/the full log line/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Back to the answer" }));
+  // Closed, the full record is let go: opening the log again fetches it again.
+  await user.click(await screen.findByRole("button", { name: "Show log" }));
+  expect(await screen.findByText(/the full log line/)).toBeTruthy();
+  expect(callsTo("ai_answer_record")).toHaveLength(2);
 });

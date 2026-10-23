@@ -418,19 +418,34 @@ export default function QueryDiagramPane(props: QueryDiagramPaneProps) {
     <section className="query-diagram" aria-label="Query diagram">
       <div className="query-diagram-strip" role="toolbar" aria-label="Query diagram">
         <span className="query-diagram-title">Query diagram</span>
-        <span className="chip chip-neutral">
+        <span className="chip chip-neutral query-diagram-readonly">
           <Icon name="eye" size={14} />
           Read only
         </span>
         <span className="query-diagram-about">Built from the current statement, table details only, no rows</span>
         <span className="spacer" />
-        <button type="button" className="button button-small button-quiet" disabled={!drawn} onClick={() => drawn && place(drawn.shape, true, drawn.dbs)}>
+        <button
+          type="button"
+          className="button button-small button-quiet"
+          aria-label="Tidy"
+          title="Tidy"
+          disabled={!drawn}
+          onClick={() => drawn && place(drawn.shape, true, drawn.dbs)}
+        >
           <Icon name="grid" size={14} />
-          Tidy
+          {/* A narrow strip (container query in app.css) keeps the icons; the words and the Read only chip go. */}
+          <span className="bar-label">Tidy</span>
         </button>
-        <button type="button" className="button button-small button-quiet" disabled={!drawn} onClick={() => setPublishAt(onScreen())}>
+        <button
+          type="button"
+          className="button button-small button-quiet"
+          aria-label="Publish"
+          title="Publish"
+          disabled={!drawn}
+          onClick={() => setPublishAt(onScreen())}
+        >
           <Icon name="image" size={14} />
-          Publish
+          <span className="bar-label">Publish</span>
         </button>
         <button type="button" className="icon-button" aria-label="Close diagram" title="Close diagram" onClick={props.onClose}>
           <Icon name="close" size={14} />

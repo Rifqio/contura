@@ -4,14 +4,15 @@ import type { CheckResult, UpdateStatus } from "../../api/updates";
 import Dialog from "../../components/Dialog";
 import Icon from "../../components/Icon";
 import { RESTART_ASK, cancelAsk, checkNow, chooseChecks, loadUpdates, resolveAndRestart, updateAndRestart, useUpdates } from "../../update/updateStore";
-import { Row, type RowKey, Section, SwitchRow, useRowShown } from "./layout";
+import { Card, type DataState, Row, StateText, SwitchRow, defineRows, useFlashClass } from "./layout";
 
-const ROW = {
+const ROW = defineRows({
   checks: { label: "Check for updates", terms: "update updates new version GitHub automatic daily privacy" },
-  version: { label: "Current version", terms: "Contura version Check now last check update" },
+  version: { label: "Current version", terms: "Contura version" },
+  lastCheck: { label: "Last check", terms: "Check now update GitHub" },
   available: { label: "New version", terms: "update release notes Update and restart download" },
-} satisfies Record<string, RowKey>;
-export const UPDATES_ROWS: readonly RowKey[] = Object.values(ROW);
+});
+export const UPDATES_ROWS = Object.values(ROW);
 
 /** Exactly what a check sends; the README's privacy section says the same. */
 export const UPDATES_PRIVACY =
@@ -33,11 +34,18 @@ export function lastCheckText(s: UpdateStatus): string {
   return `Last checked ${when(s.lastCheckMs)}. ${resultText(s.lastResult)}`;
 }
 
+/** The Last check row: reading, checking, the result, or why the check failed. */
+function lastCheckState(status: UpdateStatus | null, checking: boolean): DataState {
+  if (checking) return { s: "loading", text: "Checking GitHub..." };
+  if (!status) return { s: "loading", text: "Reading..." };
+  return status.lastResult?.kind === "failed" ? { s: "error", text: lastCheckText(status) } : { s: "ready", text: lastCheckText(status) };
+}
+
 function Available({ status }: { status: UpdateStatus }) {
   const { phase } = useUpdates();
-  const shown = useRowShown(ROW.available);
+  const cls = useFlashClass(ROW.available.id, "update-offer");
   const offer = status.offer;
-  if (!offer || !shown) return null;
+  if (!offer) return null;
   const busy = phase.kind !== "idle";
   let action;
   if (status.canInstall) {
@@ -56,7 +64,7 @@ function Available({ status }: { status: UpdateStatus }) {
     );
   }
   return (
-    <div className="update-offer" data-row="available">
+    <div className={cls} data-row={ROW.available.id}>
       <h3>{`Contura ${offer.version}`}</h3>
       {offer.notes.trim() !== "" && <p className="update-notes">{offer.notes}</p>}
       <div className="update-actions">
@@ -88,17 +96,22 @@ export default function UpdatesSection() {
     if (!status) void loadUpdates();
   }, [status]);
   const offer = status?.offer;
+  const last = lastCheckState(status, phase.kind === "checking");
   return (
-    <Section id="updates" title="Updates" rows={UPDATES_ROWS}>
-      <SwitchRow {...ROW.checks} checked={status?.checks === true} onChange={(on) => void chooseChecks(on)} hint={UPDATES_PRIVACY} />
-      <Row {...ROW.version}>
-        <span className="update-version">{status ? `Contura ${status.currentVersion}` : "Contura"}</span>
-        <button type="button" className="button" disabled={!status || phase.kind !== "idle"} onClick={() => void checkNow()}>
-          <Icon name="refresh" size={14} />
-          {phase.kind === "checking" ? "Checking" : "Check now"}
-        </button>
-      </Row>
-      {status && <p className="srow-note-line update-last">{lastCheckText(status)}</p>}
+    <>
+      <Card>
+        <SwitchRow {...ROW.checks} checked={status?.checks === true} onChange={(on) => void chooseChecks(on)} hint={UPDATES_PRIVACY} />
+        <Row {...ROW.version}>
+          <span className="update-version mono">{status ? `Contura ${status.currentVersion}` : "Contura"}</span>
+        </Row>
+        <Row {...ROW.lastCheck}>
+          <StateText state={last} />
+          <button type="button" className="button" disabled={!status || phase.kind !== "idle"} onClick={() => void checkNow()}>
+            <Icon name="refresh" size={14} />
+            {last.s === "error" ? "Try again" : "Check now"}
+          </button>
+        </Row>
+      </Card>
       {status && <Available status={status} />}
       {error && (
         <p className="field-error" role="alert">
@@ -134,6 +147,6 @@ export default function UpdatesSection() {
           </footer>
         </Dialog>
       )}
-    </Section>
+    </>
   );
 }

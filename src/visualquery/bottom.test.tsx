@@ -415,3 +415,64 @@ test("review_minor_3_without_a_connection_the_sql_tab_does_not_say_it_is_writing
   expect(within(pane).queryByText("Writing the SQL...")).toBeNull();
   expect(within(pane).getByText("No SQL without a Connection.")).toBeTruthy();
 });
+
+// ---- Release: the live SQL beside the Columns grid ----
+
+const sqlOf = (q: VisualQuery) =>
+  [
+    `SELECT ${q.columns.length === 0 ? "o.*, s.*" : q.columns.map((c) => `${q.tables.find((t) => t.id === c.table)?.alias}.${c.column}`).join(", ")}`,
+    "FROM orders o",
+    ...(q.groupBy.kind === "manual" ? [`GROUP BY ${q.groupBy.columns.map((c) => c.column).join(", ")}`] : []),
+  ].join("\n");
+const liveSql = () => routes({ visual_query_sql: ({ query }) => ({ query: { sql: sqlOf(query as VisualQuery), parts: [], outputs: [], warnings: [] }, problems: [] }) });
+const pane = () => screen.getByRole("region", { name: "SQL beside the columns" });
+
+test("release_columns_tab_shows_the_live_sql_beside_the_grid_and_follows_it", async () => {
+  liveSql();
+  render(<Tab over={TWO} />);
+  // Nothing ticked: the SELECT the query would run.
+  await waitFor(() => expect(pane().textContent).toContain("SELECT o.*, s.*"));
+  act(() => setModel((q) => ({ ...q, columns: [out("t1", "id"), out("t2", "name")] })));
+  await waitFor(() => expect(pane().textContent).toContain("SELECT o.id, s.name"));
+  // Edit by hand: the Core's text with the hand-picked GROUP BY.
+  act(() => setModel((q) => ({ ...q, groupBy: { kind: "manual", columns: [{ table: "t2", column: "name" }] } })));
+  await waitFor(() => expect(pane().textContent).toContain("GROUP BY name"));
+  // A static block, never a second editor.
+  expect(document.querySelectorAll(".cm-editor")).toHaveLength(0);
+  // A read-only, highlighted <pre> of the query.
+  const pre = pane().querySelector("pre.vq-columns-sql-code")!;
+  expect(pre).not.toBeNull();
+  expect(pre.textContent).toBe("SELECT o.id, s.name\nFROM orders o\nGROUP BY name");
+  expect(pre.querySelector("span[class]")).not.toBeNull();
+});
+
+test("release_the_sql_pane_copies_exactly_what_it_shows", async () => {
+  liveSql();
+  const writes: string[] = [];
+  const had = navigator.clipboard;
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void writes.push(t) } });
+  try {
+    render(<Tab over={{ ...TWO, columns: [out("t1", "id")] }} />);
+    await waitFor(() => expect(pane().textContent).toContain("SELECT o.id"));
+    fireEvent.click(within(pane()).getByRole("button", { name: "Copy the SQL" }));
+    await waitFor(() => expect(writes).toEqual(["SELECT o.id\nFROM orders o"]));
+    // It says so beside the button.
+    await waitFor(() => expect(within(pane()).getByRole("status").textContent).toBe("Copied"));
+    // The SQL scrolls in its own area, reachable by Tab.
+    const body = within(pane()).getByRole("region", { name: "Generated SQL" });
+    expect(body.tabIndex).toBe(0);
+    expect(body.querySelector("pre")).not.toBeNull();
+  } finally {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: had });
+  }
+});
+
+test("release_the_sql_pane_with_no_tables_and_its_narrow_rule", async () => {
+  render(<Tab over={{}} />);
+  await waitFor(() => expect(pane().textContent).toBe("SQLDrag a table from the tree to start."));
+  expect(within(pane()).getByRole("button", { name: "Copy the SQL" }).hasAttribute("disabled")).toBe(true);
+  // Under about 1,000 px of panel the pane hides (a container query; no setting is kept).
+  expect(appCss).toMatch(/\.vq-columns-split \{[^}]*container-type:\s*inline-size/);
+  expect(appCss).toMatch(/@container \(max-width: 999px\) \{\s*\.vq-columns-sql \{\s*display: none;/);
+  expect(appCss).toMatch(/\.vq-columns-sql \{[^}]*min-width:\s*320px/);
+});

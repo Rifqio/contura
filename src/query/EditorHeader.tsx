@@ -249,13 +249,15 @@ export default function EditorHeader({
             type="button"
             className={`${writeHazard ? "button button-small button-prod" : "button button-small button-primary"} editor-header-run`}
             disabled={!canRun || !!blockedTip}
-            title={blockedTip ?? undefined}
+            // Once the right end is in More the key hint leaves the button (it stays in the tooltip), so the strip fits
+            // a narrow work area beside the Ask panel.
+            title={blockedTip ?? (crowded && runKey ? `Run (${runKey})` : undefined)}
             // R8: the button shows PROD; its spoken name keeps the word.
             aria-label={writeHazard ? `Run on Production${runKey ? ` (${runKey})` : ""}` : undefined}
             onClick={onRun}
           >
             <Icon name="play" size={14} />
-            {writeHazard ? "Run on PROD" : "Run"} {runKey && <Kbd keys={runKey} />}
+            {writeHazard ? "Run on PROD" : "Run"} {runKey && !crowded && <Kbd keys={runKey} />}
           </button>
           {labelled("playAll", "Run all", hintFor(map, "query.runAll"), onRunAll, !canRun || !!runAllBlockedTip, runAllBlockedTip)}
         </>

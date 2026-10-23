@@ -3,6 +3,8 @@ import {
   aiContextChanged,
   errorText,
   fileName,
+  firstStartGuide,
+  firstStartGuideSeen,
   forgetRecent,
   listConnections,
   listDiagrams,
@@ -88,16 +90,18 @@ import {
   newDesignKey,
   objectTabOf,
   moveTab,
+  openSettingsTab,
   placeObject,
   tabConnectionId,
   tabKey,
+  withRestored,
 } from "./shell/tabs";
 import { NEW_VISUAL_NAME, savedVisualModel } from "./visualquery/drafts";
 import { emptyQuery } from "./visualquery/model";
 import VisualQueryTab, { type VisualTabControl } from "./visualquery/VisualQueryTab";
 import { useTheme } from "./theme/useTheme";
 import { KeymapProvider, useCommandKeys } from "./commands/useCommandKeys";
-import { PrefsProvider } from "./prefs/usePrefs";
+import { PrefsProvider, useUngroupedLabel } from "./prefs/usePrefs";
 import { objectKey } from "./objectPath";
 import OneTree from "./sidebar/OneTree";
 import { useTreeData } from "./sidebar/useTreeData";
@@ -105,7 +109,7 @@ import { unsavedFlows } from "./flow/flowRegistry";
 import { isUnsaved } from "./shell/tabs";
 import { pendingWork } from "./update/pendingWork";
 import { setRestartGuard } from "./update/restartGuard";
-import UpdateBanner from "./update/UpdateBanner";
+import FirstStartGuide, { GUIDE_AGAIN, type GuideResult } from "./guide/FirstStartGuide";
 import UpdatePill from "./update/UpdatePill";
 import { dailyCheck, loadUpdates } from "./update/updateStore";
 
@@ -125,6 +129,7 @@ export default function App() {
 }
 
 function Workspace() {
+  const { label: ungroupedLabel } = useUngroupedLabel();
   const toast = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
   const groupImages = useGroupImageCache(groups);
@@ -235,7 +240,7 @@ function Workspace() {
         .sort((a, b) => at(a.t) - at(b.t) || a.i - b.i)
         .map((x) => x.t);
       if (restored.length > 0) {
-        setTabs((t) => [...restored, ...t]);
+        setTabs((t) => withRestored(t, restored));
         setActiveKey((k) => k ?? tabKey(restored[0]));
       }
       if (homeIfEmpty.current) {
@@ -290,6 +295,33 @@ function Workspace() {
       flush: () => drafts.flush(),
     }),
   );
+  // The first start guide: on its own only in a data folder this start made; mounted only while open.
+  const [guideOpen, setGuideOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    firstStartGuide()
+      .then((open) => live && open && setGuideOpen(true))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  function closeGuide(result: GuideResult) {
+    setGuideOpen(false);
+    void firstStartGuideSeen().catch(() => {});
+    if (result.error) toast.show({ kind: "error", text: result.error });
+    else
+      toast.show({
+        kind: result.skipped ? "info" : "success",
+        text: (
+          <span className="guide-toast">
+            <b>{result.skipped ? "Guide skipped" : "Contura is ready"}</b>
+            <span>{GUIDE_AGAIN}</span>
+          </span>
+        ),
+      });
+    if (result.dialect) setForm({ kind: "connection", dialect: result.dialect });
+  }
   // Update checks: off until the user turns them on; the Core runs the daily one at most once a day.
   useEffect(() => {
     void loadUpdates();
@@ -991,14 +1023,13 @@ function Workspace() {
     return true;
   }
 
-  /** Opens the Settings tab (one at most), scrolled to a section (or a `row` block in it): the top unless asked otherwise. */
-  function openSettings(section: SettingsSection = "appearance", row?: string) {
+  /**
+   * Opens the Settings tab (one at most). With a section (and a `row` in it) it goes there; without one an open tab
+   * keeps the page it shows, and a new tab starts on Appearance.
+   */
+  function openSettings(section?: SettingsSection, row?: string) {
     setForm({ kind: "none" });
-    setWindowTabs((w) =>
-      w.some((t) => t.kind === "settings")
-        ? w.map((t): WindowTab => (t.kind === "settings" ? { kind: "settings", section, seq: (t.seq ?? 0) + 1, row } : t))
-        : [...w, { kind: "settings", section, seq: 0, row }],
-    );
+    setWindowTabs((w) => openSettingsTab(w, section, row));
     setActiveKey("settings");
   }
 
@@ -1087,7 +1118,7 @@ function Workspace() {
 
   const group = place.kind === "group" ? groups.find((g) => g.id === place.groupId) : undefined;
   const workspaceGroupId = place.kind === "group" ? place.groupId : null;
-  const placeName = group?.name ?? "Ungrouped";
+  const placeName = group?.name ?? ungroupedLabel;
   const inPlace = connections.filter((c) => c.groupId === workspaceGroupId);
   /** The Connection of the place used last: the active one, else the one opened most recently. */
   const lastUsed =
@@ -1222,11 +1253,13 @@ function Workspace() {
           {/* The place's sidebar stays mounted under a window tab, so its tree keeps where you were. */}
           <PlaceSidebar
             group={group}
+            groups={groups}
             placeName={placeName}
             hidden={!!activeWindow}
             empty={inPlace.length === 0}
             notice={notice}
             onEditGroup={() => setForm({ kind: "group" })}
+            onRenamed={() => void reload()}
             onNewConnection={() => setForm({ kind: "connection" })}
           >
             <OneTree
@@ -1299,10 +1332,12 @@ function Workspace() {
                 openedTimes,
                 onRecentChanged: loadRecent,
                 onShowAllHistory: showAllHistory,
+                onSettings: () => openSettings(),
                 onNewDiagram: () => setNewDiagramOpen(true),
                 diagrams,
                 onOpenDiagram: (name) => openFlowTab(name),
                 diagramActions,
+                onShowGuide: () => setGuideOpen(true),
                 onChanged: reload,
                 onBeforeMove: (id) => askFromHome(tableKeys(id), () => confirmImportsLeave(id)),
                 onBeforeDeleteGroup: (id) => askFromHome(groupTableKeys(id)),
@@ -1317,12 +1352,13 @@ function Workspace() {
                 groupId: workspaceGroupId,
                 groupName: group?.name ?? null,
                 connections,
-                onSection: (section) =>
-                  setWindowTabs((w) => w.map((x): WindowTab => (x.kind === "settings" ? { ...x, section, row: undefined } : x))),
+                onSection: (section, aiPage) =>
+                  setWindowTabs((w) => w.map((x): WindowTab => (x.kind === "settings" ? { ...x, section, aiPage, row: undefined } : x))),
                 onConnectionSaved: () => {
                   // Only the AI access changed, so open sessions and their transactions stay as they are.
                   void reload();
                 },
+                onShowGuide: () => setGuideOpen(true),
               }}
               schema={{
                 onClose: (key) => dropTab(key),
@@ -1625,11 +1661,12 @@ function Workspace() {
         </div>
       </div>
 
-      <UpdateBanner />
       <StatusBar
         screen={statusScreen}
         theme={theme.choice}
         onTheme={theme.choose}
+        onSettings={() => openSettings()}
+        settingsKey={hintFor(keymap, "settings.open") ?? undefined}
         jobs={
           <>
             <UpdatePill onOpen={() => openSettings("updates")} />
@@ -1643,6 +1680,7 @@ function Workspace() {
         }
       />
 
+      {guideOpen && <FirstStartGuide theme={theme.choice} effective={theme.effective} onTheme={theme.choose} onClose={closeGuide} />}
       <FormDialogs
         form={form}
         group={group}

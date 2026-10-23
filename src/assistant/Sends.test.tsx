@@ -185,6 +185,12 @@ test("show_exactly_lists_the_outline_step", async () => {
   await user.click(screen.getByRole("button", { name: "Show exactly" }));
   expect(screen.getByText("Outline step, sent first")).toBeTruthy();
   expect(screen.getByText(OUTLINE_EXACT)).toBeTruthy();
+  // F1: each block scrolls inside a short panel, so the keyboard reaches it as a named region.
+  for (const name of ["What is sent", "What the outline step sends"]) {
+    const block = screen.getByRole("region", { name });
+    expect(block.tagName).toBe("PRE");
+    expect(block.tabIndex).toBe(0);
+  }
   unmount();
   render(<Sends preview={withOutline({ ...OUTLINE_ITEM, on: false, bytes: 0, tokens: 0 })} header="h" onToggle={() => {}} />);
   await user.click(screen.getByRole("button", { name: "Show exactly" }));

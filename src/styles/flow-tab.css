@@ -1077,12 +1077,15 @@
   flex-direction: column;
   min-height: 0;
 }
+/* The chat keeps 30 percent of the pane (80 to 200 px) and the composer gives way above its message box: at
+   1,024 x 480 an open Show exactly pushed the box below the pane and the chat shrank to 22 px (the Ask panel's
+   fix, .ai-panel in app.css). */
 .flow-chat {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 12px;
-  min-height: 0;
+  min-height: clamp(80px, 30%, 200px);
   padding: 14px 14px 8px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -1388,11 +1391,23 @@
 }
 .flow-composer {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
   flex-direction: column;
+  min-height: 0;
   gap: 6px;
   padding: 8px 10px 10px;
   border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-composer > * {
+  flex: none;
+}
+.flow-composer > .sends {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for an edge pill's focus ring inside the scroll area, as .new-diagram-kinds. */
+  margin: -3px;
+  padding: 3px;
 }
 .flow-working {
   display: flex;

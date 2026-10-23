@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { completeDbml } from "./complete";
 import { inspectDbml } from "./inspect";
 import { parseDbml } from "./parse";
@@ -80,4 +80,30 @@ test("dialect_types_cover_three_dialects", () => {
   expect(DIALECT_TYPES.postgres).toContain("timestamptz");
   expect(DIALECT_TYPES.mysql).toContain("varchar(255)");
   expect(DIALECT_TYPES.sqlite).toEqual(["INTEGER", "TEXT", "REAL", "BLOB", "NUMERIC"]);
+});
+
+test("closing_a_dbml_document_forgets_its_last_valid_model", () => {
+  const posted: FromWorker[] = [];
+  const handle = createHandler((m) => posted.push(m), 0);
+  handle({ type: "update", id: 1, docId: "d", text: BASE, dialect: "mysql" });
+  handle({ type: "dbmlClose", docId: "d" });
+  // Opened again: nothing is known of the closed one, so a broken text has no model to suggest from.
+  handle({ type: "update", id: 2, docId: "d", text: `${BASE}Ref: orders.store_idd > stores.id\n`, dialect: "mysql" });
+  const last = posted[1];
+  expect(last.type === "result" && last.result.lastValid).toBeNull();
+});
+
+test("closing_a_dbml_document_answers_its_waiting_parse", () => {
+  vi.useFakeTimers();
+  try {
+    const posted: FromWorker[] = [];
+    const handle = createHandler((m) => posted.push(m), 120);
+    handle({ type: "update", id: 1, docId: "d", text: BASE, dialect: "mysql" });
+    handle({ type: "dbmlClose", docId: "d" });
+    expect(posted).toEqual([{ type: "failed", ids: [1], message: "This document is closed." }]);
+    vi.advanceTimersByTime(500);
+    expect(posted).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

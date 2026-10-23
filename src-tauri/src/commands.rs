@@ -4,7 +4,9 @@ use contura_core::ai::context::sync::{ContextInfo, ContextStatusRow, context_sta
 use contura_core::ai::diagram::{
     DiagramAskRequest, diagram_ask_stream, diagram_place, diagram_preview,
 };
-use contura_core::ai::memory::{Compaction, CompactionId, ThreadHit, ThreadSummary, ThreadView};
+use contura_core::ai::memory::{
+    AppendTurn, Compaction, CompactionId, ThreadHit, ThreadSummary, ThreadView, TurnView,
+};
 use contura_core::ai::models::{ModelList, ModelPicks};
 use contura_core::ai::preview::{Preview, preview};
 use contura_core::ai::request::AskRequest;
@@ -478,6 +480,17 @@ pub fn last_group(service: Service<'_>) -> Result<Option<GroupId>, Error> {
 #[tauri::command]
 pub fn set_last_group(service: Service<'_>, id: Option<GroupId>) -> Result<(), Error> {
     service.set_last_group(id)
+}
+
+/// Whether the first start guide opens on its own (a data folder this start made, guide not closed yet).
+#[tauri::command]
+pub fn first_start_guide(service: Service<'_>) -> Result<bool, Error> {
+    service.first_start_guide()
+}
+
+#[tauri::command]
+pub fn first_start_guide_seen(service: Service<'_>) -> Result<(), Error> {
+    service.first_start_guide_seen()
 }
 
 #[tauri::command]
@@ -1299,6 +1312,17 @@ pub fn save_ai_thread(
     request_id: Option<String>,
 ) -> Result<ThreadView, Error> {
     ai.save_thread_for(&thread, request_id.as_deref())
+}
+
+/// Appends one Ask's turn to its stored thread and returns only the new messages, so the
+/// thread never crosses IPC; `request_id` is the Ask, as for `save_ai_thread`.
+#[tauri::command]
+pub fn ai_append_turn(
+    ai: Ai<'_>,
+    turn: AppendTurn,
+    request_id: Option<String>,
+) -> Result<TurnView, Error> {
+    ai.append_turn(turn, request_id.as_deref())
 }
 
 /// Keeps what the user did with an answer's SQL (Insert, Insert commented out, Open in new

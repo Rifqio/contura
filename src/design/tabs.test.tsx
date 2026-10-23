@@ -253,8 +253,8 @@ test("the_row_grid_keys_add_pick_rename_and_remove", async () => {
   setup();
   await userEvent.click(await screen.findByRole("tab", { name: "Indexes 2" }));
   const keys = indexGrid().closest(".design-scroll") as HTMLElement;
-  // Ctrl+N adds on the active tab.
-  expect(fireEvent.keyDown(keys, { key: "n", ctrlKey: true })).toBe(false);
+  // The Add index button adds on the active tab (Ctrl+N stays the window's New Connection).
+  await userEvent.click(screen.getByRole("button", { name: "Add index" }));
   expect(screen.getByRole("tab", { name: "Indexes 3" })).toBeTruthy();
   const added = () => [...indexGrid().querySelectorAll("tbody tr")].pop() as HTMLElement;
   expect(added().getAttribute("aria-selected")).toBe("true");

@@ -150,16 +150,15 @@ export default function ColumnsTab({
   }
 
   return (
-    <table className="grid design-grid" role="grid" aria-label={`Columns of ${draft.path.name || "the new table"}`}>
+    <table className="grid design-grid design-columns" role="grid" aria-label={`Columns of ${draft.path.name || "the new table"}`}>
       <thead>
         <tr>
           <th className="row-number" aria-hidden="true" />
           {cells.map((cell) => (
-            <th key={cell} className={TEXT_CELLS.includes(cell) ? undefined : "design-center"}>
+            <th key={cell} className={[`design-col-${cell}`, !TEXT_CELLS.includes(cell) && "design-center"].filter(Boolean).join(" ")}>
               <span className="header-static">{HEADS[cell]}</span>
             </th>
           ))}
-          <th className="design-fill" aria-hidden="true" />
         </tr>
       </thead>
       <tbody>
@@ -207,7 +206,6 @@ export default function ColumnsTab({
                   </td>
                 );
               })}
-              <td className="design-fill" />
             </tr>
           );
         })}

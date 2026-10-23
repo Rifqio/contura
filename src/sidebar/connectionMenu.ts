@@ -31,6 +31,8 @@ export interface ConnectionMenuContext {
   /** Key hints from the keymap, so a rebind changes them; absent when unbound. */
   newQueryKey?: string;
   refreshKey?: string;
+  /** What Ungrouped is called; "Ungrouped" when absent. */
+  ungroupedLabel?: string;
 }
 
 const icon = (name: IconName) => createElement(Icon, { name });
@@ -51,7 +53,7 @@ export function connectionMenu(c: ConnectionConfig, ctx: ConnectionMenuContext, 
     ),
     {
       key: "move-ungrouped",
-      label: "Ungrouped",
+      label: ctx.ungroupedLabel ?? "Ungrouped",
       icon: createElement(GroupBadge, { name: "", color: null }),
       disabled: c.groupId === null,
       hint: c.groupId === null ? "current" : undefined,

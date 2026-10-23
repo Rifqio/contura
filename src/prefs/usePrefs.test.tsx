@@ -7,6 +7,8 @@ import { useTheme } from "../theme/useTheme";
 import { PrefsProvider, applyPrefs, usePrefs } from "./usePrefs";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+/** The interface sizes the Core was asked to apply (it zooms the window and fits its minimum to it). */
+const sizes = () => callsTo("set_interface_size").map((a) => a.size);
 
 const wrapper = ({ children }: { children: ReactNode }) => <PrefsProvider>{children}</PrefsProvider>;
 const root = () => document.documentElement;
@@ -111,4 +113,46 @@ test("apply_prefs_sets_density_and_editor_variables", () => {
   expect(el.style.getPropertyValue("--editor-font-size")).toBe("13px");
   expect(el.style.getPropertyValue("--editor-ligatures")).toBe("contextual");
   expect(el.style.getPropertyValue("--editor-features")).toBe('"calt" 1, "liga" 1');
+});
+
+test("the_stored_interface_size_zooms_the_window_once_the_core_answers_and_never_the_default_before", async () => {
+  let answer: (p: unknown) => void = () => {};
+  routeInvoke({ ui_prefs: () => new Promise((r) => (answer = r)), save_ui_prefs: () => null, set_interface_size: () => null });
+  const { result } = renderHook(() => usePrefs(), { wrapper });
+  // Until the Core answers the defaults show, but the window keeps the zoom the Core gave it at start.
+  await act(async () => {});
+  expect(sizes()).toEqual([]);
+  await act(async () => answer({ ...DEFAULT_UI_PREFS, interfaceSize: 125 }));
+  await waitFor(() => expect(result.current.prefs.interfaceSize).toBe(125));
+  expect(sizes()).toEqual([125]);
+  // A prefs change that leaves the size alone does not zoom again.
+  act(() => result.current.update({ stripeRows: true }));
+  expect(sizes()).toEqual([125]);
+});
+
+test("a_size_picked_before_the_core_answers_is_applied_and_saved_over_the_stored_one", async () => {
+  let answer: (p: unknown) => void = () => {};
+  routeInvoke({ ui_prefs: () => new Promise((r) => (answer = r)), save_ui_prefs: () => null, set_interface_size: () => null });
+  const { result } = renderHook(() => usePrefs(), { wrapper });
+  act(() => result.current.update({ interfaceSize: 110 }));
+  expect(sizes()).toEqual([]);
+  await act(async () => answer({ ...DEFAULT_UI_PREFS, interfaceSize: 125 }));
+  await waitFor(() => expect(callsTo("save_ui_prefs")).toHaveLength(1));
+  expect(callsTo("save_ui_prefs")[0]).toEqual({ prefs: { ...DEFAULT_UI_PREFS, interfaceSize: 110 } });
+  expect(sizes()).toEqual([110]);
+});
+
+test("a_size_the_core_cannot_apply_leaves_the_page_working", async () => {
+  routeInvoke({
+    ui_prefs: () => ({ ...DEFAULT_UI_PREFS, interfaceSize: 110 }),
+    save_ui_prefs: () => null,
+    set_interface_size: () => {
+      throw new Error("no window");
+    },
+  });
+  const { result } = renderHook(() => usePrefs(), { wrapper });
+  await waitFor(() => expect(sizes()).toEqual([110]));
+  act(() => result.current.update({ interfaceSize: 125 }));
+  await waitFor(() => expect(callsTo("save_ui_prefs").slice(-1)[0]).toEqual({ prefs: { ...DEFAULT_UI_PREFS, interfaceSize: 125 } }));
+  expect(sizes()).toEqual([110, 125]);
 });

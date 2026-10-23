@@ -132,7 +132,8 @@ test("the_tree_scrolls_so_saved_queries_stays_reachable", () => {
   document.body.innerHTML =
     '<div class="body"><div class="place-wrap"><aside class="side"><div class="one-tree"><div class="tree-scroll"></div></div></aside></div></div>';
   expect(["auto", "scroll"]).toContain(cascadedOverflowY(document.querySelector(".tree-scroll")!));
-  expect(cascadedOverflowY(document.querySelector("aside.side")!)).toBe("hidden");
+  // clip, not hidden: the pane itself can never be scrolled by focus (layoutFit.test.ts).
+  expect(cascadedOverflowY(document.querySelector("aside.side")!)).toBe("clip");
   document.body.innerHTML = "";
 });
 
@@ -215,9 +216,10 @@ test("port_field_is_104px", () => {
 test("tree_is_288_and_264_beside_the_ai_panel", () => {
   expect(bodyIn(tokensCss, ":root")).toMatch(/--layout-tree-width:\s*288px/);
   expect(bodyOf(".body")).toMatch(/grid-template-columns:\s*var\(--layout-tree-width\)/);
-  // S4, A4: the AI panel narrows the tree to 264, with or without History beside it.
+  // S4, A4: the AI panel narrows the tree to 264, with or without History beside it; with both, the side columns
+  // give way on a narrow window so the work area keeps 320 px (layoutFit.test.ts).
   expect(bodyOf(".body-ai")).toMatch(/grid-template-columns:\s*264px minmax\(0, 1fr\) 360px/);
-  expect(bodyOf(".body-history.body-ai")).toMatch(/grid-template-columns:\s*264px minmax\(0, 1fr\) 360px 360px/);
+  expect(bodyOf(".body-history.body-ai")).toMatch(/grid-template-columns:\s*minmax\(180px, 264px\) minmax\(320px, 1fr\) minmax\(220px, 360px\) minmax\(260px, 360px\)/);
   expect(bodyOf(".body-history")).toMatch(/grid-template-columns:\s*var\(--layout-tree-width\)/);
 });
 
@@ -330,7 +332,8 @@ test("table_header_is_one_36px_strip_that_does_not_clip_its_menus", () => {
 });
 
 test("edited_row_numbers_stay_faint", () => {
-  expect(bodyOf(".grid .row-number")).toMatch(/color:\s*var\(--c-text-faint\)/);
+  // Faint, or subtle with stripes on (gridAppearance.test.tsx).
+  expect(bodyOf(".grid .row-number")).toMatch(/color:\s*var\(--grid-row-number-text\)/);
   const edited = bodyOf(".row-number-edited");
   expect(edited).not.toMatch(/color\s*:/);
   expect(edited).not.toMatch(/font-weight\s*:/);
@@ -358,7 +361,7 @@ test("home_connection_row_is_7_12_8_with_2px_line_gap", () => {
 
 /** H12: Home scrolls inside the header-less body and Recent, with the global themed thin bar; the pane itself never shows a native one. */
 test("home_main_uses_the_thin_scrollbar", () => {
-  expect(bodyOf(".home-main")).toMatch(/overflow:\s*hidden/);
+  expect(bodyOf(".home-main")).toMatch(/overflow:\s*clip/);
   expect(bodyOf(".home-content")).not.toMatch(/overflow/);
   for (const sel of [".home-scroll", ".recent"]) {
     expect(bodyOf(sel)).toMatch(/overflow:\s*auto/);
@@ -678,4 +681,11 @@ test("item_48_the_active_tabs_feet_beat_every_divider_hiding_rule", () => {
 
 test("the Windows webview's own password reveal and clear buttons are hidden, so only Contura's Show password shows", () => {
   expect(appCss).toMatch(/input::-ms-reveal,\s*input::-ms-clear\s*\{\s*display:\s*none;\s*\}/);
+});
+
+test("the_appearance_preview_draws_its_rows_on_the_grid_surface", () => {
+  // On the surface, as `.grid td`: the stripe is darker than its rows, as in the real grid, not lighter. The
+  // palette tokens themselves, so they follow the preview's own theme class.
+  expect(bodyOf(".spv-grid")).toMatch(/background:\s*var\(--c-bg-surface\)/);
+  expect(bodyOf(".spv-row.alt")).toMatch(/background:\s*var\(--c-grid-stripe\)/);
 });

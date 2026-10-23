@@ -42,6 +42,8 @@ test("ligatures_never_change_the_text_preview_copy", async () => {
   await waitFor(() => expect(shownSql()).toBe(`${SQL};`));
   await userEvent.click(screen.getByRole("button", { name: "Copy SQL" }));
   expect(writeText).toHaveBeenCalledWith(`${SQL};`);
+  // F3: under 760 px the word goes; the tooltip keeps the name.
+  expect(screen.getByRole("button", { name: "Copy SQL" }).title).toBe("Copy SQL");
 });
 
 test("header_names_connection_database_and_prod", async () => {

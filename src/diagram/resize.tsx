@@ -21,16 +21,38 @@ export interface Limits {
   maxH: number;
 }
 
+/**
+ * The boxes of nodes being resized right now, by canvas and node id. A canvas that draws its nodes again from its
+ * props mid-drag (a preview arriving, an edit elsewhere) keeps these, so the node never jumps back for a frame; another
+ * canvas with a node of the same id is not touched. The canvas is its React Flow element (the store's `domNode`;
+ * `useStoreApi` hands each component a different wrapper). Entries live only while a drag runs, and a canvas's map
+ * goes with its element.
+ */
+const liveByCanvas = new WeakMap<Element, Map<string, Box>>();
+export function liveResizes(canvas: Element | null | undefined): Map<string, Box> {
+  if (!canvas) return new Map();
+  let live = liveByCanvas.get(canvas);
+  if (!live) {
+    live = new Map();
+    liveByCanvas.set(canvas, live);
+  }
+  return live;
+}
+
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
 
-/** The box a drag of `dir` by (dx, dy) canvas px makes: the far edges stay put; `square` keeps a diamond's shape. */
+/**
+ * The box a drag of `dir` by (dx, dy) canvas px makes: the far edges stay put; `square` keeps a diamond's shape.
+ * Nothing is rounded or snapped here: the box follows the pointer exactly, the limits are hard stops, and the owner
+ * rounds the size it keeps.
+ */
 export function resizeBox(start: Box, dir: ResizeDir, dx: number, dy: number, lim: Limits, square = false): Box {
   let w = start.w;
   let h = start.h;
-  if (dir.includes("e")) w = clamp(Math.round(start.w + dx), lim.minW, lim.maxW);
-  if (dir.includes("w")) w = clamp(Math.round(start.w - dx), lim.minW, lim.maxW);
-  if (dir.includes("s")) h = clamp(Math.round(start.h + dy), lim.minH, lim.maxH);
-  if (dir.includes("n")) h = clamp(Math.round(start.h - dy), lim.minH, lim.maxH);
+  if (dir.includes("e")) w = clamp(start.w + dx, lim.minW, lim.maxW);
+  if (dir.includes("w")) w = clamp(start.w - dx, lim.minW, lim.maxW);
+  if (dir.includes("s")) h = clamp(start.h + dy, lim.minH, lim.maxH);
+  if (dir.includes("n")) h = clamp(start.h - dy, lim.minH, lim.maxH);
   if (square) {
     const side = dir.length === 2 ? Math.max(w, h) : dir === "e" || dir === "w" ? w : h;
     w = h = clamp(side, Math.max(lim.minW, lim.minH), Math.min(lim.maxW, lim.maxH));
@@ -93,7 +115,7 @@ export function ResizeZones({ start, limits, square = false, onLive, onDone, onC
     let frame = 0;
     const paint = () => {
       frame = 0;
-      if (readout.current) readout.current.textContent = `${box.w} × ${box.h}`;
+      if (readout.current) readout.current.textContent = `${Math.round(box.w)} × ${Math.round(box.h)}`;
       onLive(box, node);
     };
     const move = (ev: PointerEvent) => {
@@ -127,7 +149,7 @@ export function ResizeZones({ start, limits, square = false, onLive, onDone, onC
       cleanup(false);
       onCancel?.(from!, node);
     };
-    if (readout.current) readout.current.textContent = `${from.w} × ${from.h}`;
+    if (readout.current) readout.current.textContent = `${Math.round(from.w)} × ${Math.round(from.h)}`;
     setDragging(true);
   };
 

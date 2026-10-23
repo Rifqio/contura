@@ -126,6 +126,15 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         return;
       case "flowIcons":
         return flow.setIcons(m.names);
+      case "dbmlClose": {
+        // A parse still waiting is dropped with the document (its editor is gone), and so is its last valid model.
+        const entry = pending.get(m.docId);
+        if (entry?.timer) clearTimeout(entry.timer);
+        if (entry) fail(entry.ids, new Error("This document is closed."));
+        pending.delete(m.docId);
+        lastValid.delete(m.docId);
+        return;
+      }
       case "flowClose":
         // A parse still waiting is answered now, so its caller never hangs; then the doc is forgotten.
         flushFlow(m.docId);

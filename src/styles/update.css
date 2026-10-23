@@ -1,20 +1,4 @@
-/* One-click updates (ADR 0026): the first-start prompt, the status bar pill, Settings > Updates. */
-
-.update-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-  min-height: 32px;
-  padding: 4px 8px 4px 12px;
-  border-top: 1px solid var(--c-border-subtle);
-  background: var(--c-bg-raised);
-  color: var(--c-text);
-}
-.update-banner p {
-  margin: 0;
-  min-width: 0;
-}
+/* One-click updates (ADR 0026): the status bar pill and Settings > Updates (the first start guide asks first). */
 
 .update-pill {
   display: inline-flex;

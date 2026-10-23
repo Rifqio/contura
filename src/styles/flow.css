@@ -172,12 +172,15 @@
 .dialog.new-diagram {
   width: min(1000px, 100%);
 }
+/* The kinds scroll; the search, the name and Cancel and Create stay in view. The whole body scrolled before, and on
+   any window under about 1,100 px tall Create sat below the dialog's edge until you scrolled to it. */
 .new-diagram-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 288px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 28px;
   min-height: 0;
-  overflow: auto;
+  overflow: clip;
   padding: var(--spacing-lg) 28px;
 }
 .new-diagram-main {
@@ -185,6 +188,20 @@
   flex-direction: column;
   gap: 18px;
   min-width: 0;
+  min-height: 0;
+}
+.new-diagram-main > * {
+  flex: none;
+}
+.new-diagram-main > .new-diagram-kinds {
+  flex: 0 1 auto;
+  min-height: 96px;
+  overflow-y: auto;
+  /* Rows keep the cards' height (a card clips its preview, so it has no minimum of its own). */
+  grid-auto-rows: max-content;
+  /* Room for the chosen card's 2 px ring inside the scroll area. */
+  margin: -3px;
+  padding: 3px;
 }
 .new-diagram-kinds {
   display: grid;
@@ -328,9 +345,12 @@
   flex-direction: column;
   gap: var(--spacing-sm);
   min-width: 0;
-  /* The divider runs the full height of the body. */
-  margin: calc(-1 * var(--spacing-lg)) 0;
-  padding: var(--spacing-lg) 0 var(--spacing-lg) 28px;
+  min-height: 0;
+  overflow-y: auto;
+  /* The divider runs the full height of the body; 3 px on the right keep a full-width row's focus ring whole, as
+     .new-diagram-kinds. */
+  margin: calc(-1 * var(--spacing-lg)) -3px calc(-1 * var(--spacing-lg)) 0;
+  padding: var(--spacing-lg) 3px var(--spacing-lg) 28px;
   border-left: 1px solid var(--c-border-subtle);
 }
 .new-diagram-aside-title {

@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import confRaw from "../src-tauri/tauri.conf.json?raw";
 import libRs from "../src-tauri/src/lib.rs?raw";
+import windowSizeRs from "../src-tauri/src/window_size.rs?raw";
+import capabilityRaw from "../src-tauri/capabilities/default.json?raw";
 import appCss from "./styles/app.css?raw";
 import tokensCss from "./styles/tokens.css?raw";
 
@@ -28,6 +30,33 @@ test("the_main_window_has_a_minimum_size", () => {
   expect(main.width).toBeGreaterThanOrEqual(main.minWidth);
   expect(main.height).toBeGreaterThanOrEqual(main.minHeight);
   expect(libRs).toMatch(/WebviewWindowBuilder::from_config\(\s*app,/);
+});
+
+test("the_saved_interface_size_zooms_the_window_at_start_and_the_page_may_change_it", () => {
+  // The Core zooms the window it just built, before the page paints; usePrefs follows later changes.
+  const built = libRs.indexOf("let window = builder.build()?;");
+  expect(built).toBeGreaterThan(0);
+  // Read before the build, as the minimum needs it too.
+  expect(libRs.indexOf("interface_size.zoom()")).toBeGreaterThan(0);
+  expect(libRs.indexOf("window.set_zoom(zoom)", built)).toBeGreaterThan(built);
+  // The minimum (1024 x 480 CSS px times Windows Text size and the interface size, window_size::min_size, unit-
+  // tested in Rust) is set on the builder, not on the hidden window after it.
+  expect(libRs.indexOf(".min_inner_size(")).toBeGreaterThan(0);
+  expect(libRs.indexOf(".min_inner_size(")).toBeLessThan(built);
+  // Later sizes go through the Core, which zooms, raises the minimum and grows the window to it; it refits on a
+  // move to another monitor, a resize (a restore from maximized lands the pending minimum) and on focus (Windows
+  // Text size changed meanwhile). Not inside ScaleFactorChanged: tao applies its own new size right after it, so
+  // the Moved or Resized that follows refits instead.
+  expect(libRs).toMatch(/window_size::set_interface_size,/);
+  expect(libRs).toMatch(/\.on_window_event\(/);
+  for (const event of ["Moved", "Resized", "Focused(true)"]) expect(libRs).toContain(`WindowEvent::${event}`);
+  expect(libRs).not.toContain("WindowEvent::ScaleFactorChanged");
+  // A maximized window still zooms; only its minimum waits for the restore.
+  const command = windowSizeRs.slice(windowSizeRs.indexOf("pub fn set_interface_size("));
+  const body = command.slice(0, command.indexOf("\n}\n"));
+  expect(body).toMatch(/\n {4}refit\(.*\);\n {4}let _ = window\.set_zoom\(zoom\);/);
+  // The page no longer zooms the webview itself.
+  expect(JSON.parse(capabilityRaw).permissions).not.toContain("core:webview:allow-set-webview-zoom");
 });
 
 test("item_11_24_html_drag_and_drop_reaches_the_page", () => {

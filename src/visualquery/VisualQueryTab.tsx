@@ -4,6 +4,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
+  Fragment,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -57,6 +59,7 @@ import DiagramCanvas, { type CanvasMenuAt, type DragOverPorts } from "../diagram
 import { CARD_WIDTH } from "../diagram/metrics";
 import { durationText } from "../format/units";
 import type { LangClient } from "../lang/client";
+import { highlightSql } from "../lang/sql/highlightStatic";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
 import { useVqPanelHeight } from "../prefs/usePrefs";
 import ResultsPanel from "../query/ResultsPanel";
@@ -177,6 +180,68 @@ export const VQ_PANEL_MIN = 37;
 const VQ_CANVAS_MIN = 120;
 /** One arrow key moves the panel's edge this far. */
 const VQ_PANEL_STEP = 16;
+
+/**
+ * The live SQL beside the Columns grid: a read-only `<pre>` in the editor's syntax colours, no second editor. It draws
+ * again only when the SQL text changes, not on every render of the tab.
+ */
+const LiveSql = memo(function LiveSql({ sql, dialect }: { sql: string; dialect: DialectKind }) {
+  const lines = useMemo(() => highlightSql(sql, dialect), [sql, dialect]);
+  return (
+    <pre className="vq-columns-sql-code">
+      <code>
+        {lines.map((spans, i) => (
+          <Fragment key={i}>
+            {i > 0 && "\n"}
+            {spans.map((s, j) =>
+              s.cls ? (
+                <span key={j} className={s.cls}>
+                  {s.text}
+                </span>
+              ) : (
+                s.text
+              ),
+            )}
+          </Fragment>
+        ))}
+      </code>
+    </pre>
+  );
+});
+
+/** Copies the live SQL; says "Copied" beside the button for a moment once it is on the clipboard. */
+function CopySql({ sql }: { sql: string | null }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return (
+    <>
+      <span className="vq-columns-sql-copied" role="status">
+        {copied ? "Copied" : ""}
+      </span>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Copy the SQL"
+        title="Copy the SQL"
+        disabled={sql === null}
+        onClick={() => {
+          if (sql === null || !navigator.clipboard) return;
+          navigator.clipboard.writeText(sql).then(
+            () => {
+              setCopied(true);
+              window.clearTimeout(timer.current);
+              timer.current = window.setTimeout(() => setCopied(false), 1500);
+            },
+            () => {},
+          );
+        }}
+      >
+        <Icon name="copy" size={14} />
+      </button>
+    </>
+  );
+}
 
 /**
  * Item 36: the handle on the panel's top edge. A drag writes the height straight to the panel once a frame (no
@@ -693,7 +758,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         type: "vqCard",
         position: { x: t.x, y: t.y },
         initialWidth: data.width ?? fitWidth(data),
-        initialHeight: Math.min(data.height ?? Number.POSITIVE_INFINITY, queryCardHeight(data)),
+        initialHeight: data.height ?? queryCardHeight(data),
         data,
       };
     });
@@ -1505,9 +1570,17 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         </button>
         {connection && <SafetyTag connection={connection} small />}
         <span className="editor-header-divider" aria-hidden="true" />
-        <button type="button" className="button button-small button-quiet" disabled={model.tables.length < 2} onClick={tidy}>
+        <button
+          type="button"
+          className="button button-small button-quiet"
+          aria-label="Tidy"
+          title="Tidy"
+          disabled={model.tables.length < 2}
+          onClick={tidy}
+        >
           <Icon name="arrange" size={14} />
-          Tidy
+          {/* A narrow toolbar (container queries in app.css) drops the key hints, then these words; the icons stay. */}
+          <span className="bar-label">Tidy</span>
         </button>
         <span className="editor-header-divider" aria-hidden="true" />
         <span className="vq-count">{countLine(model)}</span>
@@ -1516,11 +1589,13 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           type="button"
           className={diagramOpen ? "button button-small button-quiet button-on" : "button button-small button-quiet"}
           aria-pressed={diagramOpen}
+          aria-label="Show diagram"
+          title={diagramKey ? `Show diagram (${diagramKey})` : "Show diagram"}
           disabled={sql === null && !diagramOpen}
           onClick={toggleDiagram}
         >
           <Icon name="flow" size={14} />
-          Show diagram
+          <span className="bar-label">Show diagram</span>
           {diagramKey && <Kbd keys={diagramKey} />}
         </button>
         {/* Production keeps the plain primary "Run": a Visual Query only reads (DESIGN-NEXT 10.5). */}
@@ -1528,7 +1603,8 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           type="button"
           className="button button-small button-primary"
           disabled={!canRun}
-          title={block ?? undefined}
+          aria-label="Run"
+          title={block ?? (runKey ? `Run (${runKey})` : "Run")}
           onClick={() => {
             requestRun();
             // The button turns off while the run goes: the canvas keeps Esc and Ctrl+Enter.
@@ -1536,12 +1612,19 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           }}
         >
           <Icon name="play" size={14} />
-          Run
+          <span className="bar-label">Run</span>
           {runKey && <Kbd keys={runKey} />}
         </button>
-        <button type="button" className="button button-small" disabled={empty} onClick={requestSave}>
+        <button
+          type="button"
+          className="button button-small"
+          aria-label="Save"
+          title={saveKey ? `Save (${saveKey})` : "Save"}
+          disabled={empty}
+          onClick={requestSave}
+        >
           <Icon name="save" size={14} />
-          Save
+          <span className="bar-label">Save</span>
           {saveKey && <Kbd keys={saveKey} />}
         </button>
         <Menu
@@ -1730,7 +1813,33 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           </div>
           <div className="vq-panel-body" role="tabpanel" id={`${doc.id}-panel-${panel}-body`} aria-labelledby={`${doc.id}-panel-${panel}`}>
             {panel === "columns" && (
-              <ColumnsPanel model={model} outputs={outputs} problems={problems} tableColumns={tableColumns} onChange={changeModel} />
+              // The Columns grid, with the live SQL beside it when the panel is wide enough (a container query hides it).
+              <div className="vq-columns-split">
+                <ColumnsPanel model={model} outputs={outputs} problems={problems} tableColumns={tableColumns} onChange={changeModel} />
+                <section className="vq-columns-sql" aria-label="SQL beside the columns">
+                  <div className="vq-columns-sql-head">
+                    <span className="vq-columns-sql-title">SQL</span>
+                    <span className="spacer" />
+                    <CopySql sql={empty ? null : sql} />
+                  </div>
+                  {/* Its own scroll area, reachable by Tab, so a long query can be read from the keyboard. */}
+                  <div className="vq-columns-sql-body" tabIndex={0} role="region" aria-label="Generated SQL">
+                    {empty ? (
+                      <p className="vq-columns-sql-empty">Drag a table from the tree to start.</p>
+                    ) : sql !== null ? (
+                      // A static highlighted block: no second editor.
+                      <LiveSql sql={sql} dialect={dialect} />
+                    ) : (
+                      // The problems themselves show in the grid beside it; the pane only says why it is empty.
+                      (preview !== null && preview.problems.length > 0 ? ["No SQL until the problems are fixed."] : emptyLines).map((line) => (
+                        <p key={line} className="vq-columns-sql-empty">
+                          {line}
+                        </p>
+                      ))
+                    )}
+                  </div>
+                </section>
+              </div>
             )}
             {panel === "filter" && (
               <FilterPanel

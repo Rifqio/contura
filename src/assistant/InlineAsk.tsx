@@ -1,14 +1,14 @@
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { rowsLine, rowsState, rowsStateLine } from "./payload";
 import { aiConfirmKeyHost, aiKnownModels, aiSettings, setAiModelPrefs } from "../api/client";
-import type { AiSettingsView, ItemKind, ModelList, ModelPicks, SqlSchema } from "../api/types";
+import type { AiSettingsView, AnswerActionKind, ItemKind, ModelList, ModelPicks, SqlSchema } from "../api/types";
 import Icon from "../components/Icon";
 import { PROVIDERS } from "../settings/ai/providers";
 import { looksLikeSql, parseAnswer } from "./answerMarkdown";
 import answerState, { aiErrorOf, answerEnd, endMark, modelToUse } from "./answerState";
 import AnswerLog from "./AnswerLog";
 import { buildRecord, onlyOutlineLeft, sentLine, streamRecord } from "./answerRecord";
-import { type StreamEnd, stopText, useAnswerStream } from "./answerStream";
+import { type StreamEnd, stopText, useAnswerStream, useStreamText } from "./answerStream";
 import AnswerText from "./AnswerText";
 import { actionsFor, type AskContext, toAskRequest } from "./context";
 import type { InsertTarget } from "./InsertDiff";
@@ -72,10 +72,18 @@ export default function InlineAsk({
   const [models, setModels] = useState<ModelList | null>(null);
   /** Show log is open in place of the answer. */
   const [showLog, setShowLog] = useState(false);
+  /** The answer went into the editor: the card folds to one line so it stops covering the code. */
+  const [inserted, setInserted] = useState<"inserted" | "insertedCommented" | null>(null);
+  const showAnswer = useRef<HTMLButtonElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  /** Show answer was used: focus goes to the answer, where the arrow keys scroll it. */
+  const unfolded = useRef(false);
   /** "Send the saved key to <host>" is on its way. */
   const confirmingRef = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const stream = useAnswerStream();
+  // The inline answer is the only thing drawn here, so it follows the text (at most once per frame).
+  const { text: streamText } = useStreamText(stream);
   const input = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
 
@@ -141,6 +149,7 @@ export default function InlineAsk({
     if (!q || stream.running) return;
     const startedAt = Date.now();
     setShowLog(false);
+    setInserted(null);
     setRows(false);
     setOutcome({ q, action, end: null, tries: 0, startedAt });
     const end = await stream.start(request(q, action, use));
@@ -183,6 +192,7 @@ export default function InlineAsk({
   const askAgain = (q: string) => {
     stream.reset();
     setOutcome(null);
+    setInserted(null);
     setText(q);
     input.current?.focus();
   };
@@ -245,20 +255,62 @@ export default function InlineAsk({
 
   const question = outcome?.q ?? text.trim();
 
+  const doneId = useId();
+  const insertedText = inserted === "inserted" ? "Inserted into the editor" : inserted ? "Inserted commented out" : "";
+  const onAction = (kind: AnswerActionKind) => {
+    if (kind === "openedInNewTab") return;
+    setInserted(kind);
+  };
+  // The Insert button is gone with the diff; focus stays in the card so Esc still closes it.
+  useEffect(() => {
+    if (inserted) showAnswer.current?.focus();
+    else if (unfolded.current) {
+      unfolded.current = false;
+      body.current?.focus();
+    }
+  }, [inserted]);
+
   return (
-    <div className="ask-pop" role="dialog" aria-label="Ask AI" onKeyDown={onKey}>
-      <div className="pop-head">
+    <div className={inserted ? "ask-pop ask-pop-folded" : "ask-pop"} role="dialog" aria-label="Ask AI" onKeyDown={onKey}>
+      {/* Mounted from the start, so screen readers announce the text when it arrives. */}
+      <p className="visually-hidden" role="status">
+        {insertedText}
+      </p>
+      {inserted && (
+        <div className="pop-done">
+          <Icon name="check" size={14} />
+          <span className="pop-done-text" id={doneId}>
+            {insertedText}
+          </span>
+          <button
+            ref={showAnswer}
+            type="button"
+            className="link-button"
+            aria-describedby={doneId}
+            onClick={() => {
+              unfolded.current = true;
+              setInserted(null);
+            }}
+          >
+            Show answer
+          </button>
+          <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
+      <div className="pop-head" hidden={inserted !== null}>
         <span>{outcome ? outcome.q : "Ask about the selection"}</span>
         <span className="prov">{provider ? `${providerName} · ${settings?.settings.model}` : "No provider"}</span>
         <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={onClose}>
           <Icon name="close" />
         </button>
       </div>
-      <div className="pop-body">
+      <div ref={body} className="pop-body" tabIndex={-1} hidden={inserted !== null}>
         {outcome && showLog && (
           <AnswerLog
             question={outcome.q}
-            answer={stream.text}
+            answer={streamText}
             record={record}
             live={stream.running}
             connection={context.connection?.name ?? null}
@@ -303,11 +355,11 @@ export default function InlineAsk({
             {rowsNow.allowed && <p className="sends-note">{rowsStateLine(rowsNow.on)}</p>}
           </>
         )}
-        {!showLog && outcome && !stream.text && stream.running && <p className="muted">{stream.status ?? "Asking…"}</p>}
-        {!showLog && outcome && stream.text && (
+        {!showLog && outcome && !streamText && stream.running && <p className="muted">{stream.status ?? "Asking…"}</p>}
+        {!showLog && outcome && streamText && (
           <div className="answer-body">
             <AnswerText
-              text={stream.text}
+              text={streamText}
               streaming={stream.running}
               blocks={end?.done?.sqlBlocks}
               notes={end?.done?.notes}
@@ -315,6 +367,7 @@ export default function InlineAsk({
               target={insertTarget}
               onOpenInNewTab={onOpenInNewTab && ((sql) => onOpenInNewTab(sql, context.connection))}
               onCopy={(sql) => void navigator.clipboard?.writeText(sql).catch(() => {})}
+              onAction={onAction}
             />
           </div>
         )}
@@ -340,7 +393,7 @@ export default function InlineAsk({
         {!showLog && sent && end && (endKind || end.error != null) && <p className="msg-notice">{sent}</p>}
         {!showLog && outcome && end?.error != null && failureCard(outcome, end)}
       </div>
-      <div className="pop-foot">
+      <div className="pop-foot" hidden={inserted !== null}>
         {stream.running && (
           <button type="button" className="button button-small" onClick={() => stream.stop()}>
             Stop
@@ -353,6 +406,7 @@ export default function InlineAsk({
             onClick={() => {
               stream.reset();
               setOutcome(null);
+              setInserted(null);
             }}
           >
             Ask again

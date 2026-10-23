@@ -7,6 +7,7 @@ import App from "../App";
 import Home from "./Home";
 import appCss from "../styles/app.css?raw";
 import { setPlatformForTests } from "../platform";
+import { patientFile } from "../test/load";
 
 /** The tab strip's New query button (the feature bar has its own, item 16). */
 const stripNew = () => screen.getAllByRole("button", { name: "New query" }).find((b) => b.closest(".tab-strip")) ?? (() => { throw new Error("no New query in the tab strip"); })();
@@ -63,6 +64,10 @@ function renderHome(props: Partial<Parameters<typeof Home>[0]> = {}) {
     />,
   );
 }
+
+
+// A Group name waits out a double-click before it opens, which a busy machine can stretch past the default wait.
+patientFile();
 
 test("lists groups with connection counts and ungrouped connections", async () => {
   routeInvoke({ suggested_connections: () => [] });
@@ -149,7 +154,8 @@ test("the_ungrouped_card_name_opens_ungrouped", async () => {
   const onOpenUngrouped = vi.fn();
   renderHome({ onOpenUngrouped });
   await userEvent.click(within(screen.getByRole("region", { name: "Ungrouped" })).getByRole("button", { name: "Open Ungrouped" }));
-  expect(onOpenUngrouped).toHaveBeenCalled();
+  // The open waits a moment, as a second click renames instead.
+  await waitFor(() => expect(onOpenUngrouped).toHaveBeenCalled());
 });
 
 test("clicking_a_connection_row_opens_it", async () => {
@@ -304,7 +310,8 @@ test("new_diagram_sits_beside_new_group_with_its_key", async () => {
 test("count_line_stays_on_one_line", () => {
   expect(rulesOf(".home-count")).toMatch(/white-space:\s*nowrap/);
   expect(rulesOf(".home-heading")).toMatch(/flex:\s*1 0 auto/);
-  expect(rulesOf(".home-actions")).toMatch(/flex:\s*none/);
+  // The actions keep to their own line beside or under the heading and wrap inside the header (layoutFit.test.ts).
+  expect(rulesOf(".home-actions")).toMatch(/flex:\s*0 1 auto/);
 });
 
 test("filter_hint_is_boxed_and_new_connection_has_ctrl_n", () => {
@@ -490,4 +497,12 @@ test("parity_P11_38_laragon_box_names_this_pc_on_windows", async () => {
   } finally {
     setPlatformForTests(null);
   }
+});
+
+test("Home has a Settings button that opens Settings", async () => {
+  routeInvoke({ suggested_connections: () => [] });
+  const onSettings = vi.fn();
+  renderHome({ onSettings });
+  await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+  expect(onSettings).toHaveBeenCalledTimes(1);
 });

@@ -16,7 +16,7 @@ export interface UpdateOffer {
 
 /** Rust `UpdateStatus`: what Settings > Updates and the status bar show. */
 export interface UpdateStatus {
-  /** null until the first-start prompt is answered: checks are off until then. */
+  /** null until the first start guide (or Settings) answers: checks are off until then. */
   checks: boolean | null;
   currentVersion: string;
   lastCheckMs: number | null;

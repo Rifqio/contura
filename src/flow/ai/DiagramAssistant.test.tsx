@@ -5,12 +5,13 @@ import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { saveAiSettings } from "../../api/client";
-import type { AiEvent, AiThread, DiagramAskRequest, DiagramProposal, ModelList, Preview, ProposedChange } from "../../api/types";
+import { saveAiSettings, withTurn } from "../../api/client";
+import type { AiEvent, AiThread, AppendTurn, DiagramAskRequest, DiagramProposal, ModelList, Preview, ProposedChange } from "../../api/types";
 import type { DiagramCanvasProps } from "../../diagram/DiagramCanvas";
 import { LangClient } from "../../lang/client";
 import { mockEditorDom } from "../../test/editor";
 import { callsTo, routeInvoke } from "../../test/invoke";
+import { turnViewOf } from "../../test/aiThreads";
 import { fakeWorker } from "../../test/langWorker";
 import { mockReactFlowDom } from "../../test/reactFlow";
 import { done, failed, sent, step } from "../../test/aiStream";
@@ -95,6 +96,8 @@ type Sink = { onmessage: (e: AiEvent) => void };
 let threads: AiThread[] = [];
 let failWrites = false;
 let failSave = false;
+/** Each thread an Ask saved, as the Core holds it after the save. */
+let saved: AiThread[] = [];
 let failRecord = false;
 let replies: AiEvent[][] = [];
 let holdAsk = false;
@@ -153,7 +156,18 @@ function setup(opts: { text?: string; layout?: string | null; name?: string; onO
       if (failSave) throw { kind: "io", message: "the store is locked" };
       const t = a.thread as AiThread;
       threads = [...threads.filter((x) => x.id !== t.id), t];
+      saved.push(t);
       return { thread: t, topics: [], compactions: [] };
+    },
+    ai_append_turn: (a) => {
+      if (failSave) throw { kind: "io", message: "the store is locked" };
+      const turn = a.turn as AppendTurn;
+      const before = threads.find((x) => x.id === turn.threadId) ?? null;
+      const v = turnViewOf(turn, before);
+      const t = withTurn(before, v);
+      threads = [...threads.filter((x) => x.id !== t.id), t];
+      saved.push(t);
+      return v;
     },
     ai_known_models: () => {
       if (known) return known;
@@ -207,6 +221,7 @@ beforeEach(() => {
   settingsFail = null;
   failWrites = false;
   failSave = false;
+  saved = [];
   failRecord = false;
   sinks.length = 0;
 });
@@ -262,7 +277,7 @@ test("send_flushes_then_asks_with_outline", async () => {
   expect(r.outline.nodes.find((n) => n.name === "Orders")).toMatchObject({ id: "D1", table: true });
   expect(r.outline.links).toHaveLength(5);
   // The composer empties and the question shows in the thread.
-  expect((box() as HTMLTextAreaElement).value).toBe("");
+  await waitFor(() => expect((box() as HTMLTextAreaElement).value).toBe(""));
   expect(await screen.findByText("Add a fraud check after Checkout")).toBeTruthy();
 });
 
@@ -333,7 +348,7 @@ test("closing_the_tab_stops_the_ask", async () => {
   await waitFor(() => expect(s.view().state.readOnly).toBe(false));
   expect((box() as HTMLTextAreaElement).value).toBe("");
   expect(screen.queryByText("Add a fraud check after Checkout")).toBeNull();
-  expect(callsTo("save_ai_thread").filter((c) => (c.thread as AiThread).place === "diagram:checkout")).toEqual([]);
+  expect(saved.filter((t) => t.place === "diagram:checkout")).toEqual([]);
   expect(screen.queryByRole("region", { name: "Changes to review" })).toBeNull();
   cleanup();
 
@@ -533,8 +548,8 @@ test("tool_result_recorded", async () => {
   await send("Add a fraud check after Checkout");
   await reviewing();
   // The thread is saved with the proposal in the answer's record, under the diagram's place.
-  await waitFor(() => expect(callsTo("save_ai_thread").length).toBeGreaterThan(0));
-  const thread = last(callsTo("save_ai_thread"))!.thread as AiThread;
+  await waitFor(() => expect(saved.length).toBeGreaterThan(0));
+  const thread = last(saved)!;
   expect(thread.place).toBe("diagram:checkout");
   const a = thread.messages.find((m) => m.role === "assistant")!;
   expect(a.record?.toolUse).toMatchObject({ tool: "propose_diagram_changes", file: "checkout", input: INPUT, outcome: null, proposal: proposal(FRAUD) });
@@ -622,8 +637,8 @@ test("thread_reloads_with_the_card", async () => {
   replies = [answer(null)];
   await send("And a refund step");
   expect(asks()[0].threadId ?? null).toBeNull();
-  await waitFor(() => expect((last(callsTo("save_ai_thread"))?.thread as AiThread).messages).toHaveLength(4));
-  expect((last(callsTo("save_ai_thread"))!.thread as AiThread).id).toBe("t1");
+  await waitFor(() => expect(last(saved)?.messages).toHaveLength(4));
+  expect(last(saved)!.id).toBe("t1");
 });
 
 test("nothing_in_the_side_panel_has_hover_text", async () => {
@@ -663,7 +678,8 @@ test("a_failed_save_stops_the_send", async () => {
   fireEvent.keyDown(box(), { key: "Enter" });
   expect(await screen.findByText("Not saved, so nothing was sent. Save the diagram, then send it again.")).toBeTruthy();
   expect(callsTo("ai_diagram_ask")).toEqual([]);
-  expect((box() as HTMLTextAreaElement).value).toBe("Add a fraud check");
+  // Send empties the box and the refused send puts the question back in the next render.
+  await waitFor(() => expect((box() as HTMLTextAreaElement).value).toBe("Add a fraud check"));
   expect(s.view().state.readOnly).toBe(false);
 });
 

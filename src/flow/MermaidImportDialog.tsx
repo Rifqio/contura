@@ -1,6 +1,7 @@
 // New flow from Mermaid (frame 7.3): paste or open a Mermaid flowchart, see the flow it becomes, and save
 // it as an ordinary .flow file with its layout file (ruling D1) in Contura's diagrams folder, by name (Q35).
 // The Mermaid text is not kept.
+import { useUngroupedLabel } from "../prefs/usePrefs";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
@@ -71,6 +72,7 @@ function leftOutLine(lines: number[]): string | null {
 }
 
 export default function MermaidImportDialog({ groups, defaultGroup, lang, onClose, onCreated, beforeReplace }: Props) {
+  const { label: ungroupedLabel } = useUngroupedLabel();
   const toast = useToast();
   const [text, setText] = useState("");
   const [name, setName] = useState(DEFAULT_NAME);
@@ -208,10 +210,10 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
 
   const groupOptions = useMemo(
     () => [
-      { value: "", label: "Ungrouped", lead: <GroupBadge name="" color={null} /> },
+      { value: "", label: ungroupedLabel, lead: <GroupBadge name="" color={null} /> },
       ...groups.map((g) => ({ value: g.id as string, label: g.name, lead: <GroupBadge id={g.id} name={g.name} color={g.color} /> })),
     ],
-    [groups],
+    [groups, ungroupedLabel],
   );
 
   const count = result ? `${plural(result.nodes, "node")}, ${plural(result.links, "link")}${errors.length ? " read" : ""}` : "";

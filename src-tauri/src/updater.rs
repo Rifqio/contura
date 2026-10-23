@@ -154,7 +154,7 @@ pub fn update_status(updates: Updates<'_>) -> Result<UpdateStatus, Error> {
     updates.status()
 }
 
-/// The first-start prompt (Turn on, Not now) and the Settings switch.
+/// The first start guide's update step and the Settings switch.
 #[tauri::command]
 pub fn set_update_checks(updates: Updates<'_>, on: bool) -> Result<UpdateStatus, Error> {
     updates.set_checks(on)

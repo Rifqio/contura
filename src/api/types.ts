@@ -69,7 +69,21 @@ export interface UiPrefs {
   flowAssistMode: FlowAssistMode;
   /** Item 36: the Visual Query's bottom panel height in px; null is the default. */
   vqPanelHeight: number | null;
+  /** What Ungrouped is called; `null` is "Ungrouped". */
+  ungroupedLabel: string | null;
+  /** Text and controls in every window, as a percent. */
+  interfaceSize: InterfaceSize;
+  /** Every data grid shades alternate rows. */
+  stripeRows: boolean;
+  /** How the data grids draw SQL NULL; copy and export always keep real NULL. */
+  nullAs: NullDisplay;
 }
+
+export type InterfaceSize = 90 | 100 | 110 | 125;
+export const INTERFACE_SIZES: readonly InterfaceSize[] = [90, 100, 110, 125];
+
+/** The word NULL, the empty-set sign, or nothing visible (a screen reader still hears NULL). */
+export type NullDisplay = "null" | "symbol" | "blank";
 
 /** Mirrors the Core defaults; used before the Core answers. */
 export const DEFAULT_UI_PREFS: UiPrefs = {
@@ -82,6 +96,10 @@ export const DEFAULT_UI_PREFS: UiPrefs = {
   flowSidePanel: { hidden: false, tab: "editor" },
   flowAssistMode: "review",
   vqPanelHeight: null,
+  ungroupedLabel: null,
+  interfaceSize: 100,
+  stripeRows: false,
+  nullAs: "null",
 };
 
 /** Shortcut overrides by command id; an empty list unbinds the command. */
@@ -1506,6 +1524,34 @@ export interface ThreadSummary {
 /** An opened thread with its Topics and compactions; its records are trimmed. */
 export interface ThreadView {
   thread: AiThread;
+  topics: Topic[];
+  compactions: Compaction[];
+}
+
+/** One Ask's turn for `ai_append_turn`: its messages go after the stored thread's, so the thread never crosses IPC. */
+export interface AppendTurn {
+  threadId: string;
+  /** For a thread the store does not have yet. */
+  place: string;
+  /** For a thread the store does not have yet; a stored thread keeps its title. */
+  title: string;
+  updatedAt: number;
+  /** The question and its answer. */
+  messages: AiMessage[];
+  /** A Retry: the stored messages from the one at this time on are replaced. */
+  replaceFrom?: number;
+}
+
+/** What `ai_append_turn` returns: the new messages as stored (records trimmed) and where the thread now starts. */
+export interface TurnView {
+  threadId: string;
+  place: string;
+  title: string;
+  updatedAt: number;
+  messages: AiMessage[];
+  /** The time of the oldest message kept (older ones went over the cap); null for an empty thread. */
+  keptFrom: number | null;
+  messageCount: number;
   topics: Topic[];
   compactions: Compaction[];
 }

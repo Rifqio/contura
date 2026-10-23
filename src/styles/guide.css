@@ -1,0 +1,488 @@
+/* The first start guide (board "First start guide", 2026-10-23): a fixed 640 by 560 dialog under the title bar. */
+
+/* The cover takes the whole window, so nothing behind the guide is reachable. Its top strip is clear (the
+   title bar shows through, as on the board) and still drags the window; only the window buttons sit above it. */
+.fsg-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+}
+.fsg-cover-bar {
+  flex: none;
+  height: var(--title-bar-height);
+}
+:root.fsg-open .window-buttons {
+  position: relative;
+  z-index: 301;
+}
+
+.fsg-scrim {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-scrim);
+  animation: fade-in var(--motion-slow) var(--ease-enter);
+}
+
+.fsg {
+  display: flex;
+  flex-direction: column;
+  width: 640px;
+  height: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - var(--title-bar-height) - 32px);
+  overflow: hidden;
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-dialog);
+  font: var(--font-body);
+}
+.fsg:focus {
+  outline: none;
+}
+
+.fsg-progress {
+  display: flex;
+  gap: 4px;
+  height: 3px;
+  padding: 14px 28px 0;
+  flex: none;
+}
+.fsg-seg {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--c-border);
+}
+.fsg-seg.on,
+.fsg-seg.done {
+  background: var(--c-accent);
+}
+
+.fsg-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 28px 20px;
+  overflow-y: auto;
+}
+/* The body scrolls; its blocks keep their height. A block with overflow: hidden (the "You are set" summary) has no
+   automatic minimum and shrank to a 20 px sliver on a short window. */
+.fsg-body > * {
+  flex-shrink: 0;
+}
+.fsg-eyebrow {
+  margin-bottom: -12px;
+  font: var(--font-label);
+  letter-spacing: 0.02em;
+  color: var(--c-accent);
+}
+
+.fsg-title {
+  margin: 0;
+  font-family: var(--font-family-display);
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+}
+.fsg-optional {
+  font-weight: 400;
+  color: var(--c-text-subtle);
+}
+.fsg-p {
+  margin: 0;
+  color: var(--c-text-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+.fsg-small {
+  font-size: 12px;
+  line-height: 16px;
+}
+.fsg-lab {
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+.fsg-strong {
+  font-weight: 600;
+}
+.fsg-muted {
+  color: var(--c-text-muted);
+}
+.fsg-flat {
+  margin: 0;
+}
+.fsg-end {
+  margin-left: auto;
+}
+.fsg-accent {
+  flex: none;
+  color: var(--c-accent);
+}
+.fsg-ok {
+  color: var(--c-success-text);
+}
+.fsg-warn {
+  color: var(--c-prod-text);
+}
+.fsg-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fsg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fsg-card {
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-panel);
+}
+.fsg-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+.fsg-note > .icon {
+  flex: none;
+}
+.fsg-top,
+.fsg-warn-card {
+  align-items: flex-start;
+}
+.fsg-top > .icon,
+.fsg-warn-card > .icon {
+  margin-top: 1px;
+}
+.fsg-warn-card {
+  border-color: color-mix(in srgb, var(--c-prod-text) 55%, var(--c-border));
+}
+
+/* Welcome */
+.fsg-welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  text-align: center;
+}
+.fsg-lede {
+  max-width: 470px;
+}
+.fsg-promises {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: 8px;
+}
+.fsg-promise {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 14px;
+  text-align: center;
+}
+
+/* Picks: cards that act as radio choices */
+.fsg-grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.fsg-providers {
+  gap: 8px;
+}
+.fsg-grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.fsg-pick {
+  box-sizing: border-box;
+  margin: 0;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-panel);
+  color: var(--c-text);
+  font: var(--font-body);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-enter),
+    transform var(--motion-fast) var(--ease-enter);
+}
+.fsg-pick:hover {
+  background: var(--c-bg-hover);
+}
+.fsg-pick:active {
+  transform: translateY(1px);
+}
+.fsg-pick:focus-visible,
+.fsg-switch:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: 2px;
+}
+.fsg-pick.on {
+  border-color: var(--c-accent);
+  box-shadow: inset 0 0 0 1px var(--c-accent);
+  background: color-mix(in srgb, var(--c-accent) 10%, var(--c-bg-panel));
+}
+.fsg-radio {
+  box-sizing: border-box;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--c-text-subtle);
+  border-radius: var(--rounded-full);
+}
+.fsg-pick.on .fsg-radio {
+  border-color: var(--c-accent);
+}
+.fsg-pick.on .fsg-radio::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: var(--rounded-full);
+  background: var(--c-accent);
+}
+.fsg-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+}
+.fsg-db {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 104px;
+  padding: 14px 12px;
+}
+
+/* Pick a look: each sample is drawn with its own theme's tokens */
+.fsg-look {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+.fsg-sample {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 116px;
+  padding: 10px 12px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font-family: var(--font-family-code);
+  font-size: 11px;
+  line-height: 18px;
+}
+.fsg-kw {
+  color: var(--c-syn-keyword);
+}
+.fsg-id {
+  color: var(--c-syn-type);
+}
+.fsg-str {
+  color: var(--c-syn-string);
+}
+.fsg-sample-bar {
+  width: 70%;
+  height: 8px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--c-bg-hover);
+}
+.fsg-look-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+/* The AI step's key or address */
+.fsg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fsg-field label {
+  font-weight: 600;
+}
+.fsg-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  background: var(--c-bg-app);
+}
+.fsg-check {
+  flex: none;
+  height: 32px;
+}
+
+/* Updates */
+.fsg-switch {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--c-text);
+  font: var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+.fsg-switch:hover {
+  background: var(--c-bg-hover);
+}
+.fsg-switch-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.fsg-switch .sw {
+  flex: none;
+  pointer-events: none;
+}
+.fsg-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0 2px;
+  list-style: none;
+}
+.fsg-facts li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.fsg-facts .icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* Done */
+.fsg-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  text-align: center;
+}
+.fsg-done .fsg-title {
+  margin-top: 4px;
+}
+.fsg-done-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--rounded-full);
+  background: color-mix(in srgb, var(--c-success-text) 16%, transparent);
+}
+.fsg-summary {
+  margin: 0;
+  overflow: hidden;
+}
+.fsg-summary-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  height: 36px;
+  padding: 0 14px;
+}
+.fsg-summary-row + .fsg-summary-row {
+  border-top: var(--border-hairline) solid var(--c-border);
+}
+.fsg-summary-row dd {
+  margin: 0;
+  font-weight: 600;
+}
+.fsg-keys-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fsg-keys {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 24px;
+}
+.fsg-key {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+/* Footer */
+.fsg-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  height: 64px;
+  padding: 0 20px;
+  border-top: var(--border-hairline) solid var(--c-border);
+  background: var(--c-bg-panel);
+}
+.fsg-foot .button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--rounded-md);
+  gap: 6px;
+}
+.fsg-foot .button-primary {
+  padding: 0 16px;
+}
+.fsg-foot .fsg-quiet {
+  padding: 0 10px;
+  color: var(--c-text-subtle);
+}
+.fsg-foot .fsg-back {
+  background: transparent;
+  color: var(--c-text-muted);
+}
+.fsg-foot .button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+/* The toast after the guide: a title over the line about opening it again. */
+.guide-toast {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Home's empty state and Settings > General */
+.home-guide-link {
+  margin-top: var(--spacing-sm);
+}

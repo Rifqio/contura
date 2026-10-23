@@ -131,7 +131,9 @@ export function ScriptPane({ plan, dialect, target, production, onCopy, onSave, 
   return (
     <section className={production ? "script-pane prod-wash" : "script-pane"} aria-label="Sync Script">
       <header className="script-pane-head">
-        <span className="script-pane-title">{scriptTitle(plan.statements.length, dialect)}</span>
+        <span className="script-pane-title" title={scriptTitle(plan.statements.length, dialect)}>
+          {scriptTitle(plan.statements.length, dialect)}
+        </span>
         <span className="spacer" />
         <button type="button" className="button button-small button-quiet" onClick={onCopy}>
           <Icon name="copy" size={14} />

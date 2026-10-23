@@ -16,6 +16,8 @@ import {
   getAiThread,
   listAiThreads,
   saveAiThread,
+  appendAiTurn,
+  withTurn,
   connectionTarget,
   errorText,
   fileName,
@@ -32,7 +34,7 @@ test("fileName_is_the_last_part_of_either_path_style", () => {
   expect(fileName("/home/r/orders.csv")).toBe("orders.csv");
   expect(fileName("orders.csv")).toBe("orders.csv");
 });
-import type { AiError, AiEvent, AskRequest, ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
+import type { AiError, AiEvent, AskRequest, TurnView, ColumnTypes, SqlFk, VisualQuery, VqPreview, VqRun } from "./types";
 import type { BackupRequest, ExportRequest, ImportRequest, JobEvent, RestoreRequest, ScriptRequest, TransferRequest } from "./types";
 import { DEFAULT_BACKUP_INCLUDE, DEFAULT_EXPORT_OPTIONS, DEFAULT_IMPORT_OPTIONS } from "./types";
 import * as jobs from "./jobs";
@@ -602,6 +604,8 @@ test("thread_commands_pass_camel_case_arguments", async () => {
   const thread = { id: "t1", place: "ungrouped", title: "x", messages: [], updatedAt: 1 };
   await saveAiThread(thread);
   await saveAiThread(thread, "r1");
+  const turn = { threadId: "t1", place: "ungrouped", title: "x", updatedAt: 1, messages: [] };
+  await appendAiTurn(turn, "r2");
   expect(vi.mocked(invoke).mock.calls).toEqual([
     ["list_ai_threads", { place: "ungrouped" }],
     ["get_ai_thread", { threadId: "t1" }],
@@ -609,7 +613,22 @@ test("thread_commands_pass_camel_case_arguments", async () => {
     ["ai_search_threads", { place: "ungrouped", text: "orders" }],
     ["save_ai_thread", { thread, requestId: null }],
     ["save_ai_thread", { thread, requestId: "r1" }],
+    ["ai_append_turn", { turn, requestId: "r2" }],
   ]);
+});
+
+test("with_turn_puts_the_stored_turn_after_the_open_copy", () => {
+  const m = (at: number, text = `m${at}`) => ({ role: (at % 2 ? "assistant" : "user") as "user" | "assistant", text, context: [], at });
+  const base = { id: "t1", place: "p", title: "x", updatedAt: 1, messages: [m(2), m(3), m(4), m(5)] };
+  const view = (over: Partial<TurnView>): TurnView => ({ threadId: "t1", place: "p", title: "x", updatedAt: 9, messages: [m(6), m(7)], keptFrom: 2, messageCount: 6, topics: [], compactions: [], ...over });
+  expect(withTurn(base, view({})).messages.map((x) => x.at)).toEqual([2, 3, 4, 5, 6, 7]);
+  // Over the cap: the oldest turn went.
+  expect(withTurn(base, view({ keptFrom: 4 })).messages.map((x) => x.at)).toEqual([4, 5, 6, 7]);
+  // A Retry replaces the last turn.
+  expect(withTurn(base, view({}), 4).messages.map((x) => x.at)).toEqual([2, 3, 6, 7]);
+  // No copy, or another thread's: the new thread alone.
+  expect(withTurn(null, view({ keptFrom: 6 })).messages.map((x) => x.at)).toEqual([6, 7]);
+  expect(withTurn({ ...base, id: "t2" }, view({})).updatedAt).toBe(9);
 });
 
 test("parity_P11_38_a_keyring_error_names_the_os_keyring", () => {

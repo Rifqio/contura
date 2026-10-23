@@ -1,5 +1,6 @@
 import type { ColumnMap, PlannedColumn } from "../api/types";
 import Select, { type SelectOption } from "../components/Select";
+import { NullMark } from "../prefs/gridDisplay";
 
 interface Props {
   /** The file's column names, as the Core gives them ("Column 1", "name (2)"). */
@@ -44,7 +45,9 @@ export default function MappingTable({ header, first, mapping, targets, onChange
               <th scope="row" className="import-mapping-file">
                 {name}
               </th>
-              <td className={value === null || value === undefined ? "import-mapping-first import-null" : "import-mapping-first"}>{value ?? "NULL"}</td>
+              <td className="import-mapping-first" title={value === null || value === undefined ? "NULL" : undefined}>
+                {value === null || value === undefined ? <NullMark className="import-null" /> : value}
+              </td>
               <td className="import-mapping-into">
                 <Select
                   label={`Into column for ${name}`}

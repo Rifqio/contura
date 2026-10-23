@@ -81,8 +81,11 @@ function iconOf(t: AnyTab): { feature: FeatureIconName } | { icon: IconName } {
 
 /** Item 48: tabs are at most this wide, and share the strip evenly below it. */
 export const TAB_MAX = 220;
-/** The active tab keeps its name and close button at this width. */
-export const TAB_ACTIVE_MIN = 96;
+/**
+ * The active tab keeps its name, its unsaved mark and its close button at this width: icon 16, name 3ch, the mark
+ * and the gaps need 66 px beside the 12 + 6 px padding and the 20 px close (at 96 px the mark sat under the close).
+ */
+export const TAB_ACTIVE_MIN = 112;
 /** An icon-only tab is never narrower than this. */
 const TAB_ICON_ONLY = 36;
 /** Below these shares, inactive tabs hide their close until hover (narrow), then keep only their icon (compact). */
@@ -442,7 +445,11 @@ export default function TabStrip({
                 .filter(Boolean)
                 .join(" ")}
               style={drag.styleOf(key)}
-              onPointerDown={(e) => drag.down(e, key)}
+              onPointerDown={(e) => {
+                // As in Edge: pressing a tab shows it at once, so a drag moves the tab being looked at.
+                if (e.button === 0 && !on && !(e.target as HTMLElement).closest(".work-tab-close")) onSelect(key);
+                drag.down(e, key);
+              }}
               onDoubleClick={() => {
                 if (t.kind === "object" && t.preview) onKeep?.(key);
               }}

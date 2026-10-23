@@ -237,3 +237,29 @@ test("memory_event_kept", async () => {
   const ended = await end!;
   expect(ended.stamp).toMatchObject({ topic: 2, opened: true, reason: "subject", kinds: ["question", "cards"] });
 });
+
+test("text_listeners_hear_at_most_once_per_frame_and_release_lets_the_answer_go", async () => {
+  stream.hold();
+  const { result } = renderHook(() => useAnswerStream());
+  let end: Promise<StreamEnd> | undefined;
+  act(() => {
+    end = result.current.start(request("r3"));
+  });
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  let heard = 0;
+  const off = result.current.subscribe(() => heard++);
+  stream.emit(delta("a"), delta("b"), delta("c"), { type: "thinking", text: "hmm" });
+  expect(heard).toBe(0);
+  await new Promise((r) => requestAnimationFrame(() => r(null)));
+  expect(heard).toBe(1);
+  expect(result.current.text).toBe("abc");
+  // The end draws what is pending at once.
+  stream.emit(delta("d"), done());
+  expect(heard).toBe(2);
+  await end;
+  act(() => result.current.release());
+  expect(result.current.text).toBe("");
+  expect(result.current.thinking).toBe("");
+  expect(result.current.log).toEqual([]);
+  off();
+});

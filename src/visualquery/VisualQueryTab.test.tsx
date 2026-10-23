@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import type { ConnectionConfig, SqlPart, SqlSchema, VisualQuery, VqPreview } from "../api/types";
 import { ToastProvider } from "../components/Toast";
 import { LangClient } from "../lang/client";
@@ -16,6 +16,7 @@ import { fitWidth, type QueryCardData, queryCardHeight } from "./QueryCard";
 import { rowAnchor } from "./JoinEdge";
 import { parseVisualDrafts } from "./drafts";
 import VisualQueryTab, { type VisualQueryTabProps, joinBrings, pairsSentence, warningLines } from "./VisualQueryTab";
+import appCss from "../styles/app.css?raw";
 
 /** Item 30: the SQL is a tab of the bottom panel; this shows it. */
 async function showSql() {
@@ -560,11 +561,11 @@ test("item_41_card_limits_two_rows_to_every_row_and_216_to_340_wide", async () =
   await drag("se", -900, -900);
   await waitFor(() => expect(changes[changes.length - 1].heights).toEqual({ t1: 88 }));
   expect(changes[changes.length - 1].widths).toEqual({ t1: 216 });
-  // Largest: 340 wide, every row: a card as tall as its rows keeps no height of its own.
+  // Largest: 340 wide; a corner resizes both ways, so the card may grow taller than its rows, up to 480.
   await waitFor(() => expect(zone("se")).toBeTruthy());
   await drag("se", 900, 900);
   await waitFor(() => expect(changes[changes.length - 1].widths).toEqual({ t1: 340 }));
-  expect(changes[changes.length - 1].heights ?? {}).toEqual({});
+  expect(changes[changes.length - 1].heights).toEqual({ t1: 480 });
 });
 
 test("item_41_a_card_with_many_columns_draws_only_its_visible_rows_and_keeps_joined_ones", async () => {
@@ -674,27 +675,52 @@ test("item_37_with_nothing_ticked_the_sql_tab_says_the_real_problem", async () =
  * jsdom has no layout. React Flow finds a port from its box against the card's, so each port reports the box a
  * browser would give it: its row's middle, less how far the card's rows are scrolled.
  */
+/**
+ * A left port's box, its visible dot and its hit area, in px from the card's left border, read from app.css (React
+ * Flow centres a left handle on its `left`). The right port mirrors it.
+ */
+function portGeometry() {
+  const px = (body: string, prop: string) => parseFloat(new RegExp(`(?:^|[;\\s])${prop}:\\s*(-?[\\d.]+)(?:px)?[;\\s]`).exec(body)?.[1] ?? "NaN");
+  const port = cssRules(".diagram-canvas .card-port-row .react-flow__handle.vq-card-port");
+  const w = px(port, "width");
+  const h = px(port, "height");
+  const centre = px(cssRules(".diagram-canvas .card-port-row .react-flow__handle-left.vq-card-port"), "left");
+  const box = { left: centre - w / 2, right: centre + w / 2, w, h };
+  const inset = px(cssRules(".vq-card-port::after"), "inset");
+  const before = cssRules(".vq-card-port::before");
+  const side = cssRules(".react-flow__handle-left.vq-card-port::before");
+  const hit = { left: box.left + px(side, "left"), right: box.right - px(side, "right"), h: h - px(before, "top") - px(before, "bottom") };
+  return { box, dot: { left: box.left + inset, right: box.right - inset }, hit };
+}
+
 function layOutPorts() {
   const original = Element.prototype.getBoundingClientRect;
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    const row = this.classList.contains("react-flow__handle") ? this.closest<HTMLElement>("li.vq-card-row") : null;
+    // Ports live in the card's port layer: 32 px header, 4 px padding, a 24 px row each, moved by the list's scroll.
+    const row = this.classList.contains("react-flow__handle") ? this.closest<HTMLElement>(".card-port-row") : null;
     if (!row) return { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON() {} } as DOMRect;
-    const list = row.parentElement!;
-    const index = [...list.children].indexOf(row);
-    const top = 37 + index * 24 + 12 - 4 - list.scrollTop;
-    return { x: 0, y: top, left: 0, top, right: 8, bottom: top + 8, width: 8, height: 8, toJSON() {} } as DOMRect;
+    const track = row.parentElement!;
+    const scrolled = -parseFloat(/translateY\((-?[\d.]+)px\)/.exec(track.style.transform)?.[1] ?? "0");
+    // Sized and placed as app.css draws them: a left port centred past the left border, a right one past the right
+    // border of the 800 px wide card (the shared mock's width).
+    // React Flow divides what it measures by the zoom, so the screen box is the canvas box times the zoom.
+    const { box } = portGeometry();
+    const zoom = parseFloat(/scale\(([\d.]+)\)/.exec(document.querySelector<HTMLElement>(".react-flow__viewport")?.style.transform ?? "")?.[1] ?? "1");
+    const top = (37 + parseFloat(row.style.top) + 12 - box.h / 2 - scrolled) * zoom;
+    const left = (this.classList.contains("react-flow__handle-left") ? box.left : 800 - box.right) * zoom;
+    return { x: left, y: top, left, top, right: left + box.w * zoom, bottom: top + box.h * zoom, width: box.w * zoom, height: box.h * zoom, toJSON() {} } as DOMRect;
   };
-  // A port is 8 px; a card is as tall as its own height says (the shared mock makes every box 800 x 600).
+  // A port is as app.css sizes it; a card is as tall as its own height says (the shared mock makes every box 800 x 600).
   const protoH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
   const protoW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth")!;
   const sized = (el: HTMLElement, own: number) => {
-    if (el.classList.contains("react-flow__handle")) return 8;
+    if (el.classList.contains("react-flow__handle")) return portGeometry().box.h;
     const h = el.classList.contains("react-flow__node") ? parseFloat(el.querySelector<HTMLElement>(".table-card")?.style.height ?? "") : NaN;
     return Number.isFinite(h) ? h : own;
   };
   Object.defineProperties(HTMLElement.prototype, {
     offsetHeight: { configurable: true, get(this: HTMLElement) { return sized(this, 600); } },
-    offsetWidth: { configurable: true, get(this: HTMLElement) { return this.classList.contains("react-flow__handle") ? 8 : 800; } },
+    offsetWidth: { configurable: true, get(this: HTMLElement) { return this.classList.contains("react-flow__handle") ? portGeometry().box.w : 800; } },
   });
   return () => {
     Element.prototype.getBoundingClientRect = original;
@@ -702,6 +728,64 @@ function layOutPorts() {
     Object.defineProperty(HTMLElement.prototype, "offsetWidth", protoW);
   };
 }
+
+test("review_m1_a_join_line_ends_on_the_outer_edge_of_the_visible_port_dot", async () => {
+  const restore = layOutPorts();
+  try {
+    render(
+      <Harness
+        initial={docWith({
+          tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 1000)],
+          joins: [{ id: "j1", left: "t1", right: "t2", kind: "inner", on: [{ leftColumn: "store_id", rightColumn: "id" }] }],
+        })}
+      />,
+    );
+    await waitFor(() => expect(document.querySelectorAll(".vq-join-dot")).toHaveLength(2));
+    const { dot } = portGeometry();
+    // orders (x 0, 800 wide) leaves from its right port, whose dot spans 802..812; stores (x 1000) takes the line on
+    // its left port, whose dot spans 988..998. Each end sits on the dot's outer edge, with no gap.
+    const ends = [...document.querySelectorAll(".vq-join-dot")].map((c) => Number(c.getAttribute("cx"))).sort((a, b) => a - b);
+    expect(ends).toEqual([800 - dot.left, 1000 + dot.left]);
+    expect(ends).toEqual([812, 988]);
+  } finally {
+    restore();
+  }
+});
+
+test("review_l2_the_ports_follow_the_rows_scroll_at_once_and_after_any_redraw", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] }, { heights: { t1: 88 } })} />);
+  const orders = await cardEl("Table orders o");
+  await waitFor(() => expect(orders.classList.contains("table-card-scroll")).toBe(true));
+  const list = orders.querySelector<HTMLElement>("ul.table-card-columns")!;
+  const track = orders.querySelector<HTMLElement>(".card-ports-track")!;
+  // In the same frame as the scroll, not a frame later.
+  list.scrollTop = 48;
+  fireEvent.scroll(list);
+  expect(track.style.transform).toBe("translateY(-48px)");
+  // The list drops to the top with no scroll event (its rows reloaded shorter, an Undo): the next draw puts the
+  // ports back on their rows.
+  list.scrollTop = 0;
+  fireEvent.click(within(orders).getAllByRole("checkbox")[0]);
+  await waitFor(() => expect(track.style.transform).toBe(""));
+});
+
+test("review_n1_a_column_name_with_quotes_or_a_line_break_still_finds_its_ports", async () => {
+  const ODD: SqlSchema = { ...SHOP, tables: [...SHOP.tables, { schema: null, name: "odd", kind: "table", columns: [col('a"b', "int", true), col("c\nd", "int", false)] }] };
+  const client = new LangClient(() => fakeWorker());
+  lang = { client, schemas: new SchemaCache(client, () => Promise.resolve(ODD)) };
+  render(<Harness initial={docWith({ tables: [card("t1", "odd", "x")] })} />);
+  const odd = await cardEl("Table odd x");
+  const li = await waitFor(() => {
+    const el = [...odd.querySelectorAll<HTMLElement>("li.vq-card-row")].find((r) => r.dataset.column === "c\nd");
+    expect(el).toBeTruthy();
+    return el!;
+  });
+  fireEvent.pointerEnter(li);
+  expect([...odd.querySelectorAll<HTMLElement>(".card-port-row.is-hot")].map((r) => r.dataset.portRow)).toEqual(["c\nd"]);
+  const quoted = [...odd.querySelectorAll<HTMLElement>("li.vq-card-row")].find((r) => r.dataset.column === 'a"b')!;
+  fireEvent.pointerEnter(quoted);
+  expect([...odd.querySelectorAll<HTMLElement>(".card-port-row.is-hot")].map((r) => r.dataset.portRow).sort()).toEqual(['a"b', "c\nd"]);
+});
 
 test("review_gaps_scrolling_a_short_card_moves_its_join_to_the_edge_dashed_on_a_ring", async () => {
   const restore = layOutPorts();
@@ -771,7 +855,7 @@ test("review_gaps_scrolling_a_long_card_moves_its_window_and_keeps_the_joined_ro
   expect(rows().length).toBeLessThan(30);
   // The joined row keeps its port, so its line stays.
   expect(rows()).toContain("c100");
-  expect(huge.querySelector('li[data-column="c100"] .react-flow__handle[data-handleid="c100:s"]')).not.toBeNull();
+  expect(huge.querySelector('.card-port-row[data-port-row="c100"] .react-flow__handle[data-handleid="c100:s"]')).not.toBeNull();
   expect(document.querySelector(".vq-join-line")).not.toBeNull();
 });
 
@@ -790,4 +874,168 @@ test("review_minor_5_a_removed_card_takes_its_kept_size_with_it", async () => {
   expect(last.model.tables.map((t) => t.id)).toEqual(["t2"]);
   expect(last.widths).toEqual({ t2: 260 });
   expect(last.heights).toBeUndefined();
+});
+
+// ---- Release 1.0 card fixes (vq-card-bug.png) ----
+
+const cssRules = (sel: string) =>
+  [...appCss.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter((m) => m[1].split(",").map((x) => x.trim()).includes(sel))
+    .map((m) => m[2])
+    .join("\n");
+
+test("release_card_header_never_overflows_names_cut_first_count_and_actions_stay", () => {
+  for (const sel of [".vq-card .table-card-name", ".vq-card .vq-card-alias"]) {
+    const body = cssRules(sel);
+    expect(body).toMatch(/flex:\s*0 1 auto/);
+    expect(body).toMatch(/min-width:\s*0/);
+    expect(body).toMatch(/text-overflow:\s*ellipsis/);
+    expect(body).toMatch(/white-space:\s*nowrap/);
+  }
+  // The schema gives way first; the count and the action buttons never shrink.
+  expect(cssRules(".vq-card .table-card-schema")).toMatch(/flex-shrink:\s*100/);
+  for (const sel of [".vq-card .table-card-header > .table-card-count", ".vq-card .table-card-header > .icon-button"]) expect(cssRules(sel)).toMatch(/flex:\s*none/);
+  // The old rule that kept the name and alias whole (and pushed the actions out) is gone.
+  expect(cssRules(".vq-card .table-card-name")).not.toMatch(/flex:\s*none/);
+});
+
+test("release_card_never_scrolls_sideways_names_and_types_cut", () => {
+  expect(cssRules(".table-card-scroll > .table-card-columns")).toMatch(/overflow-x:\s*hidden/);
+  expect(cssRules(".react-flow__node.is-resizing .table-card > .table-card-columns")).toMatch(/overflow-x:\s*hidden/);
+  expect(cssRules(".vq-card .vq-card-col")).toMatch(/white-space:\s*nowrap/);
+  expect(cssRules(".vq-card .vq-card-type")).toMatch(/text-overflow:\s*ellipsis/);
+  expect(cssRules(".vq-card .vq-card-type")).toMatch(/min-width:\s*0/);
+});
+
+test("release_long_names_and_types_carry_their_full_text_as_a_tooltip", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
+  const orders = await cardEl("Table orders o");
+  const col = await waitFor(() => {
+    const el = orders.querySelector<HTMLElement>('li[data-column="store_id"] .vq-card-col');
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  expect(col.title).toBe("store_id");
+  expect(orders.querySelector<HTMLElement>(".table-card-name")!.title).toBe("orders");
+  const type = orders.querySelector<HTMLElement>('li[data-column="store_id"] .vq-card-type')!;
+  expect(type.title).toBe(type.textContent);
+});
+
+test("release_ports_sit_outside_the_card_in_their_own_layer_and_win_over_the_resize_zone", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] }, { heights: { t1: 88 } })} />);
+  const orders = await cardEl("Table orders o");
+  await waitFor(() => expect(orders.querySelectorAll(".card-port-row")).toHaveLength(4));
+  const list = orders.querySelector("ul.table-card-columns")!;
+  // No port is inside the scrolling list, so neither the list's clip nor its scrollbar covers one.
+  expect(list.querySelector(".react-flow__handle")).toBeNull();
+  const row = orders.querySelector<HTMLElement>('.card-port-row[data-port-row="store_id"]')!;
+  expect(row.style.top).toBe("24px");
+  expect([...row.querySelectorAll(".react-flow__handle")].map((h) => h.getAttribute("data-handleid"))).toEqual(["store_id:t", "store_id:s"]);
+  // The handle box is the visible 10 px dot, centred 7 px past the border; its hit area is 18 x 18 px, all outside the
+  // border, so the edge resize zone (4 px each side of the border) keeps its inner half along the whole edge.
+  const g = portGeometry();
+  expect(g.box).toEqual({ left: -12, right: -2, w: 10, h: 10 });
+  expect(g.dot).toEqual({ left: g.box.left, right: g.box.right });
+  expect([g.hit.right - g.hit.left, g.hit.h]).toEqual([18, 18]);
+  expect(g.hit.right).toBeLessThanOrEqual(0);
+  expect(cssRules(".react-flow__handle-right.vq-card-port::before")).toMatch(/left:\s*-2px[\s\S]*right:\s*-6px/);
+  // The layer clips only above and below (scrolled-out rows), never sideways; it sits over the zones (2) and list.
+  const layer = cssRules(".card-ports");
+  expect(layer).toMatch(/overflow-x:\s*visible/);
+  expect(layer).toMatch(/overflow-y:\s*clip/);
+  expect(layer).toMatch(/z-index:\s*4/);
+  expect(cssRules(".diagram-canvas .card-port-row .react-flow__handle.vq-card-port")).toMatch(/z-index:\s*4/);
+  expect(cssRules(".rz-zone")).toMatch(/z-index:\s*2/);
+  // Header actions and the row checkboxes sit above the zones too.
+  expect(cssRules(".vq-card .table-card-header > .icon-button")).toMatch(/z-index:\s*3/);
+  expect(cssRules(".vq-card .vq-card-check")).toMatch(/z-index:\s*3/);
+  // The scrollbar is thin and a few px in from the edge.
+  expect(cssRules(".vq-card .table-card-columns::-webkit-scrollbar")).toMatch(/width:\s*6px/);
+  expect(cssRules(".vq-card .table-card-columns")).toMatch(/margin-right:\s*3px/);
+});
+
+test("release_hovering_a_row_fills_its_ports_and_a_join_drag_fills_every_target", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
+  const orders = await cardEl("Table orders o");
+  const li = await waitFor(() => {
+    const el = orders.querySelector<HTMLElement>('li[data-column="store_id"]');
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  const portRow = () => orders.querySelector<HTMLElement>('.card-port-row[data-port-row="store_id"]')!;
+  fireEvent.pointerEnter(li);
+  expect(portRow().classList.contains("is-hot")).toBe(true);
+  fireEvent.pointerLeave(li);
+  expect(portRow().classList.contains("is-hot")).toBe(false);
+  expect(cssRules(".card-port-row.is-hot .vq-card-port::after")).toMatch(/background:\s*var\(--c-accent\)/);
+  // The port under the pointer fills too (it sits outside the row, so leaving the row for it must not empty it).
+  expect(cssRules(".vq-card-port:hover::after")).toMatch(/background:\s*var\(--c-accent\)/);
+  expect(appCss).toMatch(/\.vq-joining \.react-flow__node:not\(:has\(\.connectingfrom\)\) \.vq-card-port::after/);
+});
+
+test("release_dragging_a_column_name_starts_a_join_from_its_port", async () => {
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 400)] })} />);
+  const orders = await cardEl("Table orders o");
+  const name = await waitFor(() => {
+    const el = orders.querySelector<HTMLElement>('li[data-column="store_id"] .vq-card-col');
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  // The name does not move the card: React Flow leaves `nodrag` alone.
+  expect(name.classList.contains("nodrag")).toBe(true);
+  const port = orders.querySelector<HTMLElement>('.card-port-row[data-port-row="store_id"] .react-flow__handle.source')!;
+  const got: MouseEvent[] = [];
+  port.addEventListener("mousedown", (e) => got.push(e as MouseEvent));
+  fireEvent.mouseDown(name, { button: 0, clientX: 120, clientY: 80 });
+  expect(got).toHaveLength(1);
+  expect([got[0].clientX, got[0].clientY]).toEqual([120, 80]);
+  // React Flow takes it as a press on the port: the Join line starts from it (jsdom has no hit testing).
+  const had = document.elementFromPoint;
+  document.elementFromPoint = () => null;
+  onTestFinished(() => {
+    document.elementFromPoint = had;
+  });
+  fireEvent.mouseMove(document, { clientX: 160, clientY: 90, buttons: 1 });
+  await waitFor(() => expect(document.querySelector(".react-flow__connectionline")).not.toBeNull());
+  fireEvent.mouseUp(document, { clientX: 160, clientY: 90 });
+});
+
+test("release_a_full_card_dragged_out_at_a_corner_grows_both_ways", async () => {
+  const changes: VisualTabDoc[] = [];
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} onChange={(d) => changes.push(d)} />);
+  const orders = await cardEl("Table orders o");
+  await waitFor(() => expect(within(orders).getAllByRole("checkbox")).toHaveLength(4));
+  fireEvent.click(document.querySelector('.react-flow__node[data-id="t1"]') as HTMLElement);
+  const se = await waitFor(() => document.querySelector('.react-flow__node[data-id="t1"] .rz-zone[data-dir="se"]') as HTMLElement);
+  fireEvent.pointerDown(se, { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+  fireEvent.pointerMove(se, { clientX: 130, clientY: 140, pointerId: 1 });
+  fireEvent.pointerUp(se, { clientX: 130, clientY: 140, pointerId: 1 });
+  // 216 x 136 becomes 246 x 176: both axes, even past every row.
+  await waitFor(() => expect(changes[changes.length - 1]?.widths).toEqual({ t1: 246 }));
+  expect(changes[changes.length - 1].heights).toEqual({ t1: 176 });
+  const drawn = await cardEl("Table orders o");
+  await waitFor(() => expect(drawn.style.height).toBe("176px"));
+});
+
+test("release_a_card_resize_follows_3px_steps_in_both_axes_and_ends_mid_row", async () => {
+  const changes: VisualTabDoc[] = [];
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} onChange={(d) => changes.push(d)} />);
+  const orders = await cardEl("Table orders o");
+  await waitFor(() => expect(within(orders).getAllByRole("checkbox")).toHaveLength(4));
+  fireEvent.click(document.querySelector('.react-flow__node[data-id="t1"]') as HTMLElement);
+  const se = await waitFor(() => document.querySelector('.react-flow__node[data-id="t1"] .rz-zone[data-dir="se"]') as HTMLElement);
+  const wrap = document.querySelector('.react-flow__node[data-id="t1"]') as HTMLElement;
+  fireEvent.pointerDown(se, { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+  const seen: [number, number][] = [];
+  for (let i = 1; i <= 5; i++) {
+    fireEvent.pointerMove(se, { clientX: 100 + 3 * i, clientY: 100 - 3 * i, pointerId: 1 });
+    await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    seen.push([parseFloat(wrap.style.width), parseFloat(wrap.style.height)]);
+  }
+  // Every frame follows the pointer: 3 px wider and 3 px shorter each step, never snapped to a row.
+  expect(seen).toEqual([1, 2, 3, 4, 5].map((i) => [216 + 3 * i, 136 - 3 * i]));
+  fireEvent.pointerUp(se, { clientX: 115, clientY: 85, pointerId: 1 });
+  // 121 px ends mid-row: kept as it is, the rows clip and scroll.
+  await waitFor(() => expect(changes[changes.length - 1]?.heights).toEqual({ t1: 121 }));
+  expect(changes[changes.length - 1].widths).toEqual({ t1: 231 });
 });

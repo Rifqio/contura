@@ -2,7 +2,7 @@
 
 Contura 1.0 updates itself in one click on Windows (the portable exe) and in the Linux AppImage; the .deb gets a notice that links to the release. The README promises no telemetry, so the check is opt-in and sends nothing but two GETs.
 
-**Off until turned on.** On the first start a quiet banner (not a dialog) asks "Check GitHub for new versions of Contura? Contura asks github.com once a day; nothing else is sent." with Turn on and Not now. Until it is answered, and after Not now, no automatic check runs; the answer is saved (`settings` row `updates`). Settings > Updates has the switch, Check now (which runs with the switch off: the user asked), the version, and the last check's time and result.
+**Off until turned on.** On the first start, step 4 of the first start guide ("Stay up to date") asks, with its switch off and a line on how this install updates (portable exe, AppImage, or the .deb notice). Ending the guide saves the answer (`settings` row `updates`); Skip or Esc leaves it unanswered, which is off. Until it is answered on, no automatic check runs. (Before 1.0 a quiet banner with Turn on and Not now asked instead; the guide replaced it.) Settings > Updates has the switch, Check now (which runs with the switch off: the user asked), the version, and the last check's time and result.
 
 **What is sent.** A GET of `https://github.com/Rifqio/contura/releases/latest/download/latest.json` at most once a day (the Core decides; the UI only asks hourly whether it is due), and, on Update and restart, a GET of the one release file. The requests carry `User-Agent: Contura` and nothing else: no cookie, token, version or id. GitHub never serves a draft or a pre-release as latest.
 
@@ -41,6 +41,6 @@ The `data` folder is never touched. A folder Contura cannot write to is found be
 ## Considered and rejected
 
 - **tauri-plugin-updater.** It expects an installer or a bundle it knows (NSIS, MSI, AppImage) and its own flow; Contura's Windows build is a bare portable exe, and the plugin brings its own HTTP stack. The manifest keeps the plugin's shape, so moving to it later stays possible.
-- **On by default.** It would break the README's promise; the banner costs one click.
+- **On by default.** It would break the README's promise; the guide's switch costs one click.
 - **The GitHub API (`api.github.com`).** It rate limits by IP and its answer is larger; the release asset is a static file.
 - **A watchdog that rolls back a new version that crashes.** More moving parts than the risk is worth for 1.0; the old file is kept until the new one is up.

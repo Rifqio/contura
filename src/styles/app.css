@@ -169,6 +169,8 @@ ul {
 .prod-wash {
   background: var(--c-prod-wash);
   --grid-cell-background: var(--c-prod-wash);
+  /* Stripe every other row darkens the wash, so every row still reads as Production. */
+  --grid-cell-stripe: var(--c-prod-wash-stripe);
 }
 
 .prod-wash .sql-editor .cm-editor,
@@ -383,16 +385,19 @@ ul {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* clip, not hidden: a hidden box still scrolls when something inside it takes focus, and focusing the Ask message
+   box below the panel's edge scrolled the whole panel up, its head gone with no scroll bar to bring it back (the
+   "sinking" report). A clipped pane cannot be scrolled at all; what must scroll has its own scroll area inside. */
 .body > .place-wrap > *,
 .body > .settings-main {
   border: var(--border-hairline) solid var(--c-border-subtle);
   border-radius: var(--rounded-lg);
-  overflow: hidden;
+  overflow: clip;
 }
 
 /* The side pane holds still; its tree scrolls inside it (.tree-scroll). */
 .body > .place-wrap > .side {
-  overflow: hidden;
+  overflow: clip;
 }
 
 /* ---------- Side panel ---------- */
@@ -890,6 +895,33 @@ ul {
   font-feature-settings: "calt" 1, "liga" 1;
   color: var(--c-text);
 }
+/* A narrow work area (the Ask panel open at 1,024 px leaves about 375 px): the table name ends in an ellipsis and
+   Edit structure keeps only its icon, so the Table menu stays inside the strip. */
+.table-header {
+  container: table-header / inline-size;
+}
+@container table-header (max-width: 560px) {
+  .table-header-structure-label {
+    display: none;
+  }
+  .table-header .table-header-connection {
+    flex: 0 1 auto;
+    min-width: 20px;
+    overflow: hidden;
+  }
+  .table-header-connection .editor-header-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+.table-header .table-header-name {
+  flex: 0 1 auto;
+  min-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* The inline WHERE and ORDER BY fields: 28 px, code font, the keyword in its syntax colour (PR30). */
 .grid-filter,
 .order-by {
@@ -1223,6 +1255,14 @@ body.col-resizing {
   transition: background-color var(--motion-fast) var(--ease-enter);
 }
 
+/*
+ * Stripe every other row (Appearance). As specific as `.grid td`, so hover, selection, edited cells and new or
+ * deleted rows all win over it. The cell's own stripe: a Production pane's is a darker wash, never the neutral one.
+ */
+:where(:root[data-grid-stripes]) .grid :where(tr.grid-row-alt) td {
+  background: var(--grid-cell-stripe);
+}
+
 /* T11: the hover row is lighter than the surface in Dracula. */
 .grid tr:hover td {
   background: var(--c-bg-hover);
@@ -1246,7 +1286,7 @@ body.col-resizing {
   min-width: var(--row-number-fit);
   padding: 0 var(--spacing-sm);
   text-align: right;
-  color: var(--c-text-faint);
+  color: var(--grid-row-number-text);
   font: var(--font-mono-small);
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
@@ -1348,7 +1388,7 @@ body.col-resizing {
 
 /* ---------- Home (DN 10.4) ---------- */
 .home-main {
-  overflow: hidden;
+  overflow: clip;
 }
 
 .home {
@@ -1404,8 +1444,11 @@ body.col-resizing {
   color: var(--c-text-subtle);
 }
 
+/* The buttons wrap inside the header's width: flex: none kept them on one line, and at 1,024 px New Connection sat
+   under the Recent pane where it could not be clicked. */
 .home-actions {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
@@ -2237,6 +2280,13 @@ button.group-card-name:hover {
   animation: dialog-in var(--motion-slow) var(--ease-enter);
 }
 
+/* A short window (1,024 x 480 is 384 px at 80 vh): a dialog may use all but the scrim's padding. */
+@media (max-height: 600px) {
+  .dialog {
+    max-height: calc(100vh - 2 * var(--spacing-lg));
+  }
+}
+
 .dialog-size-confirm {
   width: min(420px, 100%);
 }
@@ -2723,6 +2773,16 @@ textarea.input {
   margin: 0 2px;
   background: var(--c-border-subtle);
 }
+/* The overview leaves a small canvas (a Visual Query's 120 px at 1,024 x 480, a Schema Model at 1,024 x 480): it covered
+   most of the cards. Its own box is sized by the parent, so a size container is safe here. */
+.diagram-canvas {
+  container: diagram-canvas / size;
+}
+@container diagram-canvas (max-height: 360px) or (max-width: 480px) {
+  .diagram-canvas .react-flow__minimap {
+    display: none;
+  }
+}
 .diagram-canvas .react-flow__minimap {
   --xy-minimap-background-color-default: var(--c-bg-raised);
   --xy-minimap-mask-background-color-default: color-mix(in srgb, var(--c-accent-subtle) 30%, transparent);
@@ -2860,65 +2920,66 @@ textarea.input {
    edge the pointer turns into the resize arrow. 8 px along each edge (4 px in, 4 px out), a 12 px square on each
    corner. The ports (z-index 3) sit above the zones, so a port wins at an edge's middle. */
 .rz-zone {
+  /* One screen px at the canvas's zoom (DiagramCanvas sets --rz-zoom), so the zones keep their size zoomed out. */
+  --rz-k: calc(1px / var(--rz-zoom, 1));
   position: absolute;
   z-index: 2;
   touch-action: none;
   pointer-events: auto;
 }
-.rz-n {
-  left: 6px;
-  right: 6px;
-  top: -4px;
-  height: 8px;
+/* Edges: 8 px across the border (4 in, 4 out), stopping where the 14 px corners start. */
+.rz-n,
+.rz-s {
+  left: calc(7 * var(--rz-k));
+  right: calc(7 * var(--rz-k));
+  height: calc(8 * var(--rz-k));
   cursor: ns-resize;
+}
+.rz-n {
+  top: calc(-4 * var(--rz-k));
 }
 .rz-s {
-  left: 6px;
-  right: 6px;
-  bottom: -4px;
-  height: 8px;
-  cursor: ns-resize;
+  bottom: calc(-4 * var(--rz-k));
+}
+.rz-e,
+.rz-w {
+  top: calc(7 * var(--rz-k));
+  bottom: calc(7 * var(--rz-k));
+  width: calc(8 * var(--rz-k));
+  cursor: ew-resize;
 }
 .rz-e {
-  top: 6px;
-  bottom: 6px;
-  right: -4px;
-  width: 8px;
-  cursor: ew-resize;
+  right: calc(-4 * var(--rz-k));
 }
 .rz-w {
-  top: 6px;
-  bottom: 6px;
-  left: -4px;
-  width: 8px;
-  cursor: ew-resize;
+  left: calc(-4 * var(--rz-k));
+}
+/* Corners: 14 px squares centred on the corner, after the edges in the page, so a corner is never an edge. */
+.rz-nw,
+.rz-ne,
+.rz-sw,
+.rz-se {
+  width: calc(14 * var(--rz-k));
+  height: calc(14 * var(--rz-k));
 }
 .rz-nw {
-  left: -6px;
-  top: -6px;
-  width: 12px;
-  height: 12px;
+  left: calc(-7 * var(--rz-k));
+  top: calc(-7 * var(--rz-k));
   cursor: nwse-resize;
 }
 .rz-se {
-  right: -6px;
-  bottom: -6px;
-  width: 12px;
-  height: 12px;
+  right: calc(-7 * var(--rz-k));
+  bottom: calc(-7 * var(--rz-k));
   cursor: nwse-resize;
 }
 .rz-ne {
-  right: -6px;
-  top: -6px;
-  width: 12px;
-  height: 12px;
+  right: calc(-7 * var(--rz-k));
+  top: calc(-7 * var(--rz-k));
   cursor: nesw-resize;
 }
 .rz-sw {
-  left: -6px;
-  bottom: -6px;
-  width: 12px;
-  height: 12px;
+  left: calc(-7 * var(--rz-k));
+  bottom: calc(-7 * var(--rz-k));
   cursor: nesw-resize;
 }
 /* The live size, under the box while it is dragged. */
@@ -2947,6 +3008,7 @@ textarea.input {
 }
 /* Item 41: a card shorter than its rows scrolls them inside; a fade shows there are more above or below. */
 .table-card-scroll,
+.table-card-tall,
 .react-flow__node.is-resizing .table-card {
   display: flex;
   flex-direction: column;
@@ -2959,20 +3021,38 @@ textarea.input {
 .react-flow__node.is-resizing .table-card > .table-card-columns {
   flex: 1;
   min-height: 0;
+  /* A card never scrolls sideways: long names and types are cut with an ellipsis. */
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   border-radius: 0 0 5px 5px;
 }
-.table-card-scroll > .table-card-columns {
-  --fade-top: 0px;
-  --fade-bottom: 14px;
-  mask-image: linear-gradient(to bottom, transparent 0, black var(--fade-top), black calc(100% - var(--fade-bottom)), transparent 100%);
+/* The fades sit in the list itself (sticky), so the list makes no stacking layer of its own over the zones. */
+.table-card-scroll > .table-card-columns::before,
+.table-card-scroll > .table-card-columns::after {
+  content: "";
+  position: sticky;
+  z-index: 1;
+  display: block;
+  height: 14px;
+  pointer-events: none;
 }
-.table-card-scroll > .table-card-columns.is-scrolled {
-  --fade-top: 14px;
+.table-card-scroll > .table-card-columns::before {
+  top: 0;
+  margin-bottom: -14px;
+  background: linear-gradient(var(--c-bg-surface), transparent);
+  opacity: 0;
 }
-.table-card-scroll > .table-card-columns.is-at-end {
-  --fade-bottom: 0px;
+.table-card-scroll > .table-card-columns::after {
+  bottom: 0;
+  margin-top: -14px;
+  background: linear-gradient(transparent, var(--c-bg-surface));
+}
+.table-card-scroll > .table-card-columns.is-scrolled::before {
+  opacity: 1;
+}
+.table-card-scroll > .table-card-columns.is-at-end::after {
+  opacity: 0;
 }
 .vq-card-gap {
   list-style: none;
@@ -3783,8 +3863,11 @@ textarea.input {
   padding: var(--spacing-xs) 0;
 }
 
+/* One column as wide as the pane: an auto column took the tab strip's full width, so in a narrow work area the
+   result tools and the grid's right edge ran past it. */
 .results {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 0;
   min-width: 0;
@@ -3877,7 +3960,10 @@ textarea.input {
 /* Rows and time of the active result, in the result toolbar (R15). */
 .results-summary {
   display: flex;
-  flex: none;
+  /* Gives way (cut at the pane) before the result tools do. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   gap: var(--spacing-sm);
   padding-left: var(--spacing-sm);
   margin-left: var(--spacing-xs);
@@ -3918,6 +4004,12 @@ textarea.input {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
+}
+/* The note at the end gives way first, to an ellipsis, in a narrow work area (beside the Ask panel). */
+.results-foot-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .result-state {
   display: grid;
@@ -4041,6 +4133,8 @@ textarea.input {
   color: var(--c-text);
 }
 .editor-header .editor-header-connection {
+  min-width: 0;
+  max-width: 100%;
   color: var(--c-text);
   font-weight: 600;
 }
@@ -4051,6 +4145,15 @@ textarea.input {
 }
 .editor-header .menu-root {
   flex: none;
+}
+/* The Connection's name gives way too (to an ellipsis), so More at the end never falls past the strip in a narrow
+   work area. */
+.editor-header .menu-root:has(> .editor-header-connection) {
+  flex: 0 1 auto;
+  min-width: 72px;
+}
+.editor-header-connection .editor-header-name {
+  min-width: 0;
 }
 /* E2: the database name gives way first (down to about eight letters), before the labels turn into icons. */
 .editor-header .menu-root:has(> .editor-header-db) {
@@ -4368,8 +4471,9 @@ button.chip[aria-pressed="true"] {
   text-align: right;
   user-select: none;
 }
+/* A long line keeps its width (the block scrolls sideways) so the line's tag sits after the text, not on top of it. */
 .sql-block-text {
-  flex: 1;
+  flex: 1 0 auto;
   min-width: 0;
   padding: 0 var(--spacing-sm);
   white-space: pre;
@@ -4929,11 +5033,13 @@ button.chip[aria-pressed="true"] {
   overflow: auto;
   min-width: 0;
   min-height: 0;
+  background: var(--c-bg-app);
 }
 .snav-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
   background: var(--c-bg-panel);
   border-right: var(--border-hairline) solid var(--c-border-subtle);
 }
@@ -4971,6 +5077,12 @@ button.chip[aria-pressed="true"] {
   flex-direction: column;
   gap: 2px;
   padding: 6px 0;
+}
+.snav-item,
+.snav-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 /* Section rows like tree rows: 28 px, hover fill, the selected tint with the 2 by 16 px accent bar. */
 .snav button {
@@ -5011,63 +5123,108 @@ button.chip[aria-pressed="true"] {
   border-radius: 2px;
   background: var(--c-accent);
 }
+/* The AI pages sit under AI assistant, past its icon. */
+.snav button.snav-sub {
+  padding-left: 34px;
+  color: var(--c-text-muted);
+}
+.snav button.snav-sub.on {
+  color: var(--c-text);
+}
+.snav-count {
+  margin-left: auto;
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-subtle);
+}
+.snav button.on .snav-count {
+  color: var(--c-text-muted);
+}
+/* One column, at most 880 px, centred in the tab. */
 .settings-page {
+  container: settings-page / inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
-  padding: 20px var(--spacing-xl);
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 20px var(--spacing-xl) 40px;
 }
 .settings-head {
   display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--spacing-md) var(--spacing-lg);
+}
+.settings-head-text {
+  flex: 1 1 300px;
+  min-width: 0;
 }
 .settings-head h1 {
   font: var(--font-headline);
 }
 .settings-head p {
-  margin-top: var(--spacing-xs);
   font: var(--font-small);
   color: var(--c-text-subtle);
 }
-.settings-cols {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0 32px;
-  align-items: start;
-}
-.settings-col {
+.settings-head-actions {
   display: flex;
-  flex-direction: column;
-  min-width: 0;
+  align-items: center;
+  gap: var(--spacing-sm);
 }
-.ssec {
+.settings-note {
+  font: var(--font-small);
+}
+/* Cards: 6 px, a 1 px line, rows divided by the subtle line. */
+.scard {
+  min-width: 0;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+}
+.scard-head {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  padding: 14px 0 var(--spacing-lg);
-  border-top: var(--border-hairline) solid var(--c-border-subtle);
-}
-.settings-col > .ssec:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-.ssec > h2 {
-  font: var(--font-subtitle);
-}
-.ssec h3 {
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: 10px 14px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
   font: var(--font-body-strong);
 }
-.srow {
-  display: grid;
-  grid-template-columns: 136px minmax(0, 1fr);
-  gap: var(--spacing-sm) var(--spacing-lg);
-  align-items: center;
-  min-height: 28px;
+.scard-body,
+.scard-pad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md) 14px;
 }
-.srow-stacked {
-  grid-template-columns: minmax(0, 1fr);
+.scard-pad h3 {
+  font: var(--font-body-strong);
+}
+.scard-note {
+  padding: 10px 14px;
+  font: var(--font-small);
+}
+.srow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm) var(--spacing-lg);
+  min-height: 48px;
+  padding: var(--spacing-sm) 14px;
+}
+.srow + .srow,
+.scard-note + .srow {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.srow-flash {
+  background: var(--c-accent-subtle);
+}
+.srow-text {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  min-width: 0;
 }
 .srow-label {
   font: var(--font-body);
@@ -5075,23 +5232,36 @@ button.chip[aria-pressed="true"] {
 }
 .srow-control {
   display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--spacing-sm);
   min-width: 0;
 }
-.srow-grow {
-  flex: 1;
+.srow-field {
+  width: 260px;
+  max-width: 100%;
+}
+.srow-below {
+  flex-basis: 100%;
   min-width: 0;
 }
 .srow-hint {
-  grid-column: 2;
-  margin-top: calc(var(--spacing-xs) * -1);
   font: var(--font-small);
   color: var(--c-text-subtle);
 }
-.srow-stacked .srow-hint {
-  grid-column: 1;
-  margin-top: 0;
+/* On the selection tint and the hover fill, secondary text steps up to muted, for 4.5:1 in both themes. */
+.srow-flash .srow-hint,
+.srow-flash :is(.krow-scope, .krow-or, .krow-none, .krow-changed),
+.krow.cap :is(.srow-hint, .krow-scope, .krow-or, .krow-none, .krow-changed),
+.krow:hover :is(.srow-hint, .krow-scope, .krow-or, .krow-none),
+.sresult:hover .srow-hint,
+.kverdict .srow-hint,
+.segmented-on .seg-count,
+.segmented-option:hover .seg-count,
+.button-on .srow-hint {
+  color: var(--c-text-muted);
 }
 .srow-hint .kbd {
   margin-left: var(--spacing-xs);
@@ -5099,6 +5269,45 @@ button.chip[aria-pressed="true"] {
 .srow-note,
 .srow-note-line {
   font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+/* What a row read: a line while it loads, the answer, or the error with its icon. */
+.sstate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--c-text-muted);
+}
+.sstate-error {
+  color: var(--c-danger-text);
+}
+.sstate .icon {
+  flex: none;
+}
+.sresult {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  width: 100%;
+  padding: var(--spacing-sm) 14px;
+  border: 0;
+  background: transparent;
+  color: var(--c-text);
+  font: var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+[role="listitem"] + [role="listitem"] > .sresult {
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.sresult:hover {
+  background: var(--c-bg-hover);
+}
+.sresult:focus-visible {
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+.sresult > .icon {
   color: var(--c-text-subtle);
 }
 .settings-link {
@@ -5135,7 +5344,7 @@ button.chip[aria-pressed="true"] {
 }
 .theme-preview {
   display: grid;
-  height: 66px;
+  height: 76px;
   border-bottom: var(--border-hairline) solid var(--c-border-subtle);
 }
 .theme-preview.two {
@@ -5148,8 +5357,9 @@ button.chip[aria-pressed="true"] {
   color: var(--c-syn-identifier);
 }
 .theme-preview-code {
-  padding: var(--spacing-sm) 0 0 var(--spacing-sm);
-  font: 11px/16px var(--font-family-code);
+  margin: 0;
+  padding: 7px 0 0 var(--spacing-sm);
+  font: 10.5px/15px var(--font-family-code);
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
   white-space: pre;
@@ -5172,13 +5382,204 @@ button.chip[aria-pressed="true"] {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
-  height: 30px;
-  padding: 0 var(--spacing-sm);
+  min-height: 30px;
+  padding: 6px var(--spacing-sm);
   font: var(--font-small);
   color: var(--c-text);
 }
+.theme-card-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .theme-card-sub {
-  margin-left: auto;
+  color: var(--c-text-subtle);
+}
+/* Appearance: the theme and grids cards on the left, the preview beside them; stacked when narrow. */
+.ap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas: "theme preview" "rest preview";
+  align-items: start;
+  gap: var(--spacing-lg);
+}
+.ap-theme {
+  grid-area: theme;
+  min-width: 0;
+}
+.ap-rest {
+  grid-area: rest;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  min-width: 0;
+}
+.ap-preview {
+  grid-area: preview;
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+@container settings-page (max-width: 760px) {
+  .ap {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas: "theme" "preview" "rest";
+  }
+  .ap-preview {
+    position: static;
+  }
+}
+/* The preview window: every colour from the theme's own tokens, lines and no shadow. */
+.spv {
+  overflow: hidden;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-app);
+  color: var(--c-text);
+  font: 11px/15px var(--font-family-ui);
+}
+.spv-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 26px;
+  padding: 0 6px;
+  overflow: hidden;
+}
+.spv-tab {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--rounded-sm) var(--rounded-sm) 0 0;
+  color: var(--c-text-muted);
+  white-space: nowrap;
+}
+.spv-tab.on {
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font-weight: 600;
+}
+.spv-body {
+  display: flex;
+  height: 236px;
+  border-top: var(--border-hairline) solid var(--c-border);
+}
+.spv-tree {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 3px;
+  width: 70px;
+  padding: 6px;
+  overflow: hidden;
+  background: var(--c-bg-panel);
+  border-right: var(--border-hairline) solid var(--c-border);
+}
+.spv-item {
+  position: relative;
+  padding-left: 8px;
+  border-radius: var(--rounded-sm);
+  white-space: nowrap;
+}
+.spv-item.on {
+  background: var(--c-accent-subtle);
+}
+.spv-muted {
+  color: var(--c-text-muted);
+}
+.spv-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--c-bg-surface);
+}
+.spv-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: var(--border-hairline) solid var(--c-border);
+  white-space: nowrap;
+}
+.spv-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.spv-run .icon {
+  width: 9px;
+  height: 9px;
+}
+.spv-code {
+  padding: 6px 8px;
+  overflow: hidden;
+  font: 10.5px/15px var(--font-family-code);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  color: var(--c-syn-identifier);
+  white-space: nowrap;
+}
+.spv-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  /* The grid's surface, so the stripe is darker than its rows as in a real grid. */
+  background: var(--c-bg-surface);
+  border-top: var(--border-hairline) solid var(--c-border);
+}
+.spv-row {
+  display: grid;
+  grid-template-columns: 32px minmax(60px, 1fr) 46px 64px;
+  gap: 5px;
+  align-items: center;
+  padding: 0 8px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  white-space: nowrap;
+}
+.spv-row:first-child {
+  border-top: 0;
+}
+.spv-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spv-row.head {
+  background: var(--c-bg-panel);
+  color: var(--c-text-muted);
+  font-weight: 600;
+}
+.spv-row.alt {
+  background: var(--c-grid-stripe);
+}
+.spv-row.sel {
+  background: var(--c-accent-subtle);
+}
+.spv-num,
+.spv-mono,
+.spv-null {
+  font-family: var(--font-family-code);
+  font-variant-numeric: tabular-nums;
+}
+.spv-num {
+  text-align: right;
+  color: var(--c-syn-number);
+}
+.spv-null {
   color: var(--c-text-subtle);
 }
 .radio {
@@ -5197,9 +5598,6 @@ button.chip[aria-pressed="true"] {
 }
 .radio:focus-visible {
   outline: none;
-}
-.settings-view .segmented {
-  width: 240px;
 }
 .num-field {
   position: relative;
@@ -5229,91 +5627,129 @@ button.chip[aria-pressed="true"] {
   color: var(--c-text);
 }
 .keymap-select {
-  width: 220px;
+  width: 120px;
 }
-.kmap {
-  display: grid;
-  border: var(--border-hairline) solid var(--c-border-subtle);
-  border-radius: var(--rounded-md);
-}
-.kmap li {
+.khead {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+.ktool {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.ktool .ktool-search {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+}
+.button-on {
+  background: var(--c-accent-subtle);
+}
+.seg-count {
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-subtle);
+}
+.kgroup-head .srow-hint {
+  font-weight: 400;
+}
+/* A command row: name, where it works, its keys, then reset and change. */
+.krow {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px minmax(0, 210px) 64px;
+  align-items: center;
   gap: var(--spacing-md);
-  height: 28px;
-  padding: 0 10px;
+  min-height: 40px;
+  padding: var(--spacing-xs) 14px;
+}
+.krow + .krow,
+.krow + .kverdict,
+.kverdict + .krow {
   border-top: var(--border-hairline) solid var(--c-border-subtle);
 }
-.kmap li:first-child {
-  border-top: 0;
+.krow:hover {
+  background: var(--c-bg-hover);
+}
+.krow.cap {
+  background: var(--c-accent-subtle);
+}
+.krow.cap::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  width: 2px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--c-accent);
+}
+.krow-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.krow-changed {
+  margin-left: var(--spacing-sm);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+}
+.krow-scope {
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+.krow-keys {
+  min-width: 0;
 }
 .kmap-keys {
   display: inline-flex;
-  gap: var(--spacing-xs);
-}
-.keymap-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-.keymap-search {
-  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+.krow-or,
+.krow-none {
+  font: var(--font-small);
   color: var(--c-text-subtle);
 }
-.keymap-search .input {
-  flex: 1;
-}
-.keymap-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-.keymap-table th,
-.keymap-table td {
-  height: 32px;
-  padding: var(--spacing-xs) 10px;
-  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
-  text-align: left;
-  vertical-align: middle;
-}
-.keymap-table thead th {
-  font: var(--font-label);
-  color: var(--c-text-muted);
-  border-bottom-color: var(--c-border);
-}
-.keymap-table tbody th {
-  font: var(--font-body);
-}
-.keymap-table tr.editing {
-  background: var(--c-accent-subtle);
-}
-.keymap-actions {
-  width: 1%;
-  white-space: nowrap;
-  text-align: right;
-}
-.keymap-actions .button + .button {
-  margin-left: var(--spacing-xs);
-}
-.keymap-edit {
+/* Row actions show on hover and on keyboard focus, never invisible under focus. */
+.krow-actions {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: 0;
+}
+.krow:hover .krow-actions,
+.krow:focus-within .krow-actions,
+.krow-actions.keep {
+  opacity: 1;
 }
 .keymap-capture {
-  width: 220px;
+  width: 100%;
+  border-color: var(--c-accent);
 }
-.keymap-verdict {
+.kverdict {
   display: flex;
-  align-items: center;
   flex-wrap: wrap;
-  gap: var(--spacing-sm);
+  align-items: center;
+  gap: var(--spacing-sm) 10px;
+  padding: var(--spacing-sm) 14px;
+  background: var(--c-accent-subtle);
 }
-.keymap-clash {
-  font: var(--font-small);
-  color: var(--c-warning-text);
+.kverdict > .icon {
+  color: var(--c-text-muted);
+}
+.kverdict-text {
+  flex: 1 1 260px;
+}
+.kverdict.kalert {
+  background: var(--c-danger-subtle);
+}
+.kverdict.kalert > .icon {
+  color: var(--c-danger-text);
 }
 /* The API key box: the saved key's last four, the typed key, the eye. */
 .keyfield {
@@ -5353,12 +5789,6 @@ button.chip[aria-pressed="true"] {
   width: 24px;
   height: 24px;
 }
-.ssub {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-  margin-top: var(--spacing-sm);
-}
 /* The current model's facts under the Model field (board 11.4). */
 .mfacts {
   display: flex;
@@ -5394,10 +5824,6 @@ button.chip[aria-pressed="true"] {
   width: 120px;
   font-variant-numeric: tabular-nums;
 }
-.folder-row {
-  display: flex;
-  gap: var(--spacing-sm);
-}
 .folder-path {
   flex: 1;
   min-width: 0;
@@ -5416,40 +5842,11 @@ button.chip[aria-pressed="true"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dstat {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border: var(--border-hairline) solid var(--c-border-subtle);
-  border-radius: var(--rounded-md);
-}
-.dstat li {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--spacing-sm) 10px;
-  border-left: var(--border-hairline) solid var(--c-border-subtle);
-}
-.dstat li:first-child {
-  border-left: 0;
-}
-.dstat span {
-  font: var(--font-small);
-  color: var(--c-text-subtle);
-}
-.dstat b {
-  font: var(--font-title);
-  font-variant-numeric: tabular-nums;
-}
 .keep-select {
   width: 160px;
 }
 .about-version {
   font: var(--font-body-strong);
-}
-.about-licences {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
 }
 .licence-list {
   display: grid;
@@ -5582,52 +5979,10 @@ button.chip[aria-pressed="true"] {
   color: var(--c-text-muted);
   font: var(--font-small);
 }
-/* Tools the assistant can use, step 11d (board 11.4). */
-.tools-table {
-  width: 100%;
-  border-collapse: collapse;
-  border: var(--border-hairline) solid var(--c-border);
-  border-radius: var(--rounded-md);
-  font: var(--font-small);
-  color: var(--c-text-muted);
-}
-.tools-table th {
-  text-align: left;
-  font: var(--font-label);
-  color: var(--c-text-subtle);
-  background: var(--c-bg-panel);
-  padding: 6px var(--spacing-md);
-}
-.tools-table td {
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-top: var(--border-hairline) solid var(--c-border-subtle);
-  vertical-align: middle;
-}
-.tools-table tr.off {
-  background: color-mix(in srgb, var(--c-bg-panel) 60%, transparent);
-}
-.tools-table .tool-name {
-  display: block;
-  font-weight: 600;
-  color: var(--c-text);
-}
-.tools-table tr.off .tool-name {
-  color: var(--c-text-muted);
-}
-.tools-table .tool-sub {
-  display: block;
-  font-size: 11px;
-  color: var(--c-text-subtle);
-}
-.tools-table .tool-never {
+.tool-never {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-.tools-table .tool-state {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
 }
 /* Recent tool uses, step 11h (board 11.4). */
 .uses-table {
@@ -5660,21 +6015,6 @@ button.chip[aria-pressed="true"] {
 }
 .tool-use-log .alog {
   max-height: 60vh;
-}
-.privacy-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-sm);
-}
-@media (max-width: 1100px) {
-  .settings-cols {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .settings-col + .settings-col > .ssec:first-child {
-    border-top: var(--border-hairline) solid var(--c-border-subtle);
-    padding-top: 14px;
-  }
 }
 /* DN 10.10 key hint: Code micro, 18 px, 0 5 px, 1 px border, 4 px radius. */
 .kbd {
@@ -5710,12 +6050,20 @@ button.chip[aria-pressed="true"] {
 .body-ai {
   grid-template-columns: 264px minmax(0, 1fr) 360px;
 }
+/* History and Ask together left the work area 8 px wide at 1,024 px (and 264 px at 1,280): the three side columns
+   now give way, down to 180, 220 and 260 px, so the work area keeps at least 320 px. */
 .body-history.body-ai {
-  grid-template-columns: 264px minmax(0, 1fr) 360px 360px;
+  grid-template-columns: minmax(180px, 264px) minmax(320px, 1fr) minmax(220px, 360px) minmax(260px, 360px);
 }
+/* One column as wide as the panel: an auto column grew to the widest row's content (a long model name, a pill row),
+   and every row then ran past the panel's right edge.
+   Rows: the head, the thread, the composer. The composer row can shrink (minmax(0, auto)) and the thread keeps at
+   least 30 percent of the panel (80 to 200 px), so on a short window the Sends list scrolls inside the composer and the message box stays in view;
+   an auto composer row pushed the message box and the thread out of the panel. */
 .ai-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(clamp(80px, 30%, 200px), 1fr) minmax(0, auto);
   min-width: 0;
   min-height: 0;
   background: var(--c-bg-panel);
@@ -5733,8 +6081,18 @@ button.chip[aria-pressed="true"] {
   font: var(--font-title);
 }
 .ai-panel-head .icon-button {
+  flex: none;
   width: 24px;
   height: 24px;
+}
+/* The access chip gives way first on a narrow panel or large text: it ends in an ellipsis, the buttons stay. */
+.ai-panel-head .chip {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 20px;
+  text-overflow: ellipsis;
 }
 /* Thread: 12 px padding, 14 px between messages. */
 /* A6: one column that never grows past the panel, so a long SQL line scrolls inside its block, never the thread. */
@@ -5819,6 +6177,8 @@ button.chip[aria-pressed="true"] {
 }
 .answer-sql-actions {
   display: flex;
+  /* A narrow panel (History open beside it) puts the buttons on a second line instead of cutting them. */
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-xs);
   padding: var(--spacing-xs);
@@ -5851,6 +6211,15 @@ button.chip[aria-pressed="true"] {
   margin: 0;
   white-space: pre-wrap;
 }
+/* A markdown heading in an answer: one bold line in the answer's own size, with a little room above. */
+.answer-h {
+  margin: var(--spacing-xs) 0 0;
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+.answer-h:first-child {
+  margin-top: 0;
+}
 .answer-list {
   display: grid;
   gap: var(--spacing-2xs);
@@ -5859,6 +6228,7 @@ button.chip[aria-pressed="true"] {
   white-space: pre-wrap;
 }
 .answer-p code,
+.answer-h code,
 .answer-list code {
   padding: 0 3px;
   border-radius: var(--rounded-xs);
@@ -5982,16 +6352,43 @@ button.chip[aria-pressed="true"] {
   flex: 1;
 }
 /* A2: the Sends line above the input, 10 px 12 px 12 px, 8 px between. */
+/* A column where only the Sends list gives way: it scrolls, while the context line and the message box keep their
+   height (see .ai-panel). */
 .composer {
   position: relative;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   gap: var(--spacing-sm);
   padding: 10px var(--spacing-md) var(--spacing-md);
   border-top: var(--border-hairline) solid var(--c-border-subtle);
 }
+.composer > * {
+  flex: none;
+}
+.composer > .sends {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for an edge pill's focus ring inside the scroll area, as .new-diagram-kinds. */
+  margin: -3px;
+  padding: 3px;
+  /* A focused switch scrolls clear of the Sends line (28 px over the 3 px ring room), which stays put over the rows. */
+  scroll-padding-top: 31px;
+}
+/* On a short window the open list scrolls beneath its line: the chevron, the size and Show exactly stay in view. */
+.composer > .sends > .sends-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--c-bg-panel);
+}
 /* Composer box: 1 px border; focus draws a 2 px accent bottom edge. */
 .comp-box {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   border: var(--border-hairline) solid var(--c-border);
   border-radius: var(--rounded-sm);
   background: var(--c-bg-surface);
@@ -6378,6 +6775,8 @@ button.chip[aria-pressed="true"] {
 /* "Sends" then icon-and-word items, in UI small. */
 .sends {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--spacing-xs);
 }
 .sends-row {
@@ -6385,6 +6784,25 @@ button.chip[aria-pressed="true"] {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-xs) 10px;
+}
+/* The Ask panel's Sends line folds its rows away; the button is the label plus a chevron. */
+.sends-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 0;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.sends-fold:hover {
+  background: var(--c-bg-hover);
+}
+.sends-fold > svg {
+  color: var(--c-text-subtle);
 }
 .sends-label {
   font: var(--font-small);
@@ -6567,6 +6985,10 @@ button.send-pill:hover {
   line-height: 18px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.payload:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
 }
 .setup {
   display: grid;
@@ -7673,9 +8095,56 @@ button.dbox:hover,
   right: 0;
   margin-top: var(--spacing-2xs);
 }
+/*
+ * Over the editor the card takes about 60% of its height, never more than fits (at least 240 px when the editor has
+ * it, so a short editor still shows some answer). The head and the actions stay put; only the body between them
+ * scrolls. In an editor too short for even the head and the actions, the whole card scrolls so no action is cut off.
+ */
 .query-editor .ask-pop {
-  max-height: calc(100% - 2 * var(--spacing-sm));
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: clamp(min(240px, calc(100% - 2 * var(--spacing-sm))), 60%, calc(100% - 2 * var(--spacing-sm)));
+  overflow-y: auto;
+}
+.query-editor .ask-pop > .pop-head,
+.query-editor .ask-pop > .pop-foot,
+.query-editor .ask-pop > .pop-done {
+  flex: none;
+}
+.query-editor .ask-pop > .pop-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ask-pop > [hidden] {
+  display: none;
+}
+.pop-body:focus {
+  outline: none;
+}
+.pop-body:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+/* After Insert the card folds to one line at the top right, so the inserted code shows. */
+.ask-pop-folded {
+  width: auto;
+}
+.pop-done {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-height: 36px;
+  padding: 0 var(--spacing-xs) 0 var(--spacing-md);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+}
+.pop-done > .icon {
+  flex: none;
+}
+.pop-done-text {
+  white-space: nowrap;
 }
 
 /* Safety row and switches (step 5a) */
@@ -7809,7 +8278,7 @@ button.dbox:hover,
 .grid td.cell-edited.cell-selected {
   box-shadow: inset 2px 0 0 var(--c-warning-solid), inset 0 0 0 2px var(--c-accent);
 }
-/* T6: an edited row's number stays faint like any other (`.row-number-edited` has no look of its own). */
+/* T6: an edited row's number looks like any other (`.row-number-edited` has no look of its own). */
 .grid tr.row-added td {
   background: var(--c-success-subtle);
 }
@@ -7919,6 +8388,39 @@ button.dbox:hover,
 }
 .edits-spacer {
   flex: 1;
+}
+/* Narrow work areas (the Ask panel beside a table at 1,024 px): the bars keep their icons and drop the words, so
+   Save and Close stay inside the pane instead of past its edge. */
+.edits-bar {
+  container: edits-bar / inline-size;
+}
+.edits-bar > .button,
+.edits-count {
+  flex: none;
+}
+@container edits-bar (max-width: 520px) {
+  .edits-bar .bar-label,
+  .edits-bar .kbd {
+    display: none;
+  }
+}
+.preview-sql-head {
+  container: preview-sql-head / inline-size;
+}
+.preview-sql-head > .button,
+.preview-sql-head > .icon-button {
+  flex: none;
+}
+.preview-sql-where,
+.preview-sql-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container preview-sql-head (max-width: 760px) {
+  .preview-sql-head .bar-label {
+    display: none;
+  }
 }
 /* Frame 3: Preview SQL, a read-only block under the grid in the confirm dialog's style. */
 .preview-sql {
@@ -8174,6 +8676,7 @@ button.dbox:hover,
 /* Result tools, plan and query error (Task 17) */
 .result-tools {
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--spacing-2xs);
 }
@@ -8989,17 +9492,16 @@ button.dbox:hover,
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: var(--spacing-sm);
-  width: calc(100% - 24px);
-  height: 32px;
-  margin: 10px 12px 12px;
-  padding: 0;
+  width: auto;
+  height: 28px;
+  margin: 6px 12px 12px;
+  padding: 0 10px 0 6px;
   border: 0;
-  border-radius: 999px;
-  background: var(--c-bg-raised);
-  color: var(--c-text);
-  font: var(--font-body-strong);
+  border-radius: var(--rounded-md);
+  background: transparent;
+  color: var(--c-text-muted);
+  font: var(--font-body);
   cursor: pointer;
   position: sticky;
   left: 12px;
@@ -9008,7 +9510,8 @@ button.dbox:hover,
     transform var(--motion-fast) var(--ease-enter);
 }
 .design-addrow:hover {
-  background: var(--c-accent-subtle);
+  background: var(--c-bg-hover);
+  color: var(--c-text);
 }
 .design-addrow:active {
   transform: translateY(1px);
@@ -9031,13 +9534,6 @@ button.dbox:hover,
 .design-addrow:hover .design-addrow-plus {
   transform: rotate(90deg);
 }
-.design-addrow-key {
-  margin-left: 4px;
-  color: var(--c-text-subtle);
-  font: var(--font-mono-micro);
-  font-variant-ligatures: contextual;
-  font-feature-settings: "calt" 1, "liga" 1;
-}
 @media (prefers-reduced-motion: reduce) {
   .design-addrow,
   .design-addrow-plus {
@@ -9058,6 +9554,25 @@ button.dbox:hover,
 .design-grid {
   width: max-content;
   min-width: 100%;
+}
+/* The Columns grid fills the width: text columns share it, the switches keep their size, Comment takes the rest. */
+.design-grid.design-columns {
+  width: 100%;
+}
+.design-columns th.design-col-name {
+  width: 22%;
+  min-width: 160px;
+}
+.design-columns th.design-col-type {
+  width: 18%;
+  min-width: 140px;
+}
+.design-columns th.design-col-default {
+  width: 14%;
+  min-width: 110px;
+}
+.design-columns th.design-col-comment {
+  min-width: 160px;
 }
 .design-grid th.design-fill,
 .design-grid td.design-fill {
@@ -9294,8 +9809,30 @@ button.dbox:hover,
   flex: 1;
 }
 .vq-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--c-text-muted);
   font: var(--font-small);
+}
+/* At 1,024 px the toolbar needed about 840 px of a 716 px pane and Save and More fell past its edge: the key hints go
+   first, then the words; the count line ends in an ellipsis. */
+.vq-toolbar {
+  container: vq-toolbar / inline-size;
+}
+.vq-toolbar > .button,
+.vq-toolbar > .menu-root {
+  flex: none;
+}
+@container vq-toolbar (max-width: 880px) {
+  .vq-toolbar .kbd {
+    display: none;
+  }
+}
+@container vq-toolbar (max-width: 560px) {
+  .vq-toolbar .bar-label {
+    display: none;
+  }
 }
 .vq-banner {
   display: flex;
@@ -9348,15 +9885,19 @@ button.dbox:hover,
   font: var(--font-small);
 }
 /* Item 40: the canvas hint has its own 28 px strip under the canvas, so it never covers a card. */
+/* A hint that does not fit wraps to a second line, which the 28 px strip hides: a narrow pane drops whole hints
+   instead of cutting the last one through a key. */
 .vq-hint-strip {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
+  align-content: flex-start;
   align-items: center;
-  gap: 14px;
+  gap: 12px 14px;
   box-sizing: border-box;
   height: 28px;
   margin: 0;
-  padding: 0 12px;
+  padding: 4px 12px 0;
   overflow: hidden;
   background: var(--c-bg-panel);
   border-top: var(--border-hairline) solid var(--c-border-subtle);
@@ -9417,12 +9958,8 @@ button.dbox:hover,
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
 }
-/* Item 32: a Visual Query card shows its table name and alias whole; the card is as wide as they need,
-   and only the schema gives way. */
-.vq-card .table-card-name,
-.vq-card .vq-card-alias {
-  flex: none;
-}
+/* Item 32: a Visual Query card is as wide as its table name and alias need (fitWidth), so they show whole; once a
+   card is dragged narrower they cut with an ellipsis (rules at the end of this file). */
 .vq-card .table-card-schema {
   flex: 0 1 auto;
   min-width: 0;
@@ -9759,12 +10296,8 @@ button.dbox:hover,
   stroke: none;
 }
 
-/* Dots on both sides of a row on hover and focus; while dragging every row is a target, the one under the drag marked (gold when the types differ). */
-.vq-canvas .vq-card-row:hover .react-flow__handle,
-.vq-canvas .vq-card-row:focus .react-flow__handle,
-.vq-canvas .vq-card-row:focus-within .react-flow__handle {
-  opacity: 1;
-}
+/* A row's ports fill on hover and focus (QueryCard marks its port row `is-hot`); while dragging every row is a
+   target, the one under the drag marked (gold when the types differ). */
 .vq-joining .vq-card-row {
   box-shadow: inset 0 0 0 1px var(--c-border-subtle);
 }
@@ -10264,8 +10797,26 @@ button.dbox:hover,
   border-bottom: var(--border-hairline) solid var(--c-border-subtle);
 }
 .query-diagram-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font: var(--font-body-strong);
   margin-right: 4px;
+}
+/* A narrow strip (the diagram beside the Visual Query canvas at 1,024 px is about 360 px): Publish and Close stayed
+   past its edge. The chip goes and the buttons keep their icons. */
+.query-diagram-strip {
+  container: query-diagram-strip / inline-size;
+}
+.query-diagram-strip > .button,
+.query-diagram-strip > .icon-button {
+  flex: none;
+}
+@container query-diagram-strip (max-width: 480px) {
+  .query-diagram-readonly,
+  .query-diagram-strip .bar-label {
+    display: none;
+  }
 }
 .query-diagram-about {
   min-width: 0;
@@ -11641,5 +12192,283 @@ button.dbox:hover,
 }
 .dstore2 .dnote {
   padding-left: 0;
+  white-space: normal;
+}
+
+/* ---- Visual Query cards (release 1.0 fixes): header, rows, ports, scrollbar ---- */
+/* The header never overflows: the schema gives way first, then the name and alias (with an ellipsis); the count
+   and the actions keep their place at every width down to the minimum. */
+.vq-card .table-card-header {
+  min-width: 0;
+}
+.vq-card .table-card-name,
+.vq-card .vq-card-alias {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The alias is short and names the table in the SQL: it keeps its width (up to 40% of the header), the name cuts. */
+.vq-card .vq-card-alias {
+  flex-shrink: 0;
+  max-width: 40%;
+}
+.vq-card .table-card-schema {
+  flex-shrink: 100;
+}
+.vq-card .table-card-header > .table-card-count,
+.vq-card .table-card-header > .icon-button,
+.vq-card .table-card-header > .chip {
+  flex: none;
+}
+/* Header actions and row checkboxes sit above the resize zones: a zone never takes their clicks. */
+.vq-card .table-card-header > .icon-button,
+.vq-card .vq-card-check {
+  position: relative;
+  z-index: 3;
+}
+/* Rows never widen the card: the name and the type cut with an ellipsis. */
+.vq-card .vq-card-row {
+  min-width: 0;
+}
+.vq-card .vq-card-col {
+  white-space: nowrap;
+}
+.vq-card .vq-card-type,
+.vq-card .vq-card-agg {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The scrollbar of a scrolling card: thin, a few px in from the edge, clear of the ports. */
+.vq-card .table-card-columns::-webkit-scrollbar {
+  width: 6px;
+}
+.vq-card .table-card-columns {
+  margin-right: 3px;
+}
+/* The ports' layer: over the rows, outside the scrolling list. It clips ports scrolled out above or below the rows,
+   never sideways, so each port sits whole just past the card's border, above the border and the scrollbar. */
+.card-ports {
+  position: absolute;
+  top: 32px;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  overflow-x: visible;
+  overflow-y: clip;
+  pointer-events: none;
+}
+.card-ports-track {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  right: 0;
+}
+.card-port-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+}
+/* A port: the handle box is the visible 10 px dot, centred 7 px past the border, so React Flow ends a Join line on the
+   dot's outer edge. Its ::before widens the hit area to 18 x 18 px, all of it outside the border: the edge resize
+   zone keeps the 4 px inside the border along the whole edge, and its outer half between the ports. */
+.diagram-canvas .card-port-row .react-flow__handle.vq-card-port {
+  z-index: 4;
+  width: 10px;
+  height: 10px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  opacity: 1;
+  pointer-events: auto;
+}
+.diagram-canvas .card-port-row .react-flow__handle-left.vq-card-port {
+  left: -7px;
+}
+.diagram-canvas .card-port-row .react-flow__handle-right.vq-card-port {
+  right: -7px;
+  left: auto;
+}
+.vq-card-port::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+}
+.react-flow__handle-left.vq-card-port::before {
+  left: -6px;
+  right: -2px;
+}
+.react-flow__handle-right.vq-card-port::before {
+  left: -2px;
+  right: -6px;
+}
+.vq-card-port::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 1.5px solid var(--c-accent);
+  border-radius: 50%;
+  background: var(--c-bg-surface);
+  opacity: 0;
+  pointer-events: none;
+}
+.diagram-canvas .react-flow__node:hover .vq-card-port::after,
+.diagram-canvas .react-flow__node.selected .vq-card-port::after,
+.vq-card-port.connectingfrom::after,
+.vq-card-port.connectingto::after {
+  opacity: 1;
+}
+/* The port under the pointer and a hovered row's two ports fill; while a Join is drawn, every port it can end on
+   is filled. */
+.vq-card-port:hover::after,
+.card-port-row.is-hot .vq-card-port::after,
+.vq-joining .react-flow__node:not(:has(.connectingfrom)) .vq-card-port::after,
+.vq-card-port.connectingto::after {
+  opacity: 1;
+  background: var(--c-accent);
+}
+/* A card dragged taller than its rows keeps the room under them. */
+.table-card-tall > .table-card-header {
+  flex: none;
+}
+.table-card-tall > .table-card-columns {
+  flex: 1;
+}
+
+/* The Columns tab: the grid on the left, the live SQL on the right (a static highlighted block, no editor), split
+   by a 1 px divider. Under about 1,000 px of panel the SQL pane hides and the grid takes the width. */
+.vq-columns-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  container-type: inline-size;
+}
+.vq-columns-split > .vq-columns {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.vq-columns-sql {
+  display: flex;
+  flex: 0 0 max(320px, 34%);
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 0;
+  border-left: var(--border-hairline) solid var(--c-border);
+}
+@container (max-width: 999px) {
+  .vq-columns-sql {
+    display: none;
+  }
+}
+.vq-columns-sql-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 6px 0 12px;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  font: var(--font-small);
+}
+.vq-columns-sql-title {
+  color: var(--c-text-muted);
+  font-weight: 600;
+}
+.vq-columns-sql-head .spacer {
+  flex: 1;
+}
+.vq-columns-sql-copied {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.vq-columns-sql-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 12px 8px;
+}
+.vq-columns-sql-body:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: -2px;
+}
+.vq-columns-sql-code {
+  margin: 0;
+  white-space: pre;
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.vq-columns-sql-empty {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+
+/* A name renamed in place (double-click, or F2 on it): the input keeps the name's font and size. */
+.rename-label {
+  user-select: none;
+}
+.inline-name {
+  position: relative;
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+.side-header > .inline-name {
+  font: var(--font-title);
+}
+.group-card-head > .inline-name {
+  font: var(--font-body-strong);
+}
+.inline-name-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 4px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-bottom-color: var(--c-border-strong);
+  border-radius: var(--rounded-sm);
+  background: var(--input-background);
+  color: var(--input-text);
+  font: inherit;
+}
+.inline-name-input:focus {
+  outline: none;
+  border-bottom-color: var(--c-accent);
+  box-shadow: inset 0 -1px 0 var(--c-accent);
+}
+.inline-name-input:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: var(--focus-ring-offset);
+}
+.inline-name-input[aria-invalid="true"] {
+  border-bottom-color: var(--c-danger-solid);
+  box-shadow: inset 0 -1px 0 var(--c-danger-solid);
+}
+/* The refusal sits under the input, over what follows, so the header keeps its height. */
+.inline-name-error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  max-width: 280px;
+  margin-top: 2px;
+  padding: 2px 6px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-raised);
+  font: var(--font-small);
   white-space: normal;
 }

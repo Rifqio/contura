@@ -9,7 +9,9 @@ import { objectKey } from "../objectPath";
 /** Where the window's Connections come from: a Group, or the Ungrouped Connections. */
 export type Place = { kind: "group"; groupId: GroupId } | { kind: "ungrouped" };
 
-export type SettingsSection = "appearance" | "editor" | "keymap" | "ai" | "dataFolder" | "updates" | "about";
+export type SettingsSection = "general" | "appearance" | "editor" | "keymap" | "ai" | "dataFolder" | "updates" | "about";
+/** The four pages of Settings > AI assistant. */
+export type AiPage = "provider" | "behaviour" | "privacy" | "tools";
 
 /** A table, view, routine or trigger chosen in the object tree. */
 export interface Selection {
@@ -106,10 +108,10 @@ export interface CompareSeed {
 export type WindowTab =
   | { kind: "home" }
   /**
-   * `seq` counts the requests, so asking for the section shown last moves there again; `row` names a block in the
-   * section to scroll to instead, such as the AI settings' tools table.
+   * `seq` counts the requests, so asking for the section shown last moves there again; `row` names a row or block of
+   * the section to go to, such as the AI settings' tools; `aiPage` is the AI page shown when no row picks one.
    */
-  | { kind: "settings"; section: SettingsSection; seq?: number; row?: string }
+  | { kind: "settings"; section: SettingsSection; aiPage?: AiPage; seq?: number; row?: string }
   | { kind: "schema"; id: string; doc: ModelDoc }
   /** A diagram, `<name>.flow` in Contura's diagrams folder; one tab per name. */
   | { kind: "flow"; name: string }
@@ -125,6 +127,19 @@ export type WindowTab =
   | { kind: "compare"; id: string; seed: CompareSeed; title: string; connectionId: ConnectionId | null };
 
 export type AnyTab = WorkTab | WindowTab;
+
+/**
+ * The window tabs after opening Settings (one tab at most). With a section (and a `row` in it) the tab goes there;
+ * without one an open tab is left on the page it shows, and a new tab starts on Appearance.
+ */
+export function openSettingsTab(w: WindowTab[], section?: SettingsSection, row?: string): WindowTab[] {
+  const open = w.some((t) => t.kind === "settings");
+  if (open && section === undefined) return w;
+  const to = section ?? "appearance";
+  return open
+    ? w.map((t): WindowTab => (t.kind === "settings" ? { kind: "settings", section: to, seq: (t.seq ?? 0) + 1, row } : t))
+    : [...w, { kind: "settings", section: to, seq: 0, row }];
+}
 
 export function tabKey(t: AnyTab): string {
   switch (t.kind) {
@@ -287,4 +302,20 @@ export function afterClose(order: string[], active: string | null, closing: stri
   const i = order.indexOf(closing);
   if (i < 0) return null;
   return order[i + 1] ?? order[i - 1] ?? null;
+}
+
+/**
+ * A place's restored tabs in front of the tabs already open, each key once. Two tabs with one key drew two panes,
+ * both shown, the second below the work area (a draft saved twice, or a restore run twice, did it).
+ */
+export function withRestored<T extends AnyTab>(open: T[], restored: T[]): T[] {
+  const seen = new Set(open.map(tabKey));
+  const fresh: T[] = [];
+  for (const t of restored) {
+    const key = tabKey(t);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fresh.push(t);
+  }
+  return fresh.length === 0 ? open : [...fresh, ...open];
 }

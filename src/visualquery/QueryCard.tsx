@@ -1,6 +1,6 @@
 // A Visual Query card on the engine's frame: tick columns, see keys and Joins, rename the alias.
 import { type NodeProps, useUpdateNodeInternals } from "@xyflow/react";
-import { createContext, type KeyboardEvent, useContext, useEffect, useRef, useState } from "react";
+import { createContext, type KeyboardEvent, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Aggregate, VqTable } from "../api/types";
 import Icon from "../components/Icon";
@@ -261,6 +261,15 @@ function CardMenu({
   );
 }
 
+/** Moves a card's ports' layer with its rows' scroll. */
+function syncPorts(list: HTMLUListElement) {
+  const track = list.parentElement?.querySelector<HTMLElement>(".card-ports-track");
+  if (!track) return;
+  const y = list.scrollTop;
+  const transform = y ? `translateY(${-y}px)` : "";
+  if (track.style.transform !== transform) track.style.transform = transform;
+}
+
 export default function QueryCard({ id, data, selected }: NodeProps & { data: QueryCardData }) {
   const act = useContext(CardActionsContext);
   const drop = useContext(DropTargetContext);
@@ -274,8 +283,17 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
   const updateInternals = useUpdateNodeInternals();
   const frame = useRef(0);
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  const root = useRef<HTMLDivElement>(null);
+  // After every draw the ports' layer takes the list's scroll again: a list that stops scrolling (columns reloaded,
+  // an Undo, a new height) can drop to the top without a scroll event.
+  useLayoutEffect(() => {
+    const list = root.current?.querySelector<HTMLUListElement>("ul.table-card-columns");
+    if (list) syncPorts(list);
+  });
   // Once a frame while the rows scroll: the Join lines find their ports again, and the window follows.
   const onRowsScroll = (list: HTMLUListElement) => {
+    // The ports' layer follows the rows in the same frame (it sits outside the list, so the list never clips a port).
+    syncPorts(list);
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
@@ -311,7 +329,9 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
 
   const title = (
     <>
-      <span className="table-card-name">{table.name}</span>
+      <span className="table-card-name" title={table.name}>
+        {table.name}
+      </span>
       <Alias value={table.alias} name={table.name} onCommit={(v) => act?.rename(table.id, v)} />
     </>
   );
@@ -340,6 +360,17 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
     </>
   );
 
+  const portRowOf = (row: HTMLElement, column: string) =>
+    row.closest(".table-card")?.querySelector<HTMLElement>(`.card-port-row[data-port-row="${CSS.escape(column)}"]`) ?? null;
+  /** A press on a column's name starts a Join from its right port, as a press on the port does. */
+  const joinFromName = (e: React.MouseEvent<HTMLElement>, column: string) => {
+    if (e.button !== 0) return;
+    const port = portRowOf(e.currentTarget, column)?.querySelector<HTMLElement>(".react-flow__handle.source");
+    if (!port) return;
+    e.preventDefault();
+    e.stopPropagation();
+    port.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientX: e.clientX, clientY: e.clientY }));
+  };
   const rowOf = (c: CardColumn) => {
     const on = c.name in ticked;
     const agg = ticked[c.name] ?? null;
@@ -362,8 +393,12 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
         tabIndex={0}
         data-column={c.name}
         onKeyDown={onRowKey(c.name)}
+        // Hovering a row fills its two ports.
+        onPointerEnter={(e) => portRowOf(e.currentTarget, c.name)?.classList.add("is-hot")}
+        onPointerLeave={(e) => portRowOf(e.currentTarget, c.name)?.classList.remove("is-hot")}
+        onFocus={(e) => portRowOf(e.currentTarget, c.name)?.classList.add("is-hot")}
+        onBlur={(e) => portRowOf(e.currentTarget, c.name)?.classList.remove("is-hot")}
       >
-        <Ports column={c.name} />
         <input
           type="checkbox"
           className="vq-card-check nodrag"
@@ -376,22 +411,35 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
         <span className="vq-card-mark" aria-hidden="true">
           {c.pk ? <Icon name="key" size={14} /> : link ? <Icon name="link" size={14} /> : null}
         </span>
-        <span className="vq-card-col">{c.name}</span>
+        {/* Dragging the column's name starts a Join from its port, as the canvas hint says; the card moves by its header. */}
+        <span className="vq-card-col nodrag" title={c.name} onMouseDown={(e) => joinFromName(e, c.name)}>
+          {c.name}
+        </span>
         {agg ? (
           <span className="vq-card-agg">{AGG_TAG[agg]}</span>
         ) : (
           // A closed Connection shows no types: they may have changed since.
-          <span className="vq-card-type">{state === "closed" ? "" : (c.type ?? "")}</span>
+          <span className="vq-card-type" title={state === "closed" ? undefined : (c.type ?? undefined)}>
+            {state === "closed" ? "" : (c.type ?? "")}
+          </span>
         )}
       </li>
     );
   };
   const visible = Math.ceil((data.height ?? full) / CARD_ROW);
   const keep = new Set(rows.flatMap((c, i) => (joined.includes(c.name) ? [i] : [])));
+  const win = windowed ? windowRows(rows.length, first, visible, keep) : null;
+  const drawn = win ? win.flatMap((r) => ("index" in r ? [r.index] : [])) : rows.map((_, i) => i);
+  // Each drawn row's ports, in a layer over the card's edges (CardFrame): never clipped by the list or its border.
+  const ports = drawn.map((i) => (
+    <div key={rows[i].name} className="card-port-row" data-port-row={rows[i].name} style={{ top: i * CARD_ROW }}>
+      <Ports column={rows[i].name} className="vq-card-port" />
+    </div>
+  ));
   const lines = (
     <>
-      {windowed
-        ? windowRows(rows.length, first, visible, keep).map((r) =>
+      {win
+        ? win.map((r) =>
             "gap" in r ? <li key={`gap${r.at}`} className="vq-card-gap" aria-hidden="true" style={{ height: r.gap * CARD_ROW }} /> : rowOf(rows[r.index]),
           )
         : rows.map(rowOf)}
@@ -422,6 +470,7 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
 
   return (
     <div
+      ref={root}
       className="vq-card"
       onKeyDown={onCardKey}
       onContextMenu={(e) => {
@@ -445,7 +494,13 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
         height={data.height}
         fullHeight={full}
         onRowsScroll={scrolls ? onRowsScroll : undefined}
-        onResize={(box) => act?.resize(table.id, { ...box, h: box.h >= full ? null : box.h })}
+        ports={ports}
+        onResize={(box) => {
+          // Live sizes follow the pointer to the sub-pixel; the kept size is whole pixels.
+          const w = Math.round(box.w);
+          const h = Math.round(box.h);
+          act?.resize(table.id, { x: Math.round(box.x), y: Math.round(box.y), w, h: h === full ? null : h });
+        }}
         tone={tone}
         dashed={tone === "warning"}
       />

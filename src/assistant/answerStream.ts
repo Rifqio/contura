@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { aiAskStream, aiCancel } from "../api/client";
 import type { AiDone, AskRequest, Compaction, ContextInfo, LogLine, ProcessStep, SentRecord, StopReason, TurnStamp } from "../api/types";
 import type { LiveRecord } from "./answerRecord";
@@ -23,8 +23,6 @@ export interface StreamEnd {
 
 interface Live {
   running: boolean;
-  text: string;
-  thinking: string;
   status: string | null;
   log: LogLine[];
   /** The Sent record, once the request is built. */
@@ -44,8 +42,6 @@ interface Live {
 
 const IDLE: Live = {
   running: false,
-  text: "",
-  thinking: "",
   status: null,
   log: [],
   sent: null,
@@ -72,12 +68,87 @@ interface Run {
 }
 
 export interface AnswerStream extends Live {
+  /** The answer text so far. Reading it does not re-render: `useStreamText` does, at most once per frame. */
+  readonly text: string;
+  /** The thinking so far, as `text`. */
+  readonly thinking: string;
+  /** Calls `listener` when the text or thinking changed, at most once per animation frame; returns the unsubscribe. */
+  subscribe(listener: () => void): () => void;
   /** Streams `request`; resolves once, when it is done, failed or stopped. */
   start(request: AskRequest): Promise<StreamEnd>;
   /** Cancels the running Ask in the Core and keeps what arrived, marked Stopped. */
   stop(): void;
   /** Back to idle, without touching a running Ask. */
   reset(): void;
+  /** Lets go of a finished answer's text, thinking and log (its saved turn holds them); a running Ask keeps them. */
+  release(): void;
+}
+
+/** Runs `fn` on the next animation frame, or soon where there are none; returns the cancel. */
+function nextFrame(fn: () => void): () => void {
+  if (typeof requestAnimationFrame === "function") {
+    const id = requestAnimationFrame(fn);
+    return () => cancelAnimationFrame(id);
+  }
+  const id = setTimeout(fn, 16);
+  return () => clearTimeout(id);
+}
+
+/** The text and thinking of the answer on screen, with listeners told at most once per animation frame. */
+export type TextStore = ReturnType<typeof textStore>;
+
+/** A new `TextStore`, empty. */
+export function textStore() {
+  let text = "";
+  let thinking = "";
+  const listeners = new Set<() => void>();
+  let cancel: (() => void) | null = null;
+  const notify = () => {
+    cancel = null;
+    for (const l of [...listeners]) l();
+  };
+  return {
+    text: () => text,
+    thinking: () => thinking,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    /** New values, drawn on the next frame. */
+    set(t: string, th: string) {
+      if (t === text && th === thinking) return;
+      text = t;
+      thinking = th;
+      cancel ??= nextFrame(notify);
+    },
+    /** Draws what is pending now (the answer ended). */
+    flush() {
+      if (!cancel) return;
+      cancel();
+      notify();
+    },
+  };
+}
+
+const noSubscribe = () => () => {};
+const nothing = () => "";
+
+/** The text of `store`, re-rendering the caller at most once per animation frame. */
+export function useStoreText(store: TextStore): string {
+  return useSyncExternalStore(store.subscribe, store.text);
+}
+
+/**
+ * The text and thinking of `stream`, re-rendering the caller at most once per animation frame; with `on` false the
+ * caller does not follow them and gets "".
+ */
+export function useStreamText(stream: AnswerStream, on = true): { text: string; thinking: string } {
+  const subscribe = on ? stream.subscribe : noSubscribe;
+  const text = useSyncExternalStore(subscribe, on ? () => stream.text : nothing);
+  const thinking = useSyncExternalStore(subscribe, on ? () => stream.thinking : nothing);
+  return { text, thinking };
 }
 
 /** One streamed answer at a time: the text so far, its status, and how it ended. Unmounting stops it. */
@@ -85,6 +156,7 @@ export function useAnswerStream(): AnswerStream {
   const [live, setLive] = useState<Live>(IDLE);
   const run = useRef<Run | null>(null);
   const mounted = useRef(true);
+  const [shown] = useState(textStore);
   const update = useCallback((patch: (l: Live) => Partial<Live>) => {
     if (mounted.current) setLive((l) => ({ ...l, ...patch(l) }));
   }, []);
@@ -120,6 +192,7 @@ export function useAnswerStream(): AnswerStream {
             if (ended) return;
             ended = true;
             if (run.current === r) run.current = null;
+            shown.flush();
             const result: StreamEnd = {
               text: r.text,
               done: null,
@@ -143,21 +216,23 @@ export function useAnswerStream(): AnswerStream {
           },
         };
         run.current = r;
+        shown.set("", "");
+        shown.flush();
         if (mounted.current) setLive({ ...IDLE, running: true });
         const asking = aiAskStream(request, (e) => {
           if (ended) return;
           switch (e.type) {
             case "delta":
               r.text += e.text;
-              update(() => ({ text: r.text }));
+              shown.set(r.text, r.live.thinking);
               break;
             case "thinking":
               r.live.thinking += e.text;
-              update(() => ({ thinking: r.live.thinking }));
+              shown.set(r.text, r.live.thinking);
               break;
             case "thinkingKept":
               r.live.thinking = e.text;
-              update(() => ({ thinking: r.live.thinking }));
+              shown.set(r.text, r.live.thinking);
               break;
             case "status":
               update(() => ({ status: e.step }));
@@ -209,14 +284,37 @@ export function useAnswerStream(): AnswerStream {
           },
         );
       }),
-    [update],
+    [update, shown],
   );
 
   const reset = useCallback(() => {
-    if (!run.current && mounted.current) setLive(IDLE);
-  }, []);
+    if (run.current || !mounted.current) return;
+    shown.set("", "");
+    shown.flush();
+    setLive(IDLE);
+  }, [shown]);
 
-  return { ...live, start, stop, reset };
+  const release = useCallback(() => {
+    if (run.current || !mounted.current) return;
+    shown.set("", "");
+    shown.flush();
+    setLive((l) => (l.log.length === 0 ? l : { ...l, log: [] }));
+  }, [shown]);
+
+  return {
+    ...live,
+    get text() {
+      return shown.text();
+    },
+    get thinking() {
+      return shown.thinking();
+    },
+    subscribe: shown.subscribe,
+    start,
+    stop,
+    reset,
+    release,
+  };
 }
 
 /** A duration in seconds: one decimal only below 10s (`0.8s`, `1.9s`), whole above (`12s`, `75s`). */

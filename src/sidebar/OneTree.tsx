@@ -1,4 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useUngroupedLabel } from "../prefs/usePrefs";
 import { connectionTarget, deleteSavedQuery, DIALECT_LABEL, errorText } from "../api/client";
 import type { ConnectionConfig, ConnectionId, Group, GroupId, ObjectKind, ObjectPath, RestoreTarget, SavedQuery } from "../api/types";
 import { hintFor } from "../commands/keymap";
@@ -242,6 +243,7 @@ function PlacedMenu({ menu, onClose }: { menu: MenuState; onClose: () => void })
 
 /** Layout A: one tree with every Connection of the place as a branch and Saved Queries last (D13 to D16). */
 export default function OneTree(props: OneTreeProps) {
+  const { label: ungroupedLabel } = useUngroupedLabel();
   const {
     connections,
     groups,
@@ -522,7 +524,7 @@ export default function OneTree(props: OneTreeProps) {
           label: c.name,
           items: connectionMenu(
             c,
-            { open, groups, newQueryKey: newQueryKey ?? undefined, refreshKey: refreshKey ?? undefined },
+            { open, groups, newQueryKey: newQueryKey ?? undefined, refreshKey: refreshKey ?? undefined, ungroupedLabel },
             {
               toggleOpen: () => (open ? props.onCloseConnection(c.id) : openConnection(c)),
               newQuery: () => props.onNewQuery(c.id),

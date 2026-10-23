@@ -425,13 +425,18 @@ export default function ResultsPanel({
                 <span>Run it again to fetch more</span>
               ))}
             <span className="spacer" />
-            <span>
-              {production
+            {(() => {
+              const note = production
                 ? "Saving runs on Production and asks you to confirm the SQL first."
                 : item.pinned
                   ? "Pinned: running again keeps this result"
-                  : "Running again replaces this result"}
-            </span>
+                  : "Running again replaces this result";
+              return (
+                <span className="results-foot-note" title={note}>
+                  {note}
+                </span>
+              );
+            })()}
           </>
         );
         break;

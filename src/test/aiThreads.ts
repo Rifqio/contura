@@ -1,4 +1,4 @@
-import type { AiThread, AnswerRecord, Compaction, ThreadSummary, ThreadView, Topic } from "../api/types";
+import type { AiThread, AnswerRecord, AppendTurn, Compaction, ThreadSummary, ThreadView, Topic, TurnView } from "../api/types";
 
 /** What `list_ai_threads` returns for a thread: no messages. */
 export const summaryOf = (t: AiThread): ThreadSummary => ({
@@ -21,3 +21,22 @@ export const viewOf = (t: AiThread, trim = false, topics: Topic[] = [], compacti
   topics,
   compactions,
 });
+
+/**
+ * What `ai_append_turn` returns for `turn` on top of `stored` (the thread the Core has, if any): the new messages, the
+ * stored title of a known thread, and nothing over the cap.
+ */
+export const turnViewOf = (turn: AppendTurn, stored: AiThread | null = null, topics: Topic[] = [], compactions: Compaction[] = []): TurnView => {
+  const kept = stored ? stored.messages.filter((m) => turn.replaceFrom === undefined || m.at < turn.replaceFrom) : [];
+  return {
+    threadId: turn.threadId,
+    place: stored?.place ?? turn.place,
+    title: stored?.title ?? turn.title,
+    updatedAt: turn.updatedAt,
+    messages: turn.messages,
+    keptFrom: kept[0]?.at ?? turn.messages[0]?.at ?? null,
+    messageCount: kept.length + turn.messages.length,
+    topics,
+    compactions,
+  };
+};

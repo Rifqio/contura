@@ -157,3 +157,15 @@ test("the_jobs_node_renders_before_the_theme_menu", () => {
   expect(job.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(job.closest("#app-status-slot")).toBeNull();
 });
+
+test("the status bar has a Settings gear beside the theme switch, with its shortcut in the tooltip", async () => {
+  const onSettings = vi.fn();
+  render(<StatusBar screen={{ kind: "home", connections: 0, open: 0 }} theme="dark" onTheme={() => {}} onSettings={onSettings} settingsKey="Ctrl+," />);
+  const gear = screen.getByRole("button", { name: "Settings (Ctrl+,)" });
+  expect(gear.getAttribute("title")).toBe("Settings (Ctrl+,)");
+  // The gear sits just before the theme switch at the right end.
+  expect(gear.nextElementSibling?.classList.contains("theme-toggle")).toBe(true);
+  await userEvent.click(gear);
+  expect(onSettings).toHaveBeenCalledTimes(1);
+  cleanup();
+});

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { errorText, fetchFullValue } from "../api/client";
 import type { Cell, ConnectionId, FullValue, KeyPart, ObjectPath } from "../api/types";
+import { NullMark } from "../prefs/gridDisplay";
 import Dialog from "./Dialog";
 
 /** Where a cell came from, so its full value can be fetched by primary key. */
@@ -77,7 +78,7 @@ export default function CellValue({
   let body;
   switch (cell.t) {
     case "null":
-      return <span className="cell-null">NULL</span>;
+      return <NullMark />;
     case "number":
       return <span className="cell-number">{cell.value}</span>;
     case "text":

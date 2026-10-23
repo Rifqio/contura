@@ -69,6 +69,7 @@ Names are CSS custom properties, set on `:root` (light) and `:root[data-theme="d
 | `--c-bg-raised` | Menus, popovers, autocomplete, toasts, minimap |
 | `--c-bg-canvas` | Diagram canvas (the snap grid sits on it) |
 | `--c-bg-hover` / `--c-bg-active` | Neutral hover; pressed and neutral selected (question bubble, neutral chip) |
+| `--c-grid-stripe` | Every second data grid row when Stripe every other row is on (text, muted and subtle keep 4.5:1) |
 | `--c-border-subtle` / `--c-border` / `--c-border-strong` | Rules inside panes and row dividers / control and card edges / input bottom edge, radio and switch rings, empty Group square (3:1) |
 | `--c-text` / `-muted` / `-subtle` / `-faint` | Primary / secondary labels / tertiary (timestamps, counts, hosts, column types) / line numbers, placeholders, muted icons (3:1, never the only carrier of meaning) |
 | `--c-accent` / `-hover` / `-pressed` | Fills under `--on-accent` text: primary button, checked controls, slider |
@@ -79,6 +80,7 @@ Names are CSS custom properties, set on `:root` (light) and `:root[data-theme="d
 | `--c-prod-solid` | Production hazard: the writing-statement gutter bar, the Run on PROD and Save on PROD outline, confirm button fill (with `--c-ink` text) |
 | `--c-prod-text` / `--c-prod-subtle` | `PROD` and `PRODUCTION` labels (text on tint); writing-statement band |
 | `--c-prod-wash` | Data-source wash behind every editor and result pane tied to a Production Connection |
+| `--c-prod-wash-stripe` | Every second data grid row on the Production wash when Stripe every other row is on: the wash darkened as far as `--c-grid-stripe` is from the surface, so every row still reads as Production |
 | `--c-group-{slot}` / `-tint` | Group initial-square fill; tint is reserved for user-coloured diagram areas and nodes |
 | `--c-gmk-ink` | The initial letter on a Group square |
 | `--c-node-{kind}-stroke` / `-fill` | Diagram node kinds |
@@ -107,6 +109,7 @@ Sources: the Dracula spec (draculatheme.com/spec), Alucard Classic: background `
   --c-bg-canvas: #f8f4e3;
   --c-bg-hover: #e2deca;
   --c-bg-active: #dedccf;
+  --c-grid-stripe: #f4f0dd;
   --c-border-subtle: #e2deca;
   --c-border: #cecbc0;
   --c-border-strong: #8f8a73;
@@ -136,6 +139,7 @@ Sources: the Dracula spec (draculatheme.com/spec), Alucard Classic: background `
   --c-prod-subtle: #f8e1c9;
   --c-prod-text: #a34d14;
   --c-prod-wash: #fdf2dd;
+  --c-prod-wash-stripe: #f2e7d0;
   --c-gmk-ink: #ffffff;
   --c-group-teal: #036a96;
   --c-group-teal-tint: #dbe8ec;
@@ -212,6 +216,7 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --c-bg-canvas: #21222c;
   --c-bg-hover: #343746;
   --c-bg-active: #3c3f52;
+  --c-grid-stripe: #20212b;
   --c-border-subtle: #191a21;
   --c-border: #3b3d4f;
   --c-border-strong: #6272a4;
@@ -241,6 +246,7 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --c-prod-subtle: #45372b;
   --c-prod-text: #ffb86c;
   --c-prod-wash: #3b3438;
+  --c-prod-wash-stripe: #322c30;
   --c-gmk-ink: #16181a;
   --c-group-teal: #8be9fd;
   --c-group-teal-tint: #24384a;
@@ -438,6 +444,11 @@ Known exceptions, accepted on purpose:
 
 Grid values: booleans `true`/`false` use `--c-syn-keyword`; `NULL` uses `--c-text-faint` at 12 px; numbers right-aligned in `--c-text`.
 
+Appearance choices for every data grid (table data, results, Visual Query results, Import preview):
+- **Show NULL as**: the word `NULL` (the start), the empty-set sign `∅`, or blank. All three keep the faint NULL look; the sign and blank carry a visually hidden "NULL", so a screen reader never hears an empty string, and a NULL cell shows "NULL" on hover. Copy and export always write real NULL.
+- **Stripe every other row** (off at the start): even-numbered rows take `--c-grid-stripe` (Alucard `#F4F0DD`, Dracula `#20212B`); text, muted and subtle text keep 4.5:1 on it. On a Production pane the stripe is `--c-prod-wash-stripe` (Alucard `#F2E7D0`, Dracula `#322C30`), never the neutral stripe, so the wash shows on every row. With stripes on, NULL and the row numbers take `--c-text-subtle` instead of faint on every row, so they keep 4.5:1 on the stripe. The stripe is as specific as a plain cell, so hover, the selected cell, edited cells and new, deleted or conflicting rows all win over it, and the selected cell's row and a row with a state of its own take no stripe.
+- **Interface size** (Window card): 90, 100, 110 or 125 percent, the native webview zoom, applied by the Core when it builds the window and followed live after. Layout rules hold because the CSS viewport shrinks with it, and the minimum window grows with it (times Windows Text size), so the page never gets under 1024 x 480 CSS px; a window smaller than the new minimum grows to it and stays on the work area. Where the work area cannot hold the minimum it is clamped to the work area.
+
 ## 4. Typography
 
 ### 4.1 Families
@@ -617,6 +628,7 @@ Item 48 (step 12b), Edge style:
 - Connection rows: database mark (state rule 9.3), name, then `PROD` chip and lock icon as they apply. `title` and `aria-label` "name, open|closed".
 - Object rows: 14 px kind icon, name, optional count (row counts for tables, item counts for folders).
 - Names truncate with an ellipsis (`min-width: 0; overflow: hidden; text-overflow: ellipsis`); icons, chips and counts never shrink.
+  - Narrow-pane exceptions (layout fit, 1,024 x 480 beside a side panel): the result summary (`.results-summary`), the Preview SQL statement count (`.preview-sql-count`) and the Visual Query count (`.vq-count`) end in an ellipsis rather than push their tools out of the pane, and the query diagram strip's Read only chip hides under 480 px so Publish and Close stay in view.
 - Selected: section 7. Type-to-filter field at the top (Filter objects, Ctrl+Shift+F); matched characters get `--c-accent-subtle`.
 - Group marker decision: the 16 px square is recommended and shown in the tree; the alternative (no marker in the tree, Group only in the switcher) was drawn and declined because the tree shows several Groups at once.
 
@@ -646,7 +658,7 @@ Item 48 (step 12b), Edge style:
 - **Editor header strip** (32 px): Connection button (database mark, name UI strong, chevron), `PRODUCTION` label when it applies, database picker, divider, Run (primary 24 px, play icon, `Ctrl+Enter`; "Run on PROD" outline when the current statement writes on Production), Run all, Explain, Format, spacer, AI access chip (info variant, "AI: Schema only"), history icon button.
 - **Editor**: section 4 (Code 13 / 20), gutter 48 px, line numbers `--c-text-faint`, current line number `--c-text`, current statement per section 7, errors wavy `--c-syn-error`.
 - **Result toolbar** (36 px): result tabs ("Result 1", "Result 2"; active `--c-text` 600 with a 2 px accent underline inset 8 px), divider, "200 rows in 48 ms" UI small tabular, spacer, Pending Edits chip (warning, "1 Pending Edit"), Discard (subtle), Save (primary, `Ctrl+S`; "Save on PROD" outline on Production), divider, filter, columns, export icon buttons.
-- **Grid**: header 28 px on `--c-bg-panel`, sticky: key icon (PK) or link icon (FK), name UI small 600, type in Code micro `--c-text-subtle`; numeric columns right-aligned. Cells Code small 12 px, 28 px rows, 1 px `--c-border-subtle` row lines, no zebra, row-number gutter 48 px `--c-text-faint`. Values: section 3.6. Selected row `--c-accent-subtle`.
+- **Grid**: header 28 px on `--c-bg-panel`, sticky: key icon (PK) or link icon (FK), name UI small 600, type in Code micro `--c-text-subtle`; numeric columns right-aligned. Cells Code small 12 px, 28 px rows, 1 px `--c-border-subtle` row lines, no zebra unless the user turns on Stripe every other row (section 3.6), row-number gutter 48 px `--c-text-faint`. Values: section 3.6. Selected row `--c-accent-subtle`.
 - **Grid footer** (32 px): "1 to 12 of 200" left; right a reason line, for example "Saving runs on Production and asks you to confirm the SQL first."
 - **Status bar** (24 px, UI small, 16 px gaps, tabular): Production segment (section 11) or Connection (mark + name), server version ("PostgreSQL 16.4"), "200 rows", "48 ms", "Ln 13, Col 27", spacer, "UTF-8", Theme switch.
 
@@ -656,7 +668,7 @@ Item 48 (step 12b), Edge style:
 - Canvas `--c-bg-canvas` with the snap grid: dots 1 px every 16 px in `--c-border`, every 80 px in `--c-border-strong` at 50 percent; hidden below 40 percent zoom. The dot grid is the snap grid, not decoration.
 - Table card: 216 px wide (200 to 360 by content), 1 px `--c-node-table-stroke`, 6 px radius, header 32 px on `--c-node-table-fill` with table icon, name UI strong, schema `--c-text-subtle`, column count right; rows 24 px (grid `14px 1fr auto 8px`): key or link icon, column name, type Code small `--c-syn-type`, `?` for nullable in `--c-text-faint`. Highlighted row (linked to text) `--c-accent-subtle`.
 - Edges 1.5 px `--c-text-subtle`, orthogonal with 8 px corners, crow's-foot and bar markers.
-- Selection: 2 px `--c-accent` outline 5 px outside the card (9 px radius), no square handles (board B2, step 12b). A card or node that resizes has invisible pointer zones instead: 8 px along each edge (4 px in, 4 px out) and a 12 px square on each corner, with the `ns`, `ew`, `nwse` and `nesw` resize pointers; the ports sit above them. A resize is live and shows "W × H" under the box. Selecting on the canvas bands the matching DBML block with `--c-accent-subtle`.
+- Selection: 2 px `--c-accent` outline 5 px outside the card (9 px radius), no square handles (board B2, step 12b). A card or node that resizes has invisible pointer zones instead: 8 px across each edge (4 px in, 4 px out) and a 14 px square on each corner, in screen px at any zoom, with the `ns`, `ew`, `nwse` and `nesw` resize pointers; the ports sit above them. A resize is live and shows "W × H" under the box. Selecting on the canvas bands the matching DBML block with `--c-accent-subtle`.
 - Zoomed-out cards (below 45 percent): 100 x 48 cards with the name (16 / 20 600) and "5 columns"; below 15 percent areas only.
 - Floating controls (level 1): zoom (minus, percent 48 px min width tabular, plus, fit) bottom right; minimap 200 x 140 with nodes as 80 percent stroke-colour blocks and the viewport as a 1 px accent rectangle on a 30 percent accent-subtle fill.
 

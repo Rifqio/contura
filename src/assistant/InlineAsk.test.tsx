@@ -15,6 +15,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { type AskContext, type AskKit, type AskSetup, tablesIn } from "./context";
 import InlineAsk from "./InlineAsk";
+import appCss from "../styles/app.css?raw";
 import { queueOffline } from "./offlineQueue";
 
 vi.mock("./offlineQueue", async (original) => {
@@ -271,9 +272,10 @@ test("the_answer_streams_into_the_box_with_its_sent_line", async () => {
   await user.click(screen.getByRole("button", { name: "Explain" }));
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
   stream.emit(sent({ model: "llama-3.3-70b-versatile" }), delta("It reads "));
-  expect(screen.getByText("It reads")).toBeTruthy();
+  // The text is drawn on the next animation frame.
+  expect(await screen.findByText("It reads")).toBeTruthy();
   stream.emit(delta("every order."));
-  expect(screen.getByText("It reads every order.")).toBeTruthy();
+  expect(await screen.findByText("It reads every order.")).toBeTruthy();
   const now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 19, 11, 42).getTime());
   try {
     stream.emit(done());
@@ -563,8 +565,115 @@ test("inline_answer_inserts_into_its_own_tab_through_the_diff", async () => {
   expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("Replaces line 1 of Query 1");
   await user.click(screen.getByRole("button", { name: "Insert" }));
   expect(text).toBe("SELECT 2;");
+  await user.click(screen.getByRole("button", { name: "Show answer" }));
   await user.click(screen.getByRole("button", { name: "Open in new tab" }));
   expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT 2", conn());
+});
+
+/** An answer with one checked SQL block, in a box that inserts into a stand-in editor. */
+async function answeredWithInsert(onClose = vi.fn()) {
+  const stream = aiStream();
+  stream.hold();
+  streaming(stream);
+  const user = userEvent.setup();
+  let text = "SELECT 1;";
+  const replaceRange = vi.fn((from: number, to: number, insert: string) => {
+    text = text.slice(0, from) + insert + text.slice(to);
+  });
+  const editor = { text: () => text, runTarget: () => ({ from: 0, to: 8, text: "SELECT 1" }), replaceRange } as unknown as SqlEditorApi;
+  render(
+    <InlineAsk
+      context={{ kind: "sql", connection: conn(), sql: "SELECT 1", lines: [1, 1], tables: [], label: "Query 1" }}
+      schema={null}
+      groupId={null}
+      onOpenSettings={vi.fn()}
+      onClose={onClose}
+      insertTarget={{ editor: () => editor, name: "Query 1" }}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  stream.emit(delta("Use this:\n```sql\nSELECT 2\n```\nIt reads less."));
+  stream.emit(
+    done({ sqlBlocks: [{ fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read", flags: [] }] }] }),
+  );
+  expect(await screen.findByText("1 statement: 1 read")).toBeTruthy();
+  return { user, onClose };
+}
+
+test("inline_insert_folds_the_box_to_one_line", async () => {
+  const { user } = await answeredWithInsert();
+  const box = screen.getByRole("dialog", { name: "Ask AI" });
+  expect(box.classList.contains("ask-pop-folded")).toBe(false);
+  // The live region is there, empty, before the insert, so its text is announced when it comes.
+  const status = within(box).getByRole("status");
+  expect(status.textContent).toBe("");
+  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  // One line: what happened, Show answer and Close; the answer, the head and the actions are hidden, not dropped.
+  expect(box.classList.contains("ask-pop-folded")).toBe(true);
+  expect(box.querySelector(".pop-done-text")?.textContent).toBe("Inserted into the editor");
+  expect(within(box).getByRole("status")).toBe(status);
+  expect(status.textContent).toBe("Inserted into the editor");
+  expect(within(box).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["Show answer", "Close"]);
+  expect(box.querySelector(".pop-body[hidden]")?.textContent).toContain("It reads less.");
+  expect(box.querySelector(".pop-head")?.hasAttribute("hidden")).toBe(true);
+  // Focus stays in the box, so Esc still reaches it; the button is described by what happened.
+  const show = within(box).getByRole("button", { name: "Show answer" });
+  expect(document.activeElement).toBe(show);
+  expect(show.getAttribute("aria-describedby")).toBe(box.querySelector(".pop-done-text")?.id);
+
+  await user.click(within(box).getByRole("button", { name: "Show answer" }));
+  expect(box.classList.contains("ask-pop-folded")).toBe(false);
+  expect(within(box).getByText("It reads less.")).toBeTruthy();
+  // The answer keeps its own Inserted line, and focus goes to the answer, where the arrow keys scroll it.
+  expect(within(box).getByText("Inserted into the editor")).toBeTruthy();
+  expect(document.activeElement).toBe(box.querySelector(".pop-body"));
+});
+
+test("inline_folded_box_closes_with_esc_and_close", async () => {
+  const { user, onClose } = await answeredWithInsert();
+  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await user.keyboard("{Escape}");
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await user.click(within(screen.getByRole("dialog", { name: "Ask AI" })).getByRole("button", { name: "Close" }));
+  expect(onClose).toHaveBeenCalledTimes(2);
+});
+
+test("inline_ask_again_after_insert_unfolds", async () => {
+  const { user } = await answeredWithInsert();
+  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
+  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await user.click(screen.getByRole("button", { name: "Show answer" }));
+  await user.click(screen.getByRole("button", { name: "Ask again" }));
+  const box = screen.getByRole("dialog", { name: "Ask AI" });
+  expect(box.classList.contains("ask-pop-folded")).toBe(false);
+  expect(within(box).getByRole("textbox", { name: "Question" })).toBeTruthy();
+});
+
+/** The body of the app.css rule whose selector is exactly `selector`. */
+function ruleBody(selector: string): string {
+  const text = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  const at = text.indexOf(`\n${selector} {`);
+  if (at < 0) return "";
+  const open = text.indexOf("{", at);
+  return text.slice(open + 1, text.indexOf("}", open));
+}
+
+test("the_box_over_the_editor_is_capped_and_scrolls_only_its_body", () => {
+  const card = ruleBody(".query-editor .ask-pop");
+  // About 60% of the editor, never past it.
+  expect(card).toContain("max-height: clamp(min(240px, calc(100% - 2 * var(--spacing-sm))), 60%, calc(100% - 2 * var(--spacing-sm)));");
+  // Never hidden: in an editor shorter than the head and the actions, the card itself scrolls to them.
+  expect(card).toContain("overflow-y: auto;");
+  expect(card).not.toContain("overflow: hidden");
+  expect(card).toContain("flex-direction: column;");
+  const body = ruleBody(".query-editor .ask-pop > .pop-body");
+  expect(body).toContain("overflow-y: auto;");
+  expect(body).toContain("min-height: 0;");
+  expect(appCss).toMatch(/\.query-editor \.ask-pop > \.pop-head,\n\.query-editor \.ask-pop > \.pop-foot,\n\.query-editor \.ask-pop > \.pop-done \{\n {2}flex: none;/);
+  expect(ruleBody(".ask-pop > [hidden]")).toContain("display: none;");
 });
 
 test("inline_show_log_in_place", async () => {

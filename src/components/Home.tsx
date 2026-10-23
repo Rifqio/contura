@@ -14,7 +14,11 @@ import Icon from "./Icon";
 import Kbd from "./Kbd";
 import Menu, { type MenuItem } from "./Menu";
 import SafetyTag from "./SafetyTag";
+import InlineName from "./InlineName";
+import { UNGROUPED_NAME_LIMIT, keepTextUnselected, usePlaceRename } from "./renamePlace";
+import { useUngroupedLabel } from "../prefs/usePrefs";
 import { thisComputer } from "../platform";
+import { Glyph } from "../guide/Glyph";
 
 interface Props {
   groups: Group[];
@@ -58,6 +62,10 @@ interface Props {
   onOpenDiagram?: (name: string) => void;
   /** A diagram row's right-click menu in Recent. */
   diagramActions?: DiagramMenuActions;
+  /** Opens Settings; without it the button is hidden. */
+  onSettings?: () => void;
+  /** Opens the first start guide; without it the empty state leaves the link out. */
+  onShowGuide?: () => void;
 }
 
 export function connectionCountText(n: number): string {
@@ -66,11 +74,11 @@ export function connectionCountText(n: number): string {
 }
 
 /** "9 Connections in 3 Groups, 1 Ungrouped". */
-export function homeCountText(connections: number, groups: number, ungrouped: number): string {
+export function homeCountText(connections: number, groups: number, ungrouped: number, ungroupedLabel = "Ungrouped"): string {
   const all = connectionCountText(connections);
-  if (groups === 0) return ungrouped === 0 ? all : `${all}, all Ungrouped`;
+  if (groups === 0) return ungrouped === 0 ? all : `${all}, all ${ungroupedLabel}`;
   const inGroups = `${all} in ${groups === 1 ? "1 Group" : `${groups} Groups`}`;
-  return ungrouped === 0 ? inGroups : `${inGroups}, ${ungrouped} Ungrouped`;
+  return ungrouped === 0 ? inGroups : `${inGroups}, ${ungrouped} ${ungroupedLabel}`;
 }
 
 type Form =
@@ -85,6 +93,75 @@ function matches(c: ConnectionConfig, filter: string): boolean {
   if (!filter) return true;
   const f = filter.toLowerCase();
   return c.name.toLowerCase().includes(f) || connectionTarget(c).toLowerCase().includes(f);
+}
+
+/** How long a click waits for a second one before it opens the place: GTK's default double-click time. */
+const DOUBLE_CLICK_MS = 400;
+
+/** A card's name: opens its place on click, renames in place on double-click or F2. */
+function CardName({ card, groups, onOpen, onRenamed }: { card: Card; groups: Group[]; onOpen: () => void; onRenamed: () => void }) {
+  const [renaming, setRenaming] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const openTimer = useRef<number | null>(null);
+  const commit = usePlaceRename(card.group, groups, onRenamed);
+  useEffect(() => () => {
+    if (openTimer.current !== null) window.clearTimeout(openTimer.current);
+  }, []);
+
+  function startRename() {
+    if (openTimer.current !== null) window.clearTimeout(openTimer.current);
+    openTimer.current = null;
+    setRenaming(true);
+  }
+
+  if (renaming) {
+    return (
+      <InlineName
+        value={card.name}
+        label={`Rename ${card.name}`}
+        maxLength={card.group ? undefined : UNGROUPED_NAME_LIMIT}
+        onCommit={commit}
+        onClose={(refocus) => {
+          setRenaming(false);
+          if (refocus) requestAnimationFrame(() => button.current?.focus());
+        }}
+      />
+    );
+  }
+  return (
+    <button
+      ref={button}
+      type="button"
+      className="group-card-name rename-label"
+      aria-label={`Open ${card.name}`}
+      title="Double-click or press F2 to rename"
+      aria-keyshortcuts="F2"
+      onClick={(e) => {
+        if (openTimer.current !== null) window.clearTimeout(openTimer.current);
+        openTimer.current = null;
+        // Enter or Space (detail 0) opens at once; a mouse click waits for a second one, which renames instead.
+        if (e.detail === 0) {
+          onOpen();
+          return;
+        }
+        if (e.detail > 1) return;
+        openTimer.current = window.setTimeout(() => {
+          openTimer.current = null;
+          onOpen();
+        }, DOUBLE_CLICK_MS);
+      }}
+      onMouseDown={keepTextUnselected}
+      onDoubleClick={startRename}
+      onKeyDown={(e) => {
+        if (e.key === "F2") {
+          e.preventDefault();
+          startRename();
+        }
+      }}
+    >
+      {card.name}
+    </button>
+  );
 }
 
 export default function Home({
@@ -110,7 +187,10 @@ export default function Home({
   diagrams,
   onOpenDiagram,
   diagramActions,
+  onSettings,
+  onShowGuide,
 }: Props) {
+  const { label: ungroupedLabel } = useUngroupedLabel();
   const [suggestions, setSuggestions] = useState<SuggestedConnection[]>([]);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const [form, setForm] = useState<Form>({ kind: "none" });
@@ -138,6 +218,7 @@ export default function Home({
   const filterKey = hintFor(keys, "tree.filter");
   const newConnectionKey = hintFor(keys, "connection.new");
   const newDiagramKey = hintFor(keys, "flow.new");
+  const settingsKey = hintFor(keys, "settings.open");
   const empty = groups.length === 0 && connections.length === 0;
 
   // Filter (Ctrl+Shift+F) moves into the filter, while Home is the tab on screen; otherwise the tree's filter takes it.
@@ -150,7 +231,7 @@ export default function Home({
       const mine = connections.filter((c) => c.groupId === g.id);
       return { group: g, name: g.name, rows: mine.filter((c) => matches(c, query)), total: mine.length };
     }),
-    { group: null, name: "Ungrouped", rows: ungrouped.filter((c) => matches(c, query)), total: ungrouped.length },
+    { group: null, name: ungroupedLabel, rows: ungrouped.filter((c) => matches(c, query)), total: ungrouped.length },
   ];
   // A filter hides the cards it leaves empty.
   const shown = query ? cards.filter((card) => card.rows.length > 0) : cards;
@@ -297,7 +378,7 @@ export default function Home({
           <header className="home-header">
             <div className="home-heading">
               <h1>Home</h1>
-              <p className="home-count">{homeCountText(connections.length, groups.length, ungrouped.length)}</p>
+              <p className="home-count">{homeCountText(connections.length, groups.length, ungrouped.length, ungroupedLabel)}</p>
             </div>
             <div className="home-actions">
               <label className="home-filter">
@@ -318,6 +399,12 @@ export default function Home({
                 />
                 {filterKey && <Kbd keys={filterKey} />}
               </label>
+              {onSettings && (
+                <button type="button" className="button" aria-label="Settings" title={settingsKey ? `Settings (${settingsKey})` : "Settings"} onClick={onSettings}>
+                  <Icon name="gear" size={14} />
+                  Settings
+                </button>
+              )}
               <button type="button" className="button" onClick={() => setForm({ kind: "group" })}>
                 <Icon name="folder" size={14} />
                 New Group
@@ -360,6 +447,12 @@ export default function Home({
                 New Connection
                 {newConnectionKey && <Kbd keys={newConnectionKey} />}
               </button>
+              {onShowGuide && (
+                <button type="button" className="button button-ghost home-guide-link" onClick={onShowGuide}>
+                  <Glyph name="guide" size={15} />
+                  Show the first start guide
+                </button>
+              )}
             </div>
             {suggestionBox}
           </div>
@@ -380,14 +473,12 @@ export default function Home({
                     >
                       <header className="group-card-head">
                         <GroupBadge id={card.group?.id} name={card.name} color={card.group?.color ?? null} size={20} />
-                        <button
-                          type="button"
-                          className="group-card-name"
-                          aria-label={`Open ${card.name}`}
-                          onClick={() => (card.group ? onOpenGroup(card.group.id) : onOpenUngrouped())}
-                        >
-                          {card.name}
-                        </button>
+                        <CardName
+                          card={card}
+                          groups={groups}
+                          onOpen={() => (card.group ? onOpenGroup(card.group.id) : onOpenUngrouped())}
+                          onRenamed={onChanged}
+                        />
                         <span className="group-card-count">{connectionCountText(card.total)}</span>
                         <Menu
                           label={`Actions for ${card.name}`}

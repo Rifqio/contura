@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::request::ItemKind;
 use crate::ai::sent::AnswerRecord;
-use crate::ai::{AiThread, ThreadId};
+use crate::ai::{AiMessage, AiThread, ThreadId};
 use crate::error::Result;
 use crate::model::ConnectionId;
 
@@ -160,6 +160,42 @@ pub struct ThreadSummary {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadView {
     pub thread: AiThread,
+    pub topics: Vec<Topic>,
+    pub compactions: Vec<Compaction>,
+}
+
+/// One Ask's turn for `append_turn`: its messages go after the stored thread's, so the
+/// thread itself never crosses IPC (memory: an Ask used to send and rewrite it whole).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendTurn {
+    pub thread_id: ThreadId,
+    /// For a thread the store does not have yet.
+    pub place: String,
+    /// For a thread the store does not have yet; a stored thread keeps its title.
+    pub title: String,
+    pub updated_at: i64,
+    /// The question and its answer.
+    pub messages: Vec<AiMessage>,
+    /// A Retry: the stored messages from the one at this time on are replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_from: Option<i64>,
+}
+
+/// What `append_turn` gives back: the new messages as stored (records trimmed), where the
+/// thread now starts (older messages went over the cap), and its Topics and compactions.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnView {
+    pub thread_id: ThreadId,
+    pub place: String,
+    pub title: String,
+    pub updated_at: i64,
+    pub messages: Vec<AiMessage>,
+    /// The time of the oldest message kept; `None` for an empty thread.
+    pub kept_from: Option<i64>,
+    /// How many messages the thread holds now.
+    pub message_count: u32,
     pub topics: Vec<Topic>,
     pub compactions: Vec<Compaction>,
 }

@@ -1,4 +1,5 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { useUngroupedLabel } from "../prefs/usePrefs";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   aiClearContext,
@@ -47,6 +48,8 @@ interface Props {
   prefill?: SuggestedConnection;
   /** A new Connection starting from another one's settings, named "<name> copy", without its password (PR23). */
   duplicateOf?: ConnectionConfig;
+  /** The Dialect a new Connection starts on, such as the one picked in the first start guide. */
+  dialect?: DialectKind;
   groups: Group[];
   /** The Group a new Connection goes into; null is Ungrouped. */
   defaultGroupId: GroupId | null;
@@ -90,6 +93,7 @@ export default function ConnectionForm({
   connection,
   prefill,
   duplicateOf,
+  dialect: startDialect,
   groups,
   defaultGroupId,
   onSaved,
@@ -98,11 +102,12 @@ export default function ConnectionForm({
   isOpen = false,
 }: Props) {
   const id = useId();
+  const { label: ungroupedLabel } = useUngroupedLabel();
   const editing = connection !== undefined;
   /** Where the stored settings come from: the Connection being edited, or the one duplicated. */
   const base = connection ?? duplicateOf;
   const source = connection ?? (duplicateOf ? { ...duplicateOf, name: `${duplicateOf.name} copy` } : prefill);
-  const initialDialect: DialectKind = source?.dialect ?? "mysql";
+  const initialDialect: DialectKind = source?.dialect ?? startDialect ?? "mysql";
   const fromServer = source && source.dialect !== "sqlite" ? source : undefined;
   const initialServer: ServerDialect = initialDialect === "sqlite" ? "mysql" : initialDialect;
 
@@ -377,7 +382,7 @@ export default function ConnectionForm({
   const f = (field: string) => `${id}-${field}`;
   const access = productionIsNew ? "never" : aiAccess;
   const groupOptions = [
-    { value: "", label: "Ungrouped", lead: <GroupBadge name="" color={null} /> },
+    { value: "", label: ungroupedLabel, lead: <GroupBadge name="" color={null} /> },
     ...groups.map((g) => ({ value: g.id as string, label: g.name, lead: <GroupBadge id={g.id} name={g.name} color={g.color} /> })),
   ];
   const dialectOptions = (["mysql", "postgres", "sqlite"] as const).map((d) => ({

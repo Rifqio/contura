@@ -10,11 +10,13 @@ import {
   moveTab,
   newDesignKey,
   objectTabOf,
+  openSettingsTab,
   placeObject,
   stripOrder,
   stripSegment,
   tabConnectionId,
   tabKey,
+  withRestored,
   type WindowTab,
   type AnyTab,
   type WorkTab,
@@ -163,4 +165,26 @@ test("a_compare_tab_drags_with_the_window_tabs", () => {
   expect(stripSegment(compare)).toBe("window");
   expect(stripSegment({ kind: "transfer", id: "t", seed: {}, title: "", dirty: false } as unknown as AnyTab)).toBe("window");
   expect(stripSegment({ kind: "settings", section: "general" } as unknown as AnyTab)).toBe("window");
+});
+
+test("settings_opens_once_keeps_its_page_on_a_plain_open_and_moves_only_when_asked", () => {
+  const home: WindowTab = { kind: "home" };
+  // Closed: a plain open starts on Appearance.
+  const opened = openSettingsTab([home]);
+  expect(opened).toEqual([home, { kind: "settings", section: "appearance", seq: 0, row: undefined }]);
+  // The user moved to AI assistant, Privacy: a plain open (Ctrl+, the gear, Home's Settings) leaves it there.
+  const onPrivacy: WindowTab[] = [home, { kind: "settings", section: "ai", aiPage: "privacy", seq: 0 }];
+  expect(openSettingsTab(onPrivacy)).toBe(onPrivacy);
+  // A link to a section (and a row) moves it, and drops the AI page the user was on.
+  expect(openSettingsTab(onPrivacy, "ai", "tools")).toEqual([home, { kind: "settings", section: "ai", seq: 1, row: "tools" }]);
+  expect(openSettingsTab(onPrivacy, "updates")).toEqual([home, { kind: "settings", section: "updates", seq: 1, row: undefined }]);
+  // Never a second tab.
+  expect(openSettingsTab(openSettingsTab(opened, "keymap"), "editor").filter((t) => t.kind === "settings")).toHaveLength(1);
+});
+
+test("restored_tabs_never_duplicate_a_key", () => {
+  // Two tabs with one key drew two panes, both shown, the second below the work area.
+  const open = [query("a"), table];
+  expect(withRestored(open, [query("b"), query("a"), query("b")]).map(tabKey)).toEqual([tabKey(query("b")), tabKey(query("a")), tabKey(table)]);
+  expect(withRestored(open, [query("a")])).toBe(open);
 });

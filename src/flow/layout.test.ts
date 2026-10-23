@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parseFlowLayout, serializeFlowLayout } from "./layout";
+import { emptyPositions, parseFlowLayout, serializeFlowLayout, withoutProposed } from "./layout";
 
 test("a_missing_or_unreadable_layout_gets_every_default", () => {
   for (const json of [null, "", "{", "[]", '{"version":2}']) {
@@ -62,4 +62,14 @@ test("item_21_51_a_drag_keeps_the_far_edge_a_diamond_its_shape_and_the_node_its_
   // A start dot and a fork bar may stay small.
   expect(nodeLimits("stateStart").minW).toBe(16);
   expect(nodeLimits("fork").minH).toBe(6);
+});
+
+test("a_rejected_proposed_shape_loses_its_position_and_a_landed_one_keeps_it", () => {
+  const nodes = Object.assign(emptyPositions(), { A: { x: 0, y: 0 }, "Fraud check": { x: 10, y: 20 }, Kept: { x: 5, y: 5 } });
+  const proposed = new Set(["Fraud check", "Kept", "never placed"]);
+  // The text after the decision defines A and Kept: Fraud check was rejected.
+  const out = withoutProposed(nodes, proposed, new Set(["A", "Kept"]));
+  expect(Object.keys(out)).toEqual(["A", "Kept"]);
+  // Everything landed: the same object.
+  expect(withoutProposed(nodes, proposed, new Map([["A", 1], ["Fraud check", 2], ["Kept", 3]]))).toBe(nodes);
 });

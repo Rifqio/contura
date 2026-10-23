@@ -179,6 +179,11 @@ export class LangClient {
     if (!this.disposed) this.worker.postMessage({ type: "flowIcons", names });
   }
 
+  /** A DBML editor closed: the worker forgets its last valid model. */
+  closeDbml(docId: string) {
+    if (!this.disposed) this.worker.postMessage({ type: "dbmlClose", docId });
+  }
+
   /** A flow tab opened under an id that was closed before. */
   openFlow(docId: string) {
     if (!this.disposed) this.worker.postMessage({ type: "flowOpen", docId });

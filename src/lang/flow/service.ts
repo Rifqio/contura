@@ -90,6 +90,12 @@ export type FlowCompleteAnswer = FlowCompletionResult & { stale?: true };
 
 type Cached = { version: number; text: string; parse: FlowParse; lastValid: FlowDoc | null };
 
+/**
+ * How many closed diagram ids the worker remembers, newest kept: a parse that arrives just after its tab closed is
+ * dropped, and older ids are forgotten so the set does not grow with every diagram ever opened.
+ */
+export const CLOSED_KEPT = 64;
+
 export function createFlowService() {
   const docs = new Map<string, Cached>();
   const closed = new Set<string>();
@@ -117,7 +123,9 @@ export function createFlowService() {
     },
 
     close(docId: string) {
+      closed.delete(docId);
       closed.add(docId);
+      if (closed.size > CLOSED_KEPT) closed.delete(closed.values().next().value!);
       docs.delete(docId);
     },
 

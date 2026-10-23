@@ -1,20 +1,19 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { AiSettings, ConnectionConfig, ToolUseRow, UiPrefs } from "../../api/types";
-import { COMMANDS } from "../../commands/registry";
 import { aiRecordToolResult, saveAiThread } from "../../api/client";
 import { setPlatformForTests } from "../../platform";
 import { callsTo } from "../../test/invoke";
 import { aiView, GROQ, modelInfo, modelList, renderWithProviders, settingsRoutes } from "../../test/settingsRoutes";
 import AboutSection from "./AboutSection";
 import { onThreadsCleared } from "../../assistant/threadsCleared";
+import { SENDS_OPEN_KEY, saveSendsOpen } from "../../assistant/sendsFold";
 import AiSection, { fetchedText } from "./AiSection";
 import AppearanceSection from "./AppearanceSection";
+import { FlashContext } from "./layout";
 import DataFolderSection from "./DataFolderSection";
 import EditorSection from "./EditorSection";
-import KeymapSection from "./KeymapSection";
-import { SearchContext } from "./layout";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 // The app plugin calls Tauri from inside the package, past the core mock.
@@ -29,6 +28,7 @@ beforeEach(() => {
   const root = document.documentElement;
   root.removeAttribute("data-density");
   root.removeAttribute("data-brighter-comments");
+  root.removeAttribute("data-grid-stripes");
   root.removeAttribute("style");
 });
 
@@ -113,6 +113,60 @@ test("row_height_saves_and_sets_compact_density", async () => {
   expect(document.documentElement.hasAttribute("data-density")).toBe(false);
 });
 
+test("stripe_every_other_row_saves_applies_and_shows_in_the_preview", async () => {
+  settingsRoutes();
+  const { container } = renderWithProviders(<AppearanceSection />);
+  await waitFor(() => expect(callsTo("ui_prefs")).toHaveLength(1));
+  const sw = screen.getByRole("switch", { name: "Stripe every other row" });
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  expect(container.querySelectorAll(".spv-row.alt")).toHaveLength(0);
+  await userEvent.click(sw);
+  await waitFor(() => expect(lastPrefs()?.stripeRows).toBe(true));
+  expect(document.documentElement.hasAttribute("data-grid-stripes")).toBe(true);
+  // Rows 2, 4 and 6 of the preview; row 3 is the selected one and keeps its colour.
+  const rows = Array.from(container.querySelectorAll(".spv-row:not(.head)"));
+  expect(rows.map((r) => r.className)).toEqual(["spv-row", "spv-row alt", "spv-row sel", "spv-row alt", "spv-row", "spv-row alt"]);
+  await userEvent.click(sw);
+  await waitFor(() => expect(lastPrefs()?.stripeRows).toBe(false));
+  expect(document.documentElement.hasAttribute("data-grid-stripes")).toBe(false);
+});
+
+test("show_null_as_saves_and_the_preview_draws_it", async () => {
+  settingsRoutes();
+  const { container } = renderWithProviders(<AppearanceSection />);
+  await waitFor(() => expect(callsTo("ui_prefs")).toHaveLength(1));
+  const group = screen.getByRole("radiogroup", { name: "Show NULL as" });
+  expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["NULL", "\u2205", "blank"]);
+  const nulls = () => Array.from(container.querySelectorAll(".spv-null")).map((n) => n.textContent);
+  expect(nulls()).toEqual(["NULL", "NULL"]);
+  // The sign is what shows; the screen reader hears its name, not a bare symbol it may skip.
+  await userEvent.click(within(group).getByRole("radio", { name: "Empty set sign" }));
+  await waitFor(() => expect(lastPrefs()?.nullAs).toBe("symbol"));
+  expect(nulls()).toEqual(["\u2205", "\u2205"]);
+  await userEvent.click(within(group).getByRole("radio", { name: "blank" }));
+  await waitFor(() => expect(lastPrefs()?.nullAs).toBe("blank"));
+  expect(nulls()).toEqual(["", ""]);
+});
+
+test("interface_size_saves_and_zooms_the_window", async () => {
+  settingsRoutes({ set_interface_size: () => null });
+  renderWithProviders(<AppearanceSection />);
+  await waitFor(() => expect(callsTo("ui_prefs")).toHaveLength(1));
+  // The Core zoomed the window to the stored 100% at start: nothing to redo.
+  const sizes = () => callsTo("set_interface_size").map((a) => a.size);
+  expect(sizes()).toEqual([]);
+  const group = screen.getByRole("radiogroup", { name: "Interface size" });
+  expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["90%", "100%", "110%", "125%"]);
+  expect(within(group).getByRole("radio", { name: "100%" }).getAttribute("aria-checked")).toBe("true");
+  await userEvent.click(within(group).getByRole("radio", { name: "125%" }));
+  await waitFor(() => expect(lastPrefs()?.interfaceSize).toBe(125));
+  // The Core zooms the window and raises its minimum, growing the window if it is now under it.
+  expect(sizes()).toEqual([125]);
+  await userEvent.click(within(group).getByRole("radio", { name: "90%" }));
+  await waitFor(() => expect(lastPrefs()?.interfaceSize).toBe(90));
+  expect(sizes()).toEqual([125, 90]);
+});
+
 // ---- Editor ----
 
 test("editor_font_controls_apply_at_once_and_clamp", async () => {
@@ -181,97 +235,6 @@ test("brighter_comments_says_dracula_only_under_alucard", async () => {
   settingsRoutes({}, { prefs: { theme: "light" } });
   renderWithProviders(<EditorSection />);
   expect(await screen.findByText("Used in Dracula only.")).toBeTruthy();
-});
-
-// ---- Keymap ----
-
-test("keymap_rows_and_edit_shortcuts_dialog", async () => {
-  settingsRoutes();
-  renderWithProviders(<KeymapSection />);
-  await waitFor(() => expect(callsTo("keymap")).toHaveLength(1));
-  expect(screen.getByRole("combobox", { name: "Keymap" }).textContent).toContain("VS Code");
-  const rows = within(screen.getByRole("list", { name: "Main shortcuts" })).getAllByRole("listitem");
-  expect(rows.map((r) => r.textContent)).toEqual([
-    "Run the current statementCtrl+Enter",
-    "Run allCtrl+Shift+Enter",
-    "FormatShift+Alt+F",
-    "SettingsCtrl+,",
-  ]);
-
-  await userEvent.click(screen.getByRole("button", { name: "Edit shortcuts..." }));
-  const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
-  expect(dialog.className).toContain("dialog-size-wide");
-  const list = () => within(within(dialog).getByRole("table", { name: "Shortcuts" })).getAllByRole("row").slice(1);
-  expect(list()).toHaveLength(COMMANDS.length);
-  expect(within(dialog).getByRole("row", { name: /^Run the current statement/ }).textContent).toContain("Ctrl+Enter");
-  await userEvent.type(within(dialog).getByRole("searchbox", { name: "Search shortcuts" }), "format");
-  expect(list().map((r) => r.querySelector("th")?.textContent)).toEqual(["Format"]);
-  // Keys are searchable too.
-  await userEvent.clear(within(dialog).getByRole("searchbox", { name: "Search shortcuts" }));
-  await userEvent.type(within(dialog).getByRole("searchbox", { name: "Search shortcuts" }), "F12");
-  expect(list().map((r) => r.querySelector("th")?.textContent)).toEqual(["Go to definition"]);
-});
-
-async function openDialog() {
-  await userEvent.click(screen.getByRole("button", { name: "Edit shortcuts..." }));
-  return screen.getByRole("dialog", { name: "Keyboard shortcuts" });
-}
-
-test("rebind_shows_the_clash_and_confirm_moves_it", async () => {
-  settingsRoutes();
-  renderWithProviders(<KeymapSection />);
-  await waitFor(() => expect(callsTo("keymap")).toHaveLength(1));
-  const dialog = await openDialog();
-  await userEvent.click(within(dialog).getByRole("button", { name: "Edit Run the current statement" }));
-  const capture = within(dialog).getByRole("textbox", { name: "Press the new keys for Run the current statement" });
-  expect(document.activeElement).toBe(capture);
-
-  // A key with no modifier is refused with the reason.
-  await userEvent.keyboard("a");
-  expect(within(dialog).getByRole("alert").textContent).toBe("Choose keys with Ctrl, Alt or Shift, or a function key.");
-
-  await userEvent.keyboard("{Control>}t{/Control}");
-  expect(within(dialog).getByRole("alert").textContent).toContain("Ctrl+T is used by New query.");
-  expect(callsTo("save_keymap")).toHaveLength(0);
-  // The dialog stays open: the press never reached the window's own keys.
-  expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeTruthy();
-
-  await userEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
-  await waitFor(() => expect(callsTo("save_keymap")).toHaveLength(1));
-  expect(callsTo("save_keymap")[0].overrides).toEqual({ "query.run": ["Ctrl+T"], "query.new": [] });
-  await waitFor(() => expect(within(dialog).getByRole("row", { name: /^Run the current statement/ }).textContent).toContain("Ctrl+T"));
-  expect(within(dialog).getByRole("row", { name: /^New query/ }).textContent).toContain("None");
-
-  // Cancel keeps the keys as they were.
-  await userEvent.click(within(dialog).getByRole("button", { name: "Edit Format" }));
-  await userEvent.keyboard("{Control>}w{/Control}");
-  expect(within(dialog).getByRole("alert").textContent).toContain("Ctrl+W is used by Close tab.");
-  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  expect(callsTo("save_keymap")).toHaveLength(1);
-  expect(within(dialog).getByRole("row", { name: /^Format/ }).textContent).toContain("Shift+Alt+F");
-
-  // Keys nothing else uses are saved at once.
-  await userEvent.click(within(dialog).getByRole("button", { name: "Edit Format" }));
-  await userEvent.keyboard("{Control>}{Alt>}l{/Alt}{/Control}");
-  await waitFor(() => expect(callsTo("save_keymap")).toHaveLength(2));
-  expect(callsTo("save_keymap")[1].overrides).toEqual({ "query.run": ["Ctrl+T"], "query.new": [], "query.format": ["Ctrl+Alt+L"] });
-});
-
-test("reset_one_and_reset_all", async () => {
-  settingsRoutes({}, { keymap: { "query.run": ["Ctrl+R"], "query.format": ["Ctrl+Shift+I"] } });
-  renderWithProviders(<KeymapSection />);
-  await waitFor(() => expect(screen.getByRole("list", { name: "Main shortcuts" }).textContent).toContain("Ctrl+R"));
-  const dialog = await openDialog();
-  expect((within(dialog).getByRole("button", { name: "Reset Run all" }) as HTMLButtonElement).disabled).toBe(true);
-  await userEvent.click(within(dialog).getByRole("button", { name: "Reset Run the current statement" }));
-  await waitFor(() => expect(callsTo("save_keymap")).toHaveLength(1));
-  expect(callsTo("save_keymap")[0].overrides).toEqual({ "query.format": ["Ctrl+Shift+I"] });
-  await waitFor(() => expect(within(dialog).getByRole("row", { name: /^Run the current statement/ }).textContent).toContain("Ctrl+Enter"));
-
-  await userEvent.click(within(dialog).getByRole("button", { name: "Reset all" }));
-  await waitFor(() => expect(callsTo("save_keymap")).toHaveLength(2));
-  expect(callsTo("save_keymap")[1].overrides).toEqual({});
-  await waitFor(() => expect((within(dialog).getByRole("button", { name: "Reset all" }) as HTMLButtonElement).disabled).toBe(true));
 });
 
 // ---- AI assistant ----
@@ -520,7 +483,7 @@ test("models_fetched_list_replaces_builtin", async () => {
     ai_models: () => modelList([modelInfo(), modelInfo({ id: "moonshotai/kimi-k2-instruct", name: "Kimi K2" })], Date.now()),
   });
   renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
-  expect(await screen.findByText("Fetched just now")).toBeTruthy();
+  expect(await screen.findByText("2 models from api.groq.com. Fetched just now.")).toBeTruthy();
   expect(callsTo("ai_models")).toEqual([{ groupId: "g1" }]);
   expect(await optionsOf("Model")).toEqual(["openai/gpt-oss-20b", "moonshotai/kimi-k2-instruct", "Type a name..."]);
   await choose("Model", "moonshotai/kimi-k2-instruct");
@@ -536,11 +499,11 @@ test("refresh_shows_fetched_just_now", async () => {
     ai_models: () => modelList([modelInfo()], at),
   });
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
-  expect(await screen.findByText("Fetched 3m ago")).toBeTruthy();
+  expect(await screen.findByText("1 model from api.groq.com. Fetched 3m ago.")).toBeTruthy();
   at = Date.now();
-  await userEvent.click(screen.getByRole("button", { name: "Fetch the model list again" }));
-  expect(await screen.findByText("Fetched just now")).toBeTruthy();
-  expect(screen.queryByText("Fetched 3m ago")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Fetch again" }));
+  expect(await screen.findByText("1 model from api.groq.com. Fetched just now.")).toBeTruthy();
+  expect(screen.queryByText(/Fetched 3m ago/)).toBeNull();
   expect(callsTo("ai_models")).toHaveLength(2);
 });
 
@@ -553,7 +516,7 @@ test("model_facts_chips", async () => {
   expect(await screen.findByText(fact("131K token context window"))).toBeTruthy();
   expect(screen.getByText("Shares its thinking")).toBeTruthy();
   expect(screen.getByText("Prompt caching")).toBeTruthy();
-  expect(screen.getByText("Fetched just now")).toBeTruthy();
+  expect(screen.getByText(/Fetched just now/)).toBeTruthy();
 });
 
 test("model_facts_come_from_the_known_list_without_a_key", async () => {
@@ -567,7 +530,8 @@ test("model_facts_come_from_the_known_list_without_a_key", async () => {
   expect(callsTo("ai_models")).toHaveLength(0);
   expect(screen.queryByText("Shares its thinking")).toBeNull();
   expect(screen.queryByText("Prompt caching")).toBeNull();
-  expect(screen.queryByText(/^Fetched/)).toBeNull();
+  expect(screen.queryByText(/Fetched/)).toBeNull();
+  expect(screen.getByText("The built-in list. Save an API key to fetch the provider's own.")).toBeTruthy();
 });
 
 test("context_window_field_only_for_unknown", async () => {
@@ -615,8 +579,8 @@ test("context_window_field_only_for_unknown", async () => {
 test("defaults_save_with_settings", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
-  await screen.findByRole("combobox", { name: "Default thinking level" });
-  expect(await optionsOf("Default thinking level")).toEqual(["Off", "Low", "Medium", "High"]);
+  const thinking = await screen.findByRole("radiogroup", { name: "Default thinking level" });
+  expect(within(thinking).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Off", "Low", "Medium", "High"]);
   expect(screen.getByText("Each model remembers the level you last picked for it.")).toBeTruthy();
   const caching = screen.getByRole("switch", { name: "Use prompt caching when the model supports it" });
   expect(caching.getAttribute("aria-checked")).toBe("true");
@@ -624,7 +588,7 @@ test("defaults_save_with_settings", async () => {
   expect(share.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText("Shown in Show log as the provider returned it. Never sent back.")).toBeTruthy();
 
-  await choose("Default thinking level", "High");
+  await userEvent.click(within(thinking).getByRole("radio", { name: "High" }));
   await userEvent.click(caching);
   await waitFor(() => expect(lastAi().settings).toMatchObject({ defaultThinking: "high", promptCaching: false }));
   // The per-model picks and the other new fields go back as they were.
@@ -636,7 +600,7 @@ test("defaults_save_with_settings", async () => {
 test("privacy_keep_exact_text", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
-  expect(await screen.findByRole("heading", { name: "Privacy" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "History" })).toBeTruthy();
   const keep = screen.getByRole("switch", { name: "Keep the exact text sent with each answer" });
   expect(keep.getAttribute("aria-checked")).toBe("false");
   expect(screen.getByText("The text can contain your schema and SQL. data/ is portable and not encrypted.")).toBeTruthy();
@@ -644,6 +608,9 @@ test("privacy_keep_exact_text", async () => {
   await waitFor(() => expect((lastAi().settings as AiSettings).keepExactText).toBe(true));
   expect(lastAi().settings).toMatchObject({ temperature: 0.5, maxTokens: 1024, modelPrefs: GROQ.modelPrefs });
 });
+
+/** The access table opens from Privacy's Edit access. */
+const openAccess = async () => userEvent.click(await screen.findByRole("button", { name: "Edit access..." }));
 
 const renderAi = () =>
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
@@ -653,7 +620,11 @@ test("pick_tables_switch_saves", async () => {
   renderAi();
   const pick = await screen.findByRole("switch", { name: "Let the assistant pick tables in large databases" });
   expect(pick.getAttribute("aria-checked")).toBe("true");
-  expect(screen.getByText("Sends an outline of table names, one extra step per Ask.")).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Ask, on large databases. The model names the tables it needs from an outline of table names, and Contura sends only those. One extra step per Ask.",
+    ),
+  ).toBeTruthy();
   await userEvent.click(pick);
   await waitFor(() => expect((lastAi().settings as AiSettings).pickTables).toBe(false));
   expect(lastAi().settings).toMatchObject({ keepExactText: false, modelPrefs: GROQ.modelPrefs });
@@ -666,6 +637,25 @@ test("pick_tables_in_a_groups_own_settings", async () => {
   expect(await screen.findByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
   expect(screen.queryByRole("switch", { name: "Let the assistant pick tables in large databases" })).toBeNull();
   expect(screen.queryByRole("switch", { name: "Keep the exact text sent with each answer" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Show the Sends list open" })).toBeNull();
+});
+
+test("sends_open_switch_sets_the_remembered_fold", async () => {
+  localStorage.removeItem(SENDS_OPEN_KEY);
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  renderAi();
+  const sw = await screen.findByRole("switch", { name: "Show the Sends list open" });
+  // Off by default: the Ask panel's Sends list starts folded.
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  await userEvent.click(sw);
+  expect(sw.getAttribute("aria-checked")).toBe("true");
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("1");
+  // The chevron in an open panel moves the same switch.
+  act(() => saveSendsOpen(false));
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  // It is a choice on this computer, not an AI setting saved to the Core.
+  expect(callsTo("save_ai_settings")).toHaveLength(0);
+  localStorage.removeItem(SENDS_OPEN_KEY);
 });
 
 test("auto_compact_switch_global_only", async () => {
@@ -675,13 +665,13 @@ test("auto_compact_switch_global_only", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, autoCompact: true } }) });
   const { unmount } = renderAi();
   const auto = await screen.findByRole("switch", { name: label });
-  // It sits in Privacy, right under Keep the exact text sent with each answer.
-  const privacy = auto.closest(".ssub") as HTMLElement;
-  expect(within(privacy).getByRole("heading", { name: "Privacy" })).toBeTruthy();
-  const switches = within(privacy).getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
-  expect(within(privacy).getAllByRole("switch")[0]).toBe(within(privacy).getByRole("switch", { name: "Keep the exact text sent with each answer" }));
-  expect(within(privacy).getAllByRole("switch")[1]).toBe(auto);
-  expect(switches.length).toBeGreaterThanOrEqual(3);
+  // It sits in Behaviour, Answers, after share thinking and prompt caching.
+  const answers = screen.getByRole("region", { name: "Answers" });
+  expect(within(answers).getAllByRole("switch")).toEqual([
+    within(answers).getByRole("switch", { name: "Ask models to share their thinking when they support it" }),
+    within(answers).getByRole("switch", { name: "Use prompt caching when the model supports it" }),
+    auto,
+  ]);
   expect(auto.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText(help)).toBeTruthy();
   await userEvent.click(auto);
@@ -706,67 +696,31 @@ test("auto_compact_switch_global_only", async () => {
   expect(screen.queryByRole("switch", { name: label })).toBeNull();
 });
 
-test("tools_row_mentions_sample_read", async () => {
+test("tools_page_rows_and_the_sample_rows_note", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
-  renderAi();
-  expect(await screen.findByRole("heading", { name: "Tools the assistant can use" })).toBeTruthy();
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} pages={["tools"]} />);
   expect(
-    screen.getByText(
+    await screen.findByText(
       "A tool is an action a model may ask Contura to take. Contura checks and runs it, never the model, and every use shows here and in Show log.",
     ),
   ).toBeTruthy();
-  const table = screen.getByRole("table", { name: "Tools the assistant can use" });
-  for (const head of ["Tool", "What it can do", "Where", "State"]) expect(within(table).getByRole("columnheader", { name: head })).toBeTruthy();
-  const rows = within(table).getAllByRole("row");
-  expect(rows).toHaveLength(4);
-  const pick = within(rows[2]);
-  expect(pick.getByText("Pick tables")).toBeTruthy();
-  expect(pick.getByText("a step, not a tool")).toBeTruthy();
-  expect(pick.getByText("The model names the tables it needs from an outline of table names. Contura sends only those.")).toBeTruthy();
-  expect(pick.getByText("Ask, large databases")).toBeTruthy();
-  expect(pick.getByText("Follows the privacy switch")).toBeTruthy();
-  const run = within(rows[3]);
-  expect(run.getByText("Run SQL or read rows")).toBeTruthy();
-  expect(run.getByText("not available")).toBeTruthy();
-  expect(run.getByText(/No model can run anything on a database\. Answers are text: only Run in the editor touches a database\./)).toBeTruthy();
-  expect(run.getByText("Sample rows").tagName).toBe("STRONG");
-  expect(
-    run.getByText(
-      (_, el) =>
-        el?.tagName === "TD" &&
-        el.textContent?.includes(
-          "Sample rows are read by Contura, not the model: at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never kept.",
-        ) === true,
-    ),
-  ).toBeTruthy();
-  expect(run.getByText("Nowhere")).toBeTruthy();
-  expect(run.getByText("Never")).toBeTruthy();
-  expect(rows[3].className).toContain("off");
-});
-
-test("settings_search_finds_sample_rows", async () => {
-  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
-  renderWithProviders(
-    <SearchContext.Provider value="sample rows">
-      <AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />
-    </SearchContext.Provider>,
+  const card = document.querySelector('[data-row="tools"]') as HTMLElement;
+  expect([...card.querySelectorAll(".srow-label")].map((l) => l.textContent)).toEqual([
+    "Propose diagram changes",
+    "Let the assistant pick tables in large databases",
+    "Run SQL or read rows",
+  ]);
+  const run = card.querySelector('[data-row="runSql"]') as HTMLElement;
+  expect(run.textContent).toMatch(/No model can run anything on a database\. Answers are text: only Run in the editor touches a database\./);
+  expect(within(run).getByText("Sample rows").tagName).toBe("STRONG");
+  expect(run.textContent).toContain(
+    "Sample rows are read by Contura, not the model: at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never kept.",
   );
-  expect(await screen.findByRole("heading", { name: "Tools the assistant can use" })).toBeTruthy();
-  expect(screen.getByRole("heading", { name: "What AI can see, per Connection" })).toBeTruthy();
-});
-
-test("settings_search_finds_pick_tables", async () => {
-  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
-  for (const query of ["pick tables", "outline", "tools"]) {
-    const view = renderWithProviders(
-      <SearchContext.Provider value={query}>
-        <AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />
-      </SearchContext.Provider>,
-    );
-    expect(await screen.findByRole("heading", { name: "Tools the assistant can use" })).toBeTruthy();
-    expect(screen.getByRole("switch", { name: "Let the assistant pick tables in large databases" })).toBeTruthy();
-    view.unmount();
-  }
+  expect(within(run).getByText("Never")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Recent tool uses" })).toBeTruthy();
+  // Only the Tools page: nothing from the other three.
+  expect(screen.queryByRole("combobox", { name: "Provider" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Answers" })).toBeNull();
 });
 
 test("refetch_on_key_change", async () => {
@@ -779,7 +733,7 @@ test("refetch_on_key_change", async () => {
     },
   });
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
-  await screen.findByText("Fetched just now");
+  await screen.findByText(/Fetched just now/);
   expect(callsTo("ai_models")).toHaveLength(1);
   await userEvent.type(screen.getByLabelText("API key"), "gsk_new_key_9z9z");
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -815,7 +769,8 @@ test("models_fetch_failure_keeps_builtin", async () => {
   });
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
   expect(await screen.findByText("Could not fetch the model list. Showing the built-in one.")).toBeTruthy();
-  expect(screen.queryByText(/^Fetched/)).toBeNull();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  expect(screen.queryByText(/Fetched/)).toBeNull();
   expect(await optionsOf("Model")).toEqual([
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
@@ -848,7 +803,7 @@ test("models_not_fetched_without_a_saved_key", async () => {
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
   await screen.findByRole("combobox", { name: "Model" });
   expect(callsTo("ai_models")).toHaveLength(0);
-  expect(screen.queryByRole("button", { name: "Fetch the model list again" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Fetch again" })).toBeNull();
 });
 
 test("test_success_text", async () => {
@@ -872,6 +827,7 @@ test("access_table_rows_use_brand_marks", async () => {
   });
   const onConnectionSaved = vi.fn();
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a, b]} onConnectionSaved={onConnectionSaved} />);
+  await openAccess();
   const table = await screen.findByRole("table", { name: "What AI can see, per Connection" });
   const rows = within(table).getAllByRole("row").slice(1);
   expect(rows[0].querySelector(".db-mark-postgres")).not.toBeNull();
@@ -899,16 +855,10 @@ test("data_folder_shows_path_counts_and_history_size", async () => {
   expect(
     screen.getByText(
       // On Linux the folder is next to the program only for an AppImage or a writable copy: the copy points at the path.
-      "Connections, Groups, Saved Queries, Query History and these settings live in the folder below. Copy the folder to take everything to another computer.",
+      "Connections, Groups, Saved Queries, Query History and these settings live in this folder. Copy the folder to take everything to another computer.",
     ),
   ).toBeTruthy();
-  const counts = screen.getByRole("list", { name: "What the data folder holds" });
-  expect(within(counts).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
-    "Connections9",
-    "Groups3",
-    "Saved Queries24",
-    "Query History4.2 MB",
-  ]);
+  expect(screen.getByText("9 Connections, 3 Groups, 24 Saved Queries, 4.2 MB of Query History")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Move/ })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Open folder" }));
   expect(callsTo("open_data_folder")).toHaveLength(1);
@@ -935,7 +885,7 @@ test("keep_history_for_saves_and_clear_asks_once", async () => {
     },
   });
   renderWithProviders(<DataFolderSection />);
-  await screen.findByText("4.2 MB");
+  await screen.findByText(/4\.2 MB of Query History/);
   await waitFor(() => expect(callsTo("ui_prefs")).toHaveLength(1));
   expect(screen.getByRole("combobox", { name: "Keep history for" }).textContent).toContain("Forever");
   expect(await optionsOf("Keep history for")).toEqual(["30 days", "90 days", "365 days", "Forever"]);
@@ -952,14 +902,14 @@ test("keep_history_for_saves_and_clear_asks_once", async () => {
   await waitFor(() => expect(callsTo("clear_query_history")).toEqual([{ id: null }]));
   // One confirm only, and the size updates.
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(await screen.findByText("0 bytes")).toBeTruthy();
+  expect(await screen.findByText(/0 bytes of Query History/)).toBeTruthy();
 });
 
 test("shortening_keep_history_asks_first_and_lengthening_applies_at_once", async () => {
   settingsRoutes();
   renderWithProviders(<DataFolderSection />);
   await waitFor(() => expect(callsTo("ui_prefs")).toHaveLength(1));
-  await screen.findByText("4.2 MB");
+  await screen.findByText(/4\.2 MB of Query History/);
   // Forever to 30 days deletes history: it asks, with Cancel focused, and Cancel changes nothing.
   await choose("Keep history for", "30 days");
   const ask = screen.getByRole("dialog", { name: "Delete Query History older than 30 days?" });
@@ -986,13 +936,17 @@ test("about_has_version_licences_and_note", async () => {
   settingsRoutes();
   renderWithProviders(<AboutSection />);
   expect(await screen.findByText("Contura 1.0.0")).toBeTruthy();
+  // The licences fold open under their row.
+  expect(screen.queryByRole("list", { name: "Licences" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Show" }));
+  expect(screen.getByRole("button", { name: "Hide" }).getAttribute("aria-expanded")).toBe("true");
   const licences = screen.getByRole("list", { name: "Licences" });
   expect(within(licences).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
     "JetBrains Mono, SIL Open Font License 1.1",
     "Lucide icons, ISC",
     "Simple Icons, CC0 1.0",
   ]);
-  expect(screen.getByText("Everything Contura keeps is in one data folder. Data folder above shows where it is.")).toBeTruthy();
+  expect(screen.getByText("Everything Contura keeps is in one data folder. The Data folder page shows where it is.")).toBeTruthy();
   expect(screen.queryByText(/next to the Contura program/)).toBeNull();
 });
 
@@ -1026,6 +980,7 @@ test("access_table_sync_and_context_columns", async () => {
   const c = conn("c3", "freight-prod", { aiAccess: "never", production: true });
   settingsRoutes({ ai_context_status: () => [ctxRow("c1", 180_000, false), ctxRow("c2", 2 * 86_400_000 + 60_000, true)] });
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a, b, c]} onConnectionSaved={() => {}} />);
+  await openAccess();
   const table = await screen.findByRole("table", { name: "What AI can see, per Connection" });
   expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
     "Connection",
@@ -1051,6 +1006,7 @@ test("sync_select_saves", async () => {
   settingsRoutes({ set_ai_sync_mode: (args) => ({ ...a, aiSync: args.mode }) });
   const onConnectionSaved = vi.fn();
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a]} onConnectionSaved={onConnectionSaved} />);
+  await openAccess();
   await screen.findByRole("table", { name: "What AI can see, per Connection" });
   await choose("Keep the AI context of freight-stg in sync", "Manual");
   await waitFor(() => expect(callsTo("set_ai_sync_mode")).toEqual([{ connectionId: "c1", mode: "manual" }]));
@@ -1062,6 +1018,7 @@ test("sync_select_follows_a_change_made_elsewhere_after_a_save", async () => {
   const a = conn("c1", "freight-stg", { aiSync: "automatic" });
   settingsRoutes({ set_ai_sync_mode: (args) => ({ ...a, aiSync: args.mode }) });
   const { rerender } = renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a]} onConnectionSaved={() => {}} />);
+  await openAccess();
   await screen.findByRole("table", { name: "What AI can see, per Connection" });
   await choose("Keep the AI context of freight-stg in sync", "Manual");
   await waitFor(() => expect(callsTo("set_ai_sync_mode")).toHaveLength(1));
@@ -1122,6 +1079,7 @@ test("clear_all_ai_data_confirms", async () => {
 test("plus_sample_rows_help", async () => {
   settingsRoutes();
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />);
+  await openAccess();
   await screen.findByRole("table", { name: "What AI can see, per Connection" });
   expect(
     screen.getByText(
@@ -1133,6 +1091,7 @@ test("plus_sample_rows_help", async () => {
 test("production_help_line", async () => {
   settingsRoutes();
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[conn("c1", "freight-stg")]} onConnectionSaved={() => {}} />);
+  await openAccess();
   await screen.findByRole("table", { name: "What AI can see, per Connection" });
   expect(screen.getByText("Production Connections stay at Never: turning Production on also clears their AI Context.")).toBeTruthy();
 });
@@ -1171,24 +1130,23 @@ test("diagram_tool_row_and_switch", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, diagramTool: true } }) });
   renderAi();
   const sw = await screen.findByRole("switch", { name: "Propose diagram changes" });
-  const row = sw.closest("tr") as HTMLElement;
-  expect(within(row).getByText("propose_diagram_changes")).toBeTruthy();
-  expect(within(row).getByText("Suggests edits to the open .flow file as a list you can review. It cannot read or write a database.")).toBeTruthy();
-  expect(within(row).getByText("Diagram assistant")).toBeTruthy();
+  const row = sw.closest(".srow") as HTMLElement;
+  expect(
+    within(row).getByText("On diagram tabs. Suggests edits to the open .flow file as a list you can review. It cannot read or write a database."),
+  ).toBeTruthy();
   expect(sw.getAttribute("aria-checked")).toBe("true");
-  expect(row.textContent).toContain("On");
-  // It is the first row of the table.
-  expect(row.parentElement?.firstElementChild).toBe(row);
+  // It is the first row of the Tools card, under the line about tools.
+  expect(row.parentElement?.querySelector(".srow")).toBe(row);
   await userEvent.click(sw);
   await waitFor(() => expect((lastAi().settings as AiSettings).diagramTool).toBe(false));
   expect(lastAi().settings).toMatchObject({ pickTables: true, modelPrefs: GROQ.modelPrefs });
-  expect(row.textContent).toContain("Off");
+  expect(sw.getAttribute("aria-checked")).toBe("false");
 });
 
 test("diagram_tool_is_global_only", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, groupOverride: true }) });
   renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
-  expect(await screen.findByText("propose_diagram_changes")).toBeTruthy();
+  expect(await screen.findByText("Same for every Group")).toBeTruthy();
   expect(screen.queryByRole("switch", { name: "Propose diagram changes" })).toBeNull();
   // A Group-level change saves without the global switch.
   await userEvent.click(screen.getByRole("switch", { name: "Inline Ask" }));
@@ -1303,20 +1261,6 @@ test("empty_recent_text", async () => {
   expect(document.querySelector(".urow")).toBeNull();
 });
 
-test("settings_search_finds_the_tool", async () => {
-  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
-  for (const query of ["tools", "diagram", "propose"]) {
-    const view = renderWithProviders(
-      <SearchContext.Provider value={query}>
-        <AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />
-      </SearchContext.Provider>,
-    );
-    expect(await screen.findByRole("switch", { name: "Propose diagram changes" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Recent tool uses" })).toBeTruthy();
-    view.unmount();
-  }
-});
-
 // ---- Parity with the step 11 boards (P11) ----
 
 test("parity_P11_38_windows_keeps_its_wording", async () => {
@@ -1339,16 +1283,67 @@ test("parity_P11_38_windows_keeps_its_wording", async () => {
   expect(await screen.findByText("Kept in the OS keyring (Windows Credential Manager), never in the data folder.")).toBeTruthy();
   expect(screen.getByText(String.raw`The text can contain your schema and SQL. data\ is portable and not encrypted.`)).toBeTruthy();
   // One word for the machine on the whole page: "this PC", as the Passwords row says.
+  await openAccess();
   expect(screen.getByText("Each Connection decides what may leave this PC. The same choice is on each Connection's form.")).toBeTruthy();
 });
 
-test("parity_P11_38_theme_reads_follow_the_system_on_windows_too", async () => {
+test("parity_P11_38_the_system_theme_is_named_by_platform", async () => {
+  // The board's "Follow Windows" on Windows; elsewhere it never names Windows.
   setPlatformForTests("windows");
   settingsRoutes();
-  renderWithProviders(<AppearanceSection />);
+  const win = renderWithProviders(<AppearanceSection />);
   const group = screen.getByRole("radiogroup", { name: "Theme" });
-  expect(within(group).getAllByRole("radio").map((r) => r.getAttribute("aria-label"))).toEqual(["Dark", "Light", "Follow the system"]);
-  expect(screen.queryByText(/Follow Windows/)).toBeNull();
+  expect(within(group).getAllByRole("radio").map((r) => r.getAttribute("aria-label"))).toEqual(["Dark", "Light", "Follow Windows"]);
+  expect(screen.getByText("Follow Windows uses Light when Windows is light and Dark when it is dark.")).toBeTruthy();
+  win.unmount();
+  setPlatformForTests("linux");
+  renderWithProviders(<AppearanceSection />);
+  expect(screen.getByRole("radio", { name: "Follow the system" })).toBeTruthy();
+  expect(screen.queryByText(/Windows/)).toBeNull();
+});
+
+test("the_system_cards_now_line_follows_the_system_while_another_theme_is_chosen", async () => {
+  let dark = false;
+  const listeners: ((e: { matches: boolean }) => void)[] = [];
+  const realMatch = window.matchMedia;
+  window.matchMedia = ((q: string) => ({
+    matches: dark,
+    media: q,
+    addEventListener: (_: string, fn: (e: { matches: boolean }) => void) => listeners.push(fn),
+    removeEventListener: (_: string, fn: (e: { matches: boolean }) => void) => listeners.splice(listeners.indexOf(fn), 1),
+  })) as unknown as typeof window.matchMedia;
+  try {
+    settingsRoutes({}, { prefs: { theme: "dark" } });
+    const view = renderWithProviders(<AppearanceSection />);
+    expect(await screen.findByText("Now light")).toBeTruthy();
+    dark = true;
+    act(() => listeners.forEach((fn) => fn({ matches: true })));
+    expect(await screen.findByText("Now dark")).toBeTruthy();
+    view.unmount();
+    expect(listeners).toHaveLength(0);
+  } finally {
+    window.matchMedia = realMatch;
+  }
+});
+
+test("a_licence_search_hit_unfolds_the_list", async () => {
+  settingsRoutes();
+  renderWithProviders(
+    <FlashContext.Provider value="licences">
+      <AboutSection />
+    </FlashContext.Provider>,
+  );
+  expect(await screen.findByRole("list", { name: "Licences" })).toBeTruthy();
+  const hide = screen.getByRole("button", { name: "Hide" });
+  // The button says what it shows and hides through the row label.
+  expect(document.getElementById(hide.getAttribute("aria-describedby")!)?.textContent).toBe("Open source licences");
+});
+
+test("the_thinking_level_is_described_by_its_hint", async () => {
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} pages={["behaviour"]} />);
+  const group = await screen.findByRole("radiogroup", { name: "Default thinking level" });
+  expect(document.getElementById(group.getAttribute("aria-describedby")!)?.textContent).toBe("Each model remembers the level you last picked for it.");
 });
 
 test("parity_P11_38_linux_wording_never_names_windows", async () => {
@@ -1377,6 +1372,7 @@ test("parity_P11_3_access_table_keeps_its_columns_and_fits_its_column", async ()
   const a = conn("c1", "freight-stg", { aiAccess: "schemaQuery", aiSync: "automatic" });
   settingsRoutes();
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a]} onConnectionSaved={() => {}} />);
+  await openAccess();
   const table = await screen.findByRole("table", { name: "What AI can see, per Connection" });
   // The built columns stay (P11-2: keep as built), Dialect included.
   expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Connection", "Dialect", "AI can see", "Sync", "Context"]);
@@ -1414,11 +1410,10 @@ test("parity_P11_9_data_folder_counts_follow_the_connections", async () => {
   settingsRoutes({ data_folder_info: () => ({ path: "/home/you/contura/data", connections, groups: 0, savedQueries: 0, historyBytes: 0 }) });
   const one = [conn("c1", "ai-prod")];
   const { rerender } = renderWithProviders(<DataFolderSection connections={one} />);
-  const counts = await screen.findByRole("list", { name: "What the data folder holds" });
-  await waitFor(() => expect(within(counts).getAllByRole("listitem")[0].textContent).toBe("Connections1"));
+  expect(await screen.findByText(/^1 Connection, 0 Groups/)).toBeTruthy();
   connections = 4;
   rerender(<DataFolderSection connections={[...one, conn("c2", "ai-readonly"), conn("c3", "ai-shop"), conn("c4", "ai-wide")]} />);
-  await waitFor(() => expect(within(counts).getAllByRole("listitem")[0].textContent).toBe("Connections4"));
+  expect(await screen.findByText(/^4 Connections, 0 Groups/)).toBeTruthy();
   expect(callsTo("data_folder_info")).toHaveLength(2);
 });
 
@@ -1431,25 +1426,12 @@ test("parity_P11_17_custom_lists_its_models_without_a_key", async () => {
   renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
   // A keyless local server still lists its models, so the Ask picker can offer them.
   await waitFor(() => expect(callsTo("ai_models")).toEqual([{ groupId: "g1" }]));
-  expect(await screen.findByText("Fetched just now")).toBeTruthy();
+  expect(await screen.findByText("2 models from 127.0.0.1:11434. Fetched just now.")).toBeTruthy();
 });
 
 test("parity_P11_17_a_keyless_hosted_provider_still_waits_for_a_key", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, keySaved: false }) });
   renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
-  await screen.findByRole("combobox", { name: "Default thinking level" });
+  await screen.findByRole("radiogroup", { name: "Default thinking level" });
   expect(callsTo("ai_models")).toHaveLength(0);
-});
-
-test("an override for a removed command is ignored, so Reset all has nothing to reset (item 35)", async () => {
-  settingsRoutes({}, { keymap: { "visualQuery.addTable": ["Ctrl+Shift+A"] } });
-  renderWithProviders(<KeymapSection />);
-  await waitFor(() => expect(callsTo("keymap")).toHaveLength(1));
-  const dialog = await openDialog();
-  await waitFor(() => expect((within(dialog).getByRole("button", { name: "Reset all" }) as HTMLButtonElement).disabled).toBe(true));
-  // A later save keeps only real overrides.
-  await userEvent.click(within(dialog).getByRole("button", { name: "Edit Format" }));
-  await userEvent.keyboard("{Control>}{Alt>}l{/Alt}{/Control}");
-  await waitFor(() => expect(callsTo("save_keymap")).toHaveLength(1));
-  expect(callsTo("save_keymap")[0].overrides).toEqual({ "query.format": ["Ctrl+Alt+L"] });
 });

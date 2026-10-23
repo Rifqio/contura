@@ -4,8 +4,8 @@ use common::TestDb;
 use contura_core::Error;
 use contura_core::connections::{ConnectionInput, ConnectionService, GroupInput, PasswordChange};
 use contura_core::model::{
-    DialectKind, EditorPrefs, FlowSidePanel, FlowSideTab, GroupColor, KeymapOverrides, RowHeight,
-    SslMode, ThemeChoice, UiPrefs,
+    DialectKind, EditorPrefs, FlowSidePanel, FlowSideTab, GroupColor, InterfaceSize,
+    KeymapOverrides, NullDisplay, RowHeight, SslMode, ThemeChoice, UiPrefs,
 };
 use contura_core::secrets::{MemorySecretStore, SecretStore};
 use contura_core::store::AppStore;
@@ -273,6 +273,14 @@ fn last_group_forgets_deleted_group() {
 }
 
 #[test]
+fn first_start_guide_opens_once_in_a_new_data_folder() {
+    let (_d, _s, svc) = service();
+    assert!(svc.first_start_guide().unwrap());
+    svc.first_start_guide_seen().unwrap();
+    assert!(!svc.first_start_guide().unwrap());
+}
+
+#[test]
 fn ui_prefs_default_to_dark() {
     let (_d, _s, svc) = service();
     assert_eq!(svc.ui_prefs().unwrap().theme, ThemeChoice::Dark);
@@ -383,6 +391,10 @@ fn ui_prefs_round_trip_every_field() {
         },
         flow_assist_mode: contura_core::model::FlowAssistMode::Auto,
         vq_panel_height: Some(180),
+        ungrouped_label: Some("Loose".into()),
+        interface_size: InterfaceSize(110),
+        stripe_rows: true,
+        null_as: NullDisplay::Blank,
     })
     .unwrap();
     drop(svc);
@@ -411,6 +423,31 @@ fn ui_prefs_round_trip_every_field() {
         contura_core::model::FlowAssistMode::Auto
     );
     assert_eq!(p.vq_panel_height, Some(180));
+    assert_eq!(p.interface_size, InterfaceSize(110));
+    assert!(p.stripe_rows);
+    assert_eq!(p.null_as, NullDisplay::Blank);
+}
+
+#[test]
+fn ui_prefs_appearance_fields_fall_back_alone() {
+    let (_d, svc) = service_with_setting(
+        "ui_prefs",
+        r#"{"theme":"light","interfaceSize":125,"stripeRows":true,"nullAs":"symbol"}"#,
+    );
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.interface_size, InterfaceSize(125));
+    assert!(p.stripe_rows);
+    assert_eq!(p.null_as, NullDisplay::Symbol);
+    // A size the page does not offer reads 100; a bad value keeps the rest.
+    let (_d, svc) = service_with_setting(
+        "ui_prefs",
+        r#"{"theme":"light","interfaceSize":300,"stripeRows":"yes","nullAs":"dash"}"#,
+    );
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_eq!(p.interface_size, InterfaceSize(100));
+    assert!(!p.stripe_rows);
+    assert_eq!(p.null_as, NullDisplay::Null);
 }
 
 #[test]
@@ -1215,4 +1252,82 @@ fn oversize_base64_is_refused_before_decoding() {
         decode_group_image("iVBORw==").unwrap(),
         vec![137, 80, 78, 71]
     );
+}
+
+#[test]
+fn ungrouped_label_is_trimmed_cut_and_empty_means_default() {
+    let (_d, _s, svc) = service();
+    assert_eq!(svc.ui_prefs().unwrap().ungrouped_label, None);
+    let save = |label: Option<&str>| {
+        svc.save_ui_prefs(UiPrefs {
+            ungrouped_label: label.map(str::to_owned),
+            ..UiPrefs::default()
+        })
+        .unwrap();
+        svc.ui_prefs().unwrap().ungrouped_label
+    };
+    assert_eq!(save(Some("  Loose  ")), Some("Loose".to_string()));
+    assert_eq!(save(Some("   ")), None);
+    assert_eq!(save(Some(&"x".repeat(100))).unwrap().chars().count(), 60);
+    // Cut first, then trimmed: no space is left at the end.
+    assert_eq!(
+        save(Some(&format!("{} x", "y".repeat(59)))),
+        Some("y".repeat(59))
+    );
+    assert_eq!(save(None), None);
+}
+
+#[test]
+fn ungrouped_label_is_normalised_when_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.sqlite");
+    let svc = ConnectionService::new(
+        AppStore::open(&path).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    svc.save_ui_prefs(UiPrefs {
+        ungrouped_label: Some("  Loose  ".into()),
+        ..UiPrefs::default()
+    })
+    .unwrap();
+    drop(svc);
+    let raw = AppStore::open(&path)
+        .unwrap()
+        .get_setting("ui_prefs")
+        .unwrap()
+        .unwrap();
+    assert!(raw.contains("\"ungroupedLabel\":\"Loose\""), "{raw}");
+}
+
+#[test]
+fn a_group_cannot_take_the_name_ungrouped_goes_by() {
+    let (_d, _s, svc) = service();
+    let group = |id: Option<contura_core::model::GroupId>, name: &str| {
+        svc.save_group(GroupInput {
+            id,
+            name: name.into(),
+            color: GroupColor::Indigo,
+        })
+    };
+    let refused = |r: contura_core::Result<contura_core::model::Group>| match r {
+        Err(Error::InvalidInput(m)) => m,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert_eq!(
+        refused(group(None, "ungrouped")),
+        "That name is what Ungrouped is called. Pick another name."
+    );
+    svc.save_ui_prefs(UiPrefs {
+        ungrouped_label: Some("Loose".into()),
+        ..UiPrefs::default()
+    })
+    .unwrap();
+    assert!(refused(group(None, "LOOSE")).starts_with("That name is what Ungrouped"));
+    let kfc = group(None, "KFC").unwrap();
+    assert_eq!(
+        refused(group(None, "kfc")),
+        "A Group is already named kfc. Pick another name."
+    );
+    // Ungrouped goes by another name, so a Group may be called Ungrouped.
+    assert!(group(Some(kfc.id), "Ungrouped").is_ok());
 }

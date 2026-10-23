@@ -213,8 +213,10 @@ test("keys_add_remove_and_move_without_the_window_commands", async () => {
   const keys = scroller();
   fireEvent.keyDown(keys, { key: "ArrowUp", altKey: true });
   expect([...grid().querySelectorAll('tbody td[data-field="name"]')].map((c) => c.textContent)[1]).toBe("status");
-  // Ctrl+N works anywhere in the designer.
-  expect(fireEvent.keyDown(screen.getByRole("tab", { name: /^Columns/ }), { key: "n", ctrlKey: true })).toBe(false);
+  // Ctrl+N is the window's New Connection, not the designer's: it adds nothing here. The Add column button adds.
+  expect(fireEvent.keyDown(screen.getByRole("tab", { name: /^Columns/ }), { key: "n", ctrlKey: true })).toBe(true);
+  expect(grid().querySelector(".row-added")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Add column" }));
   expect(lastRow().className).toContain("row-added");
   fireEvent.keyDown(keys, { key: "Delete" });
   expect(grid().querySelector(".row-added")).toBeNull();

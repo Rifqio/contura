@@ -12,6 +12,7 @@ import "./styles/compare.css";
 import "./styles/flow.css";
 import "./styles/flow-canvas.css";
 import "./styles/update.css";
+import "./styles/guide.css";
 import "./styles/lineage.css";
 import "./styles/flow-tab.css";
 import { installTooltipGuard } from "./components/tooltipGuard";

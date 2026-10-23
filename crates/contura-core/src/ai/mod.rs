@@ -1082,8 +1082,10 @@ impl AiService {
         place: &str,
         connections: &crate::connections::ConnectionService,
     ) -> Result<Vec<memory::ThreadSummary>> {
-        let threads = self.store()?.list_ai_threads(place)?;
-        connections.register_ai_threads(&threads);
+        // Only the statements are read: a thread's logs, thinking and exact text are not
+        // built for this (memory).
+        let statements = self.store()?.ai_thread_statements(place)?;
+        connections.register_ai_sql(&statements);
         self.list_threads(place)
     }
 
@@ -1162,6 +1164,80 @@ impl AiService {
             record.context = Some(info);
         }
         self.save_thread(&thread)
+    }
+
+    /// Appends one Ask's turn to the stored thread (made from `turn` when there is none),
+    /// in one read and one write: the thread never crosses IPC, and the reply holds only
+    /// the new messages. A `replace_from` drops the stored messages from that time on
+    /// first (a Retry). Each record is held to its caps; with `request_id`, the Core
+    /// writes the AI Context that Ask used into the answer's record, as `save_thread_for`.
+    /// The same `MESSAGE_LIMIT` and syncs as a save apply.
+    pub fn append_turn(
+        &self,
+        turn: memory::AppendTurn,
+        request_id: Option<&str>,
+    ) -> Result<memory::TurnView> {
+        let used = request_id.and_then(|id| {
+            let mut asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
+            let at = asked.iter().position(|(r, _)| r == id)?;
+            asked.remove(at).map(|(_, info)| info)
+        });
+        let mut add = turn.messages;
+        if let Some(info) = used
+            && let Some(record) = add
+                .iter_mut()
+                .rev()
+                .find(|m| m.role == AiRole::Assistant)
+                .and_then(|m| m.record.as_mut())
+        {
+            record.context = Some(info);
+        }
+        for m in &mut add {
+            m.record = m.record.take().map(AnswerRecord::capped);
+        }
+        let added = add.len();
+        let store = self.store()?;
+        let mut thread = store
+            .get_ai_thread(turn.thread_id)?
+            .unwrap_or_else(|| AiThread {
+                id: turn.thread_id,
+                place: turn.place,
+                title: turn.title,
+                messages: Vec::new(),
+                updated_at: turn.updated_at,
+            });
+        if let Some(from) = turn.replace_from
+            && let Some(at) = thread.messages.iter().position(|m| m.at >= from)
+        {
+            thread.messages.truncate(at);
+        }
+        thread.messages.extend(add);
+        thread.updated_at = turn.updated_at;
+        let written = store.write_ai_thread(thread)?;
+        let conn = store.conn();
+        let new_from = written.messages.len().saturating_sub(added);
+        let messages = written.messages[new_from..]
+            .iter()
+            .map(|m| AiMessage {
+                record: m.record.as_ref().map(AnswerRecord::trimmed_copy),
+                ..m.clone()
+            })
+            .collect();
+        let mut compactions = memory::store::compactions(conn, written.id)?;
+        for c in &mut compactions {
+            c.record = c.record.trimmed_copy();
+        }
+        Ok(memory::TurnView {
+            thread_id: written.id,
+            place: written.place.clone(),
+            title: written.title.clone(),
+            updated_at: written.updated_at,
+            kept_from: written.messages.first().map(|m| m.at),
+            message_count: written.messages.len() as u32,
+            messages,
+            topics: memory::store::topics(conn, written.id)?,
+            compactions,
+        })
     }
 
     /// Saves `thread`, each answer record held to its caps, and returns its view. The

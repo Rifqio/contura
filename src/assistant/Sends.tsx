@@ -1,5 +1,6 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useOpenSignal } from "./useOpenSignal";
+import { loadSendsOpen, onSendsOpen, saveSendsOpen } from "./sendsFold";
 import type { ItemKind, Preview, PreviewItem, SummaryPreview } from "../api/types";
 import Icon, { type IconName } from "../components/Icon";
 import { type ContextConnection, contextTip, sendsAge } from "./contextText";
@@ -30,6 +31,8 @@ interface Props {
    * no hover text, as in the diagram tab's side panel.
    */
   variant?: "diagram";
+  /** The Ask panel folds the rows into the Sends line until opened; the choice is remembered. */
+  foldable?: boolean;
 }
 
 /** Each kind of item has its own icon. */
@@ -65,10 +68,20 @@ function summaryLabel(s: SummaryPreview): string {
 }
 
 /** What one question would send, one row per item as the Core built it, with the exact text behind "Show exactly". */
-export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now(), modelName = null, openSignal = 0, variant }: Props) {
+export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now(), modelName = null, openSignal = 0, variant, foldable = false }: Props) {
   const diagram = variant === "diagram";
   const [shown, setShown] = useState(false);
-  useOpenSignal(openSignal, () => setShown(true));
+  const [open, setOpenState] = useState(() => !foldable || loadSendsOpen());
+  useEffect(() => (foldable ? onSendsOpen(setOpenState) : undefined), [foldable]);
+  const setOpen = (v: boolean) => {
+    setOpenState(v);
+    saveSendsOpen(v);
+  };
+  useOpenSignal(openSignal, () => {
+    setShown(true);
+    if (foldable) setOpen(true);
+  });
+  const listId = useId();
   const id = useId();
   const tables = preview ? tablesLine(preview.tables) : null;
   const context = preview?.context ?? null;
@@ -136,23 +149,32 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
   return (
     <div className="sends" role={diagram ? "group" : undefined} aria-label={diagram ? "Sends" : undefined}>
       <div className="sends-row">
-        <span className="sends-label">Sends</span>
+        {foldable ? (
+          <button type="button" className="sends-fold" aria-expanded={open} aria-controls={open && preview ? listId : undefined} onClick={() => setOpen(!open)}>
+            <Icon name={open ? "chevronDown" : "chevronRight"} size={14} />
+            <span className="sends-label">Sends</span>
+          </button>
+        ) : (
+          <span className="sends-label">Sends</span>
+        )}
         {preview && <span className="sends-size">{sizeText(preview.totalBytes + (summary?.on ? summary.bytes : 0))}</span>}
         {age && <span className="sends-age">{age}</span>}
         <span className="spacer" />
-        <button
-          type="button"
-          className="link-button"
-          aria-expanded={shown}
-          aria-controls={id}
-          disabled={!preview}
-          onClick={() => setShown((s) => !s)}
-        >
-          {shown ? "Hide" : "Show exactly"}
-        </button>
+        {open && (
+          <button
+            type="button"
+            className="link-button"
+            aria-expanded={shown}
+            aria-controls={id}
+            disabled={!preview}
+            onClick={() => setShown((s) => !s)}
+          >
+            {shown ? "Hide" : "Show exactly"}
+          </button>
+        )}
       </div>
-      {preview && (
-        <ul className="sends-list">
+      {open && preview && (
+        <ul className="sends-list" id={listId}>
           {preview.items.map((i, n) => (
             <li key={`${i.kind}-${n}`} className="sends-item">
               {pill(i)}
@@ -187,37 +209,42 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
           )}
         </ul>
       )}
-      {summary?.on && (
+      {open && summary?.on && (
         <p className="sends-note">
           {summary.kind === "summary"
             ? `+ 1 step: the last topic is summarised by ${modelName ?? "the model"} first.`
             : `+ 1 step: ${summary.messages.toLocaleString("en-US")} older ${summary.messages === 1 ? "message" : "messages"} become one summary first.`}
         </p>
       )}
-      {tables && <p className="sends-note">{tables}</p>}
-      {blocked > 0 && (
+      {open && tables && <p className="sends-note">{tables}</p>}
+      {open && blocked > 0 && (
         <p className="sends-note">
           {blocked.toLocaleString("en-US")} earlier {blocked === 1 ? "message stays" : "messages stay"} on {thisComputer()}: AI access is lower now.
         </p>
       )}
-      {preview?.notes.map((note) => (
-        <p key={note} className="sends-note">
-          {note}
-        </p>
-      ))}
+      {open &&
+        preview?.notes.map((note) => (
+          <p key={note} className="sends-note">
+            {note}
+          </p>
+        ))}
       {error && <p className="sends-note">{error}</p>}
-      {tip && <p className="sends-note sends-tip">{tip}</p>}
-      {shown && preview && (
+      {open && tip && <p className="sends-note sends-tip">{tip}</p>}
+      {open && shown && preview && (
         <div id={id}>
           <p className="sends-note">{header}</p>
-          <pre className="payload">{preview.exact}</pre>
+          <pre className="payload" tabIndex={0} role="region" aria-label="What is sent">
+            {preview.exact}
+          </pre>
           {summary?.on && (
             <>
               <p className="sends-note sends-step-head">
                 Summary step
                 <span className="sends-size">{sizeText(summary.bytes)}</span>
               </p>
-              <pre className="payload">{summary.exact}</pre>
+              <pre className="payload" tabIndex={0} role="region" aria-label="What the summary step sends">
+                {summary.exact}
+              </pre>
             </>
           )}
           {preview.outline && outline?.on && (
@@ -226,7 +253,9 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
                 Outline step, sent first
                 <span className="sends-size">{sizeText(outline.bytes)}</span>
               </p>
-              <pre className="payload">{preview.outline.exact}</pre>
+              <pre className="payload" tabIndex={0} role="region" aria-label="What the outline step sends">
+                {preview.outline.exact}
+              </pre>
             </>
           )}
         </div>

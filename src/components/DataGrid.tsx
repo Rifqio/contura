@@ -1163,11 +1163,13 @@ export default function DataGrid({
           <button
             type="button"
             className="button button-small table-header-structure"
+            aria-label="Edit structure"
             title="Change columns, keys and indexes"
             onClick={onDesign}
           >
             <FeatureIcon name="designer" size={18} />
-            Edit structure
+            {/* Hidden by a container query when the strip is narrow (beside the Ask panel); the icon stays. */}
+            <span className="table-header-structure-label">Edit structure</span>
           </button>
         )}
         <MenuButton

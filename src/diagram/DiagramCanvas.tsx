@@ -23,13 +23,14 @@ import {
   useStore,
   useStoreApi,
 } from "@xyflow/react";
-import { type DragEvent, type KeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, type KeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Icon from "../components/Icon";
 import { ConnectableContext } from "./CardFrame";
 import { DetailContext, GRID_FROM, detailFor } from "./detail";
 import { EdgeMarkers, OrthogonalEdge, StraightEdge } from "./edges";
 import { CARD_WIDTH } from "./metrics";
 import { applyLive, drawsTheSame, type LivePositions, restoreBase } from "./livePositions";
+import { liveResizes } from "./resize";
 import { motionMs } from "./motion";
 import type { Port } from "./types";
 
@@ -136,6 +137,19 @@ export function columnOfHandle(handleId: string | null | undefined): string {
  * never end. The fit never zooms past 100 percent. Also draws the zoom control: minus, the percent,
  * plus and fit.
  */
+/**
+ * The canvas zoom as `--rz-zoom` on the flow, so the resize zones (app.css `.rz-*`) keep their size on screen at
+ * any zoom. It renders nothing; only it draws again on a zoom.
+ */
+function ZoomVar() {
+  const zoom = useStore((s) => s.transform[2]);
+  const dom = useStore((s) => s.domNode);
+  useLayoutEffect(() => {
+    dom?.style.setProperty("--rz-zoom", String(zoom || 1));
+  }, [dom, zoom]);
+  return null;
+}
+
 function ViewControls({ nodes, fitRef }: { nodes: Node[]; fitRef: MutableRefObject<() => boolean> }) {
   const store = useStoreApi();
   const width = useStore((s) => s.width);
@@ -280,6 +294,7 @@ function Flow(props: DiagramCanvasProps) {
   const viewWidth = useStore((s) => s.width);
   const viewHeight = useStore((s) => s.height);
 
+  const store = useStoreApi();
   const [nodes, setNodes, onNodesChange] = useNodesState(props.nodes);
   const selectionRef = useRef(props.selection);
   selectionRef.current = props.selection;
@@ -297,10 +312,13 @@ function Flow(props: DiagramCanvasProps) {
         return props.nodes.map((n) => {
           const p = before.get(n.id);
           const measured = n.measured ?? (p && drawsTheSame(p, n) ? p.measured : undefined);
-          return { ...n, ...(measured ? { measured } : {}), selected: picked.has(n.id) || undefined };
+          // A node being resized keeps its live box until the drag ends.
+          const live = liveResizes(store.getState().domNode).get(n.id);
+          const box = live ? { position: { x: live.x, y: live.y }, width: live.w, height: live.h } : {};
+          return { ...n, ...(measured ? { measured } : {}), ...box, selected: picked.has(n.id) || undefined };
         });
       }),
-    [props.nodes, setNodes],
+    [props.nodes, setNodes, store],
   );
 
   // Brings `reveal` into view once React Flow has the node; a node already wholly on screen leaves the view as it is.
@@ -492,6 +510,7 @@ function Flow(props: DiagramCanvasProps) {
             proOptions={{ hideAttribution: true }}
           >
             <ViewControls nodes={props.nodes} fitRef={fitRef} />
+            <ZoomVar />
             <SnapGrid />
             <ColumnDrag onDragOver={onDragOver} onDragCancel={onDragCancel} cancelled={cancelled} />
             <MiniMap

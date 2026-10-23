@@ -14,7 +14,7 @@ use contura_core::connections::ConnectionService;
 use contura_core::secrets::{self, DeferredSecretStore, KeyringSecretStore, SecretStore};
 use contura_core::store::AppStore;
 use contura_core::update::UpdateService;
-use tauri::{Manager, RunEvent, WebviewWindowBuilder, window::Color};
+use tauri::{Manager, RunEvent, WebviewWindowBuilder, WindowEvent, window::Color};
 
 /// The longest quitting waits for running queries and jobs to stop.
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -47,7 +47,24 @@ pub fn run() {
             }
             Ok(())
         })
+        // The minimum window follows the monitor the window is on and Windows Text size: a
+        // move can change both, focus comes back after Settings, and a resize lands a minimum
+        // held back while the window was maximized. Not in ScaleFactorChanged: tao applies its
+        // own new size right after it, and the Moved or Resized that follows refits instead.
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            let refit = matches!(
+                event,
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::Focused(true)
+            );
+            if let (true, Some(fit)) = (refit, window.try_state::<window_size::WindowFit>()) {
+                window_size::refit(window, &fit, window_size::Refit::Grow);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            window_size::set_interface_size,
             commands::list_connections,
             commands::save_connection,
             commands::set_connection_ai_access,
@@ -97,6 +114,8 @@ pub fn run() {
             commands::move_connection,
             commands::last_group,
             commands::set_last_group,
+            commands::first_start_guide,
+            commands::first_start_guide_seen,
             commands::ui_prefs,
             commands::save_ui_prefs,
             commands::keymap,
@@ -167,6 +186,7 @@ pub fn run() {
             commands::ai_answer_record,
             commands::ai_search_threads,
             commands::save_ai_thread,
+            commands::ai_append_turn,
             commands::delete_ai_thread,
             commands::clear_ai_threads,
             job_commands::preview_export,
@@ -316,20 +336,39 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         // Dracula's --c-bg-app, so the window is not white before the page paints.
         .background_color(Color(25, 26, 33, 255))
         .data_directory(data_dir.join("webview"));
+    // The saved Interface size; usePrefs follows later changes through set_interface_size.
+    let zoom = app
+        .state::<ConnectionService>()
+        .ui_prefs()
+        .map(|p| p.interface_size.zoom())
+        .unwrap_or(1.0);
     // 1280 x 800 CSS pixels at any display scaling and Text size, shrunk to the work area
     // of the primary monitor, where the window opens. Set on the builder, not with
     // set_size after build: tao measures the frame of a hidden undecorated window wrongly
-    // and the client area came out 30 px taller.
+    // and the client area came out 30 px taller. The minimum, 1024 x 480 CSS pixels under
+    // Windows Text size and the Interface size, goes on the builder for the same reason.
+    // The opening size is never under it: 1280 x 800 is 1024 x 640 at 125 percent.
+    let text_scale = window_size::text_scale();
+    let mut min_size = None;
     if let Some(monitor) = app.primary_monitor().ok().flatten() {
         let area = monitor.work_area().size;
         let scale = monitor.scale_factor();
-        let (width, height) =
-            window_size::start_size(area.width, area.height, scale, window_size::text_scale());
+        let (width, height) = window_size::start_size(area.width, area.height, scale, text_scale);
+        let (min_width, min_height) =
+            window_size::min_size(area.width, area.height, scale, text_scale, zoom);
         builder = builder
             .inner_size(f64::from(width) / scale, f64::from(height) / scale)
+            .min_inner_size(min_width, min_height)
             .center();
+        min_size = Some((min_width, min_height));
     }
-    builder.build()?;
+    // Display scale changes, monitor moves and focus refit the minimum (lib.rs on_window_event).
+    app.manage(window_size::WindowFit::new(zoom, min_size));
+    let window = builder.build()?;
+    // Before the page paints.
+    if zoom != 1.0 {
+        let _ = window.set_zoom(zoom);
+    }
     // The window is up: an update's old program file can go.
     updater::cleanup_later(app.handle().clone());
     Ok(())

@@ -2,7 +2,7 @@
 import { act, fireEvent, render } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import appCss from "../styles/app.css?raw";
-import { type Box, RESIZE_DIRS, ResizeZones, resizeBox } from "./resize";
+import { type Box, liveResizes, RESIZE_DIRS, ResizeZones, resizeBox } from "./resize";
 
 const L = { minW: 96, maxW: 320, minH: 44, maxH: 200 };
 const start: Box = { x: 100, y: 100, w: 172, h: 72 };
@@ -103,20 +103,28 @@ test("item_51_release_and_unmount_remove_every_listener", () => {
 });
 
 test("item_51_zone_css_hit_areas_and_pointers", () => {
-  const rule = (sel: string) => appCss.match(new RegExp(`\\n${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`))?.[1] ?? "";
-  // 8 px along each edge (4 in, 4 out), 12 px squares on the corners, the resize pointers.
-  expect(rule(".rz-n")).toMatch(/top:\s*-4px/);
-  expect(rule(".rz-n")).toMatch(/height:\s*8px/);
-  expect(rule(".rz-n")).toMatch(/cursor:\s*ns-resize/);
-  expect(rule(".rz-s")).toMatch(/cursor:\s*ns-resize/);
-  expect(rule(".rz-e")).toMatch(/width:\s*8px/);
-  expect(rule(".rz-e")).toMatch(/cursor:\s*ew-resize/);
-  expect(rule(".rz-w")).toMatch(/cursor:\s*ew-resize/);
-  expect(rule(".rz-nw")).toMatch(/width:\s*12px/);
+  // Every rule whose selector list ends with `sel` (rules with one selector, or the last of a list).
+  const rule = (sel: string) =>
+    [...appCss.matchAll(new RegExp(`\\n${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`, "g"))].map((m) => m[1]).join("\n");
+  // 8 px across each edge (4 in, 4 out), 14 px squares on the corners, in screen px at any zoom, the pointers.
+  const k = (n: number) => new RegExp(`calc\\(${n} \\* var\\(--rz-k\\)\\)`);
+  expect(rule(".rz-zone")).toMatch(/--rz-k:\s*calc\(1px \/ var\(--rz-zoom, 1\)\)/);
+  expect(rule(".rz-n,\n.rz-s")).toMatch(new RegExp(`height:\\s*${k(8).source}`));
+  expect(rule(".rz-n,\n.rz-s")).toMatch(/cursor:\s*ns-resize/);
+  expect(rule(".rz-n")).toMatch(new RegExp(`top:\\s*${k(-4).source}`));
+  expect(rule(".rz-e,\n.rz-w")).toMatch(new RegExp(`width:\\s*${k(8).source}`));
+  expect(rule(".rz-e,\n.rz-w")).toMatch(/cursor:\s*ew-resize/);
+  expect(rule(".rz-e")).toMatch(new RegExp(`right:\\s*${k(-4).source}`));
+  expect(rule(".rz-nw,\n.rz-ne,\n.rz-sw,\n.rz-se")).toMatch(new RegExp(`width:\\s*${k(14).source}`));
+  expect(rule(".rz-nw,\n.rz-ne,\n.rz-sw,\n.rz-se")).toMatch(new RegExp(`height:\\s*${k(14).source}`));
+  expect(rule(".rz-nw")).toMatch(new RegExp(`left:\\s*${k(-7).source}`));
   expect(rule(".rz-nw")).toMatch(/cursor:\s*nwse-resize/);
   expect(rule(".rz-se")).toMatch(/cursor:\s*nwse-resize/);
   expect(rule(".rz-ne")).toMatch(/cursor:\s*nesw-resize/);
   expect(rule(".rz-sw")).toMatch(/cursor:\s*nesw-resize/);
+  // The edges stop where the corners start (7 px), so a corner is never swallowed by an edge.
+  expect(rule(".rz-n,\n.rz-s")).toMatch(new RegExp(`left:\\s*${k(7).source}`));
+  expect(rule(".rz-e,\n.rz-w")).toMatch(new RegExp(`top:\\s*${k(7).source}`));
   // Nothing is drawn in a zone, and the ports sit above it (z-index 3).
   expect(rule(".rz-zone")).toMatch(/z-index:\s*2/);
   expect(rule(".rz-zone")).not.toMatch(/background:\s*var/);
@@ -188,4 +196,34 @@ test("a resized node can always go back to its laid-out size, both ways", async 
   // A 340 px class shrunk to 330 can widen back to 340, and no further.
   const shrunk = nodeLimitsFor("class", { w: 330, h: 120 }, { w: 340, h: 120 });
   expect(resizeBox({ x: 0, y: 0, w: 330, h: 120 }, "e", 40, 0, shrunk, false).w).toBe(340);
+});
+
+test("release_a_drag_in_3px_steps_changes_the_box_3px_a_frame_in_both_axes_with_no_snapping", async () => {
+  const lives: Box[] = [];
+  const { container } = render(<Zones onLive={(b) => lives.push(b)} onDone={() => {}} />);
+  const se = container.querySelector<HTMLElement>('.rz-zone[data-dir="se"]')!;
+  fireEvent.pointerDown(se, { button: 0, clientX: 0, clientY: 0, pointerId: 1 });
+  for (let i = 1; i <= 6; i++) {
+    fireEvent.pointerMove(se, { clientX: 3 * i, clientY: 3 * i, pointerId: 1 });
+    await frame();
+  }
+  expect(lives.map((b) => [b.w, b.h])).toEqual([1, 2, 3, 4, 5, 6].map((i) => [172 + 3 * i, 72 + 3 * i]));
+  fireEvent.pointerUp(se, { pointerId: 1 });
+  // Nothing rounds the live box: at a 150% zoom a 3 px step is 2 canvas px, at 75% it is 4.
+  expect(resizeBox(start, "se", 3 / 1.5, 3 / 1.5, L)).toEqual({ x: 100, y: 100, w: 174, h: 74 });
+  expect(resizeBox(start, "se", 1 / 3, 1 / 3, L).w).toBeCloseTo(172.333, 3);
+});
+
+test("review_l3_live_boxes_are_kept_per_canvas_so_a_node_with_the_same_id_elsewhere_is_not_touched", () => {
+  const a = document.createElement("div");
+  const b = document.createElement("div");
+  liveResizes(a).set("t1", { x: 1, y: 2, w: 300, h: 100 });
+  expect(liveResizes(a).get("t1")).toEqual({ x: 1, y: 2, w: 300, h: 100 });
+  expect(liveResizes(b).get("t1")).toBeUndefined();
+  expect(liveResizes(a)).toBe(liveResizes(a));
+  liveResizes(a).delete("t1");
+  expect(liveResizes(a).size).toBe(0);
+  // A canvas not yet in the page keeps nothing.
+  liveResizes(null).set("t1", { x: 0, y: 0, w: 1, h: 1 });
+  expect(liveResizes(null).size).toBe(0);
 });

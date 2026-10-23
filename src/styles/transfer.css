@@ -194,11 +194,14 @@
 }
 
 /* Step 2: the table list and the options panel. */
+/* One row as tall as the step: an auto row took the options' full height, so on a short window the table list and
+   the options ran under the footer (Back covered, the summary hidden). Now the list and the options scroll. */
 .transfer-tables {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--spacing-md);
   padding: var(--spacing-md);
 }
@@ -325,6 +328,14 @@
   flex-direction: column;
   gap: var(--spacing-md);
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for a full-width field's focus ring inside the scroll area, as .new-diagram-kinds. */
+  margin: -3px;
+  padding: 3px;
+}
+.transfer-side > * {
+  flex-shrink: 0;
 }
 .transfer-options {
   display: flex;

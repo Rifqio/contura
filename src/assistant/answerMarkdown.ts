@@ -1,20 +1,41 @@
 /**
- * The strict subset an answer renders as (R5.1): paragraphs split on blank lines, `-`, `*` and `1.` lists,
- * `**bold**`, `` `code` `` and fenced code. Anything else, HTML, links and images included, stays plain text.
+ * The strict subset an answer renders as (R5.1): paragraphs split on blank lines, `#` to `###` headings, `-`, `*` and
+ * `1.` lists, `**bold**`, `` `code` `` and fenced code. Anything else, HTML, links and images included, stays plain text.
  */
 export type Inline = { kind: "text" | "bold" | "code"; text: string };
 
 export type Block =
   | { kind: "para"; inlines: Inline[] }
+  /** One line: `#` to `###`, a space, then the text; closing `#`s are dropped. `####` and deeper stay text. */
+  | { kind: "heading"; level: 1 | 2 | 3; inlines: Inline[] }
   | { kind: "list"; ordered: boolean; items: Inline[][] }
   /** `fence` counts every fence of the answer, as the Core's `fences` does, so it matches `SqlBlock.fence`. */
   | { kind: "code"; lang: string | null; text: string; fence: number; closed: boolean };
 
 const ITEM = /^\s*([-*]|\d+\.)\s+(.*)$/;
+const HEADING = /^ {0,3}(#{1,3})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+
+/** The level and text of a heading line, or null; a heading needs text after its marks. */
+function headingOf(line: string): { level: 1 | 2 | 3; text: string } | null {
+  const m = HEADING.exec(line);
+  if (!m || m[2] === "") return null;
+  return { level: m[1].length as 1 | 2 | 3, text: m[2] };
+}
 const INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*/g;
+
+/**
+ * Characters the parsers have read since the page loaded: `parseAnswer` counts its whole text, the streaming parser
+ * each line once and the unsettled part of the line still being written. The streaming cost test reads it.
+ */
+export const parseCost = { chars: 0 };
 
 /** Text with inline code and bold picked out; adjacent text runs merge. */
 export function parseInline(text: string): Inline[] {
+  parseCost.chars += text.length;
+  return inlines(text);
+}
+
+function inlines(text: string): Inline[] {
   const out: Inline[] = [];
   const push = (kind: Inline["kind"], t: string) => {
     if (!t) return;
@@ -39,14 +60,20 @@ function prose(lines: string[], out: Block[]) {
   let para: string[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
   const flush = () => {
-    if (para.length > 0) out.push({ kind: "para", inlines: parseInline(para.join("\n")) });
-    if (list) out.push({ kind: "list", ordered: list.ordered, items: list.items.map(parseInline) });
+    if (para.length > 0) out.push({ kind: "para", inlines: inlines(para.join("\n")) });
+    if (list) out.push({ kind: "list", ordered: list.ordered, items: list.items.map((i) => inlines(i)) });
     para = [];
     list = null;
   };
   for (const line of lines) {
     if (line.trim() === "") {
       flush();
+      continue;
+    }
+    const heading = headingOf(line);
+    if (heading) {
+      flush();
+      out.push({ kind: "heading", level: heading.level, inlines: inlines(heading.text) });
       continue;
     }
     const item = ITEM.exec(line);
@@ -69,6 +96,7 @@ function prose(lines: string[], out: Block[]) {
  * no other backtick after them, and closes on a line of at least as many backticks; an unclosed fence runs to the end.
  */
 export function parseAnswer(text: string): Block[] {
+  parseCost.chars += text.length;
   const out: Block[] = [];
   let pending: string[] = [];
   let open: { ticks: number; lang: string | null; body: string[] } | null = null;
@@ -98,6 +126,185 @@ export function parseAnswer(text: string): Block[] {
   return out;
 }
 
+/** `a` then `b`, a text run at the seam merged as `parseInline` merges it; neither array is changed. */
+function joinInlines(a: Inline[], b: Inline[]): Inline[] {
+  if (b.length === 0) return a;
+  if (a.length === 0) return b;
+  const last = a[a.length - 1];
+  if (last.kind === "text" && b[0].kind === "text") return [...a.slice(0, -1), { kind: "text", text: last.text + b[0].text }, ...b.slice(1)];
+  return [...a, ...b];
+}
+
+const NEW_LINE: Inline[] = [{ kind: "text", text: "\n" }];
+const OPENER = /[`*]/;
+
+/**
+ * `text` as inlines split where nothing later can change what comes before: at the first backtick or star outside
+ * every match, since a character still to come could close it. `head` is final; `tail` may change as text arrives.
+ * A match never spans a line break, so this is for one line.
+ */
+function settleInline(text: string): { head: Inline[]; tail: Inline[]; at: number } {
+  parseCost.chars += text.length;
+  const head: Inline[] = [];
+  const tail: Inline[] = [];
+  let at = -1;
+  const push = (out: Inline[], kind: Inline["kind"], t: string) => {
+    if (!t) return;
+    const last = out[out.length - 1];
+    if (kind === "text" && last?.kind === "text") out[out.length - 1] = { kind, text: last.text + t };
+    else out.push({ kind, text: t });
+  };
+  const gap = (from: number, to: number) => {
+    const t = text.slice(from, to);
+    if (at >= 0) return push(tail, "text", t);
+    const o = t.search(OPENER);
+    if (o < 0) return push(head, "text", t);
+    at = from + o;
+    push(head, "text", t.slice(0, o));
+    push(tail, "text", t.slice(o));
+  };
+  let pos = 0;
+  for (const m of text.matchAll(INLINE)) {
+    const start = m.index ?? 0;
+    gap(pos, start);
+    if (m[1] !== undefined) push(at >= 0 ? tail : head, "code", m[1]);
+    else push(at >= 0 ? tail : head, "bold", m[2]);
+    pos = start + m[0].length;
+  }
+  gap(pos, text.length);
+  return { head, tail, at: at < 0 ? text.length : at };
+}
+
+/** One answer parsed as it streams in. */
+export interface AnswerParser {
+  /** `parseAnswer(text)`, reading only what arrived since the last call when `text` extends the last one. */
+  parse(text: string): Block[];
+}
+
+type ProseState = { para: Inline[] | null; list: { ordered: boolean; items: Inline[][] } | null };
+
+/** The blocks a prose state ends in: a paragraph, then a list (only one of the two is ever open). */
+function proseBlocks(p: ProseState): Block[] {
+  const out: Block[] = [];
+  if (p.para) out.push({ kind: "para", inlines: p.para });
+  if (p.list) out.push({ kind: "list", ordered: p.list.ordered, items: p.list.items });
+  return out;
+}
+
+/**
+ * A parser for an answer that grows at its end (R5.1, as `parseAnswer`). Each finished line is read once; finished
+ * blocks are kept and handed back as the same objects; the line still being written is read again only from its
+ * first unsettled backtick or star. A text that does not extend the last one starts it over.
+ */
+export function createAnswerParser(): AnswerParser {
+  let seen = "";
+  /** Where the line still being written starts. */
+  let lineAt = 0;
+  let blocks: Block[] = [];
+  let fence = 0;
+  let open: { ticks: number; lang: string | null; text: string; lines: number } | null = null;
+  let prose: ProseState = { para: null, list: null };
+  /** The settled start of the line being written: its text and inlines, for the line at `settledAt`. */
+  let settled = { at: -1, src: "", inl: [] as Inline[] };
+
+  const flush = () => {
+    blocks.push(...proseBlocks(prose));
+    prose = { para: null, list: null };
+  };
+
+  /** The prose state after `line`, and whether it closed the blocks before; the state given is not changed. */
+  function proseLine(p: ProseState, line: string, inline: (s: string) => Inline[]): { next: ProseState; closed: Block[] } {
+    if (line.trim() === "") return { next: { para: null, list: null }, closed: proseBlocks(p) };
+    const heading = headingOf(line);
+    if (heading) {
+      return { next: { para: null, list: null }, closed: [...proseBlocks(p), { kind: "heading", level: heading.level, inlines: inline(heading.text) }] };
+    }
+    const item = ITEM.exec(line);
+    if (item) {
+      const ordered = item[1] !== "-" && item[1] !== "*";
+      const restart = p.para !== null || (p.list !== null && p.list.ordered !== ordered);
+      const list = restart || !p.list ? { ordered, items: [] as Inline[][] } : p.list;
+      return { next: { para: null, list: { ordered, items: [...list.items, inline(item[2])] } }, closed: restart ? proseBlocks(p) : [] };
+    }
+    if (p.list) {
+      const items = p.list.items.slice();
+      items[items.length - 1] = joinInlines(joinInlines(items[items.length - 1], NEW_LINE), inline(line.trim()));
+      return { next: { para: null, list: { ordered: p.list.ordered, items } }, closed: [] };
+    }
+    const para = p.para ? joinInlines(joinInlines(p.para, NEW_LINE), inline(line)) : inline(line);
+    return { next: { para, list: null }, closed: [] };
+  }
+
+  const strip = (raw: string) => (raw.endsWith("\r") ? raw.slice(0, -1) : raw);
+  const fenceOf = (line: string) => {
+    const lead = line.trimStart();
+    const ticks = /^`*/.exec(lead)![0].length;
+    return { ticks, rest: lead.slice(ticks) };
+  };
+
+  /** A finished line, read once. */
+  function finished(raw: string) {
+    parseCost.chars += raw.length;
+    const line = strip(raw);
+    const { ticks, rest } = fenceOf(line);
+    if (!open) {
+      if (ticks >= 3 && !rest.includes("`")) {
+        flush();
+        open = { ticks, lang: rest.trim().split(/\s+/)[0] || null, text: "", lines: 0 };
+      } else {
+        const { next, closed } = proseLine(prose, line, inlines);
+        blocks.push(...closed);
+        prose = next;
+      }
+    } else if (ticks >= open.ticks && rest.trim() === "") {
+      blocks.push({ kind: "code", lang: open.lang, text: open.text, fence: fence++, closed: true });
+      open = null;
+    } else {
+      open.text = open.lines === 0 ? line : `${open.text}\n${line}`;
+      open.lines++;
+    }
+  }
+
+  /** Inlines of the line being written: its settled start is kept, only the rest is read. */
+  function partialInline(s: string): Inline[] {
+    if (settled.at !== lineAt || !s.startsWith(settled.src)) settled = { at: lineAt, src: "", inl: [] };
+    const { head, tail, at } = settleInline(s.slice(settled.src.length));
+    if (at > 0) settled = { at: lineAt, src: settled.src + s.slice(settled.src.length, settled.src.length + at), inl: joinInlines(settled.inl, head) };
+    return joinInlines(settled.inl, tail);
+  }
+
+  function reset() {
+    seen = "";
+    lineAt = 0;
+    blocks = [];
+    fence = 0;
+    open = null;
+    prose = { para: null, list: null };
+    settled = { at: -1, src: "", inl: [] };
+  }
+
+  return {
+    parse(text: string): Block[] {
+      if (!text.startsWith(seen)) reset();
+      seen = text;
+      for (let nl = text.indexOf("\n", lineAt); nl >= 0; nl = text.indexOf("\n", lineAt)) {
+        finished(text.slice(lineAt, nl));
+        lineAt = nl + 1;
+      }
+      // The line being written, as `parseAnswer` would read it if the text ended here; the state is not changed.
+      const line = strip(text.slice(lineAt));
+      const { ticks, rest } = fenceOf(line);
+      if (open) {
+        if (ticks >= open.ticks && rest.trim() === "") return [...blocks, { kind: "code", lang: open.lang, text: open.text, fence, closed: true }];
+        return [...blocks, { kind: "code", lang: open.lang, text: open.lines === 0 ? line : `${open.text}\n${line}`, fence, closed: false }];
+      }
+      if (ticks >= 3 && !rest.includes("`")) return [...blocks, ...proseBlocks(prose), { kind: "code", lang: rest.trim().split(/\s+/)[0] || null, text: "", fence, closed: false }];
+      const { next, closed } = proseLine(prose, line, partialInline);
+      return [...blocks, ...closed, ...proseBlocks(next)];
+    },
+  };
+}
+
 const SQL_TAGS = new Set(["sql", "postgresql", "postgres", "pgsql", "mysql", "sqlite", "plpgsql"]);
 const SQL_STARTS = new Set([
   "SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "TRUNCATE",
@@ -124,7 +331,7 @@ export function looksLikeSql(block: { lang: string | null; text: string }): bool
 export function plainText(text: string): string {
   const words = (inlines: Inline[]) => inlines.map((i) => i.text).join("");
   return parseAnswer(text)
-    .map((b) => (b.kind === "para" ? words(b.inlines) : b.kind === "list" ? b.items.map(words).join("; ") : b.text))
+    .map((b) => (b.kind === "para" || b.kind === "heading" ? words(b.inlines) : b.kind === "list" ? b.items.map(words).join("; ") : b.text))
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();

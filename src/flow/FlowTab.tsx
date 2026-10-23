@@ -599,6 +599,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   // While the assistant's changes wait, the canvas draws them over the drawing (new in green, removed in red).
   const review = ai.overlay;
   const shown = review?.draw ?? drawn;
+  const reviewing = review !== null && review !== undefined;
 
   // Nodes with no position yet are placed by dagre in the worker, in the layout's direction.
   // Every node it asks about gets a position (the worker's, else a row below the drawing), so it never asks twice.
@@ -625,13 +626,15 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           x += n.w + 40;
         }
       }
-      doc.place(out);
+      // Shapes only the review draws keep their place until the changes are decided.
+      if (reviewing) doc.placeProposed(out);
+      else doc.place(out);
     };
     client.layout({ ...input, existing, rankdir: layout.direction }).then(place, () => place(null));
     return () => {
       live = false;
     };
-  }, [shown, look, layout.nodes, layout.direction, client, doc.place]);
+  }, [shown, look, layout.nodes, layout.direction, client, doc.place, doc.placeProposed, reviewing]);
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;

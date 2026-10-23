@@ -378,8 +378,13 @@ export default function ResultGrid({
             {start > 0 && <SpacerRow columns={columns.length} height={start * rowHeight.current} />}
             {rows.slice(start, end).map((row, i) => {
               const r = start + i;
+              // Every second row by its number, so paging keeps the pattern; a row with a state of its own
+              // (new, deleted, conflict) or the selected cell keeps its own colour. `data-grid-stripes` on the
+              // root turns the shade on.
+              const own = rowClass?.(r);
+              const alt = !own && (firstRow + r) % 2 === 0 && selected?.row !== r ? "grid-row-alt" : undefined;
               return (
-                <tr key={r} data-row={r} aria-rowindex={r + 2} className={rowClass?.(r)}>
+                <tr key={r} data-row={r} aria-rowindex={r + 2} className={own ?? alt}>
                   <td className="row-number">{rowLabel?.(r) ?? (firstRow + r).toLocaleString("en-US")}</td>
                   {row.map((cell, i) => {
                     const isSelected = selected?.row === r && selected.column === i;
@@ -394,7 +399,8 @@ export default function ResultGrid({
                         key={i}
                         data-col={i}
                         className={classes.length ? classes.join(" ") : undefined}
-                        title={cellTitle?.(r, i)}
+                        // A blank NULL has no size of its own to hover, so the cell says NULL.
+                        title={cellTitle?.(r, i) ?? (cell.t === "null" && custom == null ? "NULL" : undefined)}
                         aria-selected={editable ? isSelected : undefined}
                         onMouseDown={editable ? () => onSelect?.(r, i) : undefined}
                         onDoubleClick={onOpen ? () => onOpen(r, i) : undefined}

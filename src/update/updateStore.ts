@@ -18,13 +18,11 @@ export interface UpdateState {
   error: string | null;
   /** Unsaved work found before a restart, one line each; the Updates section asks about it. */
   ask: string[] | null;
-  /** The first-start prompt was put away for this run without an answer being saved. */
-  promptHidden: boolean;
 }
 
 export const RESTART_ASK = "Save or discard your changes before Contura restarts";
 
-const INITIAL: UpdateState = { status: null, phase: { kind: "idle" }, error: null, ask: null, promptHidden: false };
+const INITIAL: UpdateState = { status: null, phase: { kind: "idle" }, error: null, ask: null };
 
 let state: UpdateState = INITIAL;
 const listeners = new Set<() => void>();
@@ -72,15 +70,25 @@ export async function dailyCheck(): Promise<void> {
   }
 }
 
-/** The first-start prompt's answer or the Settings switch. */
-export async function chooseChecks(on: boolean): Promise<void> {
+/**
+ * Saves the checks choice (a local write) and returns why it failed, or null. Turning checks on starts the
+ * daily check in the background: the caller never waits for the network.
+ */
+export async function saveChecks(on: boolean): Promise<string | null> {
   try {
     set({ status: await setUpdateChecks(on), error: null });
   } catch (e) {
-    set({ error: errorText(e), promptHidden: true });
-    return;
+    const text = errorText(e);
+    set({ error: text });
+    return text;
   }
-  if (on) await dailyCheck();
+  if (on) void dailyCheck();
+  return null;
+}
+
+/** The Settings switch (and the first start guide, through `saveChecks`). */
+export async function chooseChecks(on: boolean): Promise<void> {
+  await saveChecks(on);
 }
 
 /** Check now: runs with checks off too, since the user asked. */

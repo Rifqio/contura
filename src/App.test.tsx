@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, expect, test, vi } from "vitest";
 import { mockEditorDom } from "./test/editor";
@@ -8,6 +8,14 @@ import { callsTo, routeInvoke } from "./test/invoke";
 import { EditorView } from "@codemirror/view";
 import App from "./App";
 import { appLang } from "./lang/appLang";
+import appCssRaw from "./styles/app.css?raw";
+import guideCssRaw from "./styles/guide.css?raw";
+
+/** A stylesheet's top-level rules (comments dropped), enough to read one rule's body. */
+function appCssRules(css: string = appCssRaw): { selector: string; body: string }[] {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return Array.from(text.matchAll(/([^{}]+)\{([^{}]*)\}/g), (m) => ({ selector: m[1].trim(), body: m[2] }));
+}
 
 /** The tab strip's New query button (the feature bar has its own, item 16). */
 const stripNew = () => screen.getAllByRole("button", { name: "New query" }).find((b) => b.closest(".tab-strip")) ?? (() => { throw new Error("no New query in the tab strip"); })();
@@ -293,11 +301,11 @@ test("settings_opens_from_the_switcher_and_ctrl_comma", async () => {
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Switch Group, current KFC" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Settings" }));
-  expect(await screen.findByLabelText("Use different settings for KFC")).toBeTruthy();
-  const sections = screen.getByRole("navigation", { name: "Settings sections" });
-  // It opens at the top; every section is on the one page.
+  const sections = await screen.findByRole("navigation", { name: "Settings sections" });
+  // It opens on Appearance, one section per nav item.
   expect(within(sections).getByRole("button", { name: "Appearance" }).getAttribute("aria-current")).toBe("page");
-  expect(within(sections).getByRole("button", { name: "AI assistant" })).toBeTruthy();
+  await userEvent.click(within(sections).getByRole("button", { name: "AI assistant" }));
+  expect(await screen.findByLabelText("Use different settings for KFC")).toBeTruthy();
   // Nothing to save or cancel (D6): the tab just closes.
   expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Close Settings" }));
@@ -306,10 +314,12 @@ test("settings_opens_from_the_switcher_and_ctrl_comma", async () => {
   expect(screen.getByText("No Connections in KFC yet.")).toBeTruthy();
 
   expect(within(document.querySelector("footer.app-status") as HTMLElement).queryByRole("button", { name: "Settings" })).toBeNull();
+  // Closed, it opens on Appearance again.
   await userEvent.keyboard("{Control>},{/Control}");
-  expect(await screen.findByLabelText("Use different settings for KFC")).toBeTruthy();
+  const again = await screen.findByRole("navigation", { name: "Settings sections" });
+  expect(within(again).getByRole("button", { name: "Appearance" }).getAttribute("aria-current")).toBe("page");
   await userEvent.click(screen.getByRole("button", { name: "Close Settings" }));
-  expect(screen.queryByLabelText("Use different settings for KFC")).toBeNull();
+  expect(screen.queryByRole("navigation", { name: "Settings sections" })).toBeNull();
   expect(screen.getByText("No Connections in KFC yet.")).toBeTruthy();
 });
 
@@ -894,6 +904,22 @@ test("ctrl_2_opens_the_second_group", async () => {
   expect(await screen.findByRole("button", { name: "Switch Group, current Acme" })).toBeTruthy();
 });
 
+test("ctrl_2_during_a_sidebar_rename_cancels_it_so_enter_renames_nothing", async () => {
+  shellRoutes({ last_group: () => "g2", save_group: () => ({ ...kfc, name: "wrong" }) });
+  render(<App />);
+  await screen.findByRole("button", { name: "Switch Group, current Acme" });
+  await closeHome();
+  const side = () => screen.getByRole("complementary", { name: /Connections$/ });
+  await userEvent.dblClick(within(side()).getByRole("heading", { name: "Acme" }));
+  await userEvent.keyboard("Acme Prod");
+  await userEvent.keyboard("{Control>}2{/Control}");
+  expect(await screen.findByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
+  await waitFor(() => expect(within(side()).queryByRole("textbox")).toBeNull());
+  await userEvent.keyboard("{Enter}");
+  expect(callsTo("save_group")).toEqual([]);
+  expect(within(side()).getByRole("heading", { name: "KFC" })).toBeTruthy();
+});
+
 test("window_tabs_survive_a_group_change", async () => {
   shellRoutes({ last_group: () => "g2" });
   render(<App />);
@@ -916,6 +942,7 @@ test("settings_is_a_tab_not_an_overlay", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Switch Group, current KFC" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Settings" }));
   expect(await screen.findByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  await userEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "AI assistant" }));
   expect(await screen.findByLabelText("Use different settings for KFC")).toBeTruthy();
   // It is a pane of the work area, beside the other tabs, not a layer over them.
   const work = document.querySelector("main.work") as HTMLElement;
@@ -968,7 +995,7 @@ test("new_group_from_the_switcher_opens_the_group_form", async () => {
 
 // ---- Task 8 review fixes ----
 
-test("reopening_settings_moves_back_to_the_asked_section", async () => {
+test("reopening_settings_switches_to_it_and_keeps_its_page", async () => {
   shellRoutes();
   render(<App />);
   await screen.findByRole("tab", { name: "Home" });
@@ -977,10 +1004,17 @@ test("reopening_settings_moves_back_to_the_asked_section", async () => {
   const current = () => within(sections).getByRole("button", { current: "page" }).textContent;
   expect(current()).toBe("Appearance");
   await userEvent.click(within(sections).getByRole("button", { name: "AI assistant" }));
-  expect(current()).toBe("AI assistant");
-  // The same section as last asked: it still moves there.
+  await userEvent.click(within(sections).getByRole("button", { name: "Privacy" }));
+  expect(current()).toBe("Privacy");
+  // Away and back with Ctrl+, and the status bar gear: the same tab, on the same page.
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
   await userEvent.keyboard("{Control>},{/Control}");
-  await waitFor(() => expect(current()).toBe("Appearance"));
+  expect(await screen.findByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  expect(current()).toBe("Privacy");
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  await userEvent.click(within(document.querySelector("footer.app-status") as HTMLElement).getByRole("button", { name: /^Settings/ }));
+  expect(await screen.findByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  expect(current()).toBe("Privacy");
   expect(screen.getAllByRole("tab", { name: "Settings" })).toHaveLength(1);
 });
 
@@ -1226,6 +1260,7 @@ test("an_answer_goes_into_the_editor_through_the_diff_and_runs_nothing", async (
       compactions: [],
     }),
     save_ai_thread: () => null,
+    ai_append_turn: (a) => ({ threadId: (a.turn as { threadId: string }).threadId, place: "group:g1", title: "fix", updatedAt: 3, messages: (a.turn as { messages: unknown[] }).messages, keptFrom: null, messageCount: 4, topics: [], compactions: [] }),
     classify_sql: () => "write",
     prepare_run: ({ statements }) => ({
       kind: "needsConfirmation",
@@ -2335,4 +2370,103 @@ test("refresh_marks_ai_context_changed", async () => {
   await userEvent.click(screen.getByRole("button", { name: "More actions for KFC Shop" }));
   await userEvent.click(within(screen.getByRole("menu", { name: "KFC Shop" })).getByRole("menuitem", { name: "Refresh schema" }));
   await waitFor(() => expect(callsTo("ai_context_changed")).toEqual([{ connectionId: "c2" }]));
+});
+
+/** A new data folder: no Groups, no Connections, and the Core asks for the first start guide. */
+function firstStart() {
+  route({
+    list_groups: () => [],
+    list_connections: () => [],
+    last_group: () => null,
+    suggested_connections: () => [],
+    first_start_guide: () => true,
+    first_start_guide_seen: () => undefined,
+    secret_store_kind: () => "keyring",
+    update_status: () => ({ checks: null, currentVersion: "1.0.0", lastCheckMs: null, lastResult: null, offer: null, install: "portable", canInstall: false, ready: false, releasesUrl: "" }),
+    set_update_checks: (a) => ({ checks: a.on, currentVersion: "1.0.0", lastCheckMs: null, lastResult: null, offer: null, install: "portable", canInstall: false, ready: false, releasesUrl: "" }),
+    ai_settings: () => {
+      throw new Error("not needed");
+    },
+  });
+}
+
+test("first_start_guide_opens_on_a_new_data_folder_skip_marks_it_seen_and_home_offers_it_again", async () => {
+  firstStart();
+  render(<App />);
+  expect(await screen.findByRole("dialog", { name: "Welcome to Contura" })).toBeTruthy();
+  // The update banner is gone: the guide's step 4 asks instead.
+  expect(screen.queryByRole("region", { name: "Update checks" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Skip the guide" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(callsTo("first_start_guide_seen")).toEqual([{}]);
+  expect(await screen.findByText("Guide skipped")).toBeTruthy();
+  expect(callsTo("set_update_checks")).toEqual([]);
+  // Home's empty state opens it again; Esc closes it like Skip.
+  await userEvent.click(screen.getByRole("button", { name: "Show the first start guide" }));
+  expect(await screen.findByRole("dialog", { name: "Welcome to Contura" })).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("first_start_guide_stays_closed_on_a_data_folder_that_has_seen_it", async () => {
+  route({ list_groups: () => [], list_connections: () => [], last_group: () => null, suggested_connections: () => [], first_start_guide: () => false });
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "No Connections yet" })).toBeTruthy();
+  await waitFor(() => expect(callsTo("first_start_guide")).toHaveLength(1));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("first_start_guide_ends_on_the_chosen_connection_form", async () => {
+  firstStart();
+  render(<App />);
+  await screen.findByRole("dialog", { name: "Welcome to Contura" });
+  await userEvent.click(screen.getByRole("button", { name: "Get started" }));
+  for (let i = 0; i < 4; i++) await userEvent.click(screen.getByRole("button", { name: "Next" }));
+  await userEvent.click(screen.getByRole("button", { name: "Add the PostgreSQL Connection" }));
+  const form = await screen.findByRole("dialog", { name: /New Connection/ });
+  const db = within(form).getByRole("radiogroup", { name: "Database" });
+  expect(within(db).getByRole("radio", { name: /PostgreSQL/, checked: true })).toBeTruthy();
+  expect(callsTo("set_update_checks")).toEqual([{ on: false }]);
+  expect(callsTo("first_start_guide_seen")).toEqual([{}]);
+});
+
+test("shell_grid_children_are_exactly_its_four_rows_and_the_guide_is_not_one", async () => {
+  // The grid defines four rows: title bar, feature bar, body, status bar. An extra child (the old update
+  // banner was one) gets squeezed and the status bar overlaps it.
+  const shell = appCssRules().find((r) => r.selector === ".app")?.body ?? "";
+  const rows = /grid-template-rows:\s*([^;]+);/.exec(shell)?.[1] ?? "";
+  expect(rows.trim().split(/\s+(?![^(]*\))/)).toHaveLength(4);
+  firstStart();
+  render(<App />);
+  await screen.findByRole("dialog", { name: "Welcome to Contura" });
+  const app = document.querySelector(".app") as HTMLElement;
+  const kids = Array.from(app.children).map((c) => `${c.tagName.toLowerCase()}.${c.classList[0]}`);
+  expect(kids).toHaveLength(4);
+  expect(kids[0]).toBe("header.title-bar");
+  expect(kids[3]).toBe("footer.app-status");
+  // The guide sits outside the grid, on a fixed cover.
+  expect(app.contains(screen.getByRole("dialog"))).toBe(false);
+  expect(appCssRules(guideCssRaw).find((r) => r.selector === ".fsg-cover")?.body).toMatch(/position:\s*fixed/);
+});
+
+test("first_start_guide_keeps_the_title_bar_out_of_reach_and_owns_esc", async () => {
+  firstStart();
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "Welcome to Contura" });
+  const header = document.querySelector("header.title-bar") as HTMLElement;
+  const home = header.querySelector(".title-home") as HTMLElement;
+  // A click on the title bar lands on the cover in the app; focus that gets there anyway comes back.
+  act(() => home.focus());
+  expect(dialog.contains(document.activeElement)).toBe(true);
+  await userEvent.tab();
+  expect(dialog.contains(document.activeElement)).toBe(true);
+  await userEvent.tab({ shift: true });
+  expect(dialog.contains(document.activeElement)).toBe(true);
+  // The window buttons stay usable: they sit above the cover.
+  expect(document.documentElement.classList.contains("fsg-open")).toBe(true);
+  expect(within(header).getByRole("button", { name: "Minimize" })).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.documentElement.classList.contains("fsg-open")).toBe(false);
+  expect(callsTo("first_start_guide_seen")).toEqual([{}]);
 });

@@ -76,6 +76,8 @@ export type ToWorker =
   | { type: "flowParse"; id: number; docId: string; text: string }
   /** The flow tab closed: forget its text, ranges and last good doc, and drop parses that arrive later. */
   | { type: "flowClose"; docId: string }
+  /** A DBML editor closed: forget its last valid model. */
+  | { type: "dbmlClose"; docId: string }
   /** A flow tab opened again under a closed id. */
   | { type: "flowOpen"; docId: string }
   /** Source ranges of the parse with `version`; refused as stale when the text has changed since. */

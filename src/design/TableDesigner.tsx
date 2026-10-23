@@ -685,20 +685,14 @@ export default function TableDesigner({
     if (!blurred) focusGrid();
   }
 
-  // D27: Ctrl+S and Ctrl+N work anywhere in the designer, so the window's commands skip them.
-  // Ctrl+S also works while a cell is being edited: Apply keeps the open edit first, as the grid's Save does.
+  // D27: Ctrl+S works anywhere in the designer, so the window's Save skips it; it also works while a cell is being
+  // edited (Apply keeps the open edit first, as the grid's Save does). Ctrl+N is the window's New Connection everywhere.
   function onKeyDown(e: KeyboardEvent<HTMLElement>) {
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     if (mod && key === "s") {
       e.preventDefault();
       void apply();
-      return;
-    }
-    if (editingRef.current) return;
-    if (mod && key === "n") {
-      e.preventDefault();
-      add();
     }
   }
 
@@ -790,12 +784,11 @@ export default function TableDesigner({
 
   /** The full-width Add row under each grid (frame Designer, `.addrow`): the toolbar's Add, where the list ends. */
   const addRow = canEdit ? (
-    <button type="button" className="design-addrow" onClick={add}>
+    <button type="button" className="design-addrow" aria-label={`${ADD_LABEL[tab]} at the end`} onClick={add}>
       <span className="design-addrow-plus" aria-hidden="true">
         <Icon name="plus" size={14} />
       </span>
       {ADD_LABEL[tab]}
-      <span className="design-addrow-key">Ctrl+N</span>
     </button>
   ) : null;
 
@@ -848,7 +841,7 @@ export default function TableDesigner({
         <button
           type="button"
           className="button button-small button-quiet"
-          title={`${ADD_LABEL[tab]} (Ctrl+N)`}
+          title={ADD_LABEL[tab]}
           disabled={!canEdit}
           onClick={add}
         >

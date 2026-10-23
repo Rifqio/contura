@@ -26,10 +26,15 @@ test("item_41_a_card_shorter_than_its_rows_scrolls_them", () => {
   expect(card.style.height).toBe("100px");
   expect(card.classList.contains("table-card-scroll")).toBe(true);
   expect(card.querySelector("ul")!.classList.contains("nowheel")).toBe(true);
-  // As tall as its rows (or taller): no height of its own, nothing scrolls.
+  // Taller than its rows (a corner dragged out): it keeps its height, with room under the rows; nothing scrolls.
   rerender(<CardFrame {...props} height={400} />);
-  expect(container.querySelector<HTMLElement>(".table-card")!.style.height).toBe("");
+  expect(container.querySelector<HTMLElement>(".table-card")!.style.height).toBe("400px");
   expect(container.querySelector(".table-card-scroll")).toBeNull();
+  expect(container.querySelector(".table-card-tall")).not.toBeNull();
+  // As tall as its rows: no height of its own.
+  rerender(<CardFrame {...props} height={136} />);
+  expect(container.querySelector<HTMLElement>(".table-card")!.style.height).toBe("");
+  expect(container.querySelector(".table-card-tall, .table-card-scroll")).toBeNull();
 });
 
 test("branch_review_3_a_card_zoomed_out_mid_resize_drops_is_resizing_from_its_node", async () => {

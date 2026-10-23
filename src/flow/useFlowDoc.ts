@@ -14,7 +14,7 @@ import type { FlowRequestOp, FlowResult, TextEdit } from "../lang/protocol";
 import type { DiagramKind, FlowDoc } from "../lang/flow/model";
 import type { FlowSpan } from "../lang/flow/parse";
 import { type FlowHandle, type FlowHold, registerFlow, registerOrphanFailure } from "./flowRegistry";
-import { emptyPositions, type FlowDirection, type FlowLayout, parseFlowLayout, serializeFlowLayout } from "./layout";
+import { emptyPositions, withoutProposed, type FlowDirection, type FlowLayout, parseFlowLayout, serializeFlowLayout } from "./layout";
 import type { NodeLook } from "./nodes/parts";
 
 /** Saves wait this long after the last change (text or layout). */
@@ -101,6 +101,13 @@ export interface FlowDocApi {
   move(after: Positions): void;
   /** Positions for nodes that had none (placed by the layout engine, or a node just added); not an undo entry. `override` replaces kept ones. */
   place(positions: Positions, override?: boolean): void;
+  /**
+   * Positions for shapes the assistant's waiting changes draw over the drawing: kept until the changes are decided,
+   * then `settleProposed` drops the ones the text does not have.
+   */
+  placeProposed(positions: Positions): void;
+  /** The waiting changes are decided and `names` is what the text defines now: positions of proposed shapes it lacks go. */
+  settleProposed(names: ReadonlySet<string> | ReadonlyMap<string, unknown>): void;
   setStyle(style: NodeLook): void;
   setDirection(direction: FlowDirection): void;
   /** Item 21: a node resized on the canvas: its new box (a left or top handle moves it too); kept in the layout file. */
@@ -632,6 +639,25 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [setLayout],
   );
 
+  /** Names placed only for the review overlay, until its changes are decided (memory: a rejected shape kept its place). */
+  const proposed = useRef(new Set<string>());
+  const placeProposed = useCallback(
+    (positions: Positions) => {
+      for (const n of Object.keys(positions)) if (!Object.prototype.hasOwnProperty.call(layoutRef.current.nodes, n)) proposed.current.add(n);
+      place(positions);
+    },
+    [place],
+  );
+  const settleProposed = useCallback(
+    (names: ReadonlySet<string> | ReadonlyMap<string, unknown>) => {
+      const l = layoutRef.current;
+      const nodes = withoutProposed(l.nodes, proposed.current, names);
+      proposed.current.clear();
+      if (nodes !== l.nodes) setLayout({ ...l, nodes });
+    },
+    [setLayout],
+  );
+
   const setStyle = useCallback(
     (style: NodeLook) => {
       if (style === layoutRef.current.style) return;
@@ -739,6 +765,8 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     applyFix,
     move,
     place,
+    placeProposed,
+    settleProposed,
     setStyle,
     resize,
     setDirection,

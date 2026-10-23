@@ -399,7 +399,7 @@
 
 .compare-panes {
   flex: 1;
-  min-height: 0;
+  min-height: 80px;
   display: flex;
   margin: 0 var(--spacing-md);
   border: var(--border-hairline) solid var(--c-border);
@@ -513,14 +513,21 @@
   color: var(--c-danger-text);
 }
 
+/* On a short window the two panes above shrank to a 2 px line under this block. Both now give way: the panes keep
+   80 px (head and two lines), and this block's SQL scrolls inside it down to its head and two lines; together they fit
+   the 212 px a 1,024 x 480 window leaves. */
 .compare-inscript {
-  flex: none;
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 66px;
   margin: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
   border: var(--border-hairline) solid var(--c-border);
   border-radius: var(--rounded-md);
   overflow: hidden;
 }
 .compare-inscript-head {
+  flex: none;
   height: 28px;
   display: flex;
   align-items: center;
@@ -531,6 +538,8 @@
   font: var(--font-small);
 }
 .compare-inscript .sql-block {
+  flex: 0 1 auto;
+  min-height: 0;
   max-height: 160px;
   border: 0;
   border-radius: 0;
@@ -686,7 +695,12 @@
   padding: 0 var(--spacing-sm) 0 var(--spacing-md);
   border-bottom: var(--border-hairline) solid var(--c-border-subtle);
 }
+/* One line in the 36 px head: in a narrow pane it wrapped to two and filled the head edge to edge. */
 .script-pane-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }

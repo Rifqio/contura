@@ -42,14 +42,17 @@ export default function EditsBar({ summary, changes, busy, production, previewOp
         type="button"
         className={previewOpen ? "button button-small button-quiet icon-button-on" : "button button-small button-quiet"}
         aria-pressed={previewOpen}
+        aria-label="Preview SQL"
+        title="Preview SQL"
         onClick={onPreview}
       >
         <Icon name="fileCode" size={14} />
-        Preview SQL
+        {/* A narrow bar (container query in app.css) keeps the icons and drops these words and the key hint. */}
+        <span className="bar-label">Preview SQL</span>
       </button>
-      <button type="button" className="button button-small button-quiet" disabled={busy} onClick={onDiscard}>
+      <button type="button" className="button button-small button-quiet" disabled={busy} onClick={onDiscard} aria-label="Discard" title="Discard">
         <Icon name="undo" size={14} />
-        Discard
+        <span className="bar-label">Discard</span>
       </button>
       {production ? (
         <button

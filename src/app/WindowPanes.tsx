@@ -6,7 +6,7 @@ import SchemaBuilder from "../schema/SchemaBuilder";
 import SettingsView from "../settings/SettingsView";
 import TransferTab from "../transfer/TransferTab";
 import CompareTab from "../compare/CompareTab";
-import { type SettingsSection, type WindowTab, tabKey } from "../shell/tabs";
+import { type AiPage, type SettingsSection, type WindowTab, tabKey } from "../shell/tabs";
 
 /** Home's props, built in App; `active` is set here from the tab on top. */
 export type HomeProps = Omit<ComponentProps<typeof Home>, "active">;
@@ -19,8 +19,9 @@ interface Props {
     groupId: GroupId | null;
     groupName: string | null;
     connections: ConnectionConfig[];
-    onSection(section: SettingsSection): void;
+    onSection(section: SettingsSection, aiPage?: AiPage): void;
     onConnectionSaved(): void;
+    onShowGuide(): void;
   };
   schema: {
     onClose(key: string): void;
@@ -72,13 +73,15 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
             <div key={key} className="work-pane settings-main" hidden={key !== activeKey}>
               <SettingsView
                 section={t.section}
+                aiPage={t.aiPage}
                 sectionRequest={t.seq}
                 row={t.row}
-                onSection={(section) => settings.onSection(section)}
+                onSection={(section, aiPage) => settings.onSection(section, aiPage)}
                 groupId={settings.groupId}
                 groupName={settings.groupName}
                 connections={settings.connections}
                 onConnectionSaved={() => settings.onConnectionSaved()}
+                onShowGuide={() => settings.onShowGuide()}
               />
             </div>
           );

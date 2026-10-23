@@ -24,6 +24,42 @@ fn store_err(e: impl std::fmt::Display) -> Error {
     Error::Store(e.to_string())
 }
 
+/// The `settings` row of the first start guide: `show` in a data folder made by this start
+/// (written with the tables), `seen` once it is closed. A data folder from before has no row,
+/// so the guide never opens there on its own.
+pub const FIRST_START_GUIDE_KEY: &str = "first_start_guide";
+
+/// A stored thread read for its answers' SQL only (`ai_thread_statements`): every other
+/// field is skipped by the parser.
+mod sql_only {
+    use crate::ai::rails::output::StatementCheck;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    pub(super) struct Thread {
+        #[serde(default)]
+        pub messages: Vec<Message>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct Message {
+        #[serde(default)]
+        pub record: Option<Record>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub(super) struct Record {
+        #[serde(default)]
+        pub sql_blocks: Vec<Block>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct Block {
+        pub statements: Vec<StatementCheck>,
+    }
+}
+
 /// SQLite store for Connections, Groups and settings. Passwords are never
 /// stored here.
 pub struct AppStore {
@@ -48,14 +84,16 @@ impl AppStore {
             ));
         }
         if version == 0 {
-            db.execute_batch(
+            // A new data folder: the first start guide opens once (the key is a constant, never user text).
+            db.execute_batch(&format!(
                 "BEGIN;
                  CREATE TABLE connections (id TEXT PRIMARY KEY, config_json TEXT NOT NULL);
                  CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL);
                  CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO settings (key, value) VALUES ('{FIRST_START_GUIDE_KEY}', 'show');
                  PRAGMA user_version = 1;
-                 COMMIT;",
-            )
+                 COMMIT;"
+            ))
             .map_err(store_err)?;
         }
         if version < 2 {
@@ -226,6 +264,39 @@ impl AppStore {
         Ok(out)
     }
 
+    /// The SQL statements of the answers of the place's newest `THREAD_LIMIT` threads, in
+    /// the order `list_ai_threads` gives them (memory: only the checked statements are
+    /// read; logs, thinking, exact text and message text are skipped, not built).
+    pub fn ai_thread_statements(
+        &self,
+        place: &str,
+    ) -> Result<Vec<crate::ai::rails::output::StatementCheck>> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT json FROM ai_threads WHERE place = ?1
+                 ORDER BY updated_at DESC LIMIT ?2",
+            )
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map(params![place, THREAD_LIMIT], |r| r.get::<_, String>(0))
+            .map_err(store_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let t: sql_only::Thread =
+                serde_json::from_str(&row.map_err(store_err)?).map_err(store_err)?;
+            for b in t
+                .messages
+                .into_iter()
+                .filter_map(|m| m.record)
+                .flat_map(|r| r.sql_blocks)
+            {
+                out.extend(b.statements);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn get_ai_thread(&self, id: ThreadId) -> Result<Option<AiThread>> {
         let json: Option<String> = self
             .db
@@ -245,7 +316,12 @@ impl AppStore {
     /// is gone, rebuilds its Topics, then drops the place's threads beyond the newest
     /// `THREAD_LIMIT` with their Topics and compactions.
     pub fn save_ai_thread(&self, t: &AiThread) -> Result<()> {
-        let mut t = t.clone();
+        self.write_ai_thread(t.clone()).map(|_| ())
+    }
+
+    /// As `save_ai_thread`, taking the thread and handing back what was written (its
+    /// newest `MESSAGE_LIMIT` messages), so a caller can answer without reading it again.
+    pub fn write_ai_thread(&self, mut t: AiThread) -> Result<AiThread> {
         let trimmed = t.messages.len() > MESSAGE_LIMIT;
         if trimmed {
             let mut start = t.messages.len() - MESSAGE_LIMIT;
@@ -293,7 +369,8 @@ impl AppStore {
             tx.execute("DELETE FROM ai_threads WHERE id = ?1", params![old_id])
                 .map_err(store_err)?;
         }
-        tx.commit().map_err(store_err)
+        tx.commit().map_err(store_err)?;
+        Ok(t)
     }
 
     pub fn delete_ai_thread(&self, id: ThreadId) -> Result<()> {
@@ -993,6 +1070,50 @@ mod tests {
     }
 
     #[test]
+    fn thread_statements_read_only_the_sql_of_the_place_newest_first() {
+        use crate::ai::rails::output::{SqlBlock, StatementCheck};
+        use crate::ai::sent::AnswerRecord;
+        use crate::safety::StatementClass;
+        let (_d, s) = open_tmp();
+        let with_sql = |place: &str, at: i64, sql: &str| {
+            let mut t = thread(place, "t", at);
+            let mut a = t.messages[0].clone();
+            a.role = crate::ai::AiRole::Assistant;
+            a.at = at + 1;
+            a.record = Some(AnswerRecord {
+                sql_blocks: vec![SqlBlock {
+                    fence: 0,
+                    label: "1 statement".into(),
+                    statements: vec![StatementCheck {
+                        text: sql.into(),
+                        class: StatementClass::Read,
+                        flags: Vec::new(),
+                    }],
+                }],
+                thinking: Some("long thinking".repeat(1000)),
+                ..AnswerRecord::default()
+            });
+            t.messages.push(a);
+            t
+        };
+        s.save_ai_thread(&with_sql("ungrouped", 1, "select 1"))
+            .unwrap();
+        s.save_ai_thread(&with_sql("ungrouped", 5, "select 5"))
+            .unwrap();
+        s.save_ai_thread(&with_sql("group:g1", 9, "select 9"))
+            .unwrap();
+        s.save_ai_thread(&thread("ungrouped", "no answers", 7))
+            .unwrap();
+        let texts: Vec<String> = s
+            .ai_thread_statements("ungrouped")
+            .unwrap()
+            .into_iter()
+            .map(|st| st.text)
+            .collect();
+        assert_eq!(texts, vec!["select 5", "select 1"]);
+    }
+
+    #[test]
     fn threads_list_newest_first_and_cap_50() {
         let (_d, s) = open_tmp();
         for i in 0..55 {
@@ -1188,6 +1309,25 @@ mod tests {
     }
 
     #[test]
+    fn a_new_store_asks_for_the_first_start_guide_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let s = AppStore::open(&path).unwrap();
+        assert_eq!(
+            s.get_setting(FIRST_START_GUIDE_KEY).unwrap().as_deref(),
+            Some("show")
+        );
+        s.set_setting(FIRST_START_GUIDE_KEY, "seen").unwrap();
+        drop(s);
+        // Opening again never writes the row back.
+        let s = AppStore::open(&path).unwrap();
+        assert_eq!(
+            s.get_setting(FIRST_START_GUIDE_KEY).unwrap().as_deref(),
+            Some("seen")
+        );
+    }
+
+    #[test]
     fn setting_round_trips() {
         let (_d, s) = open_tmp();
         assert_eq!(s.get_setting("theme").unwrap(), None);
@@ -1247,6 +1387,8 @@ mod tests {
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
+        // A data folder from before the guide never asks for it.
+        assert_eq!(s.get_setting(FIRST_START_GUIDE_KEY).unwrap(), None);
         let list = s.list_saved_queries().unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(

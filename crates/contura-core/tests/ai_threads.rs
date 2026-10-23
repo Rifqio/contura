@@ -5,7 +5,7 @@ use std::sync::Arc;
 use contura_core::ai::AiService;
 use contura_core::ai::log::{Level, LogLine, ProcessStep, StepKind};
 use contura_core::ai::memory::store::StoreThreads;
-use contura_core::ai::memory::{SummaryBy, ThreadStore};
+use contura_core::ai::memory::{AppendTurn, SummaryBy, ThreadStore};
 use contura_core::ai::rails::output::{Flag, SqlBlock, StatementCheck};
 use contura_core::ai::request::ItemKind;
 use contura_core::ai::sent::{
@@ -456,4 +456,150 @@ async fn list_registers_sql_of_every_thread() {
         conns.prepare_run(s, vec![sql.into()]).unwrap(),
         RunVerdict::NeedsConfirmation { .. }
     ));
+}
+
+fn appended(t: &AiThread, messages: Vec<AiMessage>, replace_from: Option<i64>) -> AppendTurn {
+    AppendTurn {
+        thread_id: t.id,
+        place: t.place.clone(),
+        title: t.title.clone(),
+        updated_at: messages.first().map(|m| m.at).unwrap_or(0),
+        messages,
+        replace_from,
+    }
+}
+
+#[test]
+fn append_makes_the_thread_then_adds_turns_after_the_stored_ones() {
+    let f = fx();
+    let t = thread("ungrouped", "first q", Vec::new());
+    let one = f
+        .svc
+        .append_turn(appended(&t, turn(1, 10, "first q", None), None), None)
+        .unwrap();
+    assert_eq!(one.message_count, 2);
+    assert_eq!(one.kept_from, Some(10));
+    assert_eq!(
+        (one.title.as_str(), one.place.as_str()),
+        ("first q", "ungrouped")
+    );
+    // The stored title stays; only the new messages come back, records trimmed.
+    let mut renamed = t.clone();
+    renamed.title = "another title".into();
+    let two = f
+        .svc
+        .append_turn(
+            appended(
+                &renamed,
+                turn(1, 20, "second q", Some(heavy_record(4096))),
+                None,
+            ),
+            None,
+        )
+        .unwrap();
+    assert_eq!(two.title, "first q");
+    assert_eq!(two.message_count, 4);
+    assert_eq!(
+        two.messages.iter().map(|m| m.at).collect::<Vec<_>>(),
+        vec![20, 21]
+    );
+    let r = two.messages[1].record.as_ref().unwrap();
+    assert!(r.trimmed && r.log.is_empty());
+    assert_eq!(two.topics.len(), 1);
+    // The store holds both turns, the full record with them.
+    let view = f.svc.thread_view(t.id).unwrap().unwrap();
+    assert_eq!(
+        view.thread
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first q", "answer", "second q", "answer"]
+    );
+    assert_eq!(view.thread.updated_at, 20);
+    let full = f.svc.answer_record(t.id, 21).unwrap().unwrap();
+    assert_eq!(full.log.len(), 1);
+    assert_eq!(f.svc.list_threads("ungrouped").unwrap()[0].messages, 4);
+}
+
+#[test]
+fn append_with_replace_from_replaces_the_last_turn() {
+    let f = fx();
+    let t = thread("ungrouped", "q", Vec::new());
+    f.svc
+        .append_turn(appended(&t, turn(1, 10, "q", None), None), None)
+        .unwrap();
+    f.svc
+        .append_turn(appended(&t, turn(1, 20, "failed q", None), None), None)
+        .unwrap();
+    let again = f
+        .svc
+        .append_turn(appended(&t, turn(1, 30, "failed q", None), Some(20)), None)
+        .unwrap();
+    assert_eq!(again.message_count, 4);
+    let view = f.svc.thread_view(t.id).unwrap().unwrap();
+    assert_eq!(
+        view.thread
+            .messages
+            .iter()
+            .map(|m| m.at)
+            .collect::<Vec<_>>(),
+        vec![10, 11, 30, 31]
+    );
+}
+
+#[test]
+fn append_keeps_the_200_message_cap_in_whole_turns() {
+    use contura_core::store::MESSAGE_LIMIT;
+    let f = fx();
+    let t = thread("ungrouped", "q", Vec::new());
+    let turns = MESSAGE_LIMIT as i64 / 2 + 5;
+    let mut last = None;
+    for n in 0..turns {
+        last = Some(
+            f.svc
+                .append_turn(
+                    appended(&t, turn(1, 10 * (n + 1), &format!("q{n}"), None), None),
+                    None,
+                )
+                .unwrap(),
+        );
+    }
+    let last = last.unwrap();
+    assert_eq!(last.message_count as usize, MESSAGE_LIMIT);
+    // The oldest five turns are gone; the thread starts at a question.
+    assert_eq!(last.kept_from, Some(60));
+    let view = f.svc.thread_view(t.id).unwrap().unwrap();
+    assert_eq!(view.thread.messages.len(), MESSAGE_LIMIT);
+    assert_eq!(view.thread.messages[0].role, AiRole::User);
+    assert_eq!(view.thread.messages[0].text, "q5");
+}
+
+#[test]
+fn append_for_an_ask_writes_its_context_and_caps_the_record() {
+    use contura_core::ai::context::sync::ContextInfo;
+    let f = fx();
+    let t = thread("ungrouped", "q", Vec::new());
+    let info = ContextInfo {
+        connection_id: Uuid::from_u128(42),
+        database: "shop".into(),
+        schema: "public".into(),
+        sync: contura_core::model::AiSyncMode::Automatic,
+        built_at: Some(5),
+        table_count: 3,
+        stale: false,
+        check: contura_core::ai::context::sync::SchemaCheck::Failed,
+    };
+    f.svc.remember_context("req-1", info.clone());
+    let mut record = heavy_record(10);
+    record.thinking = Some("t".repeat(200 * 1024));
+    f.svc
+        .append_turn(
+            appended(&t, turn(1, 10, "q", Some(record)), None),
+            Some("req-1"),
+        )
+        .unwrap();
+    let r = f.svc.answer_record(t.id, 11).unwrap().unwrap();
+    assert_eq!(r.context, Some(info));
+    assert!(r.thinking.unwrap().len() < 200 * 1024);
 }

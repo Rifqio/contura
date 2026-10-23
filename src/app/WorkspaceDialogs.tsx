@@ -1,4 +1,4 @@
-import type { ConnectionConfig, ConnectionId, Group, GroupId } from "../api/types";
+import type { ConnectionConfig, ConnectionId, DialectKind, Group, GroupId } from "../api/types";
 import ConnectionForm from "../components/ConnectionForm";
 import GroupForm from "../components/GroupForm";
 import type { ModelDoc } from "../schema/SchemaBuilder";
@@ -8,8 +8,8 @@ export type Form =
   | { kind: "none" }
   | { kind: "group" }
   | { kind: "newGroup" }
-  /** `duplicateOf` starts a new Connection from another one's settings (PR23). */
-  | { kind: "connection"; connection?: ConnectionConfig; duplicateOf?: ConnectionConfig };
+  /** `duplicateOf` starts a new Connection from another one's settings (PR23); `dialect` starts a new one on that Dialect (the first start guide). */
+  | { kind: "connection"; connection?: ConnectionConfig; duplicateOf?: ConnectionConfig; dialect?: DialectKind };
 
 /** New Schema Model: from Home or the tree, or a Recent file that does not say its Dialect. */
 export type ModelStart = {
@@ -99,6 +99,7 @@ export function FormDialogs({
           connection={form.connection}
           isOpen={form.connection ? openIds.has(form.connection.id) : false}
           duplicateOf={form.duplicateOf}
+          dialect={form.dialect}
           groups={groups}
           defaultGroupId={workspaceGroupId}
           beforeSave={form.connection && beforeConnectionSave ? () => beforeConnectionSave(form.connection!.id) : undefined}

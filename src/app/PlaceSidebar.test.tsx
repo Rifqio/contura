@@ -12,11 +12,13 @@ const orbit: Group = { id: "g1", name: "Orbit Freight", color: "indigo", hasImag
 function sidebar(over: Partial<ComponentProps<typeof PlaceSidebar>> = {}) {
   const props: ComponentProps<typeof PlaceSidebar> = {
     group: undefined,
+    groups: [],
     placeName: "Ungrouped",
     hidden: false,
     empty: false,
     notice: null,
     onEditGroup: vi.fn(),
+    onRenamed: vi.fn(),
     onNewConnection: vi.fn(),
     children: <div>the tree</div>,
     ...over,

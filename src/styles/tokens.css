@@ -26,6 +26,8 @@
   --c-bg-canvas: #f8f4e3;
   --c-bg-hover: #e2deca;
   --c-bg-active: #dedccf;
+  /* Stripe every other row (Appearance): text, muted and subtle text keep 4.5:1 on it. */
+  --c-grid-stripe: #f4f0dd;
   --c-border-subtle: #e2deca;
   --c-border: #cecbc0;
   --c-border-strong: #8f8a73;
@@ -55,6 +57,7 @@
   --c-prod-subtle: #f8e1c9;
   --c-prod-text: #a34d14;
   --c-prod-wash: #fdf2dd;
+  --c-prod-wash-stripe: #f2e7d0;
   --c-gmk-ink: #ffffff;
   --c-group-teal: #036a96;
   --c-group-teal-tint: #dbe8ec;
@@ -144,6 +147,7 @@
   --c-bg-canvas: #21222c;
   --c-bg-hover: #343746;
   --c-bg-active: #3c3f52;
+  --c-grid-stripe: #20212b;
   --c-border-subtle: #191a21;
   --c-border: #3b3d4f;
   --c-border-strong: #6272a4;
@@ -173,6 +177,7 @@
   --c-prod-subtle: #45372b;
   --c-prod-text: #ffb86c;
   --c-prod-wash: #3b3438;
+  --c-prod-wash-stripe: #322c30;
   --c-gmk-ink: #16181a;
   --c-group-teal: #8be9fd;
   --c-group-teal-tint: #24384a;
@@ -265,6 +270,7 @@
     --c-bg-canvas: #21222c;
     --c-bg-hover: #343746;
     --c-bg-active: #3c3f52;
+    --c-grid-stripe: #20212b;
     --c-border-subtle: #191a21;
     --c-border: #3b3d4f;
     --c-border-strong: #6272a4;
@@ -294,6 +300,7 @@
     --c-prod-subtle: #45372b;
     --c-prod-text: #ffb86c;
     --c-prod-wash: #3b3438;
+    --c-prod-wash-stripe: #322c30;
     --c-gmk-ink: #16181a;
     --c-group-teal: #8be9fd;
     --c-group-teal-tint: #24384a;
@@ -541,6 +548,8 @@
   /* The name over its type: two lines (38 px, 34 compact). */
   --grid-header-height: calc(var(--row-h) + 10px);
   --grid-cell-background: var(--c-bg-surface);
+  /* Stripe every other row; a Production pane swaps in its own darker wash (app.css .prod-wash). */
+  --grid-cell-stripe: var(--c-grid-stripe);
   --grid-cell-text: var(--c-text);
   --grid-cell-font: var(--font-mono-small);
   --grid-cell-padding: 0px 8px;
@@ -552,6 +561,7 @@
   --grid-tint-divider: color-mix(in srgb, var(--c-border) 60%, transparent);
   --grid-cell-edited-text: var(--c-text);
   --grid-cell-null-text: var(--c-text-faint);
+  --grid-row-number-text: var(--c-text-faint);
   --type-hint-text: var(--c-text-subtle);
   --type-hint-font: var(--font-mono-micro);
   --kbd-background: var(--c-bg-surface);
@@ -595,6 +605,16 @@
   --motion-canvas: 240ms;
   --ease-enter: cubic-bezier(.2, 0, 0, 1);
   --ease-exit: cubic-bezier(.4, 0, 1, 1);
+}
+
+/*
+ * Stripe every other row: faint (DN 3.1's 3:1 role) drops to 3.5:1 on the Light stripe, so NULL and row numbers
+ * take subtle, at least 4.5:1 on the surface, the stripe and both Production washes. Grid-wide, so NULL looks the
+ * same on every row.
+ */
+:root[data-grid-stripes] {
+  --grid-cell-null-text: var(--c-text-subtle);
+  --grid-row-number-text: var(--c-text-subtle);
 }
 
 /* Windows reduce-motion: everything is instant. */

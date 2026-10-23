@@ -20,6 +20,9 @@ interface Props {
   onTheme(c: ThemeChoice): void;
   /** The running jobs item (D22), shown before the theme menu. */
   jobs?: ReactNode;
+  /** Opens Settings from the gear beside the theme switch; `settingsKey` is its shortcut for the tooltip. */
+  onSettings?: () => void;
+  settingsKey?: string;
 }
 
 /** A diagram, as frames 6+.2 and 6+.3: the file, where you are typing, and its errors. */
@@ -94,7 +97,8 @@ function Left({ screen }: { screen: StatusScreen }) {
  * The window's status bar. A visible query or table tab renders its own status (rows, time, position or
  * Pending Edits) into `#app-status-slot`.
  */
-export default function StatusBar({ screen, theme, onTheme, jobs }: Props) {
+export default function StatusBar({ screen, theme, onTheme, jobs, onSettings, settingsKey }: Props) {
+  const settingsLabel = settingsKey ? `Settings (${settingsKey})` : "Settings";
   return (
     <footer className="app-status" role="status">
       <Left screen={screen} />
@@ -103,6 +107,11 @@ export default function StatusBar({ screen, theme, onTheme, jobs }: Props) {
       <span className="spacer" />
       {jobs}
       <span>UTF-8</span>
+      {onSettings && (
+        <button type="button" className="icon-button app-status-button" aria-label={settingsLabel} title={settingsLabel} onClick={onSettings}>
+          <Icon name="gear" size={14} />
+        </button>
+      )}
       <ThemeToggle value={theme} onChange={onTheme} />
     </footer>
   );

@@ -1,52 +1,62 @@
 import { createContext, type ReactNode, useContext, useId } from "react";
-import type { SettingsSection } from "../../shell/tabs";
+import Icon from "../../components/Icon";
 
-/** A row as search sees it: its label and other words it answers to. */
+/** A row as search sees it: its anchor, its label and other words it answers to. */
 export interface RowKey {
+  /** The row's anchor (`data-row`): search results and links go there. */
+  id: string;
   label: string;
   terms?: string;
+  /** The card it sits in, for the search result's trail. */
+  card?: string;
 }
 
-/** What is typed in Search settings. */
-export const SearchContext = createContext("");
-/** The search names the section itself, so every row of it shows. */
-const WholeSection = createContext(false);
+/** Rows keyed by their anchor: each key becomes the row's `id`. */
+export function defineRows<K extends string>(rows: Record<K, Omit<RowKey, "id">>): Record<K, RowKey> {
+  return Object.fromEntries(Object.entries(rows).map(([id, r]) => [id, { id, ...(r as Omit<RowKey, "id">) }])) as Record<K, RowKey>;
+}
+
+/** The row a search result or a link went to: it stays highlighted until the next move. */
+export const FlashContext = createContext<string | null>(null);
 
 export function matches(query: string, ...texts: (string | undefined)[]): boolean {
   const q = query.trim().toLowerCase();
   return q === "" || texts.some((t) => t !== undefined && t.toLowerCase().includes(q));
 }
 
-/** Whether a section has anything to show for the search. */
-export function sectionShown(query: string, title: string, rows: readonly RowKey[]): boolean {
-  return matches(query, title) || rows.some((r) => matches(query, r.label, r.terms));
+/** The class of a row (or block) by its anchor, with the highlight when it is the row gone to. */
+export function useFlashClass(id: string | undefined, base: string): string {
+  const flash = useContext(FlashContext);
+  return id !== undefined && flash === id ? `${base} srow-flash` : base;
 }
 
-interface SectionProps {
-  id: SettingsSection;
-  title: string;
-  rows: readonly RowKey[];
-  children: ReactNode;
-}
-
-/** One section of the Settings page; gone while the search matches none of its rows. */
-export function Section({ id, title, rows, children }: SectionProps) {
-  const query = useContext(SearchContext);
-  const headingId = useId();
-  if (!sectionShown(query, title, rows)) return null;
+/** A page's title and its one line, with room for actions on the right. */
+export function PageHead({ title, desc, children }: { title: string; desc: ReactNode; children?: ReactNode }) {
   return (
-    <section className="ssec" data-section={id} aria-labelledby={headingId}>
-      <h2 id={headingId}>{title}</h2>
-      <WholeSection.Provider value={matches(query, title) && query.trim() !== ""}>{children}</WholeSection.Provider>
-    </section>
+    <header className="settings-head">
+      <div className="settings-head-text">
+        <h1>{title}</h1>
+        <p>{desc}</p>
+      </div>
+      {children && <div className="settings-head-actions">{children}</div>}
+    </header>
   );
 }
 
-/** Whether a row (or a block that is not a row) shows for the search. */
-export function useRowShown(key: RowKey): boolean {
-  const query = useContext(SearchContext);
-  const whole = useContext(WholeSection);
-  return whole || matches(query, key.label, key.terms);
+/** A card of rows, its name on top when it has one. */
+export function Card({ title, row, children }: { title?: string; row?: string; children: ReactNode }) {
+  const headingId = useId();
+  const cls = useFlashClass(row, "scard");
+  return (
+    <section className={cls} data-row={row} aria-labelledby={title ? headingId : undefined}>
+      {title && (
+        <h2 className="scard-head" id={headingId}>
+          {title}
+        </h2>
+      )}
+      {children}
+    </section>
+  );
 }
 
 export interface RowIds {
@@ -56,30 +66,32 @@ export interface RowIds {
 
 interface RowProps extends RowKey {
   hint?: ReactNode;
-  /** The label above a full-width control, as for the theme cards. */
-  stacked?: boolean;
   /** The label shown, when it differs from the one search reads. */
   shownLabel?: string;
+  /** Full width under the label and the control, such as a test result. */
+  below?: ReactNode;
   children: ReactNode | ((ids: RowIds) => ReactNode);
 }
 
-/** A label, its control and an optional hint under the control. */
-export function Row({ label, terms, hint, stacked, shownLabel, children }: RowProps) {
-  const id = useId();
-  const shown = useRowShown({ label, terms });
-  if (!shown) return null;
-  const ids: RowIds = { labelId: `${id}-label`, hintId: hint ? `${id}-hint` : undefined };
+/** A label with its hint under it on the left, the control on the right. */
+export function Row({ id, label, hint, shownLabel, below, children }: RowProps) {
+  const uid = useId();
+  const cls = useFlashClass(id, "srow");
+  const ids: RowIds = { labelId: `${uid}-label`, hintId: hint ? `${uid}-hint` : undefined };
   return (
-    <div className={stacked ? "srow srow-stacked" : "srow"}>
-      <span className="srow-label" id={ids.labelId}>
-        {shownLabel ?? label}
+    <div className={cls} data-row={id}>
+      <span className="srow-text">
+        <span className="srow-label" id={ids.labelId}>
+          {shownLabel ?? label}
+        </span>
+        {hint && (
+          <span className="srow-hint" id={ids.hintId}>
+            {hint}
+          </span>
+        )}
       </span>
       <div className="srow-control">{typeof children === "function" ? children(ids) : children}</div>
-      {hint && (
-        <span className="srow-hint" id={ids.hintId}>
-          {hint}
-        </span>
-      )}
+      {below && <div className="srow-below">{below}</div>}
     </div>
   );
 }
@@ -91,7 +103,7 @@ interface SwitchRowProps extends RowKey {
   shownLabel?: string;
   /** A short remark beside the switch. */
   note?: string;
-  /** Drawn after the switch, such as the ligature sample. */
+  /** Drawn before the switch, such as the ligature sample. */
   children?: ReactNode;
 }
 
@@ -101,6 +113,8 @@ export function SwitchRow({ checked, onChange, note, children, ...row }: SwitchR
     <Row {...row}>
       {({ labelId, hintId }) => (
         <>
+          {children}
+          {note && <span className="srow-note">{note}</span>}
           <button
             type="button"
             role="switch"
@@ -110,10 +124,28 @@ export function SwitchRow({ checked, onChange, note, children, ...row }: SwitchR
             aria-describedby={hintId}
             onClick={() => onChange(!checked)}
           />
-          {children}
-          {note && <span className="srow-note">{note}</span>}
         </>
       )}
     </Row>
+  );
+}
+
+/** What a row read from the Core: a line while it loads, the answer, or the error with an icon. */
+export type DataState = { s: "loading"; text: string } | { s: "ready"; text: ReactNode } | { s: "error"; text: string };
+
+export function StateText({ state }: { state: DataState }) {
+  if (state.s === "error") {
+    return (
+      <span className="sstate sstate-error" role="alert">
+        <Icon name="alert" size={14} />
+        <span>{state.text}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="sstate" role="status">
+      {state.s === "loading" && <span className="spin" aria-hidden="true" />}
+      <span>{state.text}</span>
+    </span>
   );
 }

@@ -11,6 +11,8 @@ import { checkImageFile, pngDataUrl, squarePng, toBase64 } from "./groupImage";
 import Icon from "./Icon";
 import Kbd from "./Kbd";
 import SafetyTag from "./SafetyTag";
+import { EMPTY_GROUP_NAME } from "./renamePlace";
+import { useUngroupedLabel } from "../prefs/usePrefs";
 
 interface Props {
   /** The Group being edited; absent for a new one. */
@@ -42,10 +44,10 @@ const HUE_NAMES: Record<GroupColor, string> = {
 
 const initialOf = (name: string) => Array.from(name.trim())[0]?.toUpperCase() ?? "";
 
-function movesText(count: number): string {
+function movesText(count: number, ungrouped: string): string {
   if (count === 0) return "It has no Connections. Saved Queries and Query History stay.";
   const its = count === 1 ? "Its 1 Connection moves" : `Its ${count} Connections move`;
-  return `${its} to Ungrouped. Nothing in the databases changes, and Saved Queries and Query History stay.`;
+  return `${its} to ${ungrouped}. Nothing in the databases changes, and Saved Queries and Query History stay.`;
 }
 
 /** What the picture will be when the form is saved: untouched, a new one, or removed. */
@@ -56,6 +58,7 @@ export default function GroupForm({ group, connections, openIds, onSaved, onChan
   const { map } = useKeymap();
   const saveKeys = keysFor(map, "query.save");
   const cache = useGroupImages();
+  const { label: ungroupedLabel } = useUngroupedLabel();
   const [name, setName] = useState(group?.name ?? "");
   const [color, setColor] = useState<GroupColor>(group?.color ?? "teal");
   const [picture, setPicture] = useState<Picture>({ kind: "keep" });
@@ -101,7 +104,7 @@ export default function GroupForm({ group, connections, openIds, onSaved, onChan
   async function submit() {
     if (busy) return;
     if (name.trim() === "") {
-      setError("Give the Group a name, such as the client or project it is for.");
+      setError(EMPTY_GROUP_NAME);
       return;
     }
     setBusy(true);
@@ -151,7 +154,7 @@ export default function GroupForm({ group, connections, openIds, onSaved, onChan
         onClose={() => setConfirming(false)}
       >
         <div className="dialog-body dialog-body-stack">
-          <span>{movesText(connections.length)}</span>
+          <span>{movesText(connections.length, ungroupedLabel)}</span>
           {connections.length > 0 && (
             <ul className="member-list">
               {connections.map((c) => (

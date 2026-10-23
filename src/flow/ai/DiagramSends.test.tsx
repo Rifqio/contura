@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { aiDiagramPreview } from "../../api/client";
+import { textStore } from "../../assistant/answerStream";
 import type { DiagramAskRequest, Preview } from "../../api/types";
 import { callsTo, routeInvoke } from "../../test/invoke";
 import { GROQ } from "../../test/settingsRoutes";
@@ -60,6 +61,7 @@ function fakeAi(over: Partial<DiagramAsk> = {}): DiagramAsk {
       noOutline ? null : aiDiagramPreview({ requestId: "r", file: "checkout", text: "diagram dfd", outline: { kind: "dfd", nodes: [], links: [] } as never, question: q, scope: opts.scope, threadId: null, model: opts.model, picks: opts.picks }),
     thread: null,
     working: null,
+    streamed: textStore(),
     waiting: null,
     landed: null,
     failure: null,
@@ -114,7 +116,7 @@ test("unmounting_with_a_pending_preview_sends_nothing", async () => {
 });
 
 test("no_preview_while_an_ask_runs", async () => {
-  const view = show(fakeAi({ working: { q: "Add a fraud check", askedAt: 1, text: "", status: null, steps: [] } }));
+  const view = show(fakeAi({ working: { q: "Add a fraud check", askedAt: 1, status: null, steps: [] } }));
   await advance(1000);
   expect(previews()).toEqual([]);
   // The Ask ends: the Sends line is built again.

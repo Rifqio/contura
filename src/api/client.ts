@@ -14,10 +14,12 @@ import type {
   AiSettings,
   AiSettingsView,
   AiThread,
+  AppendTurn,
   AnswerRecord,
   ThreadHit,
   ThreadSummary,
   ThreadView,
+  TurnView,
   ToolUseRow,
   CompactRequest,
   Compaction,
@@ -278,7 +280,15 @@ export const setLastGroup = (id: GroupId | null): Promise<void> => invoke("set_l
 
 export const uiPrefs = (): Promise<UiPrefs> => invoke("ui_prefs");
 
+/** Whether the first start guide opens on its own: a data folder this start made, guide not closed yet. */
+export const firstStartGuide = (): Promise<boolean> => invoke("first_start_guide");
+
+/** The guide was closed (finished, skipped or Esc): it does not open on its own again. */
+export const firstStartGuideSeen = (): Promise<void> => invoke("first_start_guide_seen");
+
 export const saveUiPrefs = (prefs: UiPrefs): Promise<void> => invoke("save_ui_prefs", { prefs });
+/** Zooms the window to an interface size (a percent) and fits its minimum size to it. */
+export const setInterfaceSize = (size: number): Promise<void> => invoke("set_interface_size", { size });
 
 export const keymap = (): Promise<KeymapOverrides> => invoke("keymap");
 
@@ -525,6 +535,27 @@ export const saveAiThread = async (thread: AiThread, requestId: string | null = 
   toolUsesChanged.emit();
   return view;
 };
+
+/** Appends one Ask's turn to its stored thread; only the new messages come back. `requestId` as for `saveAiThread`. */
+export const appendAiTurn = async (turn: AppendTurn, requestId: string | null = null): Promise<TurnView> => {
+  const view = await invoke<TurnView>("ai_append_turn", { turn, requestId });
+  toolUsesChanged.emit();
+  return view;
+};
+
+/**
+ * `base` with the turn `view` appended as the Core stored it: the messages `replaceFrom` replaced and those that went
+ * over the cap are dropped. A `base` of another thread, or none, gives the new thread.
+ */
+export function withTurn(base: AiThread | null, view: TurnView, replaceFrom?: number): AiThread {
+  let kept = base && base.id === view.threadId ? base.messages : [];
+  if (replaceFrom !== undefined) {
+    const at = kept.findIndex((m) => m.at >= replaceFrom);
+    if (at >= 0) kept = kept.slice(0, at);
+  }
+  if (view.keptFrom !== null) kept = kept.filter((m) => m.at >= view.keptFrom!);
+  return { id: view.threadId, place: view.place, title: view.title, updatedAt: view.updatedAt, messages: [...kept, ...view.messages] };
+}
 
 /** Keeps what the user did with the SQL of the answer at `messageAt`; null for an answer kept before records were. */
 export const aiRecordAction = (threadId: string, messageAt: number, kind: AnswerActionKind): Promise<AnswerAction | null> =>

@@ -78,3 +78,15 @@ export function serializeFlowLayout(l: FlowLayout): string {
   }
   return `${JSON.stringify(out, null, 2)}\n`;
 }
+
+/**
+ * `nodes` without the positions of `proposed` names the text does not define (`names`): shapes the assistant's review
+ * drew that did not land. The same object when there is nothing to drop.
+ */
+export function withoutProposed(nodes: Positions, proposed: ReadonlySet<string>, names: ReadonlySet<string> | ReadonlyMap<string, unknown>): Positions {
+  const gone = [...proposed].filter((n) => !names.has(n) && Object.prototype.hasOwnProperty.call(nodes, n));
+  if (gone.length === 0) return nodes;
+  const out = emptyPositions();
+  for (const [n, at] of Object.entries(nodes)) if (!gone.includes(n)) out[n] = at;
+  return out;
+}

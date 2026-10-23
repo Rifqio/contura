@@ -99,16 +99,24 @@ export default function PreviewSql({
           type="button"
           className="button button-small button-quiet"
           aria-label="Copy SQL"
+          title="Copy SQL"
           disabled={!sql}
           onClick={() => sql && void navigator.clipboard?.writeText(sql)}
         >
           <Icon name="copy" size={14} />
-          Copy
+          <span className="bar-label">Copy</span>
         </button>
         {onOpenQuery && (
-          <button type="button" className="button button-small button-quiet" disabled={!sql} onClick={() => sql && onOpenQuery(sql)}>
+          <button
+            type="button"
+            className="button button-small button-quiet"
+            aria-label="Open in a query tab"
+            title="Open in a query tab"
+            disabled={!sql}
+            onClick={() => sql && onOpenQuery(sql)}
+          >
             <Icon name="external" size={14} />
-            Open in a query tab
+            <span className="bar-label">Open in a query tab</span>
           </button>
         )}
         <button type="button" className="icon-button" aria-label="Close SQL preview" title="Close SQL preview" onClick={onClose}>

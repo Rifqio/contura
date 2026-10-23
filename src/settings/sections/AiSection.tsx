@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   aiClearAll,
   aiKnownModels,
@@ -23,12 +23,14 @@ import type {
   ModelList,
   ThinkingLevel,
 } from "../../api/types";
+import { loadSendsOpen, onSendsOpen, saveSendsOpen } from "../../assistant/sendsFold";
 import { threadsCleared } from "../../assistant/threadsCleared";
 import { hintFor } from "../../commands/keymap";
 import { useKeymap } from "../../commands/useCommandKeys";
 import Dialog from "../../components/Dialog";
 import Icon from "../../components/Icon";
 import Kbd from "../../components/Kbd";
+import Segmented from "../../components/Segmented";
 import Select from "../../components/Select";
 import { agoText } from "../../format/units";
 import { dataFolderText, keyringText, thisComputer } from "../../platform";
@@ -36,33 +38,54 @@ import { usePrefs } from "../../prefs/usePrefs";
 import { sessionSecretsText, useSecretStoreKind } from "../../app/useSecretStoreKind";
 import AccessTable from "../ai/AccessTable";
 import { AI_ACCESS_OPTIONS, formatWindow, PROVIDER_ORDER, PROVIDERS, providerDefaults } from "../ai/providers";
-import { Row, type RowKey, Section, SwitchRow, useRowShown } from "./layout";
+import { Card, type DataState, Row, type RowKey, StateText, SwitchRow, defineRows } from "./layout";
+import type { AiPage } from "../../shell/tabs";
 import ToolUses from "./ToolUses";
+import { useUngroupedLabel } from "../../prefs/usePrefs";
 
-const ROW = {
+const ROW = defineRows({
   group: { label: "Use different settings for", terms: "Group" },
   provider: { label: "Provider", terms: "OpenAI Anthropic Groq DeepSeek Custom" },
   preset: { label: "Preset", terms: "OpenRouter Together" },
   baseUrl: { label: "Base URL", terms: "proxy endpoint Ollama LM Studio" },
   model: { label: "Model" },
+  modelList: { label: "Model list", terms: "fetch models" },
   contextWindow: { label: "Context window", terms: "tokens" },
   key: { label: "API key", terms: "test OS keyring Credential Manager Secret Service" },
-  caching: { label: "Use prompt caching when the model supports it" },
-  thinking: { label: "Default thinking level" },
-  shareThinking: { label: "Ask models to share their thinking when they support it" },
-  newConnections: { label: "New Connections", terms: "default AI access" },
-  inline: { label: "Inline suggestions" },
-  inlineAsk: { label: "Inline Ask", terms: "select SQL cells" },
-  errorAsk: { label: "Ask on errors", terms: "failed queries" },
-  access: { label: "What AI can see, per Connection", terms: "AI access Plus sample rows" },
-  keepExactText: { label: "Keep the exact text sent with each answer", terms: "Privacy" },
-  autoCompact: { label: "Compact the thread when the context window is nearly full", terms: "Privacy auto-compact summary Undo" },
-  pickTables: { label: "Let the assistant pick tables in large databases", terms: "Privacy pick tables outline tools" },
-  tools: { label: "Tools the assistant can use", terms: "pick tables outline tools Run SQL read rows sample rows diagram propose changes flow recent tool uses" },
+  thinking: { label: "Default thinking level", card: "Answers" },
+  shareThinking: { label: "Ask models to share their thinking when they support it", card: "Answers" },
+  caching: { label: "Use prompt caching when the model supports it", card: "Answers" },
+  autoCompact: { label: "Compact the thread when the context window is nearly full", terms: "auto-compact summary Undo", card: "Answers" },
+  inline: { label: "Inline suggestions", card: "Where it helps" },
+  inlineAsk: { label: "Inline Ask", terms: "select SQL cells", card: "Where it helps" },
+  errorAsk: { label: "Ask on errors", terms: "failed queries", card: "Where it helps" },
+  access: { label: "What AI can see, per Connection", terms: "AI access Plus sample rows Edit access", card: "Access" },
+  newConnections: { label: "New Connections", terms: "default AI access", card: "Access" },
+  sendsOpen: { label: "Show the Sends list open", terms: "Privacy Sends fold Ask panel", card: "Access" },
+  keepExactText: { label: "Keep the exact text sent with each answer", terms: "Privacy", card: "History" },
+  clearAi: { label: "Clear AI history", terms: "Privacy Clear all AI data threads AI Context", card: "History" },
+  tools: { label: "Tools the assistant can use", terms: "tools Run SQL read rows sample rows" },
   diagramTool: { label: "Propose diagram changes", terms: "tools diagram propose flow Diagram assistant" },
-  clearAi: { label: "Clear AI history", terms: "Privacy Clear all AI data threads AI Context" },
-} satisfies Record<string, RowKey>;
-export const AI_ROWS: readonly RowKey[] = Object.values(ROW);
+  pickTables: { label: "Let the assistant pick tables in large databases", terms: "Privacy pick tables outline tools" },
+  runSql: { label: "Run SQL or read rows", terms: "tools sample rows never" },
+  toolUses: { label: "Recent tool uses", terms: "tools log Open", card: "Recent tool uses" },
+});
+
+export const AI_PAGES: readonly AiPage[] = ["provider", "behaviour", "privacy", "tools"];
+
+/** Which rows each AI page holds, in their order, for search. */
+export const AI_PAGE_ROWS: Record<AiPage, readonly RowKey[]> = {
+  provider: [ROW.group, ROW.provider, ROW.preset, ROW.baseUrl, ROW.model, ROW.modelList, ROW.contextWindow, ROW.key],
+  behaviour: [ROW.thinking, ROW.shareThinking, ROW.caching, ROW.autoCompact, ROW.inline, ROW.inlineAsk, ROW.errorAsk],
+  privacy: [ROW.access, ROW.newConnections, ROW.sendsOpen, ROW.keepExactText, ROW.clearAi],
+  tools: [ROW.tools, ROW.diagramTool, ROW.pickTables, ROW.runSql, ROW.toolUses],
+};
+
+/** The AI page a row or block sits on, such as Tools for `tools`; null when no page has it. */
+export function aiPageOfRow(row: string | undefined): AiPage | null {
+  if (!row) return null;
+  return AI_PAGES.find((p) => AI_PAGE_ROWS[p].some((r) => r.id === row)) ?? null;
+}
 
 const NONE = "none";
 const THINKING_OPTIONS: { value: ThinkingLevel; label: string }[] = [
@@ -130,64 +153,43 @@ interface Props {
   groupName: string | null;
   connections: ConnectionConfig[];
   onConnectionSaved: (saved: ConnectionConfig) => void;
+  /** The AI pages to draw, in order: Settings shows one at a time. */
+  pages?: readonly AiPage[];
 }
 
 /** The current model's facts as chips (board 11.4). */
-function ModelFacts({ info, fetchedAt, now }: { info: ModelInfo | null; fetchedAt: number | null; now: number }) {
-  if (!info && fetchedAt === null) return null;
+function ModelFacts({ info }: { info: ModelInfo | null }) {
+  if (!info) return null;
   return (
     <span className="mfacts">
-      {info && (
-        <span className="mfact acc">
-          <Icon name="layers" size={14} />
-          <b>{formatWindow(info.contextWindow)}</b> token context window
-        </span>
-      )}
-      {info?.sharesThinking && (
+      <span className="mfact acc">
+        <Icon name="layers" size={14} />
+        <b>{formatWindow(info.contextWindow)}</b> token context window
+      </span>
+      {info.sharesThinking && (
         <span className="mfact">
           <Icon name="check" size={14} />
           Shares its thinking
         </span>
       )}
-      {info && info.caching !== "none" && (
+      {info.caching !== "none" && (
         <span className="mfact">
           <Icon name="check" size={14} />
           Prompt caching
-        </span>
-      )}
-      {fetchedAt !== null && (
-        <span className="mfact">
-          <Icon name="history" size={14} />
-          {fetchedText(fetchedAt, now)}
         </span>
       )}
     </span>
   );
 }
 
-interface PrivacyProps {
-  /** The Keep the exact text switch; null leaves it out (a Group's own settings). */
-  keepExactText: { checked: boolean; onChange: (keepExactText: boolean) => void } | null;
-  /** The auto-compact switch; null leaves it out with the other global switches. */
-  autoCompact: { checked: boolean; onChange: (autoCompact: boolean) => void } | null;
-  /** The Pick tables switch; null leaves it out with the other global switches. */
-  pickTables: { checked: boolean; onChange: (pickTables: boolean) => void } | null;
-  groupId: GroupId | null;
-  groupName: string | null;
-}
-
-/** Keep the exact text, then the clear actions; those are not settings, so a Group's own settings keep them. */
-function PrivacyBlock({ keepExactText, autoCompact, pickTables, groupId, groupName }: PrivacyProps) {
-  const switchShown = useRowShown(ROW.keepExactText);
-  const compactShown = useRowShown(ROW.autoCompact);
-  const pickShown = useRowShown(ROW.pickTables);
-  const clearShown = useRowShown(ROW.clearAi);
+/** Clear AI history and Clear all AI data: actions, not settings, so a Group's own settings keep them. */
+function ClearRow({ groupId, groupName }: { groupId: GroupId | null; groupName: string | null }) {
   const [asking, setAsking] = useState<"history" | "all" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  if (!(keepExactText && switchShown) && !(autoCompact && compactShown) && !(pickTables && pickShown) && !clearShown) return null;
+  const { label: ungroupedLabel } = useUngroupedLabel();
   // The history is kept per place: the Group this window shows, or Ungrouped.
   const place = groupId === null ? "ungrouped" : `group:${groupId}`;
-  const placeName = groupName ?? (groupId === null ? "Ungrouped" : "this Group");
+  const placeName = groupName ?? (groupId === null ? ungroupedLabel : "this Group");
 
   async function clear(what: "history" | "all") {
     setAsking(null);
@@ -204,47 +206,23 @@ function PrivacyBlock({ keepExactText, autoCompact, pickTables, groupId, groupNa
   }
 
   return (
-    <div className="ssub">
-      <h3>Privacy</h3>
-      {keepExactText && (
-        <SwitchRow
-          {...ROW.keepExactText}
-          checked={keepExactText.checked}
-          onChange={keepExactText.onChange}
-          hint={`The text can contain your schema and SQL. ${dataFolderText()} is portable and not encrypted.`}
-        />
-      )}
-      {autoCompact && (
-        <SwitchRow
-          {...ROW.autoCompact}
-          checked={autoCompact.checked}
-          onChange={autoCompact.onChange}
-          hint="At 85% of the model's window, older messages become a short summary written by the same model. Sends only text this thread already sent. The summary shows in the thread, and Undo brings the messages back."
-        />
-      )}
-      {pickTables && (
-        <SwitchRow
-          {...ROW.pickTables}
-          checked={pickTables.checked}
-          onChange={pickTables.onChange}
-          hint="Sends an outline of table names, one extra step per Ask."
-        />
-      )}
-      {clearShown && (
-        <div className="privacy-actions srow-wide">
-          <button type="button" className="button" onClick={() => setAsking("history")}>
-            Clear AI history...
-          </button>
-          <button type="button" className="button button-danger-text" onClick={() => setAsking("all")}>
-            Clear all AI data...
-          </button>
-          {result && (
-            <span className={result.ok ? "muted" : "field-error"} role={result.ok ? "status" : "alert"}>
-              {result.text}
-            </span>
-          )}
-        </div>
-      )}
+    <Row
+      {...ROW.clearAi}
+      hint={`The stored Ask threads and diagram chats of ${placeName}. Clear all AI data also removes every AI Context.`}
+      below={
+        result && (
+          <span className={result.ok ? "muted" : "field-error"} role={result.ok ? "status" : "alert"}>
+            {result.text}
+          </span>
+        )
+      }
+    >
+      <button type="button" className="button" onClick={() => setAsking("history")}>
+        Clear AI history...
+      </button>
+      <button type="button" className="button button-danger-text" onClick={() => setAsking("all")}>
+        Clear all AI data...
+      </button>
       {asking && (
         <Dialog title={asking === "history" ? "Clear AI history" : "Clear all AI data"} size="confirm" onClose={() => setAsking(null)}>
           <div className="dialog-body">
@@ -266,99 +244,41 @@ function PrivacyBlock({ keepExactText, autoCompact, pickTables, groupId, groupNa
           </footer>
         </Dialog>
       )}
-    </div>
+    </Row>
   );
 }
 
-/** What the assistant may ask Contura to do (board 11.4): Pick tables is a step, Run SQL is never offered. */
-function ToolsBlock({ diagramTool, connections }: { diagramTool: { checked: boolean; onChange: (on: boolean) => void } | null; connections: ConnectionConfig[] }) {
+/** What AI can see, per Connection: the table opens in a dialog, each change stored at once. */
+function AccessRow({ connections, onConnectionSaved }: Pick<Props, "connections" | "onConnectionSaved">) {
+  const [open, setOpen] = useState(false);
   const id = useId();
-  const labelId = useId();
-  if (!useRowShown(ROW.tools)) return null;
   return (
-    <div className="ssub" data-row="tools">
-      <h3 id={id}>{ROW.tools.label}</h3>
-      <p className="muted">
-        A tool is an action a model may ask Contura to take. Contura checks and runs it, never the model, and every use shows here and in Show log.
-      </p>
-      <table className="tools-table" aria-labelledby={id}>
-        <thead>
-          <tr>
-            <th scope="col">Tool</th>
-            <th scope="col">What it can do</th>
-            <th scope="col">Where</th>
-            <th scope="col">State</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>
-              <span className="tool-name" id={labelId}>
-                {ROW.diagramTool.label}
-              </span>
-              <span className="tool-sub mono-small">propose_diagram_changes</span>
-            </td>
-            <td>Suggests edits to the open .flow file as a list you can review. It cannot read or write a database.</td>
-            <td>Diagram assistant</td>
-            <td>
-              <span className="tool-state">
-                {diagramTool && (
-                  <button
-                    type="button"
-                    role="switch"
-                    className={diagramTool.checked ? "sw on" : "sw"}
-                    aria-checked={diagramTool.checked}
-                    aria-labelledby={labelId}
-                    onClick={() => diagramTool.onChange(!diagramTool.checked)}
-                  />
-                )}
-                {diagramTool ? (diagramTool.checked ? "On" : "Off") : "Same for every Group"}
-              </span>
-            </td>
-          </tr>
-          <tr>
-            <td>
-              <span className="tool-name">Pick tables</span>
-              <span className="tool-sub">a step, not a tool</span>
-            </td>
-            <td>The model names the tables it needs from an outline of table names. Contura sends only those.</td>
-            <td>Ask, large databases</td>
-            <td>Follows the privacy switch</td>
-          </tr>
-          <tr className="off">
-            <td>
-              <span className="tool-name">Run SQL or read rows</span>
-              <span className="tool-sub">not available</span>
-            </td>
-            <td>
-              No model can run anything on a database. Answers are text: only Run in the editor touches a database. <strong>Sample rows</strong> are
-              read by Contura, not the model: at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and
-              never kept.
-            </td>
-            <td>Nowhere</td>
-            <td>
-              <span className="tool-never">
-                <Icon name="lock" size={14} />
-                Never
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <ToolUses connections={connections} />
-    </div>
-  );
-}
-
-function AccessBlock({ connections, onConnectionSaved }: Pick<Props, "connections" | "onConnectionSaved">) {
-  const id = useId();
-  if (!useRowShown(ROW.access)) return null;
-  return (
-    <div className="ssub">
-      <h3 id={id}>{ROW.access.label}</h3>
-      <p className="muted">{`Each Connection decides what may leave ${thisComputer()}. The same choice is on each Connection's form.`}</p>
-      <AccessTable connections={connections} onSaved={onConnectionSaved} labelledBy={id} />
-    </div>
+    <Row {...ROW.access} hint="Nothing, schema only, or schema and sample rows. The same choice is on each Connection's form.">
+      {({ labelId }) => (
+        <>
+          <button type="button" className="button" aria-describedby={labelId} onClick={() => setOpen(true)}>
+            Edit access...
+          </button>
+          {open && (
+            <Dialog title={ROW.access.label} size="wide" onClose={() => setOpen(false)}>
+              <div className="dialog-body">
+                <p className="muted">{`Each Connection decides what may leave ${thisComputer()}. The same choice is on each Connection's form.`}</p>
+                <span className="visually-hidden" id={id}>
+                  {ROW.access.label}
+                </span>
+                <AccessTable connections={connections} onSaved={onConnectionSaved} labelledBy={id} />
+              </div>
+              <footer className="dialog-footer">
+                <span className="spacer" />
+                <button type="button" className="button button-primary" data-autofocus onClick={() => setOpen(false)}>
+                  Done
+                </button>
+              </footer>
+            </Dialog>
+          )}
+        </>
+      )}
+    </Row>
   );
 }
 
@@ -366,7 +286,7 @@ function AccessBlock({ connections, onConnectionSaved }: Pick<Props, "connection
  * Settings, AI assistant (D7, ST4). Each change is saved at once; the API key alone waits for
  * its own Save (D6), so a half-typed key is never used, and survives a Group change (R23).
  */
-export default function AiSection({ groupId, groupName, connections, onConnectionSaved }: Props) {
+export default function AiSection({ groupId, groupName, connections, onConnectionSaved, pages = AI_PAGES }: Props) {
   const { prefs, update } = usePrefs();
   const { map } = useKeymap();
   const askKey = hintFor(map, "editor.ask");
@@ -387,6 +307,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
   const [askingRemove, setAskingRemove] = useState(false);
   const [fetched, setFetched] = useState<Fetched | null>(null);
   const [fetchAgain, setFetchAgain] = useState(0);
+  const [fetching, setFetching] = useState(false);
   // Bumped by each key save, so the list is fetched again with the new key.
   const [keySaves, setKeySaves] = useState(0);
   const [known, setKnown] = useState<{ key: string; list: ModelList } | null>(null);
@@ -439,6 +360,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
   useEffect(() => {
     if (fetchKey === null) return;
     let live = true;
+    setFetching(true);
     void queue.current
       .then(() => aiModels(groupId))
       .then(
@@ -451,7 +373,8 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
           }
         },
         (e) => live && setFetched({ key: fetchKey, ok: false, reason: refusedText(e) }),
-      );
+      )
+      .finally(() => live && setFetching(false));
     return () => {
       live = false;
     };
@@ -517,20 +440,13 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
     });
   }
 
-  if (loadError) {
+  if (loadError || !view || !settings) {
     return (
-      <Section id="ai" title="AI assistant" rows={AI_ROWS}>
-        <p className="error-text" role="alert">
-          {loadError}
-        </p>
-      </Section>
-    );
-  }
-  if (!view || !settings) {
-    return (
-      <Section id="ai" title="AI assistant" rows={AI_ROWS}>
-        <p className="muted">Loading AI settings...</p>
-      </Section>
+      <Card>
+        <div className="srow">
+          <StateText state={loadError ? { s: "error", text: loadError } : { s: "loading", text: "Loading AI settings..." }} />
+        </div>
+      </Card>
     );
   }
 
@@ -541,13 +457,19 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
   // The known record is read after every change that shapes it, so it leads.
   const modelInfo = knownList?.models.find((m) => m.id === s.model) ?? fetchedList?.models.find((m) => m.id === s.model) ?? null;
   const fetchFailure = fetchedNow && !fetchedNow.ok ? (fetchedNow.reason ?? "Could not fetch the model list. Showing the built-in one.") : null;
-  const modelsHint =
-    fetchFailure || modelInfo || fetchedAt !== null ? (
-      <>
-        {fetchFailure && <span className="srow-note-line">{fetchFailure}</span>}
-        <ModelFacts info={modelInfo} fetchedAt={fetchedAt} now={now} />
-      </>
-    ) : undefined;
+  const age = fetchedAt !== null ? ` ${fetchedText(fetchedAt, now)}.` : "";
+  // The model list: the built-in one until a key is saved, then the provider's own, fetched with a state.
+  const modelList: DataState | null = !s.provider
+    ? null
+    : fetchKey === null
+      ? { s: "ready", text: `The built-in list. Save an API key to fetch the provider's own.${age}` }
+      : fetching
+        ? { s: "loading", text: "Fetching the model list..." }
+        : fetchFailure
+          ? { s: "error", text: fetchFailure }
+          : fetchedList
+            ? { s: "ready", text: `${fetchedList.models.length.toLocaleString("en-US")} ${fetchedList.models.length === 1 ? "model" : "models"} from ${hostOf(s.baseUrl)}.${age}` }
+            : { s: "loading", text: "Fetching the model list..." };
   // Custom servers, and models nothing is known about, say their own window.
   const askWindow = s.provider === "custom" || modelInfo?.known === false;
   // Read again whenever the provider changes, so it is the current provider's key.
@@ -659,19 +581,14 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
     ...PROVIDER_ORDER.map((k) => ({ value: k as AiProviderKind | typeof NONE, label: PROVIDERS[k].name, hint: PROVIDERS[k].badge })),
   ];
 
-  return (
-    <Section id="ai" title="AI assistant" rows={AI_ROWS}>
-      {groupName !== null && (
-        <SwitchRow
-          {...ROW.group}
-          shownLabel={`Use different settings for ${groupName}`}
-          checked={override}
-          onChange={(v) => void toggleOverride(v)}
-          hint={override ? `Changes here apply to ${groupName} only.` : "Changes here apply to every Group without its own settings."}
-        />
-      )}
+  const globalOnly = groupOwn && (
+    <p className="muted settings-note">Privacy and thinking settings are the same for every Group. Change them without a Group open.</p>
+  );
+
+  const provider = (
+    <Card key="provider">
       <Row {...ROW.provider}>
-        <Select label="Provider" value={s.provider ?? NONE} options={providerOptions} onChange={pickProvider} className="srow-grow" />
+        <Select label="Provider" value={s.provider ?? NONE} options={providerOptions} onChange={pickProvider} className="srow-field" />
       </Row>
       {info?.presets && (
         <Row {...ROW.preset}>
@@ -680,7 +597,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
             value={s.preset ?? "OpenAI"}
             options={Object.keys(info.presets).map((n) => ({ value: n, label: n }))}
             onChange={pickPreset}
-            className="srow-grow"
+            className="srow-field"
           />
         </Row>
       )}
@@ -691,7 +608,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
         >
           {({ hintId }) => (
             <input
-              className="input mono srow-grow"
+              className="input mono srow-field"
               aria-label="Base URL"
               aria-describedby={hintId}
               value={baseUrl}
@@ -703,11 +620,11 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
           )}
         </Row>
       )}
-      <Row {...ROW.model} hint={modelsHint}>
+      <Row {...ROW.model} below={modelInfo && <ModelFacts info={modelInfo} />}>
         {typingModel ? (
           <>
             <input
-              className="input mono srow-grow"
+              className="input mono srow-field"
               aria-label="Model"
               value={modelText}
               placeholder="Type the model name"
@@ -741,21 +658,20 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
                 setModelText("");
               } else void save({ ...s, model: m });
             }}
-            className="srow-grow"
+            className="srow-field"
           />
         )}
-        {fetchKey !== null && (
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Fetch the model list again"
-            title="Fetch the model list again"
-            onClick={() => setFetchAgain((n) => n + 1)}
-          >
-            <Icon name="refresh" size={14} />
-          </button>
-        )}
       </Row>
+      {modelList && (
+        <Row {...ROW.modelList}>
+          <StateText state={modelList} />
+          {fetchKey !== null && (
+            <button type="button" className="button" disabled={modelList.s === "loading"} onClick={() => setFetchAgain((n) => n + 1)}>
+              {modelList.s === "error" ? "Try again" : "Fetch again"}
+            </button>
+          )}
+        </Row>
+      )}
       {askWindow && (
         <Row {...ROW.contextWindow} hint="Tokens the model accepts. Left empty, Contura uses 8,000.">
           {({ hintId }) => (
@@ -778,10 +694,36 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
       <Row
         {...ROW.key}
         hint={keyNotice ?? `Kept in ${keyringText()}, never in the data folder.`}
+        below={
+          test.s !== "idle" && (
+            <div role="status" aria-live="polite">
+              {test.s === "testing" && (
+                <span className="result">
+                  <span className="spin" />
+                  <span>Sending "Reply with OK" to {test.host}...</span>
+                </span>
+              )}
+              {test.s === "ok" && (
+                <span className="result ok">
+                  <Icon name="check" />
+                  <span>{test.text}</span>
+                </span>
+              )}
+              {test.s === "bad" && (
+                <span className="result bad">
+                  <Icon name="error" />
+                  <span>
+                    <b>{test.title}</b> {test.body}
+                  </span>
+                </span>
+              )}
+            </div>
+          )
+        }
       >
         {({ hintId }) => (
           <>
-            <span className="keyfield srow-grow">
+            <span className="keyfield srow-field">
               {keySaved && !typing && <span className="keyfield-saved mono">••••••••{view.keyLast4 ?? ""}</span>}
               <input
                 className="mono"
@@ -825,107 +767,180 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
           </>
         )}
       </Row>
-      {test.s !== "idle" && (
-        <div role="status" aria-live="polite" className="srow-wide">
-          {test.s === "testing" && (
-            <span className="result">
-              <span className="spin" />
-              <span>Sending "Reply with OK" to {test.host}...</span>
-            </span>
+    </Card>
+  );
+
+  const behaviour = (
+    <Fragment key="behaviour">
+      <Card title="Answers">
+        <Row {...ROW.thinking} hint="Each model remembers the level you last picked for it.">
+          {({ hintId }) => (
+            <Segmented<ThinkingLevel>
+              label="Default thinking level"
+              describedBy={hintId}
+              value={s.defaultThinking}
+              options={THINKING_OPTIONS}
+              onChange={(defaultThinking) => void save({ ...s, defaultThinking })}
+            />
           )}
-          {test.s === "ok" && (
-            <span className="result ok">
-              <Icon name="check" />
-              <span>{test.text}</span>
-            </span>
-          )}
-          {test.s === "bad" && (
-            <span className="result bad">
-              <Icon name="error" />
-              <span>
-                <b>{test.title}</b> {test.body}
-              </span>
-            </span>
-          )}
-        </div>
-      )}
-      <SwitchRow
-        {...ROW.caching}
-        checked={s.promptCaching}
-        onChange={(promptCaching) => void save({ ...s, promptCaching })}
-        hint="The default for new models. You can change it per model in the model menu of the Ask panel."
-      />
-      <Row {...ROW.thinking} hint="Each model remembers the level you last picked for it.">
-        {({ hintId }) => (
-          <Select<ThinkingLevel>
-            label="Default thinking level"
-            describedBy={hintId}
-            value={s.defaultThinking}
-            options={THINKING_OPTIONS}
-            onChange={(defaultThinking) => void save({ ...s, defaultThinking })}
+        </Row>
+        {/* Share thinking, auto-compact and Keep the exact text are global: a Group's own settings leave them out. */}
+        {!groupOwn && (
+          <SwitchRow
+            {...ROW.shareThinking}
+            checked={s.shareThinking}
+            onChange={(shareThinking) => void save({ ...s, shareThinking })}
+            hint="Shown in Show log as the provider returned it. Never sent back."
           />
         )}
-      </Row>
-      {/* Share thinking and Keep the exact text are global: a Group's own settings leave them out. */}
-      {!groupOwn && (
         <SwitchRow
-          {...ROW.shareThinking}
-          checked={s.shareThinking}
-          onChange={(shareThinking) => void save({ ...s, shareThinking })}
-          hint="Shown in Show log as the provider returned it. Never sent back."
+          {...ROW.caching}
+          checked={s.promptCaching}
+          onChange={(promptCaching) => void save({ ...s, promptCaching })}
+          hint="The default for new models. You can change it per model in the model menu of the Ask panel."
         />
-      )}
-      <Row {...ROW.newConnections} hint="Default AI access. Production Connections always start at Never send anything.">
-        {({ hintId }) => (
-          <Select<AiAccess>
-            label="New Connections"
-            describedBy={hintId}
-            value={s.newConnectionAccess}
-            options={AI_ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-            onChange={(newConnectionAccess) => void save({ ...s, newConnectionAccess })}
-            className="srow-grow"
+        {!groupOwn && (
+          <SwitchRow
+            {...ROW.autoCompact}
+            checked={s.autoCompact ?? true}
+            onChange={(autoCompact) => void save({ ...s, autoCompact })}
+            hint="At 85% of the model's window, older messages become a short summary written by the same model. Sends only text this thread already sent. The summary shows in the thread, and Undo brings the messages back."
           />
         )}
-      </Row>
-      <SwitchRow
-        {...ROW.inline}
-        checked={prefs.inlineSuggestions}
-        onChange={(inlineSuggestions) => update({ inlineSuggestions })}
-        hint="Suggests the rest of a statement where you are typing. Uses the Connection's AI access."
-      />
-      <SwitchRow
-        {...ROW.inlineAsk}
-        checked={s.inlineAsk}
-        onChange={(inlineAsk) => void save({ ...s, inlineAsk })}
-        hint={
-          <>
-            Shows Ask when you select SQL, cells, a column or a table card{askKey ? ". " : "."}
-            {askKey && <Kbd keys={askKey} />}
-          </>
-        }
-      />
-      <SwitchRow {...ROW.errorAsk} checked={s.errorAsk} onChange={(errorAsk) => void save({ ...s, errorAsk })} hint="Shows Ask AI on failed queries." />
+      </Card>
+      <Card title="Where it helps">
+        <SwitchRow
+          {...ROW.inline}
+          checked={prefs.inlineSuggestions}
+          onChange={(inlineSuggestions) => update({ inlineSuggestions })}
+          hint="Suggests the rest of a statement where you are typing. Uses the Connection's AI access."
+        />
+        <SwitchRow
+          {...ROW.inlineAsk}
+          checked={s.inlineAsk}
+          onChange={(inlineAsk) => void save({ ...s, inlineAsk })}
+          hint={
+            <>
+              Shows Ask when you select SQL, cells, a column or a table card{askKey ? ". " : "."}
+              {askKey && <Kbd keys={askKey} />}
+            </>
+          }
+        />
+        <SwitchRow {...ROW.errorAsk} checked={s.errorAsk} onChange={(errorAsk) => void save({ ...s, errorAsk })} hint="Shows Ask AI on failed queries." />
+      </Card>
+    </Fragment>
+  );
+
+  const privacy = (
+    <Fragment key="privacy">
+      <Card title="Access">
+        <AccessRow connections={connections} onConnectionSaved={onConnectionSaved} />
+        <Row {...ROW.newConnections} hint="Default AI access. Production Connections always start at Never send anything.">
+          {({ hintId }) => (
+            <Select<AiAccess>
+              label="New Connections"
+              describedBy={hintId}
+              value={s.newConnectionAccess}
+              options={AI_ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              onChange={(newConnectionAccess) => void save({ ...s, newConnectionAccess })}
+              className="srow-field"
+            />
+          )}
+        </Row>
+        {!groupOwn && <SendsOpenRow />}
+      </Card>
+      <Card title="History">
+        {!groupOwn && (
+          <SwitchRow
+            {...ROW.keepExactText}
+            checked={s.keepExactText}
+            onChange={(keepExactText) => void save({ ...s, keepExactText })}
+            hint={`The text can contain your schema and SQL. ${dataFolderText()} is portable and not encrypted.`}
+          />
+        )}
+        <ClearRow groupId={groupId} groupName={groupName} />
+      </Card>
+    </Fragment>
+  );
+
+  const tools = (
+    <Fragment key="tools">
+      <Card row={ROW.tools.id}>
+        <p className="scard-note muted">
+          A tool is an action a model may ask Contura to take. Contura checks and runs it, never the model, and every use shows here and in Show log.
+        </p>
+        {groupOwn ? (
+          <Row {...ROW.diagramTool} hint="On diagram tabs. Suggests edits to the open .flow file as a list you can review. It cannot read or write a database.">
+            <span className="muted">Same for every Group</span>
+          </Row>
+        ) : (
+          <SwitchRow
+            {...ROW.diagramTool}
+            checked={s.diagramTool ?? true}
+            onChange={(diagramTool) => void save({ ...s, diagramTool })}
+            hint="On diagram tabs. Suggests edits to the open .flow file as a list you can review. It cannot read or write a database."
+          />
+        )}
+        {!groupOwn && (
+          <SwitchRow
+            {...ROW.pickTables}
+            checked={s.pickTables ?? true}
+            onChange={(pickTables) => void save({ ...s, pickTables })}
+            hint="Ask, on large databases. The model names the tables it needs from an outline of table names, and Contura sends only those. One extra step per Ask."
+          />
+        )}
+        <Row
+          {...ROW.runSql}
+          hint={
+            <>
+              No model can run anything on a database. Answers are text: only Run in the editor touches a database. <strong>Sample rows</strong> are read by
+              Contura, not the model: at most 5 rows of each named table, read only, only when the Sample rows switch is on for that Ask, and never kept.
+            </>
+          }
+        >
+          <span className="tool-never">
+            <Icon name="lock" size={14} />
+            Never
+          </span>
+        </Row>
+      </Card>
+      <Card row={ROW.toolUses.id}>
+        <div className="scard-pad">
+          <ToolUses connections={connections} />
+        </div>
+      </Card>
+    </Fragment>
+  );
+
+  const PAGE = { provider, behaviour, privacy, tools };
+  return (
+    <>
+      <Card>
+        {groupName !== null ? (
+          <SwitchRow
+            {...ROW.group}
+            shownLabel={`Use different settings for ${groupName}`}
+            checked={override}
+            onChange={(v) => void toggleOverride(v)}
+            hint={
+              override
+                ? `Changes on the four AI pages apply to ${groupName} only.`
+                : "Changes on the four AI pages apply to every Group without its own settings."
+            }
+          />
+        ) : (
+          <Row {...ROW.group} hint="Applies to all four AI pages.">
+            <span className="muted">Open a Group to give it its own settings.</span>
+          </Row>
+        )}
+      </Card>
       {status && (
-        <p className="field-error srow-wide" role="alert">
+        <p className="field-error" role="alert">
           {status}
         </p>
       )}
-      {groupOwn && (
-        <p className="muted srow-wide">Privacy and thinking settings are the same for every Group. Change them without a Group open.</p>
-      )}
-      <ToolsBlock
-        diagramTool={groupOwn ? null : { checked: s.diagramTool ?? true, onChange: (diagramTool) => void save({ ...s, diagramTool }) }}
-        connections={connections}
-      />
-      <PrivacyBlock
-        keepExactText={groupOwn ? null : { checked: s.keepExactText, onChange: (keepExactText) => void save({ ...s, keepExactText }) }}
-        autoCompact={groupOwn ? null : { checked: s.autoCompact ?? true, onChange: (autoCompact) => void save({ ...s, autoCompact }) }}
-        pickTables={groupOwn ? null : { checked: s.pickTables ?? true, onChange: (pickTables) => void save({ ...s, pickTables }) }}
-        groupId={groupId}
-        groupName={groupName}
-      />
-
-      <AccessBlock connections={connections} onConnectionSaved={onConnectionSaved} />
+      {pages.some((p) => p !== "provider") && globalOnly}
+      {pages.map((p) => PAGE[p])}
       {askingRemove && (
         <Dialog title="Remove the API key?" size="confirm" onClose={() => setAskingRemove(false)}>
           <div className="dialog-body">
@@ -943,6 +958,20 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
           </footer>
         </Dialog>
       )}
-    </Section>
+    </>
+  );
+}
+
+/** Whether the Ask panel's Sends list starts open; the same choice as its chevron, kept on this computer. */
+function SendsOpenRow() {
+  const [open, setOpen] = useState(loadSendsOpen);
+  useEffect(() => onSendsOpen(setOpen), []);
+  return (
+    <SwitchRow
+      {...ROW.sendsOpen}
+      checked={open}
+      onChange={saveSendsOpen}
+      hint="The list above the Ask input of what each question sends. Off, it folds to one line with the size."
+    />
   );
 }

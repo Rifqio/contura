@@ -166,6 +166,58 @@ pub struct UiPrefs {
     /// Item 36: the Visual Query's bottom panel height in px; `None` is the default.
     #[serde(default)]
     pub vq_panel_height: Option<u32>,
+    /// What the place for Connections in no Group is called; `None` is "Ungrouped".
+    #[serde(default)]
+    pub ungrouped_label: Option<String>,
+    /// Text and controls in every window, as a percent: 90, 100, 110 or 125.
+    #[serde(default)]
+    pub interface_size: InterfaceSize,
+    /// Every data grid shades alternate rows.
+    #[serde(default)]
+    pub stripe_rows: bool,
+    /// How the data grids draw SQL NULL. Copy and export always keep real NULL.
+    #[serde(default)]
+    pub null_as: NullDisplay,
+}
+
+/// The interface size as a percent of the normal size.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct InterfaceSize(pub u32);
+
+impl InterfaceSize {
+    /// The sizes the Appearance page offers; anything else reads as 100.
+    pub const CHOICES: [u32; 4] = [90, 100, 110, 125];
+
+    /// The size when it is one of the choices, otherwise 100.
+    pub fn checked(self) -> Self {
+        if Self::CHOICES.contains(&self.0) {
+            self
+        } else {
+            Self::default()
+        }
+    }
+
+    /// The webview zoom factor: 1.25 at 125 percent.
+    pub fn zoom(self) -> f64 {
+        f64::from(self.checked().0) / 100.0
+    }
+}
+
+impl Default for InterfaceSize {
+    fn default() -> Self {
+        Self(100)
+    }
+}
+
+/// How a data grid draws SQL NULL: the word, the empty-set sign, or nothing visible.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NullDisplay {
+    #[default]
+    Null,
+    Symbol,
+    Blank,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -392,6 +444,36 @@ mod tests {
         // Prefs stored before the choice existed load Review.
         let old: UiPrefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
         assert_eq!(old.flow_assist_mode, FlowAssistMode::Review);
+    }
+
+    #[test]
+    fn appearance_prefs_round_trip_and_default() {
+        let prefs = UiPrefs {
+            interface_size: InterfaceSize(125),
+            stripe_rows: true,
+            null_as: NullDisplay::Symbol,
+            ..UiPrefs::default()
+        };
+        let json = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(json["interfaceSize"], 125);
+        assert_eq!(json["stripeRows"], true);
+        assert_eq!(json["nullAs"], "symbol");
+        let back: UiPrefs = serde_json::from_value(json).unwrap();
+        assert_eq!(back, prefs);
+        // Prefs stored before these settings load the normal size, no stripes and the word NULL.
+        let old: UiPrefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert_eq!(old.interface_size, InterfaceSize(100));
+        assert!(!old.stripe_rows);
+        assert_eq!(old.null_as, NullDisplay::Null);
+    }
+
+    #[test]
+    fn interface_size_zoom_keeps_to_the_choices() {
+        assert_eq!(InterfaceSize(90).zoom(), 0.9);
+        assert_eq!(InterfaceSize(125).zoom(), 1.25);
+        assert_eq!(InterfaceSize(0).zoom(), 1.0);
+        assert_eq!(InterfaceSize(400).zoom(), 1.0);
+        assert_eq!(InterfaceSize(105).checked(), InterfaceSize(100));
     }
 
     #[test]

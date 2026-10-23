@@ -79,6 +79,9 @@ function toCm(diagnostics: Diagnostic[], docLength: number): CmDiagnostic[] {
   }));
 }
 
+/** Numbers the editors, so each has its own document in a shared language worker. */
+let editors = 0;
+
 export default function DbmlEditor({
   value,
   savedValue,
@@ -104,6 +107,8 @@ export default function DbmlEditor({
 
   useEffect(() => {
     const lang = client ?? new LangClient();
+    // Its own document in the worker, forgotten there when the editor closes (memory: its last valid model).
+    const docId = `dbml:${++editors}`;
     let result: ParseResult | null = null;
     let resultText = "";
     let caretTimer: ReturnType<typeof setTimeout> | null = null;
@@ -121,7 +126,7 @@ export default function DbmlEditor({
     function parse(view: EditorView) {
       const text = view.state.doc.toString();
       lang
-        .update("dbml", text, latest.current.dialect)
+        .update(docId, text, latest.current.dialect)
         .then((r) => {
           result = r;
           resultText = text;
@@ -248,7 +253,8 @@ export default function DbmlEditor({
       editsRef.current = null;
       viewRef.current = null;
       view.destroy();
-      if (!client) lang.dispose();
+      if (client) lang.closeDbml(docId);
+      else lang.dispose();
     };
     // The view is created once; later prop changes are pushed in below.
   }, []);

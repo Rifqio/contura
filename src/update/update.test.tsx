@@ -6,9 +6,8 @@ import UpdatesSection, { UPDATES_PRIVACY, lastCheckText } from "../settings/sect
 import { callsTo, routeInvoke } from "../test/invoke";
 import { pendingWork } from "./pendingWork";
 import { setRestartGuard } from "./restartGuard";
-import UpdateBanner, { PROMPT_TEXT } from "./UpdateBanner";
 import UpdatePill from "./UpdatePill";
-import { RESTART_ASK, loadUpdates, resetUpdatesForTests } from "./updateStore";
+import { RESTART_ASK, chooseChecks, loadUpdates, resetUpdatesForTests, updateState } from "./updateStore";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -61,49 +60,37 @@ afterEach(() => {
   unguard = null;
 });
 
-test("the first-start prompt shows while the choice is not made, and Turn on runs the daily check", async () => {
+test("until the choice is made no check runs; turning checks on runs the daily check", async () => {
   core(status());
-  render(<UpdateBanner />);
   await act(() => loadUpdates());
-  expect(screen.getByText(PROMPT_TEXT)).toBeTruthy();
-  // Off until the user answers: nothing was asked of GitHub.
+  // Off until the user answers (the first start guide or Settings): nothing was asked of GitHub.
   expect(callsTo("check_for_update")).toEqual([]);
-  await userEvent.click(screen.getByRole("button", { name: "Turn on" }));
-  await waitFor(() => expect(screen.queryByText(PROMPT_TEXT)).toBeNull());
+  await act(() => chooseChecks(true));
   expect(callsTo("set_update_checks")).toEqual([{ on: true }]);
   expect(callsTo("check_for_update")).toEqual([{ manual: false }]);
 });
 
-test("Not now is remembered: no check, and the prompt does not come back", async () => {
+test("an Off answer is remembered: no check now or at the next start", async () => {
   core(status());
-  const { unmount } = render(<UpdateBanner />);
   await act(() => loadUpdates());
-  await userEvent.click(screen.getByRole("button", { name: "Not now" }));
-  await waitFor(() => expect(screen.queryByText(PROMPT_TEXT)).toBeNull());
+  await act(() => chooseChecks(false));
   expect(callsTo("set_update_checks")).toEqual([{ on: false }]);
-  expect(callsTo("check_for_update")).toEqual([]);
-  unmount();
-  // The next start reads the saved answer.
   resetUpdatesForTests();
-  render(<UpdateBanner />);
   await act(() => loadUpdates());
-  expect(screen.queryByText(PROMPT_TEXT)).toBeNull();
+  expect(updateState().status?.checks).toBe(false);
   expect(callsTo("check_for_update")).toEqual([]);
 });
 
 test("with checks on, a start runs the daily check, which the Core may skip", async () => {
   core(status({ checks: true }));
-  render(<UpdateBanner />);
   await act(() => loadUpdates());
-  expect(screen.queryByText(PROMPT_TEXT)).toBeNull();
   expect(callsTo("check_for_update")).toEqual([{ manual: false }]);
 });
 
-test("a start without the Core's answer shows nothing and throws nothing", async () => {
+test("a start without the Core's answer throws nothing", async () => {
   routeInvoke({});
-  render(<UpdateBanner />);
   await act(() => loadUpdates());
-  expect(screen.queryByText(PROMPT_TEXT)).toBeNull();
+  expect(updateState().status).toBeNull();
 });
 
 test("Settings > Updates: the switch, the version, Check now with checks off, and the last check", async () => {
@@ -256,5 +243,30 @@ test("update copy has no dashes and never says cursor or caret", () => {
     expect(text).not.toMatch(/[–—]/);
     expect(text).not.toMatch(/\b(cursor|caret)\b/i);
   }
-  for (const text of [PROMPT_TEXT, UPDATES_PRIVACY, RESTART_ASK]) expect(text).not.toMatch(/[–—]|cursor|caret/i);
+  for (const text of [UPDATES_PRIVACY, RESTART_ASK]) expect(text).not.toMatch(/[–—]|cursor|caret/i);
+});
+
+test("Settings > Updates: the Last check row reads, checks, fails with Try again, then shows the result", async () => {
+  let reply: ((s: UpdateStatus) => void) | null = null;
+  let check: ((s: UpdateStatus) => void) | null = null;
+  routeInvoke({
+    update_status: () => new Promise<UpdateStatus>((ok) => (reply = ok)),
+    check_for_update: () => new Promise<UpdateStatus>((ok) => (check = ok)),
+  });
+  render(<UpdatesSection />);
+  // Before the Core answers: reading, and Check now waits.
+  expect(await screen.findByText("Reading...")).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Check now" }) as HTMLButtonElement).disabled).toBe(true);
+  const failed = status({ checks: false, lastCheckMs: Date.UTC(2026, 9, 23, 9, 30), lastResult: { kind: "failed", message: "Contura could not reach github.com." } });
+  await act(async () => reply!(failed));
+  // A failed check is an error with Try again.
+  const error = await screen.findByText(/Contura could not reach github\.com\.$/);
+  expect(error.closest("[role=alert]")).not.toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("Checking GitHub...")).toBeTruthy();
+  expect(callsTo("check_for_update")).toEqual([{ manual: true }]);
+  await act(async () => check!({ ...failed, lastResult: { kind: "upToDate" } }));
+  expect(await screen.findByText(/Contura is up to date\.$/)).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("button", { name: "Check now" })).toBeTruthy();
 });

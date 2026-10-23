@@ -2,7 +2,7 @@
 // node types (memo, with a Handle at each round port), group areas, square-routed lines with label chips, and
 // the one function that turns a FlowDoc and its positions into canvas nodes and edges. FlowTab and the Mermaid
 // dialog's preview both draw through it.
-import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer, Handle, type InternalNode, type Node, type NodeProps, type NodeTypes, Position, useInternalNode, useReactFlow } from "@xyflow/react";
+import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer, Handle, type InternalNode, type Node, type NodeProps, type NodeTypes, Position, useInternalNode, useReactFlow, useStoreApi } from "@xyflow/react";
 import { createContext, memo, useContext } from "react";
 import { ARROW_MARKER, DIAMOND_MARKER, MANY_MARKER, ONE_MARKER, OPEN_ARROW_MARKER, TRIANGLE_MARKER } from "../diagram/edges";
 import type { Positions } from "../diagram/layout";
@@ -14,7 +14,7 @@ import { KindNode, type KindNodeData, MindEdge, SeqEdge, SeqFrame, SeqFrameTab, 
 import DfdNode, { type DfdNodeKind } from "./nodes/DfdNode";
 import FlowchartNode, { type FlowchartNodeKind } from "./nodes/FlowchartNode";
 import { useDetail } from "../diagram/detail";
-import { ResizeZones } from "../diagram/resize";
+import { liveResizes, ResizeZones } from "../diagram/resize";
 import { iconPlate, useIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import type { NodeLook, NodeState } from "./nodes/parts";
@@ -78,6 +78,7 @@ function Resizer({ id, selected, kind, naturalW, naturalH }: { id: string; selec
   const natural = naturalW !== undefined && naturalH !== undefined ? { w: naturalW, h: naturalH } : undefined;
   const resize = useContext(FlowResizeContext);
   const flow = useReactFlow();
+  const canvas = useStoreApi();
   if (!resize || !selected) return null;
   const square = kind === "decision" || kind === "choice" || kind === "stateStart" || kind === "stateEnd";
   return (
@@ -92,9 +93,11 @@ function Resizer({ id, selected, kind, naturalW, naturalH }: { id: string; selec
       }}
       onLive={(box, node) => {
         node?.classList.add("is-resizing");
+        liveResizes(canvas.getState().domNode).set(id, box);
         flow.updateNode(id, { position: { x: box.x, y: box.y }, width: box.w, height: box.h });
       }}
       onDone={(box, start, node) => {
+        liveResizes(canvas.getState().domNode).delete(id);
         const same = box.x === start.x && box.y === start.y && box.w === start.w && box.h === start.h;
         if (same) {
           node?.classList.remove("is-resizing");
@@ -103,9 +106,11 @@ function Resizer({ id, selected, kind, naturalW, naturalH }: { id: string; selec
         }
         // The node keeps the live box until the layout draws it again at its kept size.
         requestAnimationFrame(() => node?.classList.remove("is-resizing"));
-        resize(id, box);
+        // The live box follows the pointer to the sub-pixel; the kept size is whole pixels.
+        resize(id, { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h) });
       }}
       onCancel={(start, node) => {
+        liveResizes(canvas.getState().domNode).delete(id);
         node?.classList.remove("is-resizing");
         flow.updateNode(id, { position: { x: start.x, y: start.y }, width: undefined, height: undefined });
       }}

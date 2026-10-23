@@ -3,10 +3,10 @@
 // Ask was made against and goes into the editor as one transaction on that parse's version, so one undo takes it
 // back. Closing the tab, or opening another diagram in it, stops a running Ask.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { aiCancelPlace, aiDiagramAsk, aiDiagramPreview, aiRecordToolResult, errorText, getAiThread, listAiThreads, saveAiThread } from "../../api/client";
+import { aiCancelPlace, aiDiagramAsk, aiDiagramPreview, aiRecordToolResult, appendAiTurn, errorText, getAiThread, listAiThreads, saveAiThread, withTurn } from "../../api/client";
 import type { AiMessage, AiThread, Candidate, DiagramAskRequest, DiagramProposal, DiagramScope, FlowAssistMode, FlowOutline, ModelPicks, Preview, ProposedChange, ToolOutcome } from "../../api/types";
 import { buildRecord, type LiveRecord } from "../../assistant/answerRecord";
-import type { StreamEnd } from "../../assistant/answerStream";
+import { type StreamEnd, textStore } from "../../assistant/answerStream";
 import type { LangClient } from "../../lang/client";
 import { type FlowParse, parseFlow } from "../../lang/flow/parse";
 import type { TextEdit } from "../../lang/protocol";
@@ -27,11 +27,10 @@ export const diagramPlace = (name: string) => `diagram:${name}`;
 const newId = (): string =>
   typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-/** The Ask running now: the question, the answer text so far and the Core's status line. */
+/** The Ask running now: the question and the Core's status line. Its text so far is in `streamed`. */
 export interface Working {
   q: string;
   askedAt: number;
-  text: string;
   status: string | null;
   /** The Core's earlier status lines, done. */
   steps: string[];
@@ -227,8 +226,12 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
   const [airing, setAiring] = useState<ReadonlySet<string>>(new Set());
   /** Why the last turn or outcome could not be kept, shown in the panel until the next Ask. */
   const [notSaved, setNotSaved] = useState<string | null>(null);
+  /** The running Ask's answer text, drawn at most once per animation frame by whoever follows it. */
+  const [streamed] = useState(textStore);
 
   const threadRef = useRef<AiThread | null>(null);
+  /** Threads whose last save failed: the next Ask saves them whole, since the Core may lack what they show. */
+  const unsaved = useRef(new Set<string>());
   const setThread = useCallback((t: AiThread | null) => {
     threadRef.current = t;
     setThreadState(t);
@@ -278,6 +281,8 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
     const live = () => generation.current === g;
     setThread(null);
     setWorking(null);
+    streamed.set("", "");
+    streamed.flush();
     setWaiting(null);
     setLanded(null);
     setFailure(null);
@@ -297,7 +302,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       release();
       clearTimeout(airTimer.current);
     };
-  }, [place, stop, release, setThread, setWaiting]);
+  }, [place, stop, release, setThread, setWaiting, streamed]);
 
   /** Saves the turn into the diagram's thread; returns the thread's id and the answer's time. */
   const persist = useCallback(
@@ -312,11 +317,22 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
         ? { ...base, messages: [...base.messages, ...add], updatedAt: askedAt }
         : { id: newId(), place, title: q.length > 40 ? `${q.slice(0, 40)}…` : q, messages: add, updatedAt: askedAt };
       let failed: string | null = null;
-      const returned = await saveAiThread(next, requestId).catch((e: unknown) => {
+      const fail = (e: unknown) => {
         failed = errorText(e);
         return null;
-      });
-      const kept = returned?.thread ?? next;
+      };
+      // Only the new turn goes to the Core (memory: the whole thread used to go both ways on each Ask). A thread whose
+      // last save failed goes whole once more: the Core may lack turns and outcomes it shows.
+      const kept =
+        base && unsaved.current.has(base.id)
+          ? ((await saveAiThread(next, requestId).catch(fail))?.thread ?? next)
+          : await appendAiTurn({ threadId: next.id, place: next.place, title: next.title, updatedAt: askedAt, messages: add }, requestId).then(
+              // An outcome kept meanwhile in this copy stays: the turn goes after the thread as it is now.
+              (v) => withTurn(threadRef.current?.id === v.threadId ? threadRef.current : base, v),
+              (e: unknown) => fail(e) ?? next,
+            );
+      if (failed === null) unsaved.current.delete(next.id);
+      else unsaved.current.add(next.id);
       if (live()) {
         // An unsaved turn still shows here, with why it was not kept.
         setThread(kept);
@@ -367,6 +383,8 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       }
       setWaiting(null);
       release();
+      // Shapes drawn for review that did not land lose the place they were given.
+      docRef.current.settleProposed(parseFlow(plan.text).defined);
       const added = w.proposal.changes.flatMap((c) => (accepted.has(c.index) && "add_node" in c.op ? [c.op.add_node.name] : []));
       clearTimeout(airTimer.current);
       setAiring(new Set(added));
@@ -437,7 +455,9 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       setFailure(null);
       setLanded(null);
       setNotSaved(null);
-      setWorking({ q, askedAt, text: "", status: null, steps: [] });
+      streamed.set("", "");
+      streamed.flush();
+      setWorking({ q, askedAt, status: null, steps: [] });
       const d = docRef.current;
       // What the tab holds goes to disk first, so the Core reads and hashes the same text; then the text is held.
       // A save that fails stops here: the Core would read a file that is not what the tab shows.
@@ -470,7 +490,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
         switch (e.type) {
           case "delta":
             text += e.text;
-            if (current()) setWorking((w) => w && { ...w, text });
+            if (current()) streamed.set(text, "");
             break;
           case "status":
             if (current()) setWorking((w) => w && { ...w, status: e.step, steps: w.status && w.status !== e.step ? [...w.steps, w.status] : w.steps });
@@ -518,6 +538,11 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       );
       const end = await ending;
       if (run.current === r) run.current = null;
+      // The answer is in the thread once it is saved; the streamed copy lets go of it now.
+      if (current()) {
+        streamed.set("", "");
+        streamed.flush();
+      }
       // A closed tab, or another diagram in it, keeps nothing and lands nothing.
       if (!current()) return;
       setWorking(null);
@@ -562,7 +587,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       }
       proceed(w);
     },
-    [place, name, client, persist, release, proceed, setWaiting],
+    [place, name, client, persist, release, proceed, setWaiting, streamed],
   );
 
   const reject = useCallback(
@@ -596,6 +621,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
     if (!w) return;
     setWaiting(null);
     release();
+    docRef.current.settleProposed(parseFlow(w.text).defined);
     record(w, 0);
   }, [record, release, setWaiting]);
 
@@ -632,6 +658,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       const w = waitingRef.current;
       if (!w) return;
       setWaiting(null);
+      docRef.current.settleProposed(parseFlow(w.text).defined);
       release();
       record(w, 0);
       void send(fixQuestion(messages), w.opts);
@@ -645,6 +672,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       const w = waitingRef.current;
       if (w) {
         setWaiting(null);
+        docRef.current.settleProposed(parseFlow(w.text).defined);
         release();
         record(w, 0);
       }
@@ -704,6 +732,8 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
     preview,
     thread,
     working,
+    /** The running Ask's answer text so far; `useStoreText(streamed)` follows it. */
+    streamed,
     waiting,
     landed,
     failure,

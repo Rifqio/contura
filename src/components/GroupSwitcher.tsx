@@ -5,6 +5,7 @@ import { useKeymap } from "../commands/useCommandKeys";
 import type { Place } from "../shell/tabs";
 import GroupBadge from "./GroupBadge";
 import Icon from "./Icon";
+import { useUngroupedLabel } from "../prefs/usePrefs";
 import Menu, { type MenuItem } from "./Menu";
 
 export type { Place } from "../shell/tabs";
@@ -30,15 +31,16 @@ interface Props {
 /** The title bar's Group switcher: the current Group's square and name, and a menu of Home, the places, New Group and Settings. */
 export default function GroupSwitcher({ groups, place, connectionCount, onHome, onOpenGroup, onOpenUngrouped, onNewGroup, onSettings }: Props) {
   const { map } = useKeymap();
+  const { label: ungroupedLabel } = useUngroupedLabel();
   const current = place.kind === "group" ? groups.find((g) => g.id === place.groupId) : undefined;
-  const currentName = current?.name ?? (connectionCount === 0 ? "No Group" : "Ungrouped");
+  const currentName = current?.name ?? (connectionCount === 0 ? "No Group" : ungroupedLabel);
   const numberKey = (n: number) => (n <= 9 ? (hintFor(map, `group.open.${n}` as CommandId) ?? undefined) : undefined);
 
   const placeItems: MenuItem[] = menuPlaces(groups).map((p, i) => {
     if (p.kind === "ungrouped") {
       return {
         key: "ungrouped",
-        label: "Ungrouped",
+        label: ungroupedLabel,
         shortcut: numberKey(i + 1),
         current: place.kind === "ungrouped",
         icon: <GroupBadge name="" color={null} />,

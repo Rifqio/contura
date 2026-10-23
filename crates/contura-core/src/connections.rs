@@ -26,8 +26,8 @@ use crate::jobs::paths::{PathUse, check_user_path};
 use crate::jobs::{FileIdentity, JobService};
 use crate::model::{
     AiSyncMode, Cell, ConnectionConfig, ConnectionId, DialectKind, EditorPrefs, GROUP_IMAGE_MAX,
-    Group, GroupColor, GroupId, KeymapOverrides, ObjectPath, PageRequest, RowHeight, SslMode,
-    UiPrefs,
+    Group, GroupColor, GroupId, InterfaceSize, KeymapOverrides, ObjectPath, PageRequest, RowHeight,
+    SslMode, UiPrefs,
 };
 use crate::query::{
     ExecOutcome, Execution, HistoryEntry, HistoryFilter, MoreRows, NewHistory, Outcome,
@@ -60,6 +60,10 @@ pub use transfer::TARGET_CHANGED;
 
 const LAST_GROUP_KEY: &str = "last_group";
 const UI_PREFS_KEY: &str = "ui_prefs";
+/// The longest custom name for Ungrouped, in characters.
+const UNGROUPED_LABEL_MAX: usize = 60;
+/// What Ungrouped is called until it is renamed.
+const UNGROUPED: &str = "Ungrouped";
 const KEYMAP_KEY: &str = "keymap";
 const KNOWN_EDITOR_FAMILIES: [&str; 3] = ["JetBrains Mono", "Cascadia Mono", "Consolas"];
 const RECENT_ITEMS_KEY: &str = "recent_items";
@@ -133,6 +137,20 @@ pub struct GroupInput {
 }
 
 const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+
+/// A custom name for Ungrouped as stored: trimmed, cut to its limit and trimmed again; empty is the default.
+fn ungrouped_label(label: Option<String>) -> Option<String> {
+    label
+        .map(|l| {
+            l.trim()
+                .chars()
+                .take(UNGROUPED_LABEL_MAX)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .filter(|l| !l.is_empty())
+}
 
 fn too_large() -> Error {
     Error::InvalidInput("the image is larger than 256 KB".into())
@@ -1419,15 +1437,24 @@ impl ConnectionService {
         if name.is_empty() {
             return Err(Error::InvalidInput("group name must not be empty".into()));
         }
+        let ungrouped = self
+            .ui_prefs()?
+            .ungrouped_label
+            .unwrap_or_else(|| UNGROUPED.into());
         let store = self.store()?;
         let id = input.id.unwrap_or_else(Uuid::new_v4);
-        let taken = store
-            .list_groups()?
-            .iter()
-            .any(|g| g.id != id && g.name.to_lowercase() == name.to_lowercase());
-        if taken {
+        let groups = store.list_groups()?;
+        let same = |a: &str| a.to_lowercase() == name.to_lowercase();
+        if groups.iter().any(|g| g.id != id && same(&g.name)) {
+            return Err(Error::InvalidInput(format!(
+                "A Group is already named {name}. Pick another name."
+            )));
+        }
+        // A Group may keep a name it already had, so one saved before this rule still saves.
+        let kept = groups.iter().any(|g| g.id == id && same(&g.name));
+        if same(&ungrouped) && !kept {
             return Err(Error::InvalidInput(
-                "a group with that name already exists".into(),
+                "That name is what Ungrouped is called. Pick another name.".into(),
             ));
         }
         let group = Group {
@@ -1490,6 +1517,22 @@ impl ConnectionService {
         )
     }
 
+    /// Whether the first start guide opens on its own: only in a data folder this start made,
+    /// until it is closed once.
+    pub fn first_start_guide(&self) -> Result<bool> {
+        Ok(self
+            .store()?
+            .get_setting(crate::store::FIRST_START_GUIDE_KEY)?
+            .as_deref()
+            == Some("show"))
+    }
+
+    /// The guide was closed (finished, skipped or Esc): it does not open on its own again.
+    pub fn first_start_guide_seen(&self) -> Result<()> {
+        self.store()?
+            .set_setting(crate::store::FIRST_START_GUIDE_KEY, "seen")
+    }
+
     /// Reads each field on its own, so one bad value keeps the others, then clamps.
     pub fn ui_prefs(&self) -> Result<UiPrefs> {
         let raw = self.store()?.get_setting(UI_PREFS_KEY)?;
@@ -1539,6 +1582,19 @@ impl ConnectionService {
         if let Some(h) = field(&value, "vqPanelHeight") {
             p.vq_panel_height = h;
         }
+        if let Some(l) = field(&value, "ungroupedLabel") {
+            p.ungrouped_label = l;
+        }
+        if let Some(z) = field::<InterfaceSize>(&value, "interfaceSize") {
+            p.interface_size = z.checked();
+        }
+        if let Some(b) = field(&value, "stripeRows") {
+            p.stripe_rows = b;
+        }
+        if let Some(n) = field(&value, "nullAs") {
+            p.null_as = n;
+        }
+        p.ungrouped_label = ungrouped_label(p.ungrouped_label);
         if p.row_height.0 != 24 {
             p.row_height = RowHeight(28);
         }
@@ -1566,7 +1622,9 @@ impl ConnectionService {
         self.store()?.set_setting(KEYMAP_KEY, &json)
     }
 
-    pub fn save_ui_prefs(&self, prefs: UiPrefs) -> Result<()> {
+    pub fn save_ui_prefs(&self, mut prefs: UiPrefs) -> Result<()> {
+        prefs.ungrouped_label = ungrouped_label(prefs.ungrouped_label);
+        prefs.interface_size = prefs.interface_size.checked();
         let json = serde_json::to_string(&prefs).map_err(|e| Error::Store(e.to_string()))?;
         let days_before = self.ui_prefs()?.history_keep_days;
         self.store()?.set_setting(UI_PREFS_KEY, &json)?;

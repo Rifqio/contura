@@ -545,6 +545,25 @@ test("item_7_dragging_a_tab_past_its_neighbours_reorders_and_a_short_press_does_
   expect(onReorder).toHaveBeenCalledTimes(1);
 });
 
+test("pressing an inactive tab shows it at once, so a drag moves the tab being looked at (as in Edge)", () => {
+  const q = (id: string) => ({ kind: "query" as const, doc: { id, name: id, text: "", connectionId: null, database: null, savedId: null, savedText: null } });
+  const onSelect = vi.fn();
+  render(<TabStrip tabs={[{ kind: "home" }, q("a"), q("b")]} active="query:a" onSelect={onSelect} onClose={() => {}} onNew={() => {}} onReorder={() => {}} />);
+  const [, a, b] = [...document.querySelectorAll<HTMLElement>(".work-tab")];
+  // The press selects, before any move or release.
+  fireEvent.pointerDown(b, { button: 0, clientX: 150 });
+  expect(onSelect).toHaveBeenCalledWith("query:b");
+  fireEvent.pointerUp(window, { clientX: 150 });
+  onSelect.mockClear();
+  // The active tab, a right press, and the close button do not select.
+  fireEvent.pointerDown(a, { button: 0, clientX: 50 });
+  fireEvent.pointerUp(window, { clientX: 50 });
+  fireEvent.pointerDown(b, { button: 2, clientX: 150 });
+  fireEvent.pointerDown(b.querySelector(".work-tab-close")!, { button: 0, clientX: 190 });
+  fireEvent.pointerUp(window, { clientX: 190 });
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
 test("item_7_alt_arrows_move_the_focused_tab_within_its_part_of_the_strip", async () => {
   const q = (id: string) => ({ kind: "query" as const, doc: { id, name: id, text: "", connectionId: null, database: null, savedId: null, savedText: null } });
   const flow = { kind: "flow" as const, name: "d" };
@@ -570,7 +589,7 @@ test("item_7_alt_arrows_move_the_focused_tab_within_its_part_of_the_strip", asyn
   expect(onSelect).not.toHaveBeenCalled();
 });
 
-test("item_7_the_click_that_ends_a_drag_does_not_select_the_tab", () => {
+test("item_7_the_click_that_ends_a_drag_does_not_select_the_tab_again", () => {
   const q = (id: string) => ({ kind: "query" as const, doc: { id, name: id, text: "", connectionId: null, database: null, savedId: null, savedText: null } });
   const onSelect = vi.fn();
   render(<TabStrip tabs={[q("a"), q("b")]} active="query:b" onSelect={onSelect} onClose={() => {}} onNew={() => {}} onReorder={() => {}} />);
@@ -580,7 +599,9 @@ test("item_7_the_click_that_ends_a_drag_does_not_select_the_tab", () => {
   fireEvent.pointerMove(window, { clientX: 200 });
   fireEvent.pointerUp(window, { clientX: 200 });
   fireEvent.click(button);
-  expect(onSelect).not.toHaveBeenCalled();
+  // The press selected it (as in Edge); the release click does not select a second time.
+  expect(onSelect.mock.calls).toEqual([["query:a"]]);
+  onSelect.mockClear();
   // A plain click after it selects as before.
   fireEvent.pointerDown(button, { button: 0, clientX: 50 });
   fireEvent.pointerUp(window, { clientX: 50 });
@@ -611,11 +632,11 @@ test("item_48_tab_widths_share_the_room_evenly_up_to_220", () => {
   expect(tabWidths(1000, 3, true)).toEqual({ density: "normal", width: 220, activeWidth: 220 });
   // Many: every tab shrinks by the same amount; under 150 px the inactive closes hide until hover.
   expect(tabWidths(1200, 10, true)).toEqual({ density: "narrow", width: 120, activeWidth: 120 });
-  // Under 84 px the inactive tabs keep only their icon; the active one keeps 96 px for its name and close.
+  // Under 84 px the inactive tabs keep only their icon; the active one keeps 112 px for its name, its unsaved mark and close.
   const tight = tabWidths(800, 12, true);
   expect(tight.density).toBe("compact");
-  expect(tight.activeWidth).toBe(96);
-  expect(tight.width).toBe(Math.floor((800 - 96) / 11));
+  expect(tight.activeWidth).toBe(112);
+  expect(tight.width).toBe(Math.floor((800 - 112) / 11));
   // With no active tab in the strip, all share alike.
   expect(tabWidths(800, 12, false)).toEqual({ density: "compact", width: 66, activeWidth: 66 });
   // Never narrower than the icon.
@@ -657,8 +678,8 @@ test("item_48_one_observer_on_the_strip_sets_the_widths_and_goes_on_unmount", ()
     const list = screen.getByRole("tablist", { name: "Open tabs" });
     expect(list.classList.contains("tab-list-compact")).toBe(true);
     expect(list.classList.contains("tab-list-narrow")).toBe(true);
-    expect(list.style.getPropertyValue("--tab-active-w")).toBe("96px");
-    expect(list.style.getPropertyValue("--tab-w")).toBe(`${Math.floor((900 - 96) / 11)}px`);
+    expect(list.style.getPropertyValue("--tab-active-w")).toBe("112px");
+    expect(list.style.getPropertyValue("--tab-w")).toBe(`${Math.floor((900 - 112) / 11)}px`);
     // Wider: the classes go and every tab is 220 px again.
     Object.defineProperty(strip, "clientWidth", { configurable: true, value: 4000 });
     act(() => FakeObserver.made[0].cb([], FakeObserver.made[0] as unknown as ResizeObserver));
