@@ -56,6 +56,8 @@ interface Props {
   database?: string | null;
   /** Opens the Export dialog on the shown result (the menu's Export..., and Ctrl+E here). No Import here (Q16). */
   onExport?(origin: ExportOrigin): void;
+  /** Item 40: one statement, one result (the Visual Query): no result tabs, only the summary and the tools. */
+  single?: boolean;
 }
 
 /** After a reconnect ran statement N alone (R43): "Statements 3 and 4 did not run." */
@@ -137,6 +139,7 @@ export default function ResultsPanel({
   errorAction,
   database = null,
   onExport,
+  single = false,
 }: Props) {
   const { map } = useKeymap();
   const runKey = hintFor(map, "query.run");
@@ -456,6 +459,7 @@ export default function ResultsPanel({
       {item && (
         <div className="results-tabs">
           {/* PR28: Pin and Close live on the result tab: close on hover, Pin in its right-click menu. */}
+          {!single && (
           <div role="tablist" aria-label="Result tabs" className="results-tablist">
             {state.items.map((r, i) => {
               const running = r.state.s === "running";
@@ -515,6 +519,7 @@ export default function ResultsPanel({
               );
             })}
           </div>
+          )}
           {summary}
           <span className="spacer" />
           {rowsState && (

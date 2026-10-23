@@ -70,7 +70,7 @@ test("arrow keys select, enter and typing open the editor, enter keeps the value
   expect(td(0, 1).title).toBe("Was paid. Edited, not saved yet.");
   expect(document.querySelector('tr[data-row="0"] .row-number-edited')).not.toBeNull();
   expect(td(1, 1).className).toContain("cell-selected");
-  key("x");
+  await userEvent.keyboard("x");
   expect(editor()!.value).toBe("x");
   fireEvent.keyDown(editor()!, { key: "Escape" });
   expect(td(1, 1).textContent).toBe("shipped");
@@ -433,11 +433,19 @@ test("a cut-short cell edited in the editor saves with its full old value", asyn
   expect(firstChange("apply_edits").old).toEqual(fullCell);
 });
 
-test("typing over a cut-short cell loads its full value first, so it can be saved", async () => {
+test("typing over a cut-short cell opens at once, the browser types the key, and save loads the full old value (item 47)", async () => {
   await open(orders(), {}, { plan_edits: okPlan, apply_edits: saved });
   fireEvent.mouseDown(td(1, 2));
-  key("x");
-  await waitFor(() => expect(editor()!.value).toBe("x"));
+  // The opening key is left to the browser here too; the full old value is loaded when saving.
+  expect(key(":", { shiftKey: true })).toBe(true);
+  expect(document.activeElement).toBe(editor());
+  expect(editor()!.value).toBe("");
+  expect(callsTo("fetch_full_value")).toEqual([]);
+  fireEvent.keyDown(editor()!, { key: "Escape" });
+  fireEvent.mouseDown(td(1, 2));
+  grid().focus();
+  await userEvent.keyboard("x");
+  expect(editor()!.value).toBe("x");
   fireEvent.keyDown(editor()!, { key: "Enter" });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(callsTo("apply_edits")).toHaveLength(1));
@@ -774,8 +782,8 @@ test("item_4_a_long_value_opens_in_the_larger_editor_and_ctrl_enter_keeps_it", a
 test("item_4_shift_f2_opens_the_larger_editor_from_the_cell_or_the_grid", async () => {
   await open();
   fireEvent.doubleClick(td(0, 1));
-  // The cell editor says its keys, Shift+F2 among them.
-  expect(document.querySelector(".cell-editor-tip")?.textContent).toContain("opens larger");
+  // Item 46: the cell editor names only Shift+F2; Enter and Esc go without saying.
+  expect(document.querySelector(".cell-editor-tip")?.textContent).toBe("Shift+F2 opens larger");
   fireEvent.change(editor()!, { target: { value: "typed" } });
   fireEvent.keyDown(editor()!, { key: "F2", shiftKey: true });
   const panel = screen.getByRole("dialog", { name: "Edit status" });
@@ -787,4 +795,39 @@ test("item_4_shift_f2_opens_the_larger_editor_from_the_cell_or_the_grid", async 
   expect(screen.getByRole("dialog", { name: "Edit status" })).toBeTruthy();
   fireEvent.keyDown(editor()!, { key: "Escape" });
   expect(screen.queryByRole("dialog", { name: "Edit status" })).toBeNull();
+});
+
+test("typing :: then a letter or digit keeps both colons, every character typed by the browser (item 47)", async () => {
+  // jsdom has no WebView text input (TSF), so the loss itself cannot happen here. What this proves is the
+  // fixed path: no key of `::s` or `::1` is cancelled and written in by the grid; the browser types each one,
+  // the opening key included, into the focused editor. On the old code the first `:` was cancelled.
+  const prevented: string[] = [];
+  const watch = (e: KeyboardEvent) => {
+    if (e.defaultPrevented) prevented.push(e.key);
+  };
+  document.addEventListener("keydown", watch);
+  try {
+    const user = userEvent.setup();
+    await open();
+    await user.click(td(0, 1));
+    await user.keyboard("::s");
+    expect(editor()!.value).toBe("::s");
+    fireEvent.keyDown(editor()!, { key: "Escape" });
+    await user.click(td(1, 1));
+    await user.keyboard("::1");
+    expect(editor()!.value).toBe("::1");
+    expect(prevented).toEqual([]);
+  } finally {
+    document.removeEventListener("keydown", watch);
+  }
+});
+
+test("the key that opens the editor is typed by the browser into the focused editor, not written in by the grid (item 47)", async () => {
+  await open();
+  fireEvent.mouseDown(td(0, 1));
+  // The grid leaves the key alone, so the WebView's own text input (and its IME) types the first character too.
+  expect(key(":", { shiftKey: true })).toBe(true);
+  expect(editor()).not.toBeNull();
+  expect(document.activeElement).toBe(editor());
+  expect(editor()!.value).toBe("");
 });

@@ -71,8 +71,10 @@ pub enum BinaryText {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum JsonLayout {
-    #[default]
+    /// JSON Lines (one object per line), saved as `.jsonl`.
     Lines,
+    /// One array of objects, saved as `.json`: the default (item 45).
+    #[default]
     Array,
 }
 
@@ -132,7 +134,7 @@ impl Default for ExportOptions {
             header: true,
             bom: false,
             binary: BinaryText::Hex,
-            json_layout: JsonLayout::Lines,
+            json_layout: JsonLayout::Array,
             freeze_header: true,
             rows_per_statement: 500,
             table_name: SqlTableName::AsSource,
@@ -677,7 +679,7 @@ mod tests {
         assert!(o.header);
         assert!(!o.bom);
         assert_eq!(o.binary, BinaryText::Hex);
-        assert_eq!(o.json_layout, JsonLayout::Lines);
+        assert_eq!(o.json_layout, JsonLayout::Array);
         assert!(o.freeze_header);
         assert_eq!(o.rows_per_statement, 500);
         assert_eq!(o.table_name, SqlTableName::AsSource);

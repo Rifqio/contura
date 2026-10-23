@@ -62,6 +62,14 @@
 .mermaid-editor .cm-scroller {
   font: inherit;
 }
+/* Item 50: the gutter takes the app tokens in both themes, like the SQL, DBML and .flow editors. */
+.mermaid-editor .cm-gutters {
+  background: var(--c-bg-surface);
+  border-right: 1px solid var(--c-border-subtle);
+}
+.mermaid-editor .cm-lineNumbers {
+  color: var(--c-text-faint);
+}
 .mermaid-preview {
   background: var(--c-bg-canvas);
 }

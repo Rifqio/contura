@@ -68,7 +68,6 @@ function previewFor(q: VisualQuery): VqPreview {
       });
     }
   });
-  if (q.columns.length === 0) problems.push({ target: { kind: "columns" }, message: "Tick at least one column." });
   if (q.groupBy.kind === "manual" && q.groupBy.columns.some((c) => !c.column))
     problems.push({ target: { kind: "query" }, message: "A GROUP BY row has no column. Pick one." });
   return {
@@ -382,10 +381,11 @@ test("every_picker_is_a_themed_select", async () => {
   expect(filterBody().querySelector("select")).toBeNull();
 });
 
-test("item_30_nothing_ticked_is_said_once_by_the_empty_state", async () => {
+test("item_37_nothing_ticked_says_all_columns", async () => {
   render(<Harness over={{}} />);
-  expect(await within(columnsBody()).findByText("Tick a column to start")).toBeTruthy();
-  expect(within(columnsBody()).queryByText("Tick at least one column.")).toBeNull();
+  expect(await within(columnsBody()).findByText("All columns.")).toBeTruthy();
+  expect(within(columnsBody()).getByText("Tick columns to choose them.")).toBeTruthy();
+  expect(within(columnsBody()).queryByText("Tick a column to start")).toBeNull();
 });
 
 test("item_33_conditions_fold_their_count_into_the_sentence", () => {

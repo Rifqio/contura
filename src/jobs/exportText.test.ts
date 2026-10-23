@@ -28,8 +28,9 @@ test("csv_summary_names_delimiter_header_and_null", () => {
 });
 
 test("json_excel_and_sql_summaries", () => {
-  expect(optionsSummary("json", opts())).toBe("One object per line");
-  expect(optionsSummary("json", opts({ jsonLayout: "array", binary: "base64" }))).toBe("Array, binary as Base64");
+  // Item 45: JSON defaults to one array; the other layout is JSON Lines.
+  expect(optionsSummary("json", opts())).toBe("Array");
+  expect(optionsSummary("json", opts({ jsonLayout: "lines", binary: "base64" }))).toBe("JSON Lines, binary as Base64");
   expect(optionsSummary("xlsx", opts())).toBe("Header row, frozen");
   expect(optionsSummary("xlsx", opts({ freezeHeader: false }))).toBe("Header row, not frozen");
   expect(optionsSummary("sql", opts())).toBe("500 rows per statement, table name as in the source");
@@ -38,7 +39,10 @@ test("json_excel_and_sql_summaries", () => {
 
 test("format_hints_are_the_spec_four", () => {
   expect(formatHint("csv", "menu_items", "postgres")).toBe("Plain text. Opens in Excel and in any editor.");
-  expect(formatHint("json", "menu_items", "postgres")).toBe("Plain text. Opens in Excel and in any editor.");
+  // Item 45: JSON has its own hint, for each layout.
+  expect(formatHint("json", "menu_items", "postgres")).toBe("One JSON array of objects. Opens in any editor.");
+  expect(formatHint("json", "menu_items", "postgres", "array")).toBe("One JSON array of objects. Opens in any editor.");
+  expect(formatHint("json", "menu_items", "postgres", "lines")).toBe("One JSON object per line. Opens in any editor.");
   expect(formatHint("xlsx", "menu_items", "postgres")).toBe(
     "One sheet named menu_items. bigint and numeric are written as text, so no digits are lost.",
   );
@@ -48,11 +52,12 @@ test("format_hints_are_the_spec_four", () => {
 
 test("file_names_follow_the_format_and_layout", () => {
   expect(fileNameFor("menu_items", "csv", "lines")).toBe("menu_items.csv");
-  expect(fileNameFor("menu_items", "json", "lines")).toBe("menu_items.ndjson");
+  expect(fileNameFor("menu_items", "json", "lines")).toBe("menu_items.jsonl");
   expect(fileNameFor("menu_items", "json", "array")).toBe("menu_items.json");
   expect(fileNameFor("menu_items", "xlsx", "lines")).toBe("menu_items.xlsx");
   expect(fileNameFor("menu_items", "sql", "lines")).toBe("menu_items.sql");
   expect(stripExtension("orders-oct.ndjson")).toBe("orders-oct");
+  expect(stripExtension("orders-oct.jsonl")).toBe("orders-oct");
   expect(stripExtension("orders.v2.CSV")).toBe("orders.v2");
   expect(stripExtension("orders.v2")).toBe("orders.v2");
 });

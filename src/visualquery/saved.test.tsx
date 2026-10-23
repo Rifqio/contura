@@ -65,10 +65,8 @@ const SHOP: SqlSchema = {
 };
 
 const SQL = "SELECT o.id\nFROM orders AS o";
-const preview = (q: VisualQuery): VqPreview =>
-  q.columns.length === 0
-    ? { query: null, problems: [{ target: { kind: "columns" }, message: "Tick at least one column." }] }
-    : { query: { sql: SQL, parts: [], outputs: q.columns.map((c) => c.column), warnings: [] }, problems: [] };
+// Item 37: nothing ticked still makes SQL (every column).
+const preview = (q: VisualQuery): VqPreview => ({ query: { sql: SQL, parts: [], outputs: q.columns.map((c) => c.column), warnings: [] }, problems: [] });
 
 let lang: { client: LangClient; schemas: SchemaCache };
 let loads: string[] = [];

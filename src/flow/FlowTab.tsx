@@ -40,6 +40,7 @@ import type { NodeState } from "./nodes/parts";
 import type { TextEdit } from "../lang/protocol";
 import { appLang } from "../lang/appLang";
 import { insertionLine } from "../lang/insertionLine";
+import { editorTheme } from "../lang/editorTheme";
 import type { LangClient } from "../lang/client";
 import { flowLanguageWith } from "../lang/flow/cm";
 import { defaultArrow, type DiagramKind, FIXED_KINDS, type FlowDoc, type FlowNode, type FlowNodeKind, STATE_END, STATE_START } from "../lang/flow/model";
@@ -360,6 +361,7 @@ function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, o
         extensions: [
           lineNumbers(),
           insertionLine(),
+          editorTheme(),
           bandField,
           ghostField,
           lintGutter(),

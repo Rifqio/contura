@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <img alt="MySQL" src="https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white">
+  <img alt="SQLite" src="https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white">
+</p>
+
+<p align="center">
   <a href="https://github.com/Rifqio/contura/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Rifqio/contura?style=flat-square&label=release"></a>
   <a href="https://github.com/Rifqio/contura/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/Rifqio/contura/total?style=flat-square"></a>
   <a href="https://github.com/Rifqio/contura/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Rifqio/contura/ci.yml?branch=main&style=flat-square&label=CI"></a>
@@ -43,6 +49,14 @@ I built Contura because my everyday database tool felt heavy. It does what I rea
 | **Windows 10/11** | `Contura_x64_portable.exe`: no installer. Put it in any folder and run it. |
 | **Ubuntu / Debian** | `Contura_amd64.deb`: `sudo apt install ./Contura_*.deb` |
 | **Other Linux** | `Contura_amd64.AppImage`: `chmod +x` it and run. |
+
+## Supported databases
+
+| Database | Versions |
+|---|---|
+| <img alt="MySQL" src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white"> | 8.0 and newer. MariaDB works through the MySQL support, but is not tested. |
+| <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white"> | 13 and newer |
+| <img alt="SQLite" src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white"> | Built in, nothing to install. Open any `.sqlite` or `.db` file. |
 
 ## A quick tour
 
@@ -159,7 +173,9 @@ Contura has no account, no cloud and no telemetry. Settings, Connections (withou
 | Linux AppImage | `data` next to the AppImage, when that folder can be written to |
 | Linux .deb | `~/.local/share/contura` |
 
-The only thing that ever leaves your computer is what you send to an AI provider you set up yourself.
+Only two things ever leave your computer: what you send to an AI provider you set up yourself, and, if you turn it on, the update check.
+
+**Updates.** Update checks are off until you turn them on (Contura asks once, on its first start, and Settings > Updates has the switch). When they are on, Contura asks github.com once a day for the latest release: a GET of the release manifest (`latest.json`), with no cookie, no token and no version number. When you choose Update and restart, it downloads the one new file (another GET), checks its signature and checksum, and only then replaces the program; the data folder is not touched. Nothing else is sent. On Windows and in the AppImage the update is one click; the .deb shows a link to the new release.
 
 ## Light and dark
 

@@ -14,7 +14,7 @@ import {
 import { keymap as loadKeymap, saveKeymap } from "../api/client";
 import type { KeymapOverrides } from "../api/types";
 import { keysFromEvent } from "./keys";
-import { type Keymap, resolveKeymap } from "./keymap";
+import { type Keymap, knownOverrides, resolveKeymap } from "./keymap";
 import { COMMANDS, type CommandId } from "./registry";
 
 export type CommandHandlers = Partial<Record<CommandId, () => void>>;
@@ -156,7 +156,7 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
     let live = true;
     const read = loadKeymap()
       .then((o) => {
-        stored.current = o ?? {};
+        stored.current = knownOverrides(o ?? {});
         if (live && !saved.current) setOverrides(stored.current);
       })
       .catch(() => {
@@ -176,7 +176,7 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
       if (partial) {
         if (stored.current === null) {
           try {
-            stored.current = (await loadKeymap()) ?? {};
+            stored.current = knownOverrides((await loadKeymap()) ?? {});
           } catch {
             // Still unreadable: save what was asked over nothing.
           }

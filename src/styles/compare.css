@@ -181,7 +181,7 @@
   background: var(--c-bg-panel);
 }
 .compare-left-diff {
-  width: 380px;
+  width: 400px;
 }
 .compare-left-sync {
   width: 420px;
@@ -193,12 +193,93 @@
   align-items: center;
   padding: 0 var(--spacing-sm);
 }
-.compare-filter .segmented {
-  background: var(--c-bg-panel);
+/* Item 43: the filter chips in the three status colours (board B4). */
+.compare-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-.compare-filter-n {
-  color: var(--c-text-subtle);
+.compare-chip {
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--rounded-sm);
+  background: none;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.compare-chip:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.compare-chip:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: 1px;
+}
+.compare-chip-on {
+  color: var(--c-text);
+  font-weight: 600;
+}
+.compare-chip-n {
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+.compare-chip-all .compare-chip-n {
+  color: var(--c-text-subtle);
+}
+.compare-chip-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.compare-chip-all.compare-chip-on,
+.compare-chip-all.compare-chip-on:hover {
+  background: var(--c-accent-subtle);
+  border-color: var(--c-accent);
+}
+.compare-chip-added .compare-chip-dot {
+  background: var(--diff-added);
+}
+.compare-chip-removed .compare-chip-dot {
+  background: var(--diff-removed);
+}
+.compare-chip-changed .compare-chip-dot {
+  background: var(--diff-changed);
+}
+.compare-chip-added.compare-chip-on,
+.compare-chip-added.compare-chip-on:hover {
+  background: var(--diff-added-tint);
+  border-color: var(--diff-added);
+}
+.compare-chip-removed.compare-chip-on,
+.compare-chip-removed.compare-chip-on:hover {
+  background: var(--diff-removed-tint);
+  border-color: var(--diff-removed);
+}
+.compare-chip-changed.compare-chip-on,
+.compare-chip-changed.compare-chip-on:hover {
+  background: var(--diff-changed-tint);
+  border-color: var(--diff-changed);
+}
+
+/* Item 43: the status colours, like Git decorations: on the name, the mark, the badge, the legend. */
+.diff-added,
+.compare-trow-name.diff-added {
+  color: var(--diff-added);
+}
+.diff-removed,
+.compare-trow-name.diff-removed {
+  color: var(--diff-removed);
+}
+.diff-changed,
+.compare-trow-name.diff-changed {
+  color: var(--diff-changed);
 }
 .compare-foot-hint {
   flex: none;
@@ -209,7 +290,7 @@
   font: var(--font-small);
 }
 
-/* The tree reuses the object tree's rows and guides; marks carry their word too. */
+/* The tree reuses the object tree's rows and guides; the status shows as colour and a one-letter badge (item 43). */
 .compare-tree {
   flex: 1;
   min-height: 0;
@@ -230,6 +311,8 @@
 }
 .compare-trow-name {
   flex: none;
+  color: var(--c-text);
+  font-size: 12px;
 }
 .compare-trow-detail {
   min-width: 0;
@@ -238,12 +321,20 @@
   color: var(--c-text-subtle);
   font-size: 11px;
 }
-.compare-trow-word {
+/* One letter (A, R, C) at the right edge, or the count on a table that holds changes. */
+.compare-trow-badge {
   flex: none;
+  min-width: 16px;
   margin-left: auto;
   padding-left: var(--spacing-sm);
-  color: var(--c-text-subtle);
-  font: var(--font-small);
+  text-align: right;
+  font-family: var(--font-mono-family);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.compare-trow-badge.compare-trow-count {
+  font-family: var(--font-family-ui);
 }
 .compare-trow-note {
   cursor: default;
@@ -252,14 +343,18 @@
 .compare-mark {
   flex: none;
 }
-.compare-mark-added {
-  color: var(--c-success-text);
+/* The selected row's `.icon { color: inherit }` must not take the mark's colour away. */
+.compare-mark-added,
+.tree-row-selected .compare-mark-added {
+  color: var(--diff-added);
 }
-.compare-mark-removed {
-  color: var(--c-danger-text);
+.compare-mark-removed,
+.tree-row-selected .compare-mark-removed {
+  color: var(--diff-removed);
 }
-.compare-mark-changed {
-  color: var(--c-warning-text);
+.compare-mark-changed,
+.tree-row-selected .compare-mark-changed {
+  color: var(--diff-changed);
 }
 
 /* ---- the Differences pane: title, legend, DDL panes, data-loss banner, In the Sync Script ---- */
@@ -287,14 +382,19 @@
 .compare-legend {
   display: flex;
   align-items: center;
-  gap: var(--spacing-md);
-  color: var(--c-text-subtle);
+  gap: 14px;
   font: var(--font-small);
 }
 .compare-legend > span {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
+}
+.compare-status-word {
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
+  font: var(--font-small);
 }
 
 .compare-panes {
@@ -372,22 +472,22 @@
   font: inherit;
 }
 .compare-dl-chg {
-  background: var(--c-warning-subtle);
+  background: var(--diff-changed-tint);
 }
 .compare-dl-chg .compare-dl-mk {
-  color: var(--c-warning-text);
+  color: var(--diff-changed);
 }
 .compare-dl-add {
-  background: var(--c-success-subtle);
+  background: var(--diff-added-tint);
 }
 .compare-dl-add .compare-dl-mk {
-  color: var(--c-success-text);
+  color: var(--diff-added);
 }
 .compare-dl-rem {
-  background: var(--c-danger-subtle);
+  background: var(--diff-removed-tint);
 }
 .compare-dl-rem .compare-dl-mk {
-  color: var(--c-danger-text);
+  color: var(--diff-removed);
 }
 .compare-dl-fill {
   background: color-mix(in srgb, var(--c-border-subtle) 60%, transparent);
@@ -683,4 +783,22 @@
 /* The Production dialog's data-loss banner sits on the danger tint. */
 .compare-danger {
   background: var(--c-danger-subtle);
+}
+
+/* Item 44: the database (and schema) beside each pane's Connection, as the pickers show them. */
+.compare-pane-scope-part {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+.compare-pane-sep {
+  color: var(--c-text-faint);
+}
+.compare-pane-scope {
+  color: var(--c-text-muted);
+  font: var(--font-mono-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

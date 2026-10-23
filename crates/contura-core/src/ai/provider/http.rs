@@ -1,4 +1,5 @@
-//! The one HTTP client for AI providers. The only file that names `reqwest`.
+//! The one HTTP client for AI providers. With `update/http.rs` (the update check), the only
+//! files that name `reqwest`.
 //!
 //! TLS is rustls with ring and the OS certificate store; redirects are off; the system
 //! proxy is used except for this PC and plain http to a private network. Errors name the host only, never the URL, a header

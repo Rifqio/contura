@@ -97,10 +97,12 @@ test("the_visual_query_tab_fits_the_minimum_window_height", () => {
   const banner = 6 * 2 + 20;
   const canvas = px(ruleBody(".vq-canvas"), "min-height");
   expect(canvas).toBeGreaterThanOrEqual(100);
+  // Item 36: the panel's height is the user's (inline), and it gives way down to its tab strip and rule.
   const bottom = shrinks(".vq-bottom");
-  // The bottom keeps its panel tabs and a few rows.
-  expect(bottom).toBeGreaterThanOrEqual(px(ruleBody(".vq-panel-tabs"), "height") + 3 * 28);
-  expect(toolbar + banner + canvas + bottom).toBeLessThanOrEqual(bodyAtMinimum());
+  expect(bottom).toBe(px(ruleBody(".vq-panel-tabs"), "height") + 1);
+  // Item 40: the hint has its own strip under the canvas.
+  const hint = px(ruleBody(".vq-hint-strip"), "height");
+  expect(toolbar + banner + canvas + hint + bottom).toBeLessThanOrEqual(bodyAtMinimum());
 });
 
 test("the_table_designer_fits_the_minimum_window_height", () => {

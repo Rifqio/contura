@@ -361,3 +361,13 @@ test("replace_range_replaces_and_leaves_you_typing_after_it", () => {
   act(() => editorRef.current!.replaceRange(99, 120, "!"));
   expect(view.state.doc.toString()).toBe("SELECT 1; SELECT 3;!");
 });
+
+test("the editor takes the dark flag in the dark theme, so its suggestions are readable (item 50)", () => {
+  document.documentElement.setAttribute("data-theme", "dark");
+  try {
+    const { view } = setup("");
+    expect(view.state.facet(EditorView.darkTheme)).toBe(true);
+  } finally {
+    document.documentElement.removeAttribute("data-theme");
+  }
+});

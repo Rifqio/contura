@@ -146,3 +146,22 @@ export function useFlowAssistMode(): [FlowAssistMode, (mode: FlowAssistMode) => 
   );
   return [stored === "auto" || stored === "review" ? stored : local, set];
 }
+
+/**
+ * Item 36: the Visual Query's bottom panel height, the same in every tab and remembered for the user (null is the
+ * default). Without a provider (a tab drawn on its own) it lives in the component.
+ */
+export function useVqPanelHeight(): [number | null, (h: number | null) => void] {
+  const ctx = useContext(PrefsContext);
+  const [local, setLocal] = useState<number | null>(null);
+  const update = ctx?.update;
+  const set = useCallback(
+    (h: number | null) => {
+      if (update) update({ vqPanelHeight: h });
+      else setLocal(h);
+    },
+    [update],
+  );
+  const stored = ctx?.prefs.vqPanelHeight;
+  return [ctx ? (typeof stored === "number" ? stored : null) : local, set];
+}

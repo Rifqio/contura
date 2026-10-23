@@ -13,7 +13,7 @@ function isModel(v: unknown): v is VisualQuery {
   return lists && strOrNull(v.database) && isObject(v.groupBy) && (v.limit === null || typeof v.limit === "number") && typeof v.distinct === "boolean";
 }
 
-/** Dragged card widths, when the draft has any that are numbers. */
+/** Dragged card widths or heights, when the draft has any that are numbers. */
 function widthsOf(v: unknown): Record<string, number> | undefined {
   if (!isObject(v)) return undefined;
   const out: Record<string, number> = {};
@@ -48,6 +48,7 @@ export function parseVisualDrafts(json: string): VisualTabDoc[] {
       savedId: d.savedId,
       savedJson: d.savedJson,
       ...(widthsOf(d.widths) ? { widths: widthsOf(d.widths) } : {}),
+      ...(widthsOf(d.heights) ? { heights: widthsOf(d.heights) } : {}),
     }));
   } catch {
     return [];

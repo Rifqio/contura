@@ -257,6 +257,33 @@ test("tab_reaches_the_grid_and_typing_starts_an_edit", async () => {
   expect((screen.getByRole("textbox", { name: "Cell value" }) as HTMLTextAreaElement).value).toBe("x");
 });
 
+test("item_47_the_key_that_opens_a_designer_cell_is_typed_by_the_browser", async () => {
+  setup("mysql");
+  await screen.findByRole("tab", { name: "Columns 5" });
+  fireEvent.mouseDown(cell("id", "name"));
+  scroller().focus();
+  const prevented: string[] = [];
+  const watch = (e: KeyboardEvent) => {
+    if (e.defaultPrevented) prevented.push(e.key);
+  };
+  document.addEventListener("keydown", watch);
+  try {
+    // The grid leaves the opening key to the browser, which types it into the focused editor.
+    expect(fireEvent.keyDown(scroller(), { key: ":", shiftKey: true })).toBe(true);
+    const box = screen.getByRole("textbox", { name: "Cell value" }) as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(box);
+    expect(box.value).toBe("");
+    fireEvent.keyDown(box, { key: "Escape" });
+    // Typed for real, `::s` stays `::s`, with no key cancelled on the way.
+    scroller().focus();
+    await userEvent.keyboard("::s");
+    expect((screen.getByRole("textbox", { name: "Cell value" }) as HTMLTextAreaElement).value).toBe("::s");
+    expect(prevented).toEqual([]);
+  } finally {
+    document.removeEventListener("keydown", watch);
+  }
+});
+
 test("discard_returns_to_the_loaded_design", async () => {
   const { controlRef, onDirtyChange } = setup("mysql");
   await screen.findByRole("tab", { name: "Columns 5" });

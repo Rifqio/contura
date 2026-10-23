@@ -67,6 +67,8 @@ export interface UiPrefs {
   flowSidePanel: FlowSidePanelPref;
   /** How the diagram assistant's changes land: "Review first" (the start) or "Auto-apply". */
   flowAssistMode: FlowAssistMode;
+  /** Item 36: the Visual Query's bottom panel height in px; null is the default. */
+  vqPanelHeight: number | null;
 }
 
 /** Mirrors the Core defaults; used before the Core answers. */
@@ -79,6 +81,7 @@ export const DEFAULT_UI_PREFS: UiPrefs = {
   historyKeepDays: null,
   flowSidePanel: { hidden: false, tab: "editor" },
   flowAssistMode: "review",
+  vqPanelHeight: null,
 };
 
 /** Shortcut overrides by command id; an empty list unbinds the command. */
@@ -275,7 +278,9 @@ export type CommandError =
   /** The Sync Script rebuilt at Apply differs from the one shown: `connection` (the target) changed since the compare. */
   | { kind: "planChanged"; message: { connection: string } }
   /** Apply of a Sync Script was cancelled; `applied` of its `total` statements stayed applied (MySQL; PostgreSQL's committed enum values). */
-  | { kind: "syncCancelled"; message: { applied: number; total: number } };
+  | { kind: "syncCancelled"; message: { applied: number; total: number } }
+  /** One-click updates: the sentence to show. */
+  | { kind: "update"; message: string };
 
 /** One table as the server holds it, for the Table Designer. */
 export interface TableDesign {
@@ -1710,7 +1715,7 @@ export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   header: true,
   bom: false,
   binary: "hex",
-  jsonLayout: "lines",
+  jsonLayout: "array",
   freezeHeader: true,
   rowsPerStatement: 500,
   tableName: "asSource",

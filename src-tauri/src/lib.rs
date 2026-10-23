@@ -4,6 +4,7 @@ mod fatal;
 mod folders;
 mod job_commands;
 mod paths;
+mod updater;
 mod window_size;
 
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use contura_core::ai::{AiProviderKind, AiService};
 use contura_core::connections::ConnectionService;
 use contura_core::secrets::{self, DeferredSecretStore, KeyringSecretStore, SecretStore};
 use contura_core::store::AppStore;
+use contura_core::update::UpdateService;
 use tauri::{Manager, RunEvent, WebviewWindowBuilder, window::Color};
 
 /// The longest quitting waits for running queries and jobs to stop.
@@ -19,6 +21,10 @@ const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A start made by an update waits for the old process to exit first. The old one
+    // released its single-instance lock before starting this one; the data folder lock
+    // (`start`) covers it until it has gone.
+    updater::wait_for_previous();
     let result = tauri::Builder::default()
         // First, so a second launch exits before it touches the data folder.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -195,6 +201,11 @@ pub fn run() {
             job_commands::job_events,
             job_commands::reveal_in_folder,
             job_commands::read_text_file,
+            updater::update_status,
+            updater::set_update_checks,
+            updater::check_for_update,
+            updater::download_update,
+            updater::restart_to_update,
         ])
         .build(tauri::generate_context!());
     let app = match result {
@@ -272,6 +283,11 @@ fn secret_store(
 
 fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = paths::data_dir()?;
+    // One Contura per data folder: a start made by an update waits for the old process to
+    // let go of it; any other start waits briefly, then says another Contura has it.
+    if let Some(lock) = paths::lock_data_dir(&data_dir, updater::data_lock_wait())? {
+        app.manage(lock);
+    }
     let store = AppStore::open(&data_dir.join("app.sqlite"))?;
     let secrets = Arc::new(secret_store(&store, data_dir.join("app.sqlite"))?);
     app.manage(commands::Secrets(secrets.clone()));
@@ -279,6 +295,13 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(AiService::new(ai_store, secrets.clone()));
     app.manage(ConnectionService::new(store, secrets).with_data_dir(data_dir.clone()));
     app.manage(commands::DataDir(data_dir.clone()));
+    let (kind, target) = updater::install_target();
+    app.manage(UpdateService::new(
+        AppStore::open(&data_dir.join("app.sqlite"))?,
+        &app.package_info().version.to_string(),
+        kind,
+        target,
+    ));
     // tauri.conf.json's "main" entry (create: false) holds the title, the size and its
     // minimum, and decorations off: the app draws its own title bar (TitleBar.tsx).
     let main = app
@@ -307,5 +330,7 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             .center();
     }
     builder.build()?;
+    // The window is up: an update's old program file can go.
+    updater::cleanup_later(app.handle().clone());
     Ok(())
 }

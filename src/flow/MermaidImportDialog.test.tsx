@@ -237,3 +237,22 @@ test("the_notes_list_shows_the_first_200_and_counts_the_rest", async () => {
   expect(within(dialog).getByText("250", { selector: ".chip" })).toBeTruthy();
   expect(within(dialog).getByText("And 50 more.")).toBeTruthy();
 });
+
+test("the Mermaid editor takes the dark flag in the dark theme (item 50)", () => {
+  document.documentElement.setAttribute("data-theme", "dark");
+  try {
+    const s = setup();
+    expect(s.view().state.facet(EditorView.darkTheme)).toBe(true);
+  } finally {
+    document.documentElement.removeAttribute("data-theme");
+  }
+});
+
+test("the Mermaid editor's gutter takes the app tokens, not CodeMirror's dark grey (item 50)", () => {
+  const plain = flowCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = [...plain.matchAll(/([^{}]+)\{([^}]*)\}/g)].find((m) => m[1].trim() === ".mermaid-editor .cm-gutters");
+  expect(rule?.[2]).toMatch(/background:\s*var\(--c-bg-surface\)/);
+  expect(rule?.[2]).toMatch(/border-right:[^;]*var\(--c-border-subtle\)/);
+  const numbers = [...plain.matchAll(/([^{}]+)\{([^}]*)\}/g)].find((m) => m[1].trim() === ".mermaid-editor .cm-lineNumbers");
+  expect(numbers?.[2]).toMatch(/color:\s*var\(--c-text-faint\)/);
+});

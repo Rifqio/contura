@@ -31,6 +31,12 @@ textarea {
   color: inherit;
 }
 
+/* Windows (WebView2) adds its own reveal and clear buttons to inputs; Contura draws its own Show password button. */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+
 h1,
 h2,
 h3,
@@ -238,11 +244,12 @@ ul {
   text-align: center;
 }
 
-/* Title bar (DN 10.1, R4): app glyph, Group switcher, tabs, window buttons. Empty parts drag the window. */
+/* Title bar (DN 10.1, R4): app glyph, Group switcher, tabs, window buttons. Empty parts drag the window.
+   Item 42: every item is 32 px tall and sits on one centre line, 24 px down the 40 px bar. */
 .title-bar {
   display: flex;
-  align-items: stretch;
-  gap: var(--spacing-sm);
+  align-items: flex-end;
+  gap: 0;
   height: var(--title-bar-height);
   background: var(--title-bar-background);
   color: var(--title-bar-text);
@@ -255,21 +262,26 @@ ul {
   place-items: center;
   flex: none;
   width: 44px;
-  margin-right: calc(var(--spacing-sm) * -1);
+  height: 32px;
   color: var(--c-text);
 }
 
 .window-buttons {
   display: flex;
   flex: none;
+  align-self: stretch;
   margin-left: auto;
 }
 
+/* The hover fills the whole bar's height; the glyph sits on the 24 px centre line with the rest. */
 .window-button {
   display: grid;
   place-items: center;
+  box-sizing: border-box;
   width: 46px;
   height: 40px;
+  padding: 0;
+  padding-top: 8px;
   border: 0;
   background: transparent;
   color: var(--c-text-muted);
@@ -304,10 +316,10 @@ ul {
 
 .group-switcher {
   display: flex;
+  flex: none;
   align-items: center;
-  align-self: center;
   gap: var(--spacing-sm);
-  height: 28px;
+  height: 32px;
   padding: 0 var(--spacing-sm);
   border: 0;
   border-radius: var(--rounded-sm);
@@ -2744,7 +2756,9 @@ textarea.input {
   z-index: 1;
   pointer-events: all;
 }
+/* Board B2: a port sits above the resize zones (z-index 2), so it wins at an edge's middle. */
 .diagram-canvas .react-flow__handle {
+  z-index: 3;
   width: 8px;
   height: 8px;
   border: 1px solid var(--c-accent);
@@ -2842,49 +2856,133 @@ textarea.input {
   border-radius: 9px;
   pointer-events: none;
 }
-.table-card .selbox i,
-.card-box .selbox i,
-.card-block .selbox i {
+/* Board B2 (items 25, 41, 51): resize by pointer zones, not square handles. Nothing is drawn in a zone; near an
+   edge the pointer turns into the resize arrow. 8 px along each edge (4 px in, 4 px out), a 12 px square on each
+   corner. The ports (z-index 3) sit above the zones, so a port wins at an edge's middle. */
+.rz-zone {
   position: absolute;
-  width: 8px;
-  height: 8px;
-  box-sizing: border-box;
-  background: var(--c-bg-surface);
-  border: 1px solid var(--c-accent);
-}
-/* Item 25: on a card that can be resized the handles take the pointer and drag its width. */
-.table-card .selbox.is-resizable i {
+  z-index: 2;
+  touch-action: none;
   pointer-events: auto;
+}
+.rz-n {
+  left: 6px;
+  right: 6px;
+  top: -4px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.rz-s {
+  left: 6px;
+  right: 6px;
+  bottom: -4px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.rz-e {
+  top: 6px;
+  bottom: 6px;
+  right: -4px;
+  width: 8px;
   cursor: ew-resize;
-  transition: background-color var(--motion-fast) var(--ease-enter);
 }
-.table-card .selbox.is-resizable i:hover,
-.table-card .selbox.is-resizable i:active {
+.rz-w {
+  top: 6px;
+  bottom: 6px;
+  left: -4px;
+  width: 8px;
+  cursor: ew-resize;
+}
+.rz-nw {
+  left: -6px;
+  top: -6px;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+}
+.rz-se {
+  right: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+}
+.rz-ne {
+  right: -6px;
+  top: -6px;
+  width: 12px;
+  height: 12px;
+  cursor: nesw-resize;
+}
+.rz-sw {
+  left: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  cursor: nesw-resize;
+}
+/* The live size, under the box while it is dragged. */
+.rz-readout {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 12px);
+  z-index: 8;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--rounded-sm);
   background: var(--c-accent);
+  color: var(--on-accent);
+  font: var(--font-small);
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+  visibility: hidden;
 }
-.table-card .selbox i:nth-child(1),
-.card-box .selbox i:nth-child(1),
-.card-block .selbox i:nth-child(1) {
-  left: -5px;
-  top: -5px;
+.rz-readout-on {
+  visibility: visible;
 }
-.table-card .selbox i:nth-child(2),
-.card-box .selbox i:nth-child(2),
-.card-block .selbox i:nth-child(2) {
-  right: -5px;
-  top: -5px;
+/* Item 41: a card shorter than its rows scrolls them inside; a fade shows there are more above or below. */
+.table-card-scroll,
+.react-flow__node.is-resizing .table-card {
+  display: flex;
+  flex-direction: column;
 }
-.table-card .selbox i:nth-child(3),
-.card-box .selbox i:nth-child(3),
-.card-block .selbox i:nth-child(3) {
-  left: -5px;
-  bottom: -5px;
+.table-card-scroll > .table-card-header,
+.react-flow__node.is-resizing .table-card > .table-card-header {
+  flex: none;
 }
-.table-card .selbox i:nth-child(4),
-.card-box .selbox i:nth-child(4),
-.card-block .selbox i:nth-child(4) {
-  right: -5px;
-  bottom: -5px;
+.table-card-scroll > .table-card-columns,
+.react-flow__node.is-resizing .table-card > .table-card-columns {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 0 0 5px 5px;
+}
+.table-card-scroll > .table-card-columns {
+  --fade-top: 0px;
+  --fade-bottom: 14px;
+  mask-image: linear-gradient(to bottom, transparent 0, black var(--fade-top), black calc(100% - var(--fade-bottom)), transparent 100%);
+}
+.table-card-scroll > .table-card-columns.is-scrolled {
+  --fade-top: 14px;
+}
+.table-card-scroll > .table-card-columns.is-at-end {
+  --fade-bottom: 0px;
+}
+.vq-card-gap {
+  list-style: none;
+  pointer-events: none;
+}
+/* While a card is resized its node takes the live box and the card fills it. */
+.react-flow__node.is-resizing .table-card {
+  width: 100% !important;
+  height: 100% !important;
+  margin-left: 0 !important;
 }
 .table-card-header {
   position: relative;
@@ -4370,23 +4468,52 @@ button.chip[aria-pressed="true"] {
   }
 }
 
-/* Title-bar tabs (step 4a) */
+/* Title-bar tabs (step 4a; item 48: Edge style) */
 .tab-strip {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: 0;
+  height: 32px;
   min-width: 0;
   flex: 1;
+  margin-left: 8px;
 }
+/* New query and the new tab menu, after the last tab, on the bar's centre line. */
 .tab-strip > .icon-button {
-  align-self: center;
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 28px;
+  margin: 0 0 2px 4px;
 }
-/* NF1: the strip scrolls sideways with no bar, so the tabs never ride up over one. */
+.tab-strip > .tab-strip-more {
+  width: 28px;
+  margin: 0 6px 2px 2px;
+}
+/* New query's divider, hidden beside the active or hovered last tab. */
+.tab-strip > .tab-strip-new::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 7px;
+  width: 1px;
+  height: 14px;
+  background: var(--tab-divider);
+}
+.tab-list:has(> .work-tab-on:last-child) + .tab-strip-new::before,
+.tab-list:has(> .work-tab:last-child:hover) + .tab-strip-new::before,
+.tab-list:empty + .tab-strip-new::before {
+  opacity: 0;
+}
+/* NF1: the strip scrolls sideways with no bar, so the tabs never ride up over one. The side padding keeps
+   the active tab's flared feet inside the clip. */
 .tab-list {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: 0;
+  height: 32px;
   min-width: 0;
+  padding: 0 8px;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -4395,36 +4522,99 @@ button.chip[aria-pressed="true"] {
   display: none;
   height: 0;
 }
-/* DN 10.2: 32 px, top corners 6 px; the active tab is underlined in its Connection's Group hue. */
+/* DN 10.2 and item 48: 32 px, top corners 8 px, Edge style. Every tab has the same width (`--tab-w`, set from the
+   strip's one observer, at most 220 px); a divider sits between inactive tabs, hover is a soft fill inside the
+   tab, and the active tab is raised in the surface colour and flares into the feature bar below. */
 .work-tab {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
+  gap: 2px;
   flex: none;
+  box-sizing: border-box;
+  width: var(--tab-w, 220px);
+  min-width: 0;
   height: var(--tab-height);
   max-width: 220px;
-  padding: 0 var(--spacing-sm) 0 var(--spacing-md);
-  border-radius: var(--rounded-md) var(--rounded-md) 0 0;
+  padding: 0 6px 0 12px;
+  border-radius: 8px 8px 0 0;
   background: var(--tab-background);
   color: var(--tab-text);
 }
-.work-tab:hover {
-  background: var(--c-bg-hover);
+/* The divider: the left edge of every tab but the first. */
+.work-tab::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  width: 1px;
+  height: 14px;
+  background: var(--tab-divider);
+}
+.work-tab:first-child::before {
+  opacity: 0;
+}
+/* Hover: a soft rounded fill inside the tab. */
+.work-tab::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: -1;
+  border-radius: 6px;
+  background: transparent;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+.work-tab:not(.work-tab-on):hover::after {
+  background: var(--tab-hover-fill);
+}
+.work-tab:not(.work-tab-on):hover {
+  color: var(--c-text);
+}
+/* Dividers hide beside the active and the hovered tab. */
+.work-tab:not(.work-tab-on):hover::before,
+.work-tab-on + .work-tab::before,
+.work-tab:hover + .work-tab::before {
+  opacity: 0;
 }
 .work-tab-on,
 .work-tab-on:hover {
+  z-index: 2;
+  width: var(--tab-active-w, 220px);
+  min-width: 96px;
   background: var(--tab-active-background);
   color: var(--tab-active-text);
-  box-shadow: inset 0 -2px 0 var(--group, var(--c-border-strong));
+}
+/* The active tab's feet: concave corners in the surface colour, joining the feature bar. The left foot is the
+   ::before the divider rules hide (first tab, beside a hovered tab); as on the board, it always wins. */
+.work-tab-on::before {
+  opacity: 1 !important;
+  left: -8px;
+  top: auto;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  background: radial-gradient(circle at 0 0, transparent 7.5px, var(--tab-active-background) 8px);
+}
+.work-tab-on::after {
+  inset: auto -8px 0 auto;
+  width: 8px;
+  height: 8px;
+  z-index: 0;
+  border-radius: 0;
+  background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--tab-active-background) 8px);
 }
 .work-tab-on .work-tab-button {
   font-weight: 600;
 }
 .work-tab-button {
   display: flex;
+  flex: 1;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   height: 100%;
+  padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -4448,20 +4638,35 @@ button.chip[aria-pressed="true"] {
   color: var(--c-text-muted);
   font-weight: 600;
 }
-/* Close shows on hover, on keyboard focus and on the active tab. */
+/* Item 48: every tab has its close; narrow inactive tabs show it on hover (and on keyboard focus). */
 .work-tab-close {
-  width: 22px;
-  height: 22px;
-  visibility: hidden;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--rounded-sm);
 }
 .work-tab-close .icon {
   width: 14px;
   height: 14px;
 }
-.work-tab:hover .work-tab-close,
-.work-tab-on .work-tab-close,
-.work-tab-close:focus-visible {
-  visibility: visible;
+.tab-list-narrow .work-tab:not(.work-tab-on):not(:hover) .work-tab-close {
+  display: none;
+}
+.tab-list-narrow .work-tab:not(.work-tab-on):not(:hover):focus-within .work-tab-close {
+  display: grid;
+}
+/* Compact: inactive tabs keep only their icon. */
+.tab-list-compact .work-tab:not(.work-tab-on) {
+  justify-content: center;
+  padding: 0;
+}
+.tab-list-compact .work-tab:not(.work-tab-on) .work-tab-button {
+  flex: none;
+}
+.tab-list-compact .work-tab:not(.work-tab-on) .work-tab-name,
+.tab-list-compact .work-tab:not(.work-tab-on) .safety-tag,
+.tab-list-compact .work-tab:not(.work-tab-on) .work-tab-unsaved {
+  display: none;
 }
 .work-pane {
   height: 100%;
@@ -7453,9 +7658,11 @@ button.dbox:hover,
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.cm-tooltip.cm-ask-tip {
+/* Above the editor theme's token-coloured tooltip (item 50): the Ask pop-up draws its own card. */
+.cm-editor .cm-tooltip.cm-ask-tip {
   border: 0;
   background: transparent;
+  box-shadow: none;
 }
 .grid-filter .ask-pop {
   top: 100%;
@@ -7621,6 +7828,12 @@ button.dbox:hover,
 .row-number-deleted {
   color: var(--c-danger-text);
   font-weight: 600;
+}
+/* Item 49: tinted cells keep their column dividers; in Dracula the faint divider vanished into the tint. */
+.grid tr.row-added td,
+.grid tr.row-deleted td,
+.grid td.cell-edited {
+  border-right-color: var(--grid-tint-divider);
 }
 .grid tr.row-conflict td:first-child {
   box-shadow: inset 2px 0 0 var(--c-danger-solid);
@@ -9059,7 +9272,7 @@ button.dbox:hover,
 }
 
 /* ---- Visual Query tab (step 6, Task 7, frame 6.1) ---- */
-/* Canvas on top; below it a 318 px row with the panel and the 480 px SQL pane. */
+/* Canvas on top, the hint strip under it (item 40), then the bottom panel at the user's height (item 36). */
 .vq-tab {
   display: flex;
   flex-direction: column;
@@ -9099,7 +9312,7 @@ button.dbox:hover,
 }
 .vq-canvas {
   position: relative;
-  flex: 1;
+  flex: 1 1 0;
   min-height: 120px;
   display: flex;
 }
@@ -9107,18 +9320,21 @@ button.dbox:hover,
   flex: 1;
   min-width: 0;
 }
-/* The empty state sits over the middle of the canvas, with the finder in place. */
+/* The empty state: words over the middle of the canvas (item 35, drag only). */
 .vq-empty {
   position: absolute;
   top: 48px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 5;
+  /* Item 35: words only; drops and panning go through to the canvas. */
+  pointer-events: none;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--spacing-xs);
-  width: 420px;
+  width: max-content;
+  max-width: min(420px, calc(100% - 32px));
   text-align: center;
 }
 .vq-empty-title {
@@ -9131,102 +9347,27 @@ button.dbox:hover,
   color: var(--c-text-muted);
   font: var(--font-small);
 }
-.vq-hint {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  z-index: 5;
+/* Item 40: the canvas hint has its own 28 px strip under the canvas, so it never covers a card. */
+.vq-hint-strip {
   display: flex;
-  gap: var(--spacing-md);
+  flex: none;
+  align-items: center;
+  gap: 14px;
+  box-sizing: border-box;
+  height: 28px;
   margin: 0;
+  padding: 0 12px;
+  overflow: hidden;
+  background: var(--c-bg-panel);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
   color: var(--c-text-subtle);
   font: var(--font-small);
-  pointer-events: none;
+  white-space: nowrap;
 }
-.vq-hint span {
+.vq-hint-strip span {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-}
-
-/* The finder: 420 px, search field with its key, rows of icon, name, schema and rows; a footnote. */
-.vq-finder {
-  width: 420px;
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-  background: var(--c-bg-raised);
-  border: var(--border-hairline) solid var(--c-border);
-  border-radius: var(--rounded-md);
-  box-shadow: var(--shadow-menu);
-}
-.vq-finder-over {
-  position: fixed;
-  z-index: 200;
-}
-.vq-finder-search {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  height: 36px;
-  padding: 0 10px;
-  color: var(--c-text-muted);
-  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
-}
-.vq-finder-input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--c-text);
-  font: var(--font-body);
-}
-.vq-finder-list {
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-.vq-finder-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  height: 28px;
-  padding: 0 10px;
-  color: var(--c-text);
-  cursor: pointer;
-}
-.vq-finder-row-on {
-  background: var(--c-bg-active);
-}
-.vq-finder-name {
-  font: var(--font-mono-small);
-  font-variant-ligatures: contextual;
-  font-feature-settings: "calt" 1, "liga" 1;
-}
-.vq-finder-schema {
-  flex: 1;
-  color: var(--c-text-subtle);
-  font: var(--font-small);
-}
-.vq-finder-rows {
-  color: var(--c-text-subtle);
-  font: var(--font-mono-micro);
-  font-variant-ligatures: contextual;
-  font-feature-settings: "calt" 1, "liga" 1;
-}
-.vq-finder-none {
-  margin: 0;
-  padding: 8px 10px;
-  color: var(--c-text-muted);
-  font: var(--font-small);
-}
-.vq-finder-foot {
-  margin: 0;
-  padding: 8px 10px;
-  color: var(--c-text-subtle);
-  font: var(--font-small);
-  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  gap: 6px;
 }
 
 /* Cards: 24 px rows of checkbox, key or link mark, name (600 when ticked), type or aggregate. */
@@ -9310,13 +9451,96 @@ button.dbox:hover,
   color: var(--c-danger-text);
 }
 
-/* Below the canvas: the panel and the 480 px SQL pane, 318 px tall. In a short window (480 px minimum) it gives way
-   down to its tabs and a few rows, and the canvas above keeps its own minimum. */
+/* Item 36: the bottom panel's height is the user's (set inline, remembered in the prefs); it gives way to the
+   canvas's 120 px when the window is short, and never goes under its tab strip. */
 .vq-bottom {
+  position: relative;
   display: flex;
-  flex: 0 1 318px;
-  min-height: 140px;
+  flex: 0 1 auto;
+  box-sizing: border-box;
+  min-height: 37px;
+  background: var(--c-bg-surface);
   border-top: var(--border-hairline) solid var(--c-border);
+}
+/* The handle: a 9 px band over the top edge, a resize pointer, an accent line and pill on hover and drag. */
+.vq-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -5px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 9px;
+  cursor: row-resize;
+  touch-action: none;
+  outline: none;
+}
+.vq-resize-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 1px;
+  background: transparent;
+  transition:
+    background-color var(--motion-fast) var(--ease-enter),
+    height var(--motion-fast) var(--ease-enter);
+}
+.vq-resize-pill {
+  position: relative;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--c-border-strong);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-enter);
+}
+.vq-resize:hover .vq-resize-line,
+.vq-resize:focus-visible .vq-resize-line {
+  top: 3.5px;
+  height: 2px;
+  background: color-mix(in srgb, var(--c-accent) 55%, transparent);
+}
+.vq-resize:hover .vq-resize-pill,
+.vq-resize:focus-visible .vq-resize-pill {
+  opacity: 1;
+}
+.vq-resize-dragging .vq-resize-line,
+.vq-resize-dragging:hover .vq-resize-line {
+  top: 3.5px;
+  height: 2px;
+  background: var(--c-accent);
+}
+.vq-resize-dragging .vq-resize-pill {
+  opacity: 1;
+  background: var(--c-accent);
+}
+/* The live size while dragging. */
+.vq-resize-px {
+  position: absolute;
+  bottom: 12px;
+  left: calc(50% + 28px);
+  padding: 1px 6px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-accent);
+  color: var(--on-accent);
+  font: var(--font-small);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+}
+.vq-resize-dragging .vq-resize-px {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vq-resize-line,
+  .vq-resize-pill {
+    transition: none;
+  }
 }
 .vq-panel {
   flex: 1;
@@ -9344,6 +9568,28 @@ button.dbox:hover,
 .vq-panel-tab-on {
   color: var(--c-text);
   border-bottom-color: var(--c-accent);
+}
+/* Item 38: a tab's count is a small badge after its name, hidden at 0. */
+.vq-tab-badge {
+  display: inline-block;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--c-bg-active);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.vq-panel-tab-on .vq-tab-badge {
+  background: var(--c-accent-subtle);
+  color: var(--c-text);
 }
 .vq-panel-body {
   flex: 1;
@@ -9460,6 +9706,15 @@ button.dbox:hover,
 }
 .vq-join-dot {
   fill: var(--c-text-subtle);
+}
+/* Item 41: a Join whose column is scrolled out of its card ends at the card's edge, dashed, on a hollow ring. */
+.vq-join-out {
+  stroke-dasharray: 4 3;
+}
+.vq-join-ring {
+  fill: var(--c-bg-canvas);
+  stroke: var(--c-text-subtle);
+  stroke-width: 1.5;
 }
 .vq-join-badge {
   display: inline-flex;
@@ -9690,28 +9945,99 @@ button.dbox:hover,
   font-feature-settings: "calt" 1, "liga" 1;
 }
 
-/* The Columns tab: grip, checkbox, Output name, From, Aggregate, Sort; then Group by. */
-.vq-columns,
-.vq-filters {
+/* The Columns tab (item 39): a bordered grid of grip, checkbox, Output name, From, Aggregate, Sort, with a header
+   row and row separators on the panel surface, columns sized to their content; Group by in its footer bar. */
+.vq-columns {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   gap: var(--spacing-xs);
-  padding: 8px 12px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 8px 12px 10px;
+}
+/* Item 38: the empty state sits in the middle of the panel. */
+.vq-columns-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 16px;
+}
+.vq-columns-box {
+  flex: 0 1 auto;
 }
 .vq-grid {
   border-collapse: collapse;
+  table-layout: fixed;
   width: 100%;
+  min-width: 740px;
+}
+.vq-grid-c-grip,
+.vq-grid-c-check {
+  width: 28px;
+}
+.vq-grid-c-name {
+  width: 184px;
+}
+.vq-grid-c-from {
+  width: 176px;
+}
+.vq-grid-c-agg {
+  width: 132px;
+}
+.vq-grid-c-sort {
+  width: 164px;
 }
 .vq-grid th {
-  padding: 0 6px 4px 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--c-bg-panel);
+  border-bottom: var(--border-hairline) solid var(--c-border);
   color: var(--c-text-subtle);
   font: var(--font-label);
   text-align: left;
+  white-space: nowrap;
+}
+.vq-grid th + th {
+  border-left: var(--border-hairline) solid var(--panel-rowline);
+}
+.vq-grid th:nth-child(2) {
+  border-left: 0;
 }
 .vq-grid td {
-  padding: 2px 6px 2px 0;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 8px;
+  border-bottom: var(--border-hairline) solid var(--panel-rowline);
   vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The grip and the checkbox sit centred in their 28 px cells. */
+.vq-grid td:nth-child(-n + 2) {
+  padding: 0;
+  text-align: center;
+  text-overflow: clip;
+}
+.vq-grid td:nth-child(-n + 2) > * {
+  vertical-align: middle;
+}
+.vq-grid tbody tr:last-child td {
+  border-bottom: 0;
+}
+.vq-grid tbody tr:hover {
+  background: var(--c-bg-hover);
+}
+.vq-grid .select,
+.vq-grid .select-button {
+  width: 100%;
 }
 .vq-grid-row-dragged {
   opacity: 0.5;
@@ -9720,7 +10046,8 @@ button.dbox:hover,
   cursor: grab;
 }
 .vq-col-name {
-  width: 160px;
+  box-sizing: border-box;
+  width: 100%;
 }
 .vq-col-from {
   color: var(--c-text-muted);
@@ -9728,18 +10055,28 @@ button.dbox:hover,
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
 }
-.vq-group {
-  display: flex;
+.vq-box-foot.vq-group {
   flex-direction: column;
+  align-items: stretch;
   gap: 4px;
-  align-self: stretch;
-  padding-top: 6px;
-  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 .vq-group-head {
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
+  gap: var(--spacing-sm);
+  min-height: 24px;
+}
+.vq-group-head .vq-panel-label {
+  color: var(--c-text-muted);
+  font-weight: 600;
+}
+.vq-group-manual {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm);
 }
 .vq-group-head .spacer {
   flex: 1;
@@ -9826,12 +10163,12 @@ button.dbox:hover,
   color: var(--c-warning-text);
 }
 .vq-status:empty,
-.vq-status-line:not(:has(.vq-status-ran, .vq-changed)):has(.vq-status:empty) {
+.vq-status-line:not(:has(.vq-status-ran)):has(.vq-status:empty) {
   display: none;
 }
 
 /* Visual Query: Run, Results and server error marks (Task 9). */
-.vq-status-line:has(.vq-status-ran, .vq-changed) {
+.vq-status-line:has(.vq-status-ran) {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
@@ -10191,13 +10528,13 @@ button.dbox:hover,
   --fi-hue: var(--c-feat-none);
 }
 
-/* Item 13: Home, in words, beside the mark; then a hairline before the Group switcher. */
+/* Item 13: Home, in words, beside the mark; then a hairline before the Group switcher. Item 42: 32 px. */
 .title-home {
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: 6px;
-  height: 28px;
+  height: 32px;
   padding: 0 10px 0 8px;
   border: 0;
   border-radius: var(--rounded-md);
@@ -10230,22 +10567,23 @@ button.dbox:hover,
   flex: none;
   width: 1px;
   height: 18px;
-  margin: 0 6px;
+  margin: 0 6px 7px;
   background: var(--c-border);
 }
 
-/* Item 16: the feature bar, an island under the title bar: 64 px with labels, 44 px compact. */
+/* Item 16: the feature bar, an island under the title bar: 64 px with labels, 44 px compact. Item 48: in the
+   surface colour with no border, so the active tab joins it. */
 .feature-bar {
   display: flex;
   flex: none;
   align-items: center;
   gap: 2px;
   height: 64px;
-  margin: 0 6px 6px;
+  margin: 0 6px 8px;
   padding: 0 6px;
   box-sizing: border-box;
-  background: var(--c-bg-panel);
-  border: 1px solid var(--c-border-subtle);
+  background: var(--c-bg-surface);
+  border: 0;
   border-radius: var(--rounded-lg);
   min-width: 0;
 }
@@ -10851,6 +11189,7 @@ button.dbox:hover,
   min-width: 0;
 }
 .vq-panel-body .vq-sql {
+  width: auto;
   height: 100%;
   border: 0;
 }
@@ -10865,72 +11204,154 @@ button.dbox:hover,
   font: var(--font-small);
 }
 
-/* Item 33 (frame VisualQuery, "Filter and sort"): conditions on the left; sort, limit and distinct in a 360 px column. */
-.vq-filters {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  align-items: stretch;
-  gap: 0;
-  height: 100%;
-  padding: 0;
-}
-.vq-filters-main,
-.vq-filters-side {
+/* Item 39 (board B1): bordered boxes with a 28 px head and a footer bar, on the panel surface. */
+.vq-box {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
   min-width: 0;
-  padding: 12px 16px 8px;
+  min-height: 0;
+  overflow: hidden;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
 }
-.vq-filters-side {
-  border-left: 1px solid var(--c-border-subtle);
+.vq-box-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--c-bg-panel);
+  border-bottom: var(--border-hairline) solid var(--c-border);
+  font: var(--font-small);
+  white-space: nowrap;
 }
-.vq-filters-foot {
-  margin-top: auto;
+.vq-box-head b {
+  color: var(--c-text);
+  font-weight: 600;
 }
-.vq-panel-title {
-  margin: 0;
-  font: var(--font-body-strong);
+.vq-box-sum {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-subtle);
 }
-.vq-panel-title-note {
-  margin-left: 6px;
+.vq-box-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.vq-box-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 2px;
+}
+.vq-box-add {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 4px;
+}
+.vq-box-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 10px;
+  background: var(--c-bg-panel);
+  border-top: var(--border-hairline) solid var(--c-border);
   color: var(--c-text-subtle);
   font: var(--font-small);
-  font-variant-numeric: tabular-nums;
+}
+.vq-box-foot .spacer {
+  flex: 1;
+}
+
+/* Filter and sort: Where, Sort, then Limit and Distinct side by side, with no empty middle; the note in a footer. */
+.vq-filters-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 8px 12px 10px;
+}
+.vq-filters {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) 216px;
+  gap: 8px;
+  min-height: 0;
+}
+.vq-filters .vq-filter-list,
+.vq-filters .vq-sort-list {
+  gap: 0;
+}
+.vq-filters .vq-filter-row {
+  min-height: 32px;
+  padding: 0 6px 0 10px;
+}
+.vq-filters .vq-problem {
+  padding: 0 10px 4px;
 }
 .vq-filters .vq-filter-where {
+  width: 64px;
   color: var(--c-text-subtle);
-  font: var(--font-body);
+  font: var(--font-small);
 }
-.vq-filters-rule {
-  align-self: stretch;
-  margin: 2px 0;
-  border: 0;
-  border-top: 1px solid var(--c-border-subtle);
+.vq-limit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
 }
 .vq-filters .vq-limit-row {
-  height: 28px;
+  height: 30px;
   gap: 8px;
 }
 .vq-side-label {
-  width: 88px;
+  width: 52px;
   flex: none;
 }
 .vq-filters .vq-limit {
-  width: 88px;
+  width: 76px;
 }
 .vq-side-note {
+  margin: 0;
   color: var(--c-text-subtle);
   font: var(--font-small);
+}
+.vq-distinct-note {
+  padding-left: 60px;
+}
+/* The row's own "Distinct" names the switch; its label stays for screen readers only. */
+.vq-limit-body .sw-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.vq-filters .vq-filter-where,
+.vq-filters .vq-filter-joiner {
+  width: 72px;
+  flex: none;
+}
+.vq-filters-foot {
+  flex: none;
+}
+.vq-filters-foot .vq-box-foot {
+  min-height: 30px;
+  border-top: 0;
 }
 @media (max-width: 900px) {
   .vq-filters {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .vq-filters-side {
-    border-left: 0;
-    border-top: 1px solid var(--c-border-subtle);
   }
 }
 

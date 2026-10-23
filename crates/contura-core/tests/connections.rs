@@ -382,6 +382,7 @@ fn ui_prefs_round_trip_every_field() {
             tab: FlowSideTab::Assistant,
         },
         flow_assist_mode: contura_core::model::FlowAssistMode::Auto,
+        vq_panel_height: Some(180),
     })
     .unwrap();
     drop(svc);
@@ -409,6 +410,24 @@ fn ui_prefs_round_trip_every_field() {
         p.flow_assist_mode,
         contura_core::model::FlowAssistMode::Auto
     );
+    assert_eq!(p.vq_panel_height, Some(180));
+}
+
+#[test]
+fn ui_prefs_vq_panel_height_is_kept_clamped_and_falls_back() {
+    // Item 36: remembered for the user; none is the default.
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"theme":"light"}"#);
+    assert_eq!(svc.ui_prefs().unwrap().vq_panel_height, None);
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"vqPanelHeight":300}"#);
+    assert_eq!(svc.ui_prefs().unwrap().vq_panel_height, Some(300));
+    // Never under the tab strip.
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"vqPanelHeight":3}"#);
+    assert_eq!(svc.ui_prefs().unwrap().vq_panel_height, Some(37));
+    // A bad value keeps the rest.
+    let (_d, svc) = service_with_setting("ui_prefs", r#"{"theme":"light","vqPanelHeight":"tall"}"#);
+    let p = svc.ui_prefs().unwrap();
+    assert_eq!(p.theme, ThemeChoice::Light);
+    assert_eq!(p.vq_panel_height, None);
 }
 
 #[test]

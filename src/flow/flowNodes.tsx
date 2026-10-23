@@ -2,18 +2,19 @@
 // node types (memo, with a Handle at each round port), group areas, square-routed lines with label chips, and
 // the one function that turns a FlowDoc and its positions into canvas nodes and edges. FlowTab and the Mermaid
 // dialog's preview both draw through it.
-import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer, Handle, type InternalNode, type Node, type NodeProps, type NodeTypes, Position, useInternalNode } from "@xyflow/react";
+import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer, Handle, type InternalNode, type Node, type NodeProps, type NodeTypes, Position, useInternalNode, useReactFlow } from "@xyflow/react";
 import { createContext, memo, useContext } from "react";
 import { ARROW_MARKER, DIAMOND_MARKER, MANY_MARKER, ONE_MARKER, OPEN_ARROW_MARKER, TRIANGLE_MARKER } from "../diagram/edges";
 import type { Positions } from "../diagram/layout";
 import { type Rect, routeOrthogonal } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
 import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, type FlowNodeKind, STATE_END, STATE_START } from "../lang/flow/model";
-import { fixedLayout, kindSize } from "./kindLayout";
-import { KindNode, type KindNodeData, MindEdge, SeqEdge, SeqFrame, TimeAxis, TimeSection } from "./kindNodes";
+import { fixedLayout, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { KindNode, type KindNodeData, MindEdge, SeqEdge, SeqFrame, SeqFrameTab, TimeAxis, TimeSection } from "./kindNodes";
 import DfdNode, { type DfdNodeKind } from "./nodes/DfdNode";
 import FlowchartNode, { type FlowchartNodeKind } from "./nodes/FlowchartNode";
 import { useDetail } from "../diagram/detail";
+import { ResizeZones } from "../diagram/resize";
 import { iconPlate, useIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import type { NodeLook, NodeState } from "./nodes/parts";
@@ -34,77 +35,81 @@ export type FlowNodeData = {
   state?: NodeState;
   /** Item 21: the size it was resized to on the canvas, instead of its kind's size. */
   sized?: { w: number; h: number };
+  /** The size its kind and words lay it out at, before any resize (plain numbers, so equal data stays equal). */
+  naturalW?: number;
+  naturalH?: number;
 };
 
 /** Item 21: what a resize tells the tab (the diagram tab provides it; previews leave it out, so nothing resizes). */
 export const FlowResizeContext = createContext<((name: string, box: { x: number; y: number; w: number; h: number }) => void) | null>(null);
 
-const CORNERS = ["nw", "ne", "sw", "se"] as const;
-type Corner = (typeof CORNERS)[number];
+/** Board B2 (item 51): a node is resized between these, in canvas px. */
+export const NODE_LIMITS = { minW: 96, maxW: 320, minH: 44, maxH: 200 };
 
-/** The box a corner drag makes: the far corner stays put; a diamond or a marker keeps its shape. */
-export function resizedBox(
-  start: { x: number; y: number; w: number; h: number },
-  corner: Corner,
-  dx: number,
-  dy: number,
-  min: { w: number; h: number },
-  square: boolean,
-): { x: number; y: number; w: number; h: number } {
-  const left = corner === "nw" || corner === "sw";
-  const top = corner === "nw" || corner === "ne";
-  let w = Math.max(min.w, Math.round(left ? start.w - dx : start.w + dx));
-  let h = Math.max(min.h, Math.round(top ? start.h - dy : start.h + dy));
-  if (square) w = h = Math.max(w, h);
-  return { x: left ? start.x + start.w - w : start.x, y: top ? start.y + start.h - h : start.y, w, h };
+/**
+ * The limits for a drag that starts at `from`: a node's own size widens them both ways, so a node bigger than the
+ * caps or smaller than the minimum (a start pill, a choice diamond, one sized under the old 56 x 24) never jumps
+ * on the first pixel. Its laid-out size (`natural`) widens them too, so a resized node can always go back to it.
+ */
+export function nodeLimitsFor(kind: DrawnKind, from: { w: number; h: number }, natural?: { w: number; h: number }): typeof NODE_LIMITS {
+  const lim = nodeLimits(kind);
+  const sizes = natural ? [from, natural] : [from];
+  return {
+    minW: Math.min(lim.minW, ...sizes.map((s) => s.w)),
+    maxW: Math.max(lim.maxW, ...sizes.map((s) => s.w)),
+    minH: Math.min(lim.minH, ...sizes.map((s) => s.h)),
+    maxH: Math.max(lim.maxH, ...sizes.map((s) => s.h)),
+  };
+}
+
+/** The limits for a kind: a start or end dot and a fork bar may stay smaller than other nodes. */
+export function nodeLimits(kind: DrawnKind): typeof NODE_LIMITS {
+  if (kind === "stateStart" || kind === "stateEnd") return { ...NODE_LIMITS, minW: 16, minH: 16 };
+  if (kind === "fork") return { ...NODE_LIMITS, minH: 6 };
+  return NODE_LIMITS;
 }
 
 /**
- * Four corner handles on a selected node (frame DiagramElements, "Resize handles"): drag one to make the node
- * bigger or smaller, the far corner staying where it is. The node follows the pointer while dragged (its box set
- * directly, so nothing else draws again), and the size goes into the layout file when the drag ends.
+ * Board B2 (item 51): a selected node resizes from pointer zones on its edges and corners, live. Once a frame the
+ * node takes the new box in React Flow, so its text reflows and its lines follow; the size goes into the layout
+ * file when the drag ends.
  */
-function Resizer({ id, selected, kind }: { id: string; selected: boolean; kind: DrawnKind }) {
+function Resizer({ id, selected, kind, naturalW, naturalH }: { id: string; selected: boolean; kind: DrawnKind; naturalW?: number; naturalH?: number }) {
+  const natural = naturalW !== undefined && naturalH !== undefined ? { w: naturalW, h: naturalH } : undefined;
   const resize = useContext(FlowResizeContext);
+  const flow = useReactFlow();
   if (!resize || !selected) return null;
   const square = kind === "decision" || kind === "choice" || kind === "stateStart" || kind === "stateEnd";
-  const min = { w: kind === "stateStart" || kind === "stateEnd" ? 16 : 56, h: kind === "fork" ? 6 : 24 };
-  const down = (corner: Corner) => (e: React.PointerEvent<HTMLElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const wrap = e.currentTarget.closest<HTMLElement>(".react-flow__node");
-    if (!wrap) return;
-    const zoom = Number(wrap.closest<HTMLElement>(".react-flow__viewport")?.style.transform.match(/scale\(([\d.]+)\)/)?.[1] ?? 1) || 1;
-    const at = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(wrap.style.transform);
-    const start = { x: at ? Number(at[1]) : 0, y: at ? Number(at[2]) : 0, w: wrap.offsetWidth, h: wrap.offsetHeight };
-    const sx = e.clientX;
-    const sy = e.clientY;
-    let box = start;
-    const move = (ev: PointerEvent) => {
-      box = resizedBox(start, corner, (ev.clientX - sx) / zoom, (ev.clientY - sy) / zoom, min, square);
-      wrap.style.width = `${box.w}px`;
-      wrap.style.height = `${box.h}px`;
-      wrap.style.transform = `translate(${box.x}px, ${box.y}px)`;
-      wrap.classList.add("is-resizing");
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      wrap.classList.remove("is-resizing");
-      if (box !== start) resize(id, box);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-  };
   return (
-    <>
-      {CORNERS.map((c) => (
-        <i key={c} className="fnode-resize nodrag nopan" data-corner={c} title="Drag to resize" aria-hidden="true" onPointerDown={down(c)} />
-      ))}
-    </>
+    <ResizeZones
+      square={square}
+      // A node laid out bigger than the caps (an ER table, a class with many rows) keeps its own size as its limit.
+      limits={(from) => nodeLimitsFor(kind, from, natural)}
+      start={() => {
+        const n = flow.getInternalNode(id);
+        if (!n) return null;
+        return { x: n.position.x, y: n.position.y, w: n.measured.width ?? n.width ?? n.initialWidth ?? 0, h: n.measured.height ?? n.height ?? n.initialHeight ?? 0 };
+      }}
+      onLive={(box, node) => {
+        node?.classList.add("is-resizing");
+        flow.updateNode(id, { position: { x: box.x, y: box.y }, width: box.w, height: box.h });
+      }}
+      onDone={(box, start, node) => {
+        const same = box.x === start.x && box.y === start.y && box.w === start.w && box.h === start.h;
+        if (same) {
+          node?.classList.remove("is-resizing");
+          flow.updateNode(id, { position: { x: start.x, y: start.y }, width: undefined, height: undefined });
+          return;
+        }
+        // The node keeps the live box until the layout draws it again at its kept size.
+        requestAnimationFrame(() => node?.classList.remove("is-resizing"));
+        resize(id, box);
+      }}
+      onCancel={(start, node) => {
+        node?.classList.remove("is-resizing");
+        flow.updateNode(id, { position: { x: start.x, y: start.y }, width: undefined, height: undefined });
+      }}
+    />
   );
 }
 
@@ -226,7 +231,7 @@ const DfdFlowNode = memo(function DfdFlowNode({ id, data, selected }: NodeProps)
   const d = data as FlowNodeData;
   return (
     <>
-      <Resizer id={id} selected={!!selected} kind={d.kind} />
+      <Resizer id={id} selected={!!selected} kind={d.kind} naturalW={d.naturalW} naturalH={d.naturalH} />
       <DfdNode kind={d.kind as DfdNodeKind} name={d.name} id={d.id} table={d.table} style={d.look} selected={!!selected} state={d.state} sized={d.sized} />
       <Handles />
     </>
@@ -237,7 +242,7 @@ const FlowchartFlowNode = memo(function FlowchartFlowNode({ id, data, selected }
   const d = data as FlowNodeData;
   return (
     <>
-      <Resizer id={id} selected={!!selected} kind={d.kind} />
+      <Resizer id={id} selected={!!selected} kind={d.kind} naturalW={d.naturalW} naturalH={d.naturalH} />
       <FlowchartNode kind={d.kind as FlowchartNodeKind} name={d.name} id={d.id} table={d.table} style={d.look} selected={!!selected} state={d.state} sized={d.sized} />
       <Handles />
     </>
@@ -335,7 +340,7 @@ const KindFlowNode = memo(function KindFlowNode({ id, data, selected, draggable 
   return (
     <>
       {/* A sequence, mind map or timeline is laid out from its text: its shapes are not resized by hand. */}
-      {draggable !== false && <Resizer id={id} selected={!!selected} kind={d.kind} />}
+      {draggable !== false && <Resizer id={id} selected={!!selected} kind={d.kind} naturalW={d.naturalW} naturalH={d.naturalH} />}
       <KindNode d={d} selected={!!selected} />
       <Handles />
     </>
@@ -349,6 +354,7 @@ export const FLOW_NODE_TYPES = {
   kind: KindFlowNode,
   area: FlowArea,
   seqFrame: SeqFrame,
+  seqFrameTab: SeqFrameTab,
   timeAxis: TimeAxis,
   timeSection: TimeSection,
 } satisfies NodeTypes;
@@ -471,8 +477,14 @@ function fixedGraph(doc: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes: 
   const size = (n: FlowNode) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, n.name, n.attrs.id, n);
   const lay = fixedLayout(doc, size);
   if (!lay) return null;
-  const acts = new Map<string, { from: number; to: number }[]>();
-  for (const a of doc.activations ?? []) acts.set(a.name, [...(acts.get(a.name) ?? []), { from: a.from, to: a.to }]);
+  const acts = new Map<string, { top: number; height: number }[]>();
+  // An activation bar runs from the top of its first message row to the bottom of its last, as the layout spaced them.
+  const rowY = (i: number) => lay.rows?.[i] ?? SEQ_HEAD + (i + 0.5) * SEQ_ROW;
+  for (const a of doc.activations ?? []) {
+    const top = rowY(a.from) - SEQ_ROW / 2 + 6;
+    const bar = { top, height: Math.max(SEQ_ROW - 12, rowY(Math.max(a.from, a.to)) + SEQ_ROW / 2 - 6 - top) };
+    acts.set(a.name, [...(acts.get(a.name) ?? []), bar]);
+  }
   const nodes: Node[] = doc.nodes.map((n) => {
     const kind = drawnKind(n.kind, doc.kind, n.name);
     const p = lay.positions[n.name] ?? { x: 0, y: 0 };
@@ -498,7 +510,12 @@ function fixedGraph(doc: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes: 
     zIndex: z,
   });
   const extras: Node[] = [];
-  (lay.frames ?? []).forEach((f, i) => extras.push(behind(`\u0000frame:${i}`, "seqFrame", f.box, { label: f.label, depth: f.depth }, -2 + Math.min(f.depth, 1))));
+  (lay.frames ?? []).forEach((f, i) => {
+    extras.push(behind(`\u0000frame:${i}`, "seqFrame", f.box, { label: f.label, depth: f.depth }, -2 + Math.min(f.depth, 1)));
+    // The tab goes over the participants, so a lifeline or an activation bar never runs through its words.
+    const tab = { x: f.box.x, y: f.box.y, w: f.label.length * 7 + 18, h: 21 };
+    extras.push(behind(`\u0000frameTab:${i}`, "seqFrameTab", tab, { label: f.label }, 1));
+  });
   (lay.sections ?? []).forEach((sec, i) => extras.push(behind(`\u0000section:${i}`, "timeSection", sec.box, { name: sec.name }, -3)));
   if (lay.axis) {
     const kinds = new Map(doc.nodes.map((n) => [n.name, n.kind]));
@@ -519,7 +536,7 @@ function fixedGraph(doc: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes: 
         type: "seq",
         className: (reply ? "flow-line flow-line-dashed" : "flow-line") + cls,
         markerEnd: reply ? OPEN_ARROW_MARKER : ARROW_MARKER,
-        data: { row: i, label: l.label, reply },
+        data: { row: i, y: lay.rows?.[i], label: l.label, reply },
       });
       return;
     }
@@ -576,6 +593,9 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     if (state) data.state = state;
     const family = familyOf(kind);
     if (own) data.sized = { w: own.w, h: own.h };
+    const natural = own ? nodeSize(kind, look, n.name, n.attrs.id, n) : s;
+    data.naturalW = natural.w;
+    data.naturalH = natural.h;
     // A step 12 shape fills the box its rows and words size; one resized by hand draws at its own size instead.
     const style = family === "kind" && !own ? { style: { width: s.w, height: s.h } } : {};
     return { id: n.name, type: family, position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, ...style, data };

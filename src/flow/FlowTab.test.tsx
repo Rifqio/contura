@@ -871,7 +871,7 @@ test("item_19_the_shapes_list_names_the_open_kinds_shapes_and_writes_a_line", as
   await waitFor(() => expect(s.text()).toMatch(/^State$/m));
 });
 
-test("item_21_a_selected_node_shows_four_resize_handles_and_a_kept_size_draws_it", async () => {
+test("item_21_51_a_selected_node_resizes_live_from_its_zones_and_a_kept_size_draws_it", async () => {
   // A browser tells a ResizeObserver after layout, not inside observe(): the shared mock calls back at once,
   // which a node with a size of its own turns into a render loop that no browser runs.
   class LaterResizeObserver {
@@ -891,19 +891,67 @@ test("item_21_a_selected_node_shows_four_resize_handles_and_a_kept_size_draws_it
   const s = setup({ text: DFD, layout }, "resize-sizes");
   await drawn(s);
   select(s, "Process Checkout");
-  await waitFor(() => expect(s.node("Process Checkout")!.querySelectorAll(".fnode-resize")).toHaveLength(4));
+  // Board B2: eight pointer zones on the edges and corners, no square handles.
+  await waitFor(() => expect(s.node("Process Checkout")!.querySelectorAll(".rz-zone")).toHaveLength(8));
+  expect(s.node("Process Checkout")!.querySelector(".fnode-resize")).toBeNull();
   // The kept size: the node draws at 260 x 90.
   const fnode = s.node("Process Checkout")!.querySelector(".fnode") as HTMLElement;
   expect(fnode.className).toContain("fnode-sized");
   expect([fnode.style.width, fnode.style.height]).toEqual(["260px", "90px"]);
-  // Dragging the bottom right corner 40 px right and 10 down keeps the new size in the layout file.
-  const se = s.node("Process Checkout")!.querySelector('.fnode-resize[data-corner="se"]') as HTMLElement;
-  fireEvent.pointerDown(se, { button: 0, clientX: 100, clientY: 100 });
-  fireEvent.pointerMove(window, { clientX: 140, clientY: 110 });
-  fireEvent.pointerUp(window, { clientX: 140, clientY: 110 });
-  // jsdom measures every box at 800 x 600: the new size is that plus the drag, in canvas units at the fitted zoom.
+  // Dragging the bottom right corner in: live on the next frame, then kept in the layout file.
+  const se = s.node("Process Checkout")!.querySelector('.rz-zone[data-dir="se"]') as HTMLElement;
+  fireEvent.pointerDown(se, { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+  fireEvent.pointerMove(se, { clientX: 60, clientY: 90, pointerId: 1 });
+  const wrap = s.node("Process Checkout")!.closest(".react-flow__node") as HTMLElement;
+  await waitFor(() => expect(wrap.classList.contains("is-resizing")).toBe(true));
+  fireEvent.pointerUp(se, { clientX: 60, clientY: 90, pointerId: 1 });
+  // jsdom measures every box at 800 x 600, past the caps: a node that big keeps its own size as its limit
+  // (it never snaps smaller), so the drag takes from it, in canvas units at the fitted zoom.
   const zoom = Number(/scale\(([\d.]+)\)/.exec((s.container.querySelector(".react-flow__viewport") as HTMLElement).style.transform)?.[1] ?? 1);
-  await waitFor(() => expect(JSON.parse(s.lastSave()?.layout ?? "{}").sizes?.Checkout).toEqual({ w: Math.round(800 + 40 / zoom), h: Math.round(600 + 10 / zoom) }));
+  await waitFor(() => expect(JSON.parse(s.lastSave()?.layout ?? "{}").sizes?.Checkout).toEqual({ w: Math.round(800 - 40 / zoom), h: Math.round(600 - 10 / zoom) }));
+});
+
+test("item_51_a_node_laid_out_past_the_caps_keeps_its_size_on_a_1px_drag", async () => {
+  // An ER table with ten columns is 33 + 10 x 22 + 6 = 259 px tall, past the 200 px cap.
+  const rows = Array.from({ length: 10 }, (_, i) => `ledger.column_${i} int`);
+  const text = ['diagram er "Big"', "ledger", ...rows, ""].join("\n");
+  // jsdom has no layout: each box measures at the size its style gives it, as a browser would here.
+  const protoH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+  const protoW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+  Object.defineProperties(HTMLElement.prototype, {
+    offsetHeight: { configurable: true, get(this: HTMLElement) { return parseFloat(this.style.height) || 600; } },
+    offsetWidth: { configurable: true, get(this: HTMLElement) { return parseFloat(this.style.width) || 800; } },
+  });
+  onTestFinished(() => {
+    if (protoH) Object.defineProperty(HTMLElement.prototype, "offsetHeight", protoH);
+    if (protoW) Object.defineProperty(HTMLElement.prototype, "offsetWidth", protoW);
+  });
+  const s = setup({ text, layout: null }, "big-er");
+  await drawn(s, "Entity ledger");
+  const wrap = s.node("Entity ledger")!;
+  const laid = { w: parseFloat(wrap.style.width), h: parseFloat(wrap.style.height) };
+  expect(laid.h).toBe(259);
+  select(s, "Entity ledger");
+  const zone = await waitFor(() => {
+    const z = s.node("Entity ledger")!.querySelector('.rz-zone[data-dir="s"]') as HTMLElement;
+    expect(z).toBeTruthy();
+    return z;
+  });
+  fireEvent.pointerDown(zone, { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+  fireEvent.pointerMove(zone, { clientX: 100, clientY: 101, pointerId: 1 });
+  await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
+  // Live, the node does not snap to the 200 px cap: no row is cut.
+  expect(parseFloat(wrap.style.height)).toBeGreaterThanOrEqual(laid.h);
+  expect(parseFloat(wrap.style.width)).toBe(laid.w);
+  fireEvent.pointerUp(zone, { clientX: 100, clientY: 101, pointerId: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  // Nothing smaller is kept: either no size (the move rounded away) or one at least as tall.
+  const kept = JSON.parse(s.lastSave()?.layout ?? "{}").sizes?.ledger;
+  if (kept) {
+    expect(kept.w).toBe(laid.w);
+    expect(kept.h).toBeGreaterThanOrEqual(laid.h);
+  }
+  expect(parseFloat(s.node("Entity ledger")!.style.height)).toBeGreaterThanOrEqual(laid.h);
 });
 
 test("item_22_double_click_a_node_to_edit_its_name_and_details", async () => {
@@ -954,4 +1002,15 @@ test("item_23_canvas_keys_and_a_double_click_on_empty_canvas", async () => {
   fireEvent.doubleClick(s.container.querySelector(".react-flow__pane") as HTMLElement, { clientX: 400, clientY: 300 });
   await userEvent.click(await screen.findByRole("menuitem", { name: /Data store/ }));
   await waitFor(() => expect(s.text()).toContain("Data store [store, id: D2]\n"));
+});
+
+test("the .flow editor takes the dark flag in the dark theme, so its suggestions are readable (item 50)", async () => {
+  document.documentElement.setAttribute("data-theme", "dark");
+  try {
+    const s = setup();
+    await drawn(s);
+    expect(s.view().state.facet(EditorView.darkTheme)).toBe(true);
+  } finally {
+    document.documentElement.removeAttribute("data-theme");
+  }
 });

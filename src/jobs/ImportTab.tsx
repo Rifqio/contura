@@ -91,7 +91,7 @@ export interface ImportTabProps {
 
 type Step = "file" | "columns" | "statements" | "run";
 
-const EXTENSIONS = ["csv", "tsv", "txt", "json", "ndjson", "xlsx", "sql"];
+const EXTENSIONS = ["csv", "tsv", "txt", "json", "jsonl", "ndjson", "xlsx", "sql"];
 /** The check pass waits this long after the last mapping change. */
 const CHECK_DELAY_MS = 300;
 const NUMERIC = /int|numeric|decimal|real|double|float|serial|money/i;

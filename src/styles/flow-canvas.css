@@ -585,6 +585,9 @@
   font: var(--font-small);
   white-space: nowrap;
   pointer-events: none;
+  /* The canvas colour behind the words, so a lifeline crossing them stops short of them. */
+  border-radius: 3px;
+  background: var(--c-bg-canvas);
 }
 .fkind-frame {
   width: 100%;
@@ -596,10 +599,12 @@
 }
 .fkind-frame-tab {
   display: inline-block;
+  box-sizing: border-box;
+  white-space: nowrap;
+  pointer-events: none;
   padding: 2px 8px;
-  border-right: 1px solid var(--c-border-strong);
-  border-bottom: 1px solid var(--c-border-strong);
-  border-radius: 5px 0 6px 0;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--rounded-md) 0 6px 0;
   background: var(--c-bg-surface);
   color: var(--c-text-muted);
   font: var(--font-small);
@@ -751,46 +756,13 @@
   height: 100%;
 }
 
-/* Item 21: a node resized by hand fills its box; the handles are four small accent squares at the corners. */
+/* Item 21: a node resized by hand fills its box. Board B2 (item 51): it is resized by pointer zones on its edges and
+   corners (app.css `.rz-*`), live: while dragged the node takes the new box on every frame and its text reflows. */
 .fnode.fnode-sized {
   max-width: none;
-}
-.fnode-resize {
-  position: absolute;
-  z-index: 3;
-  width: 8px;
-  height: 8px;
-  margin: -4px 0 0 -4px;
-  box-sizing: border-box;
-  border: 1px solid var(--c-accent);
-  border-radius: 1px;
-  background: var(--c-bg-surface);
-  transition: transform var(--motion-fast) var(--ease-enter);
-}
-.fnode-resize:hover {
-  transform: scale(1.25);
-}
-.fnode-resize[data-corner="nw"] {
-  top: -5px;
-  left: -5px;
-  cursor: nwse-resize;
-}
-.fnode-resize[data-corner="ne"] {
-  top: -5px;
-  left: calc(100% + 5px);
-  cursor: nesw-resize;
-}
-.fnode-resize[data-corner="sw"] {
-  top: calc(100% + 5px);
-  left: -5px;
-  cursor: nesw-resize;
-}
-.fnode-resize[data-corner="se"] {
-  top: calc(100% + 5px);
-  left: calc(100% + 5px);
-  cursor: nwse-resize;
 }
 .react-flow__node.is-resizing > .fnode {
   width: 100%;
   height: 100%;
+  max-width: none;
 }

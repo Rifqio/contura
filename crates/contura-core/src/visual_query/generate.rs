@@ -19,7 +19,8 @@ use std::collections::HashSet;
 pub struct GeneratedQuery {
     pub sql: String,
     pub parts: Vec<SqlPart>,
-    /// Each output column's final name, in SELECT order (D7).
+    /// Each output column's final name, in SELECT order (D7). Empty when nothing is
+    /// ticked and the query selects every column (item 37).
     pub outputs: Vec<String>,
     pub warnings: Vec<VqWarning>,
 }
@@ -285,7 +286,9 @@ impl<'a> Writer<'a> {
                 written.push((i, t));
             }
         }
-        if written.is_empty() {
+        // Item 37: nothing ticked selects every column of every written table.
+        let all = vq.columns.is_empty();
+        if written.is_empty() && !all {
             return Err(Error::InvalidInput(ALL_BEHIND_PENDING.into()));
         }
         let names = output_names(vq, &written);
@@ -308,19 +311,34 @@ impl<'a> Writer<'a> {
             "SELECT "
         };
         let pad = " ".repeat(head.len());
-        let count = written.len();
-        let select: Vec<String> = written
-            .iter()
-            .zip(&names)
+        let items: Vec<String> = if !all {
+            written
+                .iter()
+                .zip(&names)
+                .map(|((i, t), name)| {
+                    let c = &vq.columns[*i];
+                    let expr = self.expression(*t, c);
+                    if carries_as(c, name) {
+                        format!("{expr} AS {}", self.ident(name))
+                    } else {
+                        expr
+                    }
+                })
+                .collect()
+        } else if self.plan.order.len() == 1 {
+            vec!["*".to_string()]
+        } else {
+            self.plan
+                .order
+                .iter()
+                .map(|(t, _)| format!("{}.*", self.ident(&vq.tables[*t].alias)))
+                .collect()
+        };
+        let count = items.len();
+        let select: Vec<String> = items
+            .into_iter()
             .enumerate()
-            .map(|(n, ((i, t), name))| {
-                let c = &vq.columns[*i];
-                let expr = self.expression(*t, c);
-                let item = if carries_as(c, name) {
-                    format!("{expr} AS {}", self.ident(name))
-                } else {
-                    expr
-                };
+            .map(|(n, item)| {
                 let lead = if n == 0 { head } else { pad.as_str() };
                 let comma = if n + 1 < count { "," } else { "" };
                 format!("{lead}{item}{comma}")
@@ -1098,6 +1116,54 @@ LIMIT 50";
     }
 
     #[test]
+    fn no_ticked_column_selects_every_column() {
+        // Item 37: one table reads `SELECT *`; joined tables read each alias's `*` in FROM order.
+        for (kind, name) in DIALECTS {
+            let mut single = load("single_table", kind, name);
+            single.query.columns.clear();
+            single.query.order_by.clear();
+            let q = generate(kind, version(kind), &single.query, &single.types)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(q.sql.starts_with("SELECT *\nFROM "), "{name}: {}", q.sql);
+            assert!(q.outputs.is_empty(), "{name}");
+
+            let mut joined = load("late_orders_by_store", kind, name);
+            joined.query.columns.clear();
+            joined.query.order_by.clear();
+            let q = generate(kind, version(kind), &joined.query, &joined.types)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(
+                q.sql
+                    .starts_with("SELECT o.*,\n       s.*,\n       c.*\nFROM "),
+                "{name}: {}",
+                q.sql
+            );
+            assert!(!q.sql.contains("GROUP BY"), "{name}: {}", q.sql);
+            assert!(
+                matches!(
+                    q.parts.first(),
+                    Some(SqlPart {
+                        part: PartKind::Select,
+                        from_line: 1,
+                        to_line: 3
+                    })
+                ),
+                "{name}: {:?}",
+                q.parts.first()
+            );
+
+            joined.query.distinct = true;
+            let q = generate(kind, version(kind), &joined.query, &joined.types).unwrap();
+            assert!(
+                q.sql
+                    .starts_with("SELECT DISTINCT o.*,\n                s.*,"),
+                "{name}: {}",
+                q.sql
+            );
+        }
+    }
+
+    #[test]
     fn refusals_come_from_check() {
         let full = load("inner_left_right_full", DialectKind::MySql, "default");
         assert_eq!(
@@ -1106,10 +1172,10 @@ LIMIT 50";
         );
 
         let mut single = load("single_table", DialectKind::MySql, "mysql");
-        single.query.columns.clear();
+        single.query.columns[0].table = "gone".into();
         assert_eq!(
             refused(DialectKind::Postgres, "", &single.query, &single.types),
-            "Tick at least one column."
+            "Column 1 names a table that is not in the query."
         );
 
         let mut bad = load("literals", DialectKind::Postgres, "postgres");

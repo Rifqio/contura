@@ -216,7 +216,15 @@ test("the_format_switch_changes_the_extension", async () => {
   const { dialog } = setup();
   const name = within(dialog).getByRole("textbox", { name: "File name" }) as HTMLInputElement;
   await userEvent.click(within(dialog).getByRole("radio", { name: "JSON" }));
-  expect(name.value).toBe("menu_items.ndjson");
+  // Item 45: JSON is one array by default, with its own hint; JSON Lines is the second layout.
+  expect(name.value).toBe("menu_items.json");
+  expect(within(dialog).getByText("One JSON array of objects. Opens in any editor.")).toBeTruthy();
+  await userEvent.click(within(dialog).getByRole("button", { name: /More options/ }));
+  const layouts = within(dialog).getByRole("radiogroup", { name: "Layout" });
+  expect(within(layouts).getAllByRole("radio").map((r) => r.getAttribute("aria-label") ?? r.textContent)).toEqual(["Array, .json", "JSON Lines, .jsonl"]);
+  await userEvent.click(within(layouts).getByRole("radio", { name: "JSON Lines, .jsonl" }));
+  expect(name.value).toBe("menu_items.jsonl");
+  expect(within(dialog).getByText("One JSON object per line. Opens in any editor.")).toBeTruthy();
   await userEvent.click(within(dialog).getByRole("radio", { name: "Excel" }));
   expect(name.value).toBe("menu_items.xlsx");
   await userEvent.click(within(dialog).getByRole("radio", { name: "SQL INSERT" }));

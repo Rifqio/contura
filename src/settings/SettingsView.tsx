@@ -8,6 +8,7 @@ import AppearanceSection, { APPEARANCE_ROWS } from "./sections/AppearanceSection
 import DataFolderSection, { DATA_FOLDER_ROWS } from "./sections/DataFolderSection";
 import EditorSection, { EDITOR_ROWS } from "./sections/EditorSection";
 import KeymapSection, { KEYMAP_ROWS } from "./sections/KeymapSection";
+import UpdatesSection, { UPDATES_ROWS } from "./sections/UpdatesSection";
 import { type RowKey, SearchContext, sectionShown } from "./sections/layout";
 
 const SECTIONS: { key: SettingsSection; label: string; icon: IconName; rows: readonly RowKey[] }[] = [
@@ -16,6 +17,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: IconName; rows: rea
   { key: "keymap", label: "Keymap", icon: "keyboard", rows: KEYMAP_ROWS },
   { key: "ai", label: "AI assistant", icon: "msg", rows: AI_ROWS },
   { key: "dataFolder", label: "Data folder", icon: "folder", rows: DATA_FOLDER_ROWS },
+  { key: "updates", label: "Updates", icon: "refresh", rows: UPDATES_ROWS },
   { key: "about", label: "About Contura", icon: "info", rows: ABOUT_ROWS },
 ];
 
@@ -122,6 +124,7 @@ export default function SettingsView({ section, onSection, sectionRequest = 0, r
               <div className="settings-col">
                 <AiSection groupId={groupId} groupName={groupName} connections={connections} onConnectionSaved={onConnectionSaved ?? (() => {})} />
                 <DataFolderSection connections={connections} />
+                <UpdatesSection />
               </div>
             </div>
             <AboutSection />

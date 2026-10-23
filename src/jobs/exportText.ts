@@ -63,7 +63,7 @@ export function optionsSummary(format: Format, opts: ExportOptions): string {
       parts.push(...binary);
       break;
     case "json":
-      parts.push(opts.jsonLayout === "lines" ? "One object per line" : "Array", ...binary);
+      parts.push(opts.jsonLayout === "lines" ? "JSON Lines" : "Array", ...binary);
       break;
     case "xlsx":
       parts.push("Header row", opts.freezeHeader ? "frozen" : "not frozen", ...binary);
@@ -78,12 +78,13 @@ export function optionsSummary(format: Format, opts: ExportOptions): string {
   return parts.join(", ");
 }
 
-/** The one-line hint under the format choice. `table` names the Excel sheet. */
-export function formatHint(format: Format, table: string, dialect: DialectKind): string {
+/** The one-line hint under the format choice. `table` names the Excel sheet; `layout` is JSON's. */
+export function formatHint(format: Format, table: string, dialect: DialectKind, layout: JsonLayout = "array"): string {
   switch (format) {
     case "csv":
-    case "json":
       return "Plain text. Opens in Excel and in any editor.";
+    case "json":
+      return layout === "lines" ? "One JSON object per line. Opens in any editor." : "One JSON array of objects. Opens in any editor.";
     case "xlsx":
       return `One sheet named ${table}. bigint and numeric are written as text, so no digits are lost.`;
     case "sql":
@@ -93,7 +94,8 @@ export function formatHint(format: Format, table: string, dialect: DialectKind):
 
 /** The extension of each format; JSON depends on its layout. */
 export function extensionFor(format: Format, layout: JsonLayout): string {
-  if (format === "json") return layout === "lines" ? "ndjson" : "json";
+  // Item 45: JSON Lines is saved as `.jsonl`, the name most data tools use for it (NDJSON is the same format).
+  if (format === "json") return layout === "lines" ? "jsonl" : "json";
   return format;
 }
 
@@ -101,7 +103,7 @@ export function fileNameFor(base: string, format: Format, layout: JsonLayout): s
   return `${base}.${extensionFor(format, layout)}`;
 }
 
-const KNOWN = /\.(csv|ndjson|json|xlsx|sql)$/i;
+const KNOWN = /\.(csv|jsonl|ndjson|json|xlsx|sql)$/i;
 
 /** The name without an export extension; other dots stay. */
 export function stripExtension(name: string): string {

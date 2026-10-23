@@ -1440,3 +1440,16 @@ test("parity_P11_17_a_keyless_hosted_provider_still_waits_for_a_key", async () =
   await screen.findByRole("combobox", { name: "Default thinking level" });
   expect(callsTo("ai_models")).toHaveLength(0);
 });
+
+test("an override for a removed command is ignored, so Reset all has nothing to reset (item 35)", async () => {
+  settingsRoutes({}, { keymap: { "visualQuery.addTable": ["Ctrl+Shift+A"] } });
+  renderWithProviders(<KeymapSection />);
+  await waitFor(() => expect(callsTo("keymap")).toHaveLength(1));
+  const dialog = await openDialog();
+  await waitFor(() => expect((within(dialog).getByRole("button", { name: "Reset all" }) as HTMLButtonElement).disabled).toBe(true));
+  // A later save keeps only real overrides.
+  await userEvent.click(within(dialog).getByRole("button", { name: "Edit Format" }));
+  await userEvent.keyboard("{Control>}{Alt>}l{/Alt}{/Control}");
+  await waitFor(() => expect(callsTo("save_keymap")).toHaveLength(1));
+  expect(callsTo("save_keymap")[0].overrides).toEqual({ "query.format": ["Ctrl+Alt+L"] });
+});

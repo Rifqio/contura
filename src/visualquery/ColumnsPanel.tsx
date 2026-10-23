@@ -130,182 +130,208 @@ export default function ColumnsPanel({ model, outputs, problems, tableColumns, o
       .filter((c) => !manual?.some((m) => m.table === t.id && m.column === c))
       .map((c) => ({ value: `${t.id}\u0000${c}`, label: `${t.alias}.${c}` })),
   );
-  // Item 30: with nothing ticked, the empty state says what to do; the Core's "Tick at least one column." is not said again.
-  const columnProblems = problems.filter((p) => p.target.kind === "columns" && !(model.columns.length === 0 && p.message === "Tick at least one column."));
+  const columnProblems = problems.filter((p) => p.target.kind === "columns");
   // The Core names no GROUP BY row, so its problems are matched by their words: a row with no column
   // is said under that row, the others under the section.
   const isRowProblem = (m: string) => m.startsWith("A GROUP BY row has no column");
   const groupProblems = problems.filter((p) => p.target.kind === "query" && p.message.startsWith("A GROUP BY") && !isRowProblem(p.message));
   const rowProblem = problems.find((p) => p.target.kind === "query" && isRowProblem(p.message))?.message ?? null;
 
+  const groupBy = (model.columns.length > 0 || manual !== null) && (
+    // Item 39: Group by and Edit by hand sit in the grid's footer bar.
+    <section className="vq-box-foot vq-group" aria-label="Group by section">
+      <div className="vq-group-head">
+        <span className="vq-panel-label">Group by</span>
+        {manual === null && (
+          <>
+            <span className="chip chip-neutral">Auto</span>
+            {auto.length > 0 ? (
+              <span className="vq-mono vq-group-auto">{auto.map(ref).join(", ")}</span>
+            ) : (
+              <span className="vq-group-auto">Nothing to group. No column has an aggregate.</span>
+            )}
+          </>
+        )}
+        <span className="spacer" />
+        <Switch
+          label="Edit by hand"
+          checked={manual !== null}
+          onChange={(on) => onChange((q) => setGroupBy(q, on ? { kind: "manual", columns: autoGroupBy(q) } : { kind: "auto" }))}
+        />
+      </div>
+      {manual !== null && (
+        <div className="vq-group-manual">
+          <ul className="vq-group-list" aria-label="Group by">
+            {manual.map((g, i) => (
+              <li key={`${g.table}.${g.column}.${i}`} className="vq-group-row">
+                <span className="vq-mono vq-group-name">{ref(g)}</span>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Remove ${ref(g)} from Group by`}
+                  title="Remove"
+                  onClick={() => onChange((q) => setGroupBy(q, { kind: "manual", columns: handPicked(q).filter((_, k) => k !== i) }))}
+                >
+                  <Icon name="close" size={14} />
+                </button>
+                {!g.column && rowProblem && <p className="vq-problem">{rowProblem}</p>}
+              </li>
+            ))}
+          </ul>
+          <Select
+            label="Add to Group by"
+            value=""
+            options={[{ value: "", label: "Add a column", disabled: true }, ...groupChoices]}
+            onChange={(v) => {
+              const [table, column] = v.split("\u0000");
+              if (column !== undefined) onChange((q) => setGroupBy(q, { kind: "manual", columns: [...handPicked(q), { table, column }] }));
+            }}
+          />
+        </div>
+      )}
+      {groupProblems.map((p) => (
+        <p key={p.message} className="vq-problem">
+          {p.message}
+        </p>
+      ))}
+    </section>
+  );
+
   return (
-    <div className="vq-columns">
+    <div className={model.columns.length === 0 ? "vq-columns vq-columns-none" : "vq-columns"}>
       {model.columns.length === 0 ? (
-        <div className="vq-panel-empty">
+        // Item 38: centred in the panel.
+        <div className="vq-panel-empty vq-columns-empty">
           <Icon name="check" size={20} className="vq-panel-empty-icon" />
-          <p className="vq-panel-empty-title">Tick a column to start</p>
-          <p>Tick columns on the cards above. They become the result, in the order you tick them.</p>
+          {/* Item 37: nothing ticked runs every column (SELECT *), as in Navicat. */}
+          <p className="vq-panel-empty-title">All columns.</p>
+          <p>Tick columns to choose them.</p>
           <p className="vq-panel-empty-keys">
             <Kbd keys="Space" /> ticks the column you are on
           </p>
         </div>
       ) : (
-        <table className="vq-grid">
-          <thead>
-            <tr>
-              <th aria-label="Order" />
-              <th aria-label="Included" />
-              <th>Output name</th>
-              <th>From</th>
-              <th>Aggregate</th>
-              <th>Sort</th>
-            </tr>
-          </thead>
-          <tbody>
-            {model.columns.map((c, i) => {
-              const name = ref(c);
-              const at = sortOf(model, i);
-              const dir = at >= 0 ? model.orderBy[at].dir : "none";
-              const pos = at >= 0 ? `, ${ordinal(at + 1)}` : "";
-              return (
-                <tr
-                  key={`${c.table}.${c.column}.${i}`}
-                  className={dragged === i ? "vq-grid-row vq-grid-row-dragged" : "vq-grid-row"}
-                  onDragOver={(e) => {
-                    if (dragged === null) return;
-                    e.preventDefault();
-                    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-                  }}
-                  onDrop={onDrop(i)}
-                >
-                  <td>
-                    <button
-                      ref={(el) => {
-                        if (el) grips.current.set(i, el);
-                        else grips.current.delete(i);
-                      }}
-                      type="button"
-                      className="icon-button vq-grip"
-                      aria-label={`Move ${name}`}
-                      title="Drag to reorder (Alt+ArrowUp, Alt+ArrowDown)"
-                      draggable
-                      onDragStart={(e) => {
-                        setDragged(i);
-                        if (e.dataTransfer) {
-                          e.dataTransfer.effectAllowed = "move";
-                          e.dataTransfer.setData("text/plain", name);
-                        }
-                      }}
-                      onDragEnd={() => setDragged(null)}
-                      onKeyDown={onGripKey(i)}
-                    >
-                      <Icon name="grip" size={14} />
-                    </button>
-                  </td>
-                  <td>
-                    <input
-                      type="checkbox"
-                      className="vq-card-check"
-                      aria-label={`Include ${name}`}
-                      checked
-                      onChange={() => onChange((q) => toggleColumn(q, c.table, c.column))}
-                    />
-                  </td>
-                  <td>
-                    <OutputName
-                      value={c.alias}
-                      placeholder={outputs[i] ?? c.column}
-                      label={`Output name for ${name}`}
-                      onCommit={(v) => onChange((q) => setOutputName(q, i, v))}
-                    />
-                  </td>
-                  <td className="vq-col-from">{name}</td>
-                  <td>
-                    <Select
-                      label={`Aggregate for ${name}`}
-                      value={c.aggregate ?? "none"}
-                      options={AGGREGATES}
-                      onChange={(v) => onChange((q) => setAggregate(q, i, v === "none" ? null : v))}
-                    />
-                  </td>
-                  <td>
-                    <Select
-                      label={`Sort for ${name}`}
-                      value={dir}
-                      options={[
-                        { value: "none", label: "None" },
-                        { value: "asc", label: `Ascending${dir === "asc" ? pos : ""}` },
-                        { value: "desc", label: `Descending${dir === "desc" ? pos : ""}` },
-                      ]}
-                      onChange={(v) => setSort(i, v)}
-                    />
-                  </td>
+        // Item 39: a bordered grid with a header row and row separators on the panel surface, columns sized to
+        // their content, Group by in a footer bar.
+        <div className="vq-box vq-columns-box">
+          <div className="vq-box-scroll">
+            <table className="vq-grid">
+              <colgroup>
+                <col className="vq-grid-c-grip" />
+                <col className="vq-grid-c-check" />
+                <col className="vq-grid-c-name" />
+                <col className="vq-grid-c-from" />
+                <col className="vq-grid-c-agg" />
+                <col className="vq-grid-c-sort" />
+                <col />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th aria-label="Order" />
+                  <th aria-label="Included" />
+                  <th>Output name</th>
+                  <th>From</th>
+                  <th>Aggregate</th>
+                  <th>Sort</th>
+                  <th aria-hidden="true" />
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {model.columns.map((c, i) => {
+                  const name = ref(c);
+                  const at = sortOf(model, i);
+                  const dir = at >= 0 ? model.orderBy[at].dir : "none";
+                  const pos = at >= 0 ? `, ${ordinal(at + 1)}` : "";
+                  return (
+                    <tr
+                      key={`${c.table}.${c.column}.${i}`}
+                      className={dragged === i ? "vq-grid-row vq-grid-row-dragged" : "vq-grid-row"}
+                      onDragOver={(e) => {
+                        if (dragged === null) return;
+                        e.preventDefault();
+                        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={onDrop(i)}
+                    >
+                      <td>
+                        <button
+                          ref={(el) => {
+                            if (el) grips.current.set(i, el);
+                            else grips.current.delete(i);
+                          }}
+                          type="button"
+                          className="icon-button vq-grip"
+                          aria-label={`Move ${name}`}
+                          title="Drag to reorder (Alt+ArrowUp, Alt+ArrowDown)"
+                          draggable
+                          onDragStart={(e) => {
+                            setDragged(i);
+                            if (e.dataTransfer) {
+                              e.dataTransfer.effectAllowed = "move";
+                              e.dataTransfer.setData("text/plain", name);
+                            }
+                          }}
+                          onDragEnd={() => setDragged(null)}
+                          onKeyDown={onGripKey(i)}
+                        >
+                          <Icon name="grip" size={14} />
+                        </button>
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          className="vq-card-check"
+                          aria-label={`Include ${name}`}
+                          checked
+                          onChange={() => onChange((q) => toggleColumn(q, c.table, c.column))}
+                        />
+                      </td>
+                      <td>
+                        <OutputName
+                          value={c.alias}
+                          placeholder={outputs[i] ?? c.column}
+                          label={`Output name for ${name}`}
+                          onCommit={(v) => onChange((q) => setOutputName(q, i, v))}
+                        />
+                      </td>
+                      <td className="vq-col-from">{name}</td>
+                      <td>
+                        <Select
+                          label={`Aggregate for ${name}`}
+                          value={c.aggregate ?? "none"}
+                          options={AGGREGATES}
+                          onChange={(v) => onChange((q) => setAggregate(q, i, v === "none" ? null : v))}
+                        />
+                      </td>
+                      <td>
+                        <Select
+                          label={`Sort for ${name}`}
+                          value={dir}
+                          options={[
+                            { value: "none", label: "None" },
+                            { value: "asc", label: `Ascending${dir === "asc" ? pos : ""}` },
+                            { value: "desc", label: `Descending${dir === "desc" ? pos : ""}` },
+                          ]}
+                          onChange={(v) => setSort(i, v)}
+                        />
+                      </td>
+                      <td aria-hidden="true" />
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {groupBy}
+        </div>
       )}
+      {model.columns.length === 0 && groupBy && <div className="vq-box">{groupBy}</div>}
       {columnProblems.map((p) => (
         <p key={p.message} className="vq-problem">
           {p.message}
         </p>
       ))}
 
-      {(model.columns.length > 0 || manual !== null) && (
-        <section className="vq-group" aria-label="Group by section">
-          <div className="vq-group-head">
-            <span className="vq-panel-label">Group by</span>
-            {manual === null && (
-              <>
-                <span className="chip chip-neutral">Auto</span>
-                <span className="vq-mono vq-group-auto">{auto.length > 0 ? auto.map(ref).join(", ") : "None"}</span>
-              </>
-            )}
-            <span className="spacer" />
-            <Switch
-              label="Edit by hand"
-              checked={manual !== null}
-              onChange={(on) => onChange((q) => setGroupBy(q, on ? { kind: "manual", columns: autoGroupBy(q) } : { kind: "auto" }))}
-            />
-          </div>
-          {manual !== null && (
-            <>
-              <ul className="vq-group-list" aria-label="Group by">
-                {manual.map((g, i) => (
-                  <li key={`${g.table}.${g.column}.${i}`} className="vq-group-row">
-                    <span className="vq-mono vq-group-name">{ref(g)}</span>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={`Remove ${ref(g)} from Group by`}
-                      title="Remove"
-                      onClick={() => onChange((q) => setGroupBy(q, { kind: "manual", columns: handPicked(q).filter((_, k) => k !== i) }))}
-                    >
-                      <Icon name="close" size={14} />
-                    </button>
-                    {!g.column && rowProblem && <p className="vq-problem">{rowProblem}</p>}
-                  </li>
-                ))}
-              </ul>
-              <Select
-                label="Add to Group by"
-                value=""
-                options={[{ value: "", label: "Add a column", disabled: true }, ...groupChoices]}
-                onChange={(v) => {
-                  const [table, column] = v.split("\u0000");
-                  if (column !== undefined) onChange((q) => setGroupBy(q, { kind: "manual", columns: [...handPicked(q), { table, column }] }));
-                }}
-              />
-            </>
-          )}
-          {groupProblems.map((p) => (
-            <p key={p.message} className="vq-problem">
-              {p.message}
-            </p>
-          ))}
-        </section>
-      )}
     </div>
   );
 }

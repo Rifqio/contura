@@ -9,7 +9,7 @@ import { useState } from "react";
 import { parseVisualDrafts } from "../visualquery/drafts";
 import { registerFlow, updateFlow } from "../flow/flowRegistry";
 import Icon, { type IconName } from "./Icon";
-import TabStrip, { type WorkTab } from "./TabStrip";
+import TabStrip, { tabWidths, type WorkTab } from "./TabStrip";
 
 const q = (id: string, name: string, over: Partial<QueryTabDoc> = {}): WorkTab => ({
   kind: "query",
@@ -49,6 +49,8 @@ const iconsIn = (el: Element, names: IconName[]) => {
   const drawn = [...el.querySelectorAll("svg.icon path")].map((p) => p.getAttribute("d"));
   return names.filter((n) => drawn.includes(iconPath(n)));
 };
+/** The feature icons an element draws (item 42: one per tab). */
+const featuresIn = (el: Element) => [...el.querySelectorAll("svg.feature-icon")].map((s) => s.getAttribute("data-feature"));
 const KINDS: IconName[] = ["fileQuery", "table", "view", "trigger", "routine", "grid", "gear", "layers"];
 
 test("tabs_hold_tables_and_queries_and_close_with_their_x", async () => {
@@ -113,7 +115,7 @@ test("unsaved_tab_shows_a_star_labelled_unsaved_changes", () => {
   expect(document.querySelector(".work-tab-dot")).toBeNull();
 });
 
-test("active_tab_takes_the_group_hue_of_its_connection", () => {
+test("item_48_the_active_tab_has_no_group_underline", () => {
   const kfc = {
     id: "c1",
     name: "kfc-db",
@@ -135,15 +137,15 @@ test("active_tab_takes_the_group_hue_of_its_connection", () => {
       tabs={[table, q("a", "Query 1")]}
       active="query:a"
       connections={[kfc]}
-      groups={[{ id: "g1", name: "KFC", color: "teal", hasImage: false }]}
       onSelect={() => {}}
       onClose={() => {}}
       onNew={() => {}}
     />,
   );
+  // Item 48: Edge-style tabs carry no Group-colour underline.
   const active = screen.getByRole("tab", { name: "Query 1", selected: true }).closest(".work-tab") as HTMLElement;
-  expect(active.style.getPropertyValue("--group")).toBe("var(--c-group-teal)");
-  expect(active.style.getPropertyValue("--group-tint")).toBe("var(--c-group-teal-tint)");
+  expect(active.style.getPropertyValue("--group")).toBe("");
+  expect(active.style.getPropertyValue("--group-tint")).toBe("");
 });
 
 test("empty_parts_of_the_tab_strip_drag_the_window", () => {
@@ -155,15 +157,16 @@ test("empty_parts_of_the_tab_strip_drag_the_window", () => {
   expect(screen.getByRole("tab", { name: "Query 1" }).hasAttribute("data-tauri-drag-region")).toBe(false);
 });
 
-test("query_tab_shows_mark_prod_and_title_without_a_kind_icon", () => {
+test("item_42_query_tab_shows_one_feature_icon_prod_and_title", () => {
   render(<TabStrip tabs={[q("a", "Query 1")]} active="query:a" connections={[prod]} onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
   const tab = screen.getByRole("tab", { name: "Query 1, Production" });
-  // C5: the database mark at 14 px, the PROD chip, then the title; no document icon.
-  const mark = tab.querySelector(".db-mark") as SVGElement;
-  expect(mark.getAttribute("width")).toBe("14");
+  // Item 42: one icon per tab, the feature's own at 16 px; no database mark beside it.
+  expect(featuresIn(tab)).toEqual(["query"]);
+  expect(tab.querySelector(".feature-icon")!.getAttribute("width")).toBe("16");
+  expect(tab.querySelector(".db-mark")).toBeNull();
   expect(iconsIn(tab, KINDS)).toEqual([]);
   const parts = [...tab.children].map((el) => el.getAttribute("class") ?? "");
-  expect(parts[0]).toContain("db-mark");
+  expect(parts[0]).toContain("feature-icon");
   expect(parts[1]).toContain("safety-tag-production");
   expect(parts[parts.length - 1]).toBe("work-tab-name");
 });
@@ -171,7 +174,8 @@ test("query_tab_shows_mark_prod_and_title_without_a_kind_icon", () => {
 test("table_tab_keeps_its_table_icon", () => {
   render(<TabStrip tabs={[table]} active={table.key} connections={[prod]} onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
   const tab = screen.getByRole("tab", { name: "stores, Production" });
-  expect(iconsIn(tab, KINDS)).toEqual(["table"]);
+  expect(featuresIn(tab)).toEqual(["table"]);
+  expect(iconsIn(tab, KINDS)).toEqual([]);
   expect(tab.textContent).toContain("PROD");
 });
 
@@ -193,9 +197,11 @@ test("window_tabs_show_their_icon_and_name", () => {
     { kind: "schema", id: "m2", doc: { ...model, path: null } },
   ];
   render(<TabStrip tabs={tabs} active="home" onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
-  expect(iconsIn(screen.getByRole("tab", { name: "Home", selected: true }), KINDS)).toEqual(["grid"]);
+  expect(featuresIn(screen.getByRole("tab", { name: "Home", selected: true }))).toEqual(["home"]);
+  // Settings has no feature of its own: it keeps its gear, still one icon.
   expect(iconsIn(screen.getByRole("tab", { name: "Settings" }), KINDS)).toEqual(["gear"]);
-  expect(iconsIn(screen.getByRole("tab", { name: "shop.dbml" }), KINDS)).toEqual(["layers"]);
+  expect(featuresIn(screen.getByRole("tab", { name: "Settings" }))).toEqual([]);
+  expect(featuresIn(screen.getByRole("tab", { name: "shop.dbml" }))).toEqual(["model"]);
   expect(screen.getByRole("tab", { name: "untitled.dbml" })).toBeTruthy();
   // C1: "+" is there with no place tab at all, and Home closes like any tab.
   expect(screen.getByRole("button", { name: "New query" })).toBeTruthy();
@@ -315,11 +321,11 @@ test("design_tabs_read_table_design_or_new_table_with_the_edit_icon", () => {
     />,
   );
   const tab = screen.getByRole("tab", { name: "orders design, unsaved changes, Production" });
-  expect(iconsIn(tab, [...KINDS, "edit"])).toEqual(["edit"]);
+  expect(featuresIn(tab)).toEqual(["designer"]);
   expect(within(tab).getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
   expect(within(tab).getByText("PROD")).toBeTruthy();
   const fresh = screen.getByRole("tab", { name: "New table, Production" });
-  expect(iconsIn(fresh, [...KINDS, "edit"])).toEqual(["edit"]);
+  expect(featuresIn(fresh)).toEqual(["designer"]);
 });
 
 test("import_tabs_read_import_into_with_the_import_icon_and_chips", () => {
@@ -338,10 +344,10 @@ test("import_tabs_read_import_into_with_the_import_icon_and_chips", () => {
     />,
   );
   const tab = screen.getByRole("tab", { name: "Import into menu_items, Production" });
-  expect(iconsIn(tab, [...KINDS, "import"])).toEqual(["import"]);
+  expect(featuresIn(tab)).toEqual(["import"]);
   expect(within(tab).getByText("PROD")).toBeTruthy();
   const db = screen.getByRole("tab", { name: "Import into shop, Read-only" });
-  expect(iconsIn(db, [...KINDS, "import"])).toEqual(["import"]);
+  expect(featuresIn(db)).toEqual(["import"]);
 });
 
 test("a_lineage_tab_reads_table_lineage_with_the_flow_icon", () => {
@@ -370,11 +376,13 @@ const visual = (id: string, over: Partial<VisualTabDoc> = {}): WorkTab => ({
   doc: { id, name: "New Visual Query", connectionId: "c1", database: "shop", model: vqModel(), savedId: null, savedJson: null, ...over },
 });
 
-test("visual_tab_shows_its_icon_name_mark_and_prod_chip", () => {
+test("item_42_visual_tab_shows_one_icon_its_name_and_prod_chip", () => {
   render(<TabStrip tabs={[visual("v1")]} active="visual:v1" onSelect={() => {}} onClose={() => {}} onNew={() => {}} onNewVisual={() => {}} connections={[prod]} />);
   const tab = screen.getByRole("tab", { name: "New Visual Query, Production", selected: true });
-  expect(iconsIn(tab, ["visualQuery", ...KINDS])).toEqual(["visualQuery"]);
-  expect(tab.querySelector(".db-mark")).toBeTruthy();
+  // Item 42: the Visual Query icon alone, not also the Connection's mark.
+  expect(featuresIn(tab)).toEqual(["vquery"]);
+  expect(iconsIn(tab, ["visualQuery", ...KINDS])).toEqual([]);
+  expect(tab.querySelector(".db-mark")).toBeNull();
   expect(within(tab).getByText("PROD")).toBeTruthy();
 });
 
@@ -523,11 +531,11 @@ test("item_7_dragging_a_tab_past_its_neighbours_reorders_and_a_short_press_does_
   fireEvent.pointerMove(window, { clientX: 152 });
   fireEvent.pointerUp(window, { clientX: 152 });
   expect(onReorder).not.toHaveBeenCalled();
-  // Dragged right past b's middle: b slides left by a's width, and the drop puts a after b.
+  // Dragged right past b's middle: b slides left by a's width (tabs touch since item 48), and the drop puts a after b.
   fireEvent.pointerDown(a, { button: 0, clientX: 150 });
   fireEvent.pointerMove(window, { clientX: 260 });
   expect(a.style.transform).toBe("translateX(110px)");
-  expect(tabsEl[2].style.transform).toBe("translateX(-106px)");
+  expect(tabsEl[2].style.transform).toBe("translateX(-100px)");
   fireEvent.pointerUp(window, { clientX: 260 });
   expect(onReorder).toHaveBeenCalledWith("query:a", "query:b");
   // Home never moves.
@@ -594,4 +602,72 @@ test("item_1_a_preview_tab_is_italic_and_a_double_click_keeps_it", () => {
   expect(screen.getByRole("tab", { name: "orders" }).getAttribute("title")).toBe("orders. Preview: the next table you open replaces it. Double-click to keep it.");
   fireEvent.doubleClick(tab);
   expect(onKeep).toHaveBeenCalledWith(preview.key);
+});
+
+// ---- Item 48: Edge-style tabs share the strip's width evenly, up to 220 px ----
+
+test("item_48_tab_widths_share_the_room_evenly_up_to_220", () => {
+  // Few tabs: each keeps 220 px.
+  expect(tabWidths(1000, 3, true)).toEqual({ density: "normal", width: 220, activeWidth: 220 });
+  // Many: every tab shrinks by the same amount; under 150 px the inactive closes hide until hover.
+  expect(tabWidths(1200, 10, true)).toEqual({ density: "narrow", width: 120, activeWidth: 120 });
+  // Under 84 px the inactive tabs keep only their icon; the active one keeps 96 px for its name and close.
+  const tight = tabWidths(800, 12, true);
+  expect(tight.density).toBe("compact");
+  expect(tight.activeWidth).toBe(96);
+  expect(tight.width).toBe(Math.floor((800 - 96) / 11));
+  // With no active tab in the strip, all share alike.
+  expect(tabWidths(800, 12, false)).toEqual({ density: "compact", width: 66, activeWidth: 66 });
+  // Never narrower than the icon.
+  expect(tabWidths(200, 20, true).width).toBe(36);
+  // Not measured yet: the widest tabs.
+  expect(tabWidths(Number.POSITIVE_INFINITY, 4, true)).toEqual({ density: "normal", width: 220, activeWidth: 220 });
+});
+
+class FakeObserver {
+  static made: FakeObserver[] = [];
+  observed: Element[] = [];
+  disconnected = false;
+  constructor(public cb: ResizeObserverCallback) {
+    FakeObserver.made.push(this);
+  }
+  observe(el: Element) {
+    this.observed.push(el);
+  }
+  unobserve() {}
+  disconnect() {
+    this.disconnected = true;
+  }
+}
+
+test("item_48_one_observer_on_the_strip_sets_the_widths_and_goes_on_unmount", () => {
+  const original = globalThis.ResizeObserver;
+  FakeObserver.made = [];
+  globalThis.ResizeObserver = FakeObserver as unknown as typeof ResizeObserver;
+  try {
+    const many = Array.from({ length: 12 }, (_, i) => q(String(i), `Query ${i + 1}`));
+    const { unmount } = render(<TabStrip tabs={many} active="query:3" onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
+    // One observer for the whole strip, none per tab.
+    expect(FakeObserver.made.length).toBe(1);
+    const strip = document.querySelector(".tab-strip") as HTMLElement;
+    expect(FakeObserver.made[0].observed).toEqual([strip]);
+    // The strip is 900 px with no buttons measured beside the list.
+    Object.defineProperty(strip, "clientWidth", { configurable: true, value: 900 });
+    act(() => FakeObserver.made[0].cb([], FakeObserver.made[0] as unknown as ResizeObserver));
+    const list = screen.getByRole("tablist", { name: "Open tabs" });
+    expect(list.classList.contains("tab-list-compact")).toBe(true);
+    expect(list.classList.contains("tab-list-narrow")).toBe(true);
+    expect(list.style.getPropertyValue("--tab-active-w")).toBe("96px");
+    expect(list.style.getPropertyValue("--tab-w")).toBe(`${Math.floor((900 - 96) / 11)}px`);
+    // Wider: the classes go and every tab is 220 px again.
+    Object.defineProperty(strip, "clientWidth", { configurable: true, value: 4000 });
+    act(() => FakeObserver.made[0].cb([], FakeObserver.made[0] as unknown as ResizeObserver));
+    expect(list.classList.contains("tab-list-narrow")).toBe(false);
+    expect(list.style.getPropertyValue("--tab-w")).toBe("220px");
+    unmount();
+    expect(FakeObserver.made[0].disconnected).toBe(true);
+    expect(FakeObserver.made.length).toBe(1);
+  } finally {
+    globalThis.ResizeObserver = original;
+  }
 });

@@ -291,6 +291,17 @@ export interface TreeNode {
   hasChildren: boolean;
   /** Folders and the Not compared row. */
   count: number | null;
+  /** A changed table that holds changes: how many (item 43 draws it amber with this count). */
+  changes: number | null;
+}
+
+/** The one-letter badge at a row's right edge (item 43, like Git decorations). */
+export const MARK_LETTER: Record<DiffKind, string> = { added: "A", removed: "R", changed: "C" };
+
+/** "fax, removed"; a table that holds changes adds "4 changes inside". */
+export function rowLabel(r: Pick<TreeNode, "name" | "mark" | "changes">): string {
+  if (!r.mark) return r.name;
+  return r.changes !== null ? `${r.name}, ${r.mark}, ${plural(r.changes, "change")} inside` : `${r.name}, ${r.mark}`;
 }
 
 export function filterCounts(items: DiffItem[]): Record<DiffFilter, number> {
@@ -333,30 +344,45 @@ export function buildTree(items: DiffItem[], filter: DiffFilter, scope: string, 
     if (kids.length === 0 && !(own && keep(own))) continue;
     const id = own?.id ?? `table:${name}`;
     const mark: DiffKind = own?.kind ?? "changed";
-    const detail = own && (own.kind !== "changed" || children.length === 0) ? own.detail : plural(children.length + (own ? 1 : 0), "change");
-    tableRows.push({ id, level: 2, kind: "table", name, detail, mark, item: own, table: name, parent: "folder:tables", hasChildren: kids.length > 0, count: null });
+    const parentOfChanges = !(own && (own.kind !== "changed" || children.length === 0));
+    const total = children.length + (own ? 1 : 0);
+    const detail = parentOfChanges ? plural(total, "change") : own!.detail;
+    tableRows.push({
+      id,
+      level: 2,
+      kind: "table",
+      name,
+      detail,
+      mark,
+      item: own,
+      table: name,
+      parent: "folder:tables",
+      hasChildren: kids.length > 0,
+      count: null,
+      changes: parentOfChanges ? total : null,
+    });
     for (const k of kids) {
-      tableRows.push({ id: k.id, level: 3, kind: "item", name: k.path.name, detail: k.detail, mark: k.kind, item: k, table: name, parent: id, hasChildren: false, count: null });
+      tableRows.push({ id: k.id, level: 3, kind: "item", name: k.path.name, detail: k.detail, mark: k.kind, item: k, table: name, parent: id, hasChildren: false, count: null, changes: null });
     }
   }
   const enumRows: TreeNode[] = enums
     .filter(keep)
     .sort((a, b) => a.path.name.localeCompare(b.path.name))
-    .map((e) => ({ id: e.id, level: 2, kind: "item", name: e.path.name, detail: e.detail, mark: e.kind, item: e, table: e.path.name, parent: "folder:enums", hasChildren: false, count: null }));
+    .map((e) => ({ id: e.id, level: 2, kind: "item", name: e.path.name, detail: e.detail, mark: e.kind, item: e, table: e.path.name, parent: "folder:enums", hasChildren: false, count: null, changes: null }));
   if (tableRows.length > 0 || enumRows.length > 0) {
-    rows.push({ id: scopeId, level: 0, kind: "scope", name: scope, detail: "", mark: null, item: null, table: null, parent: null, hasChildren: true, count: null });
+    rows.push({ id: scopeId, level: 0, kind: "scope", name: scope, detail: "", mark: null, item: null, table: null, parent: null, hasChildren: true, count: null, changes: null });
   }
   if (tableRows.length > 0) {
     const n = tableRows.filter((r) => r.level === 2).length;
-    rows.push({ id: "folder:tables", level: 1, kind: "folder", name: "Tables", detail: "", mark: null, item: null, table: null, parent: scopeId, hasChildren: true, count: n });
+    rows.push({ id: "folder:tables", level: 1, kind: "folder", name: "Tables", detail: "", mark: null, item: null, table: null, parent: scopeId, hasChildren: true, count: n, changes: null });
     rows.push(...tableRows);
   }
   if (enumRows.length > 0) {
-    rows.push({ id: "folder:enums", level: 1, kind: "folder", name: "Enums", detail: "", mark: null, item: null, table: null, parent: scopeId, hasChildren: true, count: enumRows.length });
+    rows.push({ id: "folder:enums", level: 1, kind: "folder", name: "Enums", detail: "", mark: null, item: null, table: null, parent: scopeId, hasChildren: true, count: enumRows.length, changes: null });
     rows.push(...enumRows);
   }
   if (notCompared > 0) {
-    rows.push({ id: "note:notCompared", level: 0, kind: "note", name: "Not compared", detail: "", mark: null, item: null, table: null, parent: null, hasChildren: false, count: notCompared });
+    rows.push({ id: "note:notCompared", level: 0, kind: "note", name: "Not compared", detail: "", mark: null, item: null, table: null, parent: null, hasChildren: false, count: notCompared, changes: null });
   }
   return rows;
 }

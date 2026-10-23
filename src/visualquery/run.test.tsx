@@ -65,9 +65,10 @@ let lang: { client: LangClient; schemas: SchemaCache };
 
 /** The Core's preview, as far as these tests need: a FROM line, then a line per Join or CROSS JOIN. */
 function previewFor(query: VisualQuery): VqPreview {
-  if (query.columns.length === 0) return { query: null, problems: [{ target: { kind: "columns" }, message: "Tick at least one column." }] };
   const [root, ...rest] = query.tables;
-  const lines = [`SELECT ${query.columns.map((c) => c.column).join(", ")}`, `FROM ${root.name} AS ${root.alias}`];
+  // Item 37: nothing ticked selects every column.
+  const select = query.columns.length === 0 ? (query.tables.length === 1 ? "*" : query.tables.map((t) => `${t.alias}.*`).join(", ")) : query.columns.map((c) => c.column).join(", ");
+  const lines = [`SELECT ${select}`, `FROM ${root.name} AS ${root.alias}`];
   const parts: SqlPart[] = [
     { part: { kind: "select" }, fromLine: 1, toLine: 1 },
     { part: { kind: "from", table: root.id }, fromLine: 2, toLine: 2 },
@@ -189,6 +190,9 @@ test("ctrl_enter_runs_on_the_tab_session_with_no_pass_and_shows_the_results", as
     expect(call.types).toMatchObject({ t1: { id: "int" }, t2: { name: "varchar(80)" } });
     // The panel switches to Results.
     expect(await screen.findByText("10 rows in 38ms")).toBeTruthy();
+    // Item 40: one statement, one result: no "Result 1" tab.
+    expect(screen.queryByRole("tablist", { name: "Result tabs" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Result 1" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Results" }).getAttribute("aria-selected")).toBe("true");
     expect(onRan).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(slot.textContent).toContain("2 tables"));
@@ -196,10 +200,11 @@ test("ctrl_enter_runs_on_the_tab_session_with_no_pass_and_shows_the_results", as
     expect(slot.textContent).toContain("38ms");
     expect(slot.textContent).not.toContain("Changed since the last run");
 
-    // Any change after a run says so in the panel header and the status slot.
+    // Any change after a run says so once, at the end of the panel's tab strip (item 38), not in the status slot.
     act(() => setModel((q) => ({ ...q, distinct: true })));
     await waitFor(() => expect(within(panelHeader()).getByText("Changed since the last run")).toBeTruthy());
-    expect(slot.textContent).toContain("Changed since the last run");
+    expect(screen.getAllByText("Changed since the last run")).toHaveLength(1);
+    expect(slot.textContent).not.toContain("Changed since the last run");
 
     // The next run clears it.
     await waitFor(() => expect(runButton().disabled).toBe(false));
@@ -244,10 +249,12 @@ test("run_is_off_and_says_why_when_the_connection_is_closed_or_a_table_is_missin
   expect(runButton().disabled).toBe(true);
 });
 
-test("run_is_off_with_the_problem_that_stops_the_sql", async () => {
+test("item_37_nothing_ticked_runs_every_column", async () => {
   render(<Harness initial={docWith({ ...ORDERS_STORES, columns: [] })} />);
-  await waitFor(() => expect(runButton().title).toBe("Tick at least one column."));
-  expect(runButton().disabled).toBe(true);
+  await ready();
+  ctrlEnter();
+  await waitFor(() => expect(callsTo("run_visual_query")).toHaveLength(1));
+  expect((callsTo("run_visual_query")[0].query as VisualQuery).columns).toEqual([]);
 });
 
 test("a_lone_table_asks_once_before_its_first_run", async () => {

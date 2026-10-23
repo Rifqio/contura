@@ -6,6 +6,8 @@ import { type AlignedRow, type LineMark, alignLines, ddlLines, lineKey } from ".
 /** One side's header: its database mark and name, PROD where it applies, and Source or Target. */
 export interface PaneSide {
   name: string;
+  /** Item 44: the database, then the schema on PostgreSQL, so two sides on one Connection read apart. */
+  scope?: string[];
   lead?: React.ReactNode;
   tag?: React.ReactNode;
 }
@@ -61,10 +63,18 @@ function Pane({
 }) {
   const left = role === "Source";
   return (
-    <section className={wash ? "compare-pane prod-wash" : "compare-pane"} aria-label={`${role} DDL, ${side.name}`}>
+    <section className={wash ? "compare-pane prod-wash" : "compare-pane"} aria-label={`${role} DDL, ${[side.name, ...(side.scope ?? [])].join(", ")}`}>
       <header className="compare-pane-head">
         {side.lead}
         <span className="compare-pane-name">{side.name}</span>
+        {side.scope?.map((part, i) => (
+          <span key={i} className="compare-pane-scope-part">
+            <span className="compare-pane-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="compare-pane-scope mono">{part}</span>
+          </span>
+        ))}
         {side.tag}
         <span className="compare-pane-role">{role}</span>
       </header>

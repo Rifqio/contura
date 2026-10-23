@@ -41,7 +41,7 @@ Moving the Schema Builder onto the engine changed what it looks like and how it 
 - **D6, table addressing.** `VqTable.schema` is the PostgreSQL schema, or the MySQL database or SQLite attached scope when it differs from the tab's database. `tables[0]` is the root of FROM.
 - **D7, the Core names the outputs.** Default names and clash suffixes (`count_id`, `count_id_2`) are Core rules; the Columns panel shows them as placeholders.
 - **D8, sorting while grouping.** With an aggregate, a sort on a column that is not an output is a problem on the sort row. V1 extends it to DISTINCT. Cost: a sort MySQL would accept without `ONLY_FULL_GROUP_BY` is refused.
-- **D9, keys.** `Ctrl+Shift+A` (Add table), `Ctrl+Shift+E` (Open in editor) and `Ctrl+Shift+D` (diagram) are registry commands; Ctrl+S reuses `query.save`. Ctrl+Enter is handled in the Visual Query tab's own `onKeyDown`, because the registry's `query.run` is scoped to the editor. Cost: Ctrl+Enter in a Visual Query cannot be rebound.
+- **D9, keys.** `Ctrl+Shift+E` (Open in editor) and `Ctrl+Shift+D` (diagram) are registry commands; Ctrl+S reuses `query.save`. Ctrl+Enter is handled in the Visual Query tab's own `onKeyDown`, because the registry's `query.run` is scoped to the editor. Cost: Ctrl+Enter in a Visual Query cannot be rebound.
 - **D10, New-tab menu.** A chevron beside New query offers New query and New Visual Query.
 - **D11, one set of golden cases.** `crates/contura-core/src/visual_query/golden/` holds each model, its SQL per Dialect and a hand-written shape (P5); the Rust tests and the TypeScript shape test read the same files.
 - **D12, Run keeps the editor's pass shape.** Described above.
@@ -62,7 +62,10 @@ The pre-flight rulings (P1 to P16) and the build rulings (V1 to V10) are in `.su
 - **V3, the canvas surface.** `onDragOver` reports the source and the target port, Esc cancels a column drag, the Visual Query connects in loose mode and the Schema Builder in strict mode.
 - **V4, the TypeScript model matches the Core plan.** Tables group only through active or pending Joins; Manual GROUP BY entries survive an untick; a table in a database still loading reads "Loading schema"; table nouns follow a rule with an irregular list.
 - **V5, sentence case.** The analyzer says "A value is missing after >=."; the 6.2 banner writes "Line 10: a value is missing after >=."
-- **V6, every database.** The finder lists every database the Connection reaches, and a failed schema load shows "Schema did not load." with Try again.
+- **V6, every database.** A table from any database the Connection reaches can be dragged in from the tree, and a failed schema load shows "Schema did not load." with Try again.
+- **Item 35 (step 12b), drag only.** The "Find a table" finder, its `Ctrl+Shift+A`, the toolbar Add table and the canvas menu's Add table are gone: tables come from the tree by drag and drop (or the tree row's menu), and the tree's filter box finds them.
+- **Items 36, 38, 39, 40 (step 12b, board B1), the bottom panel.** Its top edge is a resize handle (a separator: drag, Up and Down keys, double-click resets to 252 px); it keeps at least its 37 px tab strip and leaves the canvas 120 px, and its height is the user's (`vqPanelHeight` in the UI prefs, the same in every tab). Tab counts are badges hidden at 0; "Changed since the last run" shows once, at the end of the tab strip. Columns and Filter and sort are bordered boxes (Group by in the grid's footer bar; Where, Sort, Limit and Distinct side by side). Results has no "Result 1" tab. The canvas hint has its own 28 px strip under the canvas while tables are on it. The SQL tab says "Writing the SQL..." until the Core's text arrives.
+- **Items 25, 41, 51 (step 12b, board B2), resizing.** A selected card or diagram node resizes from pointer zones on its edges and corners (no square handles), live: once a frame the node takes the new box in React Flow, so lines follow, and the size is kept when the drag ends (diagram nodes in the `.flow` layout file, 96 to 320 by 44 to 200 px; Visual Query cards in the tab's draft, `widths` and `heights`, 216 to 340 px wide and from two rows to every row high). A card shorter than its rows scrolls them inside; past 40 rows it draws only those in view and the joined ones. A Join to a column scrolled out of view ends at the card's edge, dashed, on a hollow ring.
 - **V7, counts.** Moving a card is not a change. A joined CROSS JOIN group is counted by its largest table's estimate.
 - **V8, kinds never mix.** Described above.
 - **V9, the query diagram loads every named database.** Described above.
@@ -71,7 +74,6 @@ The pre-flight rulings (P1 to P16) and the build rulings (V1 to V10) are in `.su
 
 ### Accepted deviations
 
-- The finder hides MySQL system databases.
 - Golden models are reused in the live tests with the database and schema rewritten per test database (P3).
 - Query diagram cards can be dragged; the drawing stays read only, since only the SQL defines it.
 - Saving regenerates the SQL every time; with the Connection closed, an unchanged model keeps its stored SQL.

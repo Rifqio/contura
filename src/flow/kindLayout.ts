@@ -16,6 +16,11 @@ export const KIND_ROW = 22;
 /** A sequence message row, and the participant header above the lifelines. */
 export const SEQ_ROW = 44;
 export const SEQ_HEAD = 40;
+/** Room between the participant boxes and the first message, so its label clears the boxes. */
+const SEQ_PAD = 16;
+/** Room above a frame's first message for its tab, and below its last message. */
+const FRAME_TAB = 28;
+const FRAME_FOOT = 10;
 /** Room between participants, between timeline items, and between mind map levels. */
 const SEQ_GAP = 72;
 const TIME_STEP = 176;
@@ -81,8 +86,9 @@ export type KindBox = { x: number; y: number; w: number; h: number };
 export interface FixedLayout {
   positions: Positions;
   sizes: Map<string, { w: number; h: number }>;
-  /** Sequence: how long each lifeline runs, and each frame's box. */
+  /** Sequence: how long each lifeline runs, each frame's box, and each message row's middle (from the top). */
   lifeline?: number;
+  rows?: number[];
   frames?: { label: string; box: KindBox; depth: number }[];
   /** Timeline: the axis and each section's band. */
   axis?: KindBox;
@@ -97,7 +103,17 @@ const pos = (): Positions => Object.create(null) as Positions;
 function sequenceLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }): FixedLayout {
   const positions = pos();
   const sizes = new Map<string, { w: number; h: number }>();
-  const lifeline = SEQ_HEAD + (doc.links.length + 1) * SEQ_ROW;
+  // Each message row is SEQ_ROW tall; a frame that opens on a row adds room for its tab above it, and one that
+  // closes adds a little below, so a tab never sits on a message or its label.
+  const frameList = doc.frames ?? [];
+  const rows: number[] = [];
+  let y = SEQ_HEAD + SEQ_PAD;
+  for (let i = 0; i < doc.links.length; i++) {
+    y += frameList.filter((f) => f.from === i && f.to >= f.from).length * FRAME_TAB;
+    rows.push(y + SEQ_ROW / 2);
+    y += SEQ_ROW + frameList.filter((f) => f.to === i && f.to >= f.from).length * FRAME_FOOT;
+  }
+  const lifeline = y + SEQ_ROW;
   const centre = new Map<string, number>();
   let x = 0;
   for (const n of doc.nodes) {
@@ -109,7 +125,7 @@ function sequenceLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: num
     x += s.w + SEQ_GAP;
   }
   // Notes sit to the right of the last participant, one under another.
-  let ny = SEQ_HEAD;
+  let ny = SEQ_HEAD + SEQ_PAD;
   for (const n of doc.nodes) {
     if (n.kind !== "note") continue;
     const s = size(n);
@@ -117,18 +133,23 @@ function sequenceLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: num
     sizes.set(n.name, s);
     ny += s.h + 16;
   }
-  // A frame spans the participants its messages touch, over its message rows.
-  const frames = (doc.frames ?? []).map((f) => {
+  // A frame spans the participants its messages touch, over its message rows. Frames opening on the same row
+  // stack their tabs, the outer one highest; their feet stack the same way below the closing row.
+  const frames = frameList.map((f) => {
     const msgs = f.to >= f.from ? doc.links.slice(f.from, f.to + 1) : [];
     const xs = msgs.flatMap((l) => [centre.get(l.from), centre.get(l.to)]).filter((v): v is number => v !== undefined);
     const lo = xs.length ? Math.min(...xs) - 60 : 0;
     const hi = xs.length ? Math.max(...xs) + 60 : 120;
     const inset = f.depth * 8;
-    const top = SEQ_HEAD + f.from * SEQ_ROW + 4 + inset;
-    const rows = Math.max(1, f.to - f.from + 1);
-    return { label: f.label, depth: f.depth, box: { x: lo + inset, y: top, w: hi - lo - inset * 2, h: rows * SEQ_ROW + 20 - inset * 2 } };
+    const first = rows[f.from] ?? SEQ_HEAD + SEQ_PAD + SEQ_ROW / 2;
+    const last = rows[Math.max(f.from, f.to)] ?? first;
+    const above = frameList.filter((g) => g.from === f.from && g.to >= g.from && g.depth >= f.depth).length;
+    const below = frameList.filter((g) => g.to === f.to && g.to >= g.from && g.depth >= f.depth).length;
+    const top = first - SEQ_ROW / 2 - above * FRAME_TAB + 2;
+    const bottom = last + SEQ_ROW / 2 + (below - 1) * FRAME_FOOT + 2;
+    return { label: f.label, depth: f.depth, box: { x: lo + inset, y: top, w: hi - lo - inset * 2, h: bottom - top } };
   });
-  return { positions, sizes, lifeline, frames };
+  return { positions, sizes, lifeline, frames, rows };
 }
 
 /** The root in the middle; its topics alternate right and left, each subtree stacked under the one before. */

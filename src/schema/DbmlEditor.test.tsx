@@ -126,3 +126,13 @@ test("selecting_a_card_bands_its_block", async () => {
   rerender(<DbmlEditor {...props} band={[]} />);
   await waitFor(() => expect(banded()).toEqual([]));
 });
+
+test("the editor takes the dark flag in the dark theme, so its suggestions are readable (item 50)", () => {
+  document.documentElement.setAttribute("data-theme", "dark");
+  try {
+    const { view } = setup("");
+    expect(view.state.facet(EditorView.darkTheme)).toBe(true);
+  } finally {
+    document.documentElement.removeAttribute("data-theme");
+  }
+});

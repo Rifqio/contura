@@ -1,4 +1,5 @@
-//! Source scans: one file talks HTTP, and the provider code never reaches a database.
+//! Source scans: two files talk HTTP (the AI client and the update check), and neither
+//! the provider code nor the update code reaches a database.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,7 +27,7 @@ fn relative(path: &Path) -> String {
 }
 
 #[test]
-fn only_http_rs_names_reqwest() {
+fn only_the_two_http_files_name_reqwest() {
     let mut files = Vec::new();
     rust_files(&src(), &mut files);
     let naming: Vec<String> = files
@@ -34,7 +35,38 @@ fn only_http_rs_names_reqwest() {
         .filter(|p| fs::read_to_string(p).unwrap().contains("reqwest"))
         .map(|p| relative(p))
         .collect();
-    assert_eq!(naming, vec!["ai/provider/http.rs".to_string()]);
+    let mut naming = naming;
+    naming.sort();
+    assert_eq!(
+        naming,
+        vec![
+            "ai/provider/http.rs".to_string(),
+            "update/http.rs".to_string()
+        ]
+    );
+}
+
+/// The update check sends a GET to GitHub and nothing else: its code reaches no
+/// Connection, no AI and no secret.
+#[test]
+fn update_names_no_catalog_ai_or_secret() {
+    let mut files = Vec::new();
+    rust_files(&src().join("update"), &mut files);
+    assert!(!files.is_empty());
+    for path in &files {
+        let text = fs::read_to_string(path).unwrap();
+        for name in [
+            "ConnectionService",
+            "SessionHandle",
+            "Dialect",
+            "CatalogReader",
+            "crate::ai",
+            "SecretStore",
+            "secrets::",
+        ] {
+            assert!(!text.contains(name), "{} names {name}", relative(path));
+        }
+    }
 }
 
 #[test]

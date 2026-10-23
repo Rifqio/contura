@@ -11,9 +11,10 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import { patientFile } from "../test/load";
 import { mockReactFlowDom } from "../test/reactFlow";
-import Finder, { type FinderTable } from "./Finder";
 import { emptyQuery } from "./model";
 import { fitWidth, type QueryCardData, queryCardHeight } from "./QueryCard";
+import { rowAnchor } from "./JoinEdge";
+import { parseVisualDrafts } from "./drafts";
 import VisualQueryTab, { type VisualQueryTabProps, joinBrings, pairsSentence, warningLines } from "./VisualQueryTab";
 
 /** Item 30: the SQL is a tab of the bottom panel; this shows it. */
@@ -92,9 +93,10 @@ function makeLang(hold: string[] = []) {
 }
 
 function previewFor(query: VisualQuery): VqPreview {
-  if (query.columns.length === 0) return { query: null, problems: [{ target: { kind: "columns" }, message: "Tick at least one column." }] };
   const [o, s] = query.tables;
-  const lines = [`SELECT ${query.columns.map((c) => `${o.alias}.${c.column}`).join(", ")}`, `FROM ${o.name} ${o.alias}`];
+  // Item 37: nothing ticked selects every column.
+  const select = query.columns.length === 0 ? (query.tables.length === 1 ? "*" : query.tables.map((t) => `${t.alias}.*`).join(", ")) : query.columns.map((c) => `${o.alias}.${c.column}`).join(", ");
+  const lines = [`SELECT ${select}`, `FROM ${o.name} ${o.alias}`];
   const parts: SqlPart[] = [
     { part: { kind: "select" }, fromLine: 1, toLine: 1 },
     { part: { kind: "from", table: o.id }, fromLine: 2, toLine: 2 },
@@ -136,11 +138,14 @@ function Harness({ initial, ...props }: { initial: VisualTabDoc } & Partial<Visu
           visible
           lang={lang}
           rowEstimate={() => null}
-          onChange={setDoc}
           onOpenInEditor={() => {}}
           onSaved={() => {}}
           onOpenConnection={() => {}}
           {...props}
+          onChange={(d) => {
+            setDoc(d);
+            props.onChange?.(d);
+          }}
         />
       </div>
     </ToastProvider>
@@ -149,16 +154,29 @@ function Harness({ initial, ...props }: { initial: VisualTabDoc } & Partial<Visu
 
 const cardEl = (label: string) => screen.findByRole("group", { name: label });
 const strip = () => screen.getByRole("toolbar", { name: "Visual Query" });
+const canvas = () => document.querySelector(".diagram-canvas") as HTMLElement;
+const dropOf = (object: unknown) => ({
+  dataTransfer: {
+    types: ["application/x-contura-object"],
+    getData: (t: string) => (t === "application/x-contura-object" ? JSON.stringify(object) : ""),
+    dropEffect: "none",
+  },
+  clientX: 300,
+  clientY: 200,
+});
+/** Drops a table of `database` from the tree onto the canvas (item 35: the only way to add one). */
+const dropTable = (name: string, database = "shop") =>
+  fireEvent.drop(canvas(), dropOf({ connectionId: "c1", kind: "table", path: { database, schema: null, name } }));
 
 test("empty_state_explains_and_runs_nothing", async () => {
   render(<Harness initial={docWith()} />);
   expect(await screen.findByText("Add tables to start")).toBeTruthy();
-  expect(screen.getByText("Drag tables from the tree onto the canvas, or find one here. Joins fill in from Foreign Keys.")).toBeTruthy();
-  // The finder sits in place, with its key.
-  const finder = screen.getByRole("searchbox", { name: "Find a table" });
-  expect(finder.closest(".vq-finder")?.querySelector(".kbd")?.textContent).toBe("Ctrl+Shift+A");
-  expect(screen.getByText("Tick a column to start")).toBeTruthy();
-  expect(screen.getByText("Tick columns on the cards above. They become the result, in the order you tick them.")).toBeTruthy();
+  // Item 35: drag only; no finder in place.
+  expect(screen.getByText("Drag tables from the tree onto the canvas. To find one, filter the tree. Joins fill in from Foreign Keys.")).toBeTruthy();
+  expect(screen.queryByRole("searchbox", { name: "Find a table" })).toBeNull();
+  // Item 37: nothing ticked means every column.
+  expect(screen.getByText("All columns.")).toBeTruthy();
+  expect(screen.getByText("Tick columns to choose them.")).toBeTruthy();
   // Said once: the Columns tab says what to do; the SQL tab only says when it will show.
   expect(screen.queryByText("Tick at least one column.")).toBeNull();
   expect((within(strip()).getByRole("button", { name: /^Run/ }) as HTMLButtonElement).disabled).toBe(true);
@@ -166,63 +184,38 @@ test("empty_state_explains_and_runs_nothing", async () => {
   expect(screen.getByText("The SQL appears here once a table is on the canvas.")).toBeTruthy();
   expect((screen.getByRole("button", { name: /^Open in editor/ }) as HTMLButtonElement).disabled).toBe(true);
   expect(within(strip()).getByText("No tables")).toBeTruthy();
-  expect(screen.getByText("Tables on other Connections are not listed. Data Transfer copies between Connections.")).toBeTruthy();
   // Nothing to preview yet.
   expect(callsTo("visual_query_sql")).toEqual([]);
 });
 
-test("the_finder_adds_with_down_and_enter_and_ctrl_shift_a_opens_it_over_the_canvas", async () => {
+test("item_35_tables_come_only_by_dragging_no_finder_no_add_table_no_ctrl_shift_a", async () => {
   render(<Harness initial={docWith()} />);
-  const search = await screen.findByRole("searchbox", { name: "Find a table" });
-  await screen.findByRole("option", { name: /orders/ });
-  const names = within(screen.getByRole("listbox", { name: "Tables" }))
-    .getAllByRole("option")
-    .map((o) => o.querySelector(".vq-finder-name")?.textContent);
-  expect(names).toEqual(["menu_items", "orders", "stores", "v_daily_sales", "wide"]);
-  // A view says so where a table shows its rows.
-  expect(within(screen.getByRole("option", { name: /v_daily_sales/ })).getByText("shop, view")).toBeTruthy();
-  search.focus();
-  await userEvent.keyboard("{ArrowDown}{Enter}");
+  await screen.findByText("Add tables to start");
+  expect(within(strip()).queryByRole("button", { name: /Add table/ })).toBeNull();
+  expect(screen.queryByRole("searchbox", { name: "Find a table" })).toBeNull();
+  dropTable("orders");
   expect(await cardEl("Table orders o")).toBeTruthy();
   expect(screen.queryByText("Add tables to start")).toBeNull();
-  // The empty state went with its finder: the canvas keeps the keys.
-  expect(document.activeElement?.classList.contains("diagram-canvas")).toBe(true);
-
-  // Ctrl+Shift+A opens the finder over the canvas; Esc closes it.
-  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
-  const over = await screen.findByRole("dialog", { name: "Add table" });
-  expect(document.body.contains(over)).toBe(true);
-  expect(within(over).getByRole("searchbox", { name: "Find a table" })).toBe(document.activeElement);
-  await userEvent.keyboard("{Escape}");
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
-  expect(document.activeElement?.classList.contains("diagram-canvas")).toBe(true);
-});
-
-test("a_hidden_tab_closes_its_floating_finder_and_enter_adds_nothing", async () => {
-  const changes: VisualTabDoc[] = [];
-  const doc = docWith({ tables: [card("t1", "orders", "o")] });
-  const { rerender } = render(<Harness initial={doc} onChange={(d) => changes.push(d)} />);
-  await cardEl("Table orders o");
-  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
-  await screen.findByRole("dialog", { name: "Add table" });
-  // Ctrl+Tab to another tab: this one hides.
-  rerender(<Harness initial={doc} onChange={(d) => changes.push(d)} visible={false} />);
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
-  expect(document.querySelector(".vq-tab")?.contains(document.activeElement)).toBe(false);
-  await userEvent.keyboard("{Enter}");
+  // Ctrl+Shift+A opens nothing.
+  (document.querySelector(".diagram-canvas") as HTMLElement).focus();
   await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
   expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull();
-  expect(changes).toEqual([]);
+  expect(screen.queryByRole("searchbox", { name: "Find a table" })).toBeNull();
+  // The canvas menu has no Add table either.
+  fireEvent.contextMenu(document.querySelector(".react-flow__pane") as HTMLElement, { clientX: 500, clientY: 300 });
+  const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+  expect(within(menu).queryByRole("menuitem", { name: /Add table/ })).toBeNull();
 });
 
-test("the_finder_lists_every_database_the_connection_reaches", async () => {
+test("a_table_dropped_from_another_database_loads_that_schema", async () => {
   render(<Harness initial={docWith()} databases={["shop", "archive", "mysql", "information_schema"]} />);
-  const row = await screen.findByRole("option", { name: /old_orders/ });
-  expect(within(row).getByText("archive")).toBeTruthy();
-  // MySQL's own databases are not loaded.
-  expect(loads.filter((d) => d !== "shop" && d !== "archive")).toEqual([]);
-  fireEvent.click(row);
-  expect(await cardEl("Table old_orders oo")).toBeTruthy();
+  await screen.findByText("Add tables to start");
+  // Nothing beyond the tab's database loads until a card names it.
+  expect(loads.filter((d) => d !== "shop")).toEqual([]);
+  dropTable("old_orders", "archive");
+  const archived = await cardEl("Table old_orders oo");
+  expect(await within(archived).findByRole("checkbox", { name: "oo.id" })).toBeTruthy();
+  expect(loads.filter((d) => d !== "shop")).toEqual(["archive"]);
 });
 
 test("a_failed_schema_load_says_so_with_try_again_and_never_loads_forever", async () => {
@@ -267,6 +260,8 @@ test("warnings_read_one_way_and_count_columns", () => {
   });
   expect(warningLines(preview(["name"]), model)).toEqual(["name of stores is left out with it."]);
   expect(warningLines(preview(["name", "city"]), model)).toEqual(["name and city of stores are left out with it."]);
+  // Item 37: with nothing ticked the whole table is left out.
+  expect(warningLines(preview([]), model)).toEqual(["stores is left out with it."]);
 });
 
 test("a_join_line_belongs_to_the_card_it_brings_in_even_after_a_swap", () => {
@@ -286,34 +281,21 @@ test("a_join_line_belongs_to_the_card_it_brings_in_even_after_a_swap", () => {
 
 test("adding_stores_after_orders_joins_them_and_says_so_once", async () => {
   render(<Harness initial={docWith()} />);
-  const search = await screen.findByRole("searchbox", { name: "Find a table" });
-  await screen.findByRole("option", { name: /orders/ });
-  search.focus();
-  await userEvent.keyboard("{ArrowDown}{Enter}");
-  await cardEl("Table orders o");
-  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
-  const over = await screen.findByRole("dialog", { name: "Add table" });
-  await userEvent.type(within(over).getByRole("searchbox", { name: "Find a table" }), "stores{Enter}");
+  await screen.findByText("Add tables to start");
+  dropTable("orders");
+  const orders = await cardEl("Table orders o");
+  await within(orders).findByRole("checkbox", { name: "o.store_id" });
+  dropTable("stores");
   expect(await cardEl("Table stores s")).toBeTruthy();
   expect(await screen.findByText("Joined stores to orders from their Foreign Keys.")).toBeTruthy();
   expect(screen.getAllByText("Joined stores to orders from their Foreign Keys.")).toHaveLength(1);
   expect(within(strip()).getByText("2 tables, 1 Join")).toBeTruthy();
 });
 
-const canvas = () => document.querySelector(".diagram-canvas") as HTMLElement;
-const dropOf = (object: unknown) => ({
-  dataTransfer: {
-    types: ["application/x-contura-object"],
-    getData: (t: string) => (t === "application/x-contura-object" ? JSON.stringify(object) : ""),
-    dropEffect: "none",
-  },
-  clientX: 300,
-  clientY: 200,
-});
 
 test("a_tree_row_dropped_on_the_canvas_becomes_a_card_and_another_connection_is_refused", async () => {
   render(<Harness initial={docWith()} />);
-  await screen.findByRole("option", { name: /orders/ });
+  await screen.findByText("Add tables to start");
   fireEvent.drop(canvas(), dropOf({ connectionId: "c1", kind: "table", path: { database: "shop", schema: null, name: "stores" } }));
   expect(await cardEl("Table stores s")).toBeTruthy();
   fireEvent.drop(canvas(), dropOf({ connectionId: "c2", kind: "table", path: { database: "crm", schema: null, name: "people" } }));
@@ -499,31 +481,6 @@ test("a_card_counts_a_note_row_only_for_a_note_it_draws", () => {
   expect(queryCardHeight({ ...base, lone: true })).toBeGreaterThan(plain);
 });
 
-test("the_finder_draws_only_the_rows_in_view_of_a_large_schema", async () => {
-  const tables: FinderTable[] = Array.from({ length: 3000 }, (_, i) => ({
-    schema: `db_${Math.floor(i / 100)}`,
-    name: `table_${String(i).padStart(4, "0")}`,
-    kind: "table",
-    rows: i,
-  }));
-  const onAdd = vi.fn();
-  render(<Finder inline tables={tables} onAdd={onAdd} onClose={() => {}} />);
-  const list = screen.getByRole("listbox", { name: "Tables" });
-  expect(within(list).getAllByRole("option").length).toBeLessThanOrEqual(40);
-  // Keys still reach every row: Up wraps to the last, and Enter adds it.
-  const search = screen.getByRole("searchbox", { name: "Find a table" });
-  search.focus();
-  await userEvent.keyboard("{ArrowUp}");
-  const active = search.getAttribute("aria-activedescendant")!;
-  expect(document.getElementById(active)?.textContent).toContain("table_2999");
-  await userEvent.keyboard("{Enter}");
-  expect(onAdd).toHaveBeenCalledWith(tables[2999]);
-  expect(within(list).getAllByRole("option").length).toBeLessThanOrEqual(40);
-  // A search narrows the rows to the matches.
-  await userEvent.type(search, "table_1234");
-  expect(within(list).getAllByRole("option").map((o) => o.querySelector(".vq-finder-name")?.textContent)).toEqual(["table_1234"]);
-});
-
 test("item_27_28_the_card_menu_explains_its_rows_and_closes_on_escape_or_a_press_outside", async () => {
   render(<Harness initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 300)] })} />);
   const orders = await cardEl("Table orders o");
@@ -556,40 +513,103 @@ test("item_26_27_right_click_on_a_card_opens_its_menu_and_tick_every_column_tick
   await waitFor(() => expect(["id", "name", "city"].map((c) => box(c).checked)).toEqual([false, false, false]));
 });
 
-test("item_29_picking_a_table_closes_the_floating_finder_and_a_press_outside_closes_it", async () => {
-  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
-  await cardEl("Table orders o");
-  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
-  const over = await screen.findByRole("dialog", { name: "Add table" });
-  await userEvent.click(await within(over).findByRole("option", { name: /stores/ }));
-  expect(await cardEl("Table stores s")).toBeTruthy();
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
-  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
-  await screen.findByRole("dialog", { name: "Add table" });
-  fireEvent.pointerDown(document.querySelector(".react-flow__pane") ?? document.body);
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
-  // Escape closes it with focus anywhere.
-  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
-  await screen.findByRole("dialog", { name: "Add table" });
-  (document.activeElement as HTMLElement | null)?.blur();
-  fireEvent.keyDown(document.body, { key: "Escape" });
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add table" })).toBeNull());
-});
-
-test("item_25_the_selected_cards_corner_handles_drag_its_width", async () => {
-  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
+test("item_25_41_the_selected_card_resizes_from_its_edges_and_corners_and_keeps_its_size", async () => {
+  const changes: VisualTabDoc[] = [];
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} onChange={(d) => changes.push(d)} />);
   const orders = await cardEl("Table orders o");
   fireEvent.click(document.querySelector('.react-flow__node[data-id="t1"]') as HTMLElement);
+  // Board B2: eight pointer zones, no square handles.
   const se = await waitFor(() => {
-    const h = orders.querySelector('.selbox i[data-corner="se"]');
-    expect(h).toBeTruthy();
-    return h as HTMLElement;
+    expect(orders.querySelectorAll(".rz-zone")).toHaveLength(8);
+    return orders.querySelector('.rz-zone[data-dir="se"]') as HTMLElement;
   });
-  fireEvent.pointerDown(se, { button: 0, clientX: 100, pointerId: 1 });
-  fireEvent.pointerMove(se, { clientX: 160, pointerId: 1 });
-  expect(orders.style.width).toBe("276px");
-  fireEvent.pointerUp(se, { clientX: 160, pointerId: 1 });
-  await waitFor(() => expect((screen.getByRole("group", { name: "Table orders o" }) as HTMLElement).style.width).toBe("276px"));
+  expect(orders.querySelector(".selbox i")).toBeNull();
+  // Four columns: 136 px when every row shows.
+  await waitFor(() => expect(within(orders).getAllByRole("checkbox")).toHaveLength(4));
+  fireEvent.pointerDown(se, { button: 0, clientX: 100, clientY: 300, pointerId: 1 });
+  fireEvent.pointerMove(se, { clientX: 160, clientY: 260, pointerId: 1 });
+  // Live: the node takes the box on the next frame.
+  const wrap = document.querySelector('.react-flow__node[data-id="t1"]') as HTMLElement;
+  await waitFor(() => expect(wrap.classList.contains("is-resizing")).toBe(true));
+  fireEvent.pointerUp(se, { clientX: 160, clientY: 260, pointerId: 1 });
+  await waitFor(() => expect(changes[changes.length - 1]?.widths).toEqual({ t1: 276 }));
+  expect(changes[changes.length - 1].heights).toEqual({ t1: 96 });
+  // A shorter card scrolls its rows inside; the wheel scrolls them, not the canvas.
+  const drawn = await cardEl("Table orders o");
+  await waitFor(() => expect(drawn.style.height).toBe("96px"));
+  expect(drawn.style.width).toBe("276px");
+  expect(drawn.classList.contains("table-card-scroll")).toBe(true);
+  expect(drawn.querySelector("ul.table-card-columns")!.classList.contains("nowheel")).toBe(true);
+});
+
+test("item_41_card_limits_two_rows_to_every_row_and_216_to_340_wide", async () => {
+  const changes: VisualTabDoc[] = [];
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} onChange={(d) => changes.push(d)} />);
+  const orders = await cardEl("Table orders o");
+  await waitFor(() => expect(within(orders).getAllByRole("checkbox")).toHaveLength(4));
+  fireEvent.click(document.querySelector('.react-flow__node[data-id="t1"]') as HTMLElement);
+  const zone = (d: string) => document.querySelector(`.react-flow__node[data-id="t1"] .rz-zone[data-dir="${d}"]`) as HTMLElement;
+  await waitFor(() => expect(zone("se")).toBeTruthy());
+  const drag = async (d: string, dx: number, dy: number) => {
+    fireEvent.pointerDown(zone(d), { button: 0, clientX: 500, clientY: 500, pointerId: 1 });
+    fireEvent.pointerMove(zone(d), { clientX: 500 + dx, clientY: 500 + dy, pointerId: 1 });
+    fireEvent.pointerUp(zone(d), { clientX: 500 + dx, clientY: 500 + dy, pointerId: 1 });
+    await waitFor(() => expect(changes.length).toBeGreaterThan(0));
+  };
+  // Smallest: 216 wide, two rows high (32 + 2 x 24 + 8).
+  await drag("se", -900, -900);
+  await waitFor(() => expect(changes[changes.length - 1].heights).toEqual({ t1: 88 }));
+  expect(changes[changes.length - 1].widths).toEqual({ t1: 216 });
+  // Largest: 340 wide, every row: a card as tall as its rows keeps no height of its own.
+  await waitFor(() => expect(zone("se")).toBeTruthy());
+  await drag("se", 900, 900);
+  await waitFor(() => expect(changes[changes.length - 1].widths).toEqual({ t1: 340 }));
+  expect(changes[changes.length - 1].heights ?? {}).toEqual({});
+});
+
+test("item_41_a_card_with_many_columns_draws_only_its_visible_rows_and_keeps_joined_ones", async () => {
+  const many = ["id", ...Array.from({ length: 119 }, (_, i) => `c${i + 1}`)];
+  makeLang();
+  const HUGE: SqlSchema = { ...SHOP, tables: [...SHOP.tables, { schema: null, name: "huge", kind: "table", columns: many.map((c, i) => col(c, "int", i === 0)) }] };
+  const client = new LangClient(() => fakeWorker());
+  lang = { client, schemas: new SchemaCache(client, () => Promise.resolve(HUGE)) };
+  render(
+    <Harness
+      initial={docWith(
+        {
+          tables: [card("t1", "huge", "h"), card("t2", "stores", "s", 400)],
+          joins: [{ id: "j1", left: "t1", right: "t2", kind: "inner", on: [{ leftColumn: "c100", rightColumn: "id" }] }],
+        },
+        { heights: { t1: 200 } },
+      )}
+    />,
+  );
+  const huge = await cardEl("Table huge h");
+  // Expanded, its 120 columns scroll in 200 px.
+  await userEvent.click(await within(huge).findByRole("button", { name: /more columns/ }));
+  await waitFor(() => expect(huge.classList.contains("table-card-scroll")).toBe(true));
+  const rows = () => [...huge.querySelectorAll<HTMLElement>("li.vq-card-row")].map((r) => r.dataset.column);
+  await waitFor(() => expect(rows().length).toBeLessThan(30));
+  // The joined column keeps its row (and its port), far below the visible ones.
+  expect(rows()).toContain("c100");
+  expect(rows()).toContain("id");
+  // Spacers keep every row at its place.
+  const gaps = [...huge.querySelectorAll<HTMLElement>("li.vq-card-gap")].reduce((n, g) => n + parseFloat(g.style.height), 0);
+  expect(gaps + rows().length * 24).toBe(120 * 24);
+});
+
+test("item_41_a_join_to_a_scrolled_out_column_goes_to_the_card_edge", () => {
+  // Rows show between 33 px and 195 px down a 200 px card at y 100.
+  expect(rowAnchor(160, 100, 200)).toEqual({ y: 160, out: false });
+  expect(rowAnchor(120, 100, 200)).toEqual({ y: 133, out: true });
+  expect(rowAnchor(400, 100, 200)).toEqual({ y: 295, out: true });
+});
+
+test("item_41_drafts_keep_card_heights", () => {
+  const doc = docWith({ tables: [card("t1", "orders", "o")] }, { widths: { t1: 276 }, heights: { t1: 120, bad: Number.NaN as unknown as number } });
+  const back = parseVisualDrafts(JSON.stringify({ version: 1, visual: [doc] }));
+  expect(back[0].widths).toEqual({ t1: 276 });
+  expect(back[0].heights).toEqual({ t1: 120 });
 });
 
 test("item_32_a_card_is_wide_enough_for_its_names_and_ticking_writes_no_output_name", async () => {
@@ -614,7 +634,6 @@ test("item_26_right_click_on_the_canvas_opens_its_menu_without_paste_and_clear_c
   fireEvent.contextMenu(pane, { clientX: 500, clientY: 300 });
   const menu = await screen.findByRole("menu", { name: "Canvas actions" });
   expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
-    "Add table...",
     "Select all",
     "Tidy",
     "Zoom to fit",
@@ -626,10 +645,6 @@ test("item_26_right_click_on_the_canvas_opens_its_menu_without_paste_and_clear_c
   await waitFor(() => expect(screen.queryByRole("group", { name: "Table orders o" })).toBeNull());
   await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
   expect(await cardEl("Table orders o")).toBeTruthy();
-  // Add table... opens the finder.
-  fireEvent.contextMenu(document.querySelector(".react-flow__pane") as HTMLElement, { clientX: 500, clientY: 300 });
-  await userEvent.click(await screen.findByRole("menuitem", { name: "Add table..." }));
-  expect(await screen.findByRole("dialog", { name: "Add table" })).toBeTruthy();
 });
 
 test("item_24_a_table_dragged_over_the_canvas_rings_it_and_dropping_adds_it", async () => {
@@ -641,4 +656,138 @@ test("item_24_a_table_dragged_over_the_canvas_rings_it_and_dropping_adds_it", as
   fireEvent.drop(canvas(), drop);
   expect(canvas().className).not.toContain("is-drop-target");
   expect(await cardEl("Table stores s")).toBeTruthy();
+});
+
+test("item_37_with_nothing_ticked_the_sql_tab_says_the_real_problem", async () => {
+  const grouped = "A grouped query needs ticked columns. Tick the ones to show.";
+  routeInvoke({ visual_query_sql: () => ({ query: null, problems: [{ target: { kind: "columns" }, message: grouped }] }) });
+  render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")], groupBy: { kind: "manual", columns: [{ table: "t1", column: "id" }] } })} />);
+  await cardEl("Table orders o");
+  const pane = await showSql();
+  expect(await within(pane).findByText(grouped)).toBeTruthy();
+  expect(within(pane).queryByText("The SQL appears here once a column is ticked.")).toBeNull();
+});
+
+// ---- Fix round 1 ----
+
+/**
+ * jsdom has no layout. React Flow finds a port from its box against the card's, so each port reports the box a
+ * browser would give it: its row's middle, less how far the card's rows are scrolled.
+ */
+function layOutPorts() {
+  const original = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    const row = this.classList.contains("react-flow__handle") ? this.closest<HTMLElement>("li.vq-card-row") : null;
+    if (!row) return { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON() {} } as DOMRect;
+    const list = row.parentElement!;
+    const index = [...list.children].indexOf(row);
+    const top = 37 + index * 24 + 12 - 4 - list.scrollTop;
+    return { x: 0, y: top, left: 0, top, right: 8, bottom: top + 8, width: 8, height: 8, toJSON() {} } as DOMRect;
+  };
+  // A port is 8 px; a card is as tall as its own height says (the shared mock makes every box 800 x 600).
+  const protoH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
+  const protoW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth")!;
+  const sized = (el: HTMLElement, own: number) => {
+    if (el.classList.contains("react-flow__handle")) return 8;
+    const h = el.classList.contains("react-flow__node") ? parseFloat(el.querySelector<HTMLElement>(".table-card")?.style.height ?? "") : NaN;
+    return Number.isFinite(h) ? h : own;
+  };
+  Object.defineProperties(HTMLElement.prototype, {
+    offsetHeight: { configurable: true, get(this: HTMLElement) { return sized(this, 600); } },
+    offsetWidth: { configurable: true, get(this: HTMLElement) { return this.classList.contains("react-flow__handle") ? 8 : 800; } },
+  });
+  return () => {
+    Element.prototype.getBoundingClientRect = original;
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", protoH);
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", protoW);
+  };
+}
+
+test("review_gaps_scrolling_a_short_card_moves_its_join_to_the_edge_dashed_on_a_ring", async () => {
+  const restore = layOutPorts();
+  try {
+    // orders is two rows high; its join leaves from store_id, the second row.
+    render(
+      <Harness
+        initial={docWith(
+          {
+            tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 400)],
+            joins: [{ id: "j1", left: "t1", right: "t2", kind: "inner", on: [{ leftColumn: "store_id", rightColumn: "id" }] }],
+          },
+          { heights: { t1: 88 } },
+        )}
+      />,
+    );
+    const orders = await cardEl("Table orders o");
+    await waitFor(() => expect(orders.classList.contains("table-card-scroll")).toBe(true));
+    const line = () => document.querySelector<SVGPathElement>(".vq-join-line");
+    // In view: a solid line on a dot at both ends.
+    await waitFor(() => expect(line()).not.toBeNull());
+    await waitFor(() => expect(document.querySelectorAll(".vq-join-dot")).toHaveLength(2));
+    expect(line()!.classList.contains("vq-join-out")).toBe(false);
+    expect(document.querySelector(".vq-join-ring")).toBeNull();
+    const before = line()!.getAttribute("d");
+    // Scrolled out above: on the next frame the ports are found again; the line goes to the card's edge, dashed,
+    // and ends on a hollow ring.
+    const list = orders.querySelector<HTMLElement>("ul.table-card-columns")!;
+    list.scrollTop = 48;
+    fireEvent.scroll(list);
+    await waitFor(() => expect(line()!.classList.contains("vq-join-out")).toBe(true));
+    expect(document.querySelectorAll(".vq-join-ring")).toHaveLength(1);
+    expect(document.querySelectorAll(".vq-join-dot")).toHaveLength(1);
+    expect(line()!.getAttribute("d")).not.toBe(before);
+    expect(list.classList.contains("is-scrolled")).toBe(true);
+  } finally {
+    restore();
+  }
+});
+
+test("review_gaps_scrolling_a_long_card_moves_its_window_and_keeps_the_joined_row", async () => {
+  const many = ["id", ...Array.from({ length: 119 }, (_, i) => `c${i + 1}`)];
+  const HUGE: SqlSchema = { ...SHOP, tables: [...SHOP.tables, { schema: null, name: "huge", kind: "table", columns: many.map((c, i) => col(c, "int", i === 0)) }] };
+  const client = new LangClient(() => fakeWorker());
+  lang = { client, schemas: new SchemaCache(client, () => Promise.resolve(HUGE)) };
+  render(
+    <Harness
+      initial={docWith(
+        {
+          tables: [card("t1", "huge", "h"), card("t2", "stores", "s", 400)],
+          joins: [{ id: "j1", left: "t1", right: "t2", kind: "inner", on: [{ leftColumn: "c100", rightColumn: "id" }] }],
+        },
+        { heights: { t1: 200 } },
+      )}
+    />,
+  );
+  const huge = await cardEl("Table huge h");
+  await userEvent.click(await within(huge).findByRole("button", { name: /more columns/ }));
+  const rows = () => [...huge.querySelectorAll<HTMLElement>("li.vq-card-row")].map((r) => r.dataset.column);
+  await waitFor(() => expect(rows()).toContain("c3"));
+  const list = huge.querySelector<HTMLElement>("ul.table-card-columns")!;
+  list.scrollTop = 60 * 24;
+  fireEvent.scroll(list);
+  // The window follows on the next frame: rows near c60 are drawn, the top ones are not.
+  await waitFor(() => expect(rows()).toContain("c60"));
+  expect(rows()).not.toContain("c3");
+  expect(rows().length).toBeLessThan(30);
+  // The joined row keeps its port, so its line stays.
+  expect(rows()).toContain("c100");
+  expect(huge.querySelector('li[data-column="c100"] .react-flow__handle[data-handleid="c100:s"]')).not.toBeNull();
+  expect(document.querySelector(".vq-join-line")).not.toBeNull();
+});
+
+test("review_minor_5_a_removed_card_takes_its_kept_size_with_it", async () => {
+  const changes: VisualTabDoc[] = [];
+  render(
+    <Harness
+      initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 400)] }, { widths: { t1: 300, t2: 260 }, heights: { t1: 100 } })}
+      onChange={(d) => changes.push(d)}
+    />,
+  );
+  const orders = await cardEl("Table orders o");
+  await userEvent.click(within(orders).getByRole("button", { name: "Remove orders" }));
+  await waitFor(() => expect(changes.length).toBeGreaterThan(0));
+  const last = changes[changes.length - 1];
+  expect(last.model.tables.map((t) => t.id)).toEqual(["t2"]);
+  expect(last.widths).toEqual({ t2: 260 });
+  expect(last.heights).toBeUndefined();
 });

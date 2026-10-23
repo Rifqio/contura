@@ -1,8 +1,10 @@
 // The engine's card: a 216 px card in full detail, a 100 x 48 name box zoomed out, a plain block further out.
-import { Handle, Position } from "@xyflow/react";
-import { createContext, type CSSProperties, type PointerEvent, type ReactNode, useContext, useRef, useState } from "react";
+import { Handle, Position, useNodeId, useReactFlow } from "@xyflow/react";
+import { createContext, type CSSProperties, type ReactNode, useContext } from "react";
 import Icon, { type IconName } from "../components/Icon";
 import { useDetail } from "./detail";
+import { cardHeight } from "./metrics";
+import { type Box, ResizeZones } from "./resize";
 import { type CardKind, NODE_TOKENS } from "./types";
 
 const KIND_ICON: Record<CardKind, IconName> = { table: "table", view: "view", derived: "layers", result: "columns" };
@@ -24,65 +26,54 @@ export function Ports({ column, connectable = true }: { column: string; connecta
   );
 }
 
-/** A card's width can be dragged between these (item 25). */
-export const MIN_CARD_WIDTH = 200;
+/** The widest a card grows on its own to show its names whole (item 32). */
 export const MAX_CARD_WIDTH = 480;
-
-const CORNERS = ["nw", "ne", "sw", "se"] as const;
-
-/** A width drag from a corner: a left corner moves the left edge, a right corner the right edge. */
-export function draggedWidth(start: number, corner: (typeof CORNERS)[number], dx: number): { width: number; shift: number } {
-  const left = corner === "nw" || corner === "sw";
-  const width = Math.round(Math.min(MAX_CARD_WIDTH, Math.max(MIN_CARD_WIDTH, left ? start - dx : start + dx)));
-  return { width, shift: left ? start - width : 0 };
-}
+/** Board B2 (items 25, 41): a card is dragged between these widths; one wider on its own may keep its width. */
+export const CARD_LIMITS = { minW: 216, maxW: 340 };
 
 /**
- * The selection: a 2 px accent outline 5 px outside the card, with a square handle on each corner. With
- * `onResize` the handles drag the card's width (its height follows its rows); without it they are not drawn,
- * so no handle ever promises a resize that does nothing (item 25).
+ * Board B2 (items 25, 41): the pointer zones of a selected card that resizes. A drag is live: once a frame the node
+ * takes the new box in React Flow, so its Join lines follow; the owner gets the box once, at the end.
  */
-function SelBox({ resize }: { resize?: { width: number; onDrag(width: number, shift: number): void; onDone(width: number, shift: number): void } }) {
-  const drag = useRef<{ x: number; corner: (typeof CORNERS)[number]; last: { width: number; shift: number } } | null>(null);
-  if (!resize) return <div className="selbox" aria-hidden="true" />;
-  const down = (corner: (typeof CORNERS)[number]) => (e: PointerEvent<HTMLElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    drag.current = { x: e.clientX, corner, last: { width: resize.width, shift: 0 } };
-  };
-  const move = (e: PointerEvent<HTMLElement>) => {
-    const d = drag.current;
-    if (!d) return;
-    // The canvas zoom scales the card: a screen pixel is 1 / zoom of the card's own.
-    const zoom = Number(e.currentTarget.closest<HTMLElement>(".react-flow__viewport")?.style.transform.match(/scale\(([\d.]+)\)/)?.[1] ?? 1) || 1;
-    d.last = draggedWidth(resize.width, d.corner, (e.clientX - d.x) / zoom);
-    resize.onDrag(d.last.width, d.last.shift);
-  };
-  const up = (e: PointerEvent<HTMLElement>) => {
-    const d = drag.current;
-    if (!d) return;
-    drag.current = null;
-    e.currentTarget.releasePointerCapture?.(e.pointerId);
-    resize.onDone(d.last.width, d.last.shift);
-  };
+function CardZones({ width, height, fullHeight, onResize }: { width: number; height?: number; fullHeight?: number; onResize(box: Box): void }) {
+  const id = useNodeId();
+  const flow = useReactFlow();
   return (
-    <div className="selbox is-resizable" aria-hidden="true">
-      {CORNERS.map((c) => (
-        <i
-          key={c}
-          className="nodrag nopan"
-          data-corner={c}
-          title="Drag to change the width"
-          onPointerDown={down(c)}
-          onPointerMove={move}
-          onPointerUp={up}
-          onPointerCancel={up}
-        />
-      ))}
-    </div>
+    <ResizeZones
+      start={() => {
+        const n = id ? flow.getInternalNode(id) : undefined;
+        return { x: n?.position.x ?? 0, y: n?.position.y ?? 0, w: width, h: height ?? fullHeight ?? n?.measured.height ?? 0 };
+      }}
+      limits={(from) => {
+        const full = fullHeight ?? from.h;
+        return { minW: CARD_LIMITS.minW, maxW: Math.max(CARD_LIMITS.maxW, from.w), minH: Math.min(full, cardHeight(2)), maxH: full };
+      }}
+      onLive={(box, node) => {
+        node?.classList.add("is-resizing");
+        if (!id) return;
+        flow.updateNode(id, { position: { x: box.x, y: box.y }, width: box.w, height: box.h });
+      }}
+      onDone={(box, from, node) => {
+        if (box.x === from.x && box.y === from.y && box.w === from.w && box.h === from.h) {
+          node?.classList.remove("is-resizing");
+          if (id) flow.updateNode(id, { position: { x: from.x, y: from.y }, width: undefined, height: undefined });
+          return;
+        }
+        // The node keeps the live box until its owner draws it again at the kept size.
+        requestAnimationFrame(() => node?.classList.remove("is-resizing"));
+        onResize(box);
+      }}
+      onCancel={(from, node) => {
+        node?.classList.remove("is-resizing");
+        if (id) flow.updateNode(id, { position: { x: from.x, y: from.y }, width: undefined, height: undefined });
+      }}
+    />
   );
+}
+
+/** The selection: a 2 px accent outline 5 px outside the card. */
+function SelBox() {
+  return <div className="selbox" aria-hidden="true" />;
 }
 
 export interface CardFrameProps {
@@ -104,14 +95,39 @@ export interface CardFrameProps {
   /** A danger edge (missing table) or a warning edge (lone card). */
   tone?: "danger" | "warning";
   dashed?: boolean;
-  /** Makes the selection handles drag the width; called once when the drag ends, with how far the left edge moved. */
-  onResize?: (width: number, shift: number) => void;
+  /**
+   * Board B2 (items 25, 41): the selected card resizes from pointer zones on its edges and corners, live, and this
+   * gets its new box once, when the drag ends.
+   */
+  onResize?: (box: Box) => void;
+  /** The card's height when it is shorter than its rows (they scroll inside it); none shows every row. */
+  height?: number;
+  /** The height that shows every row: the most a card is dragged to. */
+  fullHeight?: number;
+  /** The column list scrolled (a card shorter than its rows). */
+  onRowsScroll?: (list: HTMLUListElement) => void;
 }
 
-export default function CardFrame({ kind, title, subtitle, actions, rows, count, countLabel, selected, width, label, name, tone, dashed, onResize }: CardFrameProps) {
+export default function CardFrame({
+  kind,
+  title,
+  subtitle,
+  actions,
+  rows,
+  count,
+  countLabel,
+  selected,
+  width,
+  label,
+  name,
+  tone,
+  dashed,
+  onResize,
+  height,
+  fullHeight,
+  onRowsScroll,
+}: CardFrameProps) {
   const { detail } = useDetail();
-  // While a width drag runs the card draws its live width; the owner gets the result once, at the end.
-  const [live, setLive] = useState<{ width: number; shift: number } | null>(null);
   const tokens = NODE_TOKENS[kind];
   const style = { "--card-fill": `var(${tokens.fill})`, "--card-stroke": `var(${tokens.stroke})` } as CSSProperties;
   const marks = `${tone ? ` card-${tone}` : ""}${dashed ? " card-dashed" : ""}`;
@@ -146,21 +162,12 @@ export default function CardFrame({ kind, title, subtitle, actions, rows, count,
     );
   }
 
-  const shown = live?.width ?? width;
-  const sized: CSSProperties = { ...style, ...(shown ? { width: shown } : {}), ...(live?.shift ? { marginLeft: live.shift } : {}) };
-  const resize =
-    onResize && width
-      ? {
-          width,
-          onDrag: (w: number, shift: number) => setLive({ width: w, shift }),
-          onDone: (w: number, shift: number) => {
-            setLive(null);
-            if (w !== width) onResize(w, shift);
-          },
-        }
-      : undefined;
+  // A card as tall as its rows, or taller, keeps no height of its own.
+  const scroll = height !== undefined && fullHeight !== undefined && height < fullHeight;
+  const sized: CSSProperties = { ...style, ...(width ? { width } : {}), ...(scroll ? { height } : {}) };
+  const zones = selected && onResize && width ? <CardZones width={width} height={scroll ? height! : undefined} fullHeight={fullHeight} onResize={onResize} /> : null;
   return (
-    <div className={`table-card${marks}`} role="group" aria-label={label} style={sized}>
+    <div className={`table-card${marks}${scroll ? " table-card-scroll" : ""}`} role="group" aria-label={label} style={sized}>
       <div className="table-card-header">
         <Icon name={KIND_ICON[kind]} className="table-card-icon" />
         {title}
@@ -169,8 +176,12 @@ export default function CardFrame({ kind, title, subtitle, actions, rows, count,
         {countLabel !== "" && <span className="table-card-count">{countLabel ?? count}</span>}
         {actions}
       </div>
-      <ul className="table-card-columns">{rows}</ul>
-      {selected && <SelBox resize={resize} />}
+      {/* A shorter card scrolls its rows: the wheel scrolls them, not the canvas. */}
+      <ul className={scroll ? "table-card-columns nowheel" : "table-card-columns"} onScroll={onRowsScroll ? (e) => onRowsScroll(e.currentTarget) : undefined}>
+        {rows}
+      </ul>
+      {selected && <SelBox />}
+      {zones}
     </div>
   );
 }

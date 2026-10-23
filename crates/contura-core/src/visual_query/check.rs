@@ -126,7 +126,10 @@ pub fn check(
     }
 
     if vq.columns.is_empty() {
-        problems.push(problem(ProblemTarget::Columns, "Tick at least one column."));
+        // Item 37: nothing ticked selects every column, which a grouped query cannot do.
+        if matches!(&vq.group_by, GroupBy::Manual { columns } if !columns.is_empty()) {
+            problems.push(problem(ProblemTarget::Columns, NO_COLUMN_GROUPED));
+        }
     } else if let Some(n) = vq.columns.iter().position(|c| unknown(&c.table)) {
         problems.push(problem(
             ProblemTarget::Columns,
@@ -252,6 +255,9 @@ pub fn check(
     problems
 }
 
+/// Nothing is ticked (so every column is selected) while a manual GROUP BY groups (item 37).
+pub(crate) const NO_COLUMN_GROUPED: &str =
+    "A grouped query needs ticked columns. Tick the ones to show.";
 /// Every ticked column sits on a table left out by a pending pick.
 pub(crate) const ALL_BEHIND_PENDING: &str =
     "Every ticked column is behind a Join that needs a key. Pick one first.";
@@ -328,8 +334,10 @@ fn sort_problems(vq: &VisualQuery, plan: &Plan) -> Vec<VqProblem> {
     // Only what is written counts: a column on a table left out is no output.
     let written: Vec<&VqColumn> = vq.columns.iter().filter(|c| plan.keeps(&c.table)).collect();
     let groups = written.iter().any(|c| c.aggregate.is_some()) || !manual.is_empty();
+    // Item 37: nothing ticked selects every column of every written table, so each is an output.
+    let all = vq.columns.is_empty();
     let is_output = |table: &str, column: &str| {
-        written
+        all || written
             .iter()
             .any(|c| c.aggregate.is_none() && c.table == table && c.column == column)
     };
@@ -505,12 +513,43 @@ mod tests {
     }
 
     #[test]
-    fn no_column_is_a_problem() {
+    fn no_column_selects_all_and_is_no_problem() {
+        // Item 37: nothing ticked reads every column, like Navicat.
         let mut vq = clean();
         vq.columns.clear();
+        for kind in [PG, MY, LITE] {
+            assert_eq!(problems(kind, "3.45.1", &vq), vec![]);
+        }
+    }
+
+    #[test]
+    fn no_column_with_distinct_sorts_by_any_column() {
+        // `SELECT DISTINCT *` (or `o.*, s.*`) holds every column, so any column may sort it.
+        let mut vq = clean();
+        vq.columns.clear();
+        vq.distinct = true;
+        vq.order_by = vec![sort_column("t1", "status"), sort_column("t2", "name")];
+        for kind in [PG, MY, LITE] {
+            assert_eq!(problems(kind, "3.45.1", &vq), vec![]);
+        }
+    }
+
+    #[test]
+    fn no_column_with_a_manual_group_by_is_a_problem() {
+        let mut vq = clean();
+        vq.columns.clear();
+        vq.group_by = GroupBy::Manual {
+            columns: vec![ColumnRef {
+                table: "t1".into(),
+                column: "status".into(),
+            }],
+        };
         assert_eq!(
             problems(PG, "", &vq),
-            one(ProblemTarget::Columns, "Tick at least one column.")
+            one(
+                ProblemTarget::Columns,
+                "A grouped query needs ticked columns. Tick the ones to show."
+            )
         );
     }
 
@@ -725,7 +764,7 @@ mod tests {
     #[test]
     fn every_problem_is_listed_in_order() {
         let mut vq = clean();
-        vq.columns.clear();
+        vq.columns = vec![col("gone", "id", None)];
         vq.joins = vec![join("j1", JoinKind::Full)];
         vq.filters = vec![
             filter("", FilterOp::Eq, &[]),

@@ -166,7 +166,7 @@ test("file_step_fills_format_and_delimiter_with_the_hint", async () => {
   await chooseFile();
   expect(vi.mocked(open).mock.calls[0][0]).toMatchObject({
     multiple: false,
-    filters: [{ extensions: ["csv", "tsv", "txt", "json", "ndjson", "xlsx", "sql"] }],
+    filters: [{ extensions: ["csv", "tsv", "txt", "json", "jsonl", "ndjson", "xlsx", "sql"] }],
   });
   expect(callsTo("inspect_import_file")[0]).toEqual({ path: "C:\\data\\menu.csv", format: null });
   expect(screen.getByText("1,204 rows, 3 columns, 212 KB")).toBeTruthy();

@@ -103,6 +103,37 @@ fn own_appimage<'a>(env: &'a DirEnv, exe: &Path) -> Option<&'a Path> {
     (file.is_absolute() && mount.is_absolute() && exe.starts_with(mount)).then_some(file)
 }
 
+/// The AppImage file this process runs from, when it runs from one (see `own_appimage`)
+/// and it passes `checked_appimage`: the file an update replaces. Otherwise None, and the
+/// update shows a link to the release instead of swapping a file.
+#[cfg(target_os = "linux")]
+pub fn appimage_file() -> Option<PathBuf> {
+    let env = DirEnv::from_process();
+    let exe = std::env::current_exe().ok()?;
+    checked_appimage(own_appimage(&env, &exe)?)
+}
+
+/// `raw` resolved (symlinks followed to the real file), when that is a regular file named
+/// `*.AppImage` that starts like a type 2 AppImage: an ELF file with `AI` and 2 at byte 8,
+/// as the runtime that sets `APPIMAGE` requires.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn checked_appimage(raw: &Path) -> Option<PathBuf> {
+    use std::io::Read;
+    let file = std::fs::canonicalize(raw).ok()?;
+    if !std::fs::symlink_metadata(&file).ok()?.is_file() {
+        return None;
+    }
+    if !file.file_name()?.to_str()?.ends_with(".AppImage") {
+        return None;
+    }
+    let mut head = [0u8; 11];
+    std::fs::File::open(&file)
+        .ok()?
+        .read_exact(&mut head)
+        .ok()?;
+    (head[..4] == *b"\x7fELF" && head[8..11] == *b"AI\x02").then_some(file)
+}
+
 /// Whether `dir` can hold the data: its `webview` subfolder can be made and a file can
 /// be written in it. An existing folder the user cannot write to (made once by root,
 /// or by an admin beside a shared AppImage) fails the second check.
@@ -150,6 +181,56 @@ fn probe_write(
     }
     // Made and removed by another process twice over: someone writes here.
     true
+}
+
+/// Held for the life of the process: one Contura per data folder.
+pub struct DataLock(#[allow(dead_code)] std::fs::File);
+
+/// Why the data folder could not be locked: another process holds it.
+#[derive(Debug)]
+pub struct DataFolderBusy(pub PathBuf);
+
+impl std::fmt::Display for DataFolderBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Another Contura is using the data folder {}, or is still closing. Close it, or wait a moment, then start Contura again.",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for DataFolderBusy {}
+
+/// Takes the exclusive lock on `dir/contura.lock`, trying for up to `wait`, so two
+/// Contura processes never share one data folder, whatever the single-instance plugin
+/// does. A file system without locks (some network shares) is not refused: the lock is
+/// then skipped.
+pub fn lock_data_dir(
+    dir: &Path,
+    wait: std::time::Duration,
+) -> Result<Option<DataLock>, DataFolderBusy> {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join("contura.lock"))
+    else {
+        return Ok(None);
+    };
+    let end = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(DataLock(file))),
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(_)) => return Ok(None),
+        }
+        if std::time::Instant::now() >= end {
+            return Err(DataFolderBusy(dir.to_path_buf()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// The data folder: `CONTURA_DATA_DIR` if set (tests and dev; the older
@@ -500,5 +581,115 @@ mod tests {
         assert_eq!(from_legacy, old);
         assert_eq!(from_new, new);
         assert!(new.join("webview").is_dir());
+    }
+
+    fn appimage_bytes() -> Vec<u8> {
+        let mut b = b"\x7fELF\x02\x01\x01\x00AI\x02".to_vec();
+        b.extend_from_slice(&[0u8; 64]);
+        b
+    }
+
+    #[test]
+    fn a_real_appimage_file_is_accepted_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Contura_1.0.0_amd64.AppImage");
+        std::fs::write(&file, appimage_bytes()).unwrap();
+        let real = std::fs::canonicalize(&file).unwrap();
+        assert_eq!(checked_appimage(&file), Some(real.clone()));
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("contura");
+            std::os::unix::fs::symlink(&file, &link).unwrap();
+            // The link resolves to the real file, which is what gets swapped.
+            assert_eq!(checked_appimage(&link), Some(real));
+        }
+    }
+
+    #[test]
+    fn anything_else_falls_back_to_the_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        // Not named .AppImage.
+        let plain = dir.path().join("contura");
+        std::fs::write(&plain, appimage_bytes()).unwrap();
+        assert_eq!(checked_appimage(&plain), None);
+        // Named .AppImage, but not one.
+        let fake = dir.path().join("notes.AppImage");
+        std::fs::write(&fake, b"just some text in a file").unwrap();
+        assert_eq!(checked_appimage(&fake), None);
+        // An ELF without the AppImage mark.
+        let mut elf = appimage_bytes();
+        elf[8] = 0;
+        let bare = dir.path().join("bare.AppImage");
+        std::fs::write(&bare, elf).unwrap();
+        assert_eq!(checked_appimage(&bare), None);
+        // A folder, and a missing file.
+        let folder = dir.path().join("dir.AppImage");
+        std::fs::create_dir(&folder).unwrap();
+        assert_eq!(checked_appimage(&folder), None);
+        assert_eq!(checked_appimage(&dir.path().join("gone.AppImage")), None);
+    }
+
+    #[test]
+    fn one_process_at_a_time_holds_the_data_folder() {
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir().unwrap();
+        let first = lock_data_dir(dir.path(), Duration::ZERO).unwrap();
+        assert!(first.is_some());
+        // A second holder (another open of the file, as another process would make) waits,
+        // then is refused with a sentence that names the folder.
+        let started = Instant::now();
+        let err = lock_data_dir(dir.path(), Duration::from_millis(300))
+            .err()
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(300));
+        assert!(
+            err.to_string()
+                .starts_with("Another Contura is using the data folder")
+        );
+        assert!(err.to_string().contains(&dir.path().display().to_string()));
+        // Once the first lets go (it exits), the next one gets it, within its wait.
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(first);
+        });
+        assert!(
+            lock_data_dir(dir.path(), Duration::from_secs(5))
+                .unwrap()
+                .is_some()
+        );
+        holder.join().unwrap();
+    }
+
+    /// The same across processes: `flock(1)` holds the lock file as another Contura would.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn another_process_holding_the_data_folder_is_waited_for_then_refused() {
+        use std::time::Duration;
+        if std::process::Command::new("flock")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("contura.lock");
+        let ready = dir.path().join("held");
+        let mut other = std::process::Command::new("flock")
+            .arg(&lock)
+            .args(["sh", "-c", &format!("touch '{}'; sleep 3", ready.display())])
+            .spawn()
+            .unwrap();
+        while !ready.exists() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(lock_data_dir(dir.path(), Duration::from_millis(300)).is_err());
+        // The relaunch wait outlasts the other process, then takes the folder.
+        assert!(
+            lock_data_dir(dir.path(), Duration::from_secs(10))
+                .unwrap()
+                .is_some()
+        );
+        other.wait().unwrap();
     }
 }

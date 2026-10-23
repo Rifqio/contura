@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Kbd from "./Kbd";
 
@@ -41,7 +41,8 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
   /** Set once a key kept or dropped the value, so the blur that follows does nothing. */
   const done = useRef(false);
 
-  useEffect(() => {
+  // Before paint and inside the key press that opened the editor, so that key is typed here (item 47).
+  useLayoutEffect(() => {
     const box = areaRef.current ?? inputRef.current;
     if (!box) return;
     box.focus();
@@ -113,7 +114,7 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
     <>
       {onLarger && (
         <span className="cell-editor-tip" aria-hidden="true">
-          <Kbd keys="Enter" /> keeps <Kbd keys="Esc" /> cancels <Kbd keys="Shift+F2" /> opens larger
+          <Kbd keys="Shift+F2" /> opens larger
         </span>
       )}
       <textarea

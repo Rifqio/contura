@@ -3,7 +3,7 @@ import { useWindowed } from "./useWindowed";
 import type { DiffKind } from "../api/types";
 import Icon from "../components/Icon";
 import { guideX, STUB_WIDTH, treeGuides, type RowGuides } from "../components/treeGuides";
-import { type TreeNode, visibleRows } from "./compareModel";
+import { MARK_LETTER, rowLabel, type TreeNode, visibleRows } from "./compareModel";
 
 const MARK_PATH: Record<DiffKind, string> = {
   added: "M12 8.5v7M8.5 12h7",
@@ -11,7 +11,7 @@ const MARK_PATH: Record<DiffKind, string> = {
   changed: "M8 13c1.2-2 2.6-2 4 0s2.8 2 4 0",
 };
 
-/** The added, removed or changed mark: a rounded square with +, - or ~, in the mark's colour. Always beside its word. */
+/** The added, removed or changed mark: a rounded square with +, - or ~, in the mark's colour. Always beside its word or letter. */
 export function MarkIcon({ mark, label }: { mark: DiffKind; label?: string }) {
   return (
     <svg
@@ -64,7 +64,10 @@ interface Props {
 /** The object tree's row height until `--tree-row-height` is read (24 px at the compact density). */
 const FALLBACK_ROW_HEIGHT = 28;
 
-/** The Differences tree (`role="tree"`, guides as the object tree): Up and Down move, Right and Left expand and collapse. */
+/**
+ * The Differences tree (`role="tree"`, guides as the object tree): Up and Down move, Right and Left expand and collapse.
+ * Item 43: rows are coloured by status like Git decorations (classes only), with A, R or C at the right edge.
+ */
 export default function DiffTree({ rows, collapsed, onCollapsed, selected, onSelect }: Props) {
   const shown = useMemo(() => visibleRows(rows, collapsed), [rows, collapsed]);
   const guides = useMemo(() => treeGuides(shown.map((r) => ({ id: r.id, level: r.level })), selected), [shown, selected]);
@@ -136,8 +139,8 @@ export default function DiffTree({ rows, collapsed, onCollapsed, selected, onSel
             aria-level={r.level + 1}
             aria-selected={on}
             aria-expanded={r.hasChildren ? open : undefined}
-            title={r.mark ? `${r.name}, ${r.mark}` : r.name}
-            aria-label={r.mark ? `${r.name}, ${r.mark}` : r.name}
+            title={rowLabel(r)}
+            aria-label={rowLabel(r)}
             className={["tree-row", "compare-trow", on && "tree-row-selected", r.kind === "note" && "compare-trow-note"].filter(Boolean).join(" ")}
             style={{ paddingLeft: `calc(8px + 20px * ${r.level})` }}
             onClick={() => {
@@ -164,9 +167,13 @@ export default function DiffTree({ rows, collapsed, onCollapsed, selected, onSel
             ) : (
               <Icon name={r.kind === "scope" ? "database" : r.kind === "note" ? "list" : "folder"} size={14} />
             )}
-            <span className={r.kind === "item" || r.kind === "table" ? "compare-trow-name mono" : "compare-trow-name"}>{r.name}</span>
+            <span className={["compare-trow-name", (r.kind === "item" || r.kind === "table") && "mono", r.mark && `diff-${r.mark}`].filter(Boolean).join(" ")}>{r.name}</span>
             {r.detail && <span className="compare-trow-detail mono">{r.detail}</span>}
-            {r.mark && <span className={`compare-trow-word compare-word-${r.mark}`}>{r.mark}</span>}
+            {r.mark && (
+              <span className={["compare-trow-badge", r.changes !== null && "compare-trow-count", `diff-${r.mark}`].filter(Boolean).join(" ")} aria-hidden="true">
+                {r.changes !== null ? r.changes.toLocaleString("en-US") : MARK_LETTER[r.mark]}
+              </span>
+            )}
             {r.count !== null && <span className="tree-count">{r.count.toLocaleString("en-US")}</span>}
           </div>
         );

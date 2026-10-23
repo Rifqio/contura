@@ -163,6 +163,9 @@ pub struct UiPrefs {
     /// How the diagram assistant's changes land: reviewed first, or applied at once.
     #[serde(default)]
     pub flow_assist_mode: FlowAssistMode,
+    /// Item 36: the Visual Query's bottom panel height in px; `None` is the default.
+    #[serde(default)]
+    pub vq_panel_height: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]

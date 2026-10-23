@@ -855,6 +855,14 @@ mod tests {
         }
     }
 
+    /// JSON Lines, one object per line (the default layout is one array since item 45).
+    fn lines() -> ExportOptions {
+        ExportOptions {
+            json_layout: JsonLayout::Lines,
+            ..ExportOptions::default()
+        }
+    }
+
     fn array() -> ExportOptions {
         ExportOptions {
             json_layout: JsonLayout::Array,
@@ -896,7 +904,7 @@ mod tests {
             Value::Number("18446744073709551615".into()),
             Value::Number("12345678901234567890.123456789".into()),
         ];
-        let out = write_json(&columns, vec![row], &ExportOptions::default());
+        let out = write_json(&columns, vec![row], &lines());
         assert_eq!(
             out,
             "{\"big\":18446744073709551615,\"dec\":12345678901234567890.123456789}\n"
@@ -930,7 +938,7 @@ mod tests {
             let out = write_json(
                 &[col("f", ValueKind::Float)],
                 vec![vec![Value::Number(text.into())]],
-                &ExportOptions::default(),
+                &lines(),
             );
             assert_eq!(out, format!("{{\"f\":{want}}}\n"), "{text}");
         }
@@ -955,7 +963,7 @@ mod tests {
                     Value::Text(text.into()),
                     Value::Text("{\"a\":1}".into()),
                 ]],
-                &ExportOptions::default(),
+                &lines(),
             );
             assert_eq!(
                 out,
@@ -966,7 +974,7 @@ mod tests {
         // Other values: NULL, booleans, bytes, text escapes.
         let b64 = ExportOptions {
             binary: BinaryText::Base64,
-            ..ExportOptions::default()
+            ..lines()
         };
         let columns = [
             col("n", ValueKind::Text),
@@ -983,7 +991,7 @@ mod tests {
             ]
         };
         assert_eq!(
-            write_json(&columns, vec![row()], &ExportOptions::default()),
+            write_json(&columns, vec![row()], &lines()),
             "{\"n\":null,\"b\":true,\"x\":\"0x01ff\",\"t\":\"q\\\"\\n\"}\n"
         );
         assert_eq!(
@@ -1114,7 +1122,7 @@ mod tests {
     fn zero_rows_array_is_brackets() {
         let columns = [col("a", ValueKind::Integer)];
         assert_eq!(write_json(&columns, vec![], &array()), "[]\n");
-        assert_eq!(write_json(&columns, vec![], &ExportOptions::default()), "");
+        assert_eq!(write_json(&columns, vec![], &lines()), "");
         let two = write_json(
             &columns,
             vec![
@@ -1295,14 +1303,14 @@ mod tests {
         let out = write_json(
             &[col("doc", ValueKind::Json)],
             vec![vec![Value::Text("null".into())], vec![Value::Null]],
-            &ExportOptions::default(),
+            &lines(),
         );
         assert_eq!(out, "{\"doc\":\"null\"}\n{\"doc\":null}\n");
     }
 
     #[test]
     fn row_wider_than_columns_is_refused() {
-        let mut w = JsonWriter::new(Vec::new(), &ExportOptions::default());
+        let mut w = JsonWriter::new(Vec::new(), &lines());
         w.write_header(&[col("a", ValueKind::Integer)]).unwrap();
         let wide = Chunk {
             rows: vec![vec![Value::Number("1".into()), Value::Number("2".into())]],

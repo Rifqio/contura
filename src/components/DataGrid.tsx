@@ -10,7 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { durationText } from "../format/units";
 import { applyEdits, confirmEdits, errorText, fetchFullValue, fetchPage, isNotOpen, planEdits } from "../api/client";
 import type {
@@ -511,8 +511,9 @@ export default function DataGrid({
         large: larger || (typed === undefined && (initial.length > LONG_VALUE || initial.includes("\n"))),
       });
     const cell = d.cells[column];
-    if (d.kind === "loaded" && cell.t === "text" && cell.truncated) {
-      // The full value is the old value Save sends, so it is loaded even when typing over the cell.
+    // Typing over a cut-short cell replaces it, so it opens at once; Save loads the full old value.
+    if (d.kind === "loaded" && cell.t === "text" && cell.truncated && typed === undefined) {
+      // Double-click, Enter or F2 on a cut-short cell: its full value is loaded before the editor opens.
       const requested = pageRef.current;
       fetchFullValue(connectionId, { table, column: columns[column].name, key: rowKey(columns, d.source) })
         .then((v) => {
@@ -520,7 +521,7 @@ export default function DataGrid({
           const now = viewRef.current[row];
           if (pageRef.current !== requested || now?.kind !== "loaded" || now.source !== d.source) return;
           if (v.t !== "text") return setNote(BINARY_NOTE);
-          if (!inflight.current) start(typed ?? v.value, fullText(v.value));
+          if (!inflight.current) start(v.value, fullText(v.value));
         })
         .catch((e) => {
           if (pageRef.current === requested) setNote(errorText(e));
@@ -707,8 +708,12 @@ export default function DataGrid({
       e.preventDefault();
       deleteSelected();
     } else if (e.key.length === 1 && !mod && !e.altKey) {
-      e.preventDefault();
-      openEditor(at.row, at.column, e.key);
+      // Item 47: the editor opens empty and takes focus before the browser handles the key, so the
+      // browser types the character itself. Writing it in from here bypassed the WebView's text input
+      // (the IME on Windows), which then lost it when the next characters went in (`::s` became `:s`).
+      // Typing over a cut-short cell opens at once too: Save loads its full old value (`missingFull`).
+      flushSync(() => openEditor(at.row, at.column, ""));
+      if (!editingRef.current) e.preventDefault();
     }
   }
 

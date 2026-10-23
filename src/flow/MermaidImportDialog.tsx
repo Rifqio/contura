@@ -17,6 +17,7 @@ import Segmented from "../components/Segmented";
 import Select from "../components/Select";
 import { useToast } from "../components/Toast";
 import type { LangClient } from "../lang/client";
+import { editorTheme } from "../lang/editorTheme";
 import { dbmlHighlight } from "../schema/dbmlLanguage";
 import FlowPreview from "./FlowPreview";
 import type { MermaidResult } from "./mermaid";
@@ -123,6 +124,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
         doc: "",
         extensions: [
           lineNumbers(),
+          editorTheme(),
           history(),
           mermaidLang,
           dbmlHighlight,

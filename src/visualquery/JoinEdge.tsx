@@ -3,7 +3,9 @@
 import { BaseEdge, type EdgeProps, useStore } from "@xyflow/react";
 import { createContext, useContext, useId } from "react";
 import type { JoinKind, SqlFk, SmEndpoint, VqJoin, VqTable } from "../api/types";
+import { useDetail } from "../diagram/detail";
 import { clearBadgeSpot, type FlowBox, JoinBadge, orthogonalPath } from "../diagram/edges";
+import { CARD_HEADER } from "../diagram/metrics";
 import type { VqSchema } from "./model";
 
 export const KIND_LABEL: Record<JoinKind, string> = { inner: "Inner", left: "Left", right: "Right", full: "Full" };
@@ -126,13 +128,52 @@ function onBadgeBlur(e: React.FocusEvent<HTMLButtonElement>) {
   });
 }
 
+/** Where a card's rows show: under its 32 px header and border, above its 4 px padding and border. */
+const ROWS_TOP = CARD_HEADER + 1;
+const ROWS_BOTTOM = 5;
+/** A port nearer the edge than this is drawn as scrolled out. */
+const EDGE_SLACK = 6;
+
+/**
+ * Item 41: a Join's end on a card whose rows scroll. A port in view stays where it is; one scrolled out of view
+ * goes to the edge of the rows it left by (`out`: the line is dashed and ends in a hollow ring).
+ */
+export function rowAnchor(y: number, cardTop: number, cardHeight: number): { y: number; out: boolean } {
+  const top = cardTop + ROWS_TOP;
+  const bottom = cardTop + cardHeight - ROWS_BOTTOM;
+  if (y < top + EDGE_SLACK) return { y: top, out: true };
+  if (y > bottom - EDGE_SLACK) return { y: bottom, out: true };
+  return { y, out: false };
+}
+
+/** A card's top and height, for `rowAnchor`; equal ones keep the edge from drawing again. */
+function useCardSpan(id: string): { top: number; height: number } | null {
+  return useStore(
+    (s) => {
+      const n = s.nodeLookup.get(id);
+      if (!n) return null;
+      return { top: n.internals.positionAbsolute.y, height: n.measured.height ?? n.height ?? n.initialHeight ?? 0 };
+    },
+    (a, b) => a === b || (!!a && !!b && a.top === b.top && a.height === b.height),
+  );
+}
+
 const boxesEqual = (a: FlowBox[], b: FlowBox[]) =>
   a.length === b.length && a.every((p, i) => p.x === b[i].x && p.y === b[i].y && p.w === b[i].w && p.h === b[i].h);
 
 /** Edge type `join`. */
-export default function JoinEdge(props: EdgeProps) {
+export default function JoinEdge(edge: EdgeProps) {
   const actions = useContext(JoinActionsContext);
-  const data = props.data as JoinEdgeData | undefined;
+  const data = edge.data as JoinEdgeData | undefined;
+  // Item 41: an end whose column is scrolled out of its card goes to the card's edge.
+  const { detail } = useDetail();
+  const sourceCard = useCardSpan(edge.source);
+  const targetCard = useCardSpan(edge.target);
+  const full = detail === "full";
+  const src = full && sourceCard ? rowAnchor(edge.sourceY, sourceCard.top, sourceCard.height) : { y: edge.sourceY, out: false };
+  const tgt = full && targetCard ? rowAnchor(edge.targetY, targetCard.top, targetCard.height) : { y: edge.targetY, out: false };
+  const props = { ...edge, sourceY: src.y, targetY: tgt.y };
+  const out = src.out || tgt.out;
   const { path, x: midX, y: midY } = orthogonalPath(props);
   // Item 31: the badge never sits on a card, where it would cover a column name.
   const boxes = useStore((s) => {
@@ -153,6 +194,7 @@ export default function JoinEdge(props: EdgeProps) {
     pending ? "vq-join-pending" : madeHere ? "vq-join-made" : "vq-join-fk",
     selected && "vq-join-selected",
     danger && "vq-join-danger",
+    out && "vq-join-out",
   ]
     .filter(Boolean)
     .join(" ");
@@ -162,8 +204,16 @@ export default function JoinEdge(props: EdgeProps) {
   return (
     <>
       <BaseEdge id={props.id} path={path} className={line} interactionWidth={props.interactionWidth} />
-      <circle className="vq-join-dot" cx={props.sourceX} cy={props.sourceY} r={3} />
-      <circle className="vq-join-dot" cx={props.targetX} cy={props.targetY} r={3} />
+      {src.out ? (
+        <circle className="vq-join-ring" cx={props.sourceX} cy={props.sourceY} r={3.5} />
+      ) : (
+        <circle className="vq-join-dot" cx={props.sourceX} cy={props.sourceY} r={3} />
+      )}
+      {tgt.out ? (
+        <circle className="vq-join-ring" cx={props.targetX} cy={props.targetY} r={3.5} />
+      ) : (
+        <circle className="vq-join-dot" cx={props.targetX} cy={props.targetY} r={3} />
+      )}
       <JoinBadge x={x} y={y}>
         <button
           type="button"

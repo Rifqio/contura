@@ -1,8 +1,10 @@
 name: Release
 
 # A pushed v* tag builds the Linux bundles (.deb, AppImage) and the Windows portable exe,
-# then opens a draft GitHub release with them. A manual run is a dry run, from any ref: it
-# builds and uploads the files as workflow artifacts only, and makes no release.
+# signs the portable exe and the AppImage for the update check and writes latest.json
+# (ADR 0026), then opens a draft GitHub release with them. A manual run is a dry run, from
+# any ref: it builds and uploads the files as workflow artifacts only, never signs, and
+# makes no release.
 on:
   push:
     tags: ["v*"]
@@ -109,9 +111,70 @@ jobs:
           path: dist-release/*
           if-no-files-found: error
 
+  sign:
+    name: Sign the update files, write latest.json
+    needs: [linux, windows]
+    # Only a pushed v* tag is signed with the release key: never a manual run or a branch.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Only the Tauri CLI, at the version in package-lock.json, in a folder of its own and
+      # without install scripts: no project dependency runs while the key is in reach.
+      - name: Tauri signer
+        run: |
+          CLI_VERSION=$(node -p "require('./package-lock.json').packages['node_modules/@tauri-apps/cli'].version")
+          mkdir -p "$RUNNER_TEMP/signer"
+          cd "$RUNNER_TEMP/signer"
+          echo '{"private":true}' > package.json
+          npm install --ignore-scripts --no-audit --no-fund "@tauri-apps/cli@$CLI_VERSION"
+          echo "SIGNER=$RUNNER_TEMP/signer/node_modules/.bin/tauri" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+          merge-multiple: true
+      - name: Version
+        id: version
+        run: echo "version=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Sign the portable exe and the AppImage
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # A release without latest.json would make every copy's check fail: stop instead.
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set, so the update files cannot be signed. No release is made."
+            exit 1
+          fi
+          # The signer writes the file's base name into the signed trusted comment
+          # (file:Contura_<version>_...), which the app checks against the release it expects.
+          for f in "Contura_${VERSION}_x64_portable.exe" "Contura_${VERSION}_amd64.AppImage"; do
+            "$SIGNER" signer sign "dist-release/$f"
+            test -s "dist-release/$f.sig"
+          done
+      - name: latest.json
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        # The notes come from RELEASE_NOTES.md when present.
+        run: |
+          node scripts/update-manifest.mjs dist-release "$VERSION" RELEASE_NOTES.md
+          cat dist-release/latest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: update
+          path: |
+            dist-release/*.sig
+            dist-release/latest.json
+          if-no-files-found: error
+
   release:
     name: Draft release
-    needs: [linux, windows]
+    needs: [linux, windows, sign]
     # Only a pushed tag makes a release: a manual run, even from a tag, is a dry run.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -124,6 +187,8 @@ jobs:
         with:
           path: dist-release
           merge-multiple: true
+      - name: The update manifest is there
+        run: test -s dist-release/latest.json
       - name: Checksums
         working-directory: dist-release
         run: |
@@ -140,7 +205,7 @@ jobs:
               echo "- Windows: \`Contura_${GITHUB_REF_NAME#v}_x64_portable.exe\`, one portable exe that keeps its data beside itself."
               echo "- Linux: \`Contura_${GITHUB_REF_NAME#v}_amd64.deb\` or \`Contura_${GITHUB_REF_NAME#v}_amd64.AppImage\`."
               echo
-              echo "Check the downloads against \`SHA256SUMS.txt\`. The files are not signed."
+              echo "Check the downloads against \`SHA256SUMS.txt\`. The portable exe and the AppImage are also signed (minisign, the \`.sig\` files) for Contura's own update check."
             } > notes.md
           fi
       - name: Create the draft release

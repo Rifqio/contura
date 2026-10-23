@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import appCss from "./app.css?raw";
 import tokensCss from "./tokens.css?raw";
 import fontsCss from "./fonts.css?raw";
+import compareCss from "./compare.css?raw";
 
 /** Every shipped component file (tests are left out: their fixtures are not drawn). */
 const TSX = Object.entries(import.meta.glob("../**/*.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>).filter(
@@ -581,4 +582,100 @@ test("parity_P11_36_ask_stays_outside_the_feature_bar_overflow", () => {
 
 test("parity_P11_37_a_held_tooltip_does_not_show", () => {
   expect(bodyOf(".feature-button[data-tip-off]::after")).toMatch(/opacity:\s*0/);
+});
+
+// Item 49: the tinted rows draw their column dividers with the tint divider token.
+test("tinted_grid_cells_draw_their_column_dividers_with_the_tint_token", () => {
+  const plain = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const sel of [".grid tr.row-added td", ".grid tr.row-deleted td", ".grid td.cell-edited"]) {
+    const bodies = [...plain.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter((m) => m[1].split(",").map((s) => s.trim()).includes(sel))
+      .map((m) => m[2]);
+    expect(bodies.some((b) => /border-right-color:\s*var\(--grid-tint-divider\)/.test(b)), sel).toBe(true);
+  }
+});
+
+// Item 43: the Differences tree, its chips, the legend and the DDL lines take the diff status tokens.
+test("item_43_compare_status_colours_come_from_the_diff_tokens", () => {
+  expect(compareCss.length).toBeGreaterThan(0);
+  const all = rules(compareCss);
+  const body = (sel: string) => all.filter((r) => r.selector.split(",").map((s) => s.trim()).includes(sel)).map((r) => r.body).join("\n");
+  for (const k of ["added", "removed", "changed"]) {
+    expect(body(`.diff-${k}`)).toMatch(new RegExp(`color:\\s*var\\(--diff-${k}\\)`));
+    expect(body(`.compare-mark-${k}`)).toMatch(new RegExp(`color:\\s*var\\(--diff-${k}\\)`));
+    expect(body(`.compare-chip-${k} .compare-chip-dot`)).toMatch(new RegExp(`background:\\s*var\\(--diff-${k}\\)`));
+    expect(body(`.compare-chip-${k}.compare-chip-on`)).toMatch(new RegExp(`var\\(--diff-${k}-tint\\)`));
+    expect(body(`.compare-chip-${k}.compare-chip-on`)).toMatch(new RegExp(`border-color:\\s*var\\(--diff-${k}\\)`));
+  }
+  expect(body(".compare-dl-add")).toMatch(/var\(--diff-added-tint\)/);
+  expect(body(".compare-dl-rem")).toMatch(/var\(--diff-removed-tint\)/);
+  expect(body(".compare-dl-chg")).toMatch(/var\(--diff-changed-tint\)/);
+  // The letter badge sits at the right edge in the mono face; removed rows are never struck through.
+  expect(body(".compare-trow-badge")).toMatch(/margin-left:\s*auto/);
+  expect(body(".compare-trow-badge")).toMatch(/font-family:\s*var\(--font-mono-family\)/);
+  expect(compareCss).not.toMatch(/line-through/);
+  // The neutral rows keep the text colour.
+  expect(body(".compare-trow-name")).toMatch(/color:\s*var\(--c-text\)/);
+});
+
+// Item 42: every item in the 40 px title bar is 32 px tall on one centre line, 24 px down.
+test("item_42_title_bar_items_share_one_height_and_centre_line", () => {
+  expect(bodyOf(".title-bar")).toMatch(/align-items:\s*flex-end/);
+  expect(bodyOf(".title-bar-glyph")).toMatch(/height:\s*32px/);
+  expect(bodyOf(".title-home")).toMatch(/height:\s*32px/);
+  expect(bodyOf(".group-switcher")).toMatch(/height:\s*32px/);
+  expect(bodyOf(".group-switcher")).not.toMatch(/align-self:\s*center/);
+  expect(bodyOf(".tab-strip")).toMatch(/height:\s*32px/);
+  expect(bodyOf(".tab-strip > .icon-button")).not.toMatch(/align-self:\s*center/);
+  expect(bodyOf(".work-tab")).toMatch(/height:\s*var\(--tab-height\)/);
+  // The window buttons fill the bar's height, their glyph on the same centre line.
+  expect(bodyOf(".window-button")).toMatch(/height:\s*40px/);
+  expect(bodyOf(".window-button")).toMatch(/padding-top:\s*8px/);
+  // The divider sits on the centre line: 18 px tall, 7 px up from the bottom.
+  expect(bodyOf(".title-divider")).toMatch(/margin:\s*0 6px 7px/);
+});
+
+// Item 48: Edge-style tabs.
+test("item_48_tabs_are_edge_style", () => {
+  // Steady widths from the strip's one observer, at most 220 px; the active one at least 96 px.
+  expect(bodyOf(".work-tab")).toMatch(/width:\s*var\(--tab-w,\s*220px\)/);
+  expect(bodyOf(".work-tab-on")).toMatch(/width:\s*var\(--tab-active-w,\s*220px\)/);
+  expect(bodyOf(".work-tab-on")).toMatch(/min-width:\s*96px/);
+  // No gap: a divider between inactive tabs instead, hidden beside the active and the hovered tab.
+  expect(bodyOf(".tab-list")).toMatch(/gap:\s*0/);
+  expect(bodyOf(".work-tab::before")).toMatch(/background:\s*var\(--tab-divider\)/);
+  expect(bodyOf(".work-tab:first-child::before")).toMatch(/opacity:\s*0/);
+  for (const sel of [".work-tab-on + .work-tab::before", ".work-tab:hover + .work-tab::before", ".work-tab:not(.work-tab-on):hover::before"]) {
+    expect(bodyOf(sel)).toMatch(/opacity:\s*0/);
+  }
+  // Hover is a soft fill inside the tab.
+  expect(bodyOf(".work-tab:not(.work-tab-on):hover::after")).toMatch(/background:\s*var\(--tab-hover-fill\)/);
+  // The active tab is raised in the surface colour, with no Group underline, and joins the bar below.
+  expect(bodyOf(".work-tab-on")).toMatch(/background:\s*var\(--tab-active-background\)/);
+  expect(appCss).not.toMatch(/inset 0 -2px 0 var\(--group/);
+  expect(bodyOf(".work-tab-on::before")).toMatch(/radial-gradient/);
+  expect(bodyOf(".work-tab-on::after")).toMatch(/radial-gradient/);
+  // Narrow: inactive closes show on hover only; compact: inactive tabs keep only their icon.
+  expect(bodyOf(".tab-list-narrow .work-tab:not(.work-tab-on):not(:hover) .work-tab-close")).toMatch(/display:\s*none/);
+  expect(bodyOf(".tab-list-compact .work-tab:not(.work-tab-on) .work-tab-name")).toMatch(/display:\s*none/);
+  // The feature bar is the surface colour with no border, so the active tab joins it.
+  expect(bodyOf(".feature-bar")).toMatch(/background:\s*var\(--c-bg-surface\)/);
+  expect(bodyOf(".feature-bar")).toMatch(/border:\s*0/);
+});
+
+// Review fix 2 (item 48): the active tab's left foot is the ::before the divider rules hide; it always draws, as the
+// first tab and beside a hovered tab.
+test("item_48_the_active_tabs_feet_beat_every_divider_hiding_rule", () => {
+  const all = rules(appCss);
+  const foot = all.find((r) => r.selector === ".work-tab-on::before")?.body ?? "";
+  expect(foot).toMatch(/opacity:\s*1\s*!important/);
+  // Every rule that hides a tab's ::before is a plain declaration, so the foot's !important wins over each.
+  const hiders = all.filter((r) => /\.work-tab[^,{]*::before/.test(r.selector) && /opacity:\s*0\b/.test(r.body));
+  expect(hiders.map((r) => r.selector).join("\n")).toMatch(/\.work-tab:first-child::before/);
+  expect(hiders.map((r) => r.selector).join("\n")).toMatch(/\.work-tab:hover \+ \.work-tab::before/);
+  for (const r of hiders) expect({ sel: r.selector, important: /opacity:\s*0\s*!important/.test(r.body) }).toEqual({ sel: r.selector, important: false });
+});
+
+test("the Windows webview's own password reveal and clear buttons are hidden, so only Contura's Show password shows", () => {
+  expect(appCss).toMatch(/input::-ms-reveal,\s*input::-ms-clear\s*\{\s*display:\s*none;\s*\}/);
 });

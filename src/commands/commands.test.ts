@@ -356,7 +356,6 @@ test("export_and_mermaid_are_app_commands_and_ctrl_e_has_no_clash", () => {
 test("visual_query_keys_are_app_commands_without_a_clash", () => {
   const map = resolveKeymap({});
   const want = [
-    ["visualQuery.addTable", "Add table", "Ctrl+Shift+A"],
     ["visualQuery.openInEditor", "Open the SQL in the editor", "Ctrl+Shift+E"],
     ["diagram.toggle", "Show or hide the diagram", "Ctrl+Shift+D"],
   ] as const;
@@ -365,6 +364,8 @@ test("visual_query_keys_are_app_commands_without_a_clash", () => {
     expect(c).toMatchObject({ title, keys: [key], scope: "app" });
     expect(findClash(map, id, key)).toBeNull();
   }
+  // Item 35: Visual Query adds tables by drag only; Ctrl+Shift+A is not a Visual Query key.
+  expect(COMMANDS.some((c) => (c.id as string) === "visualQuery.addTable")).toBe(false);
 });
 
 test("diagram_file_commands_and_ctrl_alt_n_has_no_clash", () => {

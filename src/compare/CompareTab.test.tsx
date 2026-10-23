@@ -180,7 +180,7 @@ test("tree_filter_counts_and_not_compared_line", async () => {
   expect(screen.getByText("Not compared yet: 2 views, 1 trigger, 1 check constraint. Renames show as removed plus added.")).toBeTruthy();
   await userEvent.click(within(show).getByRole("button", { name: "Removed 2" }));
   const names = screen.getAllByRole("treeitem").map((r) => r.getAttribute("aria-label"));
-  expect(names).toEqual(["billing", "Tables", "invoices, changed", "fax, removed", "legacy_invoices, removed", "Not compared"]);
+  expect(names).toEqual(["billing", "Tables", "invoices, changed, 4 changes inside", "fax, removed", "legacy_invoices, removed", "Not compared"]);
 });
 
 test("ddl_panes_loss_banner_and_in_the_sync_script", async () => {
@@ -188,8 +188,10 @@ test("ddl_panes_loss_banner_and_in_the_sync_script", async () => {
   renderTab(dbSeed());
   await ready();
   await userEvent.click(screen.getByRole("treeitem", { name: "fax, removed" }));
-  await screen.findByRole("region", { name: "Target DDL, freight-prod" });
-  expect(screen.getByRole("region", { name: "Target DDL, freight-prod" }).classList.contains("prod-wash")).toBe(true);
+  // Item 44: each pane names its database and, on PostgreSQL, its schema.
+  await screen.findByRole("region", { name: "Target DDL, freight-prod, freight, billing" });
+  expect(screen.getByRole("region", { name: "Target DDL, freight-prod, freight, billing" }).classList.contains("prod-wash")).toBe(true);
+  expect(screen.getByRole("region", { name: "Source DDL, freight-staging, freight, billing" })).toBeTruthy();
   expect(screen.getByText("1 change loses data")).toBeTruthy();
   expect(screen.getByText("Dropping fax removes its values in 18,402 rows on freight-prod. It starts unticked in the Sync Script.")).toBeTruthy();
   expect(screen.getByText("3 of 4 ticked")).toBeTruthy();
@@ -518,4 +520,48 @@ test("apply_reports_its_job_for_the_close_guard", async () => {
   await waitFor(() => expect(onJob).toHaveBeenCalledWith(expect.any(String)));
   await act(async () => finish({ applied: 6, elapsedMs: 1, tables: [] }));
   await waitFor(() => expect(onJob).toHaveBeenLastCalledWith(null));
+});
+
+test("item_43_filter_chips_and_legend_take_the_status_colours", async () => {
+  routes();
+  renderTab(dbSeed());
+  await ready();
+  const show = screen.getByRole("group", { name: "Show" });
+  const chip = (name: string) => within(show).getByRole("button", { name });
+  // Each chip carries its status class and a colour dot; All has none.
+  expect(chip("All 9").classList.contains("compare-chip-all")).toBe(true);
+  expect(chip("All 9").querySelector(".compare-chip-dot")).toBeNull();
+  for (const [name, k] of [["Added 3", "added"], ["Removed 2", "removed"], ["Changed 4", "changed"]] as const) {
+    expect(chip(name).classList.contains(`compare-chip-${k}`)).toBe(true);
+    expect(chip(name).querySelector(".compare-chip-dot")).not.toBeNull();
+    expect(chip(name).querySelector(".compare-chip-n")!.classList.contains(`diff-${k}`)).toBe(true);
+  }
+  expect(chip("All 9").getAttribute("aria-pressed")).toBe("true");
+  expect(chip("All 9").classList.contains("compare-chip-on")).toBe(true);
+  await userEvent.click(chip("Added 3"));
+  expect(chip("Added 3").getAttribute("aria-pressed")).toBe("true");
+  expect(chip("Added 3").classList.contains("compare-chip-on")).toBe(true);
+  expect(chip("All 9").classList.contains("compare-chip-on")).toBe(false);
+  // Only added rows (and the tables that hold them) stay.
+  const marks = screen.getAllByRole("treeitem").flatMap((r) => [...r.querySelectorAll(".compare-trow-badge:not(.compare-trow-count)")].map((b) => b.textContent));
+  expect(new Set(marks)).toEqual(new Set(["A"]));
+  // The legend names each colour in that colour.
+  const legend = screen.getByLabelText("Legend");
+  expect(within(legend).getByText("in source only").closest("span")!.classList.contains("diff-added")).toBe(true);
+  expect(within(legend).getByText("in target only").closest("span")!.classList.contains("diff-removed")).toBe(true);
+  expect(within(legend).getByText("differs").closest("span")!.classList.contains("diff-changed")).toBe(true);
+});
+
+test("item_43_the_selected_table_shows_its_status_word_in_its_colour", async () => {
+  routes();
+  renderTab(dbSeed());
+  await ready();
+  await userEvent.click(screen.getByRole("treeitem", { name: "refunds, added" }));
+  const statusWord = () => document.querySelector<HTMLElement>(".compare-status-word")!;
+  await waitFor(() => expect(statusWord().textContent).toBe("Added"));
+  const word = statusWord();
+  expect(word.classList.contains("diff-added")).toBe(true);
+  await userEvent.click(screen.getByRole("treeitem", { name: "invoices, changed, 4 changes inside" }));
+  expect(statusWord().textContent).toBe("Changed, 4 changes");
+  expect(statusWord().classList.contains("diff-changed")).toBe(true);
 });

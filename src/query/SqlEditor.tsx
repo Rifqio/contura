@@ -33,6 +33,7 @@ import { useKeymap } from "../commands/useCommandKeys";
 import { iconElement } from "../components/Icon";
 import type { LangClient } from "../lang/client";
 import { insertionLine } from "../lang/insertionLine";
+import { editorTheme } from "../lang/editorTheme";
 import type { Diagnostic, TextEdit } from "../lang/protocol";
 import { findTable } from "../lang/sql/analyze";
 import type { SqlCompletion } from "../lang/sql/complete";
@@ -758,6 +759,7 @@ export default function SqlEditor({
         extensions: [
           oneLine ? [] : [lineNumbers(), lintGutter(), highlightActiveLineGutter()],
           insertionLine(),
+          editorTheme(),
           oneLine
             ? EditorState.transactionFilter.of((tr) => {
                 if (!tr.docChanged || tr.newDoc.lines === 1) return tr;

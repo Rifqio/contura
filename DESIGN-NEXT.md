@@ -597,15 +597,18 @@ The same rule applies in the tree, the Home cards, the Recent list (by the item'
 ## 10. Components
 
 ### 10.1 Title bar and Group switcher
-- 40 px on `--c-bg-app`. Left to right: app glyph in a 44 px cell, Group switcher, tab strip, window buttons.
+- 40 px on `--c-bg-app`. Left to right: app glyph in a 44 px cell, Home, a hairline, Group switcher, tab strip, window buttons.
+- Item 42 (step 12b): every item (glyph cell, Home, Group switcher, tabs, New query and the new tab menu) is 32 px tall and sits on one centre line, 24 px down the bar; the hairline is 18 px on the same line.
 - Group switcher: 16 px Group square, Group name in UI strong, 14 px chevron in `--c-text-subtle`; 8 px gaps, 4 px radius hover `--c-bg-hover`. Opens a menu of Groups and Home. "No Group" shows the empty square.
-- Window buttons 46 x 40, glyphs `--c-text-muted`; hover `--c-bg-hover`; close hover `--win-close` with `--win-close-ink` glyph, as Windows does.
+- Window buttons 46 x 40 (hover fills the bar's height), glyphs `--c-text-muted` on the 24 px centre line; hover `--c-bg-hover`; close hover `--win-close` with `--win-close-ink` glyph, as Windows does.
 
 ### 10.2 Tabs
-- 32 px, top corners 6 px, 12 px left and 8 px right padding, 6 px gaps; title truncates; close button 14 px shown on hover and on the active tab.
-- Content: kind icon (query, table, `.dbml`, `.flow`; query tabs currently show a 14 px database letter tag, to be replaced by the 14 px database mark), optional `PROD` chip (18 px), title, `*` when unsaved, close.
-- Active: `--c-bg-surface`, `--c-text` 600, joined to the pane below, 2 px inset underline in the Connection's Group hue (`box-shadow: inset 0 -2px 0 var(--group)`). No Production top edge.
-- Overflow: shrink to 120 px, then scroll with a list button at the end. Middle-click closes; Ctrl+Tab cycles in recent order.
+Item 48 (step 12b), Edge style:
+- 32 px, top corners 8 px, 12 px left and 6 px right padding, no gaps. Every tab has the same width: the strip's one ResizeObserver shares its room evenly, up to 220 px. Under 150 px a share, inactive tabs show their close on hover only; under 84 px they keep only their icon, and the active tab keeps its name and close at 96 px or more. When even icons do not fit, the strip scrolls.
+- A 1 x 14 px divider (`--tab-divider`) between inactive tabs, hidden beside the active and the hovered tab. Hover is a soft fill inside the tab (`--tab-hover-fill`, 3 px inset, 6 px radius).
+- Content: one feature icon (item 16, 16 px; Settings, Saved Queries and lineage keep their line icon), optional `PROD` chip (18 px), title, `*` when unsaved, close (20 px).
+- Active: `--c-bg-surface`, `--c-text` 600, raised and joined to the feature bar below (which is `--c-bg-surface` with no border) by 8 px concave feet. No Group underline, no Production top edge.
+- Middle-click closes; Ctrl+Tab cycles in recent order.
 
 ### 10.3 Object tree
 - Rows 28 px on `--c-bg-panel`, padding-left 8 + 20 x level, chevron 14 px (`chevron-right` collapsed, `chevron-down` expanded; leaves get a 14 px spacer).
@@ -653,7 +656,7 @@ The same rule applies in the tree, the Home cards, the Recent list (by the item'
 - Canvas `--c-bg-canvas` with the snap grid: dots 1 px every 16 px in `--c-border`, every 80 px in `--c-border-strong` at 50 percent; hidden below 40 percent zoom. The dot grid is the snap grid, not decoration.
 - Table card: 216 px wide (200 to 360 by content), 1 px `--c-node-table-stroke`, 6 px radius, header 32 px on `--c-node-table-fill` with table icon, name UI strong, schema `--c-text-subtle`, column count right; rows 24 px (grid `14px 1fr auto 8px`): key or link icon, column name, type Code small `--c-syn-type`, `?` for nullable in `--c-text-faint`. Highlighted row (linked to text) `--c-accent-subtle`.
 - Edges 1.5 px `--c-text-subtle`, orthogonal with 8 px corners, crow's-foot and bar markers.
-- Selection: 2 px `--c-accent` outline 5 px outside the card (9 px radius) with four 8 px square handles on `--c-bg-surface` with 1 px accent border. Selecting on the canvas bands the matching DBML block with `--c-accent-subtle`.
+- Selection: 2 px `--c-accent` outline 5 px outside the card (9 px radius), no square handles (board B2, step 12b). A card or node that resizes has invisible pointer zones instead: 8 px along each edge (4 px in, 4 px out) and a 12 px square on each corner, with the `ns`, `ew`, `nwse` and `nesw` resize pointers; the ports sit above them. A resize is live and shows "W × H" under the box. Selecting on the canvas bands the matching DBML block with `--c-accent-subtle`.
 - Zoomed-out cards (below 45 percent): 100 x 48 cards with the name (16 / 20 600) and "5 columns"; below 15 percent areas only.
 - Floating controls (level 1): zoom (minus, percent 48 px min width tabular, plus, fit) bottom right; minimap 200 x 140 with nodes as 80 percent stroke-colour blocks and the viewport as a 1 px accent rectangle on a 30 percent accent-subtle fill.
 
@@ -775,7 +778,7 @@ Four options were drawn (A data-source wash, B hazard where you write, C waterma
 | Grid density | 40 px rows, 44 px two-line header | 28 px rows (24 compact), 28 px header with inline type hint |
 | Toolbar / status bar | 44 px / 44 px | 32 to 36 px strips / 24 px status bar |
 | Icon rail | 48 px rail | Not used in these screens; navigation is Home tab plus title bar switcher (keep the rail decision open) |
-| Group mark | 22 px initial square, white initial, only in switcher and Home card | 20 px square on Home cards, 16 px in tree, switcher and diagram areas; initial ink per theme; plus the 2 px tab underline in the Group hue |
+| Group mark | 22 px initial square, white initial, only in switcher and Home card | 20 px square on Home cards, 16 px in tree, switcher and diagram areas; initial ink per theme (the tab underline in the Group hue went with item 48) |
 | Group colours | Nine (red, orange, amber, ...) | Eight slots, no red, no orange, no purple (3.4) |
 | Production | Amber `#B76E00`, 2 px outline around a grid with Pending Edits | Orange `#D06A14` / `#FFB86C`: wash on panes, `PROD`/`PRODUCTION` labels, hazard only on writes, Run/Save on PROD, confirm dialog |
 | Pending Edits | Highlighter yellow fill, 2 px edge, coloured row number, sweep animation | `--c-warning-subtle` fill and 2 px `--c-warning-solid` edge; keep the row-number colour and the 150 ms sweep from DESIGN.md if wanted (not drawn here) |

@@ -147,6 +147,12 @@ interface PickerProps {
   onChange(side: CompareDatabase): void;
 }
 
+/** Item 44: what a code pane names beside its Connection: the database, and the schema on PostgreSQL. SQLite names none. */
+export function scopeOf(side: CompareDatabase | null, connection: ConnectionConfig | null): string[] | undefined {
+  if (!side || !connection || connection.dialect === "sqlite" || !side.database) return undefined;
+  return connection.dialect === "postgres" && side.schema ? [side.database, side.schema] : [side.database];
+}
+
 /** A side's Connection, database and (PostgreSQL) schema. */
 function SidePicker({ role, connections, side, onlyDialect, onChange }: PickerProps) {
   const connection = connections.find((c) => c.id === side?.connectionId) ?? null;
@@ -610,6 +616,11 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
   const lossItem = selectedRow?.item?.losesData ? selectedRow.item : (lossItems[0] ?? null);
   const qualified = selectedTable ? (target?.schema ? `${target.schema}.${selectedTable}` : selectedTable) : "";
   const focus = selectedRow?.kind === "item" && selectedRow.item?.object !== "enum" ? selectedRow.name : null;
+  // Item 43: the shown table's status beside its name, in its colour ("Added", "Changed, 16 changes").
+  const tableRow = selectedTable ? rows.find((r) => r.table === selectedTable && r.level === 2) : undefined;
+  const statusWord = tableRow?.mark
+    ? `${tableRow.mark.charAt(0).toUpperCase()}${tableRow.mark.slice(1)}${tableRow.changes !== null ? `, ${tableRow.changes === 1 ? "1 change" : `${tableRow.changes.toLocaleString("en-US")} changes`}` : ""}`
+    : null;
 
   function inScript(): { sql: string; marks: SqlMark[]; on: number; n: number } {
     const its = plan ? plan.items.filter((i) => i.table === selectedTable) : [];
@@ -635,10 +646,12 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
 
   const sourceSide = {
     name: sourceLabel,
+    scope: kind === "database" ? scopeOf(dbSource, srcConn) : undefined,
     lead: kind === "model" ? <Icon name="layers" size={14} /> : srcConn ? <DbMark dialect={srcConn.dialect} open size={14} label={null} /> : undefined,
   };
   const targetSide = {
     name: targetLabel,
+    scope: scopeOf(target, tgtConn),
     lead: tgtConn ? <DbMark dialect={tgtConn.dialect} open size={14} label={null} /> : undefined,
     tag: tgtConn ? <SafetyTag connection={tgtConn} small /> : undefined,
   };
@@ -674,16 +687,18 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
         <div className="compare-split">
           <aside className="compare-left compare-left-diff">
             <div className="compare-filter">
-              <div className="segmented" role="group" aria-label="Show">
+              <div className="compare-chips" role="group" aria-label="Show">
                 {(["all", "added", "removed", "changed"] as const).map((f) => (
                   <button
                     key={f}
                     type="button"
                     aria-pressed={filter === f}
-                    className={filter === f ? "segmented-option segmented-on" : "segmented-option"}
+                    className={["compare-chip", `compare-chip-${f}`, filter === f && "compare-chip-on"].filter(Boolean).join(" ")}
                     onClick={() => setFilter(f)}
                   >
-                    {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)} <span className="compare-filter-n">{counts[f].toLocaleString("en-US")}</span>
+                    {f !== "all" && <span className="compare-chip-dot" aria-hidden="true" />}
+                    {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}{" "}
+                    <span className={f === "all" ? "compare-chip-n" : `compare-chip-n diff-${f}`}>{counts[f].toLocaleString("en-US")}</span>
                   </button>
                 ))}
               </div>
@@ -694,6 +709,12 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
           <section className="compare-right" aria-label="Definitions">
             <div className="compare-right-head">
               <span className="compare-right-title mono">{qualified}</span>
+              {tableRow?.mark && statusWord && (
+                <span className={`compare-status-word diff-${tableRow.mark}`}>
+                  <MarkIcon mark={tableRow.mark} />
+                  {statusWord}
+                </span>
+              )}
               {lossItems.length > 0 && (
                 <span className="chip compare-chip-bad">
                   <Icon name="warning" size={14} />
@@ -701,16 +722,16 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
                 </span>
               )}
               <span className="spacer" />
-              <span className="compare-legend">
-                <span>
+              <span className="compare-legend" aria-label="Legend">
+                <span className="diff-added">
                   <MarkIcon mark="added" />
                   in source only
                 </span>
-                <span>
+                <span className="diff-removed">
                   <MarkIcon mark="removed" />
                   in target only
                 </span>
-                <span>
+                <span className="diff-changed">
                   <MarkIcon mark="changed" />
                   differs
                 </span>

@@ -109,3 +109,58 @@ test("node_icon_tile_is_light_in_both_themes", () => {
     expect(luminance(tile as string)).toBeGreaterThan(0.85);
   }
 });
+
+// Item 49: tinted grid rows (new, edited, deleted) keep their column dividers in dark mode; light stays as it was.
+test("tinted_grid_rows_have_a_divider_token_that_shows_in_dark_and_matches_light", () => {
+  const all = (body: string) => new Map([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const lightValue = [...css.matchAll(/:root\s*\{([^}]*)\}/g)].map((m) => all(m[1]).get("--grid-tint-divider")).find(Boolean);
+  expect(lightValue).toBe("color-mix(in srgb, var(--c-border) 60%, transparent)");
+  const darkValue = all(blockAfter(css, DARK_OPEN)).get("--grid-tint-divider");
+  const mediaValue = all(blockAfter(blockAfter(css, "@media (prefers-color-scheme: dark) {"), ':root:not([data-theme="light"]) {')).get("--grid-tint-divider");
+  expect(darkValue).toBeTruthy();
+  expect(mediaValue).toBe(darkValue);
+  // Drawn from the strong border, not the faint one the tint swallows.
+  expect(darkValue).toContain("var(--c-border-strong)");
+});
+
+// Item 43: Schema Compare colours its differences like Git decorations, with the board's values in both themes.
+test("diff_status_tokens_are_set_in_light_dark_and_follow_windows", () => {
+  const all = (body: string) => new Map([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const names = ["--diff-added", "--diff-added-tint", "--diff-removed", "--diff-removed-tint", "--diff-changed", "--diff-changed-tint"];
+  const pick = (body: string) => Object.fromEntries(names.map((n) => [n, all(body).get(n)]));
+  expect(pick(blockAfter(css, ":root, .theme-light {"))).toEqual({
+    "--diff-added": "#0f5f08",
+    "--diff-added-tint": "#e1ecc9",
+    "--diff-removed": "#9c2717",
+    "--diff-removed-tint": "#fbe3dc",
+    "--diff-changed": "#7a4600",
+    "--diff-changed-tint": "#f8e1c9",
+  });
+  const darkValues = pick(blockAfter(css, DARK_OPEN));
+  expect(darkValues).toEqual({
+    "--diff-added": "#50fa7b",
+    "--diff-added-tint": "#233b2c",
+    "--diff-removed": "#ffa0a0",
+    "--diff-removed-tint": "#43272e",
+    "--diff-changed": "#ffb86c",
+    "--diff-changed-tint": "#45372b",
+  });
+  expect(pick(blockAfter(blockAfter(css, "@media (prefers-color-scheme: dark) {"), ':root:not([data-theme="light"]) {'))).toEqual(darkValues);
+});
+
+// Item 48: the tab divider and the soft hover fill, from the board, in both themes.
+test("tab_divider_and_hover_fill_tokens_in_light_dark_and_follow_windows", () => {
+  const all = (body: string) => new Map([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const pick = (body: string) => ({ divider: all(body).get("--tab-divider"), hover: all(body).get("--tab-hover-fill") });
+  expect(pick(blockAfter(css, ":root, .theme-light {"))).toEqual({ divider: "#bdb9a8", hover: "#e2deca" });
+  expect(pick(blockAfter(css, DARK_OPEN))).toEqual({ divider: "#44475a", hover: "#2a2c38" });
+  expect(pick(blockAfter(blockAfter(css, "@media (prefers-color-scheme: dark) {"), ':root:not([data-theme="light"]) {'))).toEqual({ divider: "#44475a", hover: "#2a2c38" });
+});
+
+// Item 39: the row separators of the Visual Query's bordered grids, from board B1, in both themes.
+test("panel_rowline_token_in_light_dark_and_follow_windows", () => {
+  const get = (body: string) => new Map([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()])).get("--panel-rowline");
+  expect(get(blockAfter(css, ":root, .theme-light {"))).toBe("#e6e2d2");
+  expect(get(blockAfter(css, DARK_OPEN))).toBe("#323443");
+  expect(get(blockAfter(blockAfter(css, "@media (prefers-color-scheme: dark) {"), ':root:not([data-theme="light"]) {'))).toBe("#323443");
+});

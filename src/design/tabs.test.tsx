@@ -267,9 +267,12 @@ test("the_row_grid_keys_add_pick_rename_and_remove", async () => {
   let box = screen.getByRole("textbox", { name: "Cell value" }) as HTMLInputElement;
   expect(box.value).toBe("orders_idx");
   fireEvent.keyDown(box, { key: "Escape" });
-  // Typing starts a new name with that character.
-  fireEvent.keyDown(keys, { key: "x" });
+  // Typing starts a new name with that character, typed by the browser into the focused editor (item 47).
+  expect(fireEvent.keyDown(keys, { key: "x" })).toBe(true);
   box = screen.getByRole("textbox", { name: "Cell value" }) as HTMLInputElement;
+  expect(document.activeElement).toBe(box);
+  expect(box.value).toBe("");
+  fireEvent.change(box, { target: { value: "x" } });
   expect(box.value).toBe("x");
   fireEvent.keyDown(box, { key: "Enter" });
   expect(added().querySelector('td[data-field="name"]')?.textContent).toBe("x");

@@ -26,7 +26,6 @@ export type CommandId =
   | "editor.definition"
   | "editor.parameterHints"
   | "history.toggle"
-  | "visualQuery.addTable"
   | "visualQuery.openInEditor"
   | "diagram.toggle"
   | "export.open"
@@ -74,7 +73,6 @@ export const COMMANDS: readonly Command[] = [
   editor("editor.parameterHints", "Parameter hints", ["Ctrl+Shift+Space"]),
   app("history.toggle", "Query History"),
   // Step 6 (D9): each Visual Query tab registers these with its region, so the focused tab wins.
-  app("visualQuery.addTable", "Add table", ["Ctrl+Shift+A"]),
   app("visualQuery.openInEditor", "Open the SQL in the editor", ["Ctrl+Shift+E"]),
   app("diagram.toggle", "Show or hide the diagram", ["Ctrl+Shift+D"]),
   // Step 7 (D21): each table grid and result registers export.open with its region.

@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import type { ConnectionConfig, Group } from "../api/types";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ConnectionConfig } from "../api/types";
 import { hintFor, withHint } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
 import { type DiagramMenuActions, diagramMenuItems, PlacedMenu, type PlacedMenuState } from "../flow/DiagramMenu";
 import { useUnsavedFlows } from "../flow/flowRegistry";
 import { type AnyTab, isUnsaved, stripSegment, tabConnectionId, tabKey } from "../shell/tabs";
-import DbMark from "./DbMark";
-import { groupStyle } from "./GroupBadge";
+import FeatureIcon, { type FeatureIconName } from "./FeatureIcon";
 import Icon, { type IconName } from "./Icon";
 import NewTabMenu, { type NewTabSection } from "./NewTabMenu";
 import SafetyTag from "./SafetyTag";
@@ -45,36 +44,93 @@ export function tabName(t: AnyTab): string {
   }
 }
 
-/** The kind icon before the title; query tabs show only their database mark (C5). */
-function iconOf(t: AnyTab): IconName | null {
+/**
+ * Item 42: one icon per tab, the feature's own (item 16) at 16 px. Settings, Saved Queries and lineage have no
+ * feature icon, so they keep their line icon; still one.
+ */
+function iconOf(t: AnyTab): { feature: FeatureIconName } | { icon: IconName } {
   switch (t.kind) {
     case "home":
-      return "grid";
+      return { feature: "home" };
     case "settings":
-      return "gear";
+      return { icon: "gear" };
     case "schema":
-      return "layers";
+      return { feature: "model" };
     case "flow":
-      return "flow";
+      return { feature: "diagram" };
     case "transfer":
-      return "swap";
+      return { feature: "transfer" };
     case "compare":
-      return "columns";
+      return { feature: "compare" };
     case "query":
-      return null;
+      return { feature: "query" };
     case "visual":
-      return "visualQuery";
+      return { feature: "vquery" };
     case "savedQueries":
-      return "bookmark";
+      return { icon: "bookmark" };
     case "object":
-      return t.selection.kind === "table" ? "table" : t.selection.kind === "view" ? "view" : t.selection.kind === "trigger" ? "trigger" : "routine";
+      return { feature: t.selection.kind === "table" ? "table" : t.selection.kind === "view" ? "view" : "function" };
     case "design":
-      return "edit";
+      return { feature: "designer" };
     case "import":
-      return "import";
+      return { feature: "import" };
     case "lineage":
-      return "flow";
+      return { icon: "flow" };
   }
+}
+
+/** Item 48: tabs are at most this wide, and share the strip evenly below it. */
+export const TAB_MAX = 220;
+/** The active tab keeps its name and close button at this width. */
+export const TAB_ACTIVE_MIN = 96;
+/** An icon-only tab is never narrower than this. */
+const TAB_ICON_ONLY = 36;
+/** Below these shares, inactive tabs hide their close until hover (narrow), then keep only their icon (compact). */
+const NARROW_BELOW = 150;
+const COMPACT_BELOW = 84;
+
+export type TabDensity = "normal" | "narrow" | "compact";
+
+/** Item 48: each tab's width when `n` tabs share `room` px, Edge style. */
+export function tabWidths(room: number, n: number, hasActive: boolean): { density: TabDensity; width: number; activeWidth: number } {
+  const per = n > 0 ? room / n : TAB_MAX;
+  if (!Number.isFinite(per) || per >= TAB_MAX) return { density: "normal", width: TAB_MAX, activeWidth: TAB_MAX };
+  const density: TabDensity = per < COMPACT_BELOW ? "compact" : per < NARROW_BELOW ? "narrow" : "normal";
+  if (!hasActive || n === 1) {
+    const w = Math.max(Math.floor(per), TAB_ICON_ONLY);
+    return { density, width: w, activeWidth: hasActive ? Math.max(w, TAB_ACTIVE_MIN) : w };
+  }
+  const activeWidth = Math.max(Math.floor(per), TAB_ACTIVE_MIN);
+  const width = Math.max(Math.floor((room - activeWidth) / (n - 1)), TAB_ICON_ONLY);
+  return { density, width, activeWidth };
+}
+
+/**
+ * The room the tabs share: the strip's width less the buttons after the list. One ResizeObserver on the strip,
+ * none per tab; it goes on unmount. Null until measured (and where there is no ResizeObserver).
+ */
+function useStripRoom(strip: React.RefObject<HTMLDivElement | null>, list: React.RefObject<HTMLDivElement | null>): number | null {
+  const [room, setRoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = strip.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      let others = 0;
+      for (const c of Array.from(el.children)) {
+        if (c === list.current || !(c instanceof HTMLElement)) continue;
+        const cs = getComputedStyle(c);
+        if (cs.position === "absolute" || cs.position === "fixed") continue;
+        others += c.offsetWidth + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0);
+      }
+      const ls = list.current ? getComputedStyle(list.current) : null;
+      const pad = ls ? (parseFloat(ls.paddingLeft) || 0) + (parseFloat(ls.paddingRight) || 0) : 0;
+      setRoom(Math.max(0, Math.floor(el.clientWidth - others - pad)));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [strip, list]);
+  return room;
 }
 
 interface Props {
@@ -97,8 +153,6 @@ interface Props {
   connections?: ConnectionConfig[];
   /** Table and design tabs (by key) with Pending Edits or an unapplied design. */
   dirtyKeys?: ReadonlySet<string>;
-  /** Lets a tab draw in its Connection's Group hue. */
-  groups?: Group[];
   /** Item 7: a tab dragged along the strip and dropped where `to` was. */
   onReorder?(from: string, to: string): void;
   /** A double click on a preview tab keeps it (item 1). */
@@ -111,8 +165,8 @@ interface Props {
 
 /** Starts a drag after this many pixels, so a click never moves a tab. */
 const DRAG_PX = 5;
-/** The gap between tabs (DN 10.2). */
-const TAB_GAP = 6;
+/** The gap between tabs: none since item 48 (a divider sits between them instead). */
+const TAB_GAP = 0;
 
 interface DragState {
   key: string;
@@ -287,7 +341,6 @@ export default function TabStrip({
   diagramActions,
   connections = [],
   dirtyKeys,
-  groups = [],
   onNewModel,
   newQueryWhere = null,
   onKeep,
@@ -302,6 +355,9 @@ export default function TabStrip({
   const [menu, setMenu] = useState<PlacedMenuState | null>(null);
   const keys = tabs.map(tabKey);
   const list = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const room = useStripRoom(stripRef, list);
+  const sizes = tabWidths(room ?? Number.POSITIVE_INFINITY, tabs.length, active !== null && keys.includes(active));
   /** The tab moved by Alt+Left or Alt+Right keeps focus in its new place. */
   const refocus = useRef<string | null>(null);
   useEffect(() => {
@@ -332,11 +388,12 @@ export default function TabStrip({
   });
   return (
     // Bare drag regions: Tauri drags only on direct clicks, so the tabs and buttons inside stay clickable.
-    <div className="tab-strip" data-tauri-drag-region>
+    <div className="tab-strip" data-tauri-drag-region ref={stripRef}>
       <div
         role="tablist"
         aria-label="Open tabs"
-        className="tab-list"
+        className={["tab-list", sizes.density !== "normal" && "tab-list-narrow", sizes.density === "compact" && "tab-list-compact"].filter(Boolean).join(" ")}
+        style={{ "--tab-w": `${sizes.width}px`, "--tab-active-w": `${sizes.activeWidth}px` } as React.CSSProperties}
         data-tauri-drag-region
         ref={list}
         // With no scrollbar, the wheel scrolls the strip sideways.
@@ -363,7 +420,6 @@ export default function TabStrip({
           ]
             .filter(Boolean)
             .join(", ");
-          const group = owner?.groupId ? groups.find((g) => g.id === owner.groupId) : undefined;
           const icon = iconOf(t);
           // A Saved Query's tab shows no kind word; its tooltip says what it is and where it opens.
           const tip =
@@ -385,7 +441,7 @@ export default function TabStrip({
               ]
                 .filter(Boolean)
                 .join(" ")}
-              style={{ ...groupStyle(group?.color), ...drag.styleOf(key) }}
+              style={drag.styleOf(key)}
               onPointerDown={(e) => drag.down(e, key)}
               onDoubleClick={() => {
                 if (t.kind === "object" && t.preview) onKeep?.(key);
@@ -427,8 +483,7 @@ export default function TabStrip({
                   }
                 }}
               >
-                {icon && <Icon name={icon} size={14} />}
-                {(t.kind === "query" || t.kind === "visual") && owner && <DbMark dialect={owner.dialect} open size={14} label={null} />}
+                {"feature" in icon ? <FeatureIcon name={icon.feature} size={16} /> : <Icon name={icon.icon} size={16} />}
                 {owner && <SafetyTag connection={owner} small />}
                 <span className="work-tab-name">{name}</span>
                 {dirty && (
@@ -450,7 +505,7 @@ export default function TabStrip({
           );
         })}
       </div>
-      <button type="button" className="icon-button" aria-label="New query" title={withHint("New query", hintFor(map, "query.new"))} onClick={onNew}>
+      <button type="button" className="icon-button tab-strip-new" aria-label="New query" title={withHint("New query", hintFor(map, "query.new"))} onClick={onNew}>
         <Icon name="plus" />
       </button>
       {onNewVisual && (

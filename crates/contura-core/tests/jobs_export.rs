@@ -223,7 +223,16 @@ impl Fx {
     }
 
     fn table(&self, format: Format, file: &str) -> ExportRequest {
-        self.table_with(format, file, ExportOptions::default())
+        // A `.ndjson` file is JSON Lines; the default JSON layout is one array (item 45).
+        let options = if file.ends_with(".ndjson") {
+            ExportOptions {
+                json_layout: JsonLayout::Lines,
+                ..ExportOptions::default()
+            }
+        } else {
+            ExportOptions::default()
+        };
+        self.table_with(format, file, options)
     }
 
     fn table_with(&self, format: Format, file: &str, options: ExportOptions) -> ExportRequest {

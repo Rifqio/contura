@@ -20,6 +20,8 @@ export interface FilterPanelProps {
   /** The LIMIT as typed, or null for the model's value. */
   limitDraft: string | null;
   onLimitDraft(text: string): void;
+  /** The footer's Open in editor; off while there is no SQL. */
+  onOpenInEditor?(): void;
 }
 
 export const OPERATORS: { value: FilterOp; label: string }[] = [
@@ -95,7 +97,7 @@ export function limitSends(text: string): number | null {
   return /^\d+$/.test(t) ? Number(t) : null;
 }
 
-export default function FilterPanel({ model, outputs, problems, tableColumns, onChange, limitDraft, onLimitDraft }: FilterPanelProps) {
+export default function FilterPanel({ model, outputs, problems, tableColumns, onChange, limitDraft, onLimitDraft, onOpenInEditor }: FilterPanelProps) {
   const base = useId();
   const alias = (id: string) => model.tables.find((t) => t.id === id)?.alias ?? "?";
   const columnOptions = model.tables.flatMap((t) => (tableColumns[t.id] ?? []).map((c) => ({ value: `${t.id}${SEP}${c}`, label: `${t.alias}.${c}` })));
@@ -129,175 +131,212 @@ export default function FilterPanel({ model, outputs, problems, tableColumns, on
   };
 
   return (
-    // Item 33 (frame VisualQuery, "Filter and sort"): conditions on the left, in the order they read; sort, limit
-    // and distinct on the right. A section's count is folded into its sentence, never set after its name.
-    <div className="vq-filters">
-      <section className="vq-filters-main" aria-label="Conditions">
-      <h3 className="vq-panel-title">
-        Conditions <span className="vq-panel-title-note">{conditionsLine(model.filters)}</span>
-      </h3>
-      <div className="vq-filter-list">
-        {model.filters.map((f, i) => {
-          const n = i + 1;
-          const problem = problemOf("filter", i);
-          const problemId = `${base}-f${i}`;
-          const noColumn = problem !== null && f.column === "";
-          return (
-            <div key={i} role="group" aria-label={`Filter ${n}`} className="vq-filter">
-              <div className="vq-filter-row">
-                {i === 0 ? (
-                  <span className="vq-filter-where">Where</span>
-                ) : (
-                  <Select
-                    label={`Joiner for filter ${n}`}
-                    value={f.joiner}
-                    className="vq-filter-joiner"
-                    options={[
-                      { value: "and", label: "And" },
-                      { value: "or", label: "Or" },
-                    ]}
-                    onChange={(joiner) => onChange((q) => editFilter(q, i, { joiner }))}
-                  />
-                )}
-                <Select
-                  label={`Column for filter ${n}`}
-                  mono
-                  invalid={noColumn}
-                  value={f.column ? `${f.table}${SEP}${f.column}` : ""}
-                  describedBy={problem ? problemId : undefined}
-                  options={[{ value: "", label: "Pick a column", disabled: true }, ...columnOptions]}
-                  onChange={(v) => {
-                    const [table, column] = v.split(SEP);
-                    onChange((q) => editFilter(q, i, { table, column }));
-                  }}
-                />
-                <Select
-                  label={`Operator for filter ${n}`}
-                  mono
-                  value={f.op}
-                  options={OPERATORS}
-                  onChange={(op) => onChange((q) => editFilter(q, i, { op }))}
-                />
-                <FilterValues
-                  filter={f}
-                  n={n}
-                  invalid={problem !== null && !noColumn}
-                  describedBy={problem ? problemId : undefined}
-                  onValues={(values) => onChange((q) => editFilter(q, i, { values }))}
-                />
-                <button type="button" className="icon-button" aria-label={`Remove filter ${n}`} title="Remove" onClick={() => onChange((q) => removeFilter(q, i))}>
-                  <Icon name="close" size={14} />
-                </button>
-              </div>
-              {problem && (
-                <p id={problemId} className="vq-problem">
-                  {problem}
-                </p>
-              )}
+    // Item 39 (board B1): bordered sections side by side, Where, Sort, then Limit and Distinct, with no empty
+    // middle; the note sits in a footer bar. A section's count is folded into its sentence, never a bare number.
+    <div className="vq-filters-wrap">
+      <div className="vq-filters">
+        <section className="vq-box vq-filters-where" aria-label="Where">
+          <div className="vq-box-head">
+            <b>Where</b>
+            <span className="vq-box-sum">{conditionsLine(model.filters)}</span>
+          </div>
+          <div className="vq-box-body">
+            <div className="vq-filter-list">
+              {model.filters.map((f, i) => {
+                const n = i + 1;
+                const problem = problemOf("filter", i);
+                const problemId = `${base}-f${i}`;
+                const noColumn = problem !== null && f.column === "";
+                return (
+                  <div key={i} role="group" aria-label={`Filter ${n}`} className="vq-filter">
+                    <div className="vq-filter-row">
+                      {i === 0 ? (
+                        <span className="vq-filter-where">Where</span>
+                      ) : (
+                        <Select
+                          label={`Joiner for filter ${n}`}
+                          value={f.joiner}
+                          className="vq-filter-joiner"
+                          options={[
+                            { value: "and", label: "And" },
+                            { value: "or", label: "Or" },
+                          ]}
+                          onChange={(joiner) => onChange((q) => editFilter(q, i, { joiner }))}
+                        />
+                      )}
+                      <Select
+                        label={`Column for filter ${n}`}
+                        mono
+                        invalid={noColumn}
+                        value={f.column ? `${f.table}${SEP}${f.column}` : ""}
+                        describedBy={problem ? problemId : undefined}
+                        options={[{ value: "", label: "Pick a column", disabled: true }, ...columnOptions]}
+                        onChange={(v) => {
+                          const [table, column] = v.split(SEP);
+                          onChange((q) => editFilter(q, i, { table, column }));
+                        }}
+                      />
+                      <Select
+                        label={`Operator for filter ${n}`}
+                        mono
+                        value={f.op}
+                        options={OPERATORS}
+                        onChange={(op) => onChange((q) => editFilter(q, i, { op }))}
+                      />
+                      <FilterValues
+                        filter={f}
+                        n={n}
+                        invalid={problem !== null && !noColumn}
+                        describedBy={problem ? problemId : undefined}
+                        onValues={(values) => onChange((q) => editFilter(q, i, { values }))}
+                      />
+                      <button type="button" className="icon-button" aria-label={`Remove filter ${n}`} title="Remove" onClick={() => onChange((q) => removeFilter(q, i))}>
+                        <Icon name="close" size={14} />
+                      </button>
+                    </div>
+                    {problem && (
+                      <p id={problemId} className="vq-problem">
+                        {problem}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
-      </div>
-      <button type="button" className="button button-small button-quiet" disabled={model.tables.length === 0} onClick={() => onChange((q) => addFilter(q))}>
-        <Icon name="plus" size={14} />
-        Add condition
-      </button>
-      {mixesAndOr(model.filters) && <p className="vq-panel-hint">And binds before Or. For other groupings, Open in editor.</p>}
-      <p className="vq-panel-hint vq-filters-foot">Values are sent as quoted literals. For anything more, Open in editor.</p>
-      </section>
-
-      <section className="vq-filters-side" aria-label="Sort and limit">
-      <div className="vq-sort-list">
-        <h3 className="vq-panel-title">Sort</h3>
-        {model.orderBy.map((s, i) => {
-          const n = i + 1;
-          const problem = problemOf("sort", i);
-          const problemId = `${base}-s${i}`;
-          // An output that is gone still shows where it was, so its problem reads against it.
-          const value = sortValue(s.target);
-          const options = sortOptions.some((o) => o.value === value)
-            ? sortOptions
-            : [...sortOptions, { value, label: s.target.kind === "column" ? `${alias(s.target.table)}.${s.target.column}` : `Output ${s.target.kind === "output" ? s.target.index + 1 : ""}` }];
-          return (
-            <div key={i} role="group" aria-label={`Sort ${n}`} className="vq-filter">
-              <div className="vq-filter-row">
-                <Select
-                  label={`Sort column ${n}`}
-                  mono
-                  invalid={problem !== null}
-                  value={value}
-                  describedBy={problem ? problemId : undefined}
-                  options={options}
-                  onChange={(v) => onChange((q) => editSort(q, i, { target: targetOf(v) }))}
-                />
-                <Select
-                  label={`Direction for sort ${n}`}
-                  value={s.dir}
-                  options={[
-                    { value: "asc", label: "Ascending" },
-                    { value: "desc", label: "Descending" },
-                  ]}
-                  onChange={(dir) => onChange((q) => editSort(q, i, { dir }))}
-                />
-                <button type="button" className="icon-button" aria-label={`Remove sort ${n}`} title="Remove" onClick={() => onChange((q) => removeSort(q, i))}>
-                  <Icon name="close" size={14} />
-                </button>
-              </div>
-              {problem && (
-                <p id={problemId} className="vq-problem">
-                  {problem}
-                </p>
-              )}
+            <div className="vq-box-add">
+              <button type="button" className="button button-small button-quiet" disabled={model.tables.length === 0} onClick={() => onChange((q) => addFilter(q))}>
+                <Icon name="plus" size={14} />
+                Add condition
+              </button>
             </div>
-          );
-        })}
-        <button
-          type="button"
-          className="button button-small button-quiet"
-          disabled={nextSort() === null}
-          onClick={() => {
-            const target = nextSort();
-            if (target) onChange((q) => addSort(q, { target, dir: "asc" }));
-          }}
-        >
-          <Icon name="plus" size={14} />
-          Add sort
-        </button>
-      </div>
+            {mixesAndOr(model.filters) && <p className="vq-panel-hint">And binds before Or. For other groupings, Open in editor.</p>}
+          </div>
+        </section>
 
-      <hr className="vq-filters-rule" />
-      <div className="vq-limit-row">
-        <label className="vq-side-label" htmlFor={`${base}-limit`}>
-          Limit
-        </label>
-        <input
-          id={`${base}-limit`}
-          className="input input-small vq-mono vq-limit"
-          value={limitText}
-          placeholder="No limit"
-          inputMode="numeric"
-          autoComplete="off"
-          aria-invalid={limitBad || undefined}
-          aria-describedby={limitBad ? `${base}-limit-problem` : undefined}
-          onChange={(e) => onLimit(e.target.value)}
-        />
-        <span className="vq-side-note">rows</span>
+        <section className="vq-box vq-filters-sort" aria-label="Sort">
+          <div className="vq-box-head">
+            <b>Sort</b>
+            <span className="vq-box-sum">{sortLine(model.orderBy.length)}</span>
+          </div>
+          <div className="vq-box-body">
+            <div className="vq-sort-list">
+              {model.orderBy.map((s, i) => {
+                const n = i + 1;
+                const problem = problemOf("sort", i);
+                const problemId = `${base}-s${i}`;
+                // An output that is gone still shows where it was, so its problem reads against it.
+                const value = sortValue(s.target);
+                const options = sortOptions.some((o) => o.value === value)
+                  ? sortOptions
+                  : [...sortOptions, { value, label: s.target.kind === "column" ? `${alias(s.target.table)}.${s.target.column}` : `Output ${s.target.kind === "output" ? s.target.index + 1 : ""}` }];
+                return (
+                  <div key={i} role="group" aria-label={`Sort ${n}`} className="vq-filter">
+                    <div className="vq-filter-row">
+                      <Select
+                        label={`Sort column ${n}`}
+                        mono
+                        invalid={problem !== null}
+                        value={value}
+                        describedBy={problem ? problemId : undefined}
+                        options={options}
+                        onChange={(v) => onChange((q) => editSort(q, i, { target: targetOf(v) }))}
+                      />
+                      <Select
+                        label={`Direction for sort ${n}`}
+                        value={s.dir}
+                        options={[
+                          { value: "asc", label: "Ascending" },
+                          { value: "desc", label: "Descending" },
+                        ]}
+                        onChange={(dir) => onChange((q) => editSort(q, i, { dir }))}
+                      />
+                      <button type="button" className="icon-button" aria-label={`Remove sort ${n}`} title="Remove" onClick={() => onChange((q) => removeSort(q, i))}>
+                        <Icon name="close" size={14} />
+                      </button>
+                    </div>
+                    {problem && (
+                      <p id={problemId} className="vq-problem">
+                        {problem}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="vq-box-add">
+              <button
+                type="button"
+                className="button button-small button-quiet"
+                disabled={nextSort() === null}
+                onClick={() => {
+                  const target = nextSort();
+                  if (target) onChange((q) => addSort(q, { target, dir: "asc" }));
+                }}
+              >
+                <Icon name="plus" size={14} />
+                Add sort
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="vq-box vq-filters-limit" aria-label="Limit and Distinct">
+          <div className="vq-box-head">
+            <b>Limit and Distinct</b>
+          </div>
+          <div className="vq-box-body vq-limit-body">
+            <div className="vq-limit-row">
+              <label className="vq-side-label" htmlFor={`${base}-limit`}>
+                Limit
+              </label>
+              <input
+                id={`${base}-limit`}
+                className="input input-small vq-mono vq-limit"
+                value={limitText}
+                placeholder="No limit"
+                inputMode="numeric"
+                autoComplete="off"
+                aria-invalid={limitBad || undefined}
+                aria-describedby={limitBad ? `${base}-limit-problem` : undefined}
+                onChange={(e) => onLimit(e.target.value)}
+              />
+              <span className="vq-side-note">rows</span>
+            </div>
+            {limitBad && (
+              <p id={`${base}-limit-problem`} className="vq-problem">
+                {LIMIT_PROBLEM}
+              </p>
+            )}
+            <div className="vq-limit-row">
+              <span className="vq-side-label" aria-hidden="true">
+                Distinct
+              </span>
+              <Switch label="Distinct" checked={model.distinct} onChange={(on) => onChange((q) => setDistinct(q, on))} />
+            </div>
+            <p className="vq-side-note vq-distinct-note">Drops repeated rows.</p>
+          </div>
+        </section>
       </div>
-      {limitBad && (
-        <p id={`${base}-limit-problem`} className="vq-problem">
-          {LIMIT_PROBLEM}
-        </p>
-      )}
-      <div className="vq-limit-row">
-        <span className="vq-side-label" aria-hidden="true">
-          Distinct
-        </span>
-        <Switch label="Distinct" checked={model.distinct} onChange={(on) => onChange((q) => setDistinct(q, on))} />
-        <span className="vq-side-note">Drop repeated rows</span>
+      <div className="vq-box vq-filters-foot">
+        <div className="vq-box-foot">
+          <Icon name="info" size={14} />
+          <span>Values are sent as quoted literals. For anything more, Open in editor.</span>
+          <span className="spacer" />
+          <button type="button" className="button button-small button-quiet" disabled={!onOpenInEditor} onClick={() => onOpenInEditor?.()}>
+            <Icon name="external" size={14} />
+            Open in editor
+          </button>
+        </div>
       </div>
-      </section>
     </div>
   );
+}
+
+/** The sort section's sentence (board B1). */
+export function sortLine(n: number): string {
+  if (n === 0) return "In the order the database returns";
+  if (n === 1) return "By one column";
+  return `By ${n} columns, in this order`;
 }
 
 /** The conditions' sentence, with their count folded in (user, 2026-10-19): never a bare number after the title. */

@@ -119,6 +119,18 @@
   --shadow-1: 0 4px 12px rgb(0 0 0 / .10), 0 1px 2px rgb(0 0 0 / .06);
   --shadow-2: 0 16px 40px rgb(0 0 0 / .18), 0 2px 6px rgb(0 0 0 / .08);
   --color-scrim: rgb(0 0 0 / .32);
+  /* Item 39: the row separators of the Visual Query's bordered grids. */
+  --panel-rowline: #e6e2d2;
+  /* Item 48: Edge-style tabs, the divider between inactive tabs and the soft hover fill. */
+  --tab-divider: #bdb9a8;
+  --tab-hover-fill: #e2deca;
+  /* Item 43: Schema Compare status colours, like Git decorations (text on panel, hover and selected rows; tints behind DDL lines and chips). */
+  --diff-added: #0f5f08;
+  --diff-added-tint: #e1ecc9;
+  --diff-removed: #9c2717;
+  --diff-removed-tint: #fbe3dc;
+  --diff-changed: #7a4600;
+  --diff-changed-tint: #f8e1c9;
   color-scheme: light;
 }
 
@@ -224,6 +236,20 @@
   --shadow-1: 0 4px 12px rgb(0 0 0 / .40), 0 1px 2px rgb(0 0 0 / .30);
   --shadow-2: 0 16px 40px rgb(0 0 0 / .55), 0 2px 6px rgb(0 0 0 / .35);
   --color-scrim: rgb(0 0 0 / .5);
+  /* Item 49: the faint divider vanishes into the dark tints; this one stays visible over them. */
+  --grid-tint-divider: color-mix(in srgb, var(--c-border-strong) 55%, transparent);
+  /* Item 39: the row separators of the Visual Query's bordered grids. */
+  --panel-rowline: #323443;
+  /* Item 48: the divider between inactive tabs and the soft hover fill. */
+  --tab-divider: #44475a;
+  --tab-hover-fill: #2a2c38;
+  /* Item 43: Schema Compare status colours, like Git decorations. */
+  --diff-added: #50fa7b;
+  --diff-added-tint: #233b2c;
+  --diff-removed: #ffa0a0;
+  --diff-removed-tint: #43272e;
+  --diff-changed: #ffb86c;
+  --diff-changed-tint: #45372b;
   color-scheme: dark;
 }
 
@@ -331,6 +357,19 @@
     --shadow-1: 0 4px 12px rgb(0 0 0 / .40), 0 1px 2px rgb(0 0 0 / .30);
     --shadow-2: 0 16px 40px rgb(0 0 0 / .55), 0 2px 6px rgb(0 0 0 / .35);
     --color-scrim: rgb(0 0 0 / .5);
+    --grid-tint-divider: color-mix(in srgb, var(--c-border-strong) 55%, transparent);
+    /* Item 39: the row separators of the Visual Query's bordered grids. */
+    --panel-rowline: #323443;
+    /* Item 48: the divider between inactive tabs and the soft hover fill. */
+    --tab-divider: #44475a;
+    --tab-hover-fill: #2a2c38;
+    /* Item 43: Schema Compare status colours, like Git decorations. */
+    --diff-added: #50fa7b;
+    --diff-added-tint: #233b2c;
+    --diff-removed: #ffa0a0;
+    --diff-removed-tint: #43272e;
+    --diff-changed: #ffb86c;
+    --diff-changed-tint: #45372b;
     color-scheme: dark;
   }
 }
@@ -509,6 +548,8 @@
   --menu-item-height: var(--row-h);
   --grid-footer-height: 32px;
   --grid-cell-edited-background: var(--c-warning-subtle);
+  /* Item 49: the column divider on tinted rows (new, edited, deleted). Light keeps the usual faint one. */
+  --grid-tint-divider: color-mix(in srgb, var(--c-border) 60%, transparent);
   --grid-cell-edited-text: var(--c-text);
   --grid-cell-null-text: var(--c-text-faint);
   --type-hint-text: var(--c-text-subtle);

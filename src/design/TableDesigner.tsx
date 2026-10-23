@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { DIALECT_LABEL, applyDesign, confirmDesign, errorText, planDesign, tableDdl, tableDesign } from "../api/client";
 import type {
   ConnectionConfig,
@@ -726,9 +726,10 @@ export default function TableDesigner({
       e.preventDefault();
       toggle(selected);
     } else if (e.key.length === 1 && !mod && !e.altKey && selected && TEXT_CELLS.includes(selected.cell)) {
-      // Typing on a text cell starts editing it with that character, as in the data grid.
-      e.preventDefault();
-      open(selected, e.key);
+      // Typing on a text cell starts editing it with that character, as in the data grid (item 47): the
+      // editor opens empty and takes focus inside this key press, so the browser types the character itself.
+      flushSync(() => open(selected, ""));
+      if (!editingRef.current) e.preventDefault();
     }
   }
 
@@ -749,8 +750,9 @@ export default function TableDesigner({
       e.preventDefault();
       openName(rowTab, pickedRow.id);
     } else if (e.key.length === 1 && e.key !== " " && !mod && !e.altKey && pickedRow) {
-      e.preventDefault();
-      openName(rowTab, pickedRow.id, e.key);
+      // Item 47: the browser types the opening key into the new name's editor.
+      flushSync(() => openName(rowTab, pickedRow.id, ""));
+      if (!editingRef.current) e.preventDefault();
     }
   }
 

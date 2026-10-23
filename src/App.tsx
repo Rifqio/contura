@@ -101,6 +101,13 @@ import { PrefsProvider } from "./prefs/usePrefs";
 import { objectKey } from "./objectPath";
 import OneTree from "./sidebar/OneTree";
 import { useTreeData } from "./sidebar/useTreeData";
+import { unsavedFlows } from "./flow/flowRegistry";
+import { isUnsaved } from "./shell/tabs";
+import { pendingWork } from "./update/pendingWork";
+import { setRestartGuard } from "./update/restartGuard";
+import UpdateBanner from "./update/UpdateBanner";
+import UpdatePill from "./update/UpdatePill";
+import { dailyCheck, loadUpdates } from "./update/updateStore";
 
 /** The one prefs holder and the one command registry, around the whole app. */
 export default function App() {
@@ -268,6 +275,27 @@ function Workspace() {
       jobsOnClose: { running: jobsGuard.running, confirmStop: () => jobsGuard.confirmStop() },
     });
   dirtyRef.current = dirtyKeys;
+  // ADR 0026: an update's restart asks about unsaved work first, as quitting does, and about unsaved tabs.
+  useEffect(() =>
+    setRestartGuard({
+      pending: () => pendingWork({ tabs: [...tabs, ...windowTabs], isDirty, flows: unsavedFlows(), jobsRunning: jobsGuard.running() }),
+      resolve: async () => {
+        for (const name of unsavedFlows()) if (!(await confirmCloseFlow(name))) return false;
+        for (const t of [...tabs, ...windowTabs].filter(isUnsaved)) if (!(await confirmCloseUnsaved(t))) return false;
+        const keys = tableKeys();
+        const jobsAsk = jobsGuard.running() ? { then: () => jobsGuard.confirmStop() } : undefined;
+        if (keys.some(isDirty)) return confirmLeave(keys, jobsAsk);
+        return jobsAsk ? jobsAsk.then() : true;
+      },
+      flush: () => drafts.flush(),
+    }),
+  );
+  // Update checks: off until the user turns them on; the Core runs the daily one at most once a day.
+  useEffect(() => {
+    void loadUpdates();
+    const hourly = setInterval(() => void dailyCheck(), 60 * 60 * 1000);
+    return () => clearInterval(hourly);
+  }, []);
   // Item 8: the tab on top tells which database is in use on its Connection.
   useEffect(() => {
     const t = tabs.find((x) => tabKey(x) === activeKey);
@@ -1163,7 +1191,6 @@ function Workspace() {
         <TabStrip
           tabs={allTabs}
           connections={connections}
-          groups={groups}
           active={activeKey}
           onSelect={setActiveKey}
           onClose={(key) => void closeTab(key)}
@@ -1598,17 +1625,21 @@ function Workspace() {
         </div>
       </div>
 
+      <UpdateBanner />
       <StatusBar
         screen={statusScreen}
         theme={theme.choice}
         onTheme={theme.choose}
         jobs={
-          <JobStatusItem
-            jobs={jobs.jobs}
-            onOpen={openJob}
-            onEnded={jobs.dismiss}
-            dialectOf={(id) => connections.find((c) => c.id === id)?.dialect}
-          />
+          <>
+            <UpdatePill onOpen={() => openSettings("updates")} />
+            <JobStatusItem
+              jobs={jobs.jobs}
+              onOpen={openJob}
+              onEnded={jobs.dismiss}
+              dialectOf={(id) => connections.find((c) => c.id === id)?.dialect}
+            />
+          </>
         }
       />
 

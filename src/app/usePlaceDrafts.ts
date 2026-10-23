@@ -20,6 +20,8 @@ export interface PlaceDrafts {
   leaveFor(next: Place): void;
   /** goHome: counts a visit and drops a queued open. */
   dropQueued(): void;
+  /** Saves this place's drafts now, as before an update's restart. */
+  flush(): Promise<void>;
 }
 
 export function usePlaceDrafts(opts: {
@@ -101,10 +103,16 @@ export function usePlaceDrafts(opts: {
     visit.current++;
   }
 
+  /** Writes this place's drafts now, as before an update's restart. */
+  function flush(): Promise<void> {
+    if (draftsLoaded.current !== draftKey) return Promise.resolve();
+    return saveQueryTabs(draftKey, draftsJson).catch(() => {});
+  }
+
   function dropQueued() {
     visit.current++;
     afterDrafts.current = null;
   }
 
-  return { placeNow, visit, whenDraftsLoaded, leaveFor, dropQueued };
+  return { placeNow, visit, whenDraftsLoaded, leaveFor, dropQueued, flush };
 }

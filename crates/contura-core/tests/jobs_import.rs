@@ -1174,7 +1174,12 @@ async fn production_excel_and_json(fx: &mut Fx) {
     let prod = fx.other(true, false).await;
     for (format, name) in [(Format::Xlsx, "t.xlsx"), (Format::Json, "t.ndjson")] {
         fx.sql(&clear_sql(fx.kind, "twin")).await;
-        let out = export_file(fx, "t", format, ExportOptions::default(), name).await;
+        // `t.ndjson` is JSON Lines; the default JSON layout is one array (item 45).
+        let options = ExportOptions {
+            json_layout: JsonLayout::Lines,
+            ..ExportOptions::default()
+        };
+        let out = export_file(fx, "t", format, options, name).await;
         let mut req = fx.req("twin", &out, format);
         req.connection_id = prod;
         let plan = fx.svc.plan_import(req.clone()).await.unwrap();

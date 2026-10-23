@@ -42,6 +42,10 @@ regex = "1"
 # the OS certificate store, so no aws-lc-rs enters the tree.
 reqwest = { version = "0.13", default-features = false, features = ["stream", "json", "rustls-no-provider", "system-proxy"] }
 rustls-platform-verifier = "0.7"
+# One-click updates (ADR 0026): checks a release file's minisign signature (pure Rust,
+# no C), and compares versions; semver is already in the tree through Tauri.
+minisign-verify = "0.2"
+semver = "1"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
@@ -55,3 +59,5 @@ tempfile = "3"
 # The mock HTTP server in tests/support/mock_http.rs.
 tokio = { version = "1", features = ["net", "io-util"] }
 contura-core = { path = ".", features = ["test-util"] }
+# Makes a throwaway Ed25519 key in the update tests; already in the tree through rustls.
+ring = "0.17"

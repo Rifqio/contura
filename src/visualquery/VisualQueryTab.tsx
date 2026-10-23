@@ -58,6 +58,7 @@ import { CARD_WIDTH } from "../diagram/metrics";
 import { durationText } from "../format/units";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
+import { useVqPanelHeight } from "../prefs/usePrefs";
 import ResultsPanel from "../query/ResultsPanel";
 import { EMPTY_RUNNER, runnerReducer } from "../query/runner";
 import { serverError } from "../query/serverError";
@@ -67,7 +68,6 @@ import ColumnsPanel from "./ColumnsPanel";
 import CrossJoinDialog from "./CrossJoinDialog";
 import { NEW_VISUAL_NAME } from "./drafts";
 import FilterPanel from "./FilterPanel";
-import Finder, { type FinderTable } from "./Finder";
 import JoinEdge, { JoinActionsContext, type JoinEdgeData, conditionText, isMadeHere, keyFor } from "./JoinEdge";
 import JoinPopover from "./JoinPopover";
 import {
@@ -144,7 +144,7 @@ export interface VisualQueryTabProps {
   controlRef?: MutableRefObject<VisualTabControl | null>;
   onDuplicate?(): void;
   onClose?(): void;
-  /** The databases the Connection reaches, from the tree; the finder lists the tables of each (V6). */
+  /** The databases the Connection reaches, from the tree; a rebound tab checks its database is among them. */
   databases?: string[];
   /**
    * Every Saved Query: the others' names for the first save's name check (one name space, ignoring
@@ -153,11 +153,167 @@ export interface VisualQueryTabProps {
   savedQueries?: SavedQuery[];
 }
 
-/** MySQL's own databases: reached, but never what a Visual Query reads, and heavy to load. */
-const MYSQL_SYSTEM = new Set(["information_schema", "mysql", "performance_schema", "sys"]);
 
 /** The SQL pane refreshes this long after the last change. */
 export const PREVIEW_MS = 120;
+/** The dragged card sizes of the tables still on the canvas: a removed card's size leaves the draft with it. */
+function keptSizes(d: VisualTabDoc, q: VisualQuery): Pick<VisualTabDoc, "widths" | "heights"> {
+  const ids = new Set(q.tables.map((t) => t.id));
+  const keep = (m: Record<string, number> | undefined) => {
+    if (!m) return undefined;
+    const keys = Object.keys(m);
+    if (keys.every((k) => ids.has(k))) return m;
+    const out: Record<string, number> = {};
+    for (const k of keys) if (ids.has(k)) out[k] = m[k];
+    return Object.keys(out).length > 0 ? out : undefined;
+  };
+  return { widths: keep(d.widths), heights: keep(d.heights) };
+}
+
+/** Item 36: the bottom panel's default height, and its least: the tab strip and its rule. */
+export const VQ_PANEL_DEFAULT = 252;
+export const VQ_PANEL_MIN = 37;
+/** The canvas keeps at least this much when the panel grows. */
+const VQ_CANVAS_MIN = 120;
+/** One arrow key moves the panel's edge this far. */
+const VQ_PANEL_STEP = 16;
+
+/**
+ * Item 36: the handle on the panel's top edge. A drag writes the height straight to the panel once a frame (no
+ * React state per move), with pointer capture, so its listeners sit on the handle alone; release saves it, and
+ * every listener goes on release or unmount. Double-click resets; the arrow keys step it.
+ */
+function PanelResizer({ panel, canvas, height, onHeight }: { panel: React.RefObject<HTMLDivElement | null>; canvas: React.RefObject<HTMLDivElement | null>; height: number; onHeight(h: number | null): void }) {
+  const [dragging, setDragging] = useState(false);
+  const stop = useRef<(() => void) | null>(null);
+  const px = useRef<HTMLSpanElement>(null);
+  useEffect(() => () => stop.current?.(), []);
+  /** The most the panel may take: all but the canvas's least. */
+  const maxOf = () => {
+    const p = panel.current?.offsetHeight || height;
+    const c = canvas.current?.clientHeight ?? 0;
+    return Math.max(VQ_PANEL_MIN, p + c - VQ_CANVAS_MIN);
+  };
+  const clamp = (h: number, max: number) => Math.round(Math.min(max, Math.max(VQ_PANEL_MIN, h)));
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || stop.current) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const id = e.pointerId;
+    try {
+      el.setPointerCapture?.(id);
+    } catch {
+      // A synthetic pointer has nothing to capture.
+    }
+    const startY = e.clientY;
+    const start = panel.current?.offsetHeight || height;
+    const max = maxOf();
+    let next = start;
+    let frame = 0;
+    const paint = () => {
+      frame = 0;
+      if (panel.current) panel.current.style.height = `${next}px`;
+      el.setAttribute("aria-valuenow", String(next));
+      if (px.current) px.current.textContent = `${next} px`;
+    };
+    const move = (ev: PointerEvent) => {
+      next = clamp(start - (ev.clientY - startY), max);
+      if (!frame) frame = requestAnimationFrame(paint);
+    };
+    const cleanup = (live: boolean) => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", end);
+      el.removeEventListener("pointercancel", end);
+      el.removeEventListener("lostpointercapture", end);
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      try {
+        if (el.hasPointerCapture?.(id)) el.releasePointerCapture(id);
+      } catch {
+        // Already released.
+      }
+      stop.current = null;
+      if (live) setDragging(false);
+    };
+    function end() {
+      cleanup(true);
+      paint();
+      // A click with no move keeps what is stored (the default stays the default; a squeezed panel keeps its height).
+      if (next !== start) onHeight(next);
+      else {
+        el.setAttribute("aria-valuenow", String(height));
+        if (panel.current) panel.current.style.height = `${height}px`;
+      }
+    }
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+    el.addEventListener("lostpointercapture", end);
+    stop.current = () => cleanup(false);
+    if (px.current) px.current.textContent = `${start} px`;
+    setDragging(true);
+  };
+  // What screen readers hear: the height on screen and the most it may take. Measured when the handle is reached
+  // (focus, pointer, keys) and when the stored height changes, never on every draw of the tab.
+  const [span, setSpan] = useState<{ now: number; max: number } | null>(null);
+  const measure = () => {
+    const now = panel.current?.offsetHeight || height;
+    const max = maxOf();
+    setSpan((prev) => (prev && prev.now === now && prev.max === max ? prev : { now, max }));
+  };
+  // Once reached, a new stored height is measured again; before that the stored height is what it reports.
+  const reached = span !== null;
+  useLayoutEffect(() => {
+    if (reached) measure();
+    // Only a new stored height asks for a new measure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [height]);
+  // Held arrow keys move the panel at once and save once, on key up (or when the handle loses focus).
+  const pending = useRef<number | null>(null);
+  const commitKeys = () => {
+    const h = pending.current;
+    pending.current = null;
+    if (h !== null) onHeight(h);
+  };
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const by = e.key === "ArrowUp" ? VQ_PANEL_STEP : e.key === "ArrowDown" ? -VQ_PANEL_STEP : 0;
+    if (by === 0) return;
+    e.preventDefault();
+    // From the height on screen: a panel squeezed by a short window steps from what shows.
+    const max = maxOf();
+    const next = clamp((pending.current ?? (panel.current?.offsetHeight || height)) + by, max);
+    pending.current = next;
+    if (panel.current) panel.current.style.height = `${next}px`;
+    setSpan({ now: next, max });
+  };
+  const now = span ? Math.min(span.now, span.max) : height;
+  return (
+    <div
+      className={dragging ? "vq-resize vq-resize-dragging" : "vq-resize"}
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize the query panel"
+      aria-valuenow={now}
+      aria-valuemin={VQ_PANEL_MIN}
+      aria-valuemax={span?.max}
+      onFocus={measure}
+      onPointerEnter={measure}
+      onKeyUp={(e) => {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") commitKeys();
+      }}
+      onBlur={commitKeys}
+      tabIndex={0}
+      title="Drag to resize. Double-click resets."
+      onPointerDown={onPointerDown}
+      onDoubleClick={() => onHeight(null)}
+      onKeyDown={onKeyDown}
+    >
+      <span className="vq-resize-line" aria-hidden="true" />
+      <span className="vq-resize-pill" aria-hidden="true" />
+      <span className="vq-resize-px" ref={px} aria-hidden="true" />
+    </div>
+  );
+}
 /** Where the first card goes, and the gap to the next one. */
 const START = 48;
 const GAP = 64;
@@ -215,6 +371,8 @@ export function warningLines(preview: VqPreview | null, model: VisualQuery): str
       case "pendingPick":
         return `${name(w.table)} is left out until you pick a Foreign Key.`;
       case "leftOut":
+        // Item 37: with nothing ticked every column is selected, so the whole table is what is left out.
+        if (w.columns.length === 0) return `${name(w.table)} is left out with it.`;
         return `${listText(w.columns)} of ${name(w.table)} ${w.columns.length === 1 ? "is" : "are"} left out with it.`;
     }
   });
@@ -306,16 +464,14 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
       const d = latest.current;
       const next = f(d.model);
       if (next === d.model) return;
-      latest.current = { ...d, model: next };
+      latest.current = { ...d, model: next, ...keptSizes(d, next) };
       onChange(latest.current);
     },
     [onChange],
   );
 
-  // ---- The finder's state, read by the schema loading below ----
+  // Item 35: tables come only by dragging from the tree (or its row menu); there is no finder.
   const empty = model.tables.length === 0;
-  const [finderOpen, setFinderOpen] = useState(false);
-  const finderShown = visible && (empty || finderOpen);
 
   // ---- The schema: the tab's database, and (MySQL, SQLite) every other database a card names ----
   const [stamp, setStamp] = useState(0);
@@ -323,18 +479,10 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const others = dialect === "postgres" ? [] : [...new Set(model.tables.flatMap((t) => (t.schema && t.schema !== tabDb ? [t.schema] : [])))];
   const wanted = [...(tabDb ? [tabDb] : []), ...others];
   const wantedKey = wanted.join("\u0000");
-  // V6: every database the Connection reaches (PostgreSQL reads only its own); loaded while the finder shows.
-  const reached =
-    dialect === "postgres" ? [] : (databases ?? []).filter((d) => d !== tabDb && !(dialect === "mysql" && MYSQL_SYSTEM.has(d.toLowerCase())));
-  const reachedKey = reached.join("\u0000");
   useEffect(() => {
     if (!cid || !open) return;
     for (const db of wantedKey.split("\u0000")) if (db) void lang.schemas.ensure(cid, db);
   }, [cid, open, wantedKey, lang.schemas]);
-  useEffect(() => {
-    if (!cid || !open || !finderShown) return;
-    for (const db of reachedKey.split("\u0000")) if (db) void lang.schemas.ensure(cid, db);
-  }, [cid, open, finderShown, reachedKey, lang.schemas]);
   const loadState = useCallback(
     (db: string | null) => (cid && db ? lang.schemas.state(cid, db) : null),
     // `stamp` is the schema cache's change count.
@@ -344,7 +492,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const schema = useMemo(() => {
     const byDatabase = new Map<string, NonNullable<ReturnType<LangClient["sqlSchemaFor"]>>>();
     if (cid) {
-      for (const db of new Set([...wantedKey.split("\u0000"), ...reachedKey.split("\u0000")])) {
+      for (const db of new Set(wantedKey.split("\u0000"))) {
         const s = db ? lang.client.sqlSchemaFor(schemaKey(cid, db)) : null;
         if (s) byDatabase.set(db, s);
       }
@@ -352,9 +500,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     return mergeSchemas(dialect, tabDb, byDatabase, wantedKey.split("\u0000").filter((d) => d && d !== tabDb));
     // `stamp` is the schema cache's change count.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stamp, cid, wantedKey, reachedKey, dialect, tabDb, lang.client]);
-  /** Reached databases whose tables are still on the way, for the finder's note. */
-  const reachedLoading = reached.filter((db) => loadState(db) === "loading").length;
+  }, [stamp, cid, wantedKey, dialect, tabDb, lang.client]);
   const schemaRef = useRef(schema);
   schemaRef.current = schema;
 
@@ -534,6 +680,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         expanded: expanded.has(t.id),
         root: i === 0,
         width: doc.widths?.[t.id],
+        height: doc.heights?.[t.id],
         dangerColumns: markJoin
           ? [
               ...(markJoin.left === t.id ? markJoin.on.map((p) => p.leftColumn) : []),
@@ -546,13 +693,13 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         type: "vqCard",
         position: { x: t.x, y: t.y },
         initialWidth: data.width ?? fitWidth(data),
-        initialHeight: queryCardHeight(data),
+        initialHeight: Math.min(data.height ?? Number.POSITIVE_INFINITY, queryCardHeight(data)),
         data,
       };
     });
     // `cardState` reads the load states, which change with `schema`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, schema, loading, gone, lone, preview, expanded, dialect, tabDb, open, connection, markJoin, doc.widths]);
+  }, [model, schema, loading, gone, lone, preview, expanded, dialect, tabDb, open, connection, markJoin, doc.widths, doc.heights]);
 
   // ---- Joins: the edges, their popovers, the drag chip and J ----
   const [openJoin, setOpenJoin] = useState<{ id: string; anchor: DOMRect } | null>(null);
@@ -734,10 +881,15 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
       rename: (id, alias) => changeModel((q) => setAlias(q, id, alias)),
       setRoot: (id) => changeModel((q) => setRoot(q, id)),
       expand: (id) => setExpanded((s) => new Set([...s, id])),
-      resize: (id, width, shift) => {
-        // A left-corner drag moves the card's left edge: the card moves by as much, so its right edge stays.
-        if (shift !== 0) changeModel((q) => q.tables.reduce((m, t) => (t.id === id ? moveTable(m, id, { x: t.x + shift, y: t.y }) : m), q));
-        latest.current = { ...latest.current, widths: { ...latest.current.widths, [id]: width } };
+      resize: (id, box) => {
+        // A drag of the left or top edge moves the card too, so the far edges stay where they were.
+        const t = latest.current.model.tables.find((x) => x.id === id);
+        if (t && (t.x !== box.x || t.y !== box.y)) changeModel((q) => moveTable(q, id, { x: box.x, y: box.y }));
+        // Item 41: a card as tall as its rows keeps no height of its own.
+        const heights = { ...latest.current.heights };
+        if (box.h === null) delete heights[id];
+        else heights[id] = box.h;
+        latest.current = { ...latest.current, widths: { ...latest.current.widths, [id]: box.w }, heights };
         onChange(latest.current);
       },
       tickAll: (id, columns) => changeModel((q) => tickAll(q, id, columns)),
@@ -801,38 +953,17 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     addSelection(s, at);
   }
 
-  // ---- The finder ----
+  // ---- The canvas ----
   const canvasBox = useRef<HTMLDivElement>(null);
-  const inlineInput = useRef<HTMLInputElement>(null);
-  const finderTables = useMemo<FinderTable[]>(
-    () =>
-      schema.tables.map((t) => ({
-        schema: t.schema ?? null,
-        name: t.name,
-        kind: t.kind,
-        rows: t.kind === "table" ? rowEstimate(objectPathOf(dialect, tabDb, { schema: t.schema ?? null, name: t.name })) : null,
-      })),
-    [schema, rowEstimate, dialect, tabDb],
-  );
-  const floatingInput = useRef<HTMLInputElement>(null);
-  const loadingNote =
-    reachedLoading > 0 ? `Loading the tables of ${reachedLoading} more ${reachedLoading === 1 ? "database" : "databases"}.` : null;
-  /** The canvas takes focus back when the finder adds its first card or closes. */
+  /** Item 36: the bottom panel and its height, remembered for the user. */
+  const bottomBox = useRef<HTMLDivElement>(null);
+  const [storedPanelHeight, setPanelHeight] = useVqPanelHeight();
+  const panelHeight = storedPanelHeight ?? VQ_PANEL_DEFAULT;
+  /** The canvas takes focus back after a menu or the diagram closes. */
   const focusCanvas = useCallback(() => canvasBox.current?.querySelector<HTMLElement>(".diagram-canvas")?.focus(), []);
-  const openFinder = () => {
-    if (empty) inlineInput.current?.focus();
-    else if (finderOpen) floatingInput.current?.focus();
-    else setFinderOpen(true);
-  };
-  const closeFinder = useCallback(() => {
-    setFinderOpen(false);
-    focusCanvas();
-  }, [focusCanvas]);
-  // I2: the floating finder lives in document.body, outside the hidden pane: it closes when the tab hides,
-  // and focus never stays in a hidden tab, so its keys cannot reach it.
+  // I2: focus never stays in a hidden tab, so its keys cannot reach it.
   useEffect(() => {
     if (visible) return;
-    setFinderOpen(false);
     const el = document.activeElement;
     if (el instanceof HTMLElement && canvasBox.current?.closest(".vq-tab")?.contains(el)) el.blur();
   }, [visible]);
@@ -921,12 +1052,10 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     if (at.node !== null) return;
     const ids = latest.current.model.tables.map((t) => t.id);
     const items: MenuItem[] = [
-      { key: "add", label: "Add table...", icon: <Icon name="table" />, shortcut: addKey ?? undefined, onSelect: openFinder },
       {
         key: "all",
         label: "Select all",
         icon: <Icon name="select" />,
-        separatorBefore: true,
         disabled: ids.length === 0,
         onSelect: () => {
           flow.current?.setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
@@ -965,14 +1094,19 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     ];
     setCanvasMenu({ x: at.screen.x, y: at.screen.y, label: "Canvas actions", items });
   };
-  // Item 30: "nothing ticked yet" is said once, by the Columns tab; the SQL tab only says when it will show.
+  // Item 37: nothing ticked makes SQL (every column), so with tables on the canvas and no SQL a problem
+  // stops it, and the SQL tab says that problem.
   const emptyLines = empty
     ? ["The SQL appears here once a table is on the canvas."]
-    : sql === null
-      ? model.columns.length === 0
-        ? ["The SQL appears here once a column is ticked."]
-        : (preview?.problems ?? []).filter((p) => p.target.kind !== "table").map((p) => p.message)
-      : [];
+    : preview === null
+      ? !cid
+        ? // No Connection: no SQL is coming.
+          ["No SQL without a Connection."]
+        : // The Core is still writing it (120ms after the last change): a neutral line, never a blank pane.
+          ["Writing the SQL..."]
+      : sql === null
+        ? preview.problems.filter((p) => p.target.kind !== "table").map((p) => p.message)
+        : [];
 
   // ---- Run (Ctrl+Enter or the Run button) ----
   const [panel, setPanel] = useState<PanelTab>("columns");
@@ -1138,7 +1272,6 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   useCommandKeys(
     visible
       ? {
-          "visualQuery.addTable": openFinder,
           "visualQuery.openInEditor": openInEditor,
           "query.save": requestSave,
           "diagram.toggle": toggleDiagram,
@@ -1292,7 +1425,6 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const [limitDraft, setLimitDraft] = useState<string | null>(null);
   const runKey = hintFor(map, "query.run");
   const saveKey = hintFor(map, "query.save");
-  const addKey = hintFor(map, "visualQuery.addTable");
   const diagramKey = hintFor(map, "diagram.toggle");
   const wash = production ? " prod-wash" : "";
 
@@ -1328,12 +1460,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           {t}
         </span>
       ))}
-      {changed && (
-        <span className="vq-changed">
-          <Icon name="alert" size={14} />
-          Changed since the last run
-        </span>
-      )}
+      {/* Item 38: "Changed since the last run" says itself once, at the end of the panel's tab strip. */}
       <span className="vq-status" role="status" aria-label="Visual Query status">
         {statusText}
       </span>
@@ -1378,11 +1505,6 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         </button>
         {connection && <SafetyTag connection={connection} small />}
         <span className="editor-header-divider" aria-hidden="true" />
-        <button type="button" className="button button-small button-quiet" onClick={openFinder}>
-          <Icon name="plus" size={14} />
-          Add table
-          {addKey && <Kbd keys={addKey} />}
-        </button>
         <button type="button" className="button button-small button-quiet" disabled={model.tables.length < 2} onClick={tidy}>
           <Icon name="arrange" size={14} />
           Tidy
@@ -1516,54 +1638,18 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
                   flow.current = i;
                 }}
               >
-                {empty ? (
-                  <div className="vq-empty nodrag nopan">
+                {empty && (
+                  <div className="vq-empty">
                     <h2 className="vq-empty-title">Add tables to start</h2>
-                    <p className="vq-empty-text">Drag tables from the tree onto the canvas, or find one here. Joins fill in from Foreign Keys.</p>
-                    <Finder
-                      inline
-                      tables={finderTables}
-                      home={tabDb}
-                      inputRef={inlineInput}
-                      loadingNote={loadingNote}
-                      onAdd={(t) => {
-                        addCard(t);
-                        // The empty state (and its finder) goes: the canvas keeps the keys.
-                        focusCanvas();
-                      }}
-                      onClose={() => {}}
-                    />
+                    <p className="vq-empty-text">
+                      Drag tables from the tree onto the canvas. To find one, filter the tree. Joins fill in from Foreign Keys.
+                    </p>
                   </div>
-                ) : (
-                  <p className="vq-hint">
-                    <span>Drag a column onto another to join them.</span>
-                    <span>
-                      <Kbd keys="Shift" /> adds a condition
-                    </span>
-                    <span>
-                      <Kbd keys="Space" /> tick the column
-                    </span>
-                  </p>
                 )}
               </DiagramCanvas>
             </JoinActionsContext.Provider>
           </DropTargetContext.Provider>
         </CardActionsContext.Provider>
-        {finderOpen && visible && !empty && (
-          <Finder
-            tables={finderTables}
-            home={tabDb}
-            anchor={canvasBox.current?.getBoundingClientRect() ?? null}
-            inputRef={floatingInput}
-            loadingNote={loadingNote}
-            onAdd={(t) => {
-              // Item 29: picking a table is the finder's job done; it closes, and Add table opens it again.
-              addCard(t);
-              closeFinder();
-            }}
-            onClose={closeFinder}
-          />
-        )}
         {canvasMenu && <PlacedMenu menu={canvasMenu} onClose={() => setCanvasMenu(null)} />}
         {diagramOpen && diagramSql.current !== null && (
           <QueryDiagramPane
@@ -1588,18 +1674,32 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
         )}
       </div>
 
-      <div className="vq-bottom">
+      {/* Item 40: the hint has its own strip under the canvas, so it never covers a card. */}
+      {!empty && (
+        <p className="vq-hint-strip" role="note">
+          <span>Drag a column onto another to join them.</span>
+          <span>
+            <Kbd keys="Shift" /> adds a condition
+          </span>
+          <span>
+            <Kbd keys="Space" /> ticks the column
+          </span>
+        </p>
+      )}
+
+      <div className="vq-bottom" ref={bottomBox} style={{ height: panelHeight }}>
+        <PanelResizer panel={bottomBox} canvas={canvasBox} height={panelHeight} onHeight={setPanelHeight} />
         <section className={`vq-panel${wash}`} data-part="panel" aria-label="Query panel">
           <div className="vq-panel-head">
             <div className="vq-panel-tabs" role="tablist" aria-label="Query panel">
               {(
                 [
-                  ["columns", `Columns ${model.columns.length}`],
-                  ["filter", `Filter and sort ${model.filters.length + model.orderBy.length}`],
-                  ["results", "Results"],
-                  ["sql", "SQL"],
+                  ["columns", "Columns", model.columns.length],
+                  ["filter", "Filter and sort", model.filters.length + model.orderBy.length],
+                  ["results", "Results", 0],
+                  ["sql", "SQL", 0],
                 ] as const
-              ).map(([key, label]) => (
+              ).map(([key, label, count]) => (
                 <button
                   key={key}
                   type="button"
@@ -1611,6 +1711,13 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
                   onClick={() => setPanel(key)}
                 >
                   {label}
+                  {/* Item 38: the count is a badge after the name, hidden at 0. */}
+                  {count > 0 && (
+                    <>
+                      {" "}
+                      <span className="vq-tab-badge">{count.toLocaleString("en-US")}</span>
+                    </>
+                  )}
                 </button>
               ))}
             </div>
@@ -1634,6 +1741,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
                 onChange={changeModel}
                 limitDraft={limitDraft}
                 onLimitDraft={setLimitDraft}
+                onOpenInEditor={sql === null ? undefined : openInEditor}
               />
             )}
             {panel === "sql" && (
@@ -1665,6 +1773,8 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
               ) : (
                 <ResultsPanel
                   state={runner}
+                  // Item 40: one statement, so no "Result 1" tab; the rows line and the tools stay.
+                  single
                   // The panel already carries the Production wash.
                   production={false}
                   timeoutSecs={connection?.queryTimeoutSecs ?? null}

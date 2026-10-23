@@ -1536,11 +1536,16 @@ impl ConnectionService {
         if let Some(m) = field(&value, "flowAssistMode") {
             p.flow_assist_mode = m;
         }
+        if let Some(h) = field(&value, "vqPanelHeight") {
+            p.vq_panel_height = h;
+        }
         if p.row_height.0 != 24 {
             p.row_height = RowHeight(28);
         }
         // Retention deletes history, so 0 days must never mean "delete everything after each run".
         p.history_keep_days = p.history_keep_days.map(|d| d.max(1));
+        // The panel never goes under its tab strip; the window's own height limits it further.
+        p.vq_panel_height = p.vq_panel_height.map(|h| h.clamp(37, 4000));
         p.editor.size = p.editor.size.clamp(11, 20);
         p.editor.line_height = p.editor.line_height.clamp(16, 28);
         if !KNOWN_EDITOR_FAMILIES.contains(&p.editor.family.as_str()) {

@@ -12,7 +12,7 @@ use contura_core::model::{Cell, ConnectionId, DialectKind, SslMode};
 use contura_core::query::{ExecOutcome, HistoryFilter, Outcome, QuerySessionId};
 use contura_core::secrets::MemorySecretStore;
 use contura_core::store::AppStore;
-use contura_core::visual_query::{ColumnTypes, VisualQuery};
+use contura_core::visual_query::{ColumnTypes, SortDir, SortTarget, VisualQuery, VqSort};
 use serde_json::{Value, json};
 
 struct Live {
@@ -703,18 +703,51 @@ async fn run_returns_the_sql_it_ran(l: &Live) {
 
 async fn refusal_never_reaches_the_server(l: &Live) {
     let (mut query, types) = l.golden("late_orders_by_store");
-    query.columns.clear();
-    query.order_by.clear();
+    query.columns[0].table = "gone".into();
     let err = l
         .svc
         .run_visual_query(l.s, query, types, None)
         .await
         .unwrap_err();
     match err {
-        Error::InvalidInput(m) => assert_eq!(m, "Tick at least one column."),
+        Error::InvalidInput(m) => assert_eq!(m, "Column 1 names a table that is not in the query."),
         other => panic!("expected InvalidInput, got {other:?}"),
     }
     assert!(l.history().is_empty());
+}
+
+/// Item 37: nothing ticked runs every column of every joined table.
+async fn no_ticked_column_runs_every_column(l: &Live) {
+    let (mut query, types) = l.golden("late_orders_by_store");
+    query.columns.clear();
+    query.order_by.clear();
+    let run = l
+        .svc
+        .run_visual_query(l.s, query, types, None)
+        .await
+        .unwrap();
+    assert!(run.sql.starts_with("SELECT o.*,"), "{}", run.sql);
+}
+
+/// Item 37: `SELECT DISTINCT o.*, ...` holds every column, so a sort on any of them runs.
+async fn no_ticked_column_distinct_sorts_by_any_column(l: &Live) {
+    let (mut query, types) = l.golden("late_orders_by_store");
+    query.columns.clear();
+    query.distinct = true;
+    query.order_by = vec![VqSort {
+        target: SortTarget::Column {
+            table: "t1".into(),
+            column: "placed_at".into(),
+        },
+        dir: SortDir::Desc,
+    }];
+    let run = l
+        .svc
+        .run_visual_query(l.s, query, types, None)
+        .await
+        .unwrap();
+    assert!(run.sql.starts_with("SELECT DISTINCT o.*,"), "{}", run.sql);
+    assert!(run.sql.contains("ORDER BY o.placed_at DESC"), "{}", run.sql);
 }
 
 /// One `#[tokio::test]` per shared body, each on its own fresh database.
@@ -731,6 +764,8 @@ macro_rules! live_tests {
         live_tests!(@one $setup, history_entry_written, false, false);
         live_tests!(@one $setup, run_returns_the_sql_it_ran, false, false);
         live_tests!(@one $setup, refusal_never_reaches_the_server, false, false);
+        live_tests!(@one $setup, no_ticked_column_runs_every_column, false, false);
+        live_tests!(@one $setup, no_ticked_column_distinct_sorts_by_any_column, false, false);
     };
     (@one $setup:ident, $name:ident, $production:expr, $read_only:expr) => {
         live_tests!(@named $setup, $name, $name, $production, $read_only);

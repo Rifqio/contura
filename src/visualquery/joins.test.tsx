@@ -323,10 +323,19 @@ test("delete_in_the_popover_removes_the_join_and_the_card_becomes_a_cross_join_c
 test("two_keys_give_a_pick_that_opens_once_by_itself_and_2_picks_the_second", async () => {
   makeLang(SHOP);
   render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />);
-  await cardEl("Table orders o");
-  await userEvent.keyboard("{Control>}{Shift>}a{/Shift}{/Control}");
-  const finder = await screen.findByRole("dialog", { name: "Add table" });
-  await userEvent.type(within(finder).getByRole("searchbox", { name: "Find a table" }), "stores{Enter}");
+  const orders = await cardEl("Table orders o");
+  await within(orders).findByRole("checkbox", { name: "o.store_id" });
+  // Item 35: a table comes from the tree by drag and drop.
+  fireEvent.drop(document.querySelector(".diagram-canvas") as HTMLElement, {
+    dataTransfer: {
+      types: ["application/x-contura-object"],
+      getData: (t: string) =>
+        t === "application/x-contura-object" ? JSON.stringify({ connectionId: "c1", kind: "table", path: { database: "shop", schema: null, name: "stores" } }) : "",
+      dropEffect: "none",
+    },
+    clientX: 300,
+    clientY: 200,
+  });
   const pop = await screen.findByRole("dialog", { name: "orders links to stores twice" });
   expect(within(pop).getByText("Pick the Foreign Key this Join uses. stores stays out of the SQL until you pick.")).toBeTruthy();
   const choices = within(pop).getAllByRole("button");

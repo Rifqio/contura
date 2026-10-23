@@ -18,12 +18,12 @@ test("rows_carry_marks_with_words_and_details", () => {
   render(<Harness />);
   const fax = screen.getByRole("treeitem", { name: /fax/ });
   expect(fax.getAttribute("title")).toBe("fax, removed");
-  expect(within(fax).getByText("removed")).toBeTruthy();
+  expect(fax.querySelector(".compare-trow-badge")?.textContent).toBe("R");
   expect(within(fax).getByText("text")).toBeTruthy();
   expect(fax.querySelector(".compare-mark-removed")).not.toBeNull();
   const total = screen.getByRole("treeitem", { name: /total/ });
   expect(within(total).getByText("numeric(10,2) to numeric(12,2)")).toBeTruthy();
-  expect(within(total).getByText("changed")).toBeTruthy();
+  expect(total.querySelector(".compare-trow-badge")?.textContent).toBe("C");
   // Guides as the object tree draws them.
   expect(fax.querySelector(".tree-stub")).not.toBeNull();
   // Folders and Not compared keep their counts.
@@ -39,7 +39,7 @@ test("keys_move_expand_and_collapse", () => {
   expect(selectedName()).toBe("fax, removed");
   fireEvent.keyDown(tree, { key: "ArrowUp" });
   fireEvent.keyDown(tree, { key: "ArrowUp" });
-  expect(selectedName()).toBe("invoices, changed");
+  expect(selectedName()).toBe("invoices, changed, 4 changes inside");
   // Left collapses an open table, then goes to its parent.
   fireEvent.keyDown(tree, { key: "ArrowLeft" });
   expect(screen.queryByRole("treeitem", { name: /^fax/ })).toBeNull();
@@ -50,7 +50,7 @@ test("keys_move_expand_and_collapse", () => {
   fireEvent.keyDown(tree, { key: "ArrowRight" });
   expect(selectedName()).toBe("total, changed");
   fireEvent.keyDown(tree, { key: "ArrowLeft" });
-  expect(selectedName()).toBe("invoices, changed");
+  expect(selectedName()).toBe("invoices, changed, 4 changes inside");
 });
 
 test("a_300_table_compare_draws_only_the_rows_on_screen", () => {
@@ -74,3 +74,39 @@ test("a_300_table_compare_draws_only_the_rows_on_screen", () => {
   expect(tree.scrollTop).toBeGreaterThan(0);
   expect(screen.getAllByRole("treeitem").length).toBeLessThanOrEqual(60);
 }, 30_000);
+
+test("item_43_rows_take_git_decoration_colours_and_a_one_letter_badge", () => {
+  render(<Harness />);
+  const fax = screen.getByRole("treeitem", { name: /^fax/ });
+  // The name and the mark carry the status class; the word is gone, a letter sits at the right edge.
+  expect(fax.querySelector(".compare-trow-name")!.classList.contains("diff-removed")).toBe(true);
+  expect(fax.querySelector(".compare-mark")!.classList.contains("compare-mark-removed")).toBe(true);
+  expect(within(fax).queryByText("removed")).toBeNull();
+  const badge = fax.querySelector(".compare-trow-badge")!;
+  expect(badge.textContent).toBe("R");
+  expect(badge.classList.contains("diff-removed")).toBe(true);
+  expect(badge.getAttribute("aria-hidden")).toBe("true");
+  const due = screen.getByRole("treeitem", { name: /^due_on/ });
+  expect(due.querySelector(".compare-trow-badge")!.textContent).toBe("A");
+  expect(due.querySelector(".compare-trow-name")!.classList.contains("diff-added")).toBe(true);
+  const total = screen.getByRole("treeitem", { name: /^total/ });
+  expect(total.querySelector(".compare-trow-badge")!.textContent).toBe("C");
+  expect(total.querySelector(".compare-trow-name")!.classList.contains("diff-changed")).toBe(true);
+  // No colour is set per row in an inline style: classes only.
+  for (const r of screen.getAllByRole("treeitem")) expect(r.getAttribute("style") ?? "").not.toMatch(/color/);
+});
+
+test("item_43_a_parent_that_holds_changes_is_amber_with_its_count", () => {
+  render(<Harness />);
+  const inv = screen.getByRole("treeitem", { name: "invoices, changed, 4 changes inside" });
+  const badge = inv.querySelector(".compare-trow-badge")!;
+  expect(badge.textContent).toBe("4");
+  expect(badge.classList.contains("compare-trow-count")).toBe(true);
+  expect(badge.classList.contains("diff-changed")).toBe(true);
+  expect(inv.querySelector(".compare-trow-name")!.classList.contains("diff-changed")).toBe(true);
+  // The Tables folder stays neutral with its count.
+  const tables = screen.getByRole("treeitem", { name: "Tables" });
+  expect(tables.querySelector(".compare-trow-badge")).toBeNull();
+  expect(tables.querySelector(".compare-trow-name")!.className).not.toMatch(/diff-/);
+  expect(within(tables).getByText("4").classList.contains("tree-count")).toBe(true);
+});

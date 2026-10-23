@@ -86,6 +86,15 @@ export function applyRebind(o: KeymapOverrides, map: Keymap, id: CommandId, keys
   return next;
 }
 
+/**
+ * Only the overrides of commands that exist. A stored override for a removed command (such as
+ * `visualQuery.addTable`, item 35) binds nothing, so it is dropped and never counts as a change.
+ */
+export function knownOverrides(o: KeymapOverrides): KeymapOverrides {
+  const ids = new Set<string>(COMMANDS.map((c) => c.id));
+  return Object.fromEntries(Object.entries(o).filter(([id]) => ids.has(id)));
+}
+
 /** Back to the command's default keys. */
 export function resetCommand(o: KeymapOverrides, id: CommandId): KeymapOverrides {
   const next = { ...o };

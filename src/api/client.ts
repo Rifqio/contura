@@ -789,6 +789,8 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
       return planChangedText(e.message.connection);
     case "syncCancelled":
       return syncCancelledText(e.message.applied, e.message.total);
+    case "update":
+      return e.message;
     default: {
       // A kind this UI does not know yet: still show what the Core said.
       const { kind, message } = e as { kind: string; message?: unknown };

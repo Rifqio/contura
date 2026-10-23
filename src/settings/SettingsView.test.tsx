@@ -62,6 +62,7 @@ test("tab_has_search_nav_and_heading", async () => {
     "Keymap",
     "AI assistant",
     "Data folder",
+    "Updates",
     "About Contura",
   ]);
   expect(within(nav()).getByRole("button", { name: "Appearance" }).getAttribute("aria-current")).toBe("page");
@@ -126,7 +127,7 @@ test("two_columns_in_the_design_order", async () => {
   expect(columns).toHaveLength(2);
   const names = (el: Element) => within(el as HTMLElement).getAllByRole("region").map((r) => r.getAttribute("aria-label") ?? r.querySelector("h2")?.textContent);
   expect(names(columns[0])).toEqual(["Appearance", "Editor", "Keymap"]);
-  expect(names(columns[1])).toEqual(["AI assistant", "Data folder"]);
+  expect(names(columns[1])).toEqual(["AI assistant", "Data folder", "Updates"]);
   // About sits below both columns.
   const about = region("About Contura")!;
   expect(about.closest(".settings-cols")).toBeNull();

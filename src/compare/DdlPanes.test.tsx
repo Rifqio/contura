@@ -42,3 +42,21 @@ test("the_selected_column_gets_the_focus_bar", () => {
   const { container } = setup(false, "total");
   expect(container.querySelectorAll(".compare-dl-foc")).toHaveLength(2);
 });
+
+test("item_44_each_pane_names_its_database_and_schema_beside_the_connection", () => {
+  render(
+    <DdlPanes
+      pair={PAIR}
+      dialect="mysql"
+      source={{ name: "Laragon MySQL", scope: ["hope-4"] }}
+      target={{ name: "Laragon MySQL", scope: ["hope"] }}
+      production={false}
+      focus={null}
+    />,
+  );
+  const head = (role: string) => screen.getByRole("region", { name: new RegExp(`^${role} DDL`) }).querySelector(".compare-pane-head") as HTMLElement;
+  expect(head("Source").textContent).toBe("Laragon MySQL·hope-4Source");
+  expect(head("Target").textContent).toBe("Laragon MySQL·hopeTarget");
+  expect(head("Source").querySelector(".compare-pane-scope")?.classList.contains("mono")).toBe(true);
+  expect(screen.getByRole("region", { name: "Source DDL, Laragon MySQL, hope-4" })).toBeTruthy();
+});

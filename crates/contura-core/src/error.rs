@@ -112,6 +112,16 @@ pub enum Error {
     /// enum values it committed first).
     #[error("Apply was cancelled after {applied} of {total} statements were applied")]
     SyncCancelled { applied: usize, total: usize },
+    /// One-click updates: the sentence to show, as `UpdateError` words it.
+    #[error("{0}")]
+    Update(#[serde(serialize_with = "as_text")] crate::update::UpdateError),
+}
+
+fn as_text<S: serde::Serializer>(
+    e: &crate::update::UpdateError,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    s.collect_str(e)
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

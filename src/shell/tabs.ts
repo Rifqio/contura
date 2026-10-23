@@ -9,7 +9,7 @@ import { objectKey } from "../objectPath";
 /** Where the window's Connections come from: a Group, or the Ungrouped Connections. */
 export type Place = { kind: "group"; groupId: GroupId } | { kind: "ungrouped" };
 
-export type SettingsSection = "appearance" | "editor" | "keymap" | "ai" | "dataFolder" | "about";
+export type SettingsSection = "appearance" | "editor" | "keymap" | "ai" | "dataFolder" | "updates" | "about";
 
 /** A table, view, routine or trigger chosen in the object tree. */
 export interface Selection {
@@ -38,6 +38,8 @@ export type VisualTabDoc = {
   savedJson: string | null;
   /** Card widths dragged on the canvas, by table id (item 25); kept with the draft, not in the saved query. */
   widths?: Record<string, number>;
+  /** Card heights dragged shorter than their rows (item 41), by table id; kept with the draft like the widths. */
+  heights?: Record<string, number>;
 };
 
 /**

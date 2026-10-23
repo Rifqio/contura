@@ -15,6 +15,9 @@ export type KindNodeData = {
   name: string;
   kind: DrawnKind;
   look: NodeLook;
+  /** The size its kind and words lay it out at, before any resize (plain numbers, so equal data stays equal). */
+  naturalW?: number;
+  naturalH?: number;
   rows?: string[];
   text?: string;
   depth?: number;
@@ -23,7 +26,7 @@ export type KindNodeData = {
   /** Item 21: resized on the canvas. */
   sized?: { w: number; h: number };
   /** A participant's activation bars, by message row. */
-  activations?: { from: number; to: number }[];
+  activations?: { top: number; height: number }[];
   state?: NodeState;
 };
 
@@ -127,7 +130,7 @@ function KindInside({ d }: { d: KindNodeData }) {
               key={i}
               className="fkind-activation"
               aria-hidden="true"
-              style={{ top: SEQ_HEAD + a.from * SEQ_ROW + 6, height: Math.max(1, a.to - a.from + 1) * SEQ_ROW - 12 }}
+              style={{ top: a.top, height: a.height }}
             />
           ))}
         </>
@@ -176,13 +179,19 @@ export function KindNode({ d, selected }: { d: KindNodeData; selected: boolean }
   );
 }
 
-/** A sequence frame (`loop retry 3 times { ... }`): a box over its rows with its label in a tab. */
+/** A sequence frame (`loop retry 3 times { ... }`): a box over its rows; its label is the SeqFrameTab above it. */
 export const SeqFrame = memo(function SeqFrame({ data }: NodeProps) {
   const d = data as { label: string; depth: number };
+  return <div className="fkind-frame" role="group" aria-label={`Frame ${d.label}`} />;
+});
+
+/** A frame's label in its tab, drawn over the participants so their lifelines and activation bars pass under it. */
+export const SeqFrameTab = memo(function SeqFrameTab({ data }: NodeProps) {
+  const d = data as { label: string };
   return (
-    <div className="fkind-frame" role="group" aria-label={`Frame ${d.label}`}>
-      <span className="fkind-frame-tab">{d.label}</span>
-    </div>
+    <span className="fkind-frame-tab" aria-hidden="true">
+      {d.label}
+    </span>
   );
 });
 
@@ -208,7 +217,7 @@ export const TimeSection = memo(function TimeSection({ data }: NodeProps) {
   );
 });
 
-export type SeqEdgeData = { row: number; label?: string; reply: boolean };
+export type SeqEdgeData = { row: number; y?: number; label?: string; reply: boolean };
 
 /** A sequence message: a straight line from lifeline to lifeline along its row; a message to itself loops out right. */
 export const SeqEdge = memo(function SeqEdge(p: EdgeProps) {
@@ -219,7 +228,7 @@ export const SeqEdge = memo(function SeqEdge(p: EdgeProps) {
   const w = (n: typeof a) => n.measured.width ?? n.width ?? n.initialWidth ?? 0;
   const x1 = a.internals.positionAbsolute.x + w(a) / 2;
   const x2 = b.internals.positionAbsolute.x + w(b) / 2;
-  const y = a.internals.positionAbsolute.y + SEQ_HEAD + (d.row + 0.5) * SEQ_ROW;
+  const y = a.internals.positionAbsolute.y + (d.y ?? SEQ_HEAD + (d.row + 0.5) * SEQ_ROW);
   const self = p.source === p.target;
   const path = self ? `M ${x1} ${y - 8} H ${x1 + 40} V ${y + 8} H ${x1}` : `M ${x1} ${y} H ${x2}`;
   const mid = self ? { x: x1 + 48, y: y - 8 } : { x: (x1 + x2) / 2, y: y - 10 };

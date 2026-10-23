@@ -448,7 +448,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
                 </h3>
                 <div className="export-step-body">
                   <Segmented label="Format" value={format} onChange={(f) => changeFormat(f)} options={FORMATS} />
-                  <span className="export-hint">{formatHint(format, sheetName, connection.dialect)}</span>
+                  <span className="export-hint">{formatHint(format, sheetName, connection.dialect, opts.jsonLayout)}</span>
                 </div>
               </section>
 
@@ -732,8 +732,8 @@ function MoreOptions({ format, opts, set, onLayout }: MoreProps) {
               value={opts.jsonLayout}
               onChange={onLayout}
               options={[
-                { value: "lines", label: "One object per line, .ndjson" },
                 { value: "array", label: "Array, .json" },
+                { value: "lines", label: "JSON Lines, .jsonl" },
               ]}
             />
           </div>

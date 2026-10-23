@@ -1,6 +1,6 @@
 // A Visual Query card on the engine's frame: tick columns, see keys and Joins, rename the alias.
-import type { NodeProps } from "@xyflow/react";
-import { createContext, type KeyboardEvent, useContext, useRef, useState } from "react";
+import { type NodeProps, useUpdateNodeInternals } from "@xyflow/react";
+import { createContext, type KeyboardEvent, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Aggregate, VqTable } from "../api/types";
 import Icon from "../components/Icon";
@@ -11,6 +11,31 @@ import { CARD_ROW, CARD_WIDTH, cardHeight } from "../diagram/metrics";
 
 /** Over this many columns a card shows only ticked, key and joined ones until it is expanded. */
 export const MANY_COLUMNS = 12;
+/** Item 41: a card shorter than its rows draws only the rows in view (and the joined ones) past this many. */
+export const WINDOW_ROWS = 40;
+/** Rows drawn above and below the ones in view. */
+const OVERSCAN = 6;
+
+/**
+ * The rows a scrolling card draws: those in view around `first`, plus every joined row (its port keeps the Join's
+ * line), in order, with the gaps between them as row counts.
+ */
+export function windowRows(count: number, first: number, visible: number, keep: ReadonlySet<number>): ({ index: number } | { gap: number; at: number })[] {
+  const lo = Math.max(0, first - OVERSCAN);
+  const hi = Math.min(count, first + visible + OVERSCAN);
+  const want = new Set<number>();
+  for (let i = lo; i < hi; i++) want.add(i);
+  for (const i of keep) if (i >= 0 && i < count) want.add(i);
+  const out: ({ index: number } | { gap: number; at: number })[] = [];
+  let at = 0;
+  for (const i of [...want].sort((a, b) => a - b)) {
+    if (i > at) out.push({ gap: i - at, at });
+    out.push({ index: i });
+    at = i + 1;
+  }
+  if (count > at) out.push({ gap: count - at, at });
+  return out;
+}
 
 export interface CardColumn {
   name: string;
@@ -43,6 +68,8 @@ export type QueryCardData = {
   root: boolean;
   /** The card's width when it was dragged (item 25), else the engine's 216 px. */
   width?: number;
+  /** Item 41: the card's height when it was dragged shorter than its rows, which then scroll inside it. */
+  height?: number;
   /** Columns of a Join the server's error points into, marked danger until the next change. */
   dangerColumns?: string[];
 };
@@ -61,8 +88,8 @@ export interface CardActions {
   expand(tableId: string): void;
   /** Loads the card's schema again after it failed. */
   retry(tableId: string): void;
-  /** A width drag ended: the card's new width and how far its left edge moved. */
-  resize(tableId: string, width: number, shift: number): void;
+  /** A resize ended (board B2): the card's new box; `h` is null when every row shows. */
+  resize(tableId: string, box: { x: number; y: number; w: number; h: number | null }): void;
   /** Ticks every column of the card not ticked yet, in the card's order. */
   tickAll(tableId: string, columns: string[]): void;
   /** Unticks every column of the card. */
@@ -234,11 +261,30 @@ function CardMenu({
   );
 }
 
-export default function QueryCard({ data, selected }: NodeProps & { data: QueryCardData }) {
+export default function QueryCard({ id, data, selected }: NodeProps & { data: QueryCardData }) {
   const act = useContext(CardActionsContext);
   const drop = useContext(DropTargetContext);
   const { table, kind, ticked, joined, state, lone, problems } = data;
   const { rows, more } = shownColumns(data);
+  const full = queryCardHeight(data);
+  const scrolls = data.height !== undefined && data.height < full;
+  // Item 41: a long card shorter than its rows draws only the rows in view; the window moves a row at a time.
+  const windowed = scrolls && rows.length > WINDOW_ROWS;
+  const [first, setFirst] = useState(0);
+  const updateInternals = useUpdateNodeInternals();
+  const frame = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  // Once a frame while the rows scroll: the Join lines find their ports again, and the window follows.
+  const onRowsScroll = (list: HTMLUListElement) => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      list.classList.toggle("is-scrolled", list.scrollTop > 0);
+      list.classList.toggle("is-at-end", list.scrollTop + list.clientHeight >= list.scrollHeight - 1);
+      if (windowed) setFirst(Math.floor(list.scrollTop / CARD_ROW));
+      updateInternals(id);
+    });
+  };
   const tone = state === "missing" ? "danger" : lone ? "warning" : undefined;
   const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
 
@@ -294,54 +340,61 @@ export default function QueryCard({ data, selected }: NodeProps & { data: QueryC
     </>
   );
 
+  const rowOf = (c: CardColumn) => {
+    const on = c.name in ticked;
+    const agg = ticked[c.name] ?? null;
+    const link = joined.includes(c.name);
+    const target = drop?.table === table.id && drop.column === c.name ? drop : null;
+    return (
+      <li
+        key={c.name}
+        className={[
+          "table-card-column",
+          "vq-card-row",
+          on && "vq-card-row-on",
+          state !== "ok" && state !== "loading" && "vq-card-row-faded",
+          target && "vq-card-row-target",
+          target?.warn && "vq-card-row-target-warn",
+          data.dangerColumns?.includes(c.name) && "vq-card-row-danger",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        tabIndex={0}
+        data-column={c.name}
+        onKeyDown={onRowKey(c.name)}
+      >
+        <Ports column={c.name} />
+        <input
+          type="checkbox"
+          className="vq-card-check nodrag"
+          // The row is the one tab stop; Space on it ticks.
+          tabIndex={-1}
+          aria-label={`${table.alias}.${c.name}`}
+          checked={on}
+          onChange={() => act?.toggle(table.id, c.name)}
+        />
+        <span className="vq-card-mark" aria-hidden="true">
+          {c.pk ? <Icon name="key" size={14} /> : link ? <Icon name="link" size={14} /> : null}
+        </span>
+        <span className="vq-card-col">{c.name}</span>
+        {agg ? (
+          <span className="vq-card-agg">{AGG_TAG[agg]}</span>
+        ) : (
+          // A closed Connection shows no types: they may have changed since.
+          <span className="vq-card-type">{state === "closed" ? "" : (c.type ?? "")}</span>
+        )}
+      </li>
+    );
+  };
+  const visible = Math.ceil((data.height ?? full) / CARD_ROW);
+  const keep = new Set(rows.flatMap((c, i) => (joined.includes(c.name) ? [i] : [])));
   const lines = (
     <>
-      {rows.map((c) => {
-        const on = c.name in ticked;
-        const agg = ticked[c.name] ?? null;
-        const link = joined.includes(c.name);
-        const target = drop?.table === table.id && drop.column === c.name ? drop : null;
-        return (
-          <li
-            key={c.name}
-            className={[
-              "table-card-column",
-              "vq-card-row",
-              on && "vq-card-row-on",
-              state !== "ok" && state !== "loading" && "vq-card-row-faded",
-              target && "vq-card-row-target",
-              target?.warn && "vq-card-row-target-warn",
-              data.dangerColumns?.includes(c.name) && "vq-card-row-danger",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            tabIndex={0}
-            data-column={c.name}
-            onKeyDown={onRowKey(c.name)}
-          >
-            <Ports column={c.name} />
-            <input
-              type="checkbox"
-              className="vq-card-check nodrag"
-              // The row is the one tab stop; Space on it ticks.
-              tabIndex={-1}
-              aria-label={`${table.alias}.${c.name}`}
-              checked={on}
-              onChange={() => act?.toggle(table.id, c.name)}
-            />
-            <span className="vq-card-mark" aria-hidden="true">
-              {c.pk ? <Icon name="key" size={14} /> : link ? <Icon name="link" size={14} /> : null}
-            </span>
-            <span className="vq-card-col">{c.name}</span>
-            {agg ? (
-              <span className="vq-card-agg">{AGG_TAG[agg]}</span>
-            ) : (
-              // A closed Connection shows no types: they may have changed since.
-              <span className="vq-card-type">{state === "closed" ? "" : (c.type ?? "")}</span>
-            )}
-          </li>
-        );
-      })}
+      {windowed
+        ? windowRows(rows.length, first, visible, keep).map((r) =>
+            "gap" in r ? <li key={`gap${r.at}`} className="vq-card-gap" aria-hidden="true" style={{ height: r.gap * CARD_ROW }} /> : rowOf(rows[r.index]),
+          )
+        : rows.map(rowOf)}
       {more > 0 && (
         <li className="vq-card-more">
           <button type="button" className="link-button nodrag" onClick={() => act?.expand(table.id)}>
@@ -389,7 +442,10 @@ export default function QueryCard({ data, selected }: NodeProps & { data: QueryC
         count={data.columns.length}
         selected={!!selected}
         width={data.width ?? fitWidth(data)}
-        onResize={(w, shift) => act?.resize(table.id, w, shift)}
+        height={data.height}
+        fullHeight={full}
+        onRowsScroll={scrolls ? onRowsScroll : undefined}
+        onResize={(box) => act?.resize(table.id, { ...box, h: box.h >= full ? null : box.h })}
         tone={tone}
         dashed={tone === "warning"}
       />

@@ -49,11 +49,17 @@ test("item_21_resized_sizes_round_trip_and_bad_ones_are_dropped", () => {
   expect(out.sizes.B).toEqual({ w: 200, h: 80 });
 });
 
-test("item_21_a_corner_drag_keeps_the_far_corner_and_a_diamond_its_shape", async () => {
-  const { resizedBox } = await import("./flowNodes");
+test("item_21_51_a_drag_keeps_the_far_edge_a_diamond_its_shape_and_the_node_its_limits", async () => {
+  const { NODE_LIMITS, nodeLimits } = await import("./flowNodes");
+  const { resizeBox } = await import("../diagram/resize");
   const start = { x: 100, y: 100, w: 150, h: 50 };
-  expect(resizedBox(start, "se", 30, 10, { w: 56, h: 24 }, false)).toEqual({ x: 100, y: 100, w: 180, h: 60 });
-  expect(resizedBox(start, "nw", -20, -10, { w: 56, h: 24 }, false)).toEqual({ x: 80, y: 90, w: 170, h: 60 });
-  expect(resizedBox(start, "ne", -500, 0, { w: 56, h: 24 }, false).w).toBe(56);
-  expect(resizedBox({ x: 0, y: 0, w: 116, h: 116 }, "se", 20, 0, { w: 56, h: 24 }, true)).toEqual({ x: 0, y: 0, w: 136, h: 136 });
+  expect(resizeBox(start, "se", 30, 10, NODE_LIMITS)).toEqual({ x: 100, y: 100, w: 180, h: 60 });
+  expect(resizeBox(start, "nw", -20, -10, NODE_LIMITS)).toEqual({ x: 80, y: 90, w: 170, h: 60 });
+  // Board B2: a usual node is dragged between 96 x 44 and 320 x 200.
+  expect(resizeBox(start, "ne", -500, 0, NODE_LIMITS).w).toBe(96);
+  expect(resizeBox(start, "se", 900, 900, NODE_LIMITS)).toMatchObject({ w: 320, h: 200 });
+  expect(resizeBox({ x: 0, y: 0, w: 116, h: 116 }, "se", 20, 0, NODE_LIMITS, true)).toEqual({ x: 0, y: 0, w: 136, h: 136 });
+  // A start dot and a fork bar may stay small.
+  expect(nodeLimits("stateStart").minW).toBe(16);
+  expect(nodeLimits("fork").minH).toBe(6);
 });
