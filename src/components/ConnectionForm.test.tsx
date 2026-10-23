@@ -856,3 +856,33 @@ test("never_hides_sync_controls", async () => {
   await chooseAi("Never send anything");
   expect(syncSelect()).toBeNull();
 });
+
+test("without a keyring service the password field says it is kept until Contura closes", async () => {
+  routeInvoke({ secret_store_kind: () => "missing" });
+  renderNew();
+  const note = await screen.findByText(
+    "No keyring service was found, so passwords are kept only until Contura closes. Install GNOME Keyring or KeePassXC to save them.",
+  );
+  expect(note.getAttribute("role")).toBe("note");
+  expect(screen.getByLabelText("Password").getAttribute("aria-describedby")).toBe(note.id);
+});
+
+test("a keyring that did not answer is named as such under the password field", async () => {
+  routeInvoke({ secret_store_kind: () => "noAnswer" });
+  renderNew();
+  expect(
+    await screen.findByText(
+      "The keyring did not answer, so passwords are kept only until Contura closes. Restart Contura to try the keyring again.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/No keyring service was found/)).toBeNull();
+});
+
+test("with the keyring the password field shows no session notice", async () => {
+  routeInvoke({ secret_store_kind: () => "keyring" });
+  renderNew();
+  await waitFor(() => expect(callsTo("secret_store_kind")).toHaveLength(1));
+  await Promise.resolve();
+  expect(screen.queryByText(/kept only until Contura closes/)).toBeNull();
+  expect(screen.getByLabelText("Password").getAttribute("aria-describedby")).toBeNull();
+});

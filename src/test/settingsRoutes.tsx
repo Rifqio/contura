@@ -113,8 +113,9 @@ export function settingsRoutes(
     ai_clear_all: () => undefined,
     data_folder_info: () => FOLDER,
     open_data_folder: () => undefined,
+    secret_store_kind: () => "keyring",
     clear_query_history: () => undefined,
-    "plugin:app|version": () => "0.7.0",
+    "plugin:app|version": () => "1.0.0",
     ...over,
   });
   return store;

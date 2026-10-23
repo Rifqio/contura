@@ -1,6 +1,7 @@
 [package]
 name = "contura"
-version = "0.7.0"
+version = "1.0.0"
+license = "MIT"
 description = "Contura: a portable database client"
 edition = "2024"
 

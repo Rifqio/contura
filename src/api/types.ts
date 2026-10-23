@@ -867,6 +867,12 @@ export interface SavedQueryRun {
   elapsedMs: number;
 }
 
+/**
+ * Where secrets go for this run (Core `SecretStoreKind`): the OS keyring, or memory until Contura
+ * closes because no keyring service was found (`missing`) or it did not answer in time (`noAnswer`).
+ */
+export type SecretStoreKind = "keyring" | "missing" | "noAnswer";
+
 export interface DataFolderInfo {
   path: string | null;
   connections: number;

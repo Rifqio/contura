@@ -1,5 +1,9 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
+
+use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::model::ConnectionId;
@@ -15,6 +19,8 @@ pub trait SecretStore: Send + Sync {
 }
 
 const SERVICE: &str = "Contura";
+/// An account no secret is ever saved under: reading it shows whether the store answers.
+const PROBE_ACCOUNT: &str = "Contura keyring check";
 /// The service name used before the rename; read only by the startup migration.
 const LEGACY_SERVICE: &str = "DB View";
 
@@ -38,6 +44,14 @@ impl KeyringSecretStore {
         Ok(Self {
             service: LEGACY_SERVICE,
         })
+    }
+
+    /// Opens the store and reads one account that never exists, so a keyring service that is
+    /// missing or not answering shows up here rather than at the first save.
+    pub fn new_checked() -> Result<Self> {
+        let store = Self::new()?;
+        store.get_named(PROBE_ACCOUNT)?;
+        Ok(store)
     }
 
     fn entry(&self, account: &str) -> Result<keyring::Entry> {
@@ -77,6 +91,144 @@ impl SecretStore for KeyringSecretStore {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(Error::Secret(e.to_string())),
         }
+    }
+}
+
+/// Where secrets go for this run of Contura.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SecretStoreKind {
+    /// The OS keyring: secrets are kept across restarts.
+    Keyring,
+    /// No keyring service was found, or it refused: secrets are kept in memory until
+    /// Contura closes.
+    Missing,
+    /// The keyring service did not answer within `KEYRING_PROBE_LIMIT`: secrets are kept
+    /// in memory until Contura closes.
+    NoAnswer,
+}
+
+impl SecretStoreKind {
+    /// Whether secrets are kept only until Contura closes.
+    pub fn is_session(self) -> bool {
+        self != Self::Keyring
+    }
+}
+
+/// How long start-up waits for the keyring service to answer before it keeps secrets
+/// for the session only.
+pub const KEYRING_PROBE_LIMIT: Duration = Duration::from_secs(3);
+
+/// The store a run of Contura uses, and which kind it is.
+#[derive(Clone)]
+pub struct ChosenSecretStore {
+    pub store: Arc<dyn SecretStore>,
+    pub kind: SecretStoreKind,
+}
+
+impl ChosenSecretStore {
+    /// A store in memory, for a run without a keyring; `kind` says why.
+    pub fn session(kind: SecretStoreKind) -> Self {
+        Self {
+            store: Arc::new(MemorySecretStore::new()),
+            kind,
+        }
+    }
+}
+
+/// Runs `probe` (opening the keyring) on its own thread and waits at most `limit` for it.
+/// An error, a probe that does not finish in time, or a thread that cannot start gives a
+/// session-only store, so a missing or silent keyring service never stops Contura from
+/// starting. A probe still running after `limit` is left to finish on its own.
+pub fn choose_secret_store<S, P>(probe: P, limit: Duration) -> ChosenSecretStore
+where
+    S: SecretStore + 'static,
+    P: FnOnce() -> Result<S> + Send + 'static,
+{
+    let (tx, rx) = mpsc::sync_channel(1);
+    let started = std::thread::Builder::new()
+        .name("keyring-probe".into())
+        .spawn(move || {
+            let _ = tx.send(probe());
+        });
+    if started.is_err() {
+        return ChosenSecretStore::session(SecretStoreKind::Missing);
+    }
+    match rx.recv_timeout(limit) {
+        Ok(Ok(store)) => ChosenSecretStore {
+            store: Arc::new(store),
+            kind: SecretStoreKind::Keyring,
+        },
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            ChosenSecretStore::session(SecretStoreKind::NoAnswer)
+        }
+        // An error, or a probe that ended without an answer (a panic).
+        Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+            ChosenSecretStore::session(SecretStoreKind::Missing)
+        }
+    }
+}
+
+/// A store chosen on another thread, so the window can open while the keyring is checked.
+/// Each call waits for the choice; `choose_secret_store` bounds that wait.
+pub struct DeferredSecretStore {
+    chosen: Arc<OnceLock<ChosenSecretStore>>,
+}
+
+impl DeferredSecretStore {
+    /// Runs `choose` on its own thread. If that thread cannot start, secrets are kept for
+    /// the session.
+    pub fn spawn(choose: impl FnOnce() -> ChosenSecretStore + Send + 'static) -> Self {
+        let chosen = Arc::new(OnceLock::new());
+        let slot = chosen.clone();
+        let started = std::thread::Builder::new()
+            .name("secret-store".into())
+            .spawn(move || {
+                let _ = slot.set(choose());
+            });
+        if started.is_err() {
+            let _ = chosen.set(ChosenSecretStore::session(SecretStoreKind::Missing));
+        }
+        Self { chosen }
+    }
+
+    /// A store already chosen.
+    pub fn ready(chosen: ChosenSecretStore) -> Self {
+        let slot = OnceLock::new();
+        let _ = slot.set(chosen);
+        Self {
+            chosen: Arc::new(slot),
+        }
+    }
+
+    /// Which store this run uses; waits for the choice.
+    pub fn kind(&self) -> SecretStoreKind {
+        self.chosen.wait().kind
+    }
+
+    fn store(&self) -> &dyn SecretStore {
+        self.chosen.wait().store.as_ref()
+    }
+}
+
+impl SecretStore for DeferredSecretStore {
+    fn get(&self, id: ConnectionId) -> Result<Option<String>> {
+        self.store().get(id)
+    }
+    fn set(&self, id: ConnectionId, secret: &str) -> Result<()> {
+        self.store().set(id, secret)
+    }
+    fn delete(&self, id: ConnectionId) -> Result<()> {
+        self.store().delete(id)
+    }
+    fn get_named(&self, name: &str) -> Result<Option<String>> {
+        self.store().get_named(name)
+    }
+    fn set_named(&self, name: &str, secret: &str) -> Result<()> {
+        self.store().set_named(name, secret)
+    }
+    fn delete_named(&self, name: &str) -> Result<()> {
+        self.store().delete_named(name)
     }
 }
 
@@ -273,6 +425,110 @@ mod tests {
     fn delete_missing_is_ok() {
         let store = MemorySecretStore::new();
         store.delete(ConnectionId::new_v4()).unwrap();
+    }
+
+    #[test]
+    fn a_keyring_error_keeps_secrets_for_the_session() {
+        let chosen = choose_secret_store(
+            || -> Result<MemorySecretStore> { Err(Error::Secret("ServiceUnknown".into())) },
+            Duration::from_secs(3),
+        );
+        assert_eq!(chosen.kind, SecretStoreKind::Missing);
+        assert!(chosen.kind.is_session());
+        chosen.store.set_named("AI/groq", "k1").unwrap();
+        assert_eq!(
+            chosen.store.get_named("AI/groq").unwrap().as_deref(),
+            Some("k1")
+        );
+    }
+
+    #[test]
+    fn a_silent_keyring_keeps_secrets_for_the_session_after_the_limit() {
+        let started = std::time::Instant::now();
+        let chosen = choose_secret_store(
+            || {
+                std::thread::sleep(Duration::from_secs(5));
+                Ok(MemorySecretStore::new())
+            },
+            Duration::from_millis(100),
+        );
+        assert_eq!(chosen.kind, SecretStoreKind::NoAnswer);
+        assert!(chosen.kind.is_session());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "waited {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_probe_that_ends_without_an_answer_counts_as_missing() {
+        let chosen = choose_secret_store(
+            || -> Result<MemorySecretStore> { panic!("probe failed") },
+            Duration::from_secs(3),
+        );
+        assert_eq!(chosen.kind, SecretStoreKind::Missing);
+    }
+
+    #[test]
+    fn a_keyring_that_answers_is_used() {
+        let chosen = choose_secret_store(
+            || {
+                let store = MemorySecretStore::new();
+                store.set_named("AI/groq", "from-keyring")?;
+                Ok(store)
+            },
+            Duration::from_secs(3),
+        );
+        assert_eq!(chosen.kind, SecretStoreKind::Keyring);
+        assert_eq!(
+            chosen.store.get_named("AI/groq").unwrap().as_deref(),
+            Some("from-keyring")
+        );
+    }
+
+    #[test]
+    fn a_deferred_store_waits_for_the_choice() {
+        let deferred = DeferredSecretStore::spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            choose_secret_store(
+                || -> Result<MemorySecretStore> { Err(Error::Secret("no service".into())) },
+                Duration::from_secs(3),
+            )
+        });
+        let id = ConnectionId::new_v4();
+        deferred.set(id, "pw").unwrap();
+        assert_eq!(deferred.kind(), SecretStoreKind::Missing);
+        assert_eq!(deferred.get(id).unwrap().as_deref(), Some("pw"));
+        deferred.delete(id).unwrap();
+        assert_eq!(deferred.get(id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_ready_store_reports_its_kind() {
+        let ready = DeferredSecretStore::ready(ChosenSecretStore {
+            store: Arc::new(MemorySecretStore::new()),
+            kind: SecretStoreKind::Keyring,
+        });
+        assert_eq!(ready.kind(), SecretStoreKind::Keyring);
+        ready.set_named("AI/openai", "k").unwrap();
+        assert_eq!(ready.get_named("AI/openai").unwrap().as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn the_store_kind_is_sent_in_camel_case() {
+        assert_eq!(
+            serde_json::to_string(&SecretStoreKind::Keyring).unwrap(),
+            "\"keyring\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SecretStoreKind::Missing).unwrap(),
+            "\"missing\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SecretStoreKind::NoAnswer).unwrap(),
+            "\"noAnswer\""
+        );
     }
 
     #[test]

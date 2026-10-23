@@ -78,6 +78,7 @@ import type {
   SavedQueryInput,
   SavedQueryRun,
   DataFolderInfo,
+  SecretStoreKind,
   RecentItem,
   RecentTarget,
   DesignOutcome,
@@ -294,6 +295,8 @@ export const connectionOpenedTimes = (): Promise<Record<ConnectionId, number>> =
 export const dataFolderInfo = (): Promise<DataFolderInfo> => invoke("data_folder_info");
 
 export const openDataFolder = (): Promise<void> => invoke("open_data_folder");
+
+export const secretStoreKind = (): Promise<SecretStoreKind> => invoke("secret_store_kind");
 
 export const savedQueryRuns = (): Promise<SavedQueryRun[]> => invoke("saved_query_runs");
 

@@ -1,6 +1,7 @@
 import { type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
 import type { AiError, AiProviderKind, AiSettings, ModelInfo, ModelPicks } from "../api/types";
 import { errorText, openUrl, providerMessage } from "../api/client";
+import { useSecretStoreKind } from "../app/useSecretStoreKind";
 import { keyringText, thisComputer } from "../platform";
 import Icon, { type IconName } from "../components/Icon";
 import { formatWindow, PROVIDERS } from "../settings/ai/providers";
@@ -316,6 +317,13 @@ const DEFAULT_KICKER: Partial<Record<AiError["kind"], string>> = {
   internal: "Error",
 };
 
+/** Where the API key will be kept: the keyring when one answered at start-up, otherwise only until Contura closes. */
+function KeyKept() {
+  const kind = useSecretStoreKind();
+  if (kind !== null && kind !== "keyring") return <>Without a keyring service the key is kept only until Contura closes.</>;
+  return <>{`The key is kept in ${keyringText()}.`}</>;
+}
+
 /** What the thread shows when a question could not be answered. */
 export default function answerState(error: unknown, opts: Options = {}): ReactElement {
   const ai = aiErrorOf(error);
@@ -335,7 +343,7 @@ export default function answerState(error: unknown, opts: Options = {}): ReactEl
           <span className="t">Connect an AI provider in Settings</span>
           <span className="muted">
             Then the assistant can explain SQL, fix errors and draft DBML from what you have open. Groq and DeepSeek
-            have free or low-cost plans. {`The key is kept in ${keyringText()}.`}
+            have free or low-cost plans. <KeyKept />
           </span>
           <button type="button" className="button button-primary button-small" onClick={opts.onOpenSettings}>
             <Icon name="plug" />

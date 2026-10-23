@@ -50,9 +50,9 @@ test("home_without_connections_says_no_connections", () => {
 });
 
 test("settings_shows_the_data_folder_and_version", () => {
-  const { bar } = renderBar({ kind: "settings", dataFolder: "E:\\Apps\\Contura\\data", version: "0.7.0" });
+  const { bar } = renderBar({ kind: "settings", dataFolder: "E:\\Apps\\Contura\\data", version: "1.0.0" });
   expect(bar.textContent).toContain("E:\\Apps\\Contura\\data");
-  expect(bar.textContent).toContain("Contura 0.7.0");
+  expect(bar.textContent).toContain("Contura 1.0.0");
 });
 
 test("schema_shows_model_file_applied_and_layout_note", () => {

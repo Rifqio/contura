@@ -17,7 +17,7 @@ test.skipIf(!linux)("counts_the_process_and_its_children", async () => {
     const r = spawnSync("bash", [script, "--pid", String(parent.pid), "--samples", "2", "--interval", "0.1"], { encoding: "utf8" });
     expect(r.status).toBe(0);
     const lines = r.stdout.trim().split("\n");
-    expect(lines[0]).toMatch(/^sample 1: private [\d.]+ MB, total [\d.]+ MB, processes 3$/);
+    expect(lines[0]).toMatch(/^sample 1: private [\d.]+ MB \(of it in swap [\d.]+ MB\), total [\d.]+ MB, processes 3$/);
     expect(lines[2]).toMatch(/^min: private [\d.]+ MB, total [\d.]+ MB$/);
   } finally {
     spawnSync("pkill", ["-P", String(parent.pid)]);

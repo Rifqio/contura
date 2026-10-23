@@ -10,7 +10,7 @@ import SettingsView from "./SettingsView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("./fontDetect", () => ({ isInstalled: () => false }));
-vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.7.0") }));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("1.0.0") }));
 
 const ORDER = ["appearance", "editor", "keymap", "ai", "dataFolder", "about"];
 const realRect = Element.prototype.getBoundingClientRect;

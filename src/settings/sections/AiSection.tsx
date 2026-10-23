@@ -33,6 +33,7 @@ import Select from "../../components/Select";
 import { agoText } from "../../format/units";
 import { dataFolderText, keyringText, thisComputer } from "../../platform";
 import { usePrefs } from "../../prefs/usePrefs";
+import { sessionSecretsText, useSecretStoreKind } from "../../app/useSecretStoreKind";
 import AccessTable from "../ai/AccessTable";
 import { AI_ACCESS_OPTIONS, formatWindow, PROVIDER_ORDER, PROVIDERS, providerDefaults } from "../ai/providers";
 import { Row, type RowKey, Section, SwitchRow, useRowShown } from "./layout";
@@ -380,6 +381,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
   // A saved key never comes back here: only a key being typed.
   const [typedKey, setTypedKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const keyNotice = sessionSecretsText(useSecretStoreKind(), "key");
   const [test, setTest] = useState<TestState>({ s: "idle" });
   const [status, setStatus] = useState<string | null>(null);
   const [askingRemove, setAskingRemove] = useState(false);
@@ -773,7 +775,10 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
           )}
         </Row>
       )}
-      <Row {...ROW.key} hint={`Kept in ${keyringText()}, never in the data folder.`}>
+      <Row
+        {...ROW.key}
+        hint={keyNotice ?? `Kept in ${keyringText()}, never in the data folder.`}
+      >
         {({ hintId }) => (
           <>
             <span className="keyfield srow-grow">

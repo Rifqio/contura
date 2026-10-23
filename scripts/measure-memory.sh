@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Linux counterpart of measure-memory.ps1: the memory of one process and all its descendants.
 #
-# Private is Private_Clean + Private_Dirty from /proc/<p>/smaps_rollup (the counterpart of the
-# Windows private working set, ADR 0003); total is Rss, which counts shared pages once per
-# process and is for reference only. The script takes --samples readings --interval seconds
+# Private is Private_Clean + Private_Dirty + Swap from /proc/<p>/smaps_rollup: the memory the
+# app owns, whether it sits in RAM or was moved to swap (on a machine short of RAM an idle app
+# is swapped out and a resident-only figure reads far too low). The Windows private working set
+# (ADR 0003) counts only what is resident; on Linux the swapped part is shown too so the two can
+# be told apart. Total is Rss, which counts shared pages once per process and is for reference
+# only. The script takes --samples readings --interval seconds
 # apart and prints the minimum (one reading depends on when it falls relative to the WebView's
 # garbage collection).
 #
@@ -42,15 +45,16 @@ min_private=""; min_total=""
 for ((i = 1; i <= samples; i++)); do
   [ "$i" -gt 1 ] && sleep "$interval"
   [ -d "/proc/$pid" ] || { echo "process $pid has exited" >&2; exit 2; }
-  read -r priv total n < <(
+  read -r priv total n swap < <(
     for p in $(tree "$pid" | sort -un); do
-      awk '/^(Private_Clean|Private_Dirty):/ { priv += $2 } /^Rss:/ { rss += $2 }
-        END { if (NR) print priv + 0, rss + 0 }' "/proc/$p/smaps_rollup" 2>/dev/null
-    done | awk '{ priv += $1; rss += $2; n++ } END { print priv + 0, rss + 0, n + 0 }'
+      awk '/^(Private_Clean|Private_Dirty):/ { priv += $2 } /^Swap:/ { swap += $2 } /^Rss:/ { rss += $2 }
+        END { if (NR) print priv + swap, rss + 0, swap + 0 }' "/proc/$p/smaps_rollup" 2>/dev/null
+    done | awk '{ priv += $1; rss += $2; swap += $3; n++ } END { print priv + 0, rss + 0, n + 0, swap + 0 }'
   )
   priv_mb=$(awk -v k="$priv" 'BEGIN { printf "%.1f", k / 1024 }')
   total_mb=$(awk -v k="$total" 'BEGIN { printf "%.1f", k / 1024 }')
-  echo "sample $i: private $priv_mb MB, total $total_mb MB, processes $n"
+  swap_mb=$(awk -v k="$swap" 'BEGIN { printf "%.1f", k / 1024 }')
+  echo "sample $i: private $priv_mb MB (of it in swap $swap_mb MB), total $total_mb MB, processes $n"
   if [ -z "$min_private" ] || [ "$priv" -lt "$min_private" ]; then min_private=$priv; min_total=$total; fi
 done
 awk -v p="$min_private" -v t="$min_total" 'BEGIN { printf "min: private %.1f MB, total %.1f MB\n", p / 1024, t / 1024 }'

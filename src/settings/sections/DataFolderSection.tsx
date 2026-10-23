@@ -1,3 +1,4 @@
+import { sessionSecretsText, useSecretStoreKind } from "../../app/useSecretStoreKind";
 import { useEffect, useState } from "react";
 import { clearQueryHistory, dataFolderInfo, errorText, formatBytes, openDataFolder } from "../../api/client";
 import type { ConnectionConfig, DataFolderInfo } from "../../api/types";
@@ -67,8 +68,9 @@ function Contents({ info }: { info: DataFolderInfo | null }) {
 }
 
 function PasswordsNote() {
+  const session = sessionSecretsText(useSecretStoreKind(), "passwords");
   if (!useRowShown(ROW.passwords)) return null;
-  return <p className="srow-note-line">{`Passwords stay in ${keyringText()} on ${thisComputer()}, so a copied folder asks for each one once.`}</p>;
+  return <p className="srow-note-line">{session ?? `Passwords stay in ${keyringText()} on ${thisComputer()}, so a copied folder asks for each one once.`}</p>;
 }
 
 /**

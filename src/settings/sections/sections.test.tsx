@@ -18,7 +18,7 @@ import { SearchContext } from "./layout";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 // The app plugin calls Tauri from inside the package, past the core mock.
-vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.7.0") }));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("1.0.0") }));
 const installed = vi.hoisted(() => new Set<string>());
 vi.mock("../fontDetect", () => ({ isInstalled: (family: string) => installed.has(family) }));
 
@@ -275,6 +275,27 @@ test("reset_one_and_reset_all", async () => {
 });
 
 // ---- AI assistant ----
+
+test("ai_key_without_a_keyring_service_says_the_key_is_kept_until_contura_closes", async () => {
+  settingsRoutes({ secret_store_kind: () => "missing" });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  const note = await screen.findByText(
+    "No keyring service was found, so the API key is kept only until Contura closes. Install GNOME Keyring or KeePassXC to save it.",
+  );
+  expect(screen.getByLabelText("API key").getAttribute("aria-describedby")).toBe(note.id);
+  expect(screen.queryByText(/never in the data folder/)).toBeNull();
+  expect(screen.queryByText(/passwords/)).toBeNull();
+});
+
+test("ai_key_with_a_silent_keyring_says_it_did_not_answer", async () => {
+  settingsRoutes({ secret_store_kind: () => "noAnswer" });
+  renderWithProviders(<AiSection groupId={null} groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  expect(
+    await screen.findByText(
+      "The keyring did not answer, so the API key is kept only until Contura closes. Restart Contura to try the keyring again.",
+    ),
+  ).toBeTruthy();
+});
 
 test("ai_rows_provider_model_key_new_connections_inline", async () => {
   settingsRoutes();
@@ -894,6 +915,17 @@ test("data_folder_shows_path_counts_and_history_size", async () => {
   expect(screen.getByText("Passwords stay in the OS keyring (the Secret Service) on this computer, so a copied folder asks for each one once.")).toBeTruthy();
 });
 
+test("data_folder_passwords_note_says_session_without_a_keyring", async () => {
+  settingsRoutes({ secret_store_kind: () => "missing" });
+  renderWithProviders(<DataFolderSection />);
+  expect(
+    await screen.findByText(
+      "No keyring service was found, so passwords are kept only until Contura closes. Install GNOME Keyring or KeePassXC to save them.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/^Passwords stay in/)).toBeNull();
+});
+
 test("keep_history_for_saves_and_clear_asks_once", async () => {
   let bytes = 4_404_019;
   settingsRoutes({
@@ -953,7 +985,7 @@ test("shortening_keep_history_asks_first_and_lengthening_applies_at_once", async
 test("about_has_version_licences_and_note", async () => {
   settingsRoutes();
   renderWithProviders(<AboutSection />);
-  expect(await screen.findByText("Contura 0.7.0")).toBeTruthy();
+  expect(await screen.findByText("Contura 1.0.0")).toBeTruthy();
   const licences = screen.getByRole("list", { name: "Licences" });
   expect(within(licences).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
     "JetBrains Mono, SIL Open Font License 1.1",
@@ -1330,7 +1362,7 @@ test("parity_P11_38_linux_wording_never_names_windows", async () => {
     </>,
   );
   await screen.findByText("Kept in the OS keyring (the Secret Service), never in the data folder.");
-  await screen.findByText("Contura 0.7.0");
+  await screen.findByText("Contura 1.0.0");
   expect(container.textContent).not.toMatch(/Windows|Contura\.exe|this PC|data\\/);
 });
 

@@ -808,6 +808,21 @@ pub fn data_folder_info(service: Service<'_>) -> Result<DataFolderInfo, Error> {
     service.data_folder_info()
 }
 
+/// The secret store this run uses, so the password and API key fields can say when
+/// secrets are kept only until Contura closes.
+pub struct Secrets(pub std::sync::Arc<contura_core::secrets::DeferredSecretStore>);
+
+/// Async and off the main thread: the answer waits for the keyring check (bounded).
+#[tauri::command]
+pub async fn secret_store_kind(
+    secrets: State<'_, Secrets>,
+) -> Result<contura_core::secrets::SecretStoreKind, Error> {
+    let store = secrets.0.clone();
+    tauri::async_runtime::spawn_blocking(move || store.kind())
+        .await
+        .map_err(|e| Error::Secret(format!("cannot check the keyring: {e}")))
+}
+
 /// Shows the data folder in the system's file manager.
 #[tauri::command]
 pub fn open_data_folder(data: State<'_, DataDir>) -> Result<(), Error> {
@@ -857,30 +872,39 @@ pub fn save_query_tabs(service: Service<'_>, place: String, json: String) -> Res
     service.save_query_tabs(place, json)
 }
 
+// These three read or write the saved key, which waits for the start-up keyring check:
+// async and off the main thread, so the window keeps painting meanwhile.
 #[tauri::command]
-pub fn ai_settings(ai: Ai<'_>, group_id: Option<GroupId>) -> Result<AiSettingsView, Error> {
-    ai.settings(group_id)
+pub async fn ai_settings(
+    app: AppHandle,
+    group_id: Option<GroupId>,
+) -> Result<AiSettingsView, Error> {
+    off_runtime(move || app.state::<AiService>().settings(group_id)).await
 }
 
 #[tauri::command]
-pub fn save_ai_settings(
-    ai: Ai<'_>,
+pub async fn save_ai_settings(
+    app: AppHandle,
     group_id: Option<GroupId>,
     settings: AiSettings,
     override_group: bool,
     key: KeyChange,
 ) -> Result<(), Error> {
-    ai.save_settings(group_id, settings, override_group, key)
+    off_runtime(move || {
+        app.state::<AiService>()
+            .save_settings(group_id, settings, override_group, key)
+    })
+    .await
 }
 
 /// "Send the saved key to <host>?": binds the saved key to the host the settings now use.
 #[tauri::command]
-pub fn ai_confirm_key_host(
-    ai: Ai<'_>,
+pub async fn ai_confirm_key_host(
+    app: AppHandle,
     group_id: Option<GroupId>,
     host: String,
 ) -> Result<(), Error> {
-    ai.confirm_key_host(group_id, &host)
+    off_runtime(move || app.state::<AiService>().confirm_key_host(group_id, &host)).await
 }
 
 /// One short request with the saved settings and key.

@@ -667,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "contura"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "contura-core",
  "serde",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "contura-core"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

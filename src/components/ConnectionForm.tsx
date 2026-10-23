@@ -38,6 +38,7 @@ import Segmented from "./Segmented";
 import Select from "./Select";
 import Switch from "./Switch";
 import { caFileExample, sqliteFileExample } from "../platform";
+import { sessionSecretsText, useSecretStoreKind } from "../app/useSecretStoreKind";
 
 interface Props {
   /** The Connection being edited; absent for a new one. */
@@ -137,6 +138,7 @@ export default function ConnectionForm({
   const [timeoutError, setTimeoutError] = useState<string | null>(null);
 
   const [showPassword, setShowPassword] = useState(false);
+  const passwordNotice = sessionSecretsText(useSecretStoreKind(), "passwords");
   const saveKeys = keysFor(useKeymap().map, "query.save");
   // A new Connection starts at the access the AI settings name, unless you chose one first.
   const aiChosen = useRef(base !== undefined);
@@ -493,6 +495,7 @@ export default function ConnectionForm({
                     id={f("password")}
                     className="input input-affixed"
                     type={showPassword ? "text" : "password"}
+                    aria-describedby={passwordNotice ? f("password-help") : undefined}
                     value={password}
                     placeholder={editing ? "Saved password unchanged" : ""}
                     onChange={(e) => {
@@ -510,6 +513,11 @@ export default function ConnectionForm({
                   </button>
                 </div>
               </div>
+              {passwordNotice && (
+                <span id={f("password-help")} className="field-hint field-wide" role="note">
+                  {passwordNotice}
+                </span>
+              )}
               {editing && (
                 <label className="checkbox field-wide">
                   <input

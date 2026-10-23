@@ -623,3 +623,17 @@ test("parity_P11_38_timeout_and_offline_cards_name_the_machine_for_the_platform"
     setPlatformForTests(null);
   }
 });
+
+test("setup_names_the_keyring_when_it_is_used", async () => {
+  routeInvoke({ secret_store_kind: () => "keyring" });
+  render(answerState(ai({ kind: "notConfigured" })));
+  await act(async () => {});
+  expect(screen.getByText(/The key is kept in the OS keyring \(the Secret Service\)\./)).toBeTruthy();
+});
+
+test("setup_says_the_key_is_kept_for_the_session_without_a_keyring", async () => {
+  routeInvoke({ secret_store_kind: () => "missing" });
+  render(answerState(ai({ kind: "notConfigured" })));
+  expect(await screen.findByText(/Without a keyring service the key is kept only until Contura closes\./)).toBeTruthy();
+  expect(screen.queryByText(/The key is kept in the OS keyring/)).toBeNull();
+});

@@ -1,0 +1,153 @@
+name: Release
+
+# A pushed v* tag builds the Linux bundles (.deb, AppImage) and the Windows portable exe,
+# then opens a draft GitHub release with them. A manual run is a dry run, from any ref: it
+# builds and uploads the files as workflow artifacts only, and makes no release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Linux (.deb, AppImage)
+    # An older glibc than ubuntu-latest, so the AppImage also runs on older systems.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux libraries for Tauri
+        # The keyring talks to the Secret Service over D-Bus in pure Rust (zbus), so it
+        # needs no extra library at build time.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # A cache saved on a tag is never read again: save only from main (a dry run there).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: npm ci
+      - name: Version
+        id: version
+        run: echo "version=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.version.outputs.version }}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match version ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+      - run: npx tauri build --bundles deb,appimage
+      - name: Collect
+        run: |
+          mkdir dist-release
+          cp target/release/bundle/deb/Contura_${{ steps.version.outputs.version }}_amd64.deb dist-release/
+          cp target/release/bundle/appimage/Contura_${{ steps.version.outputs.version }}_amd64.AppImage dist-release/
+          ls -l dist-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist-release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows (portable exe)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # A cache saved on a tag is never read again: save only from main (a dry run there).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: npm ci
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.version.outputs.version }}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match version ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+      # No installer: Windows ships the one exe, which keeps its data beside itself.
+      - run: npx tauri build --no-bundle
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir dist-release
+          cp target/release/contura.exe dist-release/Contura_${{ steps.version.outputs.version }}_x64_portable.exe
+          ls -l dist-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist-release/*
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: [linux, windows]
+    # Only a pushed tag makes a release: a manual run, even from a tag, is a dry run.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist-release
+        run: |
+          sha256sum Contura_* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Notes
+        run: |
+          if [ -f RELEASE_NOTES.md ]; then
+            cp RELEASE_NOTES.md notes.md
+          else
+            {
+              echo "Contura ${GITHUB_REF_NAME#v} for Windows and Linux."
+              echo
+              echo "- Windows: \`Contura_${GITHUB_REF_NAME#v}_x64_portable.exe\`, one portable exe that keeps its data beside itself."
+              echo "- Linux: \`Contura_${GITHUB_REF_NAME#v}_amd64.deb\` or \`Contura_${GITHUB_REF_NAME#v}_amd64.AppImage\`."
+              echo
+              echo "Check the downloads against \`SHA256SUMS.txt\`. The files are not signed."
+            } > notes.md
+          fi
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" --draft \
+            --title "Contura ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md \
+            dist-release/*

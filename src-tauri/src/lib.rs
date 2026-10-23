@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use contura_core::ai::{AiProviderKind, AiService};
 use contura_core::connections::ConnectionService;
-use contura_core::secrets::{self, KeyringSecretStore};
+use contura_core::secrets::{self, DeferredSecretStore, KeyringSecretStore, SecretStore};
 use contura_core::store::AppStore;
 use tauri::{Manager, RunEvent, WebviewWindowBuilder, window::Color};
 
@@ -129,6 +129,7 @@ pub fn run() {
             commands::saved_query_runs,
             commands::data_folder_info,
             commands::open_data_folder,
+            commands::secret_store_kind,
             commands::clear_recent,
             commands::restore_recent,
             commands::connection_opened_times,
@@ -221,7 +222,7 @@ pub fn run() {
 
 /// Copies secrets saved under the old "DB View" service to "Contura". Never blocks start-up:
 /// a failure leaves the old entry in place and the app runs with whatever it can read.
-fn migrate_legacy_secrets(store: &AppStore, current: &KeyringSecretStore) {
+fn migrate_legacy_secrets(store: &AppStore, current: &dyn SecretStore) {
     let Ok(legacy) = KeyringSecretStore::legacy() else {
         return;
     };
@@ -233,11 +234,47 @@ fn migrate_legacy_secrets(store: &AppStore, current: &KeyringSecretStore) {
     secrets::migrate_from_legacy(current, &legacy, &ids, &AiProviderKind::key_accounts());
 }
 
+/// On Linux the keyring (the Secret Service) is checked on another thread with a time
+/// limit while the window opens. When it is missing or does not answer, secrets are kept
+/// in memory until Contura closes, and the legacy migration is skipped. Elsewhere the
+/// keyring is opened here as before, and an error stops start-up.
+#[cfg(target_os = "linux")]
+fn secret_store(
+    _store: &AppStore,
+    db: std::path::PathBuf,
+) -> Result<DeferredSecretStore, Box<dyn std::error::Error>> {
+    Ok(DeferredSecretStore::spawn(move || {
+        let chosen = secrets::choose_secret_store(
+            KeyringSecretStore::new_checked,
+            secrets::KEYRING_PROBE_LIMIT,
+        );
+        if chosen.kind == secrets::SecretStoreKind::Keyring
+            && let Ok(store) = AppStore::open(&db)
+        {
+            migrate_legacy_secrets(&store, chosen.store.as_ref());
+        }
+        chosen
+    }))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secret_store(
+    store: &AppStore,
+    _db: std::path::PathBuf,
+) -> Result<DeferredSecretStore, Box<dyn std::error::Error>> {
+    let keyring = KeyringSecretStore::new()?;
+    migrate_legacy_secrets(store, &keyring);
+    Ok(DeferredSecretStore::ready(secrets::ChosenSecretStore {
+        store: Arc::new(keyring),
+        kind: secrets::SecretStoreKind::Keyring,
+    }))
+}
+
 fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = paths::data_dir()?;
     let store = AppStore::open(&data_dir.join("app.sqlite"))?;
-    let secrets = Arc::new(KeyringSecretStore::new()?);
-    migrate_legacy_secrets(&store, &secrets);
+    let secrets = Arc::new(secret_store(&store, data_dir.join("app.sqlite"))?);
+    app.manage(commands::Secrets(secrets.clone()));
     let ai_store = AppStore::open(&data_dir.join("app.sqlite"))?;
     app.manage(AiService::new(ai_store, secrets.clone()));
     app.manage(ConnectionService::new(store, secrets).with_data_dir(data_dir.clone()));
