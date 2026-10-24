@@ -1,12 +1,14 @@
 // UX step 3 (G1, G2, G3, G4, G9, G13, G14, G17): selection and clipboard in the table grid, gesture by gesture as the
 // GridSelection board clicks through them, with the rulings that override the board.
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Cell, Page, TableColumn, TableDesign } from "../api/types";
 import { mockEditorDom } from "../test/editor";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { setPlatformForTests } from "../platform";
 import { useCommandKeys } from "../commands/useCommandKeys";
+import { cyclePane, rememberPaneFocus } from "../app/panes";
 import DataGrid from "./DataGrid";
 import { ToastProvider } from "./Toast";
 
@@ -109,11 +111,16 @@ beforeEach(() => {
 });
 afterEach(() => setPlatformForTests(null));
 
-async function open(props: Partial<Parameters<typeof DataGrid>[0]> = {}) {
+async function open(
+  props: Partial<Parameters<typeof DataGrid>[0]> = {},
+  page: () => Page = orders,
+  extra: Parameters<typeof routeInvoke>[0] = {},
+) {
   routeInvoke({
-    fetch_page: () => orders(),
+    fetch_page: () => page(),
     table_design: () => design,
     fetch_full_value: () => ({ t: "text", value: "x" }),
+    ...extra,
   });
   render(
     <ToastProvider>
@@ -293,16 +300,56 @@ test("Ctrl+Alt+N sets NULL and Ctrl+Alt+D sets DEFAULT on the selection, as Pend
   down(td(4, 2));
   down(td(4, 4), { shiftKey: true });
   key("d", { ctrlKey: true, altKey: true, code: "KeyD" });
-  // Constant defaults are written in; an expression only a new row can take is left with a note.
+  // Constant defaults are written in; an expression default is written as DEFAULT, for the server to work out.
   expect(td(4, 2).textContent).toBe("pending");
   expect(td(4, 4).textContent).toBe("0");
-  expect(td(4, 3).textContent).toBe("2026-10-03 10:05:09+07");
-  expect(note()).toBe("Set 2 cells to DEFAULT. ordered_at's default now() is worked out by the server, so only a new row takes it.");
+  expect(td(4, 3).textContent).toBe("default");
+  expect(td(4, 3).className).toContain("cell-edited");
+  expect(note()).toBe("Set 3 cells to DEFAULT.");
   // NOT NULL columns are not set to NULL.
   down(td(6, 1));
   key("n", { ctrlKey: true, altKey: true, code: "KeyN" });
   expect(td(6, 1).textContent).toBe("318");
   expect(note()).toBe("customer_id can't be NULL, so it was left as it is.");
+});
+
+test("Set DEFAULT on a saved row sends DEFAULT for an expression default on Postgres and MySQL", async () => {
+  for (const dialect of ["postgres", "mysql"] as const) {
+    cleanup();
+    vi.mocked(invoke).mockClear();
+    await open({ dialect }, orders, { plan_edits: () => new Promise(() => {}) });
+    down(td(4, 3));
+    key("d", { ctrlKey: true, altKey: true, code: "KeyD" });
+    await waitFor(() => expect(td(4, 3).textContent).toBe("default"));
+    key("s", { ctrlKey: true });
+    await waitFor(() => expect(callsTo("plan_edits")).toHaveLength(1));
+    const edits = callsTo("plan_edits")[0].edits as { updates: { changes: { column: string; new: unknown }[] }[] };
+    expect(edits.updates[0].changes).toEqual([expect.objectContaining({ column: "ordered_at", new: { t: "default" } })]);
+  }
+});
+
+test("M6: a pending DEFAULT shows and copies as the default marker, and Filter by this value is off with the reason", async () => {
+  await open();
+  down(td(4, 3));
+  key("d", { ctrlKey: true, altKey: true, code: "KeyD" });
+  await waitFor(() => expect(td(4, 3).textContent).toBe("default"));
+  key("c", { ctrlKey: true, code: "KeyC" });
+  expect(writeText).toHaveBeenLastCalledWith("default");
+  fireEvent.contextMenu(td(4, 3));
+  const filter = screen.getByRole("menuitem", { name: "Filter by this value" }) as HTMLButtonElement;
+  expect(filter.getAttribute("aria-disabled") === "true" || filter.disabled).toBe(true);
+  expect(filter.getAttribute("title")).toBe("DEFAULT has no value yet: the server works it out on Save.");
+});
+
+test("Set DEFAULT on a saved SQLite row leaves an expression default with a note: SQLite has no DEFAULT in UPDATE", async () => {
+  await open({ dialect: "sqlite" });
+  down(td(4, 2));
+  down(td(4, 4), { shiftKey: true });
+  key("d", { ctrlKey: true, altKey: true, code: "KeyD" });
+  await waitFor(() => expect(td(4, 2).textContent).toBe("pending"));
+  expect(td(4, 4).textContent).toBe("0");
+  expect(td(4, 3).textContent).toBe("2026-10-03 10:05:09+07");
+  expect(note()).toBe("Set 2 cells to DEFAULT. ordered_at's default now() is worked out by the server, so only a new row takes it.");
 });
 
 test("M1: AltGr is not Ctrl+Alt: AltGr+N types ń into the cell instead of setting NULL", async () => {
@@ -334,6 +381,74 @@ test("Ctrl+Alt+N is Set NULL only while the grid has focus; elsewhere New diagra
   await waitFor(() => expect(td(2, 3).textContent).toBe("NULL"));
   fireEvent.keyDown(document.body, { key: "n", ctrlKey: true, altKey: true, code: "KeyN" });
   expect(newDiagram).toHaveBeenCalledTimes(1);
+});
+
+test("M13: F6 through the real keymap leaves the grid for the next pane, and Shift+F6 comes back to the same cell", async () => {
+  function Host() {
+    useCommandKeys({ "pane.next": () => cyclePane(1), "pane.previous": () => cyclePane(-1) });
+    return (
+      <>
+        <nav data-pane aria-label="Tree">
+          <button type="button">orders</button>
+        </nav>
+        <DataGrid connectionId="c1" table={table} onClose={() => {}} />
+      </>
+    );
+  }
+  const stop = rememberPaneFocus(document);
+  routeInvoke({ fetch_page: () => orders(), table_design: () => design });
+  render(
+    <ToastProvider>
+      <Host />
+    </ToastProvider>,
+  );
+  await screen.findByText("refunded");
+  down(td(2, 3));
+  grid().focus();
+  // Tab stays in the grid (ruling 5).
+  key("Tab");
+  expect(td(2, 4).className).toContain("cell-selected");
+  expect(grid().contains(document.activeElement)).toBe(true);
+  fireEvent.keyDown(document.activeElement!, { key: "F6", code: "F6" });
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "orders" }));
+  fireEvent.keyDown(document.activeElement!, { key: "F6", code: "F6", shiftKey: true });
+  expect(grid().contains(document.activeElement)).toBe(true);
+  expect(td(2, 4).className).toContain("cell-selected");
+  stop();
+});
+
+test("M13: on a Production Connection, Set NULL, Delete and paste stay Pending Edits until Save on Production confirms", async () => {
+  await open({ production: true, connectionName: "freight-prod" }, orders, { plan_edits: () => new Promise(() => {}) });
+  down(td(0, 3));
+  key("n", { ctrlKey: true, altKey: true, code: "KeyN" });
+  await waitFor(() => expect(td(0, 3).textContent).toBe("NULL"));
+  down(td(1, 4));
+  key("Delete");
+  expect(td(1, 4).textContent).toBe("NULL");
+  down(td(2, 2));
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "cancelled" } });
+  expect(td(2, 2).textContent).toBe("cancelled");
+  // Nothing has reached the database: the edits wait, and Save says it is Production.
+  expect(callsTo("plan_edits")).toHaveLength(0);
+  expect(callsTo("apply_edits")).toHaveLength(0);
+  expect(screen.getByRole("region", { name: "Pending Edits" }).textContent).toContain("3 changes");
+  expect(screen.getByRole("button", { name: "Save on Production" })).toBeTruthy();
+  // One undo step takes back each change.
+  key("z", { ctrlKey: true, code: "KeyZ" });
+  expect(td(2, 2).textContent).toBe("pending");
+});
+
+test("M13: on a Read-only Connection, Ctrl+V and Ctrl+Alt+N change nothing and say why", async () => {
+  await open({ readOnly: true, connectionName: "reporting" });
+  down(td(0, 2));
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "cancelled" } });
+  expect(await screen.findByText("reporting is Read-only. Changes are not allowed.")).toBeTruthy();
+  expect(td(0, 2).textContent).toBe("paid");
+  down(td(0, 3));
+  key("n", { ctrlKey: true, altKey: true, code: "KeyN" });
+  expect(td(0, 3).textContent).toBe("2026-10-01 09:14:07+07");
+  expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
+  expect(callsTo("table_design")).toHaveLength(0);
 });
 
 test("Delete on rows chosen by number deletes them; Alt+Delete deletes the rows the selection spans", async () => {
@@ -448,6 +563,14 @@ test("Filter by this value adds the filter at once", async () => {
   expect((callsTo("fetch_page")[1].request as { filter: string }).filter).toContain("shipped");
 });
 
+test("M11: Filter by this value on a timestamp filters by the exact value shown, not its day", async () => {
+  await open();
+  fireEvent.contextMenu(td(1, 3));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Filter by this value" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  expect((callsTo("fetch_page")[1].request as { filter: string }).filter).toBe(`"ordered_at" = '2026-10-01 11:02:45+07'`);
+});
+
 test("a Read-only Connection still selects and copies; edit keys say why they do nothing", async () => {
   await open({ readOnly: true, connectionName: "reporting" });
   down(td(0, 1));
@@ -505,4 +628,90 @@ test("M10: Ctrl+F with no cell selected opens Add filter on the first column", a
   key("f", { ctrlKey: true, code: "KeyF" });
   const dialog = await screen.findByRole("dialog", { name: "Add filter" });
   expect(dialog.textContent).toContain("id");
+});
+
+// Polish A7 (M7): the status line under the grid sums up the selection, as Excel's does.
+const summary = () => document.querySelector(".table-selection")?.textContent ?? "";
+
+test("polish A7: the status line says how many cells are selected, with their Count and Sum", async () => {
+  await open();
+  expect(summary()).toBe("");
+  down(td(4, 2));
+  expect(summary()).toBe("");
+  down(td(5, 4), { shiftKey: true });
+  // status, ordered_at and total of rows 5 and 6: one NULL, and 0.00 + 1204.00.
+  expect(summary()).toBe("6 cells selected, Count 5, Sum 1,204");
+  // M7: no live region, so holding Shift+Arrow does not read the status out on every repeat.
+  expect(document.querySelector(".table-selection")?.getAttribute("role")).toBeNull();
+
+  // A column of text has a Count and no Sum.
+  down(td(0, 2));
+  down(td(3, 2), { shiftKey: true });
+  expect(summary()).toBe("4 cells selected, Count 4");
+  key("Escape");
+});
+
+test("polish A7: Select all counts every cell of the page", async () => {
+  await open();
+  down(td(0, 0));
+  key("a", { ctrlKey: true, code: "KeyA" });
+  expect(summary()).toMatch(/^60 cells selected, Count 58, Sum /);
+});
+
+// Polish A7 (M3, M4): a paste skips what can't be edited and says how many, and a block does not land on several ranges.
+test("polish A7 M3: a block paste skips key cells, says how many, and still fills the rest", async () => {
+  await open();
+  down(td(0, 0));
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "9\tx\ny\tz" } });
+  // The key cells id of rows 1 and 2 are left; the other two cells are written.
+  expect(td(0, 0).textContent).toBe("1001");
+  expect(td(1, 0).textContent).toBe("1002");
+  expect(td(0, 1).textContent).toBe("x");
+  expect(td(1, 1).textContent).toBe("z");
+  expect(note()).toBe("Pasted 2 cells. Key column id left as it is.");
+});
+
+test("polish A7 M3: one value over cells that include a key column fills the others and says what it left", async () => {
+  await open();
+  down(td(0, 0));
+  down(td(1, 1), { shiftKey: true });
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "7" } });
+  expect([td(0, 1).textContent, td(1, 1).textContent]).toEqual(["7", "7"]);
+  expect(td(0, 0).textContent).toBe("1001");
+  expect(note()).toBe("Pasted 2 cells. Key column id left as it is.");
+});
+
+test("polish A7 M3: binary cells are skipped like key cells", async () => {
+  const withBytes = (): Page => {
+    const p = orders();
+    p.columns[4] = { name: "blob", typeName: "bytea", isPrimaryKey: false };
+    p.rows[0][4] = { t: "bytes", previewHex: "00ff", truncated: false, totalBytes: 2 };
+    return p;
+  };
+  await open({}, withBytes);
+  down(td(0, 2));
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "a\tb\tc" } });
+  expect([td(0, 2).textContent, td(0, 3).textContent]).toEqual(["a", "b"]);
+  expect(note()).toBe("Pasted 2 cells. Binary value left as it is.");
+});
+
+test("polish A7 M3: a paste with nothing editable says so and changes nothing", async () => {
+  await open();
+  down(td(0, 0));
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "9" } });
+  expect(td(0, 0).textContent).toBe("1001");
+  expect(note()).toBe("Nothing pasted. Key column id left as it is.");
+  expect(document.querySelector(".cell-edited")).toBeNull();
+});
+
+test("polish A7 M4: a block is not pasted into several selected ranges, as Excel refuses it", async () => {
+  await open();
+  down(td(0, 2));
+  down(td(3, 2), { ctrlKey: true });
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "a\nb" } });
+  expect(note()).toBe("This action won't work on multiple selections.");
+  expect([td(0, 2).textContent, td(3, 2).textContent]).toEqual(["paid", "delivered"]);
+  // One value still fills every range.
+  fireEvent.paste(grid(), { clipboardData: { getData: () => "one" } });
+  expect([td(0, 2).textContent, td(3, 2).textContent]).toEqual(["one", "one"]);
 });

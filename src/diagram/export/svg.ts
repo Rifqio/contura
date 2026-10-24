@@ -225,11 +225,24 @@ function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   if (n.subtitle) parts.push(`<text x="${x + w - 10}" y="${y + 21}" text-anchor="end" font-size="12" fill="${palette.subtle}">${esc(n.subtitle)}</text>`);
   const marked = n.rows.some((row) => row.mark);
   const nameX = x + (marked ? 32 : 10);
+  // An ER card's not-null marks, as the canvas draws them: a filled diamond, an outline for a nullable column (M11).
+  const nulls = n.rows.some((row) => row.notNull);
+  const typeX = x + w - (nulls ? 24 : 10);
   n.rows.forEach((row, i) => {
     const ty = y + CARD_HEADER + CARD_ROW * i + 16;
     if (row.mark) parts.push(`<text x="${x + 10}" y="${ty}" font-size="9" font-weight="600" fill="${palette.subtle}">${row.mark.toUpperCase()}</text>`);
     parts.push(`<text x="${nameX}" y="${ty}">${esc(row.left)}</text>`);
-    if (row.right) parts.push(`<text x="${x + w - 10}" y="${ty}" text-anchor="end" fill="${palette.type}">${esc(row.right)}</text>`);
+    if (row.right) parts.push(`<text x="${typeX}" y="${ty}" text-anchor="end" fill="${palette.type}">${esc(row.right)}</text>`);
+    if (nulls) {
+      const cx = x + w - 14;
+      const cy = ty - 4;
+      const d = `M${cx} ${cy - 4} L${cx + 4} ${cy} L${cx} ${cy + 4} L${cx - 4} ${cy} Z`;
+      parts.push(
+        row.notNull
+          ? `<path data-marker="not-null" d="${d}" fill="${palette.subtle}"/>`
+          : `<path data-marker="nullable" d="${d}" fill="none" stroke="${palette.subtle}" stroke-width="1.5"/>`,
+      );
+    }
   });
   const footer = n.footer ?? [];
   if (footer.length > 0) {

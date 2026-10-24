@@ -64,6 +64,7 @@ function commit(p: Pending, state: State, nextId = p.nextId): Pending {
 
 function sameAsLoaded(old: Cell | undefined, value: NewValue): boolean {
   if (!old) return false;
+  if (value.t === "default") return false;
   if (value.t === "null") return old.t === "null";
   if (old.t === "number") return old.value === value.value;
   if (old.t === "text") return !old.truncated && old.value === value.value;

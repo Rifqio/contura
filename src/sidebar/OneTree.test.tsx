@@ -8,6 +8,7 @@ import { GroupImagesProvider } from "../components/GroupBadge";
 import { iconElement } from "../components/Icon";
 import OneTree, { type OneTreeProps } from "./OneTree";
 import { type RevealRequest, useTreeData } from "./useTreeData";
+import { objectNames } from "../palette/nameIndex";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 beforeEach(() => vi.clearAllMocks());
@@ -209,6 +210,14 @@ test("every_open_connection_is_expanded_at_once", async () => {
     "Saved Queries",
     expect.stringContaining("to keep the query here"),
   ]);
+});
+
+test("each_object_load_keeps_its_names_for_quick_open", async () => {
+  routeInvoke({ list_databases: () => ["shop"], list_objects: () => OBJECTS });
+  render(<Harness connections={[conn("kept", "Shop")]} open={["kept"]} />);
+  await findItem("orders");
+  // Names only: no row estimates, so a closed Connection's tables can still be found by name.
+  expect(objectNames.names("kept")).toEqual(OBJECTS.map((o) => ({ kind: o.kind, database: "shop", schema: null, name: o.name })));
 });
 
 test("connection_row_mark_is_brand_when_open_and_muted_when_closed", async () => {

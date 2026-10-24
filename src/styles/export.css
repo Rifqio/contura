@@ -384,7 +384,7 @@
 }
 
 .export-chooser-row:hover {
-  background: var(--c-bg-hover);
+  background: var(--c-bg-raised-hover);
 }
 
 .export-chooser-name {

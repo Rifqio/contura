@@ -109,7 +109,7 @@ function FilterForm({
               aria-label={d.op === "between" ? "From" : "Value"}
               aria-invalid={tried && problem !== null}
               value={d.value}
-              placeholder={kind === "date" ? "2026-10-01" : kind === "number" ? "500" : ""}
+              placeholder={kind === "date" ? (d.op === "eq" ? "2026-10-01 09:14:07" : "2026-10-01") : kind === "number" ? "500" : ""}
               spellCheck={false}
               autoComplete="off"
               autoFocus

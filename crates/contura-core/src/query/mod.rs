@@ -300,6 +300,28 @@ impl SessionHandle {
         self.ask(|reply| Command::Execute { sql, reply }).await?
     }
 
+    /// N3, MySQL only: a script Contura framed (`ddl::script_frame`) stopped before its
+    /// footer, so the session still runs in the script's mode. When the header's
+    /// `@OLD_SQL_MODE` is set and differs from the session's mode, the kept mode is put back
+    /// and `@OLD_SQL_MODE` cleared, so it is put back once; true when it was.
+    pub async fn restore_script_sql_mode(&self) -> Result<bool> {
+        let differs = match self
+            .execute("SELECT @OLD_SQL_MODE IS NOT NULL AND @OLD_SQL_MODE <> @@SESSION.sql_mode")
+            .await?
+        {
+            ExecOutcome::Rows { rows, .. } => matches!(
+                rows.first().and_then(|r| r.first()),
+                Some(Cell::Number { value }) if value == "1"
+            ),
+            ExecOutcome::Affected { .. } => false,
+        };
+        if differs {
+            self.execute("SET SESSION sql_mode = @OLD_SQL_MODE, @OLD_SQL_MODE = NULL")
+                .await?;
+        }
+        Ok(differs)
+    }
+
     /// Queues `sql` to run after what the session runs now, without waiting for
     /// it or its answer: for a drop guard that must undo a session setting when
     /// the call that made it is dropped.

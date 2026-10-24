@@ -27,7 +27,9 @@ test("a_column_type_picks_how_it_is_filtered", () => {
 test("conditions_become_quoted_sql_per_dialect", () => {
   expect(filterCondition("postgres", "number", f("total", "gte", "500"))).toBe('"total" >= 500');
   expect(filterCondition("mysql", "text", f("status", "eq", "it's"))).toBe("`status` = 'it''s'");
-  expect(filterCondition("mysql", "text", f("note", "contains", "a\\b"))).toBe("LOCATE('a\\\\b', `note`) > 0");
+  // A backslash goes as hex, which reads the same with NO_BACKSLASH_ESCAPES on or off; Postgres uses E''.
+  expect(filterCondition("mysql", "text", f("note", "contains", "a\\b"))).toBe("LOCATE(_utf8mb4 X'615c62', `note`) > 0");
+  expect(filterCondition("postgres", "text", f("note", "eq", "\\' OR 1=1 --"))).toBe(`"note" = E'\\\\'' OR 1=1 --'`);
   expect(filterCondition("postgres", "text", f("note", "contains", "late"))).toBe(`strpos("note"::text, 'late') > 0`);
   expect(filterCondition("sqlite", "text", f("note", "startsWith", "Re"))).toBe(`substr("note", 1, 2) = 'Re'`);
   expect(filterCondition("postgres", "text", f("note", "endsWith", "yet"))).toBe(`right("note"::text, 3) = 'yet'`);
@@ -73,11 +75,24 @@ test("chips_and_sentences_read_as_words", () => {
 });
 
 describe("G13: a filter from a cell's value", () => {
+  it("M11: a timestamp filters by the exact value shown, with its offset, as DataGrip and DBeaver do", () => {
+    const shown = "2026-10-01 23:30:00.123456+07";
+    const f = { id: "f1", ...filterForValue("at", "date", { t: "text", value: shown, truncated: false, totalBytes: shown.length })! };
+    expect(f.op).toBe("eq");
+    // The offset makes it one instant whatever the session's time zone; the day is not taken.
+    expect(filterCondition("postgres", "date", f)).toBe(`"at" = '2026-10-01 23:30:00.123456+07'`);
+    expect(filterCondition("mysql", "date", { ...f, value: "2026-10-01 23:30:00" })).toBe("`at` = '2026-10-01 23:30:00'");
+    expect(filterWords("date", f)).toEqual({ column: "at", condition: "is", value: shown });
+    // A date alone is exact too.
+    expect(filterCondition("sqlite", "date", { ...f, value: "2026-10-01" })).toBe(`"at" = '2026-10-01'`);
+    expect(filterProblem("date", { op: "eq", value: "yesterday" })).not.toBeNull();
+  });
+
   const text = (value: string) => ({ t: "text" as const, value, truncated: false, totalBytes: value.length });
   it("is the column's own condition for its kind, NULL as is NULL", () => {
     expect(filterForValue("status", "text", text("paid"))).toEqual({ column: "status", op: "eq", value: "paid" });
     expect(filterForValue("total", "number", { t: "number", value: "58.00" })).toEqual({ column: "total", op: "eq", value: "58.00" });
-    expect(filterForValue("at", "date", text("2026-10-01 09:14:07+07"))).toEqual({ column: "at", op: "on", value: "2026-10-01" });
+    expect(filterForValue("at", "date", text("2026-10-01 09:14:07+07"))).toEqual({ column: "at", op: "eq", value: "2026-10-01 09:14:07+07" });
     expect(filterForValue("ok", "boolean", text("t"))).toEqual({ column: "ok", op: "isTrue", value: "" });
     expect(filterForValue("ok", "boolean", text("false"))).toEqual({ column: "ok", op: "isFalse", value: "" });
     expect(filterForValue("at", "date", { t: "null" })).toEqual({ column: "at", op: "null", value: "" });

@@ -1,7 +1,8 @@
 import { closeCompletion, currentCompletions } from "@codemirror/autocomplete";
 import { forEachDiagnostic } from "@codemirror/lint";
 import { EditorView } from "@codemirror/view";
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
+import { useKeymap } from "../commands/useCommandKeys";
 import { expect, test, vi } from "vitest";
 import { LangClient, type WorkerLike } from "../lang/client";
 import { KFC_SCHEMA } from "../lang/sql/fixtures";
@@ -526,4 +527,19 @@ test("ctrl_shift_f_in_the_editor_still_goes_to_the_tree_filter", () => {
   key(view, "F", { ctrlKey: true, shiftKey: true, code: "KeyF", keyCode: 70 });
   expect(run).toHaveBeenCalledWith("tree.filter");
   expect(panel(view)).toBeNull();
+});
+
+test("only_the_editor_that_offers_them_gives_the_command_palette_its_commands", () => {
+  const probe = renderHook(() => useKeymap());
+  const plain = setup("SELECT 1;");
+  // A SQL editor elsewhere (not a query tab's own) is never what the palette runs.
+  expect(probe.result.current.available("query.run")).toBe(false);
+  plain.unmount();
+  const main = setup("SELECT 1;", { paletteCommands: true });
+  expect(probe.result.current.available("query.run")).toBe(true);
+  main.view.focus();
+  expect(probe.result.current.invoke("query.run")).toBe(true);
+  expect(main.onRun).toHaveBeenLastCalledWith("current");
+  main.unmount();
+  expect(probe.result.current.available("query.run")).toBe(false);
 });

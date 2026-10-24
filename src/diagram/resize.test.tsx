@@ -227,3 +227,53 @@ test("review_l3_live_boxes_are_kept_per_canvas_so_a_node_with_the_same_id_elsewh
   liveResizes(null).set("t1", { x: 0, y: 0, w: 1, h: 1 });
   expect(liveResizes(null).size).toBe(0);
 });
+
+// ---- F26 (diagram step 5): the usual resize modifiers, Esc, and a double-click on an edge to fit.
+
+test("F26 Shift keeps the box's proportions and Alt resizes around its centre", () => {
+  // 172 x 72: a corner drag of 86 across keeps 2.39 to 1.
+  expect(resizeBox(start, "se", 86, 0, L, false, { ratio: true })).toEqual({ x: 100, y: 100, w: 258, h: 108 });
+  // An edge with Shift grows the other side too, about the middle of that side.
+  expect(resizeBox(start, "e", 43, 0, L, false, { ratio: true })).toEqual({ x: 100, y: 91, w: 215, h: 90 });
+  // Alt: both opposite edges move, the centre stays.
+  expect(resizeBox(start, "e", 20, 0, L, false, { centre: true })).toEqual({ x: 80, y: 100, w: 212, h: 72 });
+  expect(resizeBox(start, "se", 10, 10, L, false, { centre: true })).toEqual({ x: 90, y: 90, w: 192, h: 92 });
+});
+
+test("F26 the keys held on each move decide; Esc during a drag puts the box back and keeps nothing", async () => {
+  const onLive = vi.fn();
+  const onDone = vi.fn();
+  const onCancel = vi.fn();
+  const { container } = render(
+    <div className="host" style={{ position: "relative" }}>
+      <ResizeZones start={() => start} limits={L} onLive={onLive} onDone={onDone} onCancel={onCancel} />
+    </div>,
+  );
+  const e = container.querySelector<HTMLElement>('.rz-zone[data-dir="e"]')!;
+  fireEvent.pointerDown(e, { button: 0, clientX: 10, clientY: 10, pointerId: 1 });
+  fireEvent.pointerMove(e, { clientX: 30, clientY: 10, pointerId: 1, altKey: true });
+  await frame();
+  expect(onLive).toHaveBeenLastCalledWith({ x: 80, y: 100, w: 212, h: 72 }, null);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onCancel).toHaveBeenCalledWith(start, null);
+  fireEvent.pointerUp(e, { clientX: 30, clientY: 10, pointerId: 1 });
+  expect(onDone).not.toHaveBeenCalled();
+});
+
+test("F26 a double-click on an edge or corner fits the box to its content", () => {
+  const onFit = vi.fn();
+  const { container } = render(
+    <div className="host" style={{ position: "relative" }}>
+      <ResizeZones start={() => start} limits={L} onLive={() => {}} onDone={() => {}} onFit={onFit} />
+    </div>,
+  );
+  fireEvent.doubleClick(container.querySelector<HTMLElement>('.rz-zone[data-dir="s"]')!);
+  expect(onFit).toHaveBeenCalledTimes(1);
+});
+
+test("M9 Shift keeps the proportions at the size caps: both sides stop together", () => {
+  // 172 x 72 can grow to 320 wide at most; 72 x 320/172 = 133.95 high, though 200 is allowed.
+  const b = resizeBox(start, "se", 900, 0, L, false, { ratio: true });
+  expect(b.w).toBe(320);
+  expect(b.h).toBeCloseTo((72 * 320) / 172, 5);
+});

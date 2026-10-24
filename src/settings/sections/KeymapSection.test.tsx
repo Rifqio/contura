@@ -18,7 +18,7 @@ async function renderKeymap(over: Parameters<typeof settingsRoutes>[0] = {}, sta
 
 const group = (name: string) => screen.getByRole("region", { name });
 const rowOf = (id: string) => document.querySelector(`[data-row="${id}"]`) as HTMLElement;
-const titles = () => [...document.querySelectorAll(".krow .krow-title > span:first-child")].map((t) => t.firstChild?.textContent);
+const titles = () => [...document.querySelectorAll(".krow:not(.krow-fixed) .krow-title > span:first-child")].map((t) => t.firstChild?.textContent);
 const search = () => screen.getByRole("textbox", { name: "Search shortcuts" });
 
 test("every_command_of_the_registry_is_listed_once_in_the_boards_groups", async () => {
@@ -307,4 +307,31 @@ test("a_save_that_finishes_after_the_user_moved_on_leaves_the_new_capture_alone"
   await waitFor(() => expect(rowOf("query.format").textContent).toContain("Ctrl+Alt+L"));
   expect(screen.getByRole("textbox", { name: "New keys for Save" })).toBe(capture);
   expect(document.activeElement).toBe(capture);
+});
+
+// Polish A6: the editor's own find keys cannot be rebound; taking one turns it off in the editor, so say so first.
+test("polish A6: rebinding to a fixed editor key warns that the editor loses it", async () => {
+  await renderKeymap();
+  await userEvent.click(screen.getByRole("button", { name: "Change the keys for Format" }));
+  await userEvent.keyboard("{Control>}f{/Control}");
+  expect(screen.getByRole("alert").textContent).toContain("Ctrl+F is used by Find in the editor, which has no other key for it. Use it here?");
+  expect(callsTo("save_keymap")).toHaveLength(0);
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(callsTo("save_keymap")).toHaveLength(0);
+  for (const [key, title] of [["{Control>}h{/Control}", "Replace"], ["{Control>}d{/Control}", "Add next occurrence"]] as const) {
+    await userEvent.click(screen.getByRole("button", { name: "Change the keys for Format" }));
+    await userEvent.keyboard(key);
+    expect(screen.getByRole("alert").textContent).toContain(`is used by ${title} in the editor`);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  }
+});
+
+test("polish A6: the fixed editor keys are listed read-only", async () => {
+  await renderKeymap();
+  const block = screen.getByRole("group", { name: "Fixed editor keys" });
+  for (const [title, keys] of [["Find", "Ctrl+F"], ["Replace", "Ctrl+H"], ["Find next", "F3"], ["Find previous", "Shift+F3"], ["Add next occurrence", "Ctrl+D"], ["Close Find", "Esc"]]) {
+    const row = within(block).getByText(title).closest(".krow") as HTMLElement;
+    expect(row.textContent).toContain(keys);
+    expect(within(row).queryByRole("button")).toBeNull();
+  }
 });

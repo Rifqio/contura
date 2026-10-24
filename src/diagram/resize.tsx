@@ -41,23 +41,47 @@ export function liveResizes(canvas: Element | null | undefined): Map<string, Box
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
 
+/** The usual resize modifiers (F26, draw.io and Figma): Shift keeps the proportions, Alt resizes around the centre. */
+export interface ResizeMods {
+  ratio?: boolean;
+  centre?: boolean;
+}
+
 /**
  * The box a drag of `dir` by (dx, dy) canvas px makes: the far edges stay put; `square` keeps a diamond's shape.
- * Nothing is rounded or snapped here: the box follows the pointer exactly, the limits are hard stops, and the owner
- * rounds the size it keeps.
+ * With `ratio` the box keeps its proportions (an edge drag grows the other side about its middle); with `centre`
+ * the opposite edges move too, so the centre stays. Nothing is rounded or snapped here: the box follows the pointer
+ * exactly, the limits are hard stops, and the owner rounds the size it keeps.
  */
-export function resizeBox(start: Box, dir: ResizeDir, dx: number, dy: number, lim: Limits, square = false): Box {
+export function resizeBox(start: Box, dir: ResizeDir, dx: number, dy: number, lim: Limits, square = false, mods: ResizeMods = {}): Box {
+  const k = mods.centre ? 2 : 1;
+  const horiz = dir.includes("e") || dir.includes("w");
+  const vert = dir.includes("n") || dir.includes("s");
   let w = start.w;
   let h = start.h;
-  if (dir.includes("e")) w = clamp(start.w + dx, lim.minW, lim.maxW);
-  if (dir.includes("w")) w = clamp(start.w - dx, lim.minW, lim.maxW);
-  if (dir.includes("s")) h = clamp(start.h + dy, lim.minH, lim.maxH);
-  if (dir.includes("n")) h = clamp(start.h - dy, lim.minH, lim.maxH);
+  if (dir.includes("e")) w = start.w + dx * k;
+  if (dir.includes("w")) w = start.w - dx * k;
+  if (dir.includes("s")) h = start.h + dy * k;
+  if (dir.includes("n")) h = start.h - dy * k;
+  if (mods.ratio && start.w > 0 && start.h > 0) {
+    let scale = horiz && vert ? Math.max(w / start.w, h / start.h) : horiz ? w / start.w : h / start.h;
+    // Both sides stop together at the caps, so the proportions hold there too (M9).
+    scale = Math.min(Math.max(scale, lim.minW / start.w, lim.minH / start.h), lim.maxW / start.w, lim.maxH / start.h);
+    w = start.w * scale;
+    h = start.h * scale;
+  }
+  w = clamp(w, lim.minW, lim.maxW);
+  h = clamp(h, lim.minH, lim.maxH);
   if (square) {
     const side = dir.length === 2 ? Math.max(w, h) : dir === "e" || dir === "w" ? w : h;
     w = h = clamp(side, Math.max(lim.minW, lim.minH), Math.min(lim.maxW, lim.maxH));
   }
-  return { x: dir.includes("w") ? start.x + start.w - w : start.x, y: dir.includes("n") ? start.y + start.h - h : start.y, w, h };
+  // Which way each side grows: from the centre (Alt, or the side a Shift edge drag grows), else away from the far edge.
+  const midX = mods.centre || (mods.ratio && !horiz);
+  const midY = mods.centre || (mods.ratio && !vert);
+  const x = midX ? start.x + (start.w - w) / 2 : dir.includes("w") ? start.x + start.w - w : start.x;
+  const y = midY ? start.y + (start.h - h) / 2 : dir.includes("n") ? start.y + start.h - h : start.y;
+  return { x, y, w, h };
 }
 
 /** The canvas zoom at `el`: a screen pixel is 1 / zoom of the canvas's own. */
@@ -78,15 +102,17 @@ export interface ResizeZonesProps {
   onLive(box: Box, node: HTMLElement | null): void;
   /** Once, when the drag ends. */
   onDone(box: Box, start: Box, node: HTMLElement | null): void;
-  /** The zones went away mid-drag (zoomed out, selection cleared): nothing is kept; the owner puts the box back. */
+  /** The zones went away mid-drag (zoomed out, selection cleared) or Esc was pressed: nothing is kept; the owner puts the box back. */
   onCancel?(start: Box, node: HTMLElement | null): void;
+  /** A double-click on an edge or corner: the box fits its content again (draw.io; erd-ux-research 5.5). */
+  onFit?(): void;
 }
 
 /**
  * The eight zones and the size readout. Pointer capture keeps the drag on the zone, so its listeners sit there
  * alone; release and unmount remove every one. React state changes only when a drag starts and ends.
  */
-export function ResizeZones({ start, limits, square = false, onLive, onDone, onCancel }: ResizeZonesProps) {
+export function ResizeZones({ start, limits, square = false, onLive, onDone, onCancel, onFit }: ResizeZonesProps) {
   const [dragging, setDragging] = useState(false);
   const readout = useRef<HTMLSpanElement>(null);
   const stop = useRef<(() => void) | null>(null);
@@ -119,14 +145,23 @@ export function ResizeZones({ start, limits, square = false, onLive, onDone, onC
       onLive(box, node);
     };
     const move = (ev: PointerEvent) => {
-      box = resizeBox(from, dir, (ev.clientX - sx) / zoom, (ev.clientY - sy) / zoom, lim, square);
+      box = resizeBox(from, dir, (ev.clientX - sx) / zoom, (ev.clientY - sy) / zoom, lim, square, { ratio: ev.shiftKey, centre: ev.altKey });
       if (!frame) frame = requestAnimationFrame(paint);
+    };
+    // Esc puts the box back where it was (F26).
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      cleanup(true);
+      onCancel?.(from!, node);
     };
     const cleanup = (live: boolean) => {
       zone.removeEventListener("pointermove", move);
       zone.removeEventListener("pointerup", end);
       zone.removeEventListener("pointercancel", end);
       zone.removeEventListener("lostpointercapture", end);
+      window.removeEventListener("keydown", key, true);
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
       try {
@@ -145,6 +180,7 @@ export function ResizeZones({ start, limits, square = false, onLive, onDone, onC
     zone.addEventListener("pointerup", end);
     zone.addEventListener("pointercancel", end);
     zone.addEventListener("lostpointercapture", end);
+    window.addEventListener("keydown", key, true);
     stop.current = () => {
       cleanup(false);
       onCancel?.(from!, node);
@@ -156,7 +192,10 @@ export function ResizeZones({ start, limits, square = false, onLive, onDone, onC
   return (
     <>
       {RESIZE_DIRS.map((d) => (
-        <span key={d} className={`rz-zone rz-${d} nodrag nopan${dragging ? " rz-dragging" : ""}`} data-dir={d} aria-hidden="true" onPointerDown={down(d)} />
+        <span key={d} className={`rz-zone rz-${d} nodrag nopan${dragging ? " rz-dragging" : ""}`} data-dir={d} aria-hidden="true" onPointerDown={down(d)} onDoubleClick={onFit && ((e) => {
+          e.stopPropagation();
+          onFit();
+        })} />
       ))}
       <span ref={readout} className={dragging ? "rz-readout rz-readout-on" : "rz-readout"} aria-hidden="true" />
     </>

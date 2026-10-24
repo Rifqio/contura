@@ -335,6 +335,67 @@ pub struct SortSpec {
     pub descending: bool,
 }
 
+/// UX step 8: a count stops after this many rows and one more, which reads as "1,000+".
+pub const COUNT_CAP: u64 = 1000;
+
+/// UX step 8: how many rows of a table match a filter, the same filter a page takes.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CountRequest {
+    pub table: ObjectPath,
+    #[serde(default)]
+    pub filter: Option<String>,
+}
+
+impl CountRequest {
+    /// ` WHERE (...)` for the filter, or nothing, as a page's.
+    pub fn where_sql(&self) -> String {
+        filter_where(self.filter.as_deref())
+    }
+}
+
+/// Back after a followed key (M3): where the row with `key` is under a page's sort and
+/// filter, so a row that only moved to another page is found there.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocateRequest {
+    pub table: ObjectPath,
+    pub sort: Option<SortSpec>,
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// The row's primary key, every part.
+    pub key: Vec<KeyPart>,
+}
+
+impl LocateRequest {
+    /// ` WHERE (...)` for the filter, or nothing, as a page's.
+    pub fn where_sql(&self) -> String {
+        filter_where(self.filter.as_deref())
+    }
+}
+
+/// Where a row is: its 0-based place in the page order (the page is `index / PAGE_SIZE`),
+/// no row has the key under the filter, or the server's time limit ran out first.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RowPlace {
+    Found {
+        index: u64,
+    },
+    Missing,
+    TimedOut,
+    /// The server can't work a place out (MySQL 5.7 has no window functions).
+    Unsupported,
+}
+
+/// A count: at most `COUNT_CAP + 1` rows, or the server's time limit ran out first.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RowCount {
+    Counted { rows: u64 },
+    TimedOut,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PageRequest {
@@ -346,15 +407,20 @@ pub struct PageRequest {
     pub filter: Option<String>,
 }
 
+/// ` WHERE (...)` for a filter, or nothing. The filter sits on lines of its own, so a
+/// `--` comment in it cannot reach what follows. Callers also check the whole query is
+/// one statement before running it.
+fn filter_where(filter: Option<&str>) -> String {
+    match filter.map(str::trim) {
+        Some(f) if !f.is_empty() => format!(" WHERE (\n{f}\n)"),
+        _ => String::new(),
+    }
+}
+
 impl PageRequest {
-    /// ` WHERE (...)` for the filter, or nothing. The filter sits on lines of its
-    /// own, so a `--` comment in it cannot reach the ORDER BY and LIMIT after it.
-    /// Callers also check the whole query is one statement before running it.
+    /// ` WHERE (...)` for the filter, or nothing.
     pub fn where_sql(&self) -> String {
-        match self.filter.as_deref().map(str::trim) {
-            Some(f) if !f.is_empty() => format!(" WHERE (\n{f}\n)"),
-            _ => String::new(),
-        }
+        filter_where(self.filter.as_deref())
     }
 
     pub fn has_filter(&self) -> bool {

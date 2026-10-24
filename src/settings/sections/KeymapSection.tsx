@@ -1,7 +1,7 @@
 import { Fragment, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { errorText } from "../../api/client";
 import type { KeymapOverrides } from "../../api/types";
-import { type Clash, applyRebind, findClash, keyProblem, keysFor, resetCommand } from "../../commands/keymap";
+import { type Clash, applyRebind, editorFixedKeys, findClash, keyProblem, keysFor, resetCommand } from "../../commands/keymap";
 import { keysFromEvent, normalizeKeys } from "../../commands/keys";
 import { COMMANDS, type Command, type CommandId, commandById } from "../../commands/registry";
 import { platform } from "../../platform";
@@ -32,18 +32,24 @@ export const KEYMAP_GROUPS: { name: string; ids: (CommandId | Fold)[] }[] = [
     name: "Queries and the editor",
     ids: ["query.run", "query.runAll", "query.explain", "query.format", "query.save", "editor.ask", "editor.quickFix", "editor.rename", "editor.definition", "editor.parameterHints"],
   },
-  { name: "Tabs and windows", ids: ["query.new", "tab.close", "tab.reopen", "tab.next", "tab.previous", "tab.goto", "pane.next", "pane.previous", "home.open", "settings.open", "history.toggle"] },
+  { name: "Tabs and windows", ids: ["quickOpen.show", "palette.show", "query.new", "tab.close", "tab.reopen", "tab.next", "tab.previous", "tab.goto", "pane.next", "pane.previous", "nav.back", "nav.forward", "home.open", "settings.open", "history.toggle"] },
   { name: "Connections and schema", ids: ["connection.new", "tree.filter", "tree.refresh", "group.open"] },
   { name: "AI assistant", ids: ["assistant.toggle", "assistant.newChat"] },
   {
     name: "Data, Visual Query and diagrams",
-    ids: ["export.open", "visualQuery.openInEditor", "diagram.toggle", "flow.new", "flow.fromMermaid", "flow.saveCopy", "flow.rename", "flow.delete"],
+    ids: ["export.open", "grid.followKey", "grid.rowsPointingHere", "grid.moveColumnLeft", "grid.moveColumnRight", "visualQuery.openInEditor", "diagram.toggle", "flow.new", "flow.fromMermaid", "flow.saveCopy", "flow.rename", "flow.delete"],
   },
 ];
 
 /** Where a command works, when it is not everywhere. */
 const NOTES: Partial<Record<CommandId, string>> = {
   "export.open": "In a table grid or a result",
+  "grid.followKey": "In a table grid",
+  "grid.rowsPointingHere": "In a table grid",
+  "grid.moveColumnLeft": "In a table grid or a result",
+  "grid.moveColumnRight": "In a table grid or a result",
+  "nav.back": "Alt+Left in a grid, the tree or a tab",
+  "nav.forward": "Alt+Right in a grid, the tree or a tab",
   "visualQuery.openInEditor": "In a Visual Query tab",
   "diagram.toggle": "In a Visual Query tab",
 };
@@ -61,6 +67,7 @@ type FocusTo = { row: CommandId; order: readonly CommandId[] } | { search: true 
 
 /** The question before keys move: what has them now, and what it is left with. */
 function clashText(keys: string, clash: Clash, map: ReturnType<typeof useKeymap>["map"]): string {
+  if (clash.kind === "editor" && clash.fixed) return `${keys} is used by ${clash.title} in the editor, which has no other key for it. Use it here?`;
   if (clash.kind === "editor") return `${keys} is used by ${clash.title} in the editor. Use it here?`;
   const left = keysFor(map, clash.id).filter((k) => k !== keys);
   return left.length === 0
@@ -116,6 +123,7 @@ function Capture({ command, pressed, onPress, onCancel }: CaptureProps) {
       ref={field}
       readOnly
       className="input mono keymap-capture"
+      data-keys-own=""
       aria-label={`New keys for ${command.title}`}
       placeholder="Press the new keys, Esc to cancel"
       value={pressed?.keys ?? ""}
@@ -268,6 +276,12 @@ export default function KeymapSection({ title, desc }: { title: string; desc: st
     return { name: g.name, rows };
   }).filter((g) => g.rows.length > 0);
   order.current = groups.flatMap((g) => g.rows).filter((id): id is CommandId => !isFold(id));
+
+  /** The editor's own keys, shown for what they are: read-only, and gone from the editor if a command takes one. */
+  const fixedRows = editorFixedKeys().filter((f) => {
+    if (filter === "app" || filter === "changed") return false;
+    return query === "" || (byKeys ? normalizeKeys(f.keys) === normalizeKeys(query) : matches(query, f.title, f.keys, "Fixed editor keys"));
+  });
 
   function commandRow(c: Command) {
     const keys = keysFor(map, c.id);
@@ -452,7 +466,27 @@ export default function KeymapSection({ title, desc }: { title: string; desc: st
           )}
         </section>
       ))}
-      {groups.length === 0 && (
+      {fixedRows.length > 0 && (
+        <div className="scard" role="group" aria-label="Fixed editor keys">
+          <h2 className="scard-head kgroup-head">
+            <span>Fixed editor keys</span>
+            <span className="srow-hint">The editor keeps these; they cannot be changed</span>
+          </h2>
+          {fixedRows.map((f) => (
+            <div key={f.title} className="krow krow-fixed">
+              <span className="krow-title">
+                <span>{f.title}</span>
+              </span>
+              <span className="krow-scope">Editor</span>
+              <span className="krow-keys">
+                <Keys keys={[f.keys === "Escape" ? "Esc" : f.keys]} />
+              </span>
+              <span className="krow-actions" />
+            </div>
+          ))}
+        </div>
+      )}
+      {groups.length === 0 && fixedRows.length === 0 && (
         <p className="settings-note muted">
           No shortcut matches.{" "}
           <button

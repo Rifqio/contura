@@ -57,6 +57,29 @@ export const NOTE_KINDS: ReadonlySet<DiagramKind> = new Set(["flow", "sequence",
 export const STATE_START = "[*] start";
 export const STATE_END = "[*] end";
 
+/** What an ER column says about itself in brackets, in the order the writer writes them. */
+export type ColumnFlag = "pk" | "not null" | "unique";
+export const COLUMN_FLAGS: readonly ColumnFlag[] = ["pk", "not null", "unique"];
+
+/**
+ * A column's flags as the writer writes them: ` [pk, not null, unique]` in that order, only those set, or nothing.
+ * Each flag is written as it is, so toggling one never touches another (a key still means not null when read).
+ */
+export function columnFlagsText(flags: Iterable<ColumnFlag>): string {
+  const set = new Set(flags);
+  const out = COLUMN_FLAGS.filter((f) => set.has(f));
+  return out.length ? ` [${out.join(", ")}]` : "";
+}
+
+/** A table whose column lines read back as `table.column`: a plain name with no dot that needs no quotes. */
+export const columnsWritable = (table: string) => !table.includes(".") && !needsQuotes(table);
+
+/** An ER column name the canvas writes: letters, digits and _ (board ER interactions). */
+export const isColumnName = (s: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+
+/** A column type runs to the flags or the end of the line, so it may not hold what the line reads as syntax. */
+export const isColumnType = (s: string) => s === "" || (s === s.trim() && !needsQuotes(s) && !s.includes(".."));
+
 export type FlowAttrKey = "id" | "icon" | "color" | "table";
 export const ATTR_KEYS: readonly FlowAttrKey[] = ["id", "icon", "color", "table"];
 
@@ -74,6 +97,11 @@ export interface FlowNode {
    * members (`Invoice : + send()`) as "+ send()", in the order they are written.
    */
   rows?: string[];
+  /**
+   * An ER entity's column flags (`customers.id int [pk]`), one list per row in `rows`, written in COLUMN_FLAGS
+   * order. Absent when no column of the entity has any.
+   */
+  rowFlags?: ColumnFlag[][];
   /** A mind map topic's depth: 1 for a topic, 2 for a subtopic, and so on (the root is 0). */
   depth?: number;
   /** A timeline item's date (`2026-10-19`, `2026-10`), and a period's end. */
@@ -126,6 +154,18 @@ export interface FlowLink {
   tree?: boolean;
   /** Written on the same line as the link before it (`A > B > C`); set only when neither has a label. */
   chained?: boolean;
+  /**
+   * ER build C: an ER relationship's column at each end (`invoices.customer_id *--1 customers.id`); `from` and `to`
+   * stay the tables, so a line between columns draws and deletes as a line between tables does. Absent on a
+   * table-to-table line.
+   */
+  fromColumn?: string;
+  toColumn?: string;
+}
+
+/** A line end as .flow writes it: the node's name, then `.column` for an ER relationship's column. */
+export function linkEndText(name: string, column?: string): string {
+  return column === undefined ? flowName(name) : `${flowName(name)}.${column}`;
 }
 
 export interface FlowGroup {
@@ -153,6 +193,18 @@ export interface FlowDoc {
   activations?: { name: string; from: number; to: number }[];
   /** A timeline's sections, in order. */
   sections?: string[];
+}
+
+/**
+ * The most text a canvas paste or a Mermaid import reads (1 MB), and the most shapes a diagram they write may hold:
+ * past them the drawing, the layout and the editor would no longer stay light (memory is a requirement).
+ */
+export const MAX_FLOW_TEXT = 1024 * 1024;
+export const MAX_FLOW_NODES = 2000;
+
+/** True when `text` is over MAX_FLOW_TEXT, in characters or in UTF-8 bytes. */
+export function overTextLimit(text: string): boolean {
+  return text.length > MAX_FLOW_TEXT || (text.length * 3 > MAX_FLOW_TEXT && new TextEncoder().encode(text).length > MAX_FLOW_TEXT);
 }
 
 /** Groups nest at most this deep, as Mermaid import caps them, so the parser, writer and canvas stay small. */
@@ -215,4 +267,28 @@ export function nodeStatement(diagram: DiagramKind | null, node: Pick<FlowNode, 
   const parts: string[] = unsaid ? [] : [node.kind];
   for (const [key, value] of Object.entries(node.attrs)) parts.push(`${key}: ${flowValue(value)}`);
   return parts.length ? `${name} [${parts.join(", ")}]` : name;
+}
+
+/**
+ * An ER table's free name (fix round 1): `name` when no table has it in any case (SQL folds unquoted names), else
+ * `name_2`, `name_3`. Only a trailing `_N` the app itself added counts on: `orders_2` exists because `orders` does,
+ * so its copy is `orders_3`; `log_2024` is a name of its own, so its copy is `log_2024_2`. With `first`, the name is
+ * always numbered, from `name_<first>` on.
+ */
+export function sqlFreeName(name: string, taken: Iterable<string>, first?: number): string {
+  const lower = new Set<string>();
+  for (const t of taken) lower.add(t.toLowerCase());
+  // A numbered series (ER build C: a table added by double-click is table_1, table_2): never the bare name.
+  if (first !== undefined) {
+    for (let n = first; ; n++) if (!lower.has(`${name}_${n}`.toLowerCase())) return `${name}_${n}`;
+  }
+  if (!lower.has(name.toLowerCase())) return name;
+  let base = name;
+  let n = 2;
+  const m = /^(.+)_(\d+)$/.exec(name);
+  if (m && Number(m[2]) >= 2 && lower.has(m[1].toLowerCase())) {
+    base = m[1];
+    n = Number(m[2]) + 1;
+  }
+  for (; ; n++) if (!lower.has(`${base}_${n}`.toLowerCase())) return `${base}_${n}`;
 }

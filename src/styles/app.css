@@ -803,10 +803,15 @@ ul {
   padding: var(--spacing-sm) var(--spacing-md);
 }
 
-/* Right-click and More menus sit at a point in the window. */
+/*
+ * Right-click and More menus sit at a point in the window. A fixed box at a left near the right edge would shrink to the
+ * room left and cut its labels; it keeps its own width instead and the menu's clamp moves it left.
+ */
 .tree-menu {
   position: fixed;
   z-index: 200;
+  width: max-content;
+  max-width: calc(100vw - 8px);
 }
 
 .tree-menu > .menu {
@@ -1220,23 +1225,116 @@ ul {
   color: var(--type-hint-text);
 }
 
-/* R5: a 4 px drag handle on each header's right edge. */
-.col-resize {
+/* R5: the drag handle straddles a column edge (Excel, DataGrip): 4 px inside the header, and 4 px at the left of the
+   next header (a header clips what it holds, so the far side is that header's own zone). Both resize the same column. */
+.col-resize,
+.col-resize-lead {
   position: absolute;
   top: 0;
-  right: 0;
   bottom: 0;
   width: 4px;
   cursor: col-resize;
 }
+.col-resize {
+  right: 0;
+}
+.col-resize-lead {
+  left: 0;
+}
 
-.col-resize:hover {
+.col-resize:hover,
+.col-resize-lead:hover {
   background: var(--c-accent);
 }
 
 body.col-resizing {
   cursor: col-resize;
   user-select: none;
+}
+
+/*
+ * Moving a column (view only), the GridColumnOrder board: the source column dims where it was (AG Grid, DataGrip),
+ * a copy of its header follows the pointer (AG Grid), an accent bar with notches marks the gap it drops into
+ * (DBeaver, Excel), and a side the grid is scrolling to glows. The three live on the page, placed by ResultGrid.
+ */
+/* The notes of moving a column, in the table footer's live region: one line, cut short rather than wrapped. */
+.table-order-note {
+  font: var(--font-small);
+  color: var(--c-text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.col-moving,
+body.col-moving .grid .header-button {
+  cursor: grabbing;
+  user-select: none;
+}
+.grid th.col-drag-source {
+  background: var(--c-bg-active);
+  opacity: 0.45;
+}
+.grid td.col-drag-source {
+  opacity: 0.45;
+}
+.col-drag-ghost {
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: calc(var(--grid-header-height) - 4px);
+  padding: var(--grid-header-padding);
+  overflow: hidden;
+  white-space: nowrap;
+  background: var(--c-bg-raised);
+  --c-bg-hover: var(--c-bg-raised-hover);
+  border: var(--border-hairline) solid var(--c-accent);
+  border-radius: var(--rounded-sm);
+  box-shadow: var(--shadow-menu);
+  opacity: 0.92;
+  pointer-events: none;
+}
+.col-drag-mark {
+  position: fixed;
+  z-index: 301;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--c-accent);
+  pointer-events: none;
+}
+.col-drag-mark::before,
+.col-drag-mark::after {
+  content: "";
+  position: absolute;
+  left: -4px;
+  border: 5px solid transparent;
+}
+.col-drag-mark::before {
+  top: 0;
+  border-bottom-width: 0;
+  border-top-color: var(--c-accent);
+}
+.col-drag-mark::after {
+  bottom: 0;
+  border-top-width: 0;
+  border-bottom-color: var(--c-accent);
+}
+.col-drag-edge {
+  position: fixed;
+  z-index: 299;
+  width: 28px;
+  pointer-events: none;
+}
+.col-drag-edge[hidden] {
+  display: none;
+}
+.col-drag-edge-left {
+  background: linear-gradient(90deg, var(--grid-selection-fill), transparent);
+}
+.col-drag-edge-right {
+  background: linear-gradient(270deg, var(--grid-selection-fill), transparent);
 }
 
 .grid td {
@@ -1989,7 +2087,7 @@ button.group-card-name:hover {
 
 .menu-item:hover,
 .menu-item:focus-visible {
-  background: var(--c-bg-hover);
+  background: var(--c-bg-raised-hover);
 }
 
 .menu-item:focus-visible {
@@ -2199,7 +2297,7 @@ button.group-card-name:hover {
 }
 
 .select-option-active {
-  background: var(--c-bg-hover);
+  background: var(--c-bg-raised-hover);
 }
 
 .select-option-on,
@@ -2729,7 +2827,22 @@ textarea.input {
   outline: 2px solid var(--c-accent);
   outline-offset: -2px;
 }
-/* The snap grid (DESIGN-NEXT 10.6): 16 px dots in the border colour, 80 px dots in the strong border at 50 percent. */
+/* Smart guides while a card is dragged (erd-ux-research 5.5): 1 px accent lines at any zoom, taking no pointer. */
+.diagram-guides {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+.diagram-guides line {
+  stroke: var(--c-accent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+/* The dot grid (DESIGN-NEXT 10.6): 16 px dots in the border colour, 80 px dots in the strong border at 50 percent. */
 .diagram-canvas .diagram-grid-minor {
   fill: var(--c-border);
 }
@@ -6675,7 +6788,7 @@ button.chip[aria-pressed="true"] {
   cursor: pointer;
 }
 .mrow:hover {
-  background: var(--c-bg-hover);
+  background: var(--c-bg-raised-hover);
 }
 .mrow.on {
   background: var(--c-accent-subtle);
@@ -10528,7 +10641,7 @@ button.dbox:hover,
 }
 .vq-join-kind:hover:not(:disabled),
 .vq-pick-choice:hover {
-  background: var(--c-bg-active);
+  background: var(--c-bg-raised-hover);
 }
 .vq-join-kind:disabled {
   color: var(--c-text-subtle);
@@ -11430,7 +11543,7 @@ button.dbox:hover,
 }
 .new-tab-item:hover,
 .new-tab-item:focus-visible {
-  background: var(--c-bg-hover);
+  background: var(--c-bg-raised-hover);
 }
 .new-tab-item:focus-visible {
   outline: var(--focus-ring-width) solid var(--c-focus);
@@ -11663,7 +11776,7 @@ button.dbox:hover,
     color var(--motion-fast) var(--ease-enter);
 }
 .filter-quick-button:hover {
-  background: var(--c-bg-hover);
+  background: var(--c-bg-raised-hover);
   color: var(--c-text);
 }
 .filter-quick-button.is-on {
@@ -12625,7 +12738,7 @@ button.dbox:hover,
   outline-offset: -1px;
 }
 .cm-editor .cm-search .cm-button {
-  background: var(--c-bg-hover);
+  background: var(--c-bg-raised);
   background-image: none;
   color: var(--c-text);
   border: var(--border-hairline) solid var(--c-border);
@@ -12635,7 +12748,7 @@ button.dbox:hover,
   cursor: pointer;
 }
 .cm-editor .cm-search .cm-button:hover {
-  background: var(--c-bg-active);
+  background: var(--c-bg-raised-hover);
 }
 .cm-editor .cm-search .cm-button:focus-visible {
   outline: 2px solid var(--c-focus);
@@ -12672,4 +12785,364 @@ button.dbox:hover,
 .cm-editor.cm-focused .cm-nonmatchingBracket {
   background: var(--c-danger-subtle);
   outline: 1px solid var(--c-danger-solid);
+}
+
+/* UX step 6 (S1): Quick Open and the Command Palette, VS Code's quick pick at the top centre under the title bar. */
+.qo {
+  position: fixed;
+  top: calc(var(--title-bar-height) + var(--spacing-xs));
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  z-index: 300;
+  width: min(620px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  box-sizing: border-box;
+  background: var(--c-bg-raised);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-dialog);
+  animation: menu-in var(--motion-base) var(--ease-enter);
+}
+.qo-input {
+  height: 28px;
+  border-color: var(--c-accent);
+}
+.qo-list {
+  /* Ten rows, then the list scrolls; the wheel scrolls without moving the selection. */
+  max-height: calc(26px * 10);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.qo-row {
+  position: relative;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0 var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  font: var(--font-body);
+  color: var(--c-text);
+}
+/* Hover only highlights; the keyboard selection keeps its own fill and mark. */
+.qo-row:hover {
+  background: var(--c-bg-raised-hover);
+}
+.qo-row-on,
+.qo-row-on:hover {
+  background: var(--c-accent-subtle);
+}
+.qo-row-on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--c-accent);
+}
+.qo-row-section {
+  border-top: var(--border-hairline) solid var(--c-border);
+  border-radius: 0 0 var(--rounded-sm) var(--rounded-sm);
+}
+.qo-icon {
+  flex-shrink: 0;
+  color: var(--c-text-subtle);
+}
+.qo-label {
+  flex-shrink: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qo-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+.qo-hit {
+  color: var(--c-accent-text);
+  font-weight: 700;
+}
+.qo-conn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: var(--font-small);
+  color: var(--c-text-muted);
+}
+.qo-conn-closed {
+  color: var(--c-text-subtle);
+}
+.qo-keys {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 2px;
+}
+.qo-section {
+  flex-shrink: 0;
+  padding-left: 6px;
+  font: var(--font-micro);
+  color: var(--c-text-subtle);
+}
+.qo-empty {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--spacing-sm);
+  font: var(--font-body);
+  color: var(--c-text-subtle);
+}
+@media (prefers-reduced-motion: reduce) {
+  .qo {
+    animation: none;
+  }
+}
+
+/*
+ * UX step 8 (G8): follow a Foreign Key. The arrow sits in a slot kept free at a key cell's right, so the value never
+ * moves when it shows (TablePlus); it shows on the hovered row and on the active cell (Beekeeper), never on NULL.
+ */
+.grid td.fk-cell {
+  position: relative;
+  padding-right: 26px;
+}
+.grid td .fk-go {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text-muted);
+  cursor: pointer;
+}
+.grid tr:hover td .fk-go,
+.grid td.cell-selected .fk-go {
+  display: flex;
+}
+.grid td .fk-go:hover {
+  background: var(--c-bg-active);
+  color: var(--c-accent-text);
+  box-shadow: inset 0 0 0 1px var(--c-border);
+}
+.grid td.cell-selected .fk-go {
+  color: var(--c-accent-text);
+}
+/* The row a followed key opened flashes once. */
+.grid tr.row-jumped td {
+  animation: fk-landed 1.4s var(--ease-enter);
+}
+@keyframes fk-landed {
+  from,
+  70% {
+    background-color: var(--c-accent-subtle);
+  }
+}
+.table-header-nav {
+  display: inline-flex;
+  align-items: center;
+}
+.table-header-nav .icon-button[aria-disabled="true"] {
+  color: var(--c-text-subtle);
+  cursor: default;
+}
+
+/* The list under a cell that picks where a key goes (DataGrip's choose-target popup). */
+.key-picker {
+  position: fixed;
+  z-index: 200;
+  width: 400px;
+  padding: var(--spacing-xs);
+  background: var(--c-bg-raised);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-menu);
+  animation: menu-in var(--motion-base) var(--ease-enter);
+  outline: none;
+}
+.key-picker-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 8px 4px;
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.key-picker-head b {
+  color: var(--c-text);
+  font-weight: 600;
+}
+.key-picker-from {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+}
+.key-picker-hint {
+  margin-left: auto;
+}
+.key-picker-group {
+  margin-top: 2px;
+  padding: 6px 8px 2px;
+  border-top: var(--border-hairline) solid var(--c-border);
+  font: var(--font-small);
+  color: var(--c-text-subtle);
+}
+.key-picker-group-first {
+  margin-top: 0;
+  padding-top: 2px;
+  border-top: none;
+}
+.key-picker-item {
+  position: relative;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--rounded-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.key-picker-item:hover {
+  background: var(--c-bg-raised-hover);
+}
+.key-picker-on {
+  background: var(--c-accent-subtle);
+}
+.key-picker-on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--c-accent);
+}
+.key-picker-icon {
+  flex: none;
+  color: var(--c-text-subtle);
+}
+.key-picker-table {
+  flex: none;
+}
+.key-picker-by {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  color: var(--c-text-subtle);
+}
+.key-picker-meta {
+  flex: none;
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-subtle);
+}
+.key-picker-on :is(.key-picker-by, .key-picker-meta, .key-picker-icon) {
+  color: var(--c-text-muted);
+}
+.key-picker-off {
+  cursor: default;
+}
+.key-picker-off .key-picker-table {
+  color: var(--c-text-subtle);
+}
+.key-picker-off:hover {
+  background: none;
+}
+
+/* The hover fill on a raised surface is lighter in Dracula, so the subtle text on it steps up to muted to keep 4.5:1. */
+.menu-item:is(:hover, :focus-visible) :is(.menu-shortcut, .menu-hint, .menu-chevron),
+.qo-row:hover :is(.qo-desc, .qo-icon),
+.select-option-active .select-hint,
+.mrow:hover :is(.mrow-note, .mrow-win) {
+  color: var(--c-text-muted);
+}
+
+/* The one tooltip (tooltipGuard.ts): drawn inside the window, under its control or above it. */
+.app-tip {
+  position: fixed;
+  z-index: 400;
+  max-width: min(280px, calc(100vw - 8px));
+  padding: 4px 8px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-raised);
+  box-shadow: var(--shadow-menu);
+  color: var(--c-text);
+  font: var(--font-small);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  animation: menu-in var(--motion-fast) var(--ease-enter);
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-tip {
+    animation: none;
+  }
+}
+
+/* M7: the selection's Count and Sum, beside the pager and the result's note. */
+.table-selection,
+.results-selection {
+  font: var(--font-small);
+  color: var(--c-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fix round 1: inside a raised surface the neutral hover is the raised one, so a dialog's X, a toast's Undo and every
+   popover row show their hover in Dracula (there --c-bg-hover equals --c-bg-raised). Custom properties inherit, so
+   one declaration covers the surface and everything in it. */
+.menu,
+.select-list,
+.dialog,
+.dialog-discard,
+.card-popover,
+.card-menu,
+.publish-size,
+.toast,
+.mmenu,
+.sent-pop,
+.ask-btn,
+.ask-pop,
+.vq-drop-chip,
+.vq-popover,
+.new-tab-menu,
+.filter-form,
+.cell-editor-tip,
+.cell-large,
+.cm-editor .cm-panels,
+.qo,
+.key-picker,
+.export-chooser {
+  --c-bg-hover: var(--c-bg-raised-hover);
 }

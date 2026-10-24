@@ -1,5 +1,6 @@
 import type { KeymapOverrides } from "../api/types";
 import { normalizeKeys, parseKeys } from "./keys";
+import { platform } from "../platform";
 import { COMMANDS, type CommandId, REGION_SHARED_KEYS, commandById } from "./registry";
 
 export type Keymap = ReadonlyMap<CommandId, string[]>;
@@ -22,6 +23,22 @@ export const EDITOR_RESERVED: readonly { keys: string; title: string }[] = [
   { keys: "Shift+Alt+ArrowDown", title: "Copy line down" },
   { keys: "Ctrl+Shift+K", title: "Delete line" },
 ];
+
+/**
+ * The editor keys that cannot be rebound: the find keys and Ctrl+D live in the editor itself (src/lang/editingBasics.ts).
+ * An app command given one of them would run first and turn the editor's own use off, so a rebind says so first.
+ */
+export function editorFixedKeys(): readonly { keys: string; title: string }[] {
+  return [
+    { keys: "Ctrl+F", title: "Find" },
+    // Cmd+H hides the app on a Mac, so Replace sits on Cmd+Alt+F there.
+    { keys: platform() === "mac" ? "Ctrl+Alt+F" : "Ctrl+H", title: "Replace" },
+    { keys: "F3", title: "Find next" },
+    { keys: "Shift+F3", title: "Find previous" },
+    { keys: "Ctrl+D", title: "Add next occurrence" },
+    { keys: "Escape", title: "Close Find" },
+  ];
+}
 
 /** Every command's keys: its override when there is one (an empty list unbinds it), else its defaults. */
 export function resolveKeymap(o: KeymapOverrides): Keymap {
@@ -48,7 +65,7 @@ export function hintFor(map: Keymap, id: CommandId): string | null {
   return keysFor(map, id)[0] ?? null;
 }
 
-export type Clash = { kind: "command"; id: CommandId; title: string } | { kind: "editor"; title: string };
+export type Clash = { kind: "command"; id: CommandId; title: string } | { kind: "editor"; title: string; fixed?: true };
 
 /** What else already uses `keys`: another command first, then an editor key. */
 export function findClash(map: Keymap, id: CommandId, keys: string): Clash | null {
@@ -57,6 +74,8 @@ export function findClash(map: Keymap, id: CommandId, keys: string): Clash | nul
     if (other !== id && ks.includes(k) && !REGION_SHARED_KEYS.some((r) => r.keys === k && r.ids.includes(id) && r.ids.includes(other)))
       return { kind: "command", id: other, title: commandById(other)!.title };
   }
+  const fixed = editorFixedKeys().find((r) => r.keys === k);
+  if (fixed) return { kind: "editor", title: fixed.title, fixed: true };
   const reserved = EDITOR_RESERVED.find((r) => r.keys === k);
   return reserved ? { kind: "editor", title: reserved.title } : null;
 }

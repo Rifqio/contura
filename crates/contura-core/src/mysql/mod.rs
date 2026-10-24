@@ -21,8 +21,9 @@ use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
-    ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
-    Page, PageRequest, SchemaInfo, SslMode,
+    ConnectionConfig, CountRequest, DbObject, DialectKind, FullValue, FullValueRequest,
+    LocateRequest, ObjectKind, ObjectPath, Page, PageRequest, RowCount, RowPlace, SchemaInfo,
+    SslMode,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,21 +37,70 @@ pub struct MySqlDialect {
     /// Query sessions open their own connection with these, outside the pool.
     opts: OptsBuilder,
     read_only: bool,
+    /// N5: the server has window functions (MySQL 8.0, MariaDB 10.2 and later), read once
+    /// when the Connection opens; `locate_row` needs them.
+    windows: bool,
+    /// Tests: the ids of the connections `apply_design` ran on, in order.
+    #[cfg(any(test, feature = "test-util"))]
+    design_conns: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+}
+
+/// Whether a `VERSION()` answer names a server with window functions: MySQL 8.0 or later,
+/// MariaDB 10.2 or later. Unknown text counts as having them, so the read is still tried.
+pub(crate) fn has_window_functions(version: &str) -> bool {
+    let mut parts = version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|p| !p.is_empty())
+        .map(|p| p.parse::<u32>().unwrap_or(0));
+    let (Some(major), minor) = (parts.next(), parts.next().unwrap_or(0)) else {
+        return true;
+    };
+    if page::is_mariadb(version) {
+        // A MariaDB that reports itself as `5.5.5-10.x` puts its real version second.
+        let (major, minor) = if major == 5 && version.starts_with("5.5.5-") {
+            let mut rest = version["5.5.5-".len()..]
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|p| !p.is_empty())
+                .map(|p| p.parse::<u32>().unwrap_or(0));
+            (rest.next().unwrap_or(0), rest.next().unwrap_or(0))
+        } else {
+            (major, minor)
+        };
+        return (major, minor) >= (10, 2);
+    }
+    major >= 8
 }
 
 impl MySqlDialect {
+    /// A count with the server's time limit left off, as on a server that ignores it, so
+    /// the client's own limit is what stops it. Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn count_rows_without_server_limit(
+        &self,
+        req: &CountRequest,
+        timeout_ms: u64,
+    ) -> Result<RowCount> {
+        page::count_rows(&self.opts, req, timeout_ms, false).await
+    }
+
     /// Builds the pool and checks out one connection, so a bad config fails right away.
     pub async fn connect(config: &ConnectionConfig, password: Option<&str>) -> Result<Self> {
         let opts = build_opts(config, password);
         let pool = Pool::new(opts.clone());
         let target = format!("{}:{}", config.host, config.port);
         match tokio::time::timeout(CONNECT_TIMEOUT, pool.get_conn()).await {
-            Ok(Ok(conn)) => {
+            Ok(Ok(mut conn)) => {
+                let version: Option<String> =
+                    conn.query_first("SELECT VERSION()").await.ok().flatten();
                 drop(conn);
                 Ok(Self {
                     pool,
                     opts,
                     read_only: config.read_only,
+                    windows: version.as_deref().is_none_or(has_window_functions),
+                    #[cfg(any(test, feature = "test-util"))]
+                    design_conns: Default::default(),
                 })
             }
             Ok(Err(e)) => {
@@ -105,6 +155,52 @@ impl MySqlDialect {
         let mut conn = self.pool.get_conn().await.map_err(query_err)?;
         conn.query_drop(session_sql).await.map_err(query_err)?;
         snapshot::table_design_on(&mut conn, path).await
+    }
+
+    /// A pooled browse connection is set to NO_BACKSLASH_ESCAPES and held while
+    /// `apply_design` runs: its `sql_mode` after, its id, and the id of the connection
+    /// `apply_design` ran on. Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn pooled_sql_mode_around_apply_for_test(
+        &self,
+        database: &str,
+        plan: &DesignPlan,
+    ) -> Result<(String, u32, u32)> {
+        let mut conn = self.pool.get_conn().await.map_err(query_err)?;
+        conn.query_drop("SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_BACKSLASH_ESCAPES')")
+            .await
+            .map_err(query_err)?;
+        self.apply_design(database, plan).await?;
+        let mode: Option<String> = conn
+            .query_first("SELECT @@SESSION.sql_mode")
+            .await
+            .map_err(query_err)?;
+        let applied = self
+            .design_conns
+            .lock()
+            .ok()
+            .and_then(|ids| ids.last().copied())
+            .unwrap_or(0);
+        Ok((mode.unwrap_or_default(), conn.id(), applied))
+    }
+
+    /// `apply_design` on its own connection after `session_sql` ran on it, such as a
+    /// `SET SESSION sql_mode`. Public only for integration tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub async fn apply_design_after_for_test(
+        &self,
+        session_sql: &str,
+        _database: &str,
+        plan: &DesignPlan,
+    ) -> Result<DesignOutcome> {
+        let parts = design::runnable(plan)?;
+        let mut conn = Conn::new(self.opts.clone()).await.map_err(query_err)?;
+        conn.query_drop(session_sql).await.map_err(query_err)?;
+        let outcome = run_design(&mut conn, plan, &parts, self.read_only, None).await;
+        let _ = conn.disconnect().await;
+        browse_result(outcome, self.read_only)
     }
 }
 
@@ -240,6 +336,29 @@ async fn first_row(conn: &mut Conn, sql: &str) -> mysql_async::Result<Option<Str
 /// Runs a design plan on `conn`, statement by statement: MySQL commits each DDL
 /// statement on its own, so there is no transaction and the statements before a
 /// failure stay applied (`ran`). The `after` statements run whatever happened.
+/// Contura writes MySQL text literals for backslash escapes (`ddl::lit`, which a loaded
+/// design's defaults use too). Under NO_BACKSLASH_ESCAPES the server would keep `\\` as two
+/// backslashes, so the change's own connection reads its sql_mode once and drops that one
+/// flag. Quotes are doubled, so under either reading a literal never ends early.
+/// The session's `sql_mode` without NO_BACKSLASH_ESCAPES, as an expression.
+pub(crate) const SQL_MODE_WITH_ESCAPES: &str = crate::ddl::MYSQL_SQL_MODE_WITH_ESCAPES;
+
+async fn read_backslash_escapes(conn: &mut Conn) -> Result<()> {
+    let mode: Option<String> = conn
+        .query_first("SELECT @@SESSION.sql_mode")
+        .await
+        .map_err(query_err)?;
+    if mode.is_some_and(|m| {
+        m.split(',')
+            .any(|f| f.trim().eq_ignore_ascii_case("NO_BACKSLASH_ESCAPES"))
+    }) {
+        conn.query_drop(format!("SET SESSION sql_mode = {SQL_MODE_WITH_ESCAPES}"))
+            .await
+            .map_err(query_err)?;
+    }
+    Ok(())
+}
+
 async fn run_design(
     conn: &mut Conn,
     plan: &DesignPlan,
@@ -247,6 +366,7 @@ async fn run_design(
     read_only: bool,
     control: Option<&RunControl>,
 ) -> Result<DesignOutcome> {
+    read_backslash_escapes(conn).await?;
     let outcome = run_design_body(conn, plan, parts, read_only, control).await;
     for at in parts.after.clone() {
         let sql = &plan.statements[at];
@@ -337,6 +457,23 @@ impl Dialect for MySqlDialect {
 
     async fn sample_rows(&self, path: &ObjectPath, limit: u32) -> Result<Page> {
         page::sample_rows(&self.pool, path, limit).await
+    }
+
+    async fn count_rows(&self, req: &CountRequest, timeout_ms: u64) -> Result<RowCount> {
+        browse_result(
+            page::count_rows(&self.opts, req, timeout_ms, true).await,
+            self.read_only,
+        )
+    }
+
+    async fn locate_row(&self, req: &LocateRequest, timeout_ms: u64) -> Result<RowPlace> {
+        if !self.windows {
+            return Ok(RowPlace::Unsupported);
+        }
+        browse_result(
+            page::locate_row(&self.opts, req, timeout_ms, true).await,
+            self.read_only,
+        )
     }
 
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {
@@ -442,6 +579,10 @@ impl Dialect for MySqlDialect {
         let mut conn = Conn::new(self.opts.clone())
             .await
             .map_err(|e| Error::Connect(format!("cannot open a connection for the change: {e}")))?;
+        #[cfg(any(test, feature = "test-util"))]
+        if let Ok(mut ids) = self.design_conns.lock() {
+            ids.push(conn.id());
+        }
         let outcome = run_design(&mut conn, plan, &parts, self.read_only, None).await;
         let _ = conn.disconnect().await;
         browse_result(outcome, self.read_only)
@@ -521,6 +662,19 @@ impl Dialect for MySqlDialect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_functions_follow_the_server_version() {
+        assert!(has_window_functions("8.0.39"));
+        assert!(has_window_functions("8.4.2"));
+        assert!(!has_window_functions("5.7.44-log"));
+        assert!(!has_window_functions("10.1.48-MariaDB"));
+        assert!(has_window_functions("10.2.44-MariaDB"));
+        assert!(has_window_functions("11.4.2-MariaDB-ubu2404"));
+        assert!(!has_window_functions("5.5.5-10.1.48-MariaDB"));
+        assert!(has_window_functions("5.5.5-10.6.12-MariaDB"));
+        assert!(has_window_functions("weird"));
+    }
     use crate::model::DialectKind;
 
     fn config_with(ssl: SslMode) -> ConnectionConfig {

@@ -1331,3 +1331,107 @@ fn a_group_cannot_take_the_name_ungrouped_goes_by() {
     // Ungrouped goes by another name, so a Group may be called Ungrouped.
     assert!(group(Some(kfc.id), "Ungrouped").is_ok());
 }
+
+#[tokio::test]
+async fn column_orders_are_kept_per_connection_and_forgotten_with_it() {
+    let (_d, _s, svc) = service();
+    let a = svc.save(input("a", PasswordChange::Keep)).await.unwrap();
+    let b = svc.save(input("b", PasswordChange::Keep)).await.unwrap();
+    assert!(svc.column_orders(a.id).unwrap().is_empty());
+    let order = vec!["status".to_string(), "id".to_string()];
+    svc.save_column_order(a.id, "shop.orders".into(), Some(order.clone()))
+        .unwrap();
+    svc.save_column_order(a.id, "shop.items".into(), Some(order.clone()))
+        .unwrap();
+    assert_eq!(
+        svc.column_orders(a.id).unwrap().get("shop.orders"),
+        Some(&order)
+    );
+    assert_eq!(svc.column_orders(a.id).unwrap().len(), 2);
+    assert!(svc.column_orders(b.id).unwrap().is_empty());
+    // None and an empty list both bring back the table's own order, for that table alone.
+    svc.save_column_order(a.id, "shop.orders".into(), None)
+        .unwrap();
+    assert_eq!(svc.column_orders(a.id).unwrap().len(), 1);
+    svc.save_column_order(a.id, "shop.items".into(), Some(vec![]))
+        .unwrap();
+    assert!(svc.column_orders(a.id).unwrap().is_empty());
+    svc.save_column_order(a.id, "shop.orders".into(), Some(order.clone()))
+        .unwrap();
+    svc.save_column_order(b.id, "shop.orders".into(), Some(order))
+        .unwrap();
+    svc.delete(a.id).await.unwrap();
+    assert!(svc.column_orders(a.id).unwrap().is_empty());
+    assert_eq!(svc.column_orders(b.id).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn no_column_order_outlives_its_connection() {
+    let (dir, _s, svc) = service();
+    let a = svc.save(input("a", PasswordChange::Keep)).await.unwrap();
+    svc.save_column_order(a.id, "t".into(), Some(vec!["x".into()]))
+        .unwrap();
+    // Deleting the Connection in the store itself takes its orders in the same transaction.
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    store.delete_connection(a.id).unwrap();
+    assert!(
+        store
+            .settings_with_prefix(&format!("column_order:{}:", a.id))
+            .unwrap()
+            .is_empty()
+    );
+    // A tab left open after the delete writes nothing back.
+    assert!(matches!(
+        svc.save_column_order(a.id, "t".into(), Some(vec!["x".into()])),
+        Err(Error::NotFound(_))
+    ));
+    assert!(svc.column_orders(a.id).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn column_orders_unreadable_are_empty_and_too_large_is_refused() {
+    let (dir, _s, svc) = service();
+    let a = svc.save(input("a", PasswordChange::Keep)).await.unwrap();
+    svc.save_column_order(a.id, "good".into(), Some(vec!["x".into()]))
+        .unwrap();
+    // An entry that does not read is left out; the rest still read.
+    let store = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+    store
+        .set_setting(&format!("column_order:{}:bad", a.id), "[")
+        .unwrap();
+    let orders = svc.column_orders(a.id).unwrap();
+    assert_eq!(orders.len(), 1);
+    assert!(orders.contains_key("good"));
+    let many: Vec<String> = (0..5000).map(|i| format!("c{i}")).collect();
+    assert!(matches!(
+        svc.save_column_order(a.id, "t".into(), Some(many)),
+        Err(Error::InvalidInput(_))
+    ));
+    // Bytes count too: 1,000 names of 100 characters is under the name cap but over 64 KB.
+    let long: Vec<String> = (0..1000).map(|i| format!("{i:0>100}")).collect();
+    assert!(matches!(
+        svc.save_column_order(a.id, "t".into(), Some(long)),
+        Err(Error::InvalidInput(_))
+    ));
+}
+
+#[tokio::test]
+async fn column_orders_past_the_cap_drop_the_least_recently_used_table() {
+    let (_d, _s, svc) = service();
+    let a = svc.save(input("a", PasswordChange::Keep)).await.unwrap();
+    let order = || Some(vec!["b".to_string(), "a".to_string()]);
+    for i in 0..2000 {
+        svc.save_column_order(a.id, format!("t{i}"), order())
+            .unwrap();
+    }
+    // t0 is used again, so t1 is now the least recently used.
+    svc.save_column_order(a.id, "t0".into(), order()).unwrap();
+    svc.save_column_order(a.id, "t2000".into(), order())
+        .unwrap();
+    let kept = svc.column_orders(a.id).unwrap();
+    assert_eq!(kept.len(), 2000);
+    assert!(kept.contains_key("t0"));
+    assert!(!kept.contains_key("t1"));
+    assert!(kept.contains_key("t2"));
+    assert!(kept.contains_key("t2000"));
+}

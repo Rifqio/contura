@@ -25,6 +25,7 @@
   --c-bg-raised: #fffbeb;
   --c-bg-canvas: #f8f4e3;
   --c-bg-hover: #e2deca;
+  --c-bg-raised-hover: #e2deca;
   --c-bg-active: #dedccf;
   /* Stripe every other row (Appearance): text, muted and subtle text keep 4.5:1 on it. */
   --c-grid-stripe: #f4f0dd;
@@ -33,7 +34,7 @@
   --c-border-strong: #8f8a73;
   --c-text: #1f1f1f;
   --c-text-muted: #48432f;
-  --c-text-subtle: #6c664b;
+  --c-text-subtle: #605a40;
   --c-text-faint: #857f66;
   --c-accent: #644ac9;
   --c-accent-hover: #5840b5;
@@ -47,17 +48,17 @@
   --c-success-text: #14710a;
   --c-success-solid: #14710a;
   --c-warning-subtle: #faf4da;
-  --c-warning-text: #846e15;
+  --c-warning-text: #6e5a0d;
   --c-warning-solid: #c9a227;
   --c-danger-subtle: #fdf1eb;
-  --c-danger-text: #cb3a2a;
+  --c-danger-text: #b02f20;
   --c-danger-solid: #cb3a2a;
   --c-info-subtle: #dbe8ec;
-  --c-info-text: #036a96;
+  --c-info-text: #02618a;
   --c-info-solid: #036a96;
   --c-prod-solid: #d06a14;
   --c-prod-subtle: #f8e1c9;
-  --c-prod-text: #a34d14;
+  --c-prod-text: #94450f;
   --c-prod-wash: #fdf2dd;
   --c-prod-wash-stripe: #f2e7d0;
   --c-gmk-ink: #ffffff;
@@ -148,6 +149,7 @@
   --c-bg-raised: #343746;
   --c-bg-canvas: #21222c;
   --c-bg-hover: #343746;
+  --c-bg-raised-hover: #3f4256;
   --c-bg-active: #3c3f52;
   --c-grid-stripe: #20212b;
   --c-border-subtle: #191a21;
@@ -155,7 +157,7 @@
   --c-border-strong: #6272a4;
   --c-text: #f8f8f2;
   --c-text-muted: #c7c8d3;
-  --c-text-subtle: #a0a3ba;
+  --c-text-subtle: #aeb1c7;
   --c-text-faint: #6272a4;
   --c-accent: #bd93f9;
   --c-accent-hover: #caa8fa;
@@ -171,7 +173,7 @@
   --c-warning-text: #f1fa8c;
   --c-warning-solid: #f1fa8c;
   --c-danger-subtle: #43272e;
-  --c-danger-text: #ff6e6e;
+  --c-danger-text: #ff9494;
   --c-danger-solid: #ff5555;
   --c-info-subtle: #24384a;
   --c-info-text: #8be9fd;
@@ -272,6 +274,7 @@
     --c-bg-raised: #343746;
     --c-bg-canvas: #21222c;
     --c-bg-hover: #343746;
+    --c-bg-raised-hover: #3f4256;
     --c-bg-active: #3c3f52;
     --c-grid-stripe: #20212b;
     --c-border-subtle: #191a21;
@@ -279,7 +282,7 @@
     --c-border-strong: #6272a4;
     --c-text: #f8f8f2;
     --c-text-muted: #c7c8d3;
-    --c-text-subtle: #a0a3ba;
+    --c-text-subtle: #aeb1c7;
     --c-text-faint: #6272a4;
     --c-accent: #bd93f9;
     --c-accent-hover: #caa8fa;
@@ -295,7 +298,7 @@
     --c-warning-text: #f1fa8c;
     --c-warning-solid: #f1fa8c;
     --c-danger-subtle: #43272e;
-    --c-danger-text: #ff6e6e;
+    --c-danger-text: #ff9494;
     --c-danger-solid: #ff5555;
     --c-info-subtle: #24384a;
     --c-info-text: #8be9fd;

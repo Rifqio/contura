@@ -648,6 +648,34 @@
   opacity: 0;
 }
 
+/*
+  ER build C: a column's side ports (draw.io's connection points on a table row), on a hovered or selected table.
+  They sit just inside the card's edge, as the card's body clips what leaves it, in the row's 10 px side padding, so
+  they clear the key gutter and the not-null mark by 2 px; a drag from one draws a relationship.
+*/
+.react-flow__handle.fkind-port {
+  z-index: 3;
+  width: 8px;
+  height: 8px;
+  min-width: 0;
+  min-height: 0;
+  border: 1.5px solid var(--c-accent);
+  border-radius: 50%;
+  background: var(--c-bg-surface);
+  transform: translate(0, -50%);
+  cursor: crosshair;
+}
+.react-flow__handle.fkind-port[data-side="l"] {
+  left: 0;
+}
+.react-flow__handle.fkind-port[data-side="r"] {
+  right: 0;
+  left: auto;
+}
+.react-flow__handle.fkind-port:hover {
+  background: var(--c-accent);
+}
+
 /* A hovered fix, shown in grey where it would go (frame 6+.3). */
 .flow-editor .cm-flow-ghost {
   color: var(--c-text-faint);
@@ -695,20 +723,6 @@
 /* A dragged node lifts: the one node on the canvas with a shadow. */
 .flow-canvas .react-flow__node.dragging .fnode {
   box-shadow: var(--shadow-menu);
-}
-/* The dashed 16 px landing cell and the accent guides. */
-.flow-ghost {
-  position: absolute;
-  box-sizing: border-box;
-  border: 1px dashed var(--c-accent);
-  border-radius: var(--rounded-lg);
-  background: color-mix(in srgb, var(--c-accent-subtle) 25%, transparent);
-  pointer-events: none;
-}
-.flow-guide {
-  position: absolute;
-  background: var(--c-accent);
-  pointer-events: none;
 }
 /* The group a dragged node would join: its edge turns accent and solid. */
 .flow-group-hot {

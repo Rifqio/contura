@@ -1,12 +1,17 @@
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Pool, Row, Value};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+
+use mysql_async::{Conn, OptsBuilder, Pool, Row, Value};
 
 use super::query_err;
 use super::quote::quote_ident;
 use crate::common::{bytes_preview, hex_lower, order_columns, sql_scoped, text_preview};
 use crate::error::{Error, Result};
 use crate::model::{
-    Cell, ColumnInfo, DialectKind, ObjectPath, PAGE_SIZE, PREVIEW_CHARS, Page, PageRequest,
+    COUNT_CAP, Cell, ColumnInfo, CountRequest, DialectKind, LocateRequest, ObjectPath, PAGE_SIZE,
+    PREVIEW_CHARS, Page, PageRequest, RowCount, RowPlace,
 };
 
 /// How a column's values are carried to the grid.
@@ -223,6 +228,225 @@ async fn sample_in_transaction(conn: &mut Conn, path: &ObjectPath, limit: u32) -
     })
 }
 
+/// MySQL's error when `MAX_EXECUTION_TIME` stops a statement (ER_QUERY_TIMEOUT).
+const QUERY_TIMEOUT: u16 = 3024;
+/// MariaDB's error when `max_statement_time` stops a statement (ER_STATEMENT_TIMEOUT).
+const STATEMENT_TIMEOUT: u16 = 1969;
+/// How long past the server's limit the client still waits before it drops the count.
+const CLIENT_MARGIN_MS: u64 = 1_000;
+
+pub(crate) fn is_timeout_code(code: u16) -> bool {
+    code == QUERY_TIMEOUT || code == STATEMENT_TIMEOUT
+}
+
+pub(crate) fn is_mariadb(version: &str) -> bool {
+    version.to_ascii_lowercase().contains("mariadb")
+}
+
+/// The count's SELECT. MySQL takes the `MAX_EXECUTION_TIME` hint; with `no_hint`
+/// (MariaDB, which ignores it) the limit is set on the session instead.
+pub(crate) fn count_sql(req: &CountRequest, timeout_ms: u64, no_hint: bool) -> String {
+    let hint = if no_hint {
+        String::new()
+    } else {
+        format!("/*+ MAX_EXECUTION_TIME({timeout_ms}) */ ")
+    };
+    format!(
+        "SELECT {hint}COUNT(*) FROM (SELECT 1 FROM {}{} LIMIT {}) AS x",
+        sql_scoped(DialectKind::MySql, &req.table.database, &req.table.name),
+        req.where_sql(),
+        COUNT_CAP + 1
+    )
+}
+
+/// MariaDB's limit for the statements of this session, in seconds.
+pub(crate) fn mariadb_limit_sql(timeout_ms: u64) -> String {
+    format!(
+        "SET SESSION max_statement_time = {}.{:03}",
+        timeout_ms / 1000,
+        timeout_ms % 1000
+    )
+}
+
+/// What a timed read asks: a count, or a row's place (M3).
+enum Read<'a> {
+    Count(&'a CountRequest),
+    Locate(&'a LocateRequest),
+}
+
+impl Read<'_> {
+    fn table(&self) -> &ObjectPath {
+        match self {
+            Read::Count(r) => &r.table,
+            Read::Locate(r) => &r.table,
+        }
+    }
+}
+
+/// A timed read's answer: the first column of its one row (none for a missing row), or
+/// the time limit ran out.
+enum ReadOut {
+    Value(Option<u64>),
+    TimedOut,
+}
+
+/// UX step 8: the rows matching the filter, counted up to `COUNT_CAP + 1`, on a
+/// connection of its own (never one of the pool's), in a read-only transaction. The
+/// server stops the count after `timeout_ms` (MySQL's hint, MariaDB's session limit),
+/// and in every case the client stops waiting a second later, drops the connection and
+/// asks the server to kill the query. A prepared statement is one statement, so the
+/// filter can't add a second. `server_limit` false leaves the server's limit off (tests).
+pub(crate) async fn count_rows(
+    opts: &OptsBuilder,
+    req: &CountRequest,
+    timeout_ms: u64,
+    server_limit: bool,
+) -> Result<RowCount> {
+    Ok(
+        match timed_read(opts, Read::Count(req), timeout_ms, server_limit).await? {
+            ReadOut::Value(n) => RowCount::Counted {
+                rows: n.unwrap_or(0),
+            },
+            ReadOut::TimedOut => RowCount::TimedOut,
+        },
+    )
+}
+
+/// M3: the row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
+/// matching the filter, read as `count_rows` reads.
+pub(crate) async fn locate_row(
+    opts: &OptsBuilder,
+    req: &LocateRequest,
+    timeout_ms: u64,
+    server_limit: bool,
+) -> Result<RowPlace> {
+    Ok(
+        match timed_read(opts, Read::Locate(req), timeout_ms, server_limit).await? {
+            ReadOut::Value(Some(n)) => RowPlace::Found {
+                index: n.saturating_sub(1),
+            },
+            ReadOut::Value(None) => RowPlace::Missing,
+            ReadOut::TimedOut => RowPlace::TimedOut,
+        },
+    )
+}
+
+async fn timed_read(
+    opts: &OptsBuilder,
+    read: Read<'_>,
+    timeout_ms: u64,
+    server_limit: bool,
+) -> Result<ReadOut> {
+    let id = Arc::new(AtomicU32::new(0));
+    let seen = id.clone();
+    let work = async {
+        let mut conn = Conn::new(opts.clone()).await.map_err(query_err)?;
+        seen.store(conn.id(), Ordering::Relaxed);
+        let out = read_on(&mut conn, &read, timeout_ms, server_limit).await;
+        let _ = conn.disconnect().await;
+        out
+    };
+    let limit = Duration::from_millis(timeout_ms + CLIENT_MARGIN_MS);
+    match tokio::time::timeout(limit, work).await {
+        Ok(out) => out,
+        Err(_) => {
+            // The read's connection went with the dropped future; stop its query too.
+            let id = id.load(Ordering::Relaxed);
+            if id != 0 {
+                let opts = opts.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut conn) = Conn::new(opts).await {
+                        let _ = conn.query_drop(format!("KILL QUERY {id}")).await;
+                        let _ = conn.disconnect().await;
+                    }
+                });
+            }
+            Ok(ReadOut::TimedOut)
+        }
+    }
+}
+
+async fn read_on(
+    conn: &mut Conn,
+    read: &Read<'_>,
+    timeout_ms: u64,
+    server_limit: bool,
+) -> Result<ReadOut> {
+    let version: Option<String> = conn
+        .query_first("SELECT VERSION()")
+        .await
+        .map_err(query_err)?;
+    let mariadb = version.as_deref().is_some_and(is_mariadb);
+    if server_limit && mariadb {
+        conn.query_drop(mariadb_limit_sql(timeout_ms))
+            .await
+            .map_err(query_err)?;
+    }
+    conn.query_drop("START TRANSACTION READ ONLY")
+        .await
+        .map_err(query_err)?;
+    let out = read_in_transaction(conn, read, timeout_ms, mariadb || !server_limit).await;
+    let _ = conn.query_drop("ROLLBACK").await;
+    out
+}
+
+async fn read_in_transaction(
+    conn: &mut Conn,
+    read: &Read<'_>,
+    timeout_ms: u64,
+    no_hint: bool,
+) -> Result<ReadOut> {
+    let cols = table_column_meta(conn, read.table()).await?;
+    let sql = match read {
+        Read::Count(req) => count_sql(req, timeout_ms, no_hint),
+        Read::Locate(req) => {
+            let infos: Vec<ColumnInfo> = cols.iter().map(|c| c.info.clone()).collect();
+            locate_sql(req, &infos, timeout_ms, no_hint)?
+        }
+    };
+    match conn.exec_first::<u64, _, _>(sql, ()).await {
+        Ok(n) => Ok(ReadOut::Value(match read {
+            Read::Count(_) => Some(n.unwrap_or(0)),
+            Read::Locate(_) => n,
+        })),
+        Err(mysql_async::Error::Server(e)) if is_timeout_code(e.code) => Ok(ReadOut::TimedOut),
+        Err(e) => Err(query_err(e)),
+    }
+}
+
+/// The row's place: a window over the filtered rows in the page order, then its key.
+pub(crate) fn locate_sql(
+    req: &LocateRequest,
+    columns: &[ColumnInfo],
+    timeout_ms: u64,
+    no_hint: bool,
+) -> Result<String> {
+    let terms = crate::edits::key_terms(DialectKind::MySql, columns, &req.key)?;
+    let order: Vec<String> = order_columns(columns, req.sort.as_ref())?
+        .into_iter()
+        .map(|(c, desc)| format!("{} {}", quote_ident(&c), if desc { "DESC" } else { "ASC" }))
+        .collect();
+    let keys: Vec<String> = columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| quote_ident(&c.name))
+        .collect();
+    let hint = if no_hint {
+        String::new()
+    } else {
+        format!("/*+ MAX_EXECUTION_TIME({timeout_ms}) */ ")
+    };
+    Ok(format!(
+        "SELECT {hint}contura_n FROM (SELECT {}, ROW_NUMBER() OVER (ORDER BY {}) AS contura_n \
+         FROM {}{}) AS s WHERE {}",
+        keys.join(", "),
+        order.join(", "),
+        sql_scoped(DialectKind::MySql, &req.table.database, &req.table.name),
+        req.where_sql(),
+        terms.join(" AND ")
+    ))
+}
+
 pub(crate) async fn fetch_page(pool: &Pool, req: &PageRequest) -> Result<Page> {
     let mut conn = pool.get_conn().await.map_err(query_err)?;
     let cols = table_column_meta(&mut conn, &req.table).await?;
@@ -253,6 +477,41 @@ pub(crate) async fn fetch_page(pool: &Pool, req: &PageRequest) -> Result<Page> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_limits_follow_the_server_flavour() {
+        assert!(is_mariadb("10.11.6-MariaDB"));
+        assert!(is_mariadb("11.4.2-MariaDB-ubu2404"));
+        assert!(!is_mariadb("8.0.39"));
+        let req = CountRequest {
+            table: ObjectPath {
+                database: "db".into(),
+                schema: None,
+                name: "t".into(),
+            },
+            filter: Some("id > 3".into()),
+        };
+        // MySQL takes the optimizer hint; MariaDB ignores it and takes a session limit in seconds.
+        assert_eq!(
+            count_sql(&req, 3000, false),
+            "SELECT /*+ MAX_EXECUTION_TIME(3000) */ COUNT(*) FROM (SELECT 1 FROM `db`.`t` WHERE (\nid > 3\n) LIMIT 1001) AS x"
+        );
+        assert_eq!(
+            count_sql(&req, 3000, true),
+            "SELECT COUNT(*) FROM (SELECT 1 FROM `db`.`t` WHERE (\nid > 3\n) LIMIT 1001) AS x"
+        );
+        assert_eq!(
+            mariadb_limit_sql(3000),
+            "SET SESSION max_statement_time = 3.000"
+        );
+        assert_eq!(
+            mariadb_limit_sql(250),
+            "SET SESSION max_statement_time = 0.250"
+        );
+        assert!(is_timeout_code(3024));
+        assert!(is_timeout_code(1969));
+        assert!(!is_timeout_code(1064));
+    }
 
     fn col(name: &str, pk: bool, kind: ColumnKind) -> ColumnMeta {
         ColumnMeta {

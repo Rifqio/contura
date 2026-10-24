@@ -472,6 +472,8 @@ export default function QueryDiagramPane(props: QueryDiagramPaneProps) {
             onSelect={onSelect}
             onMove={onMove}
             onInit={onInit}
+            // F32: one navigation model on every canvas (drag selects, wheel pans, Ctrl + wheel zooms).
+            boxSelect
           >
             <p className="qd-hint">
               <Icon name="info" size={14} />

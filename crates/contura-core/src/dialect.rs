@@ -11,8 +11,8 @@ use crate::jobs::source::{RowSource, SourceRequest, TableStorage};
 use crate::jobs::writer::{BulkWriter, WriterSetup};
 use crate::lineage::{KeyEdge, KeyTable};
 use crate::model::{
-    ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
-    Page, PageRequest, SchemaInfo,
+    ConnectionConfig, CountRequest, DbObject, DialectKind, FullValue, FullValueRequest,
+    LocateRequest, ObjectKind, ObjectPath, Page, PageRequest, RowCount, RowPlace, SchemaInfo,
 };
 use crate::mysql::MySqlDialect;
 use crate::postgres::PostgresDialect;
@@ -24,6 +24,9 @@ use crate::sqlite::SqliteDialect;
 /// Step 11f: how long a sample read may run, in every Dialect.
 pub const SAMPLE_TIMEOUT_MS: u64 = 5_000;
 
+/// UX step 8: how long a row count may run on the server before it stops itself.
+pub const COUNT_TIMEOUT_MS: u64 = 3_000;
+
 #[async_trait::async_trait]
 pub trait Dialect: Send + Sync {
     async fn server_version(&self) -> Result<String>;
@@ -34,6 +37,24 @@ pub trait Dialect: Send + Sync {
     async fn object_definition(&self, kind: ObjectKind, path: &ObjectPath) -> Result<String>;
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page>;
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue>;
+    /// UX step 8: how many rows match `req`'s filter, up to `COUNT_CAP + 1`. Runs off the
+    /// browse session (its own connection), read-only, and the server stops it after
+    /// `timeout_ms`, which reads as `TimedOut`. The filter is the page's, one statement.
+    async fn count_rows(&self, req: &CountRequest, timeout_ms: u64) -> Result<RowCount> {
+        let _ = (req, timeout_ms);
+        Err(crate::error::Error::InvalidInput(
+            "row counts are not available here".into(),
+        ))
+    }
+    /// M3: where the row with `req.key` is under the page's sort and filter: the same order a
+    /// page is fetched in, counted by the server (a window over the filtered rows). Runs as
+    /// `count_rows` does: its own read-only connection, stopped after `timeout_ms`.
+    async fn locate_row(&self, req: &LocateRequest, timeout_ms: u64) -> Result<RowPlace> {
+        let _ = (req, timeout_ms);
+        Err(crate::error::Error::InvalidInput(
+            "finding a row is not available here".into(),
+        ))
+    }
     /// Step 11f: up to `limit` live rows of one base table for an AI Ask, as the grid
     /// reads them (same select list and cells). No ORDER BY, no OFFSET, no filter,
     /// `has_more` false. Runs in a read-only transaction on a connection that is not

@@ -9,8 +9,9 @@ use crate::common::{
 };
 use crate::error::{Error, Result};
 use crate::model::{
-    Cell, ColumnInfo, DialectKind, FULL_VALUE_LIMIT, FullValue, FullValueRequest, ObjectPath,
-    PAGE_SIZE, PREVIEW_CHARS, Page, PageRequest,
+    COUNT_CAP, Cell, ColumnInfo, CountRequest, DialectKind, FULL_VALUE_LIMIT, FullValue,
+    FullValueRequest, LocateRequest, ObjectPath, PAGE_SIZE, PREVIEW_CHARS, Page, PageRequest,
+    RowCount, RowPlace,
 };
 
 /// Stands for the implicit `rowid` sort key. It starts with NUL, so it can
@@ -199,6 +200,74 @@ pub(super) fn sample_rows(conn: &Connection, path: &ObjectPath, limit: u32) -> R
         rows,
         has_more: false,
     })
+}
+
+/// UX step 8: the rows matching the filter, counted up to `COUNT_CAP + 1`, on a session
+/// whose watchdog interrupts the statement at its time limit, which reads as `TimedOut`.
+/// `prepare` refuses text with a second statement after the first.
+pub(crate) fn count_rows(conn: &Connection, req: &CountRequest) -> Result<RowCount> {
+    let sql = format!(
+        "SELECT count(*) FROM (SELECT 1 FROM {}{} LIMIT {})",
+        sql_scoped(DialectKind::Sqlite, &req.table.database, &req.table.name),
+        req.where_sql(),
+        COUNT_CAP + 1
+    );
+    let counted = conn
+        .prepare(&sql)
+        .and_then(|mut stmt| stmt.query_row([], |r| r.get::<_, i64>(0)));
+    match counted {
+        Ok(n) => Ok(RowCount::Counted { rows: n as u64 }),
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::OperationInterrupted =>
+        {
+            Ok(RowCount::TimedOut)
+        }
+        Err(e) => Err(query_err(e)),
+    }
+}
+
+/// M3: the row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
+/// matching the filter. `prepare` refuses a second statement.
+pub(crate) fn locate_row(conn: &Connection, req: &LocateRequest) -> Result<RowPlace> {
+    let cols = table_columns(conn, &req.table)?;
+    let terms = crate::edits::key_terms(DialectKind::Sqlite, &cols, &req.key)?;
+    let order: Vec<String> = order_columns(&cols, req.sort.as_ref())?
+        .into_iter()
+        .map(|(c, desc)| format!("{} {}", quote_double(&c), if desc { "DESC" } else { "ASC" }))
+        .collect();
+    let keys: Vec<String> = cols
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| quote_double(&c.name))
+        .collect();
+    let sql = format!(
+        "SELECT contura_n FROM (SELECT {}, row_number() OVER (ORDER BY {}) AS contura_n FROM {}{}) \
+         WHERE {}",
+        keys.join(", "),
+        order.join(", "),
+        sql_scoped(DialectKind::Sqlite, &req.table.database, &req.table.name),
+        req.where_sql(),
+        terms.join(" AND ")
+    );
+    let found = conn.prepare(&sql).and_then(|mut stmt| {
+        let mut rows = stmt.query([])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(r.get::<_, i64>(0)?)),
+            None => Ok(None),
+        }
+    });
+    match found {
+        Ok(Some(n)) => Ok(RowPlace::Found {
+            index: (n - 1) as u64,
+        }),
+        Ok(None) => Ok(RowPlace::Missing),
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::OperationInterrupted =>
+        {
+            Ok(RowPlace::TimedOut)
+        }
+        Err(e) => Err(query_err(e)),
+    }
 }
 
 pub(crate) fn fetch_page(conn: &Connection, req: &PageRequest) -> Result<Page> {

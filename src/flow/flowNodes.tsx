@@ -3,18 +3,19 @@
 // the one function that turns a FlowDoc and its positions into canvas nodes and edges. FlowTab and the Mermaid
 // dialog's preview both draw through it.
 import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer, Handle, type InternalNode, type Node, type NodeProps, type NodeTypes, Position, useInternalNode, useReactFlow, useStoreApi } from "@xyflow/react";
-import { createContext, memo, useContext } from "react";
+import { createContext, memo, type PointerEvent as ReactPointerEvent, useContext, useEffect, useRef, useState } from "react";
 import { ARROW_MARKER, DIAMOND_MARKER, MANY_MARKER, ONE_MARKER, OPEN_ARROW_MARKER, TRIANGLE_MARKER } from "../diagram/edges";
 import type { Positions } from "../diagram/layout";
-import { type Rect, routeOrthogonal } from "../diagram/route";
+import { type Rect, routeOrthogonal, routeRows } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
 import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, type FlowNodeKind, STATE_END, STATE_START } from "../lang/flow/model";
-import { fixedLayout, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { erColumnRow, erRowY, fixedLayout, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { KindNode, type KindNodeData, MindEdge, SeqEdge, SeqFrame, SeqFrameTab, TimeAxis, TimeSection } from "./kindNodes";
 import DfdNode, { type DfdNodeKind } from "./nodes/DfdNode";
 import FlowchartNode, { type FlowchartNodeKind } from "./nodes/FlowchartNode";
 import { useDetail } from "../diagram/detail";
 import { liveResizes, ResizeZones } from "../diagram/resize";
+import { useErScroll } from "./erScroll";
 import { iconPlate, useIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import type { NodeLook, NodeState } from "./nodes/parts";
@@ -42,6 +43,9 @@ export type FlowNodeData = {
 
 /** Item 21: what a resize tells the tab (the diagram tab provides it; previews leave it out, so nothing resizes). */
 export const FlowResizeContext = createContext<((name: string, box: { x: number; y: number; w: number; h: number }) => void) | null>(null);
+
+/** Fit to content by a double-click on a node's edge (erd-ux-research 5.5, draw.io): the tab lets go of its kept size. */
+export const FlowFitContext = createContext<((name: string) => void) | null>(null);
 
 /** Board B2 (item 51): a node is resized between these, in canvas px. */
 export const NODE_LIMITS = { minW: 96, maxW: 320, minH: 44, maxH: 200 };
@@ -77,6 +81,7 @@ export function nodeLimits(kind: DrawnKind): typeof NODE_LIMITS {
 function Resizer({ id, selected, kind, naturalW, naturalH }: { id: string; selected: boolean; kind: DrawnKind; naturalW?: number; naturalH?: number }) {
   const natural = naturalW !== undefined && naturalH !== undefined ? { w: naturalW, h: naturalH } : undefined;
   const resize = useContext(FlowResizeContext);
+  const fit = useContext(FlowFitContext);
   const flow = useReactFlow();
   const canvas = useStoreApi();
   if (!resize || !selected) return null;
@@ -109,6 +114,7 @@ function Resizer({ id, selected, kind, naturalW, naturalH }: { id: string; selec
         // The live box follows the pointer to the sub-pixel; the kept size is whole pixels.
         resize(id, { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h) });
       }}
+      onFit={fit ? () => fit(id) : undefined}
       onCancel={(start, node) => {
         liveResizes(canvas.getState().domNode).delete(id);
         node?.classList.remove("is-resizing");
@@ -132,6 +138,12 @@ export type FlowEdgeData = {
   diamond?: boolean;
   /** Fading out with a deleted node. */
   leaving?: boolean;
+  /**
+   * ER build C: a relationship between columns meets each card at its column's row (the row's index, -1 for the
+   * header when that end is the whole table). Worked out once when the graph is built, never per frame.
+   */
+  fromRow?: number;
+  toRow?: number;
 };
 
 /** The family a kind's node type draws with; `kind` is the step 12 shapes. */
@@ -314,17 +326,81 @@ function rectOf(n: InternalNode): Rect {
   });
 }
 
+/**
+ * F8: a selected line's end dragged and let go at a flow point (draw.io reattaches it to the shape there). The
+ * diagram tab provides it; previews leave it out, so their lines show no end handles.
+ */
+export const LineEndsContext = createContext<((edge: string, end: "from" | "to", at: { x: number; y: number }) => void) | null>(null);
+
+/** A selected line's two end handles, and while one is dragged a dashed line from the other end to the pointer. */
+function LineEnds({ id, from, to }: { id: string; from: { x: number; y: number }; to: { x: number; y: number } }) {
+  const reattach = useContext(LineEndsContext);
+  const flow = useReactFlow();
+  const [drag, setDrag] = useState<{ end: "from" | "to"; at: { x: number; y: number } } | null>(null);
+  const stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => stop.current?.(), []);
+  if (!reattach) return null;
+  const down = (end: "from" | "to") => (e: ReactPointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const at = (ev: { clientX: number; clientY: number }) => flow.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+    const move = (ev: PointerEvent) => setDrag({ end, at: at(ev) });
+    const finish = (ev: PointerEvent | null) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", key, true);
+      stop.current = null;
+      setDrag(null);
+      if (ev) reattach(id, end, at(ev));
+    };
+    const up = (ev: PointerEvent) => finish(ev);
+    // Esc puts the end back where it was (draw.io).
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", key, true);
+    stop.current = () => finish(null);
+    setDrag({ end, at: at(e) });
+  };
+  const fixed = drag?.end === "from" ? to : from;
+  return (
+    <>
+      {drag && <path className="flow-line-end-preview" d={`M ${fixed.x} ${fixed.y} L ${drag.at.x} ${drag.at.y}`} />}
+      {(["from", "to"] as const).map((end) => {
+        const q = end === "from" ? from : to;
+        return <circle key={end} className="flow-line-end nodrag nopan" data-end={end} cx={q.x} cy={q.y} r={5} onPointerDown={down(end)} />;
+      })}
+    </>
+  );
+}
+
+/** A relationship between columns, at each end's row (ER build C). */
+export function rowRoute(a: Rect, b: Rect, fromRow: number, toRow: number, self: boolean, scrollA = 0, scrollB = 0) {
+  return routeRows(a, erRowY(a.y, a.h, fromRow, scrollA), b, erRowY(b.y, b.h, toRow, scrollB), self);
+}
+
 /** A flow line: square-cornered with 8 px corners from the side facing the other node, its label on a chip. */
 const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
   const a = useInternalNode(p.source);
   const b = useInternalNode(p.target);
-  if (!a || !b) return null;
-  const route = routeOrthogonal(rectOf(a), rectOf(b));
   const data = p.data as FlowEdgeData | undefined;
+  // A line at its rows follows each card's scrolled rows (fix round 1); any other line listens to nothing.
+  const rowed = data?.fromRow !== undefined;
+  const sa = useErScroll(rowed ? p.source : null);
+  const sb = useErScroll(rowed ? p.target : null);
+  if (!a || !b) return null;
+  const route = rowed ? rowRoute(rectOf(a), rectOf(b), data!.fromRow!, data!.toRow ?? -1, p.source === p.target, sa, sb) : routeOrthogonal(rectOf(a), rectOf(b));
   const label = data?.label;
   return (
     <>
       <BaseEdge id={p.id} path={route.d} markerStart={p.markerStart} markerEnd={p.markerEnd} style={p.style} interactionWidth={p.interactionWidth} />
+      {p.selected && route.points.length > 1 && <LineEnds id={p.id} from={route.points[0]} to={route.points[route.points.length - 1]} />}
       {label && (
         <EdgeLabelRenderer>
           <div
@@ -470,6 +546,7 @@ function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook): FlowNodeData & 
   if (n.attrs.table !== undefined) data.table = n.attrs.table;
   if (kind === "service" && n.attrs.icon) data.iconName = n.attrs.icon;
   if (n.rows) data.rows = n.rows;
+  if (n.rowFlags) data.rowFlags = n.rowFlags;
   if (n.text !== undefined) data.text = n.text;
   if (n.depth !== undefined) data.depth = n.depth;
   if (n.date !== undefined) data.date = n.date;
@@ -573,6 +650,8 @@ export interface GraphOptions {
   sizes?: Record<string, { w: number; h: number }>;
   /** The diagram assistant's review: links (by index) it would add or remove. */
   marks?: ReadonlyMap<number, "add" | "del">;
+  /** Rows a card shows beyond its text's, by node: an ER column being added grows its table by one (ER build A). */
+  grow?: Readonly<Record<string, number>>;
 }
 
 /** The class a link takes from the assistant's review. */
@@ -589,7 +668,8 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
   const nodes: Node[] = doc.nodes.map((n: FlowNode) => {
     const kind = drawnKind(n.kind, doc.kind, n.name);
     const own = opts.sizes && Object.prototype.hasOwnProperty.call(opts.sizes, n.name) ? opts.sizes[n.name] : null;
-    const s = own ?? nodeSize(kind, look, n.name, n.attrs.id, n);
+    const extra = opts.grow && Object.prototype.hasOwnProperty.call(opts.grow, n.name) ? opts.grow[n.name] : 0;
+    const s = own ?? nodeSize(kind, look, n.name, n.attrs.id, extra > 0 ? { ...n, rows: [...(n.rows ?? []), ...Array<string>(extra).fill("")] } : n);
     // Own keys only: a node named constructor or __proto__ is a plain name.
     const p = Object.prototype.hasOwnProperty.call(positions, n.name) ? positions[n.name] : { x: 0, y: 0 };
     placed.set(n.name, { x: p.x, y: p.y, w: s.w, h: s.h });
@@ -603,14 +683,27 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     data.naturalH = natural.h;
     // A step 12 shape fills the box its rows and words size; one resized by hand draws at its own size instead.
     const style = family === "kind" && !own ? { style: { width: s.w, height: s.h } } : {};
-    return { id: n.name, type: family, position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, ...style, data };
+    // A card growing by a new column row eases to its new height (A5); only while the row is open.
+    const growing = extra > 0 ? { className: "is-growing" } : {};
+    return { id: n.name, type: family, position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, ...style, ...growing, data };
   });
   // Links to a group are allowed by the language (Mermaid writes them); the canvas draws lines between nodes only.
   const edges: Edge[] = [];
+  // ER build C: a column's row, by table and column, built only when a line names a column.
+  let rowsOf: Map<string, readonly string[]> | null = null;
+  const rowOf = (table: string, column: string | undefined): number => {
+    if (column === undefined) return -1;
+    rowsOf ??= new Map(doc.nodes.map((n) => [n.name, n.rows ?? []]));
+    return erColumnRow(rowsOf.get(table) ?? [], column);
+  };
   doc.links.forEach((l, i) => {
     if (!placed.has(l.from) || !placed.has(l.to)) return;
     const data: FlowEdgeData = {};
     if (l.label) data.label = l.label;
+    if (l.fromColumn !== undefined || l.toColumn !== undefined) {
+      data.fromRow = rowOf(l.from, l.fromColumn);
+      data.toRow = rowOf(l.to, l.toColumn);
+    }
     if (l.arrow === "--" && doc.kind === "er" && l.label) data.diamond = true;
     const leaving = opts.states?.get(l.from) === "leaving" || opts.states?.get(l.to) === "leaving";
     if (leaving) data.leaving = true;

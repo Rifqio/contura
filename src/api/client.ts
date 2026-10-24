@@ -30,6 +30,10 @@ import type {
   CommandError,
   ConnectionConfig,
   ConnectionId,
+  CountRequest,
+  LocateRequest,
+  RowPlace,
+  CountResult,
   ConnectionInput,
   Cell,
   DbObject,
@@ -257,6 +261,10 @@ export const saveDiagramCopy = (text: string, layout: string, path: string): Pro
 export const writeBinaryFile = (path: string, base64: string): Promise<void> =>
   invoke("write_binary_file", { path, base64 });
 
+/** UX step 8: how many rows match a filter, capped at 1,001, on a read the server stops after a few seconds. */
+export const countRows = (id: ConnectionId, request: CountRequest): Promise<CountResult> => invoke("count_rows", { id, request });
+export const locateRow = (id: ConnectionId, request: LocateRequest): Promise<RowPlace> => invoke("locate_row", { id, request });
+
 export const fetchFullValue = (id: ConnectionId, request: FullValueRequest): Promise<FullValue> =>
   invoke("fetch_full_value", { id, request });
 
@@ -318,6 +326,8 @@ export const recordRecent = (target: RecentTarget, connectionId: ConnectionId | 
 export const openQuerySession = (id: ConnectionId, database: string | null): Promise<QuerySessionId> =>
   invoke("open_query_session", { id, database });
 
+/** N3: puts a MySQL tab's sql_mode back after a framed script stopped before its footer; true when it did. */
+export const restoreScriptSqlMode = (session: QuerySessionId): Promise<boolean> => invoke("restore_script_sql_mode", { session });
 export const executeSql = (
   session: QuerySessionId,
   sql: string,
@@ -435,6 +445,13 @@ export const deleteSavedQuery = (id: string): Promise<void> => invoke("delete_sa
 export const loadQueryTabs = (place: string): Promise<string | null> => invoke("load_query_tabs", { place });
 
 export const saveQueryTabs = (place: string, json: string): Promise<void> => invoke("save_query_tabs", { place, json });
+
+/** The table grids' column orders on a Connection (view only), by table key: column names in the order shown. */
+export const columnOrders = (id: ConnectionId): Promise<Record<string, string[]> | null> => invoke("column_orders", { id });
+
+/** Keeps one table's column order; null forgets it, so the table's own order shows. */
+export const saveColumnOrder = (id: ConnectionId, table: string, columns: string[] | null): Promise<void> =>
+  invoke("save_column_order", { id, table, columns });
 
 export const aiSettings = (groupId: GroupId | null): Promise<AiSettingsView> => invoke("ai_settings", { groupId });
 

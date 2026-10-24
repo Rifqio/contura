@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "vitest";
-import { cyclePane, rememberPaneFocus } from "./panes";
+import { cyclePane, focusWorkArea, rememberPaneFocus } from "./panes";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -53,4 +53,14 @@ test("a pane holding other panes on screen is skipped for them; with none on scr
   el("tree").focus();
   cyclePane(1);
   expect(document.activeElement).toBe(el("work"));
+});
+
+test("focus_work_area_goes_into_the_tab_on_screen", () => {
+  const el = layout();
+  el("tree").focus();
+  expect(focusWorkArea()).toBe(true);
+  // The first pane of the shown tab, never the hidden one.
+  expect(document.activeElement).toBe(el("code"));
+  document.body.innerHTML = "<p>no work area</p>";
+  expect(focusWorkArea()).toBe(false);
 });

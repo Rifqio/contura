@@ -59,7 +59,7 @@ import { useAskKit } from "./app/useAskKit";
 import { useDataFolder } from "./app/useDataFolder";
 import { useSavedQueries } from "./app/useSavedQueries";
 import { useStartup } from "./app/useStartup";
-import { openRecentItem } from "./app/openRecent";
+import { type RecentEnv, openRecentItem } from "./app/openRecent";
 import { placeOf } from "./app/places";
 import { useRecentList } from "./app/useRecentList";
 import { useTableDrop } from "./app/useTableDrop";
@@ -102,7 +102,9 @@ import { NEW_VISUAL_NAME, savedVisualModel } from "./visualquery/drafts";
 import { emptyQuery } from "./visualquery/model";
 import VisualQueryTab, { type VisualTabControl } from "./visualquery/VisualQueryTab";
 import { useTheme } from "./theme/useTheme";
-import { KeymapProvider, useCommandKeys } from "./commands/useCommandKeys";
+import { type CommandHandlers, KeymapProvider, useCommandKeys } from "./commands/useCommandKeys";
+import { pressedKeys } from "./commands/keys";
+import { backKeyApplies, useFkNav } from "./app/useFkNav";
 import { PrefsProvider, useUngroupedLabel } from "./prefs/usePrefs";
 import { objectKey } from "./objectPath";
 import OneTree from "./sidebar/OneTree";
@@ -111,11 +113,17 @@ import { unsavedFlows } from "./flow/flowRegistry";
 import { isUnsaved } from "./shell/tabs";
 import { pendingWork } from "./update/pendingWork";
 import { setRestartGuard } from "./update/restartGuard";
+import { flushColumnOrders } from "./grid/columnOrderStore";
 import FirstStartGuide, { GUIDE_AGAIN, type GuideResult } from "./guide/FirstStartGuide";
 import UpdatePill from "./update/UpdatePill";
 import { recordStep, RecordStepContext, tabSteps } from "./assistant/recentSteps";
 import { dailyCheck, loadUpdates } from "./update/updateStore";
-import { cyclePane, rememberPaneFocus } from "./app/panes";
+import { cyclePane, focusWorkArea, rememberPaneFocus } from "./app/panes";
+import { COMMANDS, type CommandId } from "./commands/registry";
+import QuickOpen from "./palette/QuickOpen";
+import { type PaletteCommand, type QuickItem, quickItems, savedItemId } from "./palette/entries";
+import { objectNames } from "./palette/nameIndex";
+import { readRecentCommands, rememberCommand } from "./palette/recentCommands";
 
 /** The one prefs holder and the one command registry, around the whole app. */
 export default function App() {
@@ -183,7 +191,7 @@ function Workspace() {
     schemaCloseFor,
   } = useWorkspaceTabs();
   const [historyOpen, setHistoryOpen] = useState(false);
-  const { map: keymap } = useKeymap();
+  const { map: keymap, available: commandAvailable, invoke: invokeCommand } = useKeymap();
   const [assistantOpen, setAssistantOpen] = useState(false);
   const { recent, openedTimes, load: loadRecent, record } = useRecentList();
   /** Query History shows every Connection instead of the tab's (from Home's Show all history). */
@@ -328,6 +336,26 @@ function Workspace() {
       jobsOnClose: { running: jobsGuard.running, confirmStop: () => jobsGuard.confirmStop() },
     });
   dirtyRef.current = dirtyKeys;
+  // UX step 8 (G8): followed Foreign Keys, and Back and Forward over them.
+  const fkNav = useFkNav({
+    tabs,
+    setTabs,
+    activeKey,
+    setActiveKey,
+    dirty: () => dirtyRef.current,
+    control: (key) => gridControl(key).current,
+    place: placeKey(place),
+    say: (text) => toast.show({ kind: "info", text }),
+  });
+  // Alt+Left acts only where the rulings let it (a strip tab keeps its move); Ctrl+Alt+Left everywhere.
+  const navKeys: CommandHandlers = {};
+  for (const [id, run] of [
+    ["nav.back", fkNav.back],
+    ["nav.forward", fkNav.forward],
+  ] as const) {
+    Object.defineProperty(navKeys, id, { enumerable: true, get: () => (backKeyApplies(pressedKeys(), document.activeElement) ? run : undefined) });
+  }
+  useCommandKeys(navKeys);
   // ADR 0026: an update's restart asks about unsaved work first, as quitting does, and about unsaved tabs.
   useEffect(() =>
     setRestartGuard({
@@ -340,7 +368,7 @@ function Workspace() {
         if (keys.some(isDirty)) return confirmLeave(keys, jobsAsk);
         return jobsAsk ? jobsAsk.then() : true;
       },
-      flush: () => drafts.flush(),
+      flush: () => Promise.all([drafts.flush(), flushColumnOrders()]).then(() => {}),
     }),
   );
   // The first start guide: on its own only in a data folder this start made; mounted only while open.
@@ -1016,8 +1044,92 @@ function Workspace() {
   const diagramActions = { rename: diagramFiles.rename, saveCopy: (name: string) => void diagramFiles.saveCopy(name), remove: diagramFiles.remove };
   /** The diagram tab on top, for the file commands. */
   const activeDiagram = activeWindow?.kind === "flow" ? activeWindow.name : null;
+
+  // ---- Quick Open and the Command Palette (UX step 6, S1): one box, `>` typed first for the commands ----
+  const [quick, setQuick] = useState<{ initial: string; seq: number; commands: PaletteCommand[]; recentCommands: CommandId[] } | null>(null);
+  /** Set when Quick Open opens a tab in front: focus goes into it once it shows (VS Code). */
+  const focusWork = useRef(false);
+  /** Bumped with each open from Quick Open, so the focus effect runs even when no tab changed. */
+  const [focusTick, setFocusTick] = useState(0);
+  const placeNameOf = (p: Place) => (p.kind === "group" ? (groups.find((g) => g.id === p.groupId)?.name ?? null) : ungroupedLabel);
+  function showQuick(initial: string) {
+    loadDiagrams();
+    focusWork.current = false;
+    const places = menuPlaces(groups);
+    const note = (id: CommandId) => {
+      const n = /^group\.open\.(\d)$/.exec(id);
+      const p = n ? places[Number(n[1]) - 1] : undefined;
+      return p ? placeNameOf(p) : null;
+    };
+    // Read now, while focus is still where the key was pressed: an editor's commands show only for its tab.
+    const commands = COMMANDS.filter((c) => commandAvailable(c.id)).map((c) => ({ command: c, keys: hintFor(keymap, c.id), note: note(c.id) }));
+    setQuick((q) => ({ initial, seq: (q?.seq ?? 0) + 1, commands, recentCommands: readRecentCommands() }));
+  }
+  /** The item the active tab shows, which Recent leaves out. */
+  const activeItemId = (() => {
+    const t = [...tabs, ...windowTabs].find((x) => tabKey(x) === activeKey);
+    if ((t?.kind === "query" || t?.kind === "visual") && t.doc.savedId) return savedItemId(t.doc.savedId);
+    return activeKey;
+  })();
+  const quickList = useMemo(
+    () =>
+      quick ? quickItems({ connections, openIds, names: objectNames, savedQueries, diagrams, recent, activeId: activeItemId }) : null,
+    // The index is read again whenever the tree loads (its branches change).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [quick?.seq, connections, openIds, savedQueries, diagrams, recent, activeItemId, tree.branches],
+  );
+  /** Opens a Quick Open item through the app's own open paths; `behind` keeps the tab you are on. */
+  function openQuickItem(item: QuickItem, how: "enter" | "behind") {
+    const was = activeKey;
+    const behind = how === "behind";
+    const shown = <T extends unknown[]>(open: (...a: T) => void) => (...a: T) => {
+      if (!behind) {
+        focusWork.current = true;
+        setFocusTick((n) => n + 1);
+      }
+      open(...a);
+      if (behind && was !== null) setActiveKey(was);
+    };
+    const t = item.target;
+    // Chosen by name, so meant: a kept tab, never a preview (VS Code's Quick Open).
+    const keptObject = shown((selection: Selection) => openObject(selection, { newTab: true }));
+    if (t.kind === "flow") return shown(openFlowTab)(t.name);
+    if (t.kind === "saved") return shown(openSavedHere)(t.query);
+    if (t.kind === "object") {
+      const c = connections.find((x) => x.id === t.connectionId);
+      if (c && openIds.has(c.id) && placeKey(placeOf(c)) === placeKey(placeNow.current)) {
+        return keptObject({ connectionId: c.id, kind: t.object, path: t.path });
+      }
+    }
+    // A closed Connection (or one in another place) opens first, as Recent does.
+    const item_: RecentItem =
+      t.kind === "recent" ? t.item : { target: { kind: "table", path: t.path, object: t.object }, connectionId: t.connectionId, openedAtMs: 0 };
+    void openRecentItem(item_, { ...recentEnv(), openObject: keptObject, openSaved: shown(openSaved), openBuilder: shown(openBuilder) });
+  }
+  useEffect(() => {
+    // Once, after the open's own render: an open that changed nothing (the tab was already shown) still lands in it.
+    if (!focusWork.current) return;
+    focusWork.current = false;
+    focusWorkArea();
+  }, [focusTick]);
+
   // The app's command keys; the rest of the registry is wired as each command arrives.
   useCommandKeys({
+    // S1: VS Code's Quick Open (Ctrl+P, and Ctrl+K as Edge's search) and Command Palette (Ctrl+Shift+P).
+    "quickOpen.show": () => showQuick(""),
+    "palette.show": () => showQuick(">"),
+    // Query History from anywhere a Connection is open, as the feature bar's History (keyless; the palette runs it).
+    ...(openIds.size > 0
+      ? {
+          "history.toggle": () => {
+            const shownTab = tabs.find((x) => tabKey(x) === activeKey);
+            if (shownTab?.kind === "query") {
+              setHistoryAll(false);
+              setHistoryOpen((o) => !o);
+            } else showAllHistory();
+          },
+        }
+      : {}),
     // A new query tab, on the active Connection.
     "query.new": () => newQuery(activeId),
     // The panel follows every tab but a diagram, which has its own assistant (ADR 0023).
@@ -1035,26 +1147,17 @@ function Workspace() {
     "pane.next": () => cyclePane(1),
     "pane.previous": () => cyclePane(-1),
     "connection.new": () => setForm({ kind: "connection" }),
-    "group.open.1": () => openPlaceAt(1),
-    "group.open.2": () => openPlaceAt(2),
-    "group.open.3": () => openPlaceAt(3),
-    "group.open.4": () => openPlaceAt(4),
-    "group.open.5": () => openPlaceAt(5),
-    "group.open.6": () => openPlaceAt(6),
-    "group.open.7": () => openPlaceAt(7),
-    "group.open.8": () => openPlaceAt(8),
-    "group.open.9": () => openPlaceAt(9),
+    // Only the places that exist, so the palette lists those alone.
+    ...Object.fromEntries(menuPlaces(groups).slice(0, 9).map((_, i) => [`group.open.${i + 1}`, () => openPlaceAt(i + 1)])),
     "flow.fromMermaid": () => setMermaidOpen(true),
     "flow.new": () => setNewDiagramOpen(true),
-    "flow.saveCopy": () => {
-      if (activeDiagram) void diagramFiles.saveCopy(activeDiagram);
-    },
-    "flow.rename": () => {
-      if (activeDiagram) diagramFiles.rename(activeDiagram);
-    },
-    "flow.delete": () => {
-      if (activeDiagram) diagramFiles.remove(activeDiagram);
-    },
+    ...(activeDiagram
+      ? {
+          "flow.saveCopy": () => void diagramFiles.saveCopy(activeDiagram),
+          "flow.rename": () => diagramFiles.rename(activeDiagram),
+          "flow.delete": () => diagramFiles.remove(activeDiagram),
+        }
+      : {}),
   });
 
   const askGroupId = place.kind === "group" ? place.groupId : null;
@@ -1179,8 +1282,9 @@ function Workspace() {
     setWindowTabs((w) => w.map((t) => (t.kind === "schema" && t.id === id ? { ...t, doc: { ...t.doc, path } } : t)));
   }
 
-  function openRecent(item: RecentItem) {
-    return openRecentItem(item, {
+  /** How Recent (and Quick Open, for a closed Connection) reaches the place, the Connection and the item. */
+  function recentEnv(): RecentEnv {
+    return {
       connections,
       savedQueries,
       openConnectionAt,
@@ -1191,7 +1295,11 @@ function Workspace() {
       openBuilder,
       askDialect: (file) => setModelStart({ file }),
       notice: setNotice,
-    });
+    };
+  }
+
+  function openRecent(item: RecentItem) {
+    return openRecentItem(item, recentEnv());
   }
 
   async function openUngrouped() {
@@ -1552,6 +1660,10 @@ function Workspace() {
                     }
                     version={gridVersions[t.key] ?? 0}
                     onSaved={() => record({ kind: "table", path: s.path, object: s.kind === "view" ? "view" : "table" }, s.connectionId)}
+                    open={openIds.has(s.connectionId)}
+                    onFollow={s.kind === "table" ? (req) => fkNav.follow(t.key, req) : undefined}
+                    jump={fkNav.jumpFor(t.key)}
+                    nav={s.kind === "table" ? { ...fkNav.nav, onBack: fkNav.back, onForward: fkNav.forward } : undefined}
                     notice={gridNotices[t.key] ?? null}
                     onNoticeDone={() => forgetNotice(t.key)}
                     lang={lang}
@@ -1911,6 +2023,25 @@ function Workspace() {
       )}
       {diagramFiles.dialog}
       {tableDrop.dialog}
+      {quick && quickList && (
+        <QuickOpen
+          initial={quick.initial}
+          seq={quick.seq}
+          all={quickList.all}
+          noOpenConnection={openIds.size === 0}
+          recentIds={quickList.recentIds}
+          commands={quick.commands}
+          recentCommands={quick.recentCommands}
+          quickOpenKeys={keymap.get("quickOpen.show") ?? []}
+          paletteKeys={keymap.get("palette.show") ?? []}
+          onOpen={openQuickItem}
+          onRun={(id) => {
+            rememberCommand(id);
+            invokeCommand(id);
+          }}
+          onClose={() => setQuick(null)}
+        />
+      )}
       <StartModelDialog
         modelStart={modelStart}
         connections={connections}

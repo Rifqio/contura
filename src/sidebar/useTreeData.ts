@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorText, isNotOpen, listDatabases, listObjects, listSchemas } from "../api/client";
 import type { ConnectionConfig, ConnectionId, ObjectPath } from "../api/types";
+import { objectNames } from "../palette/nameIndex";
 import {
   type BranchData,
   type TreeNode,
@@ -118,6 +119,8 @@ export function useTreeData({ connections, openIds, onNotOpen, onRevealed }: Opt
     listObjects(c.id, database, schema)
       .then((value) => {
         loadEnded(loadKey);
+        // Quick Open finds these by name, even after the Connection closes (names only, capped).
+        objectNames.keep(c.id, database, schema, value);
         patch(c.id, epoch, (b) => ({ ...b, objects: { ...b.objects, [scope]: { s: "loaded", value } } }));
         // A scope shows its tables at once the first time it loads.
         if (first && epochs.current.get(c.id) === epoch) open(folderId(c.id, scope, "table"));

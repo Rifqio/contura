@@ -528,6 +528,8 @@ export default function LineageTab({ connection, path, onOpenTable, onAddForeign
           move(keyFor(id, refs), { x: nx, y: ny });
         }}
         livePositions={glide}
+        // F32: one navigation model on every canvas (drag selects, wheel pans, Ctrl + wheel zooms).
+        boxSelect
         onInit={(i) => {
           flow.current = i;
         }}

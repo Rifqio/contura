@@ -263,6 +263,29 @@ async fn timestamp_old_value_matches(env: &Env) {
     );
 }
 
+/// `stamped` has `at` defaulting to the current time and `n` defaulting to 7; row 1 holds NULL and 1.
+async fn sets_default_on_a_saved_row(env: &Env) {
+    let at = env.value("stamped", 1, "at").await;
+    let n = env.value("stamped", 1, "n").await;
+    assert_eq!(at, Cell::Null);
+    let set = EditSet {
+        table: env.path("stamped"),
+        updates: vec![update(
+            1,
+            vec![("at", at, NewValue::Default), ("n", n, NewValue::Default)],
+        )],
+        inserts: vec![],
+        deletes: vec![],
+    };
+    let outcome = env.apply("stamped", set).await.expect("apply");
+    assert_eq!(outcome, TxOutcome::Committed { rows: vec![1] });
+    assert!(text_of(&env.value("stamped", 1, "at").await).is_some());
+    assert_eq!(
+        text_of(&env.value("stamped", 1, "n").await).as_deref(),
+        Some("7")
+    );
+}
+
 mod mysql {
     use super::*;
     use crate::common::TestDb;
@@ -379,6 +402,49 @@ mod mysql {
     async fn timestamp_old_value_matches() {
         let (db, env) = fixture().await;
         super::timestamp_old_value_matches(&env).await;
+        db.drop_db().await;
+    }
+
+    #[tokio::test]
+    async fn sets_default_on_a_saved_row() {
+        let (db, env) = fixture().await;
+        exec(
+            &db,
+            &[
+                "CREATE TABLE stamped (id bigint PRIMARY KEY, at datetime NULL DEFAULT CURRENT_TIMESTAMP, \
+                 n int DEFAULT 7)",
+                "INSERT INTO stamped VALUES (1, NULL, 1)",
+            ],
+        )
+        .await;
+        super::sets_default_on_a_saved_row(&env).await;
+        db.drop_db().await;
+    }
+
+    /// M9: a parenthesised expression default (MySQL 8.0.13+) is what `SET col = DEFAULT`
+    /// works out on the server.
+    #[tokio::test]
+    async fn sets_an_expression_default_on_a_saved_row() {
+        let (db, env) = fixture().await;
+        exec(
+            &db,
+            &[
+                "CREATE TABLE tagged (id bigint PRIMARY KEY, u varchar(36) DEFAULT (uuid()))",
+                "INSERT INTO tagged VALUES (1, 'x')",
+            ],
+        )
+        .await;
+        let old = env.value("tagged", 1, "u").await;
+        let set = EditSet {
+            table: env.path("tagged"),
+            updates: vec![update(1, vec![("u", old, NewValue::Default)])],
+            inserts: vec![],
+            deletes: vec![],
+        };
+        let outcome = env.apply("tagged", set).await.expect("apply");
+        assert_eq!(outcome, TxOutcome::Committed { rows: vec![1] });
+        let now = text_of(&env.value("tagged", 1, "u").await).unwrap();
+        assert_eq!(now.len(), 36, "{now}");
         db.drop_db().await;
     }
 }
@@ -503,6 +569,20 @@ mod pg {
         super::timestamp_old_value_matches(&env).await;
         db.drop_db().await;
     }
+
+    #[tokio::test]
+    async fn sets_default_on_a_saved_row() {
+        let (db, env) = fixture().await;
+        exec(
+            &db,
+            "CREATE TABLE public.stamped (id bigint PRIMARY KEY, at timestamptz DEFAULT now(),
+                 n int DEFAULT 7);
+             INSERT INTO public.stamped VALUES (1, NULL, 1);",
+        )
+        .await;
+        super::sets_default_on_a_saved_row(&env).await;
+        db.drop_db().await;
+    }
 }
 
 mod sqlite {
@@ -600,6 +680,36 @@ mod sqlite {
     async fn timestamp_old_value_matches() {
         let (_dir, _path, env) = fixture().await;
         super::timestamp_old_value_matches(&env).await;
+    }
+
+    /// SQLite has no DEFAULT in UPDATE: the plan is refused and nothing runs.
+    #[tokio::test]
+    async fn default_on_a_saved_row_is_refused() {
+        let (_dir, path, env) = fixture().await;
+        exec(
+            path,
+            "CREATE TABLE stamped (id bigint PRIMARY KEY, at text DEFAULT CURRENT_TIMESTAMP, n int DEFAULT 7);
+             INSERT INTO stamped VALUES (1, NULL, 1);",
+        )
+        .await;
+        let (columns, _) = env.page("stamped").await;
+        let set = EditSet {
+            table: env.path("stamped"),
+            updates: vec![update(
+                1,
+                vec![("n", env.value("stamped", 1, "n").await, NewValue::Default)],
+            )],
+            inserts: vec![],
+            deletes: vec![],
+        };
+        assert!(matches!(
+            plan_edits(env.kind, &columns, &set),
+            Err(Error::InvalidInput(_))
+        ));
+        assert_eq!(
+            text_of(&env.value("stamped", 1, "n").await).as_deref(),
+            Some("1")
+        );
     }
 
     /// A reader on another connection holds its SHARED lock, so COMMIT (which needs

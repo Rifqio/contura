@@ -689,3 +689,85 @@ test("the_appearance_preview_draws_its_rows_on_the_grid_surface", () => {
   expect(bodyOf(".spv-grid")).toMatch(/background:\s*var\(--c-bg-surface\)/);
   expect(bodyOf(".spv-row.alt")).toMatch(/background:\s*var\(--c-grid-stripe\)/);
 });
+
+// Polish A1: rows that hover inside a raised surface use the raised-hover fill, which Dracula keeps apart from the surface.
+test("hover_on_raised_surfaces_uses_the_raised_hover_token", () => {
+  const all = rules(appCss);
+  const fill = (selector: string) => {
+    const hit = all.find((r) => r.selector.split(",").map((x) => x.trim()).includes(selector));
+    expect(hit, selector).toBeTruthy();
+    return (hit as { body: string }).body.match(/background:\s*([^;]+);/)?.[1];
+  };
+  for (const sel of [
+    ".menu-item:hover",
+    ".select-option-active",
+    ".new-tab-item:hover",
+    ".mrow:hover",
+    ".qo-row:hover",
+    ".filter-quick-button:hover",
+  ]) {
+    expect(fill(sel), sel).toBe("var(--c-bg-raised-hover)");
+  }
+});
+
+// Fix round 1: a hover anywhere inside a raised surface (dialog X, toast Undo, popovers) uses the raised-hover fill,
+// found by scope: every rule that paints --c-bg-raised also sets --c-bg-hover to it for itself and its children.
+test("every_raised_surface_scopes_the_hover_token_to_raised_hover", () => {
+  const all = rules(appCss);
+  const raised = all.filter((r) => /(^|;|\s)background:\s*var\(--c-bg-raised\)/.test(r.body));
+  expect(raised.length).toBeGreaterThan(20);
+  // The canvas zoom panel belongs to the diagram work in another branch.
+  const exempt = new Set([".diagram-canvas .react-flow__panel.canvas-zoom", ".feature-button::after", ".inline-name-error", ".app-tip", ".cm-editor .cm-search .cm-button"]);
+  const scoped = new Set(
+    all
+      .filter((r) => /--c-bg-hover:\s*var\(--c-bg-raised-hover\)/.test(r.body))
+      .flatMap((r) => r.selector.split(",").map((x) => x.trim())),
+  );
+  const missing = raised.flatMap((r) => r.selector.split(",").map((x) => x.trim())).filter((sel) => !exempt.has(sel) && !scoped.has(sel));
+  expect(missing).toEqual([]);
+});
+
+test("select_hint_on_the_active_option_still_steps_up_for_the_menu_rows", () => {
+  const all = rules(appCss);
+  const stepUp = all.filter((r) => /color:\s*var\(--c-text-muted\)/.test(r.body)).map((r) => r.selector).join("\n");
+  expect(stepUp).toContain(".select-option-active .select-hint");
+});
+
+// Fix round 2 (R1, N2): hovers inside raised surfaces that are not a selected state use the raised-hover fill, and a
+// button's hover is visibly apart from its resting fill in every theme.
+test("raised_surface_hovers_use_raised_hover_and_the_search_button_hover_shows", () => {
+  const all = rules(appCss);
+  const fill = (sel: string) => all.find((r) => r.selector.split(",").map((x) => x.trim()).includes(sel))?.body.match(/background:\s*([^;]+);/)?.[1] ?? "";
+  for (const sel of [".key-picker-item:hover", ".vq-join-kind:hover:not(:disabled)", ".vq-pick-choice:hover", ".cm-editor .cm-search .cm-button:hover"]) {
+    expect(fill(sel), sel).toBe("var(--c-bg-raised-hover)");
+  }
+  const css = tokensCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  const block = (start: string) => {
+    const open = css.indexOf("{", css.indexOf(start));
+    return css.slice(open + 1, css.indexOf("}", open));
+  };
+  const lum = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  for (const [theme, body] of [["light", block(":root, .theme-light {")], ["dark", block(':root[data-theme="dark"], .theme-dark {')]] as const) {
+    const t = new Map([...body.matchAll(/(--[\w-]+)\s*:\s*(#[0-9a-f]{6});/g)].map((m) => [m[1], m[2]]));
+    // The search panel is a raised surface: its --c-bg-hover is the raised one.
+    const resolve = (v: string) => {
+      const name = v.match(/var\((--[\w-]+)\)/)?.[1] ?? "";
+      return t.get(name === "--c-bg-hover" ? "--c-bg-raised-hover" : name) as string;
+    };
+    const [a, b] = [lum(resolve(fill(".cm-editor .cm-search .cm-button"))), lum(resolve(fill(".cm-editor .cm-search .cm-button:hover")))];
+    expect((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05), theme).toBeGreaterThanOrEqual(1.15);
+  }
+});
+
+// Fix round 4 (live check): a point menu opened near the right edge keeps its natural width, so its labels are never
+// cut; the clamp in PointMenu moves it left instead.
+test("a_point_menu_keeps_its_natural_width_at_the_right_edge", () => {
+  const menu = rules(appCss).filter((r) => r.selector.split(",").map((x) => x.trim()).includes(".tree-menu"));
+  expect(menu.some((r) => /width:\s*max-content/.test(r.body))).toBe(true);
+});

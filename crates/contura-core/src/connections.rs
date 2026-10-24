@@ -70,7 +70,37 @@ const RECENT_ITEMS_KEY: &str = "recent_items";
 const QUERY_TABS_KEY: &str = "query_tabs:";
 const SAVED_QUERY_CONNECTIONS_KEY: &str = "saved_query_connections";
 const CONNECTION_OPENED_KEY: &str = "connection_opened";
+/// The table grids' column orders on one Connection: at most this many tables, least recently
+/// used out first, and at most this many bytes all together (`store::column_order_prefix`).
+const COLUMN_ORDER_TABLES_MAX: usize = 2000;
+const COLUMN_ORDER_TOTAL_BYTES_MAX: usize = 4 * 1024 * 1024;
+/// One table's order: this many names, and this many bytes stored.
+const COLUMN_ORDER_COLUMNS_MAX: usize = 4096;
+const COLUMN_ORDER_ENTRY_BYTES_MAX: usize = 64 * 1024;
+const COLUMN_ORDER_KEY_MAX: usize = 4096;
 const DAY_MS: i64 = 86_400_000;
+
+/// One table's stored column order and when it was last used, moved or shown (least recently used first).
+#[derive(Serialize, Deserialize)]
+struct StoredColumnOrder {
+    columns: Vec<String>,
+    at: i64,
+}
+
+/// A time stamp that only goes up within this run, so two moves in the same millisecond still order.
+fn next_order_stamp() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static LAST: AtomicI64 = AtomicI64::new(0);
+    let now = now_ms();
+    let mut prev = LAST.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(prev + 1);
+        match LAST.compare_exchange(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(p) => prev = p,
+        }
+    }
+}
 
 /// The server version a Visual Query is written for, without a round trip (D3): only
 /// SQLite's matters (RIGHT and FULL JOIN), and that is the bundled library's.
@@ -297,6 +327,8 @@ pub struct EditOutcome {
 pub struct DesignVerdict {
     pub plan: DesignPlan,
     pub verdict: RunVerdict,
+    /// What Copy SQL puts around the statements (`ddl::script_frame`).
+    pub frame: crate::ddl::ScriptFrame,
 }
 
 /// The Query History entry an applied design leaves.
@@ -984,7 +1016,11 @@ impl ConnectionService {
             }
         }
         let verdict = verdict(&config, Some(&design_path(&req).database), &plan.statements);
-        Ok(DesignVerdict { plan, verdict })
+        Ok(DesignVerdict {
+            plan,
+            verdict,
+            frame: crate::ddl::script_frame(config.dialect),
+        })
     }
 
     /// Records the user's confirmation of a design on a Production Connection. The pass
@@ -1804,6 +1840,16 @@ impl ConnectionService {
 
     /// Runs one statement, applying the Connection's timeout, and records it in Query History.
     /// Read-only and Production are enforced first; a blocked statement is not recorded.
+    /// N3: a MySQL query tab whose framed script stopped before its footer gets its
+    /// sql_mode back (`SessionHandle::restore_script_sql_mode`); false elsewhere.
+    pub async fn restore_script_sql_mode(&self, s: QuerySessionId) -> Result<bool> {
+        let (conn, handle) = self.query_session(s)?;
+        if self.config(conn)?.dialect != DialectKind::MySql {
+            return Ok(false);
+        }
+        handle.restore_script_sql_mode().await
+    }
+
     pub async fn execute_sql(
         &self,
         s: QuerySessionId,
@@ -2130,6 +2176,56 @@ impl ConnectionService {
     pub fn save_query_tabs(&self, place: String, json: String) -> Result<()> {
         self.store()?
             .set_setting(&format!("{QUERY_TABS_KEY}{place}"), &json)
+    }
+
+    /// The column orders the table grids show on this Connection, by the UI's table key: column
+    /// names, view only (the tables are never altered). An unreadable entry reads as none.
+    pub fn column_orders(&self, id: ConnectionId) -> Result<HashMap<String, Vec<String>>> {
+        let prefix = crate::store::column_order_prefix(id);
+        Ok(self
+            .store()?
+            .settings_with_prefix(&prefix)?
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let order: StoredColumnOrder = serde_json::from_str(&v).ok()?;
+                Some((k[prefix.len()..].to_string(), order.columns))
+            })
+            .collect())
+    }
+
+    /// Keeps one table's column order; `None` or an empty list forgets it (the table's own order).
+    /// Only that table's setting is written. Past the caps the least recently used tables go.
+    pub fn save_column_order(
+        &self,
+        id: ConnectionId,
+        table: String,
+        columns: Option<Vec<String>>,
+    ) -> Result<()> {
+        let store = self.store()?;
+        let Some(columns) = columns.filter(|c| !c.is_empty()) else {
+            let key = format!("{}{table}", crate::store::column_order_prefix(id));
+            return store.delete_setting(&key);
+        };
+        if table.len() > COLUMN_ORDER_KEY_MAX || columns.len() > COLUMN_ORDER_COLUMNS_MAX {
+            return Err(Error::InvalidInput("column order too large".into()));
+        }
+        let json = serde_json::to_string(&StoredColumnOrder {
+            columns,
+            at: next_order_stamp(),
+        })
+        .map_err(|e| Error::Store(e.to_string()))?;
+        if json.len() > COLUMN_ORDER_ENTRY_BYTES_MAX {
+            return Err(Error::InvalidInput("column order too large".into()));
+        }
+        // One transaction: the write, and past a cap the least recently used orders out. An
+        // order never outlives its Connection: a tab left open after a delete writes nothing.
+        store.put_column_order(
+            id,
+            &table,
+            &json,
+            COLUMN_ORDER_TABLES_MAX,
+            COLUMN_ORDER_TOTAL_BYTES_MAX,
+        )
     }
 }
 

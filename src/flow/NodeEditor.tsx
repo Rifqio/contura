@@ -1,6 +1,7 @@
 // Item 22: double-click a node to edit its name and details in a small panel beside it: the name (a note's
 // text), its kind where the diagram has kinds to choose from, and its id and table where the kind takes them.
-// Enter saves, Escape or a press outside leaves it as it was; the text changes as one undo entry.
+// Enter saves and Escape leaves it as it was; a press outside saves a changed form and closes an unchanged one,
+// so nothing typed is lost (F5, Fluent 2). The text changes as one undo entry.
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import Kbd from "../components/Kbd";
 import Select from "../components/Select";
@@ -58,7 +59,8 @@ export default function NodeEditor({ diagram, node, at, problem, onSave, onCance
   });
   const box = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
-  useDismiss(true, [box], onCancel);
+  const changed = edit.name !== (isNote ? (node.text ?? "") : node.name) || edit.kind !== node.kind || edit.id !== (node.attrs.id ?? "") || edit.table !== (node.attrs.table ?? "");
+  useDismiss(true, [box], (how) => (how === "press" && changed ? onSave(edit) : onCancel()));
   useEffect(() => {
     nameRef.current?.focus();
     nameRef.current?.select();

@@ -2,10 +2,12 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { type ReactNode, createElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { callsTo, routeInvoke } from "../test/invoke";
-import { keysFromEvent, normalizeKeys, toCodeMirror } from "./keys";
+import { keysFromEvent, normalizeKeys, pressedKeys, toCodeMirror, whilePressed } from "./keys";
 import { applyRebind, findClash, hintFor, keyProblem, keysFor, resetCommand, resolveKeymap } from "./keymap";
 import { COMMANDS, type CommandId } from "./registry";
 import { KeymapProvider, useCommandKeys, useKeymap } from "./useCommandKeys";
+import { fireEvent, render } from "@testing-library/react";
+import CellEditor from "../components/CellEditor";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -426,4 +428,182 @@ test("diagram_file_commands_and_ctrl_alt_n_has_no_clash", () => {
   }
   expect(findClash(map, "flow.new", "Ctrl+Alt+N")).toBeNull();
   expect(hintFor(map, "flow.new")).toBe("Ctrl+Alt+N");
+});
+
+test("quick_open_and_the_command_palette_are_rebindable_registry_commands", () => {
+  const map = resolveKeymap({});
+  // VS Code Ctrl+P; Ctrl+K as in Edge, and "Ctrl K searches tables" (requirements).
+  expect(COMMANDS.find((c) => c.id === "quickOpen.show")).toMatchObject({ keys: ["Ctrl+P", "Ctrl+K"], scope: "app", category: "View" });
+  expect(COMMANDS.find((c) => c.id === "palette.show")).toMatchObject({ keys: ["Ctrl+Shift+P"], scope: "app", category: "View" });
+  for (const k of ["Ctrl+P", "Ctrl+K"]) expect(findClash(map, "quickOpen.show", k)).toBeNull();
+  expect(findClash(map, "palette.show", "Ctrl+Shift+P")).toBeNull();
+  const moved = resolveKeymap(applyRebind({}, map, "palette.show", "Ctrl+Alt+P"));
+  expect(keysFor(moved, "palette.show")).toEqual(["Ctrl+Alt+P"]);
+  // F1 opens Help in Windows apps: not bound.
+  expect(COMMANDS.some((c) => c.keys.includes("F1"))).toBe(false);
+});
+
+test("every_command_has_a_category_for_the_palette", () => {
+  const known = new Set(["Query", "Editor", "AI", "Tabs", "View", "Connection", "Tree", "Groups", "Data", "Visual Query", "Diagram"]);
+  for (const c of COMMANDS) expect(known.has(c.category), c.id).toBe(true);
+  const cat = (id: CommandId) => COMMANDS.find((c) => c.id === id)!.category;
+  expect(cat("query.new")).toBe("Query");
+  expect(cat("history.toggle")).toBe("Query");
+  expect(cat("editor.rename")).toBe("Editor");
+  expect(cat("editor.ask")).toBe("AI");
+  expect(cat("assistant.toggle")).toBe("AI");
+  expect(cat("tab.goto.3")).toBe("Tabs");
+  expect(cat("home.open")).toBe("View");
+  expect(cat("pane.next")).toBe("View");
+  expect(cat("group.open.2")).toBe("Groups");
+  expect(cat("tree.refresh")).toBe("Tree");
+  expect(cat("export.open")).toBe("Data");
+  expect(cat("diagram.toggle")).toBe("Visual Query");
+  expect(cat("flow.new")).toBe("Diagram");
+});
+
+describe("the palette's view of the commands", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  test("ctrl_p_never_reaches_the_webview_even_when_nothing_has_it", async () => {
+    routeInvoke({ keymap: () => ({ "quickOpen.show": ["Ctrl+K"], "palette.show": [] }), save_keymap: () => null });
+    const { result } = renderHook(() => useKeymap(), { wrapper: ({ children }: { children: ReactNode }) => createElement(KeymapProvider, null, children) });
+    await waitFor(() => expect(keysFor(result.current.map, "quickOpen.show")).toEqual(["Ctrl+K"]));
+    for (const shiftKey of [false, true]) {
+      const e = ev({ ctrlKey: true, shiftKey, key: "p", code: "KeyP" });
+      window.dispatchEvent(e);
+      // WebView2 prints on Ctrl+P and Ctrl+Shift+P (print preview): never.
+      expect(e.defaultPrevented).toBe(true);
+    }
+  });
+
+  test("a_command_is_available_while_an_owner_can_run_it", () => {
+    const { result } = renderHook(() => useKeymap());
+    expect(result.current.available("tree.filter")).toBe(false);
+    const cover = document.createElement("div");
+    document.body.append(cover);
+    const under = document.createElement("div");
+    cover.append(under);
+    const hook = renderHook(() => useCommandKeys({ "tree.filter": vi.fn() }, { region: { current: under } }));
+    expect(result.current.available("tree.filter")).toBe(true);
+    // In a hidden pane it cannot run, so the palette hides it.
+    cover.hidden = true;
+    expect(result.current.available("tree.filter")).toBe(false);
+    hook.unmount();
+  });
+
+  test("invoke_runs_editor_commands_for_the_palette_while_keys_never_do", () => {
+    const onRun = vi.fn();
+    const { result } = renderHook(() => {
+      useCommandKeys({ "query.run": onRun });
+      return useKeymap();
+    });
+    window.dispatchEvent(ev({ ctrlKey: true, key: "Enter", code: "Enter" }));
+    expect(onRun).not.toHaveBeenCalled();
+    expect(result.current.run("query.run")).toBe(false);
+    expect(result.current.available("query.run")).toBe(true);
+    expect(result.current.invoke("query.run")).toBe(true);
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(result.current.invoke("query.runAll")).toBe(false);
+  });
+
+  test("a_palette_only_owner_never_takes_a_key", () => {
+    const keyed = vi.fn();
+    const palette = vi.fn();
+    const { result } = renderHook(() => {
+      useCommandKeys({ "query.save": keyed });
+      useCommandKeys({ "query.save": palette }, { paletteOnly: true });
+      return useKeymap();
+    });
+    window.dispatchEvent(ev({ ctrlKey: true, key: "s", code: "KeyS" }));
+    expect(keyed).toHaveBeenCalledTimes(1);
+    expect(palette).not.toHaveBeenCalled();
+    // The palette runs the latest owner, the editor's.
+    expect(result.current.invoke("query.save")).toBe(true);
+    expect(palette).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the print keys", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  test("reach_their_commands_and_never_print_with_focus_in_a_cell_editor", () => {
+    const quick = vi.fn();
+    const palette = vi.fn();
+    renderHook(() => useCommandKeys({ "quickOpen.show": quick, "palette.show": palette }));
+    const { container } = render(<CellEditor initial="paid" multiline={false} onCommit={vi.fn()} onCancel={vi.fn()} />);
+    const cell = container.querySelector("textarea")!;
+    // The cell editor stops every key; fireEvent answers false when the default was prevented.
+    expect(fireEvent.keyDown(cell, { key: "p", code: "KeyP", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(cell, { key: "k", code: "KeyK", ctrlKey: true })).toBe(false);
+    expect(quick).toHaveBeenCalledTimes(2);
+    expect(fireEvent.keyDown(cell, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true })).toBe(false);
+    expect(palette).toHaveBeenCalledTimes(1);
+  });
+
+  test("run_once_from_anywhere_else", () => {
+    const quick = vi.fn();
+    renderHook(() => useCommandKeys({ "quickOpen.show": quick }));
+    expect(fireEvent.keyDown(document.body, { key: "p", code: "KeyP", ctrlKey: true })).toBe(false);
+    expect(quick).toHaveBeenCalledTimes(1);
+  });
+
+  test("a_box_that_owns_its_keys_gets_them_but_never_prints", () => {
+    const quick = vi.fn();
+    const own = vi.fn();
+    renderHook(() => useCommandKeys({ "quickOpen.show": quick }));
+    const { container } = render(<input data-keys-own="" onKeyDown={own} />);
+    expect(fireEvent.keyDown(container.querySelector("input")!, { key: "p", code: "KeyP", ctrlKey: true })).toBe(false);
+    expect(own).toHaveBeenCalledTimes(1);
+    expect(quick).not.toHaveBeenCalled();
+  });
+});
+
+test("step_8_follow_a_key_and_back_forward_are_app_commands_without_a_clash", () => {
+  const map = resolveKeymap({});
+  const want = [
+    ["grid.followKey", "Go to referenced row", ["F4", "Ctrl+B"]],
+    ["grid.rowsPointingHere", "Rows that point here", ["Alt+F7"]],
+    ["nav.back", "Back", ["Alt+ArrowLeft", "Ctrl+Alt+ArrowLeft"]],
+    ["nav.forward", "Forward", ["Alt+ArrowRight", "Ctrl+Alt+ArrowRight"]],
+  ] as const;
+  for (const [id, title, keys] of want) {
+    expect(COMMANDS.find((x) => x.id === id)).toMatchObject({ title, keys, scope: "app" });
+    for (const k of keys) expect(findClash(map, id, k)).toBeNull();
+  }
+  expect(hintFor(map, "grid.followKey")).toBe("F4");
+  expect(hintFor(map, "grid.rowsPointingHere")).toBe("Alt+F7");
+  // DBeaver's Alt+Space is not bound: on Windows it opens the window's system menu.
+  expect(COMMANDS.some((c) => c.keys.includes("Alt+Space"))).toBe(false);
+});
+
+test("moving_a_column_has_dbeavers_keys_without_a_clash", () => {
+  const map = resolveKeymap({});
+  const want = [
+    ["grid.moveColumnLeft", "Move column left", ["Shift+Alt+ArrowLeft"]],
+    ["grid.moveColumnRight", "Move column right", ["Shift+Alt+ArrowRight"]],
+  ] as const;
+  for (const [id, title, keys] of want) {
+    expect(COMMANDS.find((x) => x.id === id)).toMatchObject({ title, keys, scope: "app", category: "Data" });
+    for (const k of keys) expect(findClash(map, id, k)).toBeNull();
+  }
+  // Rebindable like the other grid keys: an override takes their place.
+  expect(hintFor(resolveKeymap({ "grid.moveColumnLeft": ["Ctrl+Shift+ArrowLeft"] }), "grid.moveColumnLeft")).toBe("Ctrl+Shift+ArrowLeft");
+});
+
+test("a_handler_knows_which_keys_ran_it", () => {
+  const seen: (string | null)[] = [];
+  const { unmount } = renderHook(() => useCommandKeys({ "nav.back": () => void seen.push(pressedKeys()) }));
+  window.dispatchEvent(ev({ ctrlKey: true, altKey: true, key: "ArrowLeft", code: "ArrowLeft" }));
+  window.dispatchEvent(ev({ altKey: true, key: "ArrowLeft", code: "ArrowLeft" }));
+  expect(seen).toEqual(["Ctrl+Alt+ArrowLeft", "Alt+ArrowLeft"]);
+  // Outside a key press (the palette runs a command), there are none.
+  expect(pressedKeys()).toBeNull();
+  expect(whilePressed("F4", () => pressedKeys())).toBe("F4");
+  expect(pressedKeys()).toBeNull();
+  unmount();
 });

@@ -34,11 +34,17 @@ SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull, \
  WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped \
  ORDER BY a.attnum";
 
-/// NOT NULL stays on the column (PostgreSQL 18 also lists it as a constraint).
+/// NOT NULL stays on the column (PostgreSQL 18 also lists it as a constraint). A Foreign Key
+/// to a partitioned table is written once: its copies on the same table (one per partition
+/// of the referenced table) are left out. A partition keeps the copy of its parent's key,
+/// so its DDL shows the key it holds.
 const CONSTRAINTS_SQL: &str = "\
 SELECT conname::text, pg_get_constraintdef(oid, true) \
   FROM pg_constraint \
  WHERE conrelid = $1 AND contype IN ('p', 'u', 'c', 'x', 'f') \
+   AND (contype <> 'f' OR conparentid = 0 \
+        OR (SELECT p.conrelid FROM pg_constraint p WHERE p.oid = pg_constraint.conparentid) \
+           <> pg_constraint.conrelid) \
  ORDER BY CASE contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'c' THEN 2 \
                        WHEN 'x' THEN 3 ELSE 4 END, conname";
 

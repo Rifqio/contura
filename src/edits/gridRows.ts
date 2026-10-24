@@ -8,8 +8,9 @@ export type DisplayRow =
   /** `index`: the row's place on the loaded page, for its row number. */
   | { kind: "loaded"; key: RowKey | null; source: Cell[]; cells: Cell[]; deleted: boolean; index: number };
 
+/** DEFAULT has no value until the server works it out; the grid shows it as `default` (`isDefault`). */
 export function valueCell(v: NewValue): Cell {
-  return v.t === "null" ? { t: "null" } : { t: "text", value: v.value, truncated: false, totalBytes: v.value.length };
+  return v.t === "text" ? { t: "text", value: v.value, truncated: false, totalBytes: v.value.length } : { t: "null" };
 }
 
 /** The value a loaded cell holds, when it is whole; cut-short and binary cells have none. */

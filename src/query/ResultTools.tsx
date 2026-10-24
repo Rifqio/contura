@@ -10,6 +10,8 @@ import { useToast } from "../components/Toast";
 
 interface Props {
   columns: ResultColumn[];
+  /** The columns in the order the grid shows them, as indexes; null or left out is the query's own order. */
+  order?: readonly number[] | null;
   /** The rows to export: those the filter lets through. */
   rows: Cell[][];
   filter: string;
@@ -87,12 +89,18 @@ export default function ResultTools({
   connectionName,
   onExport,
   onImport,
+  order,
 }: Props) {
   const { show } = useToast();
   const exportKey = hintFor(useKeymap().map, "export.open") ?? undefined;
   const shown = columns.filter((c) => !hidden.has(c.name));
-  const exported = () => rows.map((r) => r.filter((_, i) => !hidden.has(columns[i].name)));
-  const csv = () => toCsv(shown, exported());
+  // The CSV has the columns as the grid shows them: its order, without the hidden ones.
+  const keep = () => (order && order.length === columns.length ? order : columns.map((_, i) => i)).filter((i) => !hidden.has(columns[i].name));
+  const exported = () => {
+    const k = keep();
+    return rows.map((r) => k.map((i) => r[i]));
+  };
+  const csv = () => toCsv(keep().map((i) => columns[i]), exported());
   const cut = () => {
     const n = cutShort(exported());
     return n === 0 ? "" : ` ${n.toLocaleString("en-US")} ${n === 1 ? "value was" : "values were"} cut short in the CSV.`;

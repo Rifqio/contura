@@ -4,12 +4,14 @@ import {
   type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
   type ReactNode,
+  type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import type { Cell, SortSpec } from "../api/types";
 import {
   addCell,
@@ -20,19 +22,26 @@ import {
   copyText,
   extendRowsTo,
   extendTo,
+  isOneColumn,
   navigate,
   norm,
   type Range,
   rowCoverage,
   selectAll,
+  selectColumn,
   selectRows,
   type Selection,
   single,
 } from "../grid/selection";
 import { writeClipboard } from "../grid/clipboard";
+import { isOwnOrder, ownOrder } from "../grid/columnOrder";
+import { type CommandHandlers, useCommandKeys, useKeymap } from "../commands/useCommandKeys";
+import { hintFor } from "../commands/keymap";
+import { pressedKeys } from "../commands/keys";
 import CellValue, { type CellSource } from "./CellValue";
 import { cellContentWidth, fitColumns, fitToContent, headerFloor, headerPadding, headerWidth } from "./columnWidths";
 import Icon from "./Icon";
+import { type MenuItem, PointMenu } from "./Menu";
 
 /** Rows are one line high (app.css `.grid td`); measured once rendered. */
 const FALLBACK_ROW_HEIGHT = 28;
@@ -41,6 +50,10 @@ const HEADER_PADDING = 16;
 const BOOL_TYPE = /^bool(ean)?$/i;
 /** Rows rendered above and below the visible ones. */
 const OVERSCAN = 20;
+/** A press on a header moves its column once the pointer has gone further than this; less is a click (AG Grid). */
+const DRAG_START = 4;
+/** While a column is dragged this close to the grid's side, the grid scrolls that way (AG Grid, Excel). */
+const EDGE = 28;
 
 export interface GridColumn {
   name: string;
@@ -54,6 +67,34 @@ export interface GridColumn {
 interface Props {
   columns: GridColumn[];
   rows: Cell[][];
+  /**
+   * The columns in the order shown, as indexes into `columns` and into every row; every column in its own order when
+   * left out. Every position the grid gives back (selection, cells, menus) is a place in this order.
+   */
+  order?: readonly number[];
+  /**
+   * Moves the column at shown position `from` into the gap `slot` (0 to the column count), view only: dragging a
+   * header, the move keys and the header menu. Without it columns stay where they are.
+   */
+  onMoveColumn?(from: number, slot: number, by: MoveBy): void;
+  /** The header menu's Reset column order; offered, and on while `order` is not the columns' own. */
+  onResetOrder?(): void;
+  /** Said after a move, such as " Remembered for orders." */
+  orderMemo?: string;
+  /**
+   * Whether the whole order (hidden columns too) is the columns' own; Reset column order is on when it is not. Left out,
+   * the shown columns decide.
+   */
+  orderIsOwn?: boolean;
+  /** What the columns' own order is called, for the note a reset leaves: "the table's order". */
+  ownOrderText?: string;
+  /**
+   * Where the notes of moving a column go (a live region that is always there, such as the footer's), so nothing
+   * appears above the grid and moves under the pointer during a drag. `onNote` when left out.
+   */
+  onOrderNote?(text: string): void;
+  /** The header menu's Sort ascending and Sort descending. */
+  onSortTo?(sort: SortSpec): void;
   /** Changing it starts the grid over at the top, with fresh column widths. */
   resetKey: unknown;
   /** Dragged and fitted widths are kept, by column name, while this stays the same; it defaults to `resetKey`. */
@@ -99,7 +140,26 @@ interface Props {
   rowLabel?(row: number): ReactNode | undefined;
   /** Replaces the cell's content, such as the open editor. */
   renderCell?(row: number, column: number): ReactNode | undefined;
+  /** The text a copy takes for a cell whose shown text is not its value, such as the `default` marker. */
+  copyCell?(row: number, column: number): string | undefined;
+  /**
+   * UX step 8: a Foreign Key cell. `go` draws the arrow at the cell's right (TablePlus), shown on row hover and on the
+   * active cell; `null` is a NULL key, which has no arrow. Either keeps the arrow's slot free so values line up.
+   */
+  keyCell?(row: number, column: number): { kind: "go"; title: string; onFollow(): void } | { kind: "null" } | null;
 }
+
+/** Registers app command handlers for as long as it is rendered. */
+function CommandKeys({ handlers, region }: { handlers: CommandHandlers; region: RefObject<HTMLElement | null> }) {
+  useCommandKeys(handlers, { region });
+  return null;
+}
+
+/** A NULL key has no row to go to; its cell says so. */
+const NULL_KEY_TIP = "NULL: no row to go to";
+
+/** How a column was moved: a held key repeats, so its saves may wait for the run to end; a drag or a menu item never. */
+export type MoveBy = "drag" | "menu" | "keys";
 
 export interface GridHandle {
   /** Copies the selection, with a header line when asked: as Ctrl+C and Ctrl+Shift+C. */
@@ -140,6 +200,7 @@ type Visible = { first: number; last: number };
  * the row-number gutter.
  */
 type Measure = { key: unknown; cols: string; gutter: number; natural: number[]; header: number[]; floor: number[] };
+/** The columns' widths are measured once per set of columns shown; moving one keeps them (by column index). */
 /** Widths the user dragged or fitted, by column name, while their `widthsKey` stays. */
 type Pins = { key: unknown; px: Record<string, number> };
 
@@ -150,6 +211,14 @@ type Pins = { key: unknown; px: Record<string, number> };
 export default function ResultGrid({
   columns,
   rows,
+  order,
+  onMoveColumn,
+  onResetOrder,
+  orderMemo = "",
+  ownOrderText = "their own order",
+  orderIsOwn,
+  onSortTo,
+  onOrderNote,
   resetKey,
   widthsKey = resetKey,
   onResized,
@@ -178,6 +247,8 @@ export default function ResultGrid({
   rowClass,
   rowLabel,
   renderCell,
+  copyCell,
+  keyCell,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = useRef(FALLBACK_ROW_HEIGHT);
@@ -188,7 +259,13 @@ export default function ResultGrid({
   /** Bumped to measure the widths again (fonts loaded, or a hidden grid shown). */
   const [epoch, setEpoch] = useState(0);
   const measured = useRef(false);
-  const cols = columns.map((c) => c.name).join("\u0000");
+  const own = useRef<number[]>([]);
+  if (!order && own.current.length !== columns.length) own.current = ownOrder(columns.length);
+  /** Shown position to column index: the one mapping every cell, header and copy goes through. */
+  const at = order ?? own.current;
+  const count = at.length;
+  // Which columns are shown, not their order: a move never measures again.
+  const cols = `${columns.map((c) => c.name).join("\u0000")}|${[...at].sort((a, b) => a - b).join(",")}`;
 
   // Clearing the measure renders the table without fixed widths, which the measuring
   // effect below then reads.
@@ -255,16 +332,25 @@ export default function ResultGrid({
     if (!box) return;
     const gutter = box.querySelector<HTMLElement>("thead th.row-number")?.offsetWidth ?? 0;
     const heads = Array.from(box.querySelectorAll<HTMLElement>("thead th:not(.row-number)"));
-    const natural = heads.map((th) => th.offsetWidth);
+    // Kept by column index (the headers are in the order shown), so a moved column keeps its width.
+    const byColumn = (values: number[]) => {
+      const out = new Array<number>(columns.length).fill(0);
+      values.forEach((v, p) => {
+        if (at[p] !== undefined) out[at[p]] = v;
+      });
+      return out;
+    };
+    const shownNatural = heads.map((th) => th.offsetWidth);
     // The header cell's own side borders take room from the label too.
     const measureHeads = (f: (label: HTMLElement, padding: number) => number) =>
       heads.map((th) => {
         const label = th.querySelector<HTMLElement>(".header-label");
         return label ? f(label, headerPadding(th, HEADER_PADDING)) : HEADER_PADDING;
       });
-    const header = measureHeads(headerWidth);
-    const floor = measureHeads(headerFloor);
-    const ok = gutter > 0 && natural.length > 0 && natural.every((w) => w > 0);
+    const natural = byColumn(shownNatural);
+    const header = byColumn(measureHeads(headerWidth));
+    const floor = byColumn(measureHeads(headerFloor));
+    const ok = gutter > 0 && shownNatural.length > 0 && shownNatural.every((w) => w > 0);
     measured.current = ok;
     setMeasure(ok ? { key: resetKey, cols, gutter, natural, header, floor } : null);
     setAvailable(box.clientWidth);
@@ -274,17 +360,17 @@ export default function ResultGrid({
   const start = Math.max(0, visible.first - OVERSCAN);
   const end = Math.min(rowCount, visible.last + OVERSCAN);
   const current = measure && measure.key === resetKey && measure.cols === cols ? measure : null;
-  const pinned = pins && current && pins.key === widthsKey ? columns.map((c) => pins.px[c.name] ?? null) : null;
+  const pinned = pins && current && pins.key === widthsKey ? at.map((c) => pins.px[columns[c].name] ?? null) : null;
   const fixed = current
     ? [
         current.gutter,
         ...fitColumns({
-          natural: current.natural,
-          header: current.header,
+          natural: at.map((c) => current.natural[c]),
+          header: at.map((c) => current.header[c]),
           // One px less: the collapsed outer border adds a fraction of a px past the set width,
           // which would otherwise show a horizontal scrollbar on a pane the grid exactly fills.
           available: available - current.gutter - 1,
-          pinned: pinned ?? current.natural.map(() => null),
+          pinned: pinned ?? at.map(() => null),
         }),
       ]
     : null;
@@ -302,8 +388,9 @@ export default function ResultGrid({
     e.preventDefault();
     e.stopPropagation();
     const cells = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>(`tbody td[data-col="${ci}"]`) ?? [], cellContentWidth);
+    const c = at[ci];
     onResized?.();
-    pin(columns[ci].name, fitToContent({ header: current.header[ci], floor: current.floor[ci] ?? current.header[ci], cells }));
+    pin(columns[c].name, fitToContent({ header: current.header[c], floor: current.floor[c] ?? current.header[c], cells }));
   }
 
   function startResize(e: ReactMouseEvent, ci: number) {
@@ -313,8 +400,8 @@ export default function ResultGrid({
     stopDrag.current?.();
     const startX = e.clientX;
     const startWidth = fixed[ci + 1];
-    const min = current.floor[ci] ?? current.header[ci];
-    const name = columns[ci].name;
+    const min = current.floor[at[ci]] ?? current.header[at[ci]];
+    const name = columns[at[ci]].name;
     let moved = false;
     const move = (ev: MouseEvent) => {
       moved = true;
@@ -353,23 +440,53 @@ export default function ResultGrid({
     if (editingRow !== null && (editingRow < start || editingRow >= end)) editorLost.current?.();
   }, [editingRow, start, end]);
 
-  // The moving corner of the selection stays in view; a row not rendered yet is scrolled to first.
+  // The moving corner of the selection stays in view; a row not rendered yet is scrolled to first. A whole column
+  // (a header, Ctrl+Space, a moved column) keeps the rows where they are and only brings the column into view
+  // sideways; whole rows keep the columns; everything (Ctrl+A) moves nothing (Excel, DataGrip, AG Grid).
   const endRow = selection?.end.r;
   const endCol = selection?.end.c;
+  const lastRange = selection?.ranges[selection.ranges.length - 1];
+  const span = lastRange ? norm(lastRange) : null;
+  const allRows = !!span && rows.length > 1 && span.t === 0 && span.b >= rows.length - 1;
+  const allCols = !!span && count > 1 && span.l === 0 && span.r >= count - 1;
   useEffect(() => {
     if (endRow === undefined || endCol === undefined) return;
     const box = scrollRef.current;
-    const td = box?.querySelector<HTMLElement>(`tr[data-row="${endRow}"] td[data-col="${endCol}"]`);
+    if (!box || (allRows && allCols)) return;
+    if (allRows) {
+      const th = box.querySelector<HTMLElement>(`thead th[aria-colindex="${endCol + 2}"]`);
+      if (!th) return;
+      const b = box.getBoundingClientRect();
+      const h = th.getBoundingClientRect();
+      if (h.left < b.left) box.scrollLeft -= b.left - h.left;
+      else if (h.right > b.left + box.clientWidth) box.scrollLeft += Math.min(h.left - b.left, h.right - b.left - box.clientWidth);
+      return;
+    }
+    const td = box.querySelector<HTMLElement>(`tr[data-row="${endRow}"] td[data-col="${endCol}"]`);
+    if (allCols) {
+      const tr = td?.parentElement;
+      if (!tr) {
+        box.scrollTop = Math.max(0, endRow * rowHeight.current - box.clientHeight / 2);
+        return;
+      }
+      const b = box.getBoundingClientRect();
+      const r = tr.getBoundingClientRect();
+      const head = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+      if (r.top < b.top + head) box.scrollTop -= b.top + head - r.top;
+      else if (r.bottom > b.top + box.clientHeight) box.scrollTop += r.bottom - b.top - box.clientHeight;
+      return;
+    }
     if (td) td.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-    else if (box) box.scrollTop = Math.max(0, endRow * rowHeight.current - box.clientHeight / 2);
-  }, [endRow, endCol]);
+    else box.scrollTop = Math.max(0, endRow * rowHeight.current - box.clientHeight / 2);
+  }, [endRow, endCol, allRows, allCols]);
 
   const selectable = !!onSelection;
   const active = selection && selectable ? selection.active : null;
 
   // G1: the copied block wears a dashed mark until Esc or a change of the rows (an edit).
   const [copied, setCopied] = useState<Range[] | null>(null);
-  useEffect(() => setCopied(null), [rows]);
+  // A moved column moves the places the mark stood on, so it goes too.
+  useEffect(() => setCopied(null), [rows, at]);
 
   function copy(headers: boolean) {
     if (!selection) return;
@@ -378,10 +495,11 @@ export default function ResultGrid({
       onNote?.("Not copied: copy takes one block, or blocks sharing rows or columns.");
       return;
     }
+    // In the order shown (DataGrip, Excel): each shown place goes through the one mapping.
     const text = copyText(
       b,
-      (r, c) => copyValue(rows[r]?.[c]),
-      headers ? b.cols.map((c) => columns[c].name) : undefined,
+      (r, c) => copyCell?.(r, c) ?? copyValue(rows[r]?.[at[c]]),
+      headers ? b.cols.map((c) => columns[at[c]].name) : undefined,
     );
     // The note says it was copied at once; a clipboard that refuses takes the copy mark and the note back (M2).
     void writeClipboard(text).then((ok) => {
@@ -391,7 +509,7 @@ export default function ResultGrid({
     });
     setCopied(selection.ranges.map((g) => ({ ...g })));
     let cut = 0;
-    for (const r of b.rows) for (const c of b.cols) if (cutShort(rows[r]?.[c])) cut++;
+    for (const r of b.rows) for (const c of b.cols) if (cutShort(rows[r]?.[at[c]])) cut++;
     const copied = `Copied ${plural(b.rows.length * b.cols.length, "cell")}${headers ? " with headers" : ""}`;
     // I1: never a silent cut. The Core sends at most 1 KB of a value (PREVIEW_BYTES).
     onNote?.(
@@ -404,7 +522,7 @@ export default function ResultGrid({
   copyRef.current = copy;
   if (gridRef) gridRef.current = { copy: (headers) => copyRef.current(headers) };
 
-  const dims = { rows: rows.length, cols: columns.length };
+  const dims = { rows: rows.length, cols: count };
   /** A drag from a cell or a row number extends the selection over what the pointer passes. */
   const drag = useRef<"cells" | "rows" | null>(null);
   useEffect(() => {
@@ -428,10 +546,10 @@ export default function ResultGrid({
   }
 
   function rowDown(e: ReactMouseEvent, r: number) {
-    if (!onSelection || e.button !== 0 || columns.length === 0) return;
+    if (!onSelection || e.button !== 0 || count === 0) return;
     e.preventDefault();
     const s = latest.current;
-    const next = e.shiftKey && s ? extendRowsTo(s, r, columns.length) : selectRows(s, r, r, (e.ctrlKey || e.metaKey) && !!s, columns.length);
+    const next = e.shiftKey && s ? extendRowsTo(s, r, count) : selectRows(s, r, r, (e.ctrlKey || e.metaKey) && !!s, count);
     drag.current = "rows";
     scrollRef.current?.focus({ preventScroll: true });
     onSelection(next);
@@ -446,7 +564,7 @@ export default function ResultGrid({
     if (!tr) return;
     const r = Number(tr.getAttribute("data-row"));
     if (mode === "rows") {
-      if (s.end.r !== r) onSelection(extendRowsTo(s, r, columns.length));
+      if (s.end.r !== r) onSelection(extendRowsTo(s, r, count));
       return;
     }
     const td = el.closest("td[data-col]");
@@ -455,8 +573,252 @@ export default function ResultGrid({
     if (s.end.r !== r || s.end.c !== c) onSelection(extendTo(s, { r, c }));
   }
 
+  // ---- Moving columns, view only: drag a header, the move keys (DBeaver's Alt+Shift+Left and Right), the header menu ----
+  const movable = !!onMoveColumn && count > 0;
+  const { map: keymap } = useKeymap();
+  /** A move command's first key, arrows named as people say them ("Shift+Alt+Left"). */
+  const moveKey = (id: "grid.moveColumnLeft" | "grid.moveColumnRight") =>
+    hintFor(keymap, id)?.replace(/Arrow(Left|Right|Up|Down)/, "$1") ?? undefined;
+  const nameAt = (p: number) => columns[at[p]]?.name ?? "";
+  const orderNote = (text: string) => (onOrderNote ?? onNote)?.(text);
+
+  /** Moves the column at `from` into the gap `slot`, keeps it selected and says where it went. */
+  function moved(from: number, slot: number, by: MoveBy) {
+    if (!onMoveColumn || slot === from || slot === from + 1 || slot < 0 || slot > count) return;
+    const to = slot > from ? slot - 1 : slot;
+    // The column before the gap, which is the column before it once moved.
+    const where = to === 0 ? "to first" : to === count - 1 ? "to last" : `after ${nameAt(slot - 1)}`;
+    const name = nameAt(from);
+    onMoveColumn(from, slot, by);
+    // Excel: the moved column stays selected, so the keys can move it on.
+    if (rows.length > 0) onSelection?.(selectColumn(to, rows.length, latest.current?.active.r ?? 0));
+    orderNote(`Moved ${name} ${where}.${orderMemo}`);
+  }
+
+  /** The move keys and the menu's Move left and Move right: the active cell's column, one place. */
+  function moveBy(d: -1 | 1) {
+    const s = latest.current;
+    if (!movable) return;
+    if (!s) return orderNote("Select a cell in the column to move first.");
+    const p = s.active.c;
+    if (p + d < 0 || p + d >= count) return orderNote(`${nameAt(p)} is already ${d < 0 ? "first" : "last"}.`);
+    moved(p, d < 0 ? p - 1 : p + 2, "keys");
+  }
+
+  /** Reset column order (DataGrip's Reset View): the columns' own order, the active column still active. */
+  function resetOrder() {
+    if (!onResetOrder) return;
+    const s = latest.current;
+    const column = s ? at[s.active.c] : undefined;
+    onResetOrder();
+    if (s && column !== undefined && rows.length > 0) {
+      const p = [...at].sort((a, b) => a - b).indexOf(column);
+      onSelection?.(isOneColumn(s, rows.length) ? selectColumn(p, rows.length, s.active.r) : single({ r: s.active.r, c: p }));
+    }
+    orderNote(`Column order reset to ${ownOrderText}.`);
+  }
+
+  // The keys act on the focused grid; from the Command Palette (no key pressed) on the one on screen.
+  const moveKeys: CommandHandlers = {};
+  if (onMoveColumn) {
+    const mine = () => pressedKeys() === null || !!scrollRef.current?.contains(document.activeElement);
+    for (const [id, d] of [
+      ["grid.moveColumnLeft", -1],
+      ["grid.moveColumnRight", 1],
+    ] as const) {
+      Object.defineProperty(moveKeys, id, { enumerable: true, get: () => (mine() ? () => moveBy(d) : undefined) });
+    }
+  }
+
+  /** The column being dragged (its shown position), while a drag is on: its header and cells dim. */
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const ghostRef = useRef<HTMLDivElement>(null);
+  const markRef = useRef<HTMLSpanElement>(null);
+  const edgeRef = useRef<HTMLSpanElement>(null);
+  type Drag = { from: number; slot: number; x: number; offset: number; width: number; started: boolean; stop(): void };
+  const dragging = useRef<Drag | null>(null);
+  /** The press ended a drag: the header's click must not sort too. */
+  const noClick = useRef(false);
+  useEffect(() => () => dragging.current?.stop(), []);
+
+  /**
+   * Puts the drop marker in the gap nearest the pointer and the ghost header under it (AG Grid), straight on the
+   * page: a pointer move never renders the grid again.
+   */
+  function place() {
+    const d = dragging.current;
+    const box = scrollRef.current;
+    if (!d || !box) return;
+    const heads = Array.from(box.querySelectorAll<HTMLElement>("thead th:not(.row-number)"), (th) => th.getBoundingClientRect());
+    let slot = 0;
+    heads.forEach((b, i) => {
+      if (b.left + b.width / 2 < d.x) slot = i + 1;
+    });
+    d.slot = slot;
+    const view = box.getBoundingClientRect();
+    const gap = slot < heads.length ? heads[slot].left : (heads[heads.length - 1]?.right ?? view.left);
+    const mark = markRef.current;
+    if (mark) {
+      mark.style.left = `${Math.round(Math.max(view.left + 1, Math.min(view.right - 1, gap)))}px`;
+      mark.style.top = `${Math.round(view.top)}px`;
+      mark.style.height = `${box.clientHeight}px`;
+    }
+    const ghost = ghostRef.current;
+    if (ghost) {
+      ghost.style.left = `${Math.round(Math.max(view.left, Math.min(view.right - d.width, d.x - d.offset)))}px`;
+      ghost.style.top = `${Math.round((heads[0]?.top ?? view.top) + 2)}px`;
+      ghost.style.width = `${Math.round(d.width)}px`;
+    }
+    const edge = edgeRef.current;
+    if (edge) {
+      const left = d.x < view.left + EDGE && box.scrollLeft > 0;
+      const right = d.x > view.right - EDGE && box.scrollLeft < box.scrollWidth - box.clientWidth;
+      edge.hidden = !left && !right;
+      edge.className = left ? "col-drag-edge col-drag-edge-left" : "col-drag-edge col-drag-edge-right";
+      edge.style.left = `${Math.round(left ? view.left : view.right - EDGE)}px`;
+      edge.style.top = `${Math.round(view.top)}px`;
+      edge.style.height = `${box.clientHeight}px`;
+    }
+  }
+  useLayoutEffect(() => {
+    if (dragFrom !== null) place();
+  }, [dragFrom]);
+
+  /** A press on a header: a click sorts as before; past 4 px it drags the column (AG Grid, DataGrip). */
+  function headDown(e: ReactMouseEvent<HTMLElement>, ci: number) {
+    noClick.current = false;
+    if (selectable) {
+      // M9: a click sorts but leaves focus on the grid, so its keys go on working.
+      e.preventDefault();
+      scrollRef.current?.focus({ preventScroll: true });
+    }
+    if (!movable || e.button !== 0) return;
+    const th = e.currentTarget.closest("th");
+    if (!th) return;
+    e.preventDefault();
+    const head = th.getBoundingClientRect();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const d: Drag = { from: ci, slot: ci, x: x0, offset: x0 - head.left, width: head.width, started: false, stop: () => {} };
+    const stop = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("keydown", key, true);
+      clearInterval(timer);
+      document.body.classList.remove("col-moving");
+      if (dragging.current === d) dragging.current = null;
+      if (d.started) setDragFrom(null);
+    };
+    const move = (ev: MouseEvent) => {
+      d.x = ev.clientX;
+      if (!d.started) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) <= DRAG_START) return;
+        d.started = true;
+        dragging.current = d;
+        setDragFrom(ci);
+        document.body.classList.add("col-moving");
+        orderNote(`Moving ${nameAt(ci)}. Drop it between two headers; Esc puts it back.`);
+        // Near a side the grid scrolls on its own, faster the closer the pointer is, so a column can go past the view.
+        timer = setInterval(() => {
+          const box = scrollRef.current;
+          if (!box) return;
+          const v = box.getBoundingClientRect();
+          const step =
+            d.x < v.left + EDGE ? -Math.ceil((v.left + EDGE - d.x) / 3) - 2 : d.x > v.right - EDGE ? Math.ceil((d.x - (v.right - EDGE)) / 3) + 2 : 0;
+          if (!step) return;
+          const before = box.scrollLeft;
+          box.scrollLeft = before + step;
+          if (box.scrollLeft !== before) place();
+        }, 16);
+      }
+      place();
+    };
+    const up = () => {
+      stop();
+      // A press that never went past 4 px is a click: the header's click sorts.
+      if (!d.started) return;
+      // Only this release's click is the drag's: a release off the header fires none, so the mark goes once the
+      // click would have come, and the next sort (a click or Enter on the header) is never lost.
+      noClick.current = true;
+      setTimeout(() => (noClick.current = false), 0);
+      if (d.slot === d.from || d.slot === d.from + 1) {
+        if (rows.length > 0) onSelection?.(selectColumn(d.from, rows.length, latest.current?.active.r ?? 0));
+        orderNote("Dropped where it was: the order is unchanged.");
+      } else moved(d.from, d.slot, "drag");
+    };
+    // Esc mid-drag puts the column back (Excel, Windows drag and drop).
+    const key = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key !== "Escape" || !d.started) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      stop();
+      // The button is still held: the click its release may fire is the drag's, not a sort.
+      noClick.current = true;
+      window.addEventListener("mouseup", () => setTimeout(() => (noClick.current = false), 0), { capture: true, once: true });
+      orderNote(`Move cancelled: ${nameAt(d.from)} stays where it was.`);
+    };
+    d.stop = stop;
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    window.addEventListener("keydown", key, true);
+  }
+
+  /** The header menu: right-click a header, or Shift+F10 and the Menu key on a selected column (DataGrip, DBeaver). */
+  const [headMenu, setHeadMenu] = useState<{ pos: number; x: number; y: number } | null>(null);
+  // A move or a new set of columns closes it, so it never acts on a column that is no longer there.
+  useEffect(() => setHeadMenu(null), [at]);
+
+  function closeHeadMenu() {
+    setHeadMenu(null);
+    scrollRef.current?.focus({ preventScroll: true });
+  }
+
+  function headMenuItems(pos: number): MenuItem[] {
+    const c = columns[at[pos]];
+    if (!c) return [];
+    const heading = `${c.name}, column ${pos + 1} of ${count}`;
+    const items: MenuItem[] = [{ key: "head", label: heading, heading }];
+    if (onSortTo) {
+      items.push(
+        { key: "asc", label: "Sort ascending", onSelect: () => onSortTo({ column: c.name, descending: false }) },
+        { key: "desc", label: "Sort descending", onSelect: () => onSortTo({ column: c.name, descending: true }) },
+      );
+    }
+    items.push(
+      { key: "left", label: "Move left", shortcut: moveKey("grid.moveColumnLeft"), separatorBefore: !!onSortTo, disabled: pos === 0, onSelect: () => moved(pos, pos - 1, "menu") },
+      {
+        key: "right",
+        label: "Move right",
+        shortcut: moveKey("grid.moveColumnRight"),
+        disabled: pos === count - 1,
+        onSelect: () => moved(pos, pos + 2, "menu"),
+      },
+    );
+    if (onResetOrder) {
+      const own = orderIsOwn ?? isOwnOrder(at);
+      items.push({
+        key: "reset",
+        label: "Reset column order",
+        separatorBefore: true,
+        disabled: own,
+        title: own ? `The columns are already in ${ownOrderText}` : undefined,
+        onSelect: resetOrder,
+      });
+    }
+    return items;
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (typing(e.target)) return;
+    // A selected column's menu is its header's: Move left, Move right and Reset column order.
+    if (movable && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) && selection && isOneColumn(selection, rows.length)) {
+      e.preventDefault();
+      const th = scrollRef.current?.querySelectorAll<HTMLElement>("thead th:not(.row-number)")[selection.active.c];
+      const b = th?.getBoundingClientRect();
+      setHeadMenu({ pos: selection.active.c, x: b ? b.left + 8 : 0, y: b ? b.bottom : 0 });
+      return;
+    }
     onGridKey?.(e);
     if (e.defaultPrevented || !onSelection) return;
     const mod = e.ctrlKey || e.metaKey;
@@ -481,6 +843,7 @@ export default function ResultGrid({
     }
   }
 
+  const dragged = dragFrom === null ? null : columns[at[dragFrom]];
   return (
     <div
       className="grid-scroll"
@@ -492,11 +855,12 @@ export default function ResultGrid({
       onPaste={onPaste}
       onMouseOver={selectable ? dragOver : undefined}
     >
-      {columns.length > 0 && (
+      {count > 0 && (
         <table
-          className={stale ? "grid grid-stale" : "grid"}
+          className={[stale ? "grid grid-stale" : "grid", dragFrom !== null ? "grid-moving" : ""].filter(Boolean).join(" ")}
           aria-label={label}
           aria-rowcount={rowCount + 1}
+          aria-colcount={count + 1}
           aria-multiselectable={selectable || undefined}
           style={fixed ? { tableLayout: "fixed", width: fixed.reduce((a, b) => a + b, 0) } : undefined}
         >
@@ -512,6 +876,7 @@ export default function ResultGrid({
               <th
                 className={selectable && coversAll(selection, dims) ? "row-number corner-all" : "row-number"}
                 scope="col"
+                aria-colindex={1}
                 title={selectable ? "Select all (Ctrl+A)" : undefined}
                 onMouseDown={
                   selectable
@@ -527,7 +892,8 @@ export default function ResultGrid({
                 <span className="visually-hidden">Row</span>
                 {corner}
               </th>
-              {columns.map((c, ci) => {
+              {at.map((di, ci) => {
+                const c = columns[di];
                 const sorted = sort?.column === c.name ? (sort.descending ? "descending" : "ascending") : "none";
                 // The key icon, the name over its type, then a slot that keeps room for the sort icon,
                 // so sorting never widens the label past its column.
@@ -550,35 +916,58 @@ export default function ResultGrid({
                   </span>
                 );
                 const cover = selectable ? colCoverage(selection, ci, rowCount) : null;
-                const thClass = [c.numeric ? "align-end" : "", cover ? `col-sel-${cover}` : ""].filter(Boolean).join(" ");
+                const thClass = [c.numeric ? "align-end" : "", cover ? `col-sel-${cover}` : "", dragFrom === ci ? "col-drag-source" : ""]
+                  .filter(Boolean)
+                  .join(" ");
                 return (
                   <th
-                    key={`${ci}:${c.name}`}
+                    key={`${di}:${c.name}`}
                     scope="col"
+                    aria-colindex={ci + 2}
                     aria-sort={onSort ? sorted : undefined}
                     aria-label={`${c.name}, ${c.typeName}`}
                     className={thClass || undefined}
+                    onContextMenu={
+                      movable
+                        ? (e) => {
+                            e.preventDefault();
+                            // The header's menu acts on its column, which it selects first (DataGrip).
+                            if (rows.length > 0) onSelection?.(selectColumn(ci, rows.length, latest.current?.active.r ?? 0));
+                            setHeadMenu({ pos: ci, x: e.clientX, y: e.clientY });
+                          }
+                        : undefined
+                    }
                   >
                     {onSort ? (
                       <button
                         type="button"
                         className="header-button"
                         aria-label={`Sort by ${c.name}`}
-                        // M9: a click sorts but leaves focus on the grid, so its keys go on working.
-                        onMouseDown={
-                          selectable
-                            ? (e) => {
-                                e.preventDefault();
-                                scrollRef.current?.focus({ preventScroll: true });
-                              }
-                            : undefined
-                        }
-                        onClick={() => onSort(c.name)}
+                        title={movable ? `${c.name} ${c.typeName}. Click to sort; drag sideways to move` : undefined}
+                        onMouseDown={selectable || movable ? (e) => headDown(e, ci) : undefined}
+                        onClick={(e) => {
+                          // A keyboard click (Enter, Space) always sorts.
+                          if (noClick.current && e.detail !== 0) {
+                            noClick.current = false;
+                            return;
+                          }
+                          onSort(c.name);
+                        }}
                       >
                         {name}
                       </button>
                     ) : (
-                      <span className="header-static">{name}</span>
+                      <span className="header-static" onMouseDown={movable ? (e) => headDown(e, ci) : undefined}>
+                        {name}
+                      </span>
+                    )}
+                    {fixed && ci > 0 && (
+                      <span
+                        className="col-resize-lead"
+                        aria-hidden="true"
+                        onMouseDown={(e) => startResize(e, ci - 1)}
+                        onDoubleClick={(e) => fitColumn(e, ci - 1)}
+                      />
                     )}
                     {fixed && (
                       <span
@@ -594,7 +983,7 @@ export default function ResultGrid({
             </tr>
           </thead>
           <tbody>
-            {start > 0 && <SpacerRow columns={columns.length} height={start * rowHeight.current} />}
+            {start > 0 && <SpacerRow columns={count} height={start * rowHeight.current} />}
             {rows.slice(start, end).map((row, i) => {
               const r = start + i;
               // Every second row by its number, so paging keeps the pattern; a row with a state of its own
@@ -602,19 +991,20 @@ export default function ResultGrid({
               // root turns the shade on.
               const own = rowClass?.(r);
               const alt = !own && (firstRow + r) % 2 === 0 && active?.r !== r ? "grid-row-alt" : undefined;
-              const rowCover = selectable ? rowCoverage(selection, r, columns.length) : null;
+              const rowCover = selectable ? rowCoverage(selection, r, count) : null;
               return (
                 <tr key={r} data-row={r} aria-rowindex={r + 2} className={own ?? alt}>
                   <td
                     className={rowCover ? `row-number row-sel-${rowCover}` : "row-number"}
+                    aria-colindex={1}
                     onMouseDown={selectable ? (e) => rowDown(e, r) : undefined}
                     onContextMenu={
                       onCellMenu
                         ? (e) => {
                             e.preventDefault();
                             const s = latest.current;
-                            const full = !!s && rowCoverage(s, r, columns.length) === "full";
-                            const next = full && s ? s : selectRows(s, r, r, false, columns.length);
+                            const full = !!s && rowCoverage(s, r, count) === "full";
+                            const next = full && s ? s : selectRows(s, r, r, false, count);
                             if (!full) onSelection?.(next);
                             onCellMenu(r, next.active.r === r ? next.active.c : 0, e.clientX, e.clientY);
                           }
@@ -623,7 +1013,9 @@ export default function ResultGrid({
                   >
                     {rowLabel?.(r) ?? (firstRow + r).toLocaleString("en-US")}
                   </td>
-                  {row.map((cell, i) => {
+                  {at.map((di, i) => {
+                    // The cell shown at place `i` is column `di` of the row: no row is copied to show an order.
+                    const cell = row[di];
                     const isSelected = active?.r === r && active.c === i;
                     const inSel = selectable && contains(selection, r, i);
                     const mark = copied && copied.some((g) => {
@@ -640,15 +1032,19 @@ export default function ResultGrid({
                       inSel && !contains(selection, r, i - 1) ? "sel-l" : "",
                       inSel && !contains(selection, r, i + 1) ? "sel-r" : "",
                       mark ? "cell-copied" : "",
+                      dragFrom === i ? "col-drag-source" : "",
                     ].filter(Boolean);
                     const custom = renderCell?.(r, i);
+                    const link = custom == null ? keyCell?.(r, i) : null;
+                    if (link) classes.push("fk-cell");
                     return (
                       <td
-                        key={i}
+                        key={di}
                         data-col={i}
+                        aria-colindex={i + 2}
                         className={classes.length ? classes.join(" ") : undefined}
                         // A blank NULL has no size of its own to hover, so the cell says NULL.
-                        title={cellTitle?.(r, i) ?? (cell.t === "null" && custom == null ? "NULL" : undefined)}
+                        title={cellTitle?.(r, i) ?? (link?.kind === "null" ? NULL_KEY_TIP : cell.t === "null" && custom == null ? "NULL" : undefined)}
                         aria-selected={selectable ? inSel : undefined}
                         onMouseDown={selectable ? (e) => cellDown(e, r, i) : undefined}
                         onDoubleClick={onOpen ? () => onOpen(r, i) : undefined}
@@ -668,9 +1064,32 @@ export default function ResultGrid({
                         {custom ?? (
                           <CellValue
                             cell={cell}
-                            source={cellSource?.(r, columns[i].name)}
-                            boolean={BOOL_TYPE.test(columns[i].typeName)}
+                            source={cellSource?.(r, columns[di].name)}
+                            boolean={BOOL_TYPE.test(columns[di].typeName)}
                           />
+                        )}
+                        {link?.kind === "go" && (
+                          <button
+                            type="button"
+                            className="fk-go"
+                            tabIndex={-1}
+                            title={link.title}
+                            aria-label={link.title}
+                            // The press selects the cell, as a press anywhere in it does, and keeps focus on the grid.
+                            onMouseDown={(e) => {
+                              if (e.button !== 0) return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              scrollRef.current?.focus({ preventScroll: true });
+                              onSelection?.(single({ r, c: i }));
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              link.onFollow();
+                            }}
+                          >
+                            <Icon name="arrowRight" size={14} />
+                          </button>
                         )}
                       </td>
                     );
@@ -678,11 +1097,34 @@ export default function ResultGrid({
                 </tr>
               );
             })}
-            {end < rowCount && <SpacerRow columns={columns.length} height={(rowCount - end) * rowHeight.current} />}
+            {end < rowCount && <SpacerRow columns={count} height={(rowCount - end) * rowHeight.current} />}
           </tbody>
         </table>
       )}
       {children}
+      {/* Only a grid that moves columns takes the keys; a preview grid (Import, Export) adds no key listener. */}
+      {onMoveColumn && <CommandKeys handlers={moveKeys} region={scrollRef} />}
+      {/* While a column is dragged: a copy of its header under the pointer, the drop marker between two headers and
+          the glow of a side the grid is scrolling to. On the page itself, so no pane clips or contains them. */}
+      {dragged &&
+        createPortal(
+          <>
+            <div ref={ghostRef} className="col-drag-ghost" aria-hidden="true">
+              <span className="header-text">
+                <span className="header-name">{dragged.name}</span>
+                <span className="type-hint">{dragged.typeName}</span>
+              </span>
+            </div>
+            <span ref={markRef} className="col-drag-mark" aria-hidden="true" />
+            <span ref={edgeRef} className="col-drag-edge" aria-hidden="true" hidden />
+          </>,
+          document.body,
+        )}
+      {headMenu &&
+        createPortal(
+          <PointMenu x={headMenu.x} y={headMenu.y} items={headMenuItems(headMenu.pos)} label="Column" onClose={closeHeadMenu} onDismiss={() => setHeadMenu(null)} />,
+          document.body,
+        )}
     </div>
   );
 }

@@ -355,3 +355,17 @@ test("the published draft follows edits and carries the Dialect's types", async 
   await userEvent.click(within(cell("total", "key")).getByRole("button", { name: "Primary key" }));
   await waitFor(() => expect(design().primary).toEqual(["id", "total"]));
 });
+
+// UX step 2 minor 6: while a cell is being typed in, Ctrl+N is not the window's New Connection either.
+test("ctrl_n_while_a_cell_is_edited_is_kept_from_new_connection_and_adds_no_row", async () => {
+  setup("mysql");
+  await screen.findByRole("tab", { name: "Columns 5" });
+  fireEvent.doubleClick(cell("email", "name"));
+  const box = screen.getByRole("textbox", { name: "Cell value" });
+  // keyDown returns false when the key was prevented, which keeps the window's command from running.
+  expect(fireEvent.keyDown(box, { key: "n", ctrlKey: true })).toBe(false);
+  // Also when the key reaches the grid itself with the cell still open.
+  expect(fireEvent.keyDown(scroller(), { key: "n", ctrlKey: true })).toBe(false);
+  expect(grid().querySelector(".row-added")).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Cell value" })).toBeTruthy();
+});

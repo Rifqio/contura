@@ -199,7 +199,7 @@ test("ctrl+z undoes and ctrl+y redoes", async () => {
   expect(td(0, 1).textContent).toBe("lost");
 });
 
-test("paste fills a block, extra lines become new rows, and key columns are refused", async () => {
+test("paste fills a block, extra lines become new rows, and key columns are skipped", async () => {
   await open();
   fireEvent.mouseDown(td(1, 1));
   fireEvent.paste(grid(), { clipboardData: { getData: () => "a\tb\nc\td\n" } });
@@ -213,8 +213,10 @@ test("paste fills a block, extra lines become new rows, and key columns are refu
   expect(td(1, 1).textContent).toBe("shipped");
   fireEvent.mouseDown(td(0, 0));
   fireEvent.paste(grid(), { clipboardData: { getData: () => "9\tx" } });
-  expect(screen.getByRole("status").textContent).toBe("Pasting can't change key columns.");
-  expect(td(0, 1).textContent).toBe("paid");
+  // The key cell is left as it is (M3) and the cell beside it takes its value.
+  expect(screen.getByRole("status").textContent).toBe("Pasted 1 cell. Key column id left as it is.");
+  expect(td(0, 0).textContent).toBe("1");
+  expect(td(0, 1).textContent).toBe("x");
 });
 
 test("edits stay when the page changes", async () => {

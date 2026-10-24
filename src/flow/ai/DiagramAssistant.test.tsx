@@ -316,6 +316,23 @@ test("text_is_read_only_while_working", async () => {
   await waitFor(() => expect(s.view().state.readOnly).toBe(false));
 });
 
+test("F20 Esc stops the Ask only from the Assistant pane, not from the canvas or the text", async () => {
+  const s = setup();
+  await drawn(s);
+  holdAsk = true;
+  await send("Add a fraud check after Checkout");
+  await waitFor(() => expect(s.view().state.readOnly).toBe(true));
+  // Esc on the canvas clears the canvas's own things; the Ask goes on.
+  fireEvent.keyDown(s.container.querySelector(".flow-canvas")!, { key: "Escape" });
+  fireEvent.keyDown(s.container.querySelector(".cm-content")!, { key: "Escape" });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(callsTo("ai_cancel_place")).toEqual([]);
+  expect(s.view().state.readOnly).toBe(true);
+  // From the Assistant pane it stops.
+  fireEvent.keyDown(screen.getByText("Working on checkout.flow. Stop it to type."), { key: "Escape" });
+  await waitFor(() => expect(callsTo("ai_cancel_place")).toEqual([{ place: "diagram:checkout" }]));
+});
+
 test("closing_the_tab_stops_the_ask", async () => {
   const s = setup();
   await drawn(s);

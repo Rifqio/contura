@@ -229,6 +229,28 @@ pub(super) fn schema_snapshot(conn: &Connection, database: &str) -> Result<Schem
         });
     }
 
+    // SQLite keeps `REFERENCES Stores(ID)` as written and matches it without case: each end
+    // takes the names its table declares, so a diagram finds its tables and columns.
+    let declared = |table: &str| tables.iter().find(|t| t.name.eq_ignore_ascii_case(table));
+    let canonical = |table: Option<&SmTable>, column: &mut String| {
+        if let Some(c) = table.and_then(|t| {
+            t.columns
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(column))
+        }) {
+            column.clone_from(&c.name);
+        }
+    };
+    for r in &mut refs {
+        let from = declared(&r.from.table);
+        r.from.columns.iter_mut().for_each(|c| canonical(from, c));
+        let to = declared(&r.to.table);
+        if let Some(t) = to {
+            r.to.table.clone_from(&t.name);
+        }
+        r.to.columns.iter_mut().for_each(|c| canonical(to, c));
+    }
+
     Ok(SchemaModel {
         dialect: DialectKind::Sqlite,
         tables,

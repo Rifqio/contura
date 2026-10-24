@@ -39,6 +39,7 @@ import ColumnsTab, { CELL_FIELD, type CellAt, TEXT_CELLS, cellEditable, columnCe
 import {
   type Draft,
   addColumn,
+  backslashNote,
   addForeignKey,
   addIndex,
   changeCount,
@@ -757,8 +758,12 @@ export default function TableDesigner({
 
   // The cell keys belong to the grid alone, as in the data grid, so the toolbar and tabs keep theirs.
   function onGridKey(e: KeyboardEvent<HTMLElement>) {
-    if (editingRef.current) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (editingRef.current) {
+      // A cell is open but the key came to the grid: Ctrl+N is not New Connection here, and adds no row mid-edit.
+      if (mod && !e.altKey && e.key.toLowerCase() === "n") e.preventDefault();
+      return;
+    }
     if (mod && !e.altKey && e.key.toLowerCase() === "n") {
       // D3: as in the data grid, Ctrl+N in a grid adds a row; the window's New Connection keeps it elsewhere.
       e.preventDefault();
@@ -794,8 +799,12 @@ export default function TableDesigner({
   // a new name, Delete removes it. Keys from a control inside a row (a column picker, a Select)
   // stay with that control.
   function onRowKey(e: KeyboardEvent<HTMLElement>) {
-    if (editingRef.current || !rowTab || e.target !== e.currentTarget) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (editingRef.current && mod && !e.altKey && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      return;
+    }
+    if (editingRef.current || !rowTab || e.target !== e.currentTarget) return;
     if (mod && !e.altKey && e.key.toLowerCase() === "n") {
       e.preventDefault();
       add();
@@ -1035,6 +1044,7 @@ export default function TableDesigner({
               {text}
             </p>
           ))}
+          {backslashNote(draft, dialect) && <p className="design-note">{backslashNote(draft, dialect)}</p>}
           {note && <p className="design-note">{note}</p>}
         </div>
       )}

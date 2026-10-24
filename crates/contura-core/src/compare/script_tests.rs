@@ -615,6 +615,7 @@ fn same_input_same_text() {
         keys(&v),
         [
             "enumValuesFirst",
+            "frame",
             "hash",
             "items",
             "line",

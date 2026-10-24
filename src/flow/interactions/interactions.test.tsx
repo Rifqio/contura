@@ -18,7 +18,7 @@ import { mockReactFlowDom } from "../../test/reactFlow";
 import { holdTimers } from "../../test/timers";
 import { EditorView } from "@codemirror/view";
 import FlowTab from "../FlowTab";
-import { GUIDE_PX, MAGNET_PX, SNAP, ghostCell, guidesFor, magnetTarget } from "./geometry";
+import { MAGNET_PX, magnetTarget } from "./geometry";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 // A busy machine stretches the canvas work; waits still end as soon as their condition holds.
@@ -182,53 +182,17 @@ const between = (v: number, a: number, b: number) => v > Math.min(a, b) && v < M
 
 // ----- geometry
 
-test("snap_ghost_cell", async () => {
-  expect(SNAP).toBe(16);
-  expect(ghostCell({ x: 403, y: 210, w: 172, h: 52 })).toEqual({ x: 400, y: 208, w: 172, h: 52 });
-  expect(ghostCell({ x: 409, y: 215, w: 172, h: 52 })).toEqual({ x: 416, y: 208, w: 172, h: 52 });
-  // On the canvas: the node follows the pointer, a dashed outline shows the cell it lands on, and the release
-  // settles it into that cell.
+test("F7 a released node lands exactly where it was let go: no grid cell, whole pixels", async () => {
   const s = setup();
   await drawn(s);
-  act(() => canvas.props!.onDrag!("Checkout", 403, 210));
-  const ghost = await waitFor(() => {
-    const g = s.portal().querySelector<HTMLElement>(".flow-ghost");
-    expect(g).not.toBeNull();
-    return g!;
-  });
-  expect([ghost.style.left, ghost.style.top]).toEqual(["400px", "208px"]);
-  act(() => canvas.props!.onMove!("Checkout", 403, 210));
+  act(() => canvas.props!.onDrag!("Checkout", 403.4, 210));
+  // No landing cell is drawn: the canvas's own guides line shapes up instead.
   expect(s.portal().querySelector(".flow-ghost")).toBeNull();
+  act(() => canvas.props!.onMove!("Checkout", 403.4, 210));
   await waitFor(() => expect(s.saves().length).toBeGreaterThan(0));
-  expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes.Checkout).toEqual({ x: 400, y: 208 });
-  await waitFor(() => expect(shownAt("Checkout")).toEqual({ x: 400, y: 208 }));
+  expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes.Checkout).toEqual({ x: 403, y: 210 });
+  await waitFor(() => expect(shownAt("Checkout")).toEqual({ x: 403, y: 210 }));
   expect(s.text()).toBe(DFD);
-});
-
-test("guides_within_4px_only", async () => {
-  expect(GUIDE_PX).toBe(4);
-  const lead = { x: 100, y: 100, w: 100, h: 50 };
-  // Left edges 4 px apart: a vertical guide on the other node's edge.
-  expect(guidesFor(lead, [{ x: 104, y: 300, w: 120, h: 50 }])).toEqual([{ axis: "x", at: 104, from: 88, to: 362 }]);
-  // 5 px apart: none (centres and right edges are further still).
-  expect(guidesFor(lead, [{ x: 105, y: 300, w: 120, h: 50 }])).toEqual([]);
-  // Centres in line: one guide through both centres.
-  expect(guidesFor(lead, [{ x: 400, y: 103, w: 100, h: 50 }]).map((g) => [g.axis, g.at])).toEqual([
-    ["y", 103],
-    ["y", 128],
-    ["y", 153],
-  ]);
-  expect(guidesFor(lead, [{ x: 400, y: 95, w: 100, h: 50 }])).toEqual([]);
-  // On the canvas: Checkout dragged level with Customer shows a guide.
-  const s = setup();
-  await drawn(s);
-  act(() => canvas.props!.onDrag!("Checkout", 610, 500));
-  await waitFor(() => expect(s.portal().querySelector(".flow-ghost")).not.toBeNull());
-  expect(s.portal().querySelectorAll(".flow-guide")).toHaveLength(0);
-  act(() => canvas.props!.onDrag!("Checkout", 610, 130));
-  await waitFor(() => expect(s.portal().querySelectorAll(".flow-guide").length).toBeGreaterThan(0));
-  act(() => canvas.props!.onMove!("Checkout", 610, 130));
-  expect(s.portal().querySelectorAll(".flow-guide")).toHaveLength(0);
 });
 
 test("magnet_24px_locks_nearest_port", () => {
@@ -302,13 +266,13 @@ test("drop_on_empty_opens_add_and_connect", async () => {
     await waitFor(() => expect(s.text()).toContain(c.node));
     expect(s.text()).toContain(c.link);
     expect(screen.queryByRole("menu", { name: "Add and connect" })).toBeNull();
-    // The new node lands where the line was released, on the grid; the new flow takes a label.
+    // The new node lands where the line was released, to the pixel; the new flow takes a label.
     const box = await screen.findByRole("textbox", { name: "Flow label" });
     fireEvent.keyDown(box, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Flow label" })).toBeNull());
   }
   await waitFor(() => expect(s.saves().length).toBeGreaterThan(0));
-  await waitFor(() => expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes["Data store"]).toEqual({ x: 208, y: 672 }));
+  await waitFor(() => expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes["Data store"]).toEqual({ x: 203, y: 674 }));
 });
 
 test("esc_pulls_line_back", async () => {
@@ -350,7 +314,7 @@ test("group_join_and_leave_rewrite_text", async () => {
   await waitFor(() => expect(s.text()).toContain("Payments {\n  Charge card [process, id: 2.0]\n  Card network [entity]\n  Customer [entity]\n}"));
   expect(s.text().split("\n").slice(2, 4)).toEqual(["Checkout [process, id: 1.0]", "Orders [store, id: D1, table: shop.orders]"]);
   expect(s.portal().querySelector(".flow-group-hot")).toBeNull();
-  await waitFor(() => expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes.Customer).toEqual({ x: 416, y: 336 }));
+  await waitFor(() => expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes.Customer).toEqual({ x: 420, y: 330 }));
   // The move and the text change are one undo entry.
   act(() => void s.press("z", { ctrlKey: true }));
   await waitFor(() => expect(s.text()).toBe(DFD));

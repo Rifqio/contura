@@ -414,21 +414,17 @@ export default function TabStrip({
     const next = at < 0 ? (by > 0 ? 0 : keys.length - 1) : (at + by + keys.length) % keys.length;
     onSelect(keys[next]);
   };
+  // Each is offered only while it can act, so the Command Palette hides the others (VS Code's when clauses).
+  const activeShown = active !== null && keys.includes(active);
   useCommandKeys({
-    "tab.close": () => {
-      if (active !== null && keys.includes(active)) onClose(active);
-    },
-    "tab.next": () => step(1),
-    "tab.previous": () => step(-1),
+    ...(activeShown ? { "tab.close": () => onClose(active) } : {}),
+    ...(keys.length > 1 ? { "tab.next": () => step(1), "tab.previous": () => step(-1) } : {}),
     // Edge: Ctrl+1 to Ctrl+8 go to that tab, Ctrl+9 to the last; a number past the last tab does nothing.
     ...Object.fromEntries(
-      ["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((n) => [
-        `tab.goto.${n}`,
-        () => {
-          const key = n === "9" ? keys[keys.length - 1] : keys[Number(n) - 1];
-          if (key !== undefined) onSelect(key);
-        },
-      ]),
+      ["1", "2", "3", "4", "5", "6", "7", "8", "9"].flatMap((n) => {
+        const key = n === "9" ? keys[keys.length - 1] : keys[Number(n) - 1];
+        return key === undefined ? [] : [[`tab.goto.${n}`, () => onSelect(key)]];
+      }),
     ),
   });
   return (

@@ -520,7 +520,7 @@ export default function ImportTab({
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       void onRun();
-    } else if (e.key === "ArrowLeft" && e.altKey) {
+    } else if (e.key === "ArrowLeft" && e.altKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       back();
     } else if (e.key.toLowerCase() === "m" && e.ctrlKey && !e.altKey && !e.shiftKey && step === "columns") {

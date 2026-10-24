@@ -1,0 +1,77 @@
+{
+  "_comment": "UX step 8: SQL string literals per Dialect, as the Core's common.rs sql_string writes them. The TypeScript escaper (src/grid/sqlString.ts) and the Core are both tested against this file, so they cannot drift.",
+  "cases": [
+    {
+      "value": "paid",
+      "postgres": "'paid'",
+      "mysql": "'paid'",
+      "sqlite": "'paid'"
+    },
+    {
+      "value": "O'Brien",
+      "postgres": "'O''Brien'",
+      "mysql": "'O''Brien'",
+      "sqlite": "'O''Brien'"
+    },
+    {
+      "value": "a\\b",
+      "postgres": "E'a\\\\b'",
+      "mysql": "_utf8mb4 X'615c62'",
+      "sqlite": "'a\\b'"
+    },
+    {
+      "value": "\\' OR 1=1 --",
+      "postgres": "E'\\\\'' OR 1=1 --'",
+      "mysql": "_utf8mb4 X'5c27204f5220313d31202d2d'",
+      "sqlite": "'\\'' OR 1=1 --'"
+    },
+    {
+      "value": "x\u0000y",
+      "postgres": "'x\u0000y'",
+      "mysql": "'x\u0000y'",
+      "sqlite": "'x\u0000y'"
+    },
+    {
+      "value": "naïve 表 😀",
+      "postgres": "'naïve 表 😀'",
+      "mysql": "'naïve 表 😀'",
+      "sqlite": "'naïve 表 😀'"
+    },
+    {
+      "value": "line1\nline2\r\n",
+      "postgres": "'line1\nline2\r\n'",
+      "mysql": "'line1\nline2\r\n'",
+      "sqlite": "'line1\nline2\r\n'"
+    },
+    {
+      "value": "",
+      "postgres": "''",
+      "mysql": "''",
+      "sqlite": "''"
+    },
+    {
+      "value": "''",
+      "postgres": "''''''",
+      "mysql": "''''''",
+      "sqlite": "''''''"
+    },
+    {
+      "value": "\\\\",
+      "postgres": "E'\\\\\\\\'",
+      "mysql": "_utf8mb4 X'5c5c'",
+      "sqlite": "'\\\\'"
+    },
+    {
+      "value": "tab\tend",
+      "postgres": "'tab\tend'",
+      "mysql": "'tab\tend'",
+      "sqlite": "'tab\tend'"
+    },
+    {
+      "value": "it's a \\'test\\'",
+      "postgres": "E'it''s a \\\\''test\\\\'''",
+      "mysql": "_utf8mb4 X'697427732061205c27746573745c27'",
+      "sqlite": "'it''s a \\''test\\'''"
+    }
+  ]
+}

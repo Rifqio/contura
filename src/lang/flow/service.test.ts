@@ -98,3 +98,23 @@ test("the_closed_ids_are_capped_and_a_just_closed_one_still_drops_late_parses", 
   flow.close("d999");
   expect(flow.isClosed("d999")).toBe(true);
 });
+
+test("a paste is one worker op on the cached parse: one edit list and the names it used", () => {
+  const flow = createFlowService();
+  const text = 'diagram flow "F"\nA\nB\n\nA > B\n';
+  const { version } = flow.parse("p", text);
+  const r = flow.edit("p", version, { op: "paste", text: "A\nB\nA > B\n" });
+  expect(r).toEqual({
+    stale: false,
+    edits: [
+      { from: 21, to: 21, insert: "A 2\nB 2\n" },
+      { from: 28, to: 28, insert: "A 2 > B 2\n" },
+    ],
+    names: { A: "A 2", B: "B 2" },
+  });
+  // Text that is not this kind's lines is refused: no edits.
+  expect(flow.edit("p", version, { op: "paste", text: "A > Nowhere" })).toMatchObject({ stale: false, edits: [] });
+  // Planned on an older text: stale, as every canvas action.
+  flow.parse("p", `${text}C\n`);
+  expect(flow.edit("p", version, { op: "paste", text: "A\n" })).toEqual({ stale: true });
+});

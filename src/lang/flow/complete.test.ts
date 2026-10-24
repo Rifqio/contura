@@ -109,3 +109,14 @@ test("a typed provider prefix puts the provider icons first", () => {
   const s = completeFlow('diagram cloud "A"\nQ [icon: s', 'diagram cloud "A"\nQ [icon: s'.length, icons);
   expect(s.items.map((i) => i.label)).toEqual(["s3-general", "storage", "aws-s3", "azure-sql", "gcp-artifacts"]);
 });
+
+test("inside an ER column's brackets the column flags are offered, not node kinds (ER build A)", () => {
+  const text = 'diagram er "x"\ncustomers\ncustomers.id int [pk, ';
+  const r = completeFlow(text, text.length, []);
+  expect(r.items.map((i) => i.label)).toEqual(["not null", "unique"]);
+  const typed = 'diagram er "x"\ncustomers\ncustomers.email text [no';
+  expect(completeFlow(typed, typed.length, []).items.map((i) => i.apply)).toEqual(["not null"]);
+  // A table's own brackets still offer its kinds.
+  const table = 'diagram er "x"\nlines [';
+  expect(completeFlow(table, table.length, []).items.map((i) => i.label)).toContain("weak");
+});

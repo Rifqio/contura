@@ -64,6 +64,19 @@ export function extendRowsTo(s: Selection, r: number, cols: number): Selection {
   return { ...s, ranges: [...s.ranges.slice(0, -1), last], end: { r, c: Math.max(0, cols - 1) }, rows: true };
 }
 
+/** One whole column, its header's selection: every row of column `c`, the active cell kept on row `activeRow`. */
+export function selectColumn(c: number, rows: number, activeRow = 0): Selection {
+  const r = Math.max(0, Math.min(activeRow, rows - 1));
+  return { ranges: [{ r0: 0, c0: c, r1: Math.max(0, rows - 1), c1: c }], active: { r, c }, anchor: { r: 0, c }, end: { r: Math.max(0, rows - 1), c }, rows: false };
+}
+
+/** The selection is one whole column (a header's), which the header menu then acts on. */
+export function isOneColumn(s: Selection | null, rows: number): boolean {
+  if (!s || s.ranges.length !== 1 || s.rows || rows === 0) return false;
+  const n = norm(s.ranges[0]);
+  return n.l === n.r && n.t === 0 && n.b >= rows - 1;
+}
+
 export function selectAll(d: Dims, active: Pos = { r: 0, c: 0 }): Selection {
   return {
     ranges: [{ r0: 0, c0: 0, r1: Math.max(0, d.rows - 1), c1: Math.max(0, d.cols - 1) }],
@@ -122,6 +135,15 @@ export function cellCount(s: Selection | null): number {
     if (covered) n += (r[1] - r[0] + 1) * (c[1] - c[0] + 1);
   });
   return n;
+}
+
+/** Calls `f` once for each cell selected, a cell in two ranges once. */
+export function eachCell(s: Selection | null, f: (r: number, c: number) => void) {
+  if (!s) return;
+  pieces(s, (r, c, covered) => {
+    if (!covered) return;
+    for (let i = r[0]; i <= r[1]; i++) for (let j = c[0]; j <= c[1]; j++) f(i, j);
+  });
 }
 
 /**

@@ -6,5 +6,7 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.perf.test.ts"],
     fileParallelism: false,
+    // The allocation checks collect garbage before they measure (fix round 2, M9).
+    execArgv: ["--expose-gc"],
   },
 });

@@ -9,6 +9,7 @@ import {
   flowLabel,
   flowName,
   flowValue,
+  linkEndText,
   MAX_GROUP_DEPTH,
   quote,
 } from "../lang/flow/model";
@@ -71,14 +72,17 @@ function linkLines(links: FlowLink[]): string[] {
   // The end of the last line while it can still take a chain link (it has no label).
   let open: string | null = null;
   for (const l of links) {
-    if (l.chained && !l.label && open === l.from) {
-      lines[lines.length - 1] += ` ${l.arrow} ${flowName(l.to)}`;
-      open = l.to;
+    // An ER relationship's ends carry their columns (ER build C).
+    const from = linkEndText(l.from, l.fromColumn);
+    const to = linkEndText(l.to, l.toColumn);
+    if (l.chained && !l.label && open === from) {
+      lines[lines.length - 1] += ` ${l.arrow} ${to}`;
+      open = to;
       continue;
     }
     const label = l.label ? `: ${flowLabel(l.label)}` : "";
-    lines.push(`${flowName(l.from)} ${l.arrow} ${flowName(l.to)}${label}`);
-    open = l.label ? null : l.to;
+    lines.push(`${from} ${l.arrow} ${to}${label}`);
+    open = l.label ? null : to;
   }
   return lines;
 }

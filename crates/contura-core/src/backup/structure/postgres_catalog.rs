@@ -226,6 +226,7 @@ pub async fn read_catalog(client: &Client, schema: &str) -> Result<PgCatalog> {
              FROM pg_catalog.pg_constraint k JOIN pg_catalog.pg_class c ON c.oid = k.conrelid \
              WHERE c.relnamespace = $1 AND c.relkind = 'r' \
              AND k.contype IN ('p', 'u', 'c', 'x', 'f') \
+             AND (k.contype <> 'f' OR k.conparentid = 0) \
              ORDER BY c.relname, k.conname",
             &[&ns],
         )

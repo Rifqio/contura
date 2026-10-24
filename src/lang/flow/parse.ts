@@ -14,6 +14,8 @@ import {
   type FlowNodeKind,
   flowName,
   KINDS,
+  COLUMN_FLAGS,
+  type ColumnFlag,
   MAX_GROUP_DEPTH,
   NOTE_KINDS,
   nodeStatement,
@@ -71,10 +73,14 @@ export type FlowParse = {
   readonly definedTwice: ReadonlySet<string>;
   /**
    * Step 12: the lines that belong to a node besides its own (an ER entity's column lines, a class's member
-   * lines), and in each the range of the node's name, so a delete takes them and a rename follows.
+   * lines), and in each the range of the node's name, so a delete takes them and a rename follows. An ER column
+   * with flags has the range of its `[...]` list too.
    */
-  rowsOf(name: string): readonly { line: FlowRange; name: FlowRange }[];
+  rowsOf(name: string): readonly RowSpan[];
 };
+
+/** A node's own extra line: the line's statement, the node's name in it, and an ER column's flag list. */
+export type RowSpan = { line: FlowRange; name: FlowRange; flags?: FlowRange };
 
 // Packed spans: `[from, to, ...parts]`, each part a from/to pair, -1 where the element has no such part.
 const NODE_PARTS = ["name", "attrs", "kind"] as const;
@@ -184,7 +190,7 @@ class Parser {
   private candidates: { name: string; lower: string; band: number }[] | null = null;
   // ----- step 12 kinds
   /** Each node's own extra lines (ER columns, class members). */
-  private rows = new Map<string, { line: FlowRange; name: FlowRange }[]>();
+  private rows = new Map<string, RowSpan[]>();
   /** Sequence frames: the open ones, and those closed. */
   private frameStack: { label: string; kind: string; from: number; depth: number; at: number; nameTo: number; line: number }[] = [];
   private frames: NonNullable<FlowDoc["frames"]> = [];
@@ -644,13 +650,52 @@ class Parser {
   }
 
   /** An extra line of a node (an ER column, a class member). */
-  private addRow(owner: string, text: string, line: FlowRange, name: FlowRange) {
+  private addRow(owner: string, text: string, line: FlowRange, name: FlowRange, flags?: { list: ColumnFlag[]; range: FlowRange }) {
     const n = this.byName.get(owner);
     if (!n) return;
-    (n.rows ??= []).push(text);
+    const rows = (n.rows ??= []);
+    rows.push(text);
+    // Flags only once a column has some: the rows before it get none.
+    if (flags && flags.list.length > 0 && !n.rowFlags) n.rowFlags = rows.slice(0, -1).map(() => []);
+    if (n.rowFlags) n.rowFlags.push(flags?.list ?? []);
     const list = this.rows.get(owner) ?? [];
-    list.push({ line, name });
+    list.push(flags ? { line, name, flags: flags.range } : { line, name });
     this.rows.set(owner, list);
+  }
+
+  /** An ER column's `[pk, not null, unique]` at `q`, in any case and spacing; unknown words are problems. */
+  private columnFlags(q: number, e: number): { list: ColumnFlag[]; range: FlowRange } {
+    const s = this.s;
+    const found = new Set<ColumnFlag>();
+    let j = q + 1;
+    for (;;) {
+      j = this.ws(j, e);
+      let k = j;
+      while (k < e && s.charCodeAt(k) !== 44 && s.charCodeAt(k) !== 93 && !this.isComment(k, e)) k++;
+      const to = this.trimBack(k, j);
+      const word = s.slice(j, to).toLowerCase().split(/\s+/).join(" ");
+      if (word !== "") {
+        if ((COLUMN_FLAGS as readonly string[]).includes(word)) found.add(word as ColumnFlag);
+        else {
+          const near = nearWord(word, COLUMN_FLAGS);
+          const at = j;
+          this.error(j, to, MESSAGES.unknownFlag(s.slice(j, to), near), () => (near ? [{ title: FIX_TITLES.use(near), edits: [{ from: at, to, insert: near }] }] : []));
+        }
+      }
+      if (k < e && s.charCodeAt(k) === 44) {
+        j = k + 1;
+        continue;
+      }
+      const list = COLUMN_FLAGS.filter((f) => found.has(f));
+      if (k < e && s.charCodeAt(k) === 93) {
+        this.end(k + 1, e);
+        return { list, range: { from: q, to: k + 1 } };
+      }
+      const end = this.trimBack(k, q);
+      this.error(q, end, MESSAGES.openList);
+      if (k < e) this.comment(k, e);
+      return { list, range: { from: q, to: end } };
+    }
   }
 
   private diagramLine(p: number, e: number): boolean {
@@ -766,17 +811,20 @@ class Parser {
       return;
     }
     // An ER column: `customers.email text`.
-    if (this.kind === "er" && c !== 91 && c !== 123) {
+    // With flags, `customers.id int [pk]`, once customers is an entity (else `sales.orders [entity]` is a node).
+    if (this.kind === "er" && c !== 123) {
       const dot = first.value.indexOf(".");
-      if (dot > 0 && !this.defs.has(first.value)) {
-        const owner = first.value.slice(0, dot);
-        const n = this.byName.get(owner);
-        if (!n || !(n.kind === "entity" || n.kind === "weak")) {
+      const owner = dot > 0 ? first.value.slice(0, dot) : "";
+      const n = dot > 0 && !this.defs.has(first.value) ? this.byName.get(owner) : undefined;
+      const entity = !!n && (n.kind === "entity" || n.kind === "weak");
+      if (dot > 0 && !this.defs.has(first.value) && (c !== 91 || entity)) {
+        if (!entity) {
           this.error(first.from, first.from + dot, MESSAGES.noEntity(owner));
           return;
         }
-        this.addRow(owner, first.value.slice(dot + 1).trim(), { from: first.from, to: first.to }, { from: first.from, to: first.from + dot });
-        this.end(q, e);
+        const flags = c === 91 ? this.columnFlags(q, e) : undefined;
+        this.addRow(owner, first.value.slice(dot + 1).trim(), { from: first.from, to: first.to }, { from: first.from, to: first.from + dot }, flags);
+        if (!flags) this.end(q, e);
         return;
       }
     }
@@ -1136,6 +1184,7 @@ class Parser {
     if (this.kind === "mindmap" && this.nodes.length > 0 && !this.nodes.some((n) => n.node.kind === "root")) {
       this.problem("hint", 0, 0, MESSAGES.noRoot, () => [], 1);
     }
+    if (this.kind === "er") this.columnEnds();
     this.links.forEach((l, i) => {
       const p = this.linkPacked[i];
       const line = this.linkLines[i];
@@ -1147,6 +1196,39 @@ class Parser {
       }
       if (this.kind === "flow" && l.label === undefined && this.byName.get(l.from)?.kind === "decision") {
         this.problem("hint", p[0], p[1], MESSAGES.decisionLabels, () => [], line);
+      }
+    });
+  }
+
+  /**
+   * ER build C: a line end `table.column` that names no node of its own is that table's column, once every column
+   * line is read (a line may come before them). The end becomes the table and the column goes beside it; a column
+   * the table does not have is a problem. A quoted end is a name, never a column.
+   */
+  private columnEnds() {
+    const s = this.s;
+    this.links.forEach((l, i) => {
+      const p = this.linkPacked[i];
+      for (const end of ["from", "to"] as const) {
+        const name = end === "from" ? l.from : l.to;
+        const at = p[end === "from" ? 2 : 4];
+        if (this.defs.has(name) || s.charCodeAt(at) === 34) continue;
+        const dot = name.indexOf(".");
+        if (dot <= 0) continue;
+        const table = name.slice(0, dot);
+        const node = this.byName.get(table);
+        if (!node || !(node.kind === "entity" || node.kind === "weak")) continue;
+        const column = name.slice(dot + 1);
+        if (!(node.rows ?? []).some((r) => columnName(r) === column)) {
+          this.error(at, p[end === "from" ? 3 : 5], MESSAGES.noColumn(table, column), () => [], this.linkLines[i]);
+        }
+        if (end === "from") {
+          l.from = table;
+          l.fromColumn = column;
+        } else {
+          l.to = table;
+          l.toColumn = column;
+        }
       }
     });
   }
@@ -1235,6 +1317,13 @@ class Parser {
     if (kind === "timeline") doc.sections = this.sections;
     return doc;
   }
+}
+
+/** An ER row's column name: the row up to its first space ("customer_id int" is customer_id). */
+function columnName(row: string): string {
+  let j = 0;
+  while (j < row.length && !isWs(row.charCodeAt(j))) j++;
+  return row.slice(0, j);
 }
 
 /** Parses .flow text; never throws on odd text, and reports what is wrong as problems with fixes. */

@@ -1,0 +1,283 @@
+// ER step 2.4 and diagram step 4 (erd-ux-research 5.6; diagram-ux-research F31, F8, F11, F12, C2, CL2): the canvas's
+// right-click menus, one per target, what is under the pointer first, each item's key on the right. FlowTab picks
+// the target and runs the actions; these only say what each menu holds and in which order.
+import Icon from "../components/Icon";
+import type { MenuItem } from "../components/Menu";
+import type { ColumnFlag, DiagramKind, FlowArrow } from "../lang/flow/model";
+import { ARROWS } from "../lang/flow/model";
+import type { AddTool } from "./FlowToolbar";
+
+/** What each arrow is called in a line's menu, by kind: draw.io's line styles, the UML names and ER's cardinality. */
+const ARROW_NAMES: Record<DiagramKind, Partial<Record<FlowArrow, string>>> = {
+  dfd: { ">": "One way", "<>": "Both ways", "-->": "Dashed", "-": "No arrow" },
+  flow: { ">": "One way", "<>": "Both ways", "-->": "Dashed", "-": "No arrow" },
+  cloud: { ">": "One way", "<>": "Both ways", "-": "No arrow", "-->": "Dashed", "..>": "Dotted (assumes)" },
+  er: { "1--1": "One to one", "1--*": "One to many", "*--1": "Many to one", "*--*": "Many to many" },
+  sequence: { "->": "Request", "-->": "Reply" },
+  state: { ">": "One way", "-->": "Dashed" },
+  class: { "<|--": "Inheritance", "*--": "Composition", "..>": "Dependency", "-->": "Association", "--": "Link", "-": "No arrow" },
+  mindmap: { ">": "One way", "-": "No arrow" },
+  timeline: {},
+};
+
+/** The order a kind's arrows are offered in: the language's own (ARROWS); ER lists its four cardinalities. */
+function arrowsOf(kind: DiagramKind): FlowArrow[] {
+  if (kind === "er") return ["1--1", "1--*", "*--1", "*--*"];
+  return ARROWS[kind].filter((a) => ARROW_NAMES[kind][a] !== undefined);
+}
+
+/** The arrow submenu's name: ER changes the cardinality, a class line is a UML relationship, others an arrow (F8). */
+function arrowMenuName(kind: DiagramKind): string {
+  if (kind === "er") return "Change cardinality";
+  if (kind === "class") return "Relationship";
+  return "Arrow";
+}
+
+/** A tool's name without its verb, as a submenu lists it ("Add step" is "Step"). */
+const shapeName = (tool: AddTool) => tool.label.replace(/^Add (a |an )?/, "").replace(/^./, (c) => c.toUpperCase());
+
+export interface ColumnMenu {
+  flags: readonly ColumnFlag[];
+  /** Why the table's columns cannot be edited on the card, or null. */
+  blocked: string | null;
+  rename(): void;
+  editType(): void;
+  toggle(flag: ColumnFlag): void;
+  insert(where: "above" | "below"): void;
+  duplicate(): void;
+  /** The board's "Make a relationship from here" (fix round 2, I1): pick the column it refers to. */
+  relate(): void;
+  showInText(): void;
+  remove(): void;
+}
+
+/** An ER column (erd-ux-research 5.6, board ER interactions). */
+export function columnMenuItems(c: ColumnMenu): MenuItem[] {
+  const pk = c.flags.includes("pk");
+  const off = c.blocked !== null;
+  const why = c.blocked ?? undefined;
+  return [
+    { key: "rename", label: "Rename", icon: <Icon name="edit" />, shortcut: "F2", disabled: off, title: why, onSelect: c.rename },
+    { key: "type", label: "Edit type", disabled: off, title: why, onSelect: c.editType },
+    { key: "pk", label: "Primary key", shortcut: "K", checked: pk, separatorBefore: true, disabled: off, title: why, onSelect: () => c.toggle("pk") },
+    { key: "unique", label: "Unique", checked: c.flags.includes("unique"), disabled: off, title: why, onSelect: () => c.toggle("unique") },
+    { key: "nn", label: "Not null", shortcut: "N", checked: pk || c.flags.includes("not null"), disabled: off, title: why, onSelect: () => c.toggle("not null") },
+    { key: "above", label: "Insert column above", separatorBefore: true, disabled: off, title: why, onSelect: () => c.insert("above") },
+    { key: "below", label: "Insert column below", disabled: off, title: why, onSelect: () => c.insert("below") },
+    { key: "dup", label: "Duplicate", icon: <Icon name="duplicate" />, shortcut: "Ctrl+Enter", disabled: off, title: why, onSelect: c.duplicate },
+    { key: "relate", label: "Make a relationship from here", disabled: off, title: why, onSelect: c.relate },
+    { key: "text", label: "Show in the text", icon: <Icon name="fileCode" />, separatorBefore: true, onSelect: c.showInText },
+    { key: "delete", label: "Delete column", icon: <Icon name="trash" />, shortcut: "Delete", danger: true, disabled: off, title: why, onSelect: c.remove },
+  ];
+}
+
+export interface ShapeMenu {
+  kind: DiagramKind;
+  /** An ER table (its own menu) or a shape of any other kind. */
+  table: boolean;
+  /** Resized by hand: Fit to content gives it its own size back. */
+  sized: boolean;
+  /** The kind's add tools, for Add connected (none where lines are not drawn). */
+  connect: AddTool[];
+  /** A cloud service: Choose icon and Group (C2). */
+  service: boolean;
+  rename(): void;
+  details(): void;
+  addColumn(): void;
+  addRelationship(): void;
+  cut(): void;
+  copy(): void;
+  duplicate(): void;
+  addConnected(tool: AddTool): void;
+  chooseIcon(): void;
+  group(): void;
+  fit(): void;
+  showInText(): void;
+  remove(): void;
+}
+
+/** One shape: an ER table's menu (erd-ux-research 5.6), or any other shape's (F31). */
+export function shapeMenuItems(s: ShapeMenu): MenuItem[] {
+  const clip: MenuItem[] = [
+    { key: "cut", label: "Cut", shortcut: "Ctrl+X", separatorBefore: !s.table, onSelect: s.cut },
+    { key: "copy", label: "Copy", icon: <Icon name="copy" />, shortcut: "Ctrl+C", onSelect: s.copy },
+  ];
+  const tail: MenuItem[] = [
+    { key: "fit", label: "Fit to content", icon: <Icon name="fit" />, disabled: !s.sized, onSelect: s.fit },
+    { key: "text", label: "Show in the text", icon: <Icon name="fileCode" />, onSelect: s.showInText },
+  ];
+  if (s.table) {
+    return [
+      { key: "rename", label: "Rename", icon: <Icon name="edit" />, shortcut: "F2", onSelect: s.rename },
+      { key: "addcol", label: "Add column", icon: <Icon name="plus" />, onSelect: s.addColumn },
+      { key: "rel", label: "Add relationship to...", onSelect: s.addRelationship },
+      { key: "duplicate", label: "Duplicate table", icon: <Icon name="duplicate" />, shortcut: "Ctrl+D", onSelect: s.duplicate },
+      { ...clip[0], separatorBefore: true },
+      clip[1],
+      { key: "details", label: "Details...", separatorBefore: true, onSelect: s.details },
+      ...tail,
+      { key: "delete", label: "Delete table", icon: <Icon name="trash" />, shortcut: "Delete", danger: true, separatorBefore: true, onSelect: s.remove },
+    ];
+  }
+  // F31's order: Duplicate, then the clipboard.
+  return [
+    { key: "rename", label: "Edit text", icon: <Icon name="edit" />, shortcut: "F2", onSelect: s.rename },
+    { key: "details", label: "Details...", onSelect: s.details },
+    { key: "duplicate", label: "Duplicate", icon: <Icon name="duplicate" />, shortcut: "Ctrl+D", separatorBefore: true, onSelect: s.duplicate },
+    { ...clip[0], separatorBefore: false },
+    clip[1],
+    ...(s.connect.length > 0
+      ? [
+          {
+            key: "connected",
+            label: "Add connected",
+            icon: <Icon name="plus" />,
+            separatorBefore: true,
+            submenu: s.connect.map((t) => ({ key: `connect:${t.label}`, label: shapeName(t), icon: <Icon name={t.icon} />, onSelect: () => s.addConnected(t) })),
+          },
+        ]
+      : []),
+    ...(s.service
+      ? [
+          { key: "icon", label: "Choose icon...", onSelect: s.chooseIcon },
+          { key: "group", label: "Group", shortcut: "G", onSelect: s.group },
+        ]
+      : []),
+    { ...tail[0], separatorBefore: true },
+    tail[1],
+    { key: "delete", label: "Delete", icon: <Icon name="trash" />, shortcut: "Delete", danger: true, separatorBefore: true, onSelect: s.remove },
+  ];
+}
+
+export interface LineMenu {
+  kind: DiagramKind;
+  arrow: FlowArrow;
+  /** A mind map branch: it comes from an indent, so only a disabled Delete with the reason. */
+  branch: string | null;
+  editLabel(): void;
+  setArrow(arrow: FlowArrow): void;
+  reverse(): void;
+  showInText(): void;
+  remove(): void;
+}
+
+/** One line (F8, CL2; an ER relationship by erd-ux-research 5.6): label, arrow, reverse, show, delete. */
+export function lineMenuItems(l: LineMenu): MenuItem[] {
+  const remove: MenuItem = {
+    key: "delete",
+    label: "Delete",
+    icon: <Icon name="trash" />,
+    shortcut: "Delete",
+    danger: true,
+    separatorBefore: l.branch === null,
+    disabled: l.branch !== null,
+    ...(l.branch !== null ? { title: l.branch } : {}),
+    onSelect: l.remove,
+  };
+  if (l.branch !== null) return [remove];
+  const arrows = arrowsOf(l.kind);
+  return [
+    { key: "label", label: "Edit label", icon: <Icon name="edit" />, shortcut: "F2", onSelect: l.editLabel },
+    ...(arrows.length > 1
+      ? [
+          {
+            key: "arrow",
+            label: arrowMenuName(l.kind),
+            // The arrow it already has does nothing (I2).
+            submenu: arrows.map((a) => ({ key: `arrow:${a}`, label: ARROW_NAMES[l.kind][a]!, hint: a, checked: a === l.arrow, onSelect: a === l.arrow ? undefined : () => l.setArrow(a) })),
+          },
+        ]
+      : []),
+    { key: "reverse", label: l.kind === "er" ? "Swap direction" : "Reverse", onSelect: l.reverse },
+    { key: "text", label: "Show in the text", icon: <Icon name="fileCode" />, onSelect: l.showInText },
+    remove,
+  ];
+}
+
+export type AlignHow = "left" | "centre" | "right" | "top" | "middle" | "bottom";
+
+export interface SelectionMenu {
+  count: number;
+  /** Shapes that can be moved (not a sequence, mind map or timeline), at least two of them. */
+  shapes: number;
+  movable: boolean;
+  service: boolean;
+  align(how: AlignHow): void;
+  distribute(axis: "x" | "y"): void;
+  cut(): void;
+  copy(): void;
+  duplicate(): void;
+  tidy(): void;
+  group(): void;
+  remove(): void;
+}
+
+/** Several selected (F11, F12): Align and Distribute (draw.io's Arrange), the clipboard, Tidy and Delete n items. */
+export function selectionMenuItems(s: SelectionMenu): MenuItem[] {
+  const off = !s.movable || s.shapes < 2;
+  const ALIGN: [AlignHow, string][] = [
+    ["left", "Left"],
+    ["centre", "Centre"],
+    ["right", "Right"],
+    ["top", "Top"],
+    ["middle", "Middle"],
+    ["bottom", "Bottom"],
+  ];
+  return [
+    { key: "align", label: "Align", disabled: off, submenu: ALIGN.map(([how, label]) => ({ key: `align:${how}`, label, onSelect: () => s.align(how) })) },
+    {
+      key: "distribute",
+      label: "Distribute",
+      disabled: !s.movable || s.shapes < 3,
+      submenu: [
+        { key: "dist:x", label: "Horizontally", onSelect: () => s.distribute("x") },
+        { key: "dist:y", label: "Vertically", onSelect: () => s.distribute("y") },
+      ],
+    },
+    { key: "cut", label: "Cut", shortcut: "Ctrl+X", separatorBefore: true, onSelect: s.cut },
+    { key: "copy", label: "Copy", icon: <Icon name="copy" />, shortcut: "Ctrl+C", onSelect: s.copy },
+    { key: "duplicate", label: "Duplicate", icon: <Icon name="duplicate" />, shortcut: "Ctrl+D", onSelect: s.duplicate },
+    { key: "tidy", label: "Tidy", icon: <Icon name="tidy" />, disabled: !s.movable, onSelect: s.tidy },
+    ...(s.service ? [{ key: "group", label: "Group", shortcut: "G", onSelect: s.group }] : []),
+    { key: "delete", label: `Delete ${s.count.toLocaleString("en-US")} ${s.count === 1 ? "item" : "items"}`, icon: <Icon name="trash" />, shortcut: "Delete", danger: true, separatorBefore: true, onSelect: s.remove },
+  ];
+}
+
+export interface PaneMenu {
+  kind: DiagramKind;
+  tools: AddTool[];
+  empty: boolean;
+  drawn: boolean;
+  add(tool: AddTool): void;
+  paste(): void;
+  selectAll(): void;
+  tidy(): void;
+  fit(): void;
+  publish(): void;
+}
+
+/** The empty canvas (F31; erd-ux-research 5.6): add at the pointer first, then the canvas's own actions. */
+export function paneMenuItems(p: PaneMenu): MenuItem[] {
+  const shapes = p.tools.filter((t) => t.kind !== "group");
+  const adds: MenuItem[] =
+    p.kind === "er" && shapes[0]
+      ? [{ key: "add:table", label: "Add table here", icon: <Icon name={shapes[0].icon} />, shortcut: shapes[0].key, onSelect: () => p.add(shapes[0]) }]
+      : shapes.length > 0
+        ? [
+            {
+              key: "addhere",
+              label: "Add here",
+              icon: <Icon name="plus" />,
+              submenu: shapes.map((t) => ({ key: `add:${t.label}`, label: shapeName(t), icon: <Icon name={t.icon} />, shortcut: t.key, onSelect: () => p.add(t) })),
+            },
+          ]
+        : [];
+  return [
+    ...adds,
+    { key: "paste", label: "Paste", shortcut: "Ctrl+V", separatorBefore: adds.length > 0, onSelect: p.paste },
+    { key: "all", label: "Select all", icon: <Icon name="select" />, shortcut: "Ctrl+A", disabled: p.empty, onSelect: p.selectAll },
+    { key: "tidy", label: "Tidy", icon: <Icon name="tidy" />, disabled: p.empty, onSelect: p.tidy },
+    { key: "fit", label: "Zoom to fit", icon: <Icon name="fit" />, shortcut: "Shift+1", onSelect: p.fit },
+    { key: "publish", label: "Publish image...", icon: <Icon name="image" />, shortcut: "Ctrl+Shift+E", separatorBefore: true, disabled: !p.drawn, onSelect: p.publish },
+  ];
+}

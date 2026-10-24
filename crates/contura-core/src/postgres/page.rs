@@ -5,6 +5,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::types::Type;
 use tokio_postgres::{Client, GenericClient, SimpleQueryMessage};
 
@@ -12,8 +13,9 @@ use super::query_err;
 use crate::common::{check_key, decode_hex, order_columns, quote_double, text_preview};
 use crate::error::{Error, Result};
 use crate::model::{
-    Cell, ColumnInfo, FULL_VALUE_LIMIT, FullValue, FullValueRequest, ObjectPath, PAGE_SIZE,
-    PREVIEW_BYTES, PREVIEW_CHARS, Page, PageRequest,
+    COUNT_CAP, Cell, ColumnInfo, CountRequest, DialectKind, FULL_VALUE_LIMIT, FullValue,
+    FullValueRequest, LocateRequest, ObjectPath, PAGE_SIZE, PREVIEW_BYTES, PREVIEW_CHARS, Page,
+    PageRequest, RowCount, RowPlace,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -265,6 +267,73 @@ pub(super) async fn sample_rows(
         rows,
         has_more: false,
     })
+}
+
+/// M3: the row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
+/// matching the filter, on `client`, which the caller has put in a read-only transaction
+/// with its time limit. The extended protocol runs one statement only.
+pub(super) async fn locate_row(
+    client: &impl GenericClient,
+    req: &LocateRequest,
+) -> Result<RowPlace> {
+    let schema = schema_of(&req.table)?;
+    let rel = relation(client, schema, &req.table.name).await?;
+    let terms = crate::edits::key_terms(DialectKind::Postgres, &rel.columns, &req.key)?;
+    let order: Vec<String> = order_columns(&rel.columns, req.sort.as_ref())?
+        .into_iter()
+        .map(|(c, desc)| order_term(&rel, &c, desc))
+        .collect();
+    let keys: Vec<String> = rel
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| format!("t.{}", quote_double(&c.name)))
+        .collect();
+    let sql = format!(
+        "SELECT contura_n FROM (SELECT {}, row_number() OVER (ORDER BY {}) AS contura_n \
+         FROM {} AS t{}) AS s WHERE {}",
+        keys.join(", "),
+        order.join(", "),
+        qualified(schema, &req.table.name),
+        req.where_sql(),
+        terms.join(" AND ")
+    );
+    match client.query_opt(&sql, &[]).await {
+        Ok(Some(row)) => {
+            let n: i64 = row.try_get(0).map_err(query_err)?;
+            Ok(RowPlace::Found {
+                index: (n - 1) as u64,
+            })
+        }
+        Ok(None) => Ok(RowPlace::Missing),
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => Ok(RowPlace::TimedOut),
+        Err(e) => Err(query_err(e)),
+    }
+}
+
+/// UX step 8: the rows matching the filter, counted up to `COUNT_CAP + 1`, on `client`,
+/// which the caller has put in a read-only transaction with its time limit. The extended
+/// protocol runs one statement only, so the filter can't add a second.
+pub(super) async fn count_rows(
+    client: &impl GenericClient,
+    req: &CountRequest,
+) -> Result<RowCount> {
+    let schema = schema_of(&req.table)?;
+    relation(client, schema, &req.table.name).await?;
+    let sql = format!(
+        "SELECT count(*) FROM (SELECT 1 FROM {} AS t{} LIMIT {}) AS x",
+        qualified(schema, &req.table.name),
+        req.where_sql(),
+        COUNT_CAP + 1
+    );
+    match client.query_one(&sql, &[]).await {
+        Ok(row) => {
+            let n: i64 = row.try_get(0).map_err(query_err)?;
+            Ok(RowCount::Counted { rows: n as u64 })
+        }
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => Ok(RowCount::TimedOut),
+        Err(e) => Err(query_err(e)),
+    }
 }
 
 pub(super) async fn fetch_page(client: &Client, req: &PageRequest) -> Result<Page> {

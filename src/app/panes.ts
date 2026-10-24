@@ -49,3 +49,11 @@ export function cyclePane(dir: 1 | -1, root: ParentNode = document): boolean {
   focusIn(list[next]);
   return true;
 }
+
+/** Moves focus into the work area's tab on screen (its first pane), as after Quick Open opens it; false when none. */
+export function focusWorkArea(root: ParentNode = document): boolean {
+  const work = root.querySelector<HTMLElement>("main[data-pane]");
+  if (!work || !shown(work)) return false;
+  focusIn(panes(work).find((p) => p !== work) ?? work);
+  return true;
+}

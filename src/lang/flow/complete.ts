@@ -1,7 +1,7 @@
 // Completion for .flow (spec section 2, "Editor"): kinds and attribute keys inside brackets, icon names after
 // `icon:` (provider prefix first), node names where a name goes, and the diagram kinds on the first line.
 import { rankIcons } from "./iconRank";
-import { ATTR_KEYS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS, NOTE_KINDS } from "./model";
+import { ATTR_KEYS, COLUMN_FLAGS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS, NOTE_KINDS } from "./model";
 import { parseFlow } from "./parse";
 
 export type FlowCompletion = {
@@ -166,6 +166,12 @@ export function completeFlow(
     const typed = ctx.item.trimStart();
     const used = new Set(ctx.items.map((i) => (i.includes(":") ? i.slice(0, i.indexOf(":")).trim() : i)));
     const dk = diagramKind(text);
+    // An ER column line (`customers.id int [`) takes its flags (ER build A).
+    if (dk === "er" && /^\s*[^\s."[]+\.\S/.test(line.slice(0, line.lastIndexOf("[")))) {
+      const taken = new Set(ctx.items.map((i) => i.toLowerCase().split(/\s+/).join(" ")));
+      const flags = COLUMN_FLAGS.filter((f) => !taken.has(f) && startsWithCi(f, typed));
+      return { from: pos - typed.length, items: flags.map((f) => ({ label: f, kind: "keyword" as const, apply: f })) };
+    }
     const hasKind = ctx.items.some((i) => i !== "" && !i.includes(":"));
     const kinds = dk === "cloud" || hasKind ? [] : dk ? KINDS[dk] : [...KINDS.dfd, ...KINDS.flow];
     // A cloud node is drawn by its icon, so the icon key comes first there.

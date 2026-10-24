@@ -520,3 +520,22 @@ describe("deleteLink", () => {
     expect(apply(t, r.edits)).toBe(lines('diagram flow "x"', "A", "B"));
   });
 });
+
+// Diagram build 1, S5: a participant added between two lands between them in the text, so the drawing shows it there.
+test("addNode with before writes the new line just before that node", () => {
+  const seq = lines('diagram sequence "Pay"', "participant App", "  participant Api", "App -> Api : charge");
+  const r = applyFlowEdit(seq, parseFlow(seq), { op: "addNode", name: "Bank", kind: "participant", before: "Api" });
+  expect(apply(seq, r.edits)).toBe(lines('diagram sequence "Pay"', "participant App", "  participant Bank", "  participant Api", "App -> Api : charge"));
+  // An unknown name to go before: at the usual place.
+  const r2 = applyFlowEdit(seq, parseFlow(seq), { op: "addNode", name: "Bank", kind: "participant", before: "Nobody" });
+  expect(apply(seq, r2.edits)).toBe(lines('diagram sequence "Pay"', "participant App", "  participant Api", "participant Bank", "App -> Api : charge"));
+});
+
+// Live check: an ER table added where its name is taken gets a SQL-friendly free name (table_2), not "table 2".
+test("an ER table's free name joins its number with _", () => {
+  const er = lines('diagram er "b"', "table", "table_2");
+  const r = applyFlowEdit(er, parseFlow(er), { op: "addNode", name: "table", kind: "entity", unique: true });
+  expect(r.name).toBe("table_3");
+  const flow = lines('diagram flow "f"', "Step");
+  expect(applyFlowEdit(flow, parseFlow(flow), { op: "addNode", name: "Step", kind: null, unique: true }).name).toBe("Step 2");
+});

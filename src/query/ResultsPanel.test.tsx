@@ -1,11 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { setPlatformForTests } from "../platform";
 import type { Cell, ExecOutcome } from "../api/types";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { ToastProvider } from "../components/Toast";
-import ResultsPanel from "./ResultsPanel";
+import { SETTLE_MS } from "../components/Menu";
+import ResultsPanel, { sortLoaded } from "./ResultsPanel";
 import { EMPTY_RUNNER, type RunnerState, runnerReducer } from "./runner";
 import type { Stmt } from "./statements";
 
@@ -440,6 +441,16 @@ describe("G7: working with query results", () => {
   });
   afterEach(() => setPlatformForTests(null));
 
+  test("polish A7: the footer sums up the selected cells, Count and Sum", () => {
+    panel(grouped());
+    const summary = () => document.querySelector(".results-selection")?.textContent ?? "";
+    down(td(0, 0));
+    expect(summary()).toBe("");
+    down(td(1, 2), { shiftKey: true });
+    // paid 3 1422.00 / pending 2 NULL: five hold a value, and the numbers add to 1,427.
+    expect(summary()).toBe("6 cells selected, Count 5, Sum 1,427");
+  });
+
   test("cells select and copy as in the table grid, NULL as an empty field", () => {
     panel(grouped());
     down(td(0, 0));
@@ -497,6 +508,27 @@ describe("G7: working with query results", () => {
     expect(column(0)).toEqual(["delivered", "paid", "pending", "refunded"]);
   });
 
+  test("M8: a sorted result keeps each row's number from the result, in the row numbers, the menu and Open full value", () => {
+    panel(grouped());
+    fireEvent.click(screen.getByRole("button", { name: "Sort by revenue" }));
+    const numbers = () => Array.from(document.querySelectorAll("tbody td.row-number")).map((x) => x.textContent);
+    // refunded (row 4), delivered (row 3), paid (row 1), pending (row 2, NULL last).
+    expect(numbers()).toEqual(["4", "3", "1", "2"]);
+    fireEvent.contextMenu(td(0, 0), { clientX: 10, clientY: 10 });
+    expect(screen.getByText("status, row 4")).toBeTruthy();
+  });
+
+  test("M8: numbers beyond 2^53 sort by their exact value", () => {
+    const big = (a: string, b: string, c: string) => [[n(a)], [n(b)], [n(c)]];
+    const rows = big("9007199254740993", "9007199254740992", "-12345678901234567890.5");
+    expect(sortLoaded(rows, [0, 1, 2], 0, false)).toEqual([2, 1, 0]);
+    expect(sortLoaded(rows, [0, 1, 2], 0, true)).toEqual([0, 1, 2]);
+    const decimals = big("123456789012345678.000000000000000002", "123456789012345678.000000000000000001", "-0.5");
+    expect(sortLoaded(decimals, [0, 1, 2], 0, false)).toEqual([2, 1, 0]);
+    // Equal values keep their order; a float with an exponent still sorts by value.
+    expect(sortLoaded(big("1.50", "1.5", "1e-3"), [0, 1, 2], 0, false)).toEqual([2, 0, 1]);
+  });
+
   test("I3: in a sorted result the selection follows its rows when more rows load, and the note says what was sorted", () => {
     const base = grouped();
     const id = base.items[0].id;
@@ -551,4 +583,61 @@ describe("G7: working with query results", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Open full value" }));
     expect(screen.getByRole("dialog", { name: "status, row 3" }).textContent).toContain("delivered");
   });
+});
+
+test("a_result_can_be_reordered_as_shown_but_run_again_brings_back_the_query_order", async () => {
+  setPlatformForTests("linux");
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const onExport = vi.fn();
+  const view = (s: RunnerState) => (
+    <ToastProvider>
+      <ResultsPanel state={s} timeoutSecs={null} lineAt={() => 1} onExport={onExport} {...noop} />
+    </ToastProvider>
+  );
+  const { rerender } = render(view(four()));
+  const heads = () => Array.from(document.querySelectorAll("thead th .header-name")).map((h) => h.textContent);
+  const grid = document.querySelector(".grid-scroll") as HTMLElement;
+  fireEvent.mouseDown(document.querySelector('tr[data-row="0"] td[data-col="0"]')!, { button: 0 });
+  fireEvent.keyDown(grid, { key: "ArrowRight", code: "ArrowRight", altKey: true, shiftKey: true });
+  expect(heads()).toEqual(["name", "id"]);
+  expect(document.querySelector(".results-grid-note")?.textContent).toBe("Moved id to last. Not remembered: Run again brings back the query's order.");
+  // Copy with headers, Copy as CSV and Export follow the order shown.
+  fireEvent.keyDown(grid, { key: "c", code: "KeyC", ctrlKey: true, shiftKey: true });
+  expect(writeText).toHaveBeenLastCalledWith("id\n1\n2\n3\n4");
+  fireEvent.mouseDown(document.querySelector('tr[data-row="0"] td[data-col="0"]')!, { button: 0 });
+  fireEvent.mouseDown(document.querySelector('tr[data-row="1"] td[data-col="1"]')!, { button: 0, shiftKey: true });
+  fireEvent.keyDown(grid, { key: "c", code: "KeyC", ctrlKey: true, shiftKey: true });
+  expect(writeText).toHaveBeenLastCalledWith("name\tid\nZinger\t1\nFries\t2");
+  await userEvent.click(screen.getByRole("button", { name: "Export" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: /Copy as CSV/ }));
+  expect(writeText).toHaveBeenLastCalledWith(["name,id", "Zinger,1", "Fries,2", "Coleslaw,3", "Zinger Box,4"].join("\r\n"));
+  fireEvent.keyDown(grid, { key: "e", code: "KeyE", ctrlKey: true });
+  expect(onExport.mock.calls.slice(-1)[0]?.[0]).toMatchObject({ kind: "result", order: [1, 0] });
+  // Run again: a new result, in the query's own order.
+  const again = started(["SELECT * FROM menu"], four());
+  rerender(view(runnerReducer(again, { type: "done", id: again.items[again.items.length - 1].id, outcome: textRows(["Zinger"]), ms: 3 })));
+  expect(heads()).toEqual(["id", "name"]);
+  setPlatformForTests(null);
+});
+
+test("a_press_outside_a_result_tab_menu_leaves_focus_where_it_landed_and_a_scroll_closes_it", async () => {
+  render(
+    <>
+      <ResultsPanel state={four()} timeoutSecs={null} lineAt={() => 1} onClose={() => {}} {...noop} />
+      <textarea aria-label="editor" />
+    </>,
+  );
+  const tab = screen.getByRole("tab");
+  fireEvent.contextMenu(tab.parentElement!, { clientX: 20, clientY: 20 });
+  expect(screen.getByRole("menu", { name: "Result" })).toBeTruthy();
+  const editor = screen.getByRole("textbox", { name: "editor" });
+  editor.focus();
+  fireEvent.mouseDown(editor);
+  expect(screen.queryByRole("menu", { name: "Result" })).toBeNull();
+  expect(document.activeElement).toBe(editor);
+  fireEvent.contextMenu(tab.parentElement!, { clientX: 20, clientY: 20 });
+  await act(() => new Promise((r) => setTimeout(r, SETTLE_MS + 20)));
+  fireEvent.scroll(document.querySelector(".grid-scroll")!);
+  expect(screen.queryByRole("menu", { name: "Result" })).toBeNull();
 });

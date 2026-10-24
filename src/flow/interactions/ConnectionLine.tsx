@@ -4,7 +4,7 @@
 // fades in (80 ms).
 import { type ConnectionLineComponentProps, type InternalNode, useStore } from "@xyflow/react";
 import { useEffect } from "react";
-import { routeOrthogonal } from "../../diagram/route";
+import { routeOrthogonal, routeRows } from "../../diagram/route";
 import { type Box, linkBox, magnetTarget, type Point, portAt, type Side } from "./geometry";
 
 const SIDE_OF: Record<string, Side> = { right: "r", left: "l", top: "t", bottom: "b" };
@@ -55,15 +55,24 @@ function useLift(id: string | null) {
 
 /** The connection line, with `onDraw` told where it is each frame. Made once per tab, so React Flow keeps one component. */
 export function makeConnectionLine(onDraw: (draw: DrawState) => void) {
-  return function FlowConnectionLine({ fromNode, fromHandle, fromPosition, pointer }: ConnectionLineComponentProps) {
+  return function FlowConnectionLine({ fromNode, fromHandle, fromPosition, fromX, fromY, pointer }: ConnectionLineComponentProps) {
     const lookup = useStore((s) => s.nodeLookup);
+    // React Flow gives the pointer in pixels of the canvas element; the line is drawn in flow coordinates
+    // (fix round 2, live bug (a): with the view panned or zoomed the line ended far from the pointer).
+    const [tx, ty, zoom] = useStore((s) => s.transform);
+    const at = { x: (pointer.x - tx) / zoom, y: (pointer.y - ty) / zoom };
     const from = boxOf(fromNode);
-    const lock = magnetTarget(pointer, targetsOf(lookup, fromNode.id));
+    // ER build C: from a column's port the line leaves at the row and follows the pointer; the drop decides the
+    // column or header it joins, so it never locks onto a whole table.
+    const column = !!fromHandle?.id?.startsWith("col:");
+    const lock = column ? null : magnetTarget(at, targetsOf(lookup, fromNode.id));
     const target = lock ? lookup.get(lock.id) : undefined;
     const to = target ? boxOf(target) : null;
     // The line always leaves from the port that was pressed (item 18), to the pointer or the locked port.
-    const end = to && lock ? portAt(to, lock.side) : { x: pointer.x, y: pointer.y };
-    const route = routeOrthogonal(from, { x: end.x, y: end.y, w: 0, h: 0 }, { toPoint: true, from: pressedSide(fromHandle?.id, fromPosition) });
+    const end = to && lock ? portAt(to, lock.side) : at;
+    const route = column
+      ? routeRows({ x: fromX, y: fromY, w: 0, h: 0 }, fromY, { x: end.x, y: end.y, w: 0, h: 0 }, end.y)
+      : routeOrthogonal(from, { x: end.x, y: end.y, w: 0, h: 0 }, { toPoint: true, from: pressedSide(fromHandle?.id, fromPosition) });
     const lockId = to && lock ? lock.id : null;
     useLift(lockId);
     useEffect(() => onDraw({ fromId: fromNode.id, from, end, lock: lockId }));

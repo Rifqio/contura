@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Icon from "./Icon";
 
 export interface MenuItem {
@@ -190,6 +190,66 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** A right-click menu at a point (a result tab, a cell, a grid header), kept inside the window. */
+/** How long after opening a point menu a scroll is still taken as part of its opening. */
+export const SETTLE_MS = 150;
+
+/**
+ * `onClose` runs on Esc, Tab or a chosen item (and may give focus back to where the menu came from); `onDismiss` on a
+ * press outside or a scroll, which leave focus where the press landed, as native menus do.
+ */
+export function PointMenu({
+  x,
+  y,
+  items,
+  onClose,
+  onDismiss,
+  label,
+}: {
+  x: number;
+  y: number;
+  items: MenuItem[];
+  onClose: () => void;
+  onDismiss: () => void;
+  label: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState({ x, y });
+  useLayoutEffect(() => {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box || box.height === 0) return;
+    setAt({ x: Math.max(4, Math.min(x, window.innerWidth - box.width - 4)), y: Math.max(4, Math.min(y, window.innerHeight - box.height - 4)) });
+  }, [x, y]);
+  // A press outside, or any scroll under the menu (the grid, a pane, the page), closes it: a fixed menu must not float
+  // over something else than what it was opened on.
+  const dismiss = useRef(onDismiss);
+  dismiss.current = onDismiss;
+  useEffect(() => {
+    const away = (e: Event) => {
+      if (!ref.current?.contains(e.target as Node)) dismiss.current();
+    };
+    // A scroll that the opening itself caused (the press that opened it bringing a cell or column into view) arrives
+    // a frame later; only scrolls after the menu has settled close it.
+    let armed = false;
+    const settle = window.setTimeout(() => (armed = true), SETTLE_MS);
+    const scrolled = (e: Event) => {
+      if (armed) away(e);
+    };
+    document.addEventListener("mousedown", away);
+    window.addEventListener("scroll", scrolled, true);
+    return () => {
+      window.clearTimeout(settle);
+      document.removeEventListener("mousedown", away);
+      window.removeEventListener("scroll", scrolled, true);
+    };
+  }, []);
+  return (
+    <div ref={ref} className="tree-menu" style={{ left: at.x, top: at.y }}>
+      <MenuList items={items} label={label} onClose={onClose} compact />
     </div>
   );
 }

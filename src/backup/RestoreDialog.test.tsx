@@ -177,6 +177,13 @@ interface Opts {
   statements?: ScriptStatement[];
 }
 
+/** The Jobs store as the dialog sees it, to check what became of the running job. */
+let jobsProbe: ReturnType<typeof useJobs> | null = null;
+function JobsProbe() {
+  jobsProbe = useJobs();
+  return null;
+}
+
 function setup({ connection = prod, target = { connectionId: "c1", database: "freight", schema: "billing" }, check = CHECK, plan = PLAN, statements = [] }: Opts = {}) {
   const onClose = vi.fn();
   const onRestored = vi.fn();
@@ -192,6 +199,7 @@ function setup({ connection = prod, target = { connectionId: "c1", database: "fr
   render(
     <ToastProvider>
       <JobsProvider>
+        <JobsProbe />
         <RestoreDialog connection={connection} group={null} target={target} onClose={onClose} onRestored={onRestored} onOpenInTree={onOpenInTree} />
       </JobsProvider>
     </ToastProvider>,
@@ -508,6 +516,12 @@ test("J1: Esc, a scrim mousedown and the close button leave a running Restore ru
   await userEvent.click(within(run).getByRole("button", { name: "Close" }));
   expect(onClose).toHaveBeenCalledTimes(3);
   expect(callsTo("cancel_job")).toHaveLength(0);
+  // Minor 8: each one handed the job to the background, where it keeps running, instead of only closing the view.
+  const id = (callsTo("start_restore")[0] as { job?: string }).job;
+  expect(id).toBeTruthy();
+  const kept = jobsProbe?.jobs.find((j) => j.id === id);
+  expect(kept?.background).toBe(true);
+  expect(kept?.done).toBeNull();
 });
 
 test("J1: after Cancel and roll back, focus is on Keep running and Enter or a second click never rolls back", async () => {

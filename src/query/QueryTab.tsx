@@ -12,6 +12,7 @@ import {
   DIALECT_LABEL,
   errorText,
   executeSql,
+  restoreScriptSqlMode,
   explainStatement,
   fetchMoreRows,
   isCommandError,
@@ -276,7 +277,8 @@ export default function QueryTab({
   const [diagramCount, setDiagramCount] = useState<string | null>(null);
   const root = useRef<HTMLElement>(null);
   const toggleDiagram = () => setDiagramOpen((o) => !o);
-  useCommandKeys(lang ? { "diagram.toggle": toggleDiagram } : {}, { region: root });
+  // Explain has no default key; the Command Palette runs it on the query tab on screen.
+  useCommandKeys({ ...(lang ? { "diagram.toggle": toggleDiagram } : {}), "query.explain": () => explain() }, { region: root });
   const [share, setShare] = useState(loadShare);
   const [askSel, setAskSel] = useState<AskSelection | null>(null);
   // Bumped to open the tab's session again after a dropped Connection was reopened.
@@ -450,6 +452,14 @@ export default function QueryTab({
           return;
         }
         if (externalIn([stmt])) settleExternal({ ran: false });
+        // N3: a framed MySQL script (Compare or Transfer, Open in editor) stopped before the footer that puts the
+        // tab's sql_mode back: the Core puts it back when the header changed it.
+        if (connection?.dialect === "mysql" && left.slice(1).some((s) => /@OLD_SQL_MODE/i.test(s.text))) {
+          void restoreScriptSqlMode(session).then(
+            (put) => put && setNotice("The script stopped before its end; sql_mode was put back."),
+            () => {},
+          );
+        }
         dispatch({ type: "failed", id, error, ms: performance.now() - started });
         ranStep(null, { failed: true });
         onRan?.();
@@ -700,9 +710,15 @@ export default function QueryTab({
   }
 
   /** Q8: Run pressed during a run says so instead of doing nothing. */
+  const alreadyAt = useRef(-Infinity);
   function runAgain(): boolean {
     if (!running) return false;
-    show({ kind: "info", text: "Already running. Esc cancels it." });
+    // A held key repeats a few ms apart: the toast is said once, so it leaves after its own 4 s. A separate press
+    // (more than 150 ms after the last) says it again, even if the toast was closed or replaced meanwhile.
+    const now = Date.now();
+    const repeat = now - alreadyAt.current < 150;
+    alreadyAt.current = now;
+    if (!repeat) show({ kind: "info", text: "Already running. Esc cancels it." });
     return true;
   }
   const runCurrent = () => runAgain() || run([editorRef.current?.runTarget() ?? null]);
@@ -904,6 +920,7 @@ export default function QueryTab({
       <div className="query-work" ref={work} style={{ gridTemplateRows: `${share}fr 6px ${1 - share}fr` }}>
         <div className={production ? "query-editor prod-wash" : "query-editor"} data-pane>
           <SqlEditor
+            paletteCommands
             value={tab.text}
             dialect={dialect}
             editorRef={editorRef}

@@ -69,6 +69,7 @@ Names are CSS custom properties, set on `:root` (light) and `:root[data-theme="d
 | `--c-bg-raised` | Menus, popovers, autocomplete, toasts, minimap |
 | `--c-bg-canvas` | Diagram canvas (the snap grid sits on it) |
 | `--c-bg-hover` / `--c-bg-active` | Neutral hover; pressed and neutral selected (question bubble, neutral chip) |
+| `--c-bg-raised-hover` | Hover on a row inside a raised surface (menu, popover, select list, Quick Open). Dracula's `bg-hover` equals its `bg-raised`, so this one is lighter; subtle text on it steps up to muted |
 | `--c-grid-stripe` | Every second data grid row when Stripe every other row is on (text, muted and subtle keep 4.5:1) |
 | `--c-border-subtle` / `--c-border` / `--c-border-strong` | Rules inside panes and row dividers / control and card edges / input bottom edge, radio and switch rings, empty Group square (3:1) |
 | `--c-text` / `-muted` / `-subtle` / `-faint` | Primary / secondary labels / tertiary (timestamps, counts, hosts, column types) / line numbers, placeholders, muted icons (3:1, never the only carrier of meaning) |
@@ -108,6 +109,7 @@ Sources: the Dracula spec (draculatheme.com/spec), Alucard Classic: background `
   --c-bg-raised: #fffbeb;
   --c-bg-canvas: #f8f4e3;
   --c-bg-hover: #e2deca;
+  --c-bg-raised-hover: #e2deca;
   --c-bg-active: #dedccf;
   --c-grid-stripe: #f4f0dd;
   --c-border-subtle: #e2deca;
@@ -115,7 +117,7 @@ Sources: the Dracula spec (draculatheme.com/spec), Alucard Classic: background `
   --c-border-strong: #8f8a73;
   --c-text: #1f1f1f;
   --c-text-muted: #48432f;
-  --c-text-subtle: #6c664b;
+  --c-text-subtle: #605a40;
   --c-text-faint: #857f66;
   --c-accent: #644ac9;
   --c-accent-hover: #5840b5;
@@ -127,17 +129,17 @@ Sources: the Dracula spec (draculatheme.com/spec), Alucard Classic: background `
   --c-success-text: #14710a;
   --c-success-solid: #14710a;
   --c-warning-subtle: #faf4da;
-  --c-warning-text: #846e15;
+  --c-warning-text: #6e5a0d;
   --c-warning-solid: #c9a227;
   --c-danger-subtle: #fdf1eb;
-  --c-danger-text: #cb3a2a;
+  --c-danger-text: #b02f20;
   --c-danger-solid: #cb3a2a;
   --c-info-subtle: #dbe8ec;
-  --c-info-text: #036a96;
+  --c-info-text: #02618a;
   --c-info-solid: #036a96;
   --c-prod-solid: #d06a14;
   --c-prod-subtle: #f8e1c9;
-  --c-prod-text: #a34d14;
+  --c-prod-text: #94450f;
   --c-prod-wash: #fdf2dd;
   --c-prod-wash-stripe: #f2e7d0;
   --c-gmk-ink: #ffffff;
@@ -215,6 +217,7 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --c-bg-raised: #343746;
   --c-bg-canvas: #21222c;
   --c-bg-hover: #343746;
+  --c-bg-raised-hover: #3f4256;
   --c-bg-active: #3c3f52;
   --c-grid-stripe: #20212b;
   --c-border-subtle: #191a21;
@@ -222,7 +225,7 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --c-border-strong: #6272a4;
   --c-text: #f8f8f2;
   --c-text-muted: #c7c8d3;
-  --c-text-subtle: #a0a3ba;
+  --c-text-subtle: #aeb1c7;
   --c-text-faint: #6272a4;
   --c-accent: #bd93f9;
   --c-accent-hover: #caa8fa;
@@ -237,7 +240,7 @@ Sources: the official Dracula palette: background `#282A36`, current line `#4447
   --c-warning-text: #f1fa8c;
   --c-warning-solid: #f1fa8c;
   --c-danger-subtle: #43272e;
-  --c-danger-text: #ff6e6e;
+  --c-danger-text: #ff9494;
   --c-danger-solid: #ff5555;
   --c-info-subtle: #24384a;
   --c-info-text: #8be9fd;
@@ -340,13 +343,16 @@ Targets: body text 7:1 where possible and never below 4.5:1; secondary text 4.5:
 | `text` on `bg-app` | 13.57 | 16.27 |
 | `text` on `bg-raised` | 15.89 | 11.06 |
 | `text` on `bg-hover` | 12.19 | 11.06 |
+| `text` on `bg-raised-hover` | 12.19 | 9.27 |
+| `text-muted` on `bg-raised-hover` | 7.33 | 5.94 |
+| `accent-text` on `bg-raised-hover` | 4.62 | 4.89 |
 | `text` on `accent-subtle` | 10.70 | 8.59 |
 | `text-muted` on `bg-surface` | 9.55 | 8.57 |
 | `text-muted` on `bg-panel` | 8.41 | 9.50 |
 | `text-muted` on `bg-app` | 8.16 | 10.43 |
-| `text-subtle` on `bg-surface` | 5.56 | 5.73 |
-| `text-subtle` on `bg-panel` | 4.90 | 6.35 |
-| `text-subtle` on `bg-hover` | 4.27 | 4.74 |
+| `text-subtle` on `bg-surface` | 6.67 | 6.72 |
+| `text-subtle` on `bg-panel` | 5.87 | 7.45 |
+| `text-subtle` on `bg-hover` | 5.12 | 5.57 |
 | `text-faint` on `bg-surface` | 3.88 | 3.03 |
 | `text-faint` on `bg-panel` | 3.41 | 3.36 |
 | `border-strong` on `bg-surface` | 3.35 | 3.03 |
@@ -359,15 +365,15 @@ Targets: body text 7:1 where possible and never below 4.5:1; secondary text 4.5:
 | `focus` on `bg-app` | 5.14 | 7.19 |
 | `success-text` on `bg-surface` | 5.96 | 10.38 |
 | `success-text` on `success-subtle` | 5.02 | 8.83 |
-| `warning-text` on `bg-surface` | 4.80 | 12.74 |
-| `warning-text` on `warning-subtle` | 4.50 | 10.20 |
-| `danger-text` on `bg-surface` | 4.85 | 5.23 |
-| `danger-text` on `danger-subtle` | 4.54 | 4.91 |
-| `info-text` on `bg-surface` | 5.78 | 10.29 |
-| `info-text` on `info-subtle` | 4.78 | 8.72 |
-| `prod-text` on `bg-surface` | 5.58 | 8.36 |
-| `prod-text` on `prod-subtle` | 4.58 | 6.72 |
-| `prod-text` on `bg-app` | 4.76 | 10.18 |
+| `warning-text` on `bg-surface` | 6.47 | 12.74 |
+| `warning-text` on `warning-subtle` | 6.07 | 10.20 |
+| `danger-text` on `bg-surface` | 6.19 | 6.72 |
+| `danger-text` on `danger-subtle` | 5.79 | 6.32 |
+| `info-text` on `bg-surface` | 6.58 | 10.29 |
+| `info-text` on `info-subtle` | 5.44 | 8.72 |
+| `prod-text` on `bg-surface` | 6.50 | 8.36 |
+| `prod-text` on `prod-subtle` | 5.33 | 6.72 |
+| `prod-text` on `bg-app` | 5.55 | 10.18 |
 | `prod-solid` on `bg-surface` | 3.52 | 8.36 |
 | `ink` on `prod-solid` | 4.88 | 10.45 |
 | `text` on `prod-wash` | 14.85 | 11.36 |
@@ -665,7 +671,7 @@ Item 48 (step 12b), Edge style:
 ### 10.6 Schema Builder
 - Left pane (420 px): strip "DBML" title, dialect chip ("PostgreSQL"), "Saved" state, more menu; DBML editor (section 4); footer "No problems" with check icon and "6 tables, 5 refs".
 - Toolbar (36 px): Select (pressed: `--c-accent-subtle` fill), Add table, Arrange, divider, selection summary ("orders selected"), spacer, Publish, Apply to Connection... (secondary).
-- Canvas `--c-bg-canvas` with the snap grid: dots 1 px every 16 px in `--c-border`, every 80 px in `--c-border-strong` at 50 percent; hidden below 40 percent zoom. The dot grid is the snap grid, not decoration.
+- Canvas `--c-bg-canvas` with the snap grid: dots 1 px every 16 px in `--c-border`, every 80 px in `--c-border-strong` at 50 percent; hidden below 40 percent zoom. Cards no longer snap to it: they snap to 1 px accent alignment guides within 6 screen px of a neighbour's edge or centre (ADR 0019).
 - Table card: 216 px wide (200 to 360 by content), 1 px `--c-node-table-stroke`, 6 px radius, header 32 px on `--c-node-table-fill` with table icon, name UI strong, schema `--c-text-subtle`, column count right; rows 24 px (grid `14px 1fr auto 8px`): key or link icon, column name, type Code small `--c-syn-type`, `?` for nullable in `--c-text-faint`. Highlighted row (linked to text) `--c-accent-subtle`.
 - Edges 1.5 px `--c-text-subtle`, orthogonal with 8 px corners, crow's-foot and bar markers.
 - Selection: 2 px `--c-accent` outline 5 px outside the card (9 px radius), no square handles (board B2, step 12b). A card or node that resizes has invisible pointer zones instead: 8 px across each edge (4 px in, 4 px out) and a 14 px square on each corner, in screen px at any zoom, with the `ns`, `ew`, `nwse` and `nesw` resize pointers; the ports sit above them. A resize is live and shows "W × H" under the box. Selecting on the canvas bands the matching DBML block with `--c-accent-subtle`.
@@ -728,7 +734,7 @@ All chips: 20 px default, 0 6 px, 4 px radius, UI small, never shrink, never sta
 
 ### 10.12 Menus, tooltips, toasts, dialogs, empty states
 - Menus and popovers: level 1, 8 px radius, 4 px outer padding, 28 px items (24 compact) with 12 px padding, icon 16, label, shortcut right in Code micro `--c-text-subtle`; separators 1 px `--c-border-subtle` with 4 px margin; destructive items in `--c-danger-text`.
-- Tooltips: `--c-bg-raised`, 1 px `--c-border`, 4 px radius, UI small, max 280 px, 500 ms delay, include the shortcut.
+- Tooltips: `--c-bg-raised`, 1 px `--c-border`, 4 px radius, UI small, max 280 px, 500 ms delay, include the shortcut. One tooltip draws every `title` inside the window (under the control, above it at the bottom edge, pushed back from every edge); a button press, a context menu, a key or a scroll hides it until the pointer leaves.
 - Toasts: bottom right, 360 px wide, 44 px high, level 1, icon + one line + optional action + close; info 4 s, success 3 s, errors stay. Never used to confirm writes.
 - Dialogs: widths 420 (confirm), 560 (form), 640 (model), 760 (SQL preview, Publish); max 80 vh with inner scroll; header 52 px with no rule under it, body 16 px padding, footer 56 px with buttons right-aligned and the primary rightmost; `Esc` closes; Enter triggers the primary only outside multi-line fields.
 - Scrollbars: 10 px, themed in both themes, no arrow buttons; text selection uses `--c-accent-subtle` with the text colour unchanged. Density: `--row-h` is 28 px, 24 px under `data-density="compact"`, and drives grid cells and header, tree rows and menu items.

@@ -25,9 +25,9 @@ use contura_core::design::{DesignOutcome, DesignRequest, TableDesign};
 use contura_core::edits::EditSet;
 use contura_core::explain::Plan;
 use contura_core::model::{
-    AiSyncMode, ConnectionConfig, ConnectionId, DbObject, DialectKind, FullValue, FullValueRequest,
-    Group, GroupId, KeymapOverrides, ObjectKind, ObjectPath, Page, PageRequest, SchemaInfo,
-    UiPrefs,
+    AiSyncMode, ConnectionConfig, ConnectionId, CountRequest, DbObject, DialectKind, FullValue,
+    FullValueRequest, Group, GroupId, KeymapOverrides, LocateRequest, ObjectKind, ObjectPath, Page,
+    PageRequest, RowCount, RowPlace, SchemaInfo, UiPrefs,
 };
 use contura_core::query::{
     Execution, HistoryEntry, HistoryFilter, MoreRows, QuerySessionId, SavedQuery, SavedQueryId,
@@ -229,6 +229,36 @@ pub async fn fetch_page(
     request: PageRequest,
 ) -> Result<Page, Error> {
     service.session(id).await?.fetch_page(&request).await
+}
+
+/// UX step 8: how many rows of a table match a filter (Rows that point here), capped at
+/// 1,001, on a read of its own that the server stops after a few seconds.
+#[tauri::command]
+pub async fn count_rows(
+    service: Service<'_>,
+    id: ConnectionId,
+    request: CountRequest,
+) -> Result<RowCount, Error> {
+    service
+        .session(id)
+        .await?
+        .count_rows(&request, contura_core::dialect::COUNT_TIMEOUT_MS)
+        .await
+}
+
+/// M3: where a row is under a page's sort and filter, for Back after a followed key, on a
+/// read of its own that the server stops after a few seconds.
+#[tauri::command]
+pub async fn locate_row(
+    service: Service<'_>,
+    id: ConnectionId,
+    request: LocateRequest,
+) -> Result<RowPlace, Error> {
+    service
+        .session(id)
+        .await?
+        .locate_row(&request, contura_core::dialect::COUNT_TIMEOUT_MS)
+        .await
 }
 
 #[tauri::command]
@@ -555,6 +585,15 @@ pub async fn open_query_session(
     database: Option<String>,
 ) -> Result<QuerySessionId, Error> {
     service.open_query_session(id, database).await
+}
+
+/// N3: a MySQL tab's framed script stopped before its footer: put its sql_mode back.
+#[tauri::command]
+pub async fn restore_script_sql_mode(
+    service: Service<'_>,
+    session: QuerySessionId,
+) -> Result<bool, Error> {
+    service.restore_script_sql_mode(session).await
 }
 
 #[tauri::command]
@@ -899,6 +938,24 @@ pub fn load_query_tabs(service: Service<'_>, place: String) -> Result<Option<Str
 #[tauri::command]
 pub fn save_query_tabs(service: Service<'_>, place: String, json: String) -> Result<(), Error> {
     service.save_query_tabs(place, json)
+}
+
+#[tauri::command]
+pub fn column_orders(
+    service: Service<'_>,
+    id: ConnectionId,
+) -> Result<std::collections::HashMap<String, Vec<String>>, Error> {
+    service.column_orders(id)
+}
+
+#[tauri::command]
+pub fn save_column_order(
+    service: Service<'_>,
+    id: ConnectionId,
+    table: String,
+    columns: Option<Vec<String>>,
+) -> Result<(), Error> {
+    service.save_column_order(id, table, columns)
 }
 
 // These three read or write the saved key, which waits for the start-up keyring check:

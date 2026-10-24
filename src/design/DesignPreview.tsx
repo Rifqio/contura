@@ -1,3 +1,4 @@
+import { framedScript } from "../api/scriptFrame";
 import { useEffect, useRef, useState } from "react";
 import { errorText, planDesign } from "../api/client";
 import type { ConnectionId, DesignMode, DesignRequest, DesignVerdict, DialectKind } from "../api/types";
@@ -117,7 +118,7 @@ export default function DesignPreview({ connectionId, dialect, request, onPlan, 
           aria-label="Copy SQL"
           title="Copy SQL"
           disabled={!sql}
-          onClick={() => sql && void navigator.clipboard?.writeText(sql).catch(() => {})}
+          onClick={() => sql && void navigator.clipboard?.writeText(framedScript(shown?.frame, sql)).catch(() => {})}
         >
           <Icon name="copy" size={14} />
         </button>

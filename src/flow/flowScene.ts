@@ -1,13 +1,13 @@
 // A drawn diagram (data flow, flowchart or cloud) as an export scene, for Publish (spec 6+ section 8): every
 // placed node at its canvas place and size, the group areas, and the lines routed as the canvas routes them.
 // Cloud icons come from the pack as images and go into the scene as data: image URLs, unchanged (ruling P9).
-import type { Scene, SceneArea, SceneEdge, SceneNode } from "../diagram/export/scene";
+import type { Scene, SceneArea, SceneEdge, SceneNode, SceneRow } from "../diagram/export/scene";
 import type { Positions } from "../diagram/layout";
-import { routeOrthogonal } from "../diagram/route";
+import { routeOrthogonal, routeRows } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
-import type { FlowArrow, FlowDoc, FlowGroup } from "../lang/flow/model";
+import type { FlowArrow, FlowDoc, FlowGroup, FlowNode } from "../lang/flow/model";
 import { drawnKind, familyOf, groupBoxes, nodeSize } from "./flowNodes";
-import { fixedLayout } from "./kindLayout";
+import { erColumnRow, erRowY, fixedLayout } from "./kindLayout";
 import { iconPlate, loadIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import type { NodeLook } from "./nodes/parts";
@@ -57,6 +57,25 @@ function eachGroup(groups: FlowGroup[], visit: (g: FlowGroup) => void) {
     visit(g);
     stack.push(...g.groups);
   }
+}
+
+/**
+ * A card's rows in the export: an ER column as its name with its type on the right and its key marked, as the
+ * canvas draws it (A5); a class member as written.
+ */
+function cardRows(n: FlowNode, kind: DrawnKind): SceneRow[] {
+  const rows = n.rows ?? [];
+  if (kind !== "erTable" && kind !== "erWeak") return rows.map((r) => ({ left: r }));
+  return rows.map((r, i) => {
+    const at = r.search(/\s/);
+    const row: SceneRow = { left: at < 0 ? r : r.slice(0, at) };
+    const type = at < 0 ? "" : r.slice(at + 1).trim();
+    if (type) row.right = type;
+    const flags = n.rowFlags?.[i] ?? [];
+    if (flags.includes("pk")) row.mark = "pk";
+    if (flags.includes("pk") || flags.includes("not null")) row.notNull = true;
+    return row;
+  });
 }
 
 /** Every icon name the diagram's services and groups ask for, once each. */
@@ -120,7 +139,7 @@ export function flowScene(doc: FlowDoc, given: Positions, look: NodeLook, icons:
     placed.set(n.name, { x: p.x, y: p.y, ...size });
     types.set(n.name, familyOf(kind));
     if (CARD_KINDS.has(kind)) {
-      nodes.push({ id: n.name, kind: "table", x: p.x, y: p.y, w: size.w, h: size.h, title: n.name, rows: (n.rows ?? []).map((r) => ({ left: r })) });
+      nodes.push({ id: n.name, kind: "table", x: p.x, y: p.y, w: size.w, h: size.h, title: n.name, rows: cardRows(n, kind) });
       continue;
     }
     const node: SceneNode = { id: n.name, kind, x: p.x, y: p.y, w: size.w, h: size.h, title: n.kind === "note" ? (n.text ?? n.name) : n.name, rows: [], look };
@@ -158,11 +177,18 @@ export function flowScene(doc: FlowDoc, given: Positions, look: NodeLook, icons:
 
   // Lines between nodes only, as the canvas draws them; a line meets a cloud service at its 48 px tile.
   const edges: SceneEdge[] = [];
+  const rowsOf = new Map(doc.nodes.map((n) => [n.name, n.rows ?? []]));
   doc.links.forEach((l, i) => {
     const a = placed.get(l.from);
     const b = placed.get(l.to);
     if (!a || !b) return;
-    const route = routeOrthogonal(linkBox(types.get(l.from), a), linkBox(types.get(l.to), b));
+    const ab = linkBox(types.get(l.from), a);
+    const bb = linkBox(types.get(l.to), b);
+    // A relationship between columns meets each card at its column's row, as on the canvas (ER build C).
+    const rows = l.fromColumn !== undefined || l.toColumn !== undefined;
+    const route = rows
+      ? routeRows(ab, erRowY(ab.y, ab.h, erColumnRow(rowsOf.get(l.from) ?? [], l.fromColumn)), bb, erRowY(bb.y, bb.h, erColumnRow(rowsOf.get(l.to) ?? [], l.toColumn)), l.from === l.to)
+      : routeOrthogonal(ab, bb);
     const edge: SceneEdge = { id: `edge:${i}`, kind: "flow", points: route.points, heads: HEADS[l.arrow] };
     const line = LINE[l.arrow];
     if (line) edge.line = line;

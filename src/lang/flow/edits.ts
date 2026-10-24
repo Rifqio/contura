@@ -2,8 +2,8 @@
 // current text, so it works while the text has errors, and returns the smallest change: untouched lines stay
 // byte for byte. In the app they run in the language worker against its cached parse (ruling P5).
 import type { TextEdit } from "../protocol";
-import { ATTR_KEYS, type DiagramKind, type FlowArrow, type FlowAttrKey, type FlowLink, type FlowNodeKind, flowLabel, flowName, flowValue, nodeStatement } from "./model";
-import type { FlowParse, FlowRange } from "./parse";
+import { ARROWS, ATTR_KEYS, type ColumnFlag, COLUMN_FLAGS, columnFlagsText, type DiagramKind, type FlowArrow, type FlowAttrKey, type FlowLink, type FlowNodeKind, columnsWritable, flowLabel, flowName, flowValue, isColumnName, isColumnType, linkEndText, nodeStatement, sqlFreeName, STATE_END, STATE_START } from "./model";
+import type { FlowParse, FlowRange, RowSpan } from "./parse";
 
 /** One canvas action, as the worker is asked for it. */
 export type FlowEditOp =
@@ -16,6 +16,8 @@ export type FlowEditOp =
       group?: string | null;
       /** Makes the name unique first (`Process 3`), so a quick add never collides. */
       unique?: boolean;
+      /** Writes the line just before this node's (a sequence participant added between two); else at the usual place. */
+      before?: string;
     }
   | {
       op: "addGroup";
@@ -29,11 +31,33 @@ export type FlowEditOp =
   | { op: "deleteNode"; name: string }
   | { op: "moveToGroup"; name: string; group: string | null }
   | { op: "setAttr"; name: string; key: "kind" | FlowAttrKey; value: string | null }
-  | { op: "setLinkLabel"; index: number; label: string | null }
-  | { op: "deleteLink"; index: number };
+  // ER build C: a relationship's label by its ref (the in-place field), as the line ops find their line.
+  | { op: "setLinkLabel"; index: number; label: string | null; link?: LinkRef }
+  | { op: "deleteLink"; index: number }
+  // A line's arrow, direction and ends (diagram step 4, F8 and CL2; ER step 2.4).
+  | { op: "setLinkArrow"; link: LinkRef; arrow: FlowArrow }
+  | { op: "reverseLink"; link: LinkRef }
+  // An ER relationship's end may land on a column (fix round 1); without one it joins the whole table.
+  | { op: "setLinkEnd"; link: LinkRef; end: "from" | "to"; node: string; column?: string }
+  // ER columns, by their index in the entity's rows and the name the canvas saw there (ER build A): a text that
+  // no longer has that column at that place (a stale drawing) refuses the op.
+  | { op: "addColumn"; table: string; at: number; before: string | null; name: string; type: string; flags?: ColumnFlag[] }
+  | { op: "setColumn"; table: string; index: number; column: string; name?: string; type?: string }
+  | { op: "setColumnFlag"; table: string; index: number; column: string; flag: ColumnFlag; on: boolean }
+  | { op: "duplicateColumn"; table: string; index: number; column: string }
+  | { op: "deleteColumn"; table: string; index: number; column: string };
 
-/** The edits, and for an add the name it used. An empty list means the action does not apply to this text. */
-export type FlowEditResult = { edits: TextEdit[]; name?: string };
+/**
+ * The edits, and for an add the name it used (a paste: each pasted name's new name). An empty list means the action
+ * does not apply to this text.
+ */
+export type FlowEditResult = {
+  edits: TextEdit[];
+  name?: string;
+  names?: Record<string, string>;
+  /** A paste: why it was refused (no edits), or what it left out. */
+  note?: string;
+};
 
 // ----- text helpers
 
@@ -41,12 +65,12 @@ const isBlankChar = (c: string) => c === " " || c === "\t";
 const isSpace = (c: string) => /\s/.test(c);
 
 /** The text's own line break, so a CRLF file stays CRLF. */
-function lineBreak(s: string): string {
+export function lineBreak(s: string): string {
   const i = s.indexOf("\n");
   return i > 0 && s[i - 1] === "\r" ? "\r\n" : "\n";
 }
 
-const lineStart = (s: string, p: number) => s.lastIndexOf("\n", p - 1) + 1;
+export const lineStart = (s: string, p: number) => s.lastIndexOf("\n", p - 1) + 1;
 
 /** The end of the line holding `p`, before its line break. */
 function lineEnd(s: string, p: number): number {
@@ -57,7 +81,7 @@ function lineEnd(s: string, p: number): number {
 }
 
 /** The start of the line after the one holding `p`, or the end of the text. */
-function nextLine(s: string, p: number): number {
+export function nextLine(s: string, p: number): number {
   const e = s.indexOf("\n", p);
   return e < 0 ? s.length : e + 1;
 }
@@ -105,13 +129,13 @@ function removeStatement(s: string, from: number, to: number): TextEdit {
 }
 
 /** A line inserted at the start of a line (or at the end of the text). */
-function insertLine(s: string, pos: number, line: string, nl: string): TextEdit {
+export function insertLine(s: string, pos: number, line: string, nl: string): TextEdit {
   if (pos >= s.length && s.length > 0 && !s.endsWith("\n")) return { from: s.length, to: s.length, insert: nl + line };
   return { from: pos, to: pos, insert: line + nl };
 }
 
 /** Sorted and merged where edits touch, so the list is valid as one CodeMirror change. */
-function normalize(s: string, edits: TextEdit[]): TextEdit[] {
+export function normalize(s: string, edits: TextEdit[]): TextEdit[] {
   const sorted = edits.map((e, i) => ({ e, i })).sort((a, b) => a.e.from - b.e.from || a.e.to - b.e.to || a.i - b.i);
   const out: TextEdit[] = [];
   for (const { e } of sorted) {
@@ -128,13 +152,18 @@ function normalize(s: string, edits: TextEdit[]): TextEdit[] {
 
 // ----- where new lines go
 
-/** After the last node that is in no group; else after the first line; else at the end. */
+/**
+ * After the last node that is in no group, past its own lines (an ER table's columns, a class's members, ER build
+ * C); else after the first line; else at the end.
+ */
 function topLevelSpot(s: string, parse: FlowParse, except?: string): number {
   let at = -1;
   for (const name of parse.defined.keys()) {
     if (name === except || parse.parentOf(name) !== null) continue;
     const sp = parse.span(`node:${name}`);
-    if (sp) at = sp.from;
+    if (!sp) continue;
+    at = sp.from;
+    for (const row of parse.rowsOf(name)) if (row.line.from > at) at = row.line.from;
   }
   if (at >= 0) return nextLine(s, at);
   const header = parse.span("diagram");
@@ -195,10 +224,13 @@ export function addNode(
   kind: FlowNodeKind | null,
   attrs: Record<string, string> = {},
   group?: string | null,
+  before?: string,
 ): TextEdit[] {
   if (parse.defined.has(name)) return [];
   const nl = lineBreak(text);
   const line = nodeText(name, kind, attrs, parse.kind);
+  const next = before !== undefined && !group ? parse.span(`node:${before}`) : null;
+  if (next) return [insertLine(text, lineStart(text, next.from), indentAt(text, next.from) + line, nl)];
   if (group) {
     const spot = groupSpot(text, parse, group);
     return spot ? [insertLine(text, spot.pos, spot.indent + line, nl)] : [];
@@ -237,7 +269,7 @@ export function addLink(text: string, parse: FlowParse, from: string, to: string
 }
 
 /** The statement of the last link written directly in `group` (null: outside every group). */
-function lastLinkIn(parse: FlowParse, group: string | null): FlowRange | undefined {
+export function lastLinkIn(parse: FlowParse, group: string | null): FlowRange | undefined {
   if (parse.links.length === 0) return undefined;
   // Group blocks, so a link's innermost group is the latest-starting block that holds it.
   const blocks: { name: string; from: number; to: number }[] = [];
@@ -270,12 +302,15 @@ export function renameNode(text: string, parse: FlowParse, old: string, next: st
   add((parse.span(`node:${old}`) ?? parse.span(`group:${old}`))?.name);
   // Its own extra lines (ER columns, class members) name it too.
   for (const row of parse.rowsOf(old)) add(row.name);
+  // An ER relationship's column end (`invoices.customer_id`) keeps its column: only the table's part changes.
+  const tablePart = (r: FlowRange | undefined, column: string | undefined) =>
+    r && column !== undefined ? (text.slice(r.from, r.from + old.length) === old ? { from: r.from, to: r.from + old.length } : undefined) : r;
   parse.links.forEach((l, i) => {
     if (l.from !== old && l.to !== old) return;
     const sp = parse.span(`link:${i}`);
     // In a chain, one name ends one link and starts the next: `seen` writes it once.
-    if (l.from === old) add(sp?.fromName);
-    if (l.to === old) add(sp?.toName);
+    if (l.from === old) add(tablePart(sp?.fromName, l.fromColumn));
+    if (l.to === old) add(tablePart(sp?.toName, l.toColumn));
   });
   return normalize(text, edits);
 }
@@ -439,8 +474,300 @@ export function setLinkLabel(text: string, parse: FlowParse, index: number, labe
   return [{ from: sp.toName.to, to: sp.toName.to, insert: insert + lineBreak(text) + indentAt(text, sp.line.from) + again }];
 }
 
-/** `base` when it is free, else `base 2`, `base 3`, and so on. */
+/**
+ * A line as the canvas names it (fix round 1, I1): its two ends, its label, and which of the lines with those three
+ * it is (0 for the first), so an op made on a drawing that has since changed finds the line meant or refuses.
+ */
+export interface LinkRef {
+  from: string;
+  to: string;
+  label: string | null;
+  nth: number;
+  /** An ER relationship's columns (ER build C): two lines between the same tables differ by them. */
+  fromColumn?: string;
+  toColumn?: string;
+}
+
+/** True when link `l` has the ends, columns and label of `r`. */
+function sameLine(l: FlowLink, r: { from: string; to: string; label?: string | null; fromColumn?: string; toColumn?: string }): boolean {
+  return l.from === r.from && l.to === r.to && (l.label ?? null) === (r.label ?? null) && l.fromColumn === r.fromColumn && l.toColumn === r.toColumn;
+}
+
+/** The ref of link `index` among `links` (a mind map branch has none). */
+export function linkRefOf(links: readonly FlowLink[], index: number): LinkRef | null {
+  const l = links[index];
+  if (!l || l.tree) return null;
+  const label = l.label ?? null;
+  let nth = 0;
+  for (let i = 0; i < index; i++) {
+    const o = links[i];
+    if (!o.tree && sameLine(o, l)) nth++;
+  }
+  const ref: LinkRef = { from: l.from, to: l.to, label, nth };
+  if (l.fromColumn !== undefined) ref.fromColumn = l.fromColumn;
+  if (l.toColumn !== undefined) ref.toColumn = l.toColumn;
+  return ref;
+}
+
+/** The index of the line `ref` names in this parse, or null. */
+export function findLink(parse: FlowParse, ref: LinkRef): number | null {
+  let seen = 0;
+  for (let i = 0; i < parse.links.length; i++) {
+    const l = parse.links[i];
+    if (l.tree || !sameLine(l, ref)) continue;
+    if (seen++ === ref.nth) return i;
+  }
+  return null;
+}
+
+export const LINK_NOTES = {
+  gone: "That line is no longer in the text, so nothing was changed.",
+  broken: "Fix the text first: the drawing is the last one without errors.",
+  marker: "The start only begins a line and the end only ends one.",
+  reverseMarker: "A line from the start or to the end cannot be reversed: the start only begins a line and the end only ends one.",
+  unknown: (node: string) => `${node} is not in the text.`,
+  arrow: (arrow: string) => `${arrow} is not a line this kind of diagram draws.`,
+};
+
+/** Runs a line op on the line `ref` names, or says why not (a text with errors, a line no longer there). */
+function onLink(parse: FlowParse, ref: LinkRef, run: (index: number) => FlowEditResult): FlowEditResult {
+  if (!parse.doc) return { edits: [], note: LINK_NOTES.broken };
+  const index = findLink(parse, ref);
+  if (index === null) return { edits: [], note: LINK_NOTES.gone };
+  return run(index);
+}
+
+/** The other links written on link `index`'s line (a chain `A > B > C`), first to last, `index` among them. */
+function chainOf(parse: FlowParse, index: number): number[] {
+  const line = parse.span(`link:${index}`)?.line;
+  if (!line) return [];
+  let a = index;
+  while (a > 0 && parse.span(`link:${a - 1}`)?.line?.from === line.from) a--;
+  let b = index;
+  while (b + 1 < parse.links.length && parse.span(`link:${b + 1}`)?.line?.from === line.from) b++;
+  return Array.from({ length: b - a + 1 }, (_, k) => a + k);
+}
+
+/**
+ * Rewrites link `index` as `from arrow to` (the names as written in the text). On a line of its own only the
+ * parts that change are replaced; in a chain the chain is split into one statement per link, in order, so the
+ * others keep what they say.
+ */
+function rewriteLink(text: string, parse: FlowParse, index: number, next: { from: string; arrow: FlowArrow; to: string }): TextEdit[] {
+  const sp = parse.span(`link:${index}`);
+  if (!sp?.fromName || !sp.toName || !sp.arrow || !sp.line) return [];
+  const chain = chainOf(parse, index);
+  if (chain.length <= 1) {
+    const edits: TextEdit[] = [];
+    const put = (r: FlowRange, v: string) => {
+      if (text.slice(r.from, r.to) !== v) edits.push({ from: r.from, to: r.to, insert: v });
+    };
+    put(sp.fromName, next.from);
+    put(sp.arrow, next.arrow);
+    put(sp.toName, next.to);
+    return normalize(text, edits);
+  }
+  const nl = lineBreak(text);
+  const indent = indentAt(text, sp.line.from);
+  const statements = chain.map((k) => {
+    const ks = parse.span(`link:${k}`)!;
+    const slice = (r: FlowRange | undefined) => (r ? text.slice(r.from, r.to) : "");
+    const [from, arrow, to] = k === index ? [next.from, next.arrow, next.to] : [slice(ks.fromName), slice(ks.arrow), slice(ks.toName)];
+    const label = ks.label ? `: ${text.slice(ks.label.from, ks.label.to)}` : "";
+    return `${from} ${arrow} ${to}${label}`;
+  });
+  return [{ from: sp.line.from, to: sp.line.to, insert: statements.join(nl + indent) }];
+}
+
+/** The text of link `index`'s two names as written, or null when the link has no line (a mind map branch). */
+function linkNames(text: string, parse: FlowParse, index: number): { from: string; to: string; arrow: FlowArrow } | null {
+  if (!Number.isInteger(index) || index < 0 || index >= parse.links.length) return null;
+  const sp = parse.span(`link:${index}`);
+  if (!sp?.fromName || !sp.toName || !sp.arrow) return null;
+  return { from: text.slice(sp.fromName.from, sp.fromName.to), to: text.slice(sp.toName.from, sp.toName.to), arrow: parse.links[index].arrow };
+}
+
+/** Sets link `index`'s arrow to one its kind draws (`ARROWS`); the names and label stay as written. */
+export function setLinkArrow(text: string, parse: FlowParse, index: number, arrow: FlowArrow): TextEdit[] {
+  const at = linkNames(text, parse, index);
+  if (!at || at.arrow === arrow || !parse.kind || !ARROWS[parse.kind].includes(arrow)) return [];
+  const sp = parse.span(`link:${index}`)!;
+  return [{ from: sp.arrow!.from, to: sp.arrow!.to, insert: arrow }];
+}
+
+/** An ER relationship read from its other end: `1--*` becomes `*--1`, so each table keeps its end. */
+const REVERSED: Partial<Record<FlowArrow, FlowArrow>> = { "1--*": "*--1", "*--1": "1--*" };
+
+/** Swaps link `index`'s two ends (draw.io's Reverse); an ER relationship's ends swap with them (board ER interactions). */
+export function reverseLink(text: string, parse: FlowParse, index: number): TextEdit[] {
+  const at = linkNames(text, parse, index);
+  if (!at) return [];
+  const arrow = parse.kind === "er" ? (REVERSED[at.arrow] ?? at.arrow) : at.arrow;
+  return rewriteLink(text, parse, index, { from: at.to, arrow, to: at.from });
+}
+
+/**
+ * Moves one end of link `index` onto `node` (a drag of the line's end, as draw.io reattaches). A state diagram's
+ * markers are written `[*]`, the start only as a `from` and the end only as a `to`.
+ */
+export function setLinkEnd(text: string, parse: FlowParse, index: number, end: "from" | "to", node: string, column?: string): TextEdit[] {
+  const at = linkNames(text, parse, index);
+  if (!at) return [];
+  const link = parse.links[index];
+  if ((end === "from" ? link.from : link.to) === node && (end === "from" ? link.fromColumn : link.toColumn) === column) return [];
+  let written: string;
+  if (node === STATE_START || node === STATE_END) {
+    if (parse.kind !== "state" || (node === STATE_START) !== (end === "from")) return [];
+    written = "[*]";
+  } else {
+    if (!parse.defined.has(node)) return [];
+    written = linkEndText(node, column);
+  }
+  return rewriteLink(text, parse, index, end === "from" ? { ...at, from: written } : { ...at, to: written });
+}
+
+// ----- ER columns
+
+/** An entity the canvas can write columns for: a plain name with no dot, so `table.column` reads back. */
+function columnOwner(parse: FlowParse, table: string): boolean {
+  return parse.kind === "er" && !!parse.span(`node:${table}`) && !parse.definedTwice.has(table) && columnsWritable(table);
+}
+
+/** A column line's name and type, read from the text after `table.`. */
+function columnParts(text: string, row: RowSpan): { name: string; type: string } {
+  const body = text.slice(row.name.to + 1, row.line.to).trim();
+  const at = body.search(/\s/);
+  return at < 0 ? { name: body, type: "" } : { name: body.slice(0, at), type: body.slice(at + 1).trim() };
+}
+
+/** The flags written in a column's list, as the parser reads them. */
+function columnFlagsOf(text: string, row: RowSpan): Set<ColumnFlag> {
+  const out = new Set<ColumnFlag>();
+  if (!row.flags) return out;
+  for (const item of text.slice(row.flags.from + 1, row.flags.to - 1).split(",")) {
+    const word = item.trim().toLowerCase().split(/\s+/).join(" ");
+    if ((COLUMN_FLAGS as readonly string[]).includes(word)) out.add(word as ColumnFlag);
+  }
+  return out;
+}
+
+/** The column at `index` when the text still has `column` there; else undefined. */
+function columnAt(text: string, parse: FlowParse, table: string, index: number, column: string): RowSpan | undefined {
+  if (!columnOwner(parse, table)) return undefined;
+  const row = parse.rowsOf(table)[index];
+  return row && columnParts(text, row).name === column ? row : undefined;
+}
+
+/** True when another column of the table already has this name, in any case. */
+function columnTaken(text: string, rows: readonly RowSpan[], name: string, except = -1): boolean {
+  const lower = name.toLowerCase();
+  return rows.some((r, i) => i !== except && columnParts(text, r).name.toLowerCase() === lower);
+}
+
+/** A new column line before the column at `at`, or after the last one (after the table's line when it has none). */
+export function addColumn(
+  text: string,
+  parse: FlowParse,
+  table: string,
+  at: number,
+  before: string | null,
+  name: string,
+  type: string,
+  flags: readonly ColumnFlag[] = [],
+): TextEdit[] {
+  if (!columnOwner(parse, table) || !isColumnName(name) || !isColumnType(type)) return [];
+  const rows = parse.rowsOf(table);
+  if (columnTaken(text, rows, name)) return [];
+  // The place the canvas saw: before that column, or after the last one.
+  if (before === null ? at < rows.length : !rows[at] || columnParts(text, rows[at]).name !== before) return [];
+  const node = parse.span(`node:${table}`)!;
+  const ref = at >= 0 && at < rows.length ? rows[at].line.from : rows.length > 0 ? rows[rows.length - 1].line.from : node.from;
+  const pos = at >= 0 && at < rows.length ? lineStart(text, ref) : nextLine(text, ref);
+  const line = `${indentAt(text, ref)}${table}.${name}${type ? ` ${type}` : ""}${columnFlagsText(flags)}`;
+  return [insertLine(text, pos, line, lineBreak(text))];
+}
+
+/** Renames or retypes one column in place; its flags and any comment after it stay. */
+export function setColumn(text: string, parse: FlowParse, table: string, index: number, column: string, name?: string, type?: string): TextEdit[] {
+  const row = columnAt(text, parse, table, index, column);
+  if (!row) return [];
+  const rows = parse.rowsOf(table);
+  const cur = columnParts(text, row);
+  const nextName = name ?? cur.name;
+  const nextType = type ?? cur.type;
+  if (!isColumnName(nextName) || !isColumnType(nextType) || columnTaken(text, rows, nextName, index)) return [];
+  if (nextName === cur.name && nextType === cur.type) return [];
+  // Only the name's or the type's own span changes; the spacing between them stays as written.
+  const nameFrom = row.name.to + 1;
+  const nameTo = nameFrom + cur.name.length;
+  const edits: TextEdit[] = [];
+  if (nextName !== cur.name) {
+    edits.push({ from: nameFrom, to: nameTo, insert: nextName });
+    // A6: the relationships that name the column follow it, in the same edit list. In a chain one name ends one
+    // link and starts the next: `seen` writes it once (fix round 2, I3).
+    const seen = new Set<number>();
+    parse.links.forEach((l, i) => {
+      const sp = parse.span(`link:${i}`);
+      const column = (r: FlowRange | undefined) => {
+        if (!r || seen.has(r.from)) return;
+        seen.add(r.from);
+        edits.push({ from: r.from + table.length + 1, to: r.to, insert: nextName });
+      };
+      if (l.from === table && l.fromColumn === cur.name) column(sp?.fromName);
+      if (l.to === table && l.toColumn === cur.name) column(sp?.toName);
+    });
+  }
+  if (nextType !== cur.type) {
+    if (!cur.type) edits.push({ from: nameTo, to: nameTo, insert: ` ${nextType}` });
+    else if (!nextType) edits.push({ from: nameTo, to: row.line.to, insert: "" });
+    else edits.push({ from: row.line.to - cur.type.length, to: row.line.to, insert: nextType });
+  }
+  return normalize(text, edits);
+}
+
+/** Turns one flag on or off and writes the list as `[pk, not null, unique]`; the other flags stay as they are. */
+export function setColumnFlag(text: string, parse: FlowParse, table: string, index: number, column: string, flag: ColumnFlag, on: boolean): TextEdit[] {
+  const row = columnAt(text, parse, table, index, column);
+  // An unclosed list is a problem already: the writer leaves it to the text.
+  if (!row || (row.flags && text[row.flags.to - 1] !== "]")) return [];
+  const before = columnFlagsOf(text, row);
+  const after = new Set(before);
+  if (on) after.add(flag);
+  else after.delete(flag);
+  const insert = columnFlagsText(after);
+  if (insert === columnFlagsText(before)) return [];
+  return [{ from: row.line.to, to: row.flags?.to ?? row.line.to, insert }];
+}
+
+/** A copy of the column below it, named `name_copy` (then `name_copy2`, ...), not a key (draw.io's Ctrl+Enter). */
+export function duplicateColumn(text: string, parse: FlowParse, table: string, index: number, column: string): TextEdit[] {
+  const row = columnAt(text, parse, table, index, column);
+  if (!row) return [];
+  const rows = parse.rowsOf(table);
+  const cur = columnParts(text, row);
+  let name = `${cur.name}_copy`;
+  for (let n = 2; columnTaken(text, rows, name); n++) name = `${cur.name}_copy${n}`;
+  const flags = columnFlagsOf(text, row);
+  if (flags.delete("pk")) flags.add("not null");
+  const next = rows[index + 1];
+  return addColumn(text, parse, table, index + 1, next ? columnParts(text, next).name : null, name, cur.type, [...flags]);
+}
+
+/** Deletes one column's line, with a comment on that line. */
+export function deleteColumn(text: string, parse: FlowParse, table: string, index: number, column: string): TextEdit[] {
+  const row = columnAt(text, parse, table, index, column);
+  if (!row) return [];
+  // A comment on the column's own line is about the column: it goes with it.
+  const edits = [removeLines(text, lineStart(text, row.line.from), nextLine(text, row.line.from))];
+  // So do the relationships that use it (ER build C).
+  const uses = (l: FlowLink) => (l.from === table && l.fromColumn === column) || (l.to === table && l.toColumn === column);
+  if (parse.links.some(uses)) removeLinks(text, parse, uses, edits, lineBreak(text));
+  return normalize(text, edits);
+}
+
+/** `base` when it is free, else `base 2`, `base 3`, and so on; an ER table `base_2`, `base_3` (a plain SQL name). */
 export function uniqueName(parse: FlowParse, base: string): string {
+  if (parse.kind === "er") return sqlFreeName(base, parse.defined.keys());
   if (!parse.defined.has(base)) return base;
   for (let n = 2; ; n++) if (!parse.defined.has(`${base} ${n}`)) return `${base} ${n}`;
 }
@@ -450,7 +777,7 @@ export function applyFlowEdit(text: string, parse: FlowParse, edit: FlowEditOp):
   switch (edit.op) {
     case "addNode": {
       const name = edit.unique ? uniqueName(parse, edit.name) : edit.name;
-      return { edits: addNode(text, parse, name, edit.kind, edit.attrs ?? {}, edit.group), name };
+      return { edits: addNode(text, parse, name, edit.kind, edit.attrs ?? {}, edit.group, edit.before), name };
     }
     case "addGroup": {
       const name = edit.unique ? uniqueName(parse, edit.name) : edit.name;
@@ -467,8 +794,43 @@ export function applyFlowEdit(text: string, parse: FlowParse, edit: FlowEditOp):
     case "setAttr":
       return { edits: setAttr(text, parse, edit.name, edit.key, edit.value) };
     case "setLinkLabel":
+      if (edit.link) return onLink(parse, edit.link, (i) => ({ edits: setLinkLabel(text, parse, i, edit.label) }));
       return { edits: setLinkLabel(text, parse, edit.index, edit.label) };
     case "deleteLink":
       return { edits: deleteLink(text, parse, edit.index) };
+    case "setLinkArrow":
+      return onLink(parse, edit.link, (i) => {
+        if (parse.kind && !ARROWS[parse.kind].includes(edit.arrow)) return { edits: [], note: LINK_NOTES.arrow(edit.arrow) };
+        return { edits: setLinkArrow(text, parse, i, edit.arrow) };
+      });
+    case "reverseLink":
+      return onLink(parse, edit.link, (i) => {
+        const l = parse.links[i];
+        if ([l.from, l.to].some((n) => n === STATE_START || n === STATE_END)) return { edits: [], note: LINK_NOTES.reverseMarker };
+        if (l.from === l.to) return { edits: [] };
+        return { edits: reverseLink(text, parse, i) };
+      });
+    case "setLinkEnd":
+      return onLink(parse, edit.link, (i) => {
+        const node = edit.node;
+        if (node === STATE_START || node === STATE_END) {
+          if (parse.kind !== "state" || (node === STATE_START) !== (edit.end === "from")) return { edits: [], note: LINK_NOTES.marker };
+        } else if (!parse.defined.has(node)) return { edits: [], note: LINK_NOTES.unknown(node) };
+        if (edit.column !== undefined) {
+          const rows = parse.doc?.nodes.find((n) => n.name === node)?.rows ?? [];
+          if (parse.kind !== "er" || !rows.some((r) => r.split(/\s/)[0] === edit.column)) return { edits: [], note: LINK_NOTES.unknown(`${node}.${edit.column}`) };
+        }
+        return { edits: setLinkEnd(text, parse, i, edit.end, node, edit.column) };
+      });
+    case "addColumn":
+      return { edits: addColumn(text, parse, edit.table, edit.at, edit.before, edit.name, edit.type, edit.flags) };
+    case "setColumn":
+      return { edits: setColumn(text, parse, edit.table, edit.index, edit.column, edit.name, edit.type) };
+    case "setColumnFlag":
+      return { edits: setColumnFlag(text, parse, edit.table, edit.index, edit.column, edit.flag, edit.on) };
+    case "duplicateColumn":
+      return { edits: duplicateColumn(text, parse, edit.table, edit.index, edit.column) };
+    case "deleteColumn":
+      return { edits: deleteColumn(text, parse, edit.table, edit.index, edit.column) };
   }
 }

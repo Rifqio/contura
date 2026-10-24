@@ -59,6 +59,9 @@ export default function CellEditor({ initial, multiline, onCommit, onCancel, onS
     if (e.key === "Escape") {
       e.preventDefault();
       finish(onCancel);
+    } else if (e.key.toLowerCase() === "n" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      // The grid's Ctrl+N adds a row once the edit ends; while typing it is not the window's New Connection either.
+      e.preventDefault();
     } else if (e.key.toLowerCase() === "s" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       finish(() => (onSave ? onSave(value) : onCommit(value, "none")));

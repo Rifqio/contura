@@ -38,6 +38,10 @@ fn columns_sql(only_search_path: bool) -> String {
     )
 }
 
+/// A key to a partitioned table is one key. PostgreSQL also stores a copy of it per
+/// partition of the referenced table, on the same table as the key it copies: those are
+/// left out. A partition's copy of its parent's key sits on another table, the partition,
+/// and stays, so a partition's grid finds the key it holds (to a leaf partition too).
 fn fks_sql(only_search_path: bool) -> String {
     let scope = scope(only_search_path);
     format!(
@@ -50,7 +54,7 @@ fn fks_sql(only_search_path: bool) -> String {
          FROM pg_constraint con \
          JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
          JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
-         WHERE con.contype = 'f' AND {scope} \
+         WHERE con.contype = 'f' AND (con.conparentid = 0 OR (SELECT p.conrelid FROM pg_constraint p WHERE p.oid = con.conparentid) <> con.conrelid) AND {scope} \
          ORDER BY n.nspname, c.relname, con.conname"
     )
 }

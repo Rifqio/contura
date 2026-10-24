@@ -63,6 +63,19 @@ test("copy_writes_the_shown_text", async () => {
   expect(writeText).toHaveBeenCalledWith(text);
 });
 
+test("I1: Copy SQL puts the plan's sql_mode frame around the statements; the preview shows only what Apply runs", async () => {
+  const writeText = vi.fn(() => Promise.resolve());
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const frame = { header: ["SET @OLD_SQL_MODE = @@SESSION.sql_mode;", "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';"], footer: ["SET sql_mode = @OLD_SQL_MODE;"] };
+  show({ ...verdict({ kind: "copyOnly", reason: "it has a CHECK constraint" }, ["ALTER TABLE `orders` MODIFY `total` int"]), frame });
+  await screen.findByText(/Copy this SQL to run it yourself/);
+  expect(island().textContent).not.toContain("OLD_SQL_MODE");
+  fireEvent.click(screen.getByRole("button", { name: "Copy SQL" }));
+  expect(writeText).toHaveBeenCalledWith(
+    "SET @OLD_SQL_MODE = @@SESSION.sql_mode;\nSET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n\nALTER TABLE `orders` MODIFY `total` int;\n\nSET sql_mode = @OLD_SQL_MODE;\n",
+  );
+});
+
 test("warnings_are_alert_banners_above_the_sql", async () => {
   show(
     verdict({ kind: "atomic" }, ["ALTER TABLE `orders` DROP COLUMN `total`"], [

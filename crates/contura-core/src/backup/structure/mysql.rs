@@ -25,15 +25,16 @@ use crate::model::DialectKind;
 use crate::mysql::query_err;
 use crate::mysql::quote::quote_ident;
 
-/// The `sql_mode` the settings section sets.
-pub const RESTORE_SQL_MODE: &str = "NO_AUTO_VALUE_ON_ZERO";
+/// The `sql_mode` the settings section sets: the mode a Backup file
+/// runs under (`ddl::SqlModeFrame::Backup`).
+pub const RESTORE_SQL_MODE: &str = crate::ddl::MYSQL_BACKUP_SQL_MODE;
 
 pub const SETTINGS: &[&str] = &[
     "SET NAMES utf8mb4;",
     "SET FOREIGN_KEY_CHECKS = 0;",
     "SET UNIQUE_CHECKS = 0;",
     "SET time_zone = '+00:00';",
-    "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';",
+    crate::ddl::mysql_sql_mode_set(crate::ddl::SqlModeFrame::Backup),
 ];
 
 pub const FINISH: &[&str] = &["SET FOREIGN_KEY_CHECKS = 1;", "SET UNIQUE_CHECKS = 1;"];

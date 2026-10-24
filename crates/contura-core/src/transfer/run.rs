@@ -121,8 +121,12 @@ pub async fn run_transfer(
         before: match dst {
             DialectKind::MySql => vec![
                 // A value that does not fit fails instead of being cut; a copied id of 0
-                // stays 0. Never INSERT IGNORE.
-                "SET SESSION sql_mode = CONCAT_WS(',', @@SESSION.sql_mode, 'STRICT_ALL_TABLES', 'NO_AUTO_VALUE_ON_ZERO')".into(),
+                // stays 0. Never INSERT IGNORE. The structure's literals double a backslash
+                // (`ddl::lit`), so backslash escapes stay on whatever the server's mode.
+                format!(
+                    "SET SESSION sql_mode = CONCAT_WS(',', {}, 'STRICT_ALL_TABLES', 'NO_AUTO_VALUE_ON_ZERO')",
+                    crate::mysql::SQL_MODE_WITH_ESCAPES
+                ),
             ],
             _ => Vec::new(),
         },

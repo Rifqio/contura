@@ -394,6 +394,26 @@ test("copy_save_as_and_open_in_editor", async () => {
   expect(onOpenInEditor).toHaveBeenCalledWith(side("prod"), copied);
 });
 
+test("I1: a MySQL script copied, saved or opened in an editor carries the plan's sql_mode frame", async () => {
+  const dialog = await import("@tauri-apps/plugin-dialog");
+  vi.mocked(dialog.save).mockResolvedValue("C:\\out\\billing-sync.sql");
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const frame = { header: ["SET @OLD_SQL_MODE = @@SESSION.sql_mode;", "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';"], footer: ["SET sql_mode = @OLD_SQL_MODE;"] };
+  routes({ extra: { plan_sync: (a) => ({ ...planFor((a.selection as string[] | null) ?? null), frame }) } });
+  const { onOpenInEditor } = renderTab(dbSeed());
+  await ready();
+  await userEvent.click(screen.getByRole("tab", { name: "Sync Script 6 of 9" }));
+  await userEvent.click(screen.getByRole("button", { name: "Copy script" }));
+  const copied = (last(writeText.mock.calls) as unknown as [string])[0];
+  expect(copied.startsWith("SET @OLD_SQL_MODE = @@SESSION.sql_mode;\nSET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n\n-- 2. Change\n")).toBe(true);
+  expect(copied.endsWith(";\n\nSET sql_mode = @OLD_SQL_MODE;\n")).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "Save as..." }));
+  await waitFor(() => expect(callsTo("write_text_file")).toEqual([{ path: "C:\\out\\billing-sync.sql", text: copied }]));
+  await userEvent.click(screen.getByRole("button", { name: "Open in editor" }));
+  expect(onOpenInEditor).toHaveBeenCalledWith(side("prod"), copied);
+});
+
 test("not_scriptable_items_stay_unticked", async () => {
   routes();
   renderTab(dbSeed());

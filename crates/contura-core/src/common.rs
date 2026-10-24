@@ -332,6 +332,30 @@ mod tests {
         }
     }
 
+    /// The UI's escaper (src/grid/sqlString.ts) is tested against the same file, so the
+    /// two can never write a value differently.
+    #[test]
+    fn sql_string_matches_the_shared_fixture() {
+        let doc: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/sql_string_cases.json")).unwrap();
+        let cases = doc["cases"].as_array().unwrap();
+        assert!(cases.len() > 8);
+        for c in cases {
+            let value = c["value"].as_str().unwrap();
+            for (kind, key) in [
+                (DialectKind::Postgres, "postgres"),
+                (DialectKind::MySql, "mysql"),
+                (DialectKind::Sqlite, "sqlite"),
+            ] {
+                assert_eq!(
+                    sql_string(kind, value),
+                    c[key].as_str().unwrap(),
+                    "{key}: {value:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn quote_double_escapes_quotes() {
         assert_eq!(quote_double("we\"ird"), "\"we\"\"ird\"");

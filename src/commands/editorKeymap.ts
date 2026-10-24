@@ -1,6 +1,6 @@
 import { type Extension, Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
-import { toCodeMirror } from "./keys";
+import { toCodeMirror, whilePressed } from "./keys";
 import type { Keymap } from "./keymap";
 import type { CommandId } from "./registry";
 
@@ -16,6 +16,6 @@ export interface EditorCommands {
  * override such as Ctrl+Z wins over Undo.
  */
 export function editorCommandKeymap(map: Keymap, run: (id: CommandId) => boolean): Extension {
-  const bindings = [...map].flatMap(([id, keys]) => keys.map((k) => ({ key: toCodeMirror(k), run: () => run(id) })));
+  const bindings = [...map].flatMap(([id, keys]) => keys.map((k) => ({ key: toCodeMirror(k), run: () => whilePressed(k, () => run(id)) })));
   return Prec.high(keymap.of(bindings));
 }

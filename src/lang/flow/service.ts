@@ -3,6 +3,7 @@
 // cached parse of one text version, and a request planned on an older version is refused.
 import { completeFlow, type FlowCompletionResult } from "./complete";
 import type { TextEdit } from "../protocol";
+import { pasteLines } from "./clip";
 import { applyFlowEdit, type FlowEditOp, type FlowEditResult } from "./edits";
 import type { FlowDoc } from "./model";
 import { flowOutline } from "./outline";
@@ -35,8 +36,14 @@ export type FlowSpansResult =
 /** Several canvas actions as one (a multi-node delete): one edit list, one undo entry, all or nothing. */
 export type FlowBatchOp = { op: "batch"; ops: FlowEditOp[] };
 
+/**
+ * A paste (diagram-ux-research F2): the clipboard's .flow lines written into the text with free names, as one edit
+ * list and one undo entry. A mind map paste goes under a topic or after one (a duplicate).
+ */
+export type FlowPasteOp = { op: "paste"; text: string; under?: string; after?: string };
+
 /** What a canvas action asks the worker for. */
-export type FlowRequestOp = FlowEditOp | FlowBatchOp;
+export type FlowRequestOp = FlowEditOp | FlowBatchOp | FlowPasteOp;
 
 /** Applies sorted, non-overlapping edits to `text`. */
 export function applyEdits(text: string, edits: readonly TextEdit[]): string {
@@ -160,6 +167,10 @@ export function createFlowService() {
       const c = current(docId, version);
       if (!c) return { stale: true };
       if (edit.op === "batch") return { stale: false, ...applyFlowBatch(c.text, c.parse, edit.ops) };
+      if (edit.op === "paste") {
+        const place = edit.under !== undefined ? { under: edit.under } : edit.after !== undefined ? { after: edit.after } : undefined;
+        return { stale: false, ...pasteLines(c.text, c.parse, edit.text, place) };
+      }
       return { stale: false, ...applyFlowEdit(c.text, c.parse, edit) };
     },
 

@@ -492,6 +492,9 @@ test("alt_left_goes_back_and_ctrl_enter_imports", async () => {
   renderTab();
   await toColumns();
   expect(stepNow()).toContain("Columns");
+  // UX step 8: Ctrl+Alt+Left is Back over followed keys everywhere, so the wizard leaves it alone.
+  expect(fireEvent.keyDown(tab(), { key: "ArrowLeft", altKey: true, ctrlKey: true })).toBe(true);
+  expect(stepNow()).toContain("Columns");
   fireEvent.keyDown(tab(), { key: "ArrowLeft", altKey: true });
   expect(stepNow()).toContain("File");
   fireEvent.click(screen.getByRole("button", { name: "Next" }));

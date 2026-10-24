@@ -278,3 +278,40 @@ async fn plain_session_still_writes() {
     s.execute("INSERT INTO t VALUES (1)").await.unwrap();
     db.drop_db().await;
 }
+
+/// N3: Run all stopped inside a framed script, before its footer: the tab's session gets
+/// the mode the header kept back, once. A session the script never framed is left alone.
+#[tokio::test]
+async fn a_script_stopped_before_its_footer_gets_its_sql_mode_back() {
+    let (db, _dialect, s) = fixture().await;
+    s.execute("SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES'")
+        .await
+        .unwrap();
+    // Nothing framed yet: nothing to put back.
+    assert!(!s.restore_script_sql_mode().await.unwrap());
+    s.execute(contura_core::ddl::mysql_sql_mode_set(
+        contura_core::ddl::SqlModeFrame::KeepSession,
+    ))
+    .await
+    .unwrap();
+    assert!(
+        s.execute("ALTER TABLE nowhere ADD COLUMN x int")
+            .await
+            .is_err()
+    );
+    assert_eq!(mode(&s).await, "STRICT_TRANS_TABLES");
+    assert!(s.restore_script_sql_mode().await.unwrap());
+    assert_eq!(mode(&s).await, "NO_BACKSLASH_ESCAPES,STRICT_TRANS_TABLES");
+    // Put back once: a later stop does not undo a change the user makes meanwhile.
+    s.execute("SET SESSION sql_mode = 'ANSI_QUOTES'")
+        .await
+        .unwrap();
+    assert!(!s.restore_script_sql_mode().await.unwrap());
+    assert_eq!(mode(&s).await, "ANSI_QUOTES");
+    db.drop_db().await;
+}
+
+async fn mode(s: &SessionHandle) -> String {
+    let (_, r, _) = rows(s.execute("SELECT @@SESSION.sql_mode").await.unwrap());
+    text(&r[0][0]).to_string()
+}

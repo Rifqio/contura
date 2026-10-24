@@ -30,7 +30,7 @@ import { type EditorCommands, editorCommandKeymap } from "../commands/editorKeym
 import type { CommandId } from "../commands/registry";
 import { hintFor } from "../commands/keymap";
 import { kbdElement } from "../components/Kbd";
-import { useKeymap } from "../commands/useCommandKeys";
+import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
 import { iconElement } from "../components/Icon";
 import type { LangClient } from "../lang/client";
 import { insertionLine } from "../lang/insertionLine";
@@ -104,6 +104,8 @@ interface Props {
   onShowInTree?(table: { schema: string | null; name: string }): void;
   /** One line, no gutters, Enter runs: the grid filter. */
   oneLine?: boolean;
+  /** Offer this editor's commands to the Command Palette: only a query tab's own editor does (S1). */
+  paletteCommands?: boolean;
   /** Ask AI about the selection, or the current statement: Ctrl+I, and the Ask button on a selection. */
   onAsk?(ctx: AskSelection): void;
   /** Show the Ask button at the end of a selection; Ctrl+I works either way. */
@@ -432,6 +434,19 @@ function toCm(diagnostics: Diagnostic[], docLength: number): CmDiagnostic[] {
   }));
 }
 
+/** The editor commands the Command Palette can run in the editor on screen. */
+const PALETTE_IDS: readonly CommandId[] = [
+  "query.run",
+  "query.runAll",
+  "query.format",
+  "query.save",
+  "editor.ask",
+  "editor.quickFix",
+  "editor.rename",
+  "editor.definition",
+  "editor.parameterHints",
+];
+
 export default function SqlEditor({
   value,
   dialect,
@@ -449,6 +464,7 @@ export default function SqlEditor({
   lang,
   onShowInTree,
   oneLine,
+  paletteCommands = false,
   onAsk,
   askButton,
   commands,
@@ -463,6 +479,11 @@ export default function SqlEditor({
   const reanalyze = useRef<(() => void) | null>(null);
   const latest = useRef({ onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask") });
   latest.current = { onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask") };
+  // The Command Palette runs this editor's commands (S1); keys reach them through the editor's own keymap.
+  useCommandKeys(
+    oneLine || !paletteCommands ? {} : Object.fromEntries(PALETTE_IDS.filter((id) => id !== "editor.ask" || !!onAsk).map((id) => [id, () => void runCommand.current(id)])),
+    { region: host, paletteOnly: true },
+  );
 
   useEffect(() => {
     let diagnostics: Diagnostic[] = [];

@@ -9,8 +9,13 @@ use crate::model::{Cell, ColumnInfo, DialectKind, KeyPart, ObjectPath};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "t", rename_all = "camelCase")]
 pub enum NewValue {
-    Text { value: String },
+    Text {
+        value: String,
+    },
     Null,
+    /// The column's default. An UPDATE writes `SET col = DEFAULT` (Postgres and MySQL; SQLite has
+    /// no DEFAULT in UPDATE, so it is refused there). An INSERT leaves the column out.
+    Default,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -155,10 +160,14 @@ fn cell_literal(kind: DialectKind, cell: &Cell) -> Result<String> {
     }
 }
 
-fn new_literal(kind: DialectKind, value: &NewValue) -> String {
+fn new_literal(kind: DialectKind, value: &NewValue) -> Result<String> {
     match value {
-        NewValue::Text { value } => sql_string(kind, value),
-        NewValue::Null => "NULL".into(),
+        NewValue::Text { value } => Ok(sql_string(kind, value)),
+        NewValue::Null => Ok("NULL".into()),
+        NewValue::Default if kind == DialectKind::Sqlite => Err(Error::InvalidInput(
+            "SQLite can't set a saved row's cell to DEFAULT".into(),
+        )),
+        NewValue::Default => Ok("DEFAULT".into()),
     }
 }
 
@@ -262,7 +271,7 @@ fn plan_update(
         sets.push(format!(
             "{} = {}",
             sql_ident(kind, &change.column),
-            new_literal(kind, &change.new)
+            new_literal(kind, &change.new)?
         ));
         // A binary old value is never compared, so Set NULL works on any binary column.
         if compares_exactly(&info.type_name) && !matches!(change.old, Cell::Bytes { .. }) {
@@ -286,7 +295,13 @@ fn plan_insert(
     table: &str,
     row: &RowInsert,
 ) -> Result<PlannedEdit> {
-    let sql = if row.values.is_empty() {
+    // A column set to DEFAULT is left out, which every dialect reads as its default.
+    let given: Vec<&(String, NewValue)> = row
+        .values
+        .iter()
+        .filter(|(_, v)| *v != NewValue::Default)
+        .collect();
+    let sql = if given.is_empty() {
         match kind {
             DialectKind::MySql => format!("INSERT INTO {table} () VALUES ()"),
             DialectKind::Postgres | DialectKind::Sqlite => {
@@ -296,10 +311,10 @@ fn plan_insert(
     } else {
         let mut names = Vec::new();
         let mut values = Vec::new();
-        for (name, value) in &row.values {
+        for (name, value) in given {
             column(columns, name)?;
             names.push(sql_ident(kind, name));
-            values.push(new_literal(kind, value));
+            values.push(new_literal(kind, value)?);
         }
         format!(
             "INSERT INTO {table} ({}) VALUES ({})",
@@ -690,6 +705,74 @@ mod tests {
         ]));
         let plan = plan_edits(DialectKind::MySql, &columns, &e).unwrap();
         assert!(plan[0].sql.ends_with("WHERE `id` = 141352 AND `c` = 'z'"));
+    }
+
+    #[test]
+    fn default_sets_default_on_postgres_and_mysql() {
+        for k in [DialectKind::Postgres, DialectKind::MySql] {
+            let mut e = set(k);
+            e.updates.push(update(vec![change(
+                "shipped_at",
+                text("2026-01-01 00:00:00"),
+                NewValue::Default,
+            )]));
+            assert_eq!(
+                one_sql(k, &e),
+                format!(
+                    "UPDATE {} SET {s} = DEFAULT WHERE {i} = 141352 AND {s} = '2026-01-01 00:00:00'",
+                    table(k),
+                    s = q(k, "shipped_at"),
+                    i = q(k, "id"),
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn default_on_a_saved_row_is_refused_on_sqlite() {
+        let mut e = set(DialectKind::Sqlite);
+        e.updates.push(update(vec![change(
+            "shipped_at",
+            Cell::Null,
+            NewValue::Default,
+        )]));
+        assert!(matches!(
+            plan_edits(DialectKind::Sqlite, &cols(), &e),
+            Err(Error::InvalidInput(m)) if m.contains("SQLite")
+        ));
+    }
+
+    #[test]
+    fn default_in_an_insert_leaves_the_column_out() {
+        for k in ALL {
+            let mut e = set(k);
+            e.inserts.push(RowInsert {
+                values: vec![
+                    ("status".into(), nv("new")),
+                    ("shipped_at".into(), NewValue::Default),
+                ],
+            });
+            assert_eq!(
+                one_sql(k, &e),
+                format!(
+                    "INSERT INTO {} ({}) VALUES ('new')",
+                    table(k),
+                    q(k, "status")
+                )
+            );
+            let mut e = set(k);
+            e.inserts.push(RowInsert {
+                values: vec![("shipped_at".into(), NewValue::Default)],
+            });
+            assert!(one_sql(k, &e).contains("VALUES"));
+            assert!(!one_sql(k, &e).contains("shipped_at"));
+        }
+    }
+
+    #[test]
+    fn default_travels_as_its_tag() {
+        let v: NewValue = serde_json::from_str(r#"{"t":"default"}"#).unwrap();
+        assert_eq!(v, NewValue::Default);
     }
 
     #[test]

@@ -54,6 +54,8 @@ const INDEXES_SQL: &str = "SELECT c.relname::text, i.relname::text, ix.indisuniq
     WHERE n.nspname = $1 AND c.relkind IN ('r','p') \
     ORDER BY c.relname, i.relname";
 
+/// `conparentid = 0`: the snapshot lists no partitions, so it takes each key once, from its
+/// parent table, never a copy per partition.
 const REFS_SQL: &str = "SELECT con.conname::text, c.relname::text, fn.nspname::text, fc.relname::text, \
     ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord) \
           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum ORDER BY k.ord), \
@@ -63,7 +65,7 @@ const REFS_SQL: &str = "SELECT con.conname::text, c.relname::text, fn.nspname::t
     FROM pg_constraint con \
     JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
     JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
-    WHERE con.contype = 'f' AND n.nspname = $1 \
+    WHERE con.contype = 'f' AND con.conparentid = 0 AND n.nspname = $1 \
     ORDER BY c.relname, con.conname";
 
 const ENUMS_SQL: &str = "SELECT t.typname::text, \
@@ -378,6 +380,8 @@ const DESIGN_INDEXES_SQL: &str = "SELECT i.relname::text, ix.indisunique, ix.ind
     WHERE n.nspname = $1 AND c.relname = $2 \
     ORDER BY ix.indisprimary DESC, i.relname";
 
+/// The keys a table holds: a partition keeps the copy of its parent's key, but no copy whose
+/// parent key is on this same table (one per partition of the referenced table).
 const DESIGN_REFS_SQL: &str = "SELECT con.conname::text, fn.nspname::text, fc.relname::text, \
     ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord) \
           JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum ORDER BY k.ord), \
@@ -388,14 +392,18 @@ const DESIGN_REFS_SQL: &str = "SELECT con.conname::text, fn.nspname::text, fc.re
     FROM pg_constraint con \
     JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
     JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
-    WHERE con.contype = 'f' AND n.nspname = $1 AND c.relname = $2 \
+    WHERE con.contype = 'f' AND (con.conparentid = 0 OR (SELECT p.conrelid FROM pg_constraint p WHERE p.oid = con.conparentid) <> con.conrelid) \
+      AND n.nspname = $1 AND c.relname = $2 \
     ORDER BY con.conname";
 
+/// The keys pointing at a table, once each: a copy held by a partition is its parent's key
+/// again. A partition opened by itself lists the copies that point at it.
 const DESIGN_INCOMING_SQL: &str = "SELECT con.conname::text, n.nspname::text, c.relname::text \
     FROM pg_constraint con \
     JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
     JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
-    WHERE con.contype = 'f' AND fn.nspname = $1 AND fc.relname = $2 \
+    WHERE con.contype = 'f' AND (con.conparentid = 0 OR (fc.relispartition AND NOT c.relispartition)) \
+      AND fn.nspname = $1 AND fc.relname = $2 \
     ORDER BY n.nspname, c.relname, con.conname";
 
 /// Checks and triggers of one table, as `unsupported` notes.

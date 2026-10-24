@@ -13,8 +13,9 @@ use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
-    ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
-    Page, PageRequest, SchemaInfo, SslMode,
+    ConnectionConfig, CountRequest, DbObject, DialectKind, FullValue, FullValueRequest,
+    LocateRequest, ObjectKind, ObjectPath, Page, PageRequest, RowCount, RowPlace, SchemaInfo,
+    SslMode,
 };
 
 mod ddl;
@@ -137,6 +138,8 @@ fn build_settings(config: &ConnectionConfig, password: Option<&str>) -> Result<S
         .connect_timeout(CONNECT_TIMEOUT)
         .application_name("Contura")
         // Every client, browse or query session, starts read-only on a Read-only Connection.
+        // DateStyle is set after connecting (`iso_dates`): a startup option would override
+        // the database's and the role's day order.
         .options(if config.read_only {
             "-c TimeZone=UTC -c default_transaction_read_only=on"
         } else {
@@ -187,7 +190,10 @@ async fn open_client(settings: &Settings, database: &str) -> Result<Client> {
         }
     };
     match tokio::time::timeout(CONNECT_TIMEOUT, connecting).await {
-        Ok(Ok(client)) => Ok(client),
+        Ok(Ok(client)) => {
+            iso_dates(&client).await?;
+            Ok(client)
+        }
         Ok(Err(e)) => Err(map_connect_error(e, &settings.target)),
         Err(_) => Err(Error::Connect(format!(
             "timed out after {} s connecting to {}",
@@ -195,6 +201,33 @@ async fn open_client(settings: &Settings, database: &str) -> Result<Client> {
             settings.target
         ))),
     }
+}
+
+/// N1: dates and times come back as ISO text, so the text a cell shows reads back as the
+/// same value (Filter by this value), while the day order the database or role set (DMY,
+/// MDY or YMD) stays for the dates a user types. Read on each new client, reconnects too.
+async fn iso_dates(client: &Client) -> Result<()> {
+    let style: String = client
+        .query_one("SHOW DateStyle", &[])
+        .await
+        .map_err(query_err)?
+        .get(0);
+    client
+        .batch_execute(&format!("SET DateStyle = 'ISO, {}'", day_order(&style)))
+        .await
+        .map_err(query_err)
+}
+
+/// The order part of a `SHOW DateStyle` answer such as `SQL, DMY`; MDY when there is none.
+fn day_order(style: &str) -> &'static str {
+    let up = style.to_ascii_uppercase();
+    ["DMY", "YMD", "MDY"]
+        .into_iter()
+        .find(|o| {
+            up.split(|c: char| c == ',' || c.is_whitespace())
+                .any(|w| w == *o)
+        })
+        .unwrap_or("MDY")
 }
 
 fn map_connect_error(e: tokio_postgres::Error, target: &str) -> Error {
@@ -588,6 +621,41 @@ impl Dialect for PostgresDialect {
         page
     }
 
+    async fn count_rows(&self, req: &CountRequest, timeout_ms: u64) -> Result<RowCount> {
+        // A client of its own, never the shared browse one, so a long count never holds
+        // up a page; the server ends it at the time limit.
+        let mut client = open_client(&self.settings, &req.table.database).await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(query_err)?;
+        tx.batch_execute(&format!("SET LOCAL statement_timeout = {timeout_ms}"))
+            .await
+            .map_err(query_err)?;
+        let out = page::count_rows(&tx, req).await;
+        let _ = tx.rollback().await;
+        browse_result(out, self.read_only)
+    }
+
+    async fn locate_row(&self, req: &LocateRequest, timeout_ms: u64) -> Result<RowPlace> {
+        // As count_rows: a read-only client of its own, stopped by the server at the limit.
+        let mut client = open_client(&self.settings, &req.table.database).await?;
+        let tx = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(query_err)?;
+        tx.batch_execute(&format!("SET LOCAL statement_timeout = {timeout_ms}"))
+            .await
+            .map_err(query_err)?;
+        let out = page::locate_row(&tx, req).await;
+        let _ = tx.rollback().await;
+        browse_result(out, self.read_only)
+    }
+
     async fn fetch_full_value(&self, req: &FullValueRequest) -> Result<FullValue> {
         let client = self.client(&req.table.database).await?;
         browse_result(page::fetch_full_value(&client, req).await, self.read_only)
@@ -778,6 +846,15 @@ impl Dialect for PostgresDialect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn day_order_is_read_from_the_datestyle() {
+        assert_eq!(day_order("SQL, DMY"), "DMY");
+        assert_eq!(day_order("ISO, MDY"), "MDY");
+        assert_eq!(day_order("German, DMY"), "DMY");
+        assert_eq!(day_order("Postgres, YMD"), "YMD");
+        assert_eq!(day_order("ISO"), "MDY");
+    }
 
     #[test]
     fn version_number_drops_the_build_note() {

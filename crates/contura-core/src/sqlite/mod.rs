@@ -22,8 +22,8 @@ use crate::dialect::Dialect;
 use crate::edits::{PlannedEdit, TxOutcome};
 use crate::error::{Error, Result, browse_result};
 use crate::model::{
-    ConnectionConfig, DbObject, DialectKind, FullValue, FullValueRequest, ObjectKind, ObjectPath,
-    Page, PageRequest, SchemaInfo,
+    ConnectionConfig, CountRequest, DbObject, DialectKind, FullValue, FullValueRequest,
+    LocateRequest, ObjectKind, ObjectPath, Page, PageRequest, RowCount, RowPlace, SchemaInfo,
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -149,6 +149,16 @@ where
     T: Send + 'static,
     F: FnOnce(&Connection) -> Result<T> + Send + 'static,
 {
+    timed_session(file, crate::dialect::SAMPLE_TIMEOUT_MS, work).await
+}
+
+/// `sample_session` with its own time limit: the watchdog interrupts the statement after
+/// `limit_ms`.
+async fn timed_session<T, F>(file: std::path::PathBuf, limit_ms: u64, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+{
     tokio::task::spawn_blocking(move || {
         let conn = Connection::open_with_flags(
             &file,
@@ -159,7 +169,7 @@ where
         let handle = conn.get_interrupt_handle();
         let (stop, stopped) = std::sync::mpsc::channel::<()>();
         let watchdog = std::thread::spawn(move || {
-            let limit = Duration::from_millis(crate::dialect::SAMPLE_TIMEOUT_MS);
+            let limit = Duration::from_millis(limit_ms);
             if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(limit) {
                 handle.interrupt();
             }
@@ -503,6 +513,24 @@ impl Dialect for SqliteDialect {
     async fn fetch_page(&self, req: &PageRequest) -> Result<Page> {
         let req = req.clone();
         self.run(move |c| page::fetch_page(c, &req)).await
+    }
+
+    async fn count_rows(&self, req: &CountRequest, timeout_ms: u64) -> Result<RowCount> {
+        // Its own read-only connection, never the serialized browse one.
+        let req = req.clone();
+        timed_session(self.path.clone(), timeout_ms, move |c| {
+            page::count_rows(c, &req)
+        })
+        .await
+    }
+
+    async fn locate_row(&self, req: &LocateRequest, timeout_ms: u64) -> Result<RowPlace> {
+        // As count_rows: its own read-only connection, never the serialized browse one.
+        let req = req.clone();
+        timed_session(self.path.clone(), timeout_ms, move |c| {
+            page::locate_row(c, &req)
+        })
+        .await
     }
 
     async fn sample_rows(&self, path: &ObjectPath, limit: u32) -> Result<Page> {

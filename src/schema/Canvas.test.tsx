@@ -416,3 +416,11 @@ test("item_20_right_click_on_the_schema_canvas_opens_its_menu", async () => {
   fireEvent.keyDown(document.body, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("menu", { name: "Canvas actions" })).toBeNull());
 });
+
+// F32 (diagram step 5): one navigation model on every canvas: a drag on empty canvas draws a selection box, the
+// middle button pans, the wheel pans and Ctrl + wheel zooms.
+test("F32 a drag on the empty Schema Builder canvas selects; it does not pan", async () => {
+  renderCanvas();
+  const pane = await waitFor(() => document.querySelector(".react-flow__pane") as HTMLElement);
+  expect(pane.classList.contains("draggable")).toBe(false);
+});

@@ -707,6 +707,7 @@ test("item_5_the_table_menu_offers_export_and_import_and_sends_the_table_origin"
     path: table,
     columns: ["id", "note"],
     hidden: [],
+    order: ["id", "note"],
     filter: null,
     sort: null,
     selected: [],
@@ -1016,4 +1017,33 @@ test("G15: hiding a column in the Columns menu tells the tab", async () => {
   await userEvent.click(screen.getByRole("menuitem", { name: "Columns" }));
   await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "note" }));
   expect(worked).toHaveBeenCalledTimes(1);
+});
+
+// Polish A4: the resize zone straddles the column edge (Excel, DataGrip): the 4 px left of it belong to the column
+// before, the 4 px right of it (the next header's left side) resize that same column.
+const lead = (i: number) => document.querySelectorAll(".col-resize-lead")[i];
+
+test("polish A4: the right side of a column edge drags and fits the column on its left", async () => {
+  await openFitted({ first: 150 });
+  // Two data columns: only the second has a column on its left to resize.
+  expect(document.querySelectorAll(".col-resize-lead")).toHaveLength(1);
+  expect(lead(0).getAttribute("aria-hidden")).toBe("true");
+  fireEvent.mouseDown(lead(0), { clientX: 200, button: 0 });
+  fireEvent.mouseMove(window, { clientX: 260 });
+  fireEvent.mouseUp(window);
+  expect(colWidths()).toEqual(["48px", "140px", "80px"]);
+  fireEvent.doubleClick(lead(0));
+  const [, first] = colWidths().map((w) => parseInt(w));
+  expect(first).toBe(66);
+});
+
+test("polish A4: the edge zones sit beside the sort button, so a header click still sorts and a drag does not", async () => {
+  await openFitted({});
+  expect(lead(0).closest(".header-button")).toBeNull();
+  fireEvent.mouseDown(lead(0), { clientX: 200, button: 0 });
+  fireEvent.mouseMove(window, { clientX: 230 });
+  fireEvent.mouseUp(window);
+  expect(callsTo("fetch_page")).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Sort by id" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
 });

@@ -241,6 +241,10 @@ test("Ctrl+Enter goes on and Alt+Left goes back", async () => {
   const tab = document.querySelector(".transfer-tab") as HTMLElement;
   fireEvent.keyDown(tab, { key: "Enter", ctrlKey: true });
   await screen.findByRole("region", { name: "Tables" });
+  // UX step 8: Ctrl+Alt+Left is Back over followed keys everywhere, so the wizard leaves it alone.
+  const ctrlAlt = fireEvent.keyDown(tab, { key: "ArrowLeft", altKey: true, ctrlKey: true });
+  expect(ctrlAlt).toBe(true);
+  expect(screen.getByRole("region", { name: "Tables" })).toBeTruthy();
   fireEvent.keyDown(tab, { key: "ArrowLeft", altKey: true });
   await waitFor(() => expect(screen.queryByRole("region", { name: "Tables" })).toBeNull());
 });
@@ -391,6 +395,24 @@ test("a needs-a-choice column blocks Next until a type is picked", async () => {
   // A type typed by hand is an override.
   setType("id", "bigint");
   await waitFor(() => expect(lastReq().overrides).toEqual([{ table: "sales", column: "id", value: "bigint" }]));
+});
+
+test("I1: Copy and Open in editor on Review put the plan's sql_mode frame around the structure SQL", async () => {
+  const frame = { header: ["SET @OLD_SQL_MODE = @@SESSION.sql_mode;", "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';"], footer: ["SET sql_mode = @OLD_SQL_MODE;"] };
+  runRoutes({ plan_transfer: (a) => ({ ...((a.req as Req).choices.length > 0 ? SETTLED : PLAN), frame }) });
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const onOpenInEditor = vi.fn();
+  renderWith({ onOpenInEditor });
+  await toReview();
+  expect(screen.getByRole("region", { name: "Structure SQL" }).textContent).not.toContain("OLD_SQL_MODE");
+  await userEvent.click(screen.getByRole("button", { name: "Open in editor" }));
+  const opened = onOpenInEditor.mock.calls[0][1] as string;
+  expect(opened.startsWith("SET @OLD_SQL_MODE = @@SESSION.sql_mode;\nSET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n\n")).toBe(true);
+  expect(opened).toContain('CREATE TABLE "pos"."sales" (id integer);');
+  expect(opened.endsWith("\n\nSET sql_mode = @OLD_SQL_MODE;\n")).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+  expect(writeText).toHaveBeenCalledWith(opened);
 });
 
 test("a refused type shows the Core's words and keeps the grid", async () => {

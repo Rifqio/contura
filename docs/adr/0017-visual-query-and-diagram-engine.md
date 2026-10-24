@@ -23,7 +23,7 @@ Step 6 adds three things: the Visual Query (tables of one Connection on a canvas
 Moving the Schema Builder onto the engine changed what it looks like and how it behaves. The reviews kept every change:
 
 - Fit stops at 100 percent zoom, so a small model is not blown up.
-- Cards snap to a 16 px grid (DESIGN-NEXT 10.6); the grid hides below 40 percent zoom.
+- Cards snap to a 16 px grid (DESIGN-NEXT 10.6); the grid hides below 40 percent zoom. Superseded by ADR 0019's guides (ER build B): no card snaps to the grid; the dot grid stays as a backdrop.
 - Zoomed out, cards turn into name boxes (below 45 percent) and blocks (below 15 percent).
 - The canvas is a tab stop.
 - Dragging several selected cards saves the position of every one of them.

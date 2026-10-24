@@ -1,19 +1,9 @@
-<p align="center">
-  <img src="src-tauri/icons/icon.png" width="96" alt="Contura logo">
-</p>
-
-<h1 align="center">Contura</h1>
-
-<p align="center">
-  <b>A fast, light database client for MySQL, PostgreSQL and SQLite,<br>
-  with an AI assistant that never runs anything on your database by itself.</b>
-</p>
-
-<p align="center">
-  <img alt="MySQL" src="https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white">
-  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white">
-  <img alt="SQLite" src="https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white">
-</p>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/banner-light.png">
+    <img src="docs/banner.png" width="900" alt="Contura: a fast, light database client with an AI assistant that never runs anything on your database by itself. Connects to MySQL 8.0+, PostgreSQL 13+ and SQLite; Redis coming in 1.1. In the app: SQL editor, table data, Visual Query, DBML schemas, diagrams, AI assistant, Transfer, Compare, Backup and Restore. Coming in 1.1: Local servers and an MCP server. Windows and Linux, Rust core, Tauri 2, MIT licence.">
+  </picture>
+</h1>
 
 <p align="center">
   <a href="https://github.com/Rifqio/contura/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Rifqio/contura?style=flat-square&label=release"></a>
@@ -182,6 +172,14 @@ Only two things ever leave your computer: what you send to an AI provider you se
 Two themes, Dark and Light, switched with one click on the moon at the right end of the status bar. Code and data are set in JetBrains Mono.
 
 <img src="docs/screenshots/light-dark.png" alt="The same window in the Light and Dark themes" width="900">
+
+## Roadmap
+
+Coming in 1.1, through the built-in updater:
+
+- **Redis Connections.** Redis gets a Connection of its own. A key browser shows a key's value beside the key list, and edits are made in place. A Workbench runs commands with completion and help, and a CLI, a command helper and a profiler sit in a bottom panel. A database report shows where the memory goes, next to the slow log. Pub/Sub lets you subscribe to channels or patterns and publish messages. Production and Read-only safety apply to Redis too.
+- **Local servers.** Start PostgreSQL, MySQL, MariaDB or Redis on your own machine with one switch, with nothing to install. A server is downloaded the first time you start it and checked against its checksum. It runs from Contura's own folder and listens on 127.0.0.1 only. Its password is kept in the system keyring. Contura makes the Connection for you. On Windows, Redis is Valkey, built by Contura's release pipeline.
+- **MCP server.** AI tools that speak the Model Context Protocol, such as Claude Desktop or Cursor, can use your Connections through Contura. They can read schemas and run queries. The same safety rules apply: Read-only Connections stay read-only, and on a Production Connection Contura asks you before anything that writes. It is off until you turn it on, and you choose which Connections it can see.
 
 ## Build from source
 

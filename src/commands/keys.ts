@@ -95,3 +95,21 @@ export function toCodeMirror(keys: string): string {
   const key = /^[A-Z]$/.test(p.key) ? p.key.toLowerCase() : p.key;
   return [...MODIFIERS.filter((m) => p.mods.has(m)), key].join("-");
 }
+
+/** The keys of the press running a command right now; null outside one (a command run from a menu). */
+let pressed: string | null = null;
+
+export function pressedKeys(): string | null {
+  return pressed;
+}
+
+/** Runs `f` as the handling of a press of `keys`, so a handler can tell Alt+Left from Ctrl+Alt+Left. */
+export function whilePressed<T>(keys: string, f: () => T): T {
+  const before = pressed;
+  pressed = keys;
+  try {
+    return f();
+  } finally {
+    pressed = before;
+  }
+}

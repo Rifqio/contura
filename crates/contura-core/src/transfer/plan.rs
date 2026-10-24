@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::map::{MapOptions, MappingNote, NoteKind, map_model};
 use super::types::parse_type;
-use crate::common::sql_ident;
+use crate::common::{pg_string, sql_ident};
 use crate::ddl::{DdlOptions, parts, table_order};
 use crate::error::{Error, Result};
 use crate::jobs::fingerprint::{JobPlan, job_fingerprint};
@@ -262,6 +262,8 @@ pub struct TransferPlan {
     pub orphan_checks: Vec<OrphanCheck>,
     /// SHA-256 hex of everything above plus the options, for the Job pass.
     pub fingerprint: String,
+    /// What Copy and Open in editor put around the structure SQL (`ddl::script_frame`).
+    pub frame: crate::ddl::ScriptFrame,
 }
 
 /// What happens to one ticked table on the target.
@@ -594,13 +596,7 @@ pub fn plan_transfer(
                         Action::Create => c.increment,
                         _ => generated.contains(&c.name.as_str()),
                     }) {
-                        let table = target_q(i);
-                        let col = q(&c.name);
-                        after_rows.push(format!(
-                            "SELECT setval(pg_get_serial_sequence('{}', '{}'), coalesce(max({col}), 1), max({col}) IS NOT NULL) FROM {table};",
-                            table.replace('\'', "''"),
-                            c.name.replace('\'', "''"),
-                        ));
+                        after_rows.push(pg_setval(&target_q(i), &c.name, &q(&c.name)));
                     }
                 }
             }
@@ -839,6 +835,7 @@ pub fn plan_transfer(
         fk_groups,
         orphan_checks,
         fingerprint: String::new(),
+        frame: crate::ddl::script_frame(dst),
     };
     plan.fingerprint = fingerprint(req, &plan)?;
     Ok(plan)
@@ -905,4 +902,35 @@ fn fingerprint(req: &TransferRequest, plan: &TransferPlan) -> Result<String> {
         file: None,
     };
     Ok(hex(&job_fingerprint(&job)?))
+}
+
+/// Moves a PostgreSQL column's sequence past the copied rows. The table and column names go in as text literals
+/// that read the same whatever the target's `standard_conforming_strings` is, so a name holding `\'` stays a name.
+fn pg_setval(table: &str, column: &str, column_sql: &str) -> String {
+    format!(
+        "SELECT setval(pg_get_serial_sequence({}, {}), coalesce(max({column_sql}), 1), max({column_sql}) IS NOT NULL) FROM {table};",
+        pg_string(table),
+        pg_string(column),
+    )
+}
+
+#[cfg(test)]
+mod setval_tests {
+    use super::pg_setval;
+
+    #[test]
+    fn a_name_with_a_backslash_and_a_quote_stays_inside_its_literal() {
+        assert_eq!(
+            pg_setval("\"pos\".\"st\\'x\"", "id", "\"id\""),
+            "SELECT setval(pg_get_serial_sequence(E'\"pos\".\"st\\\\''x\"', 'id'), coalesce(max(\"id\"), 1), max(\"id\") IS NOT NULL) FROM \"pos\".\"st\\'x\";"
+        );
+    }
+
+    #[test]
+    fn a_plain_name_is_written_as_before() {
+        assert_eq!(
+            pg_setval("\"pos\".\"stores\"", "id", "\"id\""),
+            "SELECT setval(pg_get_serial_sequence('\"pos\".\"stores\"', 'id'), coalesce(max(\"id\"), 1), max(\"id\") IS NOT NULL) FROM \"pos\".\"stores\";"
+        );
+    }
 }

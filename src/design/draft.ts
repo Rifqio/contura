@@ -839,3 +839,20 @@ export function toEdits(dr: Draft): DesignEdit[] {
 export function changeCount(dr: Draft): number {
   return diff(dr).changed.size;
 }
+
+/**
+ * M1: a default typed with a backslash, on MySQL. Apply, Compare and the copied scripts all read it with backslash
+ * escapes (the runner turns NO_BACKSLASH_ESCAPES off, the scripts set Backup's sql_mode), as the designer shows a
+ * loaded default (`'a\\b'`), so the note says so rather than reading it the server's way.
+ */
+export function backslashNote(dr: Draft, dialect: DialectKind): string | null {
+  if (dialect !== "mysql") return null;
+  const typed = dr.columns.filter((c) => {
+    if (dr.removed.includes(c.id) || !c.defaultSql?.includes("\\")) return false;
+    const loaded = c.origin === null ? null : dr.base?.columns.find((x) => x.name === c.origin);
+    return loaded?.defaultSql !== c.defaultSql;
+  });
+  if (typed.length === 0) return null;
+  const which = typed.map((c) => c.name).join(", ");
+  return `MySQL default${typed.length === 1 ? "" : "s"} ${which}: Contura reads a backslash in quotes as an escape, whatever the server's sql_mode, so \\\\ is one backslash and \\t a tab.`;
+}

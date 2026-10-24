@@ -106,18 +106,26 @@ function splitPath(path: string): { folder: string; name: string } {
 
 const n = (v: number) => v.toLocaleString("en-US");
 
-/** The result panel's shown column names, in order; empty when it shows them all (or hides them all). */
-function shownColumns(origin: Extract<ExportOrigin, { kind: "result" }>): string[] {
+/** The result panel's shown columns, as indexes in the order shown; all of them when it would hide every one. */
+function shownIndexes(origin: Extract<ExportOrigin, { kind: "result" }>): number[] {
   const hidden = new Set(origin.hidden ?? []);
-  const shown = origin.columns.map((c) => c.name).filter((name) => !hidden.has(name));
-  return shown.length === origin.columns.length || shown.length === 0 ? [] : shown;
+  const order = origin.order && origin.order.length === origin.columns.length ? origin.order : origin.columns.map((_, i) => i);
+  const keep = order.filter((i) => origin.columns[i] && !hidden.has(origin.columns[i].name));
+  return keep.length === 0 ? order : keep;
 }
 
-/** Rows shown as the result panel shows them: its hidden columns are left out. */
+const ownOrder = (keep: number[], n: number) => keep.length === n && keep.every((c, i) => c === i);
+
+/** The result panel's shown column names, in the order shown; empty when it shows them all in the query's order. */
+function shownColumns(origin: Extract<ExportOrigin, { kind: "result" }>): string[] {
+  const keep = shownIndexes(origin);
+  return ownOrder(keep, origin.columns.length) ? [] : keep.map((i) => origin.columns[i].name);
+}
+
+/** Rows shown as the result panel shows them: its hidden columns left out, the rest in the order shown. */
 function shownRows(origin: Extract<ExportOrigin, { kind: "result" }>): ExportSource {
-  const hidden = new Set(origin.hidden ?? []);
-  const keep = origin.columns.flatMap((c, i) => (hidden.has(c.name) ? [] : [i]));
-  if (keep.length === origin.columns.length || keep.length === 0) return { kind: "rows", columns: origin.columns, rows: origin.rows };
+  const keep = shownIndexes(origin);
+  if (ownOrder(keep, origin.columns.length)) return { kind: "rows", columns: origin.columns, rows: origin.rows };
   return { kind: "rows", columns: keep.map((i) => origin.columns[i]), rows: origin.rows.map((r) => keep.map((i) => r[i])) };
 }
 
@@ -131,7 +139,11 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
   const [scope, setScope] = useState<Scope>("all");
   // D16 and Q26: a result's statement counts as not read until a preview says it reads.
   const [readState, setReadState] = useState<"unknown" | "read" | "notRead">("unknown");
-  const [order, setOrder] = useState<string[]>(allColumns);
+  // The grid's order when it moved columns (view only), so the export writes them as shown.
+  const [order, setOrder] = useState<string[]>(() => {
+    const shown = table?.order;
+    return shown && shown.length === allColumns.length && allColumns.every((c) => shown.includes(c)) ? shown : allColumns;
+  });
   // Columns hidden in the grid start off, but at least one column stays on.
   const [off, setOff] = useState<Set<string>>(() => {
     const hidden = (table?.hidden ?? []).filter((c) => allColumns.includes(c));

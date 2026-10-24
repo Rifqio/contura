@@ -536,6 +536,14 @@ function nextSpot(q: VisualQuery): { x: number; y: number } {
   return { x: snap(right + CARD_WIDTH + GAP), y: START };
 }
 
+/**
+ * Where a table dropped from the tree goes: where it was let go, to the pixel, as every canvas places things now
+ * (ER build B, ADR 0019; no 16 px cell). With no usable point (no pointer position), where a found table would go.
+ */
+export function dropSpot(at: { x: number; y: number } | undefined, q: VisualQuery): { x: number; y: number } {
+  return at && Number.isFinite(at.x) && Number.isFinite(at.y) ? { x: Math.round(at.x), y: Math.round(at.y) } : nextSpot(q);
+}
+
 function findTable(schema: VqSchema, t: VqTable) {
   return schema.tables.find((s) => (s.schema ?? null) === (t.schema ?? null) && s.name === t.name);
 }
@@ -1044,7 +1052,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     (t: { schema: string | null; name: string }, at?: { x: number; y: number }) => {
       const d = latest.current;
       // A drop without a usable point (no pointer position) goes where a found table would.
-      const spot = at && Number.isFinite(at.x) && Number.isFinite(at.y) ? { x: snap(at.x), y: snap(at.y) } : nextSpot(d.model);
+      const spot = dropSpot(at, d.model);
       const added = addTable(d.model, t, schemaRef.current, spot);
       changeModel(() => added.query);
       if (added.joinedTo.length > 0) {

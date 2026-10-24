@@ -315,9 +315,16 @@ export default function Canvas({ model, layout, blocked, errorAt, onLayout, onEd
           }}
           onMove={onMove}
           onDrag={onDrag}
+          // Esc put the cards back: the lines take their sides from the kept places again (M4).
+          onMoveCancel={() => {
+            liveX.current = new Map(baseX);
+            setDragSides(null);
+          }}
           onConnectPorts={blocked ? undefined : onConnectPorts}
           onSelect={onSelect}
           onContextMenu={openMenu}
+          // F32: one navigation model on every canvas (drag selects, wheel pans, Ctrl + wheel zooms).
+          boxSelect
         />
       </div>
       {menu && <PlacedMenu menu={menu} onClose={() => setMenu(null)} />}

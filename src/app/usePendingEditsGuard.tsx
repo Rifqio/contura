@@ -7,6 +7,7 @@ import UnsavedEdits, { designBody, tableBody } from "../components/UnsavedEdits"
 import { flowEntry, unsavedFlows } from "../flow/flowRegistry";
 import type { QueryTabDoc } from "../query/QueryTab";
 import { type AnyTab, type VisualTabDoc, type WorkTab, isUnsaved, objectTabOf, tabKey } from "../shell/tabs";
+import { flushColumnOrders } from "../grid/columnOrderStore";
 
 export interface LeaveOpts {
   /** The next ask after the Pending Edits (running jobs); a Discard applies only when it says yes. */
@@ -286,12 +287,15 @@ export function usePendingEditsGuard(opts: {
       .then(() => {
         const w = getCurrentWindow();
         return w.onCloseRequested(async (event) => {
+          // Column orders still waiting for a run of move keys to pause are written now, and waited for before the
+          // window goes.
+          const orders = flushColumnOrders();
           const keys = tableKeys();
           const dirty = keys.some(isDirty);
           const jobs = jobsOnClose.current;
           const running = jobs?.running() ?? false;
           const flows = unsavedFlows();
-          if (!dirty && !running && flows.length === 0) return;
+          if (!dirty && !running && flows.length === 0) return orders;
           event.preventDefault();
           // Diagrams save on their own: a save still to come is written (and waited for) before the window goes.
           for (const name of flows) if (!(await confirmCloseFlowRef.current(name))) return;
@@ -300,6 +304,7 @@ export function usePendingEditsGuard(opts: {
           if (dirty) {
             if (!(await confirmLeaveRef.current(keys, jobsAsk))) return;
           } else if (jobsAsk && !(await jobsAsk.then())) return;
+          await orders;
           await w.destroy();
         });
       })

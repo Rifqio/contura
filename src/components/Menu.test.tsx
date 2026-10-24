@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import Icon from "./Icon";
-import Menu, { type MenuItem } from "./Menu";
+import Menu, { type MenuItem, PointMenu } from "./Menu";
 
 function open(items: MenuItem[]) {
   render(
@@ -90,4 +90,29 @@ test("hovering_a_plain_row_keeps_focus_in_the_menu", async () => {
   await userEvent.hover(other);
   expect(screen.queryByRole("menuitem", { name: "Billing" })).toBeNull();
   expect(document.activeElement).toBe(other);
+});
+
+test("a_point_menu_opened_20_px_from_the_right_edge_moves_left_at_its_own_width", () => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+  const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const w = this.classList.contains("tree-menu") ? 260 : 0;
+    return { left: 0, top: 0, width: w, height: w ? 120 : 0, right: w, bottom: w ? 120 : 0, x: 0, y: 0, toJSON() {} } as DOMRect;
+  });
+  render(
+    <PointMenu
+      x={1004}
+      y={40}
+      label="Column"
+      onClose={() => {}}
+      onDismiss={() => {}}
+      items={[{ key: "left", label: "Move left", shortcut: "Shift+Alt+Left", onSelect: () => {} }]}
+    />,
+  );
+  const box = document.querySelector(".tree-menu") as HTMLElement;
+  // Its whole measured width fits: placed at 1024 - 260 - 4, not squeezed into the 20 px left of it.
+  expect(box.style.left).toBe("760px");
+  expect(box.style.top).toBe("40px");
+  expect(box.style.width).toBe("");
+  rect.mockRestore();
 });

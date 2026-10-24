@@ -1,3 +1,4 @@
+import { framedScript } from "../api/scriptFrame";
 import { save } from "@tauri-apps/plugin-dialog";
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorText, fileName, isCommandError, listDatabases, listSchemas, openConnection, writeTextFile } from "../api/client";
@@ -687,7 +688,8 @@ export default function CompareTab({ seed, askKey = null, connections, groups, v
     }
   }
 
-  const script = plan ? scriptText(plan.statements) : "";
+  // I1: what leaves Contura carries the plan's frame (MySQL's sql_mode); the view shows what Apply runs.
+  const script = plan ? framedScript(plan.frame, scriptText(plan.statements)) : "";
   const copyScript = () => void navigator.clipboard?.writeText(script);
 
   async function saveScript() {

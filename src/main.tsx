@@ -15,6 +15,7 @@ import "./styles/update.css";
 import "./styles/guide.css";
 import "./styles/lineage.css";
 import "./styles/flow-tab.css";
+import { installContextMenuGuard } from "./components/contextMenuGuard";
 import { installTooltipGuard } from "./components/tooltipGuard";
 import { applyStoredTheme } from "./theme/theme";
 
@@ -22,6 +23,8 @@ import { applyStoredTheme } from "./theme/theme";
 applyStoredTheme();
 // No tooltip outlives its trigger: a click, a scroll or leaving the window hides it (P11-37).
 installTooltipGuard();
+// The WebView never shows its own right-click menu (its Reload restarts the app); text fields keep Cut, Copy, Paste.
+installContextMenuGuard();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

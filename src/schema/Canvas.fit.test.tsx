@@ -45,7 +45,7 @@ test("a_model_bigger_than_the_pane_is_fitted_on_open", async () => {
   expect((viewport() as HTMLElement).style.transform).toBe(fitted);
 });
 
-test("refits_after_a_window_resize", async () => {
+test("a_window_resize_keeps_the_users_view", async () => {
   const model = parseDbml(Array.from({ length: 24 }, (_, i) => `Table t${i} {\n  id integer [pk]\n}\n`).join("\n"), "postgres").model!;
   render(
     <div style={{ width: 800, height: 600 }}>
@@ -55,11 +55,12 @@ test("refits_after_a_window_resize", async () => {
   const viewport = () => (document.querySelector(".react-flow__viewport") as HTMLElement).style.transform;
   await waitFor(() => expect(scaleOf(document.querySelector(".react-flow__viewport"))).toBeLessThan(0.5));
   const fitted = viewport();
-  // The user zooms in; then the window is resized.
+  // The user zooms in; then the window is resized: the view stays where the user put it (diagram-ux-research F16,
+  // as Figma and draw.io).
   fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
   await waitFor(() => expect(viewport()).not.toBe(fitted));
+  const zoomed = viewport();
   fireEvent(window, new Event("resize"));
-  // Debounced: nothing has moved yet.
-  expect(viewport()).not.toBe(fitted);
-  await waitFor(() => expect(viewport()).toBe(fitted));
+  await new Promise((done) => setTimeout(done, 300));
+  expect(viewport()).toBe(zoomed);
 });

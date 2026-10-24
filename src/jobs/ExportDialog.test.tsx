@@ -659,3 +659,39 @@ test("choose_closes_the_column_chooser_it_opened_m8", async () => {
   expect(screen.queryByRole("dialog", { name: "Columns" })).toBeNull();
   expect(choose.getAttribute("aria-expanded")).toBe("false");
 });
+
+test("columns_moved_in_the_grid_export_in_the_order_shown", async () => {
+  const { dialog } = setup(tableOrigin({ order: ["price", "id", "sku", "name", "category", "is_available"], hidden: ["sku"] }));
+  expect(within(dialog).getByText("5 of 6 columns")).toBeTruthy();
+  await waitFor(() => {
+    const req = callsTo("preview_export").slice(-1)[0].req as ExportRequest;
+    expect(req.source).toMatchObject({ columns: ["price", "id", "name", "category", "is_available"] });
+  });
+});
+
+test("a_result_with_moved_columns_exports_them_as_shown", async () => {
+  const origin: ExportOrigin = {
+    ...resultOrigin,
+    sql: "select id, name, price from t",
+    columns: [
+      { name: "id", typeName: "int4", numeric: true },
+      { name: "name", typeName: "text", numeric: false },
+      { name: "price", typeName: "numeric", numeric: true },
+    ],
+    rows: [[{ t: "number", value: "1" }, { t: "text", value: "Tea", truncated: false, totalBytes: 3 }, { t: "number", value: "2.50" }]],
+    order: [2, 0, 1],
+  } as ExportOrigin;
+  const first = setup(origin);
+  expect(await within(first.dialog).findByRole("radio", { name: "The result of this query" })).toBeTruthy();
+  expect((callsTo("preview_export")[0].req as ExportRequest).source).toEqual({ kind: "query", database: "shop", sql: "select id, name, price from t", columns: ["price", "id", "name"] });
+  cleanup();
+  const { dialog } = setup(origin);
+  routeInvoke({ preview_export: () => new Promise(() => {}), start_export: () => undefined });
+  fireEvent.keyDown(within(dialog).getByRole("radio", { name: /Rows shown/ }), { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(callsTo("start_export")).toHaveLength(1));
+  expect((callsTo("start_export")[0].req as ExportRequest).source).toMatchObject({
+    kind: "rows",
+    columns: [{ name: "price" }, { name: "id" }, { name: "name" }],
+    rows: [[{ t: "number", value: "2.50" }, { t: "number", value: "1" }, { t: "text", value: "Tea" }]],
+  });
+});

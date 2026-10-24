@@ -5,7 +5,7 @@ import { type RefObject, useEffect, useRef } from "react";
  * The press is caught in the capture phase, so a canvas that stops its pointer events (React Flow's pan
  * and zoom do) still closes it; Escape is caught on the document, so it works with focus left elsewhere.
  */
-export function useDismiss(open: boolean, inside: RefObject<HTMLElement | null>[], onClose: () => void) {
+export function useDismiss(open: boolean, inside: RefObject<HTMLElement | null>[], onClose: (how: "press" | "escape") => void) {
   const latest = useRef({ inside, onClose });
   latest.current = { inside, onClose };
   useEffect(() => {
@@ -19,14 +19,14 @@ export function useDismiss(open: boolean, inside: RefObject<HTMLElement | null>[
       (latest.current.inside.some((r) => r.current?.contains(t)) || (t instanceof Element && t.closest("[data-sublayer]") !== null));
     const onPointerDown = (e: Event) => {
       pressClosed = !isInside(e.target);
-      if (pressClosed) latest.current.onClose();
+      if (pressClosed) latest.current.onClose("press");
     };
     const onMouseDown = (e: Event) => {
       if (pressClosed) {
         pressClosed = false;
         return;
       }
-      if (!isInside(e.target)) latest.current.onClose();
+      if (!isInside(e.target)) latest.current.onClose("press");
     };
     const onPointerUp = () => {
       pressClosed = false;
@@ -35,7 +35,7 @@ export function useDismiss(open: boolean, inside: RefObject<HTMLElement | null>[
       if (e.key !== "Escape" || e.defaultPrevented) return;
       e.preventDefault();
       e.stopPropagation();
-      latest.current.onClose();
+      latest.current.onClose("escape");
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("mousedown", onMouseDown, true);

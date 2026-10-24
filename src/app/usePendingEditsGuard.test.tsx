@@ -7,6 +7,7 @@ import type { QueryTabDoc } from "../query/QueryTab";
 import type { WorkTab } from "../shell/tabs";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { registerFlow, updateFlow } from "../flow/flowRegistry";
+import { rememberColumnOrder } from "../grid/columnOrderStore";
 import { type PendingEditsGuard, usePendingEditsGuard } from "./usePendingEditsGuard";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -567,5 +568,25 @@ describe("diagram saves on close (P16 I3)", () => {
     } finally {
       off();
     }
+  });
+
+  it("quitting_waits_for_a_column_order_still_waiting_to_be_written", async () => {
+    let release: () => void = () => {};
+    routeInvoke({ save_column_order: () => new Promise<null>((r) => (release = () => r(null))) });
+    setup();
+    await waitFor(() => expect(closeWindow.handler).not.toBeNull());
+    // A run of move keys waits before it writes; the quit must not lose it.
+    rememberColumnOrder("c1", { database: "shop", schema: null, name: "orders" }, ["b", "a"], true);
+    expect(callsTo("save_column_order")).toEqual([]);
+    let done = false;
+    const closing = closeWindow.handler!({ preventDefault: vi.fn() }).then(() => (done = true));
+    await waitFor(() => expect(callsTo("save_column_order")).toHaveLength(1));
+    expect(callsTo("save_column_order")[0].columns).toEqual(["b", "a"]);
+    // The close goes on only once the Core has the order.
+    await Promise.resolve();
+    expect(done).toBe(false);
+    release();
+    await act(() => closing);
+    expect(done).toBe(true);
   });
 });

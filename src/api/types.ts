@@ -183,6 +183,26 @@ export interface PageRequest {
   filter?: string | null;
 }
 
+/** UX step 8: how many rows of a table match a filter, the same filter a page takes. */
+export interface CountRequest {
+  table: ObjectPath;
+  filter: string | null;
+}
+
+/** M3: where the row with `key` is under a page's sort and filter (Back after a followed key). */
+export interface LocateRequest {
+  table: ObjectPath;
+  sort: SortSpec | null;
+  filter: string | null;
+  key: KeyPart[];
+}
+
+/** The row's 0-based place in the page order (its page is `index / 1000`), no such row, or the time limit ran out. */
+export type RowPlace = { kind: "found"; index: number } | { kind: "missing" } | { kind: "timedOut" } | { kind: "unsupported" };
+
+/** The Core's count: at most 1,001 rows, or the server's time limit ran out first. */
+export type CountResult = { kind: "counted"; rows: number } | { kind: "timedOut" };
+
 export interface Page {
   columns: ColumnInfo[];
   rows: Cell[][];
@@ -489,16 +509,25 @@ export interface DesignPlan {
   foreignKeys: boolean | null;
 }
 
+/** The statements a script handed to the user starts and ends with (`ddl::script_frame`); empty except on MySQL. */
+export interface ScriptFrame {
+  header: string[];
+  footer: string[];
+}
+
 export interface DesignVerdict {
   plan: DesignPlan;
   verdict: RunVerdict;
+  /** What Copy SQL puts around the statements. */
+  frame?: ScriptFrame;
 }
 
 /** What Apply did. A failure comes back as an error (`designFailed`, `designForeignKeys`), never as an outcome. */
 export type DesignOutcome = { kind: "done"; ran: number };
 
 /** A value typed into a cell; numbers and dates are sent as text too. */
-export type NewValue = { t: "text"; value: string } | { t: "null" };
+/** `default` is the column's default: `SET col = DEFAULT` on a saved row (Postgres and MySQL), left out of an INSERT. */
+export type NewValue = { t: "text"; value: string } | { t: "null" } | { t: "default" };
 
 export interface CellChange {
   column: string;
@@ -2363,6 +2392,8 @@ export interface TransferPlan {
   orphanChecks: TransferOrphanCheck[];
   /** Sent back with Start, so a target that changed since Review is refused. */
   fingerprint: string;
+  /** What Copy and Open in editor put around the structure SQL. */
+  frame?: ScriptFrame;
 }
 
 // Backup and Restore (step 9). Same Dialect only; the file is Contura's own plain SQL script.
@@ -2758,6 +2789,8 @@ export interface SyncPlan {
    * rest runs, so the script is not one transaction (`line` says so too).
    */
   enumValuesFirst: boolean;
+  /** What Copy script, Save as and Open in editor put around the script. */
+  frame?: ScriptFrame;
 }
 
 /** What Apply did. A failure comes back as an error (`designFailed`, `designForeignKeys`, `planChanged`). */

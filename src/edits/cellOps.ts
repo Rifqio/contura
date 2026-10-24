@@ -11,7 +11,8 @@ const TEXT_TYPE = /^(n?varchar|n?char|character|bpchar|text|tinytext|mediumtext|
 
 /**
  * A column default Set DEFAULT can write into a saved row: a quoted string, a number, a boolean or NULL. Anything
- * else (`now()`, `nextval(...)`) is worked out by the server, which only a new row can take.
+ * else (`now()`, `nextval(...)`) is worked out by the server: Postgres and MySQL take it as `SET col = DEFAULT`,
+ * while on SQLite only a new row can take it.
  */
 export function constantDefault(sql: string | null): { value: NewValue } | { expression: string } | null {
   if (sql === null) return null;
@@ -60,6 +61,8 @@ export function planCells(a: {
   /** `view` and `columns` indexes, each once. */
   cells: { row: number; column: number }[];
   design: Map<string, ColumnFacts> | null;
+  /** The UPDATE takes `SET col = DEFAULT` (Postgres, MySQL); SQLite has no DEFAULT in UPDATE. */
+  updateDefault: boolean;
 }): { ops: CellOp[]; note: string } {
   const { kind, view, columns, design } = a;
   const keyCols = new Set<string>();
@@ -103,6 +106,7 @@ export function planCells(a: {
       }
       const def = constantDefault(info?.defaultSql ?? null);
       if (def && "value" in def) put(d, col.name, def.value);
+      else if (def && a.updateDefault) put(d, col.name, { t: "default" });
       else if (def) computed.set(col.name, def.expression);
       else if (nullable) {
         if (!design) guessed = true;

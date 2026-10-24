@@ -17,7 +17,7 @@ import { rowAnchor } from "./JoinEdge";
 import { parseVisualDrafts } from "./drafts";
 import { type TabAskEntry, useTabAsk } from "../assistant/tabAsk";
 import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
-import VisualQueryTab, { type VisualQueryTabProps, joinBrings, pairsSentence, visualTabAsk, warningLines } from "./VisualQueryTab";
+import VisualQueryTab, { dropSpot, type VisualQueryTabProps, joinBrings, pairsSentence, visualTabAsk, warningLines } from "./VisualQueryTab";
 import appCss from "../styles/app.css?raw";
 
 /** Item 30: the SQL is a tab of the bottom panel; this shows it. */
@@ -1266,4 +1266,11 @@ test("fix1_backspace_on_a_column_row_does_not_remove_its_card_but_delete_on_the_
   row.focus();
   fireEvent.keyDown(row, { key: "Backspace" });
   expect(screen.getByRole("group", { name: "Table orders o" })).toBeTruthy();
+});
+
+// ER build B fix round 1b: a table dropped from the tree lands on whole pixels, not a 16 px cell, as every canvas.
+test("a table dropped from the tree lands where it was let go, to the pixel", () => {
+  expect(dropSpot({ x: 301.4, y: 203.6 }, emptyQuery("shop", "postgres"))).toEqual({ x: 301, y: 204 });
+  // No usable point: where a found table would go.
+  expect(dropSpot({ x: Number.NaN, y: 0 }, emptyQuery("shop", "postgres"))).toEqual({ x: 48, y: 48 });
 });

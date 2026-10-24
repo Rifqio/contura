@@ -1,4 +1,4 @@
-// The floating tool bar centred over the canvas (frames 6+.2, 6+.4, 6+.5): the pointer, the add tools for the
+// The floating tool bar centred over the canvas (frames 6+.2, 6+.4, 6+.5): the add tools for the
 // diagram's kind, the Modern and Classic switch on a data flow, and Tidy. Each tool names itself and its key in a
 // notched hint on hover.
 import Icon, { type IconName } from "../components/Icon";
@@ -35,7 +35,8 @@ export const ADD_TOOLS: Record<DiagramKind, AddTool[]> = {
   ],
   // Step 12, item 19: the newer kinds' main shapes; the Shape picker lists them all.
   er: [
-    { label: "Add entity", key: "E", icon: "table", kind: "entity", base: "table" },
+    // T, the table tool's key (erd-ux-research 5.8); nothing else takes T on the ER canvas.
+    { label: "Add entity", key: "T", icon: "table", kind: "entity", base: "table" },
     { label: "Add weak entity", key: "W", icon: "layers", kind: "weak", base: "detail" },
   ],
   sequence: [
@@ -118,8 +119,6 @@ interface Props {
 export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySelection, onShape }: Props) {
   return (
     <div className="flow-toolbar nodrag nopan" role="toolbar" aria-label="Diagram tools">
-      <Tool label="Select" icon="select" pressed />
-      <span className="flow-toolbar-divider" aria-hidden="true" />
       {ADD_TOOLS[kind].map((t) => (
         // Group puts the selected services in a new group.
         <Tool key={t.label} label={t.label} icon={t.icon} shortcut={t.key} onClick={() => onAdd(t)} />

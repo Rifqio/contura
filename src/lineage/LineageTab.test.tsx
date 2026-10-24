@@ -793,3 +793,13 @@ test("try_again_keeps_the_last_warning_while_it_reads_again", async () => {
   expect(within(warning).queryByText("Checking what deleting an order does...")).toBeNull();
   expect(lineageCalls().filter(isEffects)).toHaveLength(2);
 });
+
+test("F32 a drag on the empty lineage canvas selects; it does not pan", async () => {
+  setup();
+  const pane = await waitFor(() => {
+    const p = document.querySelector(".react-flow__pane");
+    expect(p).not.toBeNull();
+    return p as HTMLElement;
+  });
+  expect(pane.classList.contains("draggable")).toBe(false);
+});

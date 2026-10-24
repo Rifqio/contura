@@ -444,7 +444,7 @@ export default function TransferTab({ seed, askKey = null, connections, groups, 
       e.preventDefault();
       if (step < 3) next();
       else if (step === 3 || (step === 4 && run?.outcome && run.outcome.kind !== "finished")) onRun();
-    } else if (e.key === "ArrowLeft" && e.altKey) {
+    } else if (e.key === "ArrowLeft" && e.altKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       back();
     }

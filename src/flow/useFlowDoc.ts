@@ -27,6 +27,11 @@ const NEXT_PARSE_MS = 2000;
 /** Node positions before and after a move; undo applies the inverse. */
 export const moveEffect = StateEffect.define<{ before: Positions; after: Positions }>();
 
+/** One node's box in the layout: where it is, and its kept size (null: its own size). */
+export type KeptBox = { at?: { x: number; y: number }; size: { w: number; h: number } | null };
+/** A resize or a Fit to content (fix round 1, I7): one undo entry, so Ctrl+Z puts a manual size back. */
+export const sizeEffect = StateEffect.define<{ name: string; before: KeptBox; after: KeptBox }>();
+
 /** The newest parse and the text it was made from. */
 export interface Parsed {
   result: FlowResult;
@@ -44,11 +49,17 @@ export interface RunOptions {
   version?: number;
   /** Node positions written in the same transaction as the edits. */
   move?: Positions;
+  /** The worker refused the action and said why (a paste names the reason). */
+  onRefused?(why: string): void;
 }
 
 /** What a canvas action did: the name an add used, and where its first new line starts in the new text. */
 export interface RunResult {
   name?: string;
+  /** A paste: each pasted shape's name and the new name it got. */
+  names?: Record<string, string>;
+  /** A paste: what it left out (groups, frames). */
+  note?: string;
   /** The offset of the start of the first line the edits wrote. */
   at?: number;
 }
@@ -98,7 +109,8 @@ export interface FlowDocApi {
   /** Applies a fix's edits when the text is still the one its parse was made from. */
   applyFix(edits: TextEdit[], parsedText: string): boolean;
   /** Moves nodes: writes only the layout, as one undo entry. */
-  move(after: Positions): void;
+  /** One move, one undo entry; `before` when the nodes were already drawn moved (a held arrow key's burst). */
+  move(after: Positions, before?: Positions): void;
   /** Positions for nodes that had none (placed by the layout engine, or a node just added); not an undo entry. `override` replaces kept ones. */
   place(positions: Positions, override?: boolean): void;
   /**
@@ -112,6 +124,8 @@ export interface FlowDocApi {
   setDirection(direction: FlowDirection): void;
   /** Item 21: a node resized on the canvas: its new box (a left or top handle moves it too); kept in the layout file. */
   resize(name: string, box: { x: number; y: number; w: number; h: number }): void;
+  /** A resized node goes back to its own size (Fit to content, a double-click on its edge). */
+  unsize(name: string): void;
   /** The 1-based line each name is defined on in the current text, or null when the text has changed since. */
   linesOf(names: string[]): Promise<Record<string, number | null> | null>;
   /** Parses the editor's text again, as when the worker learns something new (the icon names). */
@@ -332,6 +346,41 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [setLayout, scheduleSave],
   );
 
+  /** A node's kept box as `box` says: its place, and its size or none. */
+  const applyBox = useCallback(
+    (name: string, box: KeptBox) => {
+      const l = layoutRef.current;
+      const nodes = emptyPositions();
+      Object.assign(nodes, l.nodes);
+      if (box.at) nodes[name] = box.at;
+      const sizes = Object.create(null) as Record<string, { w: number; h: number }>;
+      for (const [k, v] of Object.entries(l.sizes ?? {})) if (k !== name) sizes[k] = v;
+      if (box.size) sizes[name] = box.size;
+      setLayout({ ...l, nodes, sizes });
+      scheduleSave();
+    },
+    [setLayout, scheduleSave],
+  );
+
+  /** `name`'s kept box now. */
+  const keptBox = useCallback((name: string): KeptBox => {
+    const l = layoutRef.current;
+    const at = Object.prototype.hasOwnProperty.call(l.nodes, name) ? l.nodes[name] : undefined;
+    const size = l.sizes && Object.prototype.hasOwnProperty.call(l.sizes, name) ? l.sizes[name] : null;
+    return { ...(at ? { at } : {}), size };
+  }, []);
+
+  /** A box change as its own undo entry (or applied at once before the text is open). */
+  const changeBox = useCallback(
+    (name: string, after: KeptBox) => {
+      const before = keptBox(name);
+      const view = viewRef.current;
+      if (view) view.dispatch({ effects: sizeEffect.of({ name, before, after }), annotations: isolateHistory.of("full") });
+      else applyBox(name, after);
+    },
+    [keptBox, applyBox],
+  );
+
   // Read the files; the tab joins the window's list of diagrams (unsaved mark, status bar, close guard).
   // Closing the tab writes a save still to come or one that failed, then frees the worker's state for it.
   useEffect(() => {
@@ -464,13 +513,15 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       readOnlyRef.current.of(EditorState.readOnly.of(false)),
       history(),
       // Undoing a move moves the nodes back; redo moves them again.
-      invertedEffects.of((tr) =>
-        tr.effects.filter((e) => e.is(moveEffect)).map((e) => moveEffect.of({ before: e.value.after, after: e.value.before })),
-      ),
+      invertedEffects.of((tr) => [
+        ...tr.effects.filter((e) => e.is(moveEffect)).map((e) => moveEffect.of({ before: e.value.after, after: e.value.before })),
+        ...tr.effects.filter((e) => e.is(sizeEffect)).map((e) => sizeEffect.of({ name: e.value.name, before: e.value.after, after: e.value.before })),
+      ]),
       EditorView.updateListener.of((u) => {
         for (const tr of u.transactions) {
           const undoing = tr.isUserEvent("undo");
           for (const e of tr.effects) {
+            if (e.is(sizeEffect)) applyBox(e.value.name, e.value.after);
             if (!e.is(moveEffect)) continue;
             if (undoing || tr.isUserEvent("redo")) for (const fn of historyMoves.current) fn({ from: e.value.before, to: e.value.after, undo: undoing });
             applyPositions(e.value.after);
@@ -490,7 +541,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         }
       }),
     ],
-    [applyPositions, parse, scheduleSave, name],
+    [applyPositions, applyBox, parse, scheduleSave, name],
   );
 
   const attach = useCallback(
@@ -549,13 +600,21 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
           continue;
         }
         // An empty list: the action does not apply to this text (a taken name, an unknown node).
-        if (answer.edits.length === 0) return null;
+        if (answer.edits.length === 0) {
+          if (answer.note) opts.onRefused?.(answer.note);
+          return null;
+        }
         dispatchEdits(view, answer.edits, opts.move);
         // The first written line: past the line breaks and indent the insert starts with.
         const first = answer.edits[0];
         const lead = first.insert.length - first.insert.replace(/^[\s]+/, "").length;
         const at = view.state.doc.lineAt(Math.min(first.from + lead, view.state.doc.length)).from;
-        return answer.name === undefined ? { at } : { name: answer.name, at };
+        return {
+          at,
+          ...(answer.name === undefined ? {} : { name: answer.name }),
+          ...(answer.names === undefined ? {} : { names: answer.names }),
+          ...(answer.note === undefined ? {} : { note: answer.note }),
+        };
       }
       return null;
     },
@@ -618,10 +677,10 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   );
 
   const move = useCallback(
-    (after: Positions) => {
+    (after: Positions, from?: Positions) => {
       const keys = Object.keys(after);
       if (keys.length === 0) return;
-      const before = positionsOf(keys);
+      const before = from ?? positionsOf(keys);
       const view = viewRef.current;
       if (view) view.dispatch({ effects: moveEffect.of({ before, after }), annotations: isolateHistory.of("full") });
       else applyPositions(after);
@@ -668,15 +727,18 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   );
 
   const resize = useCallback(
-    (name: string, box: { x: number; y: number; w: number; h: number }) => {
+    (name: string, box: { x: number; y: number; w: number; h: number }) => changeBox(name, { at: { x: box.x, y: box.y }, size: { w: box.w, h: box.h } }),
+    [changeBox],
+  );
+
+  /** Fit to content (erd-ux-research 5.5): a resized node lets go of its kept size, as one undo entry (I7). */
+  const unsize = useCallback(
+    (name: string) => {
       const l = layoutRef.current;
-      const nodes = emptyPositions();
-      Object.assign(nodes, l.nodes, { [name]: { x: box.x, y: box.y } });
-      const sizes = Object.assign(Object.create(null) as Record<string, { w: number; h: number }>, l.sizes, { [name]: { w: box.w, h: box.h } });
-      setLayout({ ...l, nodes, sizes });
-      scheduleSave();
+      if (!l.sizes || !Object.prototype.hasOwnProperty.call(l.sizes, name)) return;
+      changeBox(name, { ...keptBox(name), size: null });
     },
-    [setLayout, scheduleSave],
+    [changeBox, keptBox],
   );
 
   const setDirection = useCallback(
@@ -769,6 +831,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     settleProposed,
     setStyle,
     resize,
+    unsize,
     setDirection,
     linesOf,
     reparse,

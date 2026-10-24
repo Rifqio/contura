@@ -117,7 +117,7 @@ export default function SidePanel({ tab, hidden, pending, locked = false, workin
         <div className="flow-side-pane" id={paneId("editor")} role="tabpanel" aria-labelledby={tabId("editor")} hidden={tab !== "editor"}>
           {editor}
         </div>
-        <div className="flow-side-pane" id={paneId("assistant")} role="tabpanel" aria-labelledby={tabId("assistant")} hidden={tab !== "assistant"}>
+        <div className="flow-side-pane" id={paneId("assistant")} data-side-pane="assistant" role="tabpanel" aria-labelledby={tabId("assistant")} hidden={tab !== "assistant"}>
           {assistant}
         </div>
       </section>

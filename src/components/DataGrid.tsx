@@ -12,7 +12,7 @@ import {
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { durationText } from "../format/units";
-import { applyEdits, confirmEdits, errorText, fetchFullValue, fetchPage, isNotOpen, planEdits, tableDesign } from "../api/client";
+import { applyEdits, confirmEdits, errorText, fetchFullValue, fetchPage, isNotOpen, locateRow, planEdits, tableDesign } from "../api/client";
 import type {
   Cell,
   ColumnInfo,
@@ -53,6 +53,7 @@ import {
   applyMany,
   type CellOp,
 } from "../edits/pending";
+import { summarize } from "../grid/summary";
 import { cellText, cellValue, type DisplayRow, displayRows, hasKey, parsePaste } from "../edits/gridRows";
 import CellEditor, { type LargeEditor } from "./CellEditor";
 import type { LangClient } from "../lang/client";
@@ -61,8 +62,31 @@ import type { AskContext, AskKit } from "../assistant/context";
 import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
 import { type RecentStepInput, useRecordStep } from "../assistant/recentSteps";
 import FilterBar from "../grid/FilterBar";
-import { planCells, plural } from "../edits/cellOps";
+import { names, planCells, plural } from "../edits/cellOps";
 import { filterForValue, filtersSql, OPS, type RowFilter, valueKind } from "../grid/rowFilters";
+import {
+  type FollowRequest,
+  type GridJump,
+  type KeyWay,
+  type RowCount,
+  backNote,
+  countText,
+  danglingNote,
+  filtersText,
+  fkText,
+  hasWaysIn,
+  inNote,
+  isKeyColumn,
+  keyFiltersOf,
+  keysOfTable,
+  keyText,
+  outNote,
+  rowFiltersOf,
+  waysIn,
+  waysOut,
+} from "../grid/foreignKeys";
+import { type CountStop, countRows } from "../grid/keyCounts";
+import KeyPicker, { type PickGroup, type PickItem } from "../grid/KeyPicker";
 import {
   altGraph,
   cellCount,
@@ -71,20 +95,25 @@ import {
   norm,
   rowsOf,
   type Selection,
+  selectRows,
   single,
   wholeRows,
 } from "../grid/selection";
 import { readClipboard } from "../grid/clipboard";
+import { isOwnOrder, moveColumn, namesOfOrder, orderFromNames, ownOrder, shownOf } from "../grid/columnOrder";
+import { loadColumnOrder, rememberColumnOrder } from "../grid/columnOrderStore";
 import { FullValueDialog } from "./CellValue";
 import FeatureIcon from "./FeatureIcon";
 import Kbd from "./Kbd";
-import ResultGrid, { type GridHandle } from "./ResultGrid";
+import ResultGrid, { type GridHandle, type MoveBy } from "./ResultGrid";
 import Icon from "./Icon";
 import DbMark from "./DbMark";
 import MenuButton, { MenuList, type MenuItem } from "./Menu";
 import { useToast } from "./Toast";
 import { toCsv } from "../query/ResultTools";
-import { type CommandHandlers, useCommandKeys } from "../commands/useCommandKeys";
+import { type CommandHandlers, useCommandKeys, useKeymap } from "../commands/useCommandKeys";
+import { hintFor } from "../commands/keymap";
+import { pressedKeys } from "../commands/keys";
 import type { ExportOrigin } from "../jobs/exportText";
 import { objectPrefix } from "../objectPath";
 
@@ -154,6 +183,27 @@ interface Props {
   onSaved?(): void;
   /** The tab's key: the grid publishes what the Ask may know of it (`tabAsk.ts`). */
   askKey?: string | null;
+  /** UX step 8: the Connection is open, so rows that point here may be counted. */
+  open?: boolean;
+  /** UX step 8: a key was followed; the owner opens `way.path` filtered by the key. */
+  onFollow?(request: FollowRequest): void;
+  /** UX step 8: show these filters and this cell (a followed key, Back, Forward); acted on once per `seq`. */
+  jump?: GridJump | null;
+  /** UX step 8: Back and Forward in the header; `back` and `forward` name the tab each goes to, null when none. */
+  nav?: { back: string | null; forward: string | null; onBack(): void; onForward(): void };
+}
+
+/** Where a table grid is, for Back and Forward: its filters, page and active cell (the row on the page). */
+export interface GridLocation {
+  filters: RowFilter[];
+  where: string | null;
+  page: number;
+  sort: SortSpec | null;
+  /**
+   * The active cell: its row on the page, the column, and the row's primary key: null for a table with no key, left
+   * out for a row with none yet (a new row), which comes back by its place.
+   */
+  cell: { row: number; column: string; key?: string | null } | null;
 }
 
 /**
@@ -194,6 +244,8 @@ export interface GridControl {
   flush(): boolean;
   /** How many Pending Edits the grid holds, for the unsaved changes dialog. */
   pendingCount(): number;
+  /** UX step 8: where a table grid is, for Back and Forward; other tabs have none. */
+  location?(): GridLocation;
 }
 
 type Ask = Extract<RunVerdict, { kind: "needsConfirmation" }>;
@@ -202,11 +254,13 @@ const READ_ONLY_TIP = "Read-only Connection: cells can't be edited";
 const NO_KEY = "This table has no primary key, so its rows can't be edited";
 const KEY_NOTE = "Key columns can't be changed here";
 const BINARY_NOTE = "Binary values can only be set to NULL here";
-const PASTE_KEY_NOTE = "Pasting can't change key columns.";
+const MULTI_SELECTION_NOTE = "This action won't work on multiple selections.";
 const PASTE_DELETED_NOTE = "Deleted rows can't be edited. Revert the row first.";
 const PROD_SAVE_NOTE = "Saving runs on Production and asks you to confirm the SQL first.";
 const READ_ONLY_FOOT = "Read-only Connection: cells cannot be edited";
 const VIEW_NOTE = "Views are shown here, not edited.";
+const NO_LOOKUP = "Couldn't look up where the row moved on this server; showing its old place.";
+const DEFAULT_NO_FILTER = "DEFAULT has no value yet: the server works it out on Save.";
 
 let filterSeq = 0;
 
@@ -375,6 +429,10 @@ export default function DataGrid({
   onSaved,
   onTransfer,
   askKey = null,
+  open = true,
+  onFollow,
+  jump = null,
+  nav,
 }: Props) {
   const { show: showToast } = useToast();
   const recordStep = useRecordStep();
@@ -394,13 +452,34 @@ export default function DataGrid({
   const workedRef = useRef(onWorked);
   workedRef.current = onWorked;
   const worked = () => workedRef.current?.();
-  const [pageIndex, setPageIndex] = useState(0);
-  const [sort, setSort] = useState<SortSpec | null>(null);
+  // A tab opened by a followed key starts on the key's filter, so it never fetches every row first.
+  const [pageIndex, setPageIndex] = useState(jump?.page ?? 0);
+  const [sort, setSort] = useState<SortSpec | null>(jump?.sort ?? null);
   /** The hidden columns of the Table menu's Columns list (PR28). */
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  /**
+   * The column order shown, as column names; null is the table's own. View only: a move never alters the table. It is
+   * remembered per table per Connection (`columnOrderStore`) and read when the grid opens.
+   */
+  const [orderNames, setOrderNames] = useState<string[] | null>(null);
+  const orderMoved = useRef(false);
+  useEffect(() => {
+    let live = true;
+    void loadColumnOrder(connectionId, table).then((names) => {
+      // A move made before the read answered wins.
+      if (!live || !names || orderMoved.current) return;
+      setOrderNames(names);
+      // Opening the table uses its order: written again (the same names), it is the most recently used one.
+      rememberColumnOrder(connectionId, table, names);
+    });
+    return () => {
+      live = false;
+    };
+    // `table` is fixed for this component's lifetime.
+  }, [connectionId]);
   /** Item 2: the filters, built in words; `filter` is the WHERE they make, which the page is fetched with. */
-  const [rowFilters, setRowFilters] = useState<RowFilter[]>([]);
-  const [filter, setFilter] = useState<string | null>(null);
+  const [rowFilters, setRowFilters] = useState<RowFilter[]>(jump?.filters ?? []);
+  const [filter, setFilter] = useState<string | null>(jump?.where ?? null);
   const schemaLoad = useSyncExternalStore(
     lang ? (l) => lang.schemas.subscribe(l) : noSubscribe,
     () => lang?.schemas.state(connectionId, table.database) ?? null,
@@ -510,6 +589,11 @@ export default function DataGrid({
   const editValue = useRef("");
   const [menu, setMenu] = useState<Menu | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /**
+   * What moving a column says (a drag, its drop, the move keys, the header menu). It lives in the footer's live region,
+   * which is always there, so a drag never adds a line above the grid that would push it under the pointer.
+   */
+  const [orderNote, setOrderNote] = useState<string | null>(null);
   /** The save in progress; editing is locked while it runs. */
   const inflight = useRef<Promise<boolean> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -537,7 +621,14 @@ export default function DataGrid({
     } else setSel(again);
     setEditing(null);
     setMenu(null);
+    closePicker(false);
     before.current = shown ? { epoch: shown.epoch, columns: page?.columns ?? [], view } : null;
+    // UX step 8: a followed key, Back or Forward lands once its rows are in.
+    const l = landing.current;
+    if (l && shown && page && shown.epoch === l.epoch) {
+      landing.current = null;
+      land(l.jump, l.replaced, page);
+    }
   }, [page]);
   // The latest page and rows, for answers that arrive after the grid moved on.
   const pageRef = useRef(page);
@@ -547,9 +638,11 @@ export default function DataGrid({
   const keyed = hasKey(columns);
 
   // The rows and columns on screen, as indexes into `view` and `columns`: every row (the filters run on the
-  // server), and the columns the Table menu's Columns list has not hidden.
-  // Selection, editing and Pending Edits stay in `view` and `columns` indexes; only the grid maps.
-  const shownCols = useMemo(() => columns.flatMap((c, i) => (hidden.has(c.name) ? [] : [i])), [columns, hidden]);
+  // server), and the columns the Table menu's Columns list has not hidden, in the order shown.
+  // Selection, editing and Pending Edits stay in `view` and `columns` indexes; only the grid maps, through
+  // `shownCols` alone: copy, paste, the summary, edits, keys and tooltips all read a shown place through it.
+  const order = useMemo(() => orderFromNames(orderNames, columns.map((c) => c.name)), [orderNames, columns]);
+  const shownCols = useMemo(() => shownOf(order, (i) => hidden.has(columns[i].name)), [order, columns, hidden]);
   const shownRows = useMemo(() => view.map((_, i) => i), [view]);
   const rowPos = (row: number) => shownRows.indexOf(row);
   const colPos = (column: number) => shownCols.indexOf(column);
@@ -594,6 +687,8 @@ export default function DataGrid({
       path: table,
       columns: columns.map((c) => c.name),
       hidden: columns.filter((c) => hidden.has(c.name)).map((c) => c.name),
+      // Export writes the columns in the order the grid shows them.
+      order: order.map((i) => columns[i].name),
       filter,
       sort,
       selected,
@@ -618,12 +713,18 @@ export default function DataGrid({
   // hidden, so nothing acts on a cell off screen. Fewer rows (an undone new row) cut the ranges back.
   // The cell menu follows the same rule: it closes when its row or column leaves the screen.
   const colsBefore = useRef(shownCols);
+  /** The grid moved a column (drag, keys, header menu) and selected it in its new place. */
+  const orderSelected = useRef(false);
   useEffect(() => {
     const prev = colsBefore.current;
     colsBefore.current = shownCols;
+    const movedHere = orderSelected.current;
+    orderSelected.current = false;
     setSelection((s) => {
       if (!s) return s;
-      if (prev.join(",") !== shownCols.join(",")) {
+      // Columns that just arrived keep a selection made for them (a followed key's row). A move made in the grid
+      // brings the selection it made itself.
+      if (prev.length > 0 && !movedHere && prev.join(",") !== shownCols.join(",")) {
         const c = shownCols.indexOf(prev[s.active.c]);
         return c < 0 || s.active.r >= shownRows.length ? null : single({ r: s.active.r, c });
       }
@@ -788,7 +889,7 @@ export default function DataGrid({
 
   function applyCells(kind: "clear" | "null" | "default", design: Map<string, TableColumn> | null) {
     if (!pendingRef.current || inflight.current) return;
-    const plan = planCells({ kind, view, columns, cells: selectedCells(), design });
+    const plan = planCells({ kind, view, columns, cells: selectedCells(), design, updateDefault: dialect !== "sqlite" });
     if (plan.ops.length) update((p) => applyMany(p, plan.ops)[0]);
     setNote(plan.note);
   }
@@ -893,6 +994,30 @@ export default function DataGrid({
     if (!editable || !pendingRef.current || inflight.current) return;
     const lines = parsePaste(text);
     const many = cellCount(selection) > 1;
+    /** The cells a paste left alone (M3): key and binary cells of loaded rows can't be typed into. */
+    const left = { keys: new Set<string>(), binary: 0 };
+    let skippedCount = 0;
+    const fixed = (d: DisplayRow, column: number): boolean => {
+      if (d.kind !== "loaded") return false;
+      if (columns[column].isPrimaryKey) left.keys.add(columns[column].name);
+      else if (d.cells[column].t === "bytes") left.binary++;
+      else return false;
+      return true;
+    };
+    const said = (written: number): string | null => {
+      if (skippedCount === 0) return null;
+      // The words Delete and Set NULL use for the same cells.
+      const why = [
+        left.keys.size ? (left.keys.size === 1 ? `Key column ${names([...left.keys])} left as it is.` : `Key columns ${names([...left.keys])} left as they are.`) : "",
+        left.binary ? (left.binary === 1 ? "Binary value left as it is." : "Binary values left as they are.") : "",
+      ].filter(Boolean);
+      return `${written ? `Pasted ${plural(written, "cell")}.` : "Nothing pasted."} ${why.join(" ")}`;
+    };
+    const skip = (d: DisplayRow, column: number) => {
+      const was = fixed(d, column);
+      if (was) skippedCount++;
+      return was;
+    };
     if (lines.length === 1 && lines[0].length === 1 && many) {
       const cells = selectedCells();
       for (const at of cells) {
@@ -900,46 +1025,49 @@ export default function DataGrid({
         if (d?.kind !== "loaded") continue;
         if (!d.key) return setNote(NO_KEY);
         if (d.deleted) return setNote(PASTE_DELETED_NOTE);
-        if (columns[at.column].isPrimaryKey) return setNote(PASTE_KEY_NOTE);
       }
-      setNote(null);
       const value: NewValue = { t: "text", value: lines[0][0] };
-      update((p) =>
-        applyMany(
-          p,
-          cells.map((at): CellOp => {
-            const d = view[at.row];
-            const column = columns[at.column].name;
-            return d.kind === "new" ? { t: "setNew", localId: d.id, column, value } : { t: "set", rowKey: d.key!, row: d.source, column, value };
-          }),
-        )[0],
-      );
+      const ops: CellOp[] = [];
+      for (const at of cells) {
+        const d = view[at.row];
+        if (skip(d, at.column)) continue;
+        const column = columns[at.column].name;
+        ops.push(d.kind === "new" ? { t: "setNew", localId: d.id, column, value } : { t: "set", rowKey: d.key!, row: d.source, column, value });
+      }
+      setNote(said(ops.length));
+      if (ops.length) update((p) => applyMany(p, ops)[0]);
       return;
     }
+    // Excel: a block does not paste into several ranges at once.
+    if (selection && selection.ranges.length > 1) return setNote(MULTI_SELECTION_NOTE);
     const top = selection ? norm(selection.ranges[selection.ranges.length - 1]) : null;
     const r0 = top ? top.t : 0;
     const c0 = top ? top.l : 0;
     if (r0 < 0 || c0 < 0 || c0 >= shownCols.length) return;
     const span = (line: string[]) => line.slice(0, shownCols.length - c0);
     const column = (j: number) => columns[shownCols[c0 + j]];
+    const columnAt = (j: number) => shownCols[c0 + j];
     const target = (i: number) => (r0 + i < shownRows.length ? view[shownRows[r0 + i]] : undefined);
-    for (const [i, line] of lines.entries()) {
+    for (const [i] of lines.entries()) {
       const d = target(i);
       if (d?.kind !== "loaded") continue;
       if (!d.key) return setNote(NO_KEY);
       if (d.deleted) return setNote(PASTE_DELETED_NOTE);
-      if (span(line).some((_, j) => column(j).isPrimaryKey)) return setNote(PASTE_KEY_NOTE);
     }
-    setNote(null);
     const ops: CellOp[] = [];
+    let written = 0;
     lines.forEach((line, i) => {
       const d = target(i);
-      const cells = span(line).map((value, j) => [column(j).name, { t: "text", value } as NewValue] as const);
+      const cells = span(line).flatMap((value, j) =>
+        d && skip(d, columnAt(j)) ? [] : [[column(j).name, { t: "text", value } as NewValue] as const],
+      );
+      written += cells.length;
       if (!d) ops.push({ t: "add", values: new Map<string, NewValue>(cells) });
       else if (d.kind === "new") for (const [name, value] of cells) ops.push({ t: "setNew", localId: d.id, column: name, value });
-      else if (d.key && !d.deleted) for (const [name, value] of cells) ops.push({ t: "set", rowKey: d.key, row: d.source, column: name, value });
+      else for (const [name, value] of cells) ops.push({ t: "set", rowKey: d.key!, row: d.source, column: name, value });
     });
-    update((p) => applyMany(p, ops)[0]);
+    setNote(said(written));
+    if (ops.length) update((p) => applyMany(p, ops)[0]);
   }
 
   /** Why an edit key does nothing here: the Read-only toast, or a note on a view. */
@@ -958,12 +1086,26 @@ export default function DataGrid({
     const c = columns[sel.column];
     const cell = view[sel.row]?.cells[sel.column];
     if (!c || !cell) return null;
+    // M6: DEFAULT has no value to fill in: the form opens empty on its column.
+    if (defaultMarker(sel.row, sel.column)) return { column: c.name, op: OPS[valueKind(c.typeName)][0].op, value: "" };
     const f = filterForValue(c.name, valueKind(c.typeName), cell);
     if (!f) setNote("Binary values can't be filtered by.");
     return f;
   }
 
+  /**
+   * M6: the cell shows the `default` marker: a pending DEFAULT on a saved row, or a new row's key left to its default.
+   * It has no value yet, so it copies as the marker and is not filtered by.
+   */
+  function defaultMarker(row: number, column: number): boolean {
+    const d = view[row];
+    if (!d || !columns[column]) return false;
+    if (d.kind === "new") return !d.set[column] && d.defaults[column];
+    return !!(d.key && pending && pendingValue(pending, d.key, columns[column].name)?.t === "default");
+  }
+
   function filterByValue() {
+    if (sel && defaultMarker(sel.row, sel.column)) return setNote(DEFAULT_NO_FILTER);
     const f = filterDraft();
     if (f && sel) applyFilters([...rowFilters, { ...f, id: `cell${++filterSeq}` }]);
   }
@@ -1265,6 +1407,13 @@ export default function DataGrid({
         return !!pendingRef.current && count(pendingRef.current) > 0;
       },
       pendingCount: () => (pendingRef.current ? count(pendingRef.current) : 0),
+      location: () => {
+        const d = sel ? view[sel.row] : undefined;
+        const at = sel ? { row: sel.row, column: columns[sel.column].name } : null;
+        // M4: a new row of a keyed table has no key yet: it comes back by its place, never as a keyless table's row.
+        const cell = !at ? null : d?.kind === "loaded" ? { ...at, key: d.key } : keyed ? at : { ...at, key: null };
+        return { filters: rowFilters, where: filter, page: pageIndex, sort, cell };
+      },
     };
   }
 
@@ -1334,9 +1483,41 @@ export default function DataGrid({
       );
     }
     items.push(
-      { key: "filter", label: "Filter by this value", separatorBefore: true, onSelect: act(filterByValue) },
+      {
+        key: "filter",
+        label: "Filter by this value",
+        separatorBefore: true,
+        ...(defaultMarker(m.row, m.column) && { disabled: true, title: DEFAULT_NO_FILTER }),
+        onSelect: act(filterByValue),
+      },
       { key: "full", label: "Open full value", shortcut: "Shift+F2", onSelect: act(() => openFull({ row: m.row, column: m.column })) },
     );
+    // UX step 8: their own group after Filter by this value and Open full value (DataGrip, DBeaver).
+    if (canFollow && keySchema && d.kind === "loaded") {
+      const spot = { row: m.row, column: m.column };
+      const name = columns[m.column].name;
+      const isKey = isKeyColumn(keySchema, table, name);
+      if (isKey) {
+        const ways = waysOut(keySchema, table, valueOf(d), name);
+        const dead = ways.every((w) => w.blocked);
+        items.push({
+          key: "followKey",
+          label: ways.length > 1 ? "Go to referenced row..." : "Go to referenced row",
+          shortcut: followHint ?? undefined,
+          separatorBefore: true,
+          disabled: dead,
+          title: dead
+            ? `${ways[0].blocked}: no row to go to`
+            : ways.length > 1
+              ? `Pick one of ${ways.length} keys`
+              : `Opens ${ways[0].path.name} where ${keyText(ways[0].filters)}`,
+          onSelect: act(() => follow(spot)),
+        });
+      }
+      if (hasWaysIn(keySchema, table)) {
+        items.push({ key: "pointsHere", label: "Rows that point here...", shortcut: pointsHint ?? undefined, separatorBefore: !isKey, onSelect: act(() => pointsHere(spot)) });
+      }
+    }
     if (!editable) return items;
     const live = rows.some((r) => view[r] && !(view[r].kind === "loaded" && (view[r] as { deleted: boolean }).deleted));
     if (live) {
@@ -1365,18 +1546,350 @@ export default function DataGrid({
     return items;
   }
 
-  // PR31: Foreign Key columns from the language schema the filter already loads; none until it loads.
-  const fkColumns = useMemo(() => {
-    const out = new Set<string>();
-    if (!lang || schemaLoad !== "loaded") return out;
-    const schema = lang.client.sqlSchemaFor(schemaKey(connectionId, table.database));
-    for (const fk of schema?.fks ?? []) {
-      if (fk.from.table !== table.name) continue;
-      if (table.schema !== null && fk.from.schema !== null && fk.from.schema !== table.schema) continue;
-      for (const c of fk.from.columns) out.add(c);
+  // ---- UX step 8 (G8): following Foreign Keys ----
+  // PR31: the keys come from the language schema the filter already loads; none until it loads. Only this table's
+  // keys are kept, so each cell looks through a few.
+  const keySchema = useMemo(() => {
+    if (!lang || schemaLoad !== "loaded") return null;
+    const s = lang.client.sqlSchemaFor(schemaKey(connectionId, table.database));
+    return s ? keysOfTable(s, table, dialect) : null;
+  }, [lang, schemaLoad, connectionId, table, dialect]);
+  const fkColumns = useMemo(
+    () => new Set(keySchema ? columns.filter((c) => isKeyColumn(keySchema, table, c.name)).map((c) => c.name) : []),
+    [keySchema, columns, table],
+  );
+  const { map: keymap } = useKeymap();
+  const followHint = hintFor(keymap, "grid.followKey");
+  const pointsHint = hintFor(keymap, "grid.rowsPointingHere");
+  /** " (Alt+Left)": the first key, with arrow keys named as people say them. */
+  /** A command's first key, with arrow keys named as people say them ("Alt+Left"). */
+  const spokenKey = (id: "nav.back" | "nav.forward") => hintFor(keymap, id)?.replace(/Arrow(Left|Right|Up|Down)/, "$1") ?? null;
+  const navHint = (id: "nav.back" | "nav.forward") => {
+    const k = spokenKey(id);
+    return k ? ` (${k})` : "";
+  };
+  const canFollow = kind === "table" && !!onFollow && !!keySchema;
+
+  /** How a column of another table of this database filters, from the language schema; text when unknown. */
+  function kindIn(path: ObjectPath) {
+    const t = lang?.schemas
+      .tables(connectionId, table.database)
+      ?.find((x) => x.name === path.name && (path.schema === null || x.schema === null || x.schema === path.schema));
+    const kinds = new Map((t?.columns ?? []).map((c) => [c.name, valueKind(c.typeName)]));
+    return (c: string) => kinds.get(c) ?? "text";
+  }
+  const valueOf = (d: DisplayRow) => (c: string) => {
+    const i = columns.findIndex((x) => x.name === c);
+    return i < 0 ? undefined : d.cells[i];
+  };
+
+  type Picker = {
+    seq: number;
+    mode: "out" | "in" | "related";
+    title: string;
+    from: string;
+    ways: KeyWay[];
+    counts: Record<number, RowCount>;
+    x: number;
+    y: number;
+    spot: Spot;
+    /** One table points here: it opens by itself once its count shows it has rows. */
+    autoOpen?: boolean;
+  };
+  const [picker, setPicker] = useState<Picker | null>(null);
+  /** Counts each list opened or closed, so a count that answers late lands only in its own list. */
+  const pickSeq = useRef(0);
+  /** The counts of the list on screen; closing it drops the ones still waiting their turn. */
+  const countStop = useRef<CountStop>({ cancelled: false });
+  function newCounts(): CountStop {
+    countStop.current.cancelled = true;
+    countStop.current = { cancelled: false };
+    return countStop.current;
+  }
+  function closePicker(refocus: boolean) {
+    newCounts();
+    pickSeq.current++;
+    setPicker(null);
+    if (refocus) focusGrid();
+  }
+
+  /** Under the cell, as the menu sits under the active cell. */
+  function anchor(spot: Spot) {
+    const cell = sectionRef.current?.querySelector(`tr[data-row="${rowPos(spot.row)}"] td[data-col="${colPos(spot.column)}"]`);
+    const b = cell?.getBoundingClientRect();
+    return { x: b ? b.left : 0, y: b ? b.bottom + 2 : 0 };
+  }
+
+  const isNone = (c: RowCount | undefined) => c?.state === "done" && c.rows === 0 && !c.more;
+
+  /** Asks the owner to open the key's table filtered by it. */
+  function emit(way: KeyWay, spot: Spot) {
+    const d = view[spot.row];
+    if (!onFollow || d?.kind !== "loaded" || way.blocked) return;
+    closePicker(false);
+    setNote(null);
+    const filters = rowFiltersOf(way.filters);
+    const key = way.dir === "in" ? way.fk.to.columns.map((column, i) => ({ column, value: way.filters[i]?.value ?? "" })) : [];
+    onFollow({ way, filters, where: filtersSql(dialect, filters, kindIn(way.path)), from: { table: table.name, row: firstRow + d.index, key } });
+  }
+
+  /** Counts the rows of each table that points here, as the answers come. */
+  function startCounts(seq: number, ways: KeyWay[]) {
+    const stop = newCounts();
+    ways.forEach((w, i) => {
+      if (w.dir !== "in" || w.blocked) return;
+      const where = filtersSql(dialect, rowFiltersOf(w.filters), kindIn(w.path));
+      void countRows(connectionId, { table: w.path, where }, open, stop).then((c) =>
+        setPicker((p) => (p && p.seq === seq ? { ...p, counts: { ...p.counts, [i]: c } } : p)),
+      );
+    });
+  }
+
+  function openPicker(mode: Picker["mode"], ways: KeyWay[], spot: Spot, counts: Record<number, RowCount> = {}, autoOpen = false) {
+    const d = view[spot.row];
+    const c = columns[spot.column];
+    if (d?.kind !== "loaded" || !c) return;
+    setMenu(null);
+    const seq = ++pickSeq.current;
+    const from = mode === "out" ? `${c.name} = ${cellText(d.cells[spot.column])}` : `${table.name} row ${(firstRow + d.index).toLocaleString("en-US")}`;
+    const title = mode === "in" ? "Rows that point here" : mode === "related" ? "Related rows" : "Go to";
+    setPicker({ seq, mode, title, from, ways, counts, ...anchor(spot), spot, autoOpen });
+    startCounts(seq, ways.map((w, i) => (counts[i] ? { ...w, blocked: "counted" } : w)));
+  }
+
+  /** The row a key is followed from, or why there is none. */
+  function keyRow(spot: Spot | null): DisplayRow | null {
+    if (!spot) {
+      setNote(`Select a cell first. ${followHint ?? "F4"} on a key goes to its row.`);
+      return null;
     }
-    return out;
-  }, [lang, schemaLoad, connectionId, table]);
+    const d = view[spot.row];
+    // A key pressed in the open cell editor is the editor's.
+    if (!d || editingRef.current) return null;
+    if (!keySchema) {
+      if (lang) setNote("The table's keys are still loading. Try again in a moment.");
+      return null;
+    }
+    if (d.kind !== "loaded") {
+      setNote("Save the new row first: it has no keys to follow yet.");
+      return null;
+    }
+    return d;
+  }
+
+  /** F4, Ctrl+B, the arrow and the menu: to the row the key names; a picker for two keys; related rows elsewhere. */
+  function follow(spot: Spot | null) {
+    const d = keyRow(spot);
+    if (!d || !spot || !keySchema) return;
+    const name = columns[spot.column].name;
+    const value = valueOf(d);
+    if (!isKeyColumn(keySchema, table, name)) {
+      // DataGrip's Related Data: the row's keys, and the tables that point to it.
+      const ways = [...waysOut(keySchema, table, value), ...waysIn(keySchema, table, value)];
+      if (ways.length === 0) return setNote(`${name} is not a Foreign Key, and nothing links to this row.`);
+      return openPicker("related", ways, spot);
+    }
+    const ways = waysOut(keySchema, table, value, name);
+    if (ways.every((w) => w.blocked)) return setNote(`${ways[0].blocked}: there is no ${ways[0].path.name} row to go to.`);
+    if (ways.length === 1) return emit(ways[0], spot);
+    openPicker("out", ways, spot);
+  }
+
+  /** Alt+F7 and the menu: the tables whose rows point to this row, with counts; one table with rows opens at once. */
+  function pointsHere(spot: Spot | null) {
+    const d = keyRow(spot);
+    if (!d || !spot || !keySchema) return;
+    const ways = waysIn(keySchema, table, valueOf(d));
+    if (ways.length === 0) return setNote(`No Foreign Key points to ${table.name}.`);
+    // One table: the list shows at once while it counts (DataGrip), and opens the rows when there are some.
+    openPicker("in", ways, spot, {}, ways.length === 1 && !ways[0].blocked);
+  }
+
+  // Nothing points to the row: the list stays, every table in it off, and the note says so.
+  useEffect(() => {
+    if (picker?.mode === "in" && picker.ways.every((w, i) => w.blocked || isNone(picker.counts[i]))) {
+      setNote(`No rows point to this ${table.name} row.`);
+    }
+    const counted = picker?.counts[0];
+    if (picker?.autoOpen && counted && !isNone(counted)) emit(picker.ways[0], picker.spot);
+  }, [picker]);
+
+  function pickGroups(p: Picker): PickGroup[] {
+    const item = (w: KeyWay, i: number): PickItem => {
+      const count = p.counts[i] ?? ({ state: "counting" } as const);
+      return {
+        id: String(i),
+        dir: w.dir,
+        table: w.path.name,
+        by: w.dir === "out" ? (w.blocked ?? keyText(w.filters)) : `by ${w.fk.from.columns.join(" + ")}`,
+        meta: w.dir === "out" ? (!w.blocked && w.fk.from.columns.length === 1 ? `via ${w.fk.from.columns[0]}` : "") : w.blocked ? w.blocked : countText(count),
+        tip: `${w.fk.name ?? "Foreign Key"}: ${fkText(w.fk)}`,
+        disabled: !!w.blocked || (w.dir === "in" && isNone(count)),
+      };
+    };
+    const all = p.ways.map(item);
+    if (p.mode !== "related") return [{ label: null, items: all }];
+    return [
+      { label: "Goes to", items: all.filter((x) => x.dir === "out") },
+      { label: "Points here", items: all.filter((x) => x.dir === "in") },
+    ];
+  }
+
+  // The commands act on the active cell of the focused grid, else the one on screen when nothing has focus or a menu
+  // runs them. Keys pressed in another pane (the SQL editor, the Schema Builder's Ctrl+B) are that pane's.
+  const followKeys: CommandHandlers = {};
+  if (kind === "table" && onFollow) {
+    const mine = () => {
+      const at = document.activeElement;
+      return pressedKeys() === null || !at || at === document.body || !!sectionRef.current?.contains(at);
+    };
+    for (const [id, run] of [
+      ["grid.followKey", () => follow(sel)],
+      ["grid.rowsPointingHere", () => pointsHere(sel)],
+    ] as const) {
+      Object.defineProperty(followKeys, id, { enumerable: true, get: () => (mine() ? run : undefined) });
+    }
+  }
+  useCommandKeys(followKeys, { region: sectionRef });
+
+  /** What arrived with a followed key, Back or Forward, waiting for its rows: the fetch epoch and the replaced filter. */
+  const landing = useRef<{ jump: GridJump; epoch: number; replaced: string | null } | null>(jump ? { jump, epoch: 0, replaced: null } : null);
+  const jumpSeen = useRef<number | null>(jump?.seq ?? null);
+  /** The note a landing wrote; moving the cell clears it (the board). */
+  const jumpNote = useRef<string | null>(null);
+  const [flashRow, setFlashRow] = useState<number | null>(null);
+  useEffect(() => {
+    if (flashRow === null) return;
+    const t = setTimeout(() => setFlashRow(null), 1400);
+    return () => clearTimeout(t);
+  }, [flashRow]);
+
+  // A new request on an open tab: its filters replace the tab's (the note names the old ones) and its cell is chosen.
+  useEffect(() => {
+    if (!jump || jumpSeen.current === jump.seq) return;
+    jumpSeen.current = jump.seq;
+    if (jump.say.kind === "none") {
+      jumpNote.current = jump.say.text;
+      setNote(jump.say.text);
+      return;
+    }
+    flushEditor();
+    setMenu(null);
+    closePicker(false);
+    const was = filtersText(rowFilters);
+    const replaced = was !== null && was !== filtersText(jump.filters) ? was : null;
+    setRowFilters(jump.filters);
+    const sorted = jump.sort !== undefined && (jump.sort?.column !== sort?.column || jump.sort?.descending !== sort?.descending);
+    // M5: a fetch still in flight would land the jump on the rows it replaces: wait for a fresh one.
+    if (jump.where !== filter || jump.page !== pageIndex || sorted || loading || !page) {
+      epochRef.current++;
+      setFilter(jump.where);
+      setPageIndex(jump.page);
+      if (sorted) setSort(jump.sort ?? null);
+      landing.current = { jump, epoch: epochRef.current, replaced };
+      // The same WHERE, sort and page fetch nothing new, so ask again: the rows may have changed since.
+      if (jump.where === filter && jump.page === pageIndex && !sorted) setAttempt((n) => n + 1);
+    } else land(jump, replaced, page);
+  }, [jump?.seq]);
+
+  /** A row key (`keyOf`) in words with the key's columns: `id = 1003`. */
+  function keyWords(key: string): string {
+    const names = columns.filter((c) => c.isPrimaryKey).map((c) => c.name);
+    let cells: Cell[] = [];
+    try {
+      cells = JSON.parse(key) as Cell[];
+    } catch {
+      return "its key";
+    }
+    return names.map((n, i) => `${n} = ${cells[i] ? cellText(cells[i]) : "?"}`).join(" AND ");
+  }
+
+  /**
+   * M3: Back or Forward to a row with a key that is not on the page. Its place under the tab's sort and filter gives
+   * its page, which is fetched and the row selected there; a row no longer there says so. Another move of the grid
+   * meanwhile drops the answer.
+   */
+  function findElsewhere(j: GridJump, key: string, replaced: string | null) {
+    const epoch = epochRef.current;
+    const names = columns.filter((c) => c.isPrimaryKey).map((c) => c.name);
+    let cells: Cell[] = [];
+    try {
+      cells = JSON.parse(key) as Cell[];
+    } catch {
+      cells = [];
+    }
+    const settle = (located: "missing" | "unknown" | "unsupported") => {
+      if (epochRef.current !== epoch || !pageRef.current) return;
+      land({ ...j, located }, replaced, pageRef.current);
+    };
+    if (cells.length !== names.length) return settle("unknown");
+    locateRow(connectionId, { table, sort, filter, key: names.map((column, i) => ({ column, value: cells[i] })) }).then(
+      (place) => {
+        if (epochRef.current !== epoch) return;
+        if (place.kind === "missing") return settle("missing");
+        if (place.kind === "unsupported") return settle("unsupported");
+        if (place.kind !== "found") return settle("unknown");
+        const pageNo = Math.floor(place.index / PAGE_SIZE);
+        if (pageNo === pageIndex) return settle("unknown");
+        epochRef.current++;
+        landing.current = { jump: { ...j, page: pageNo, located: "moved" }, epoch: epochRef.current, replaced };
+        setPageIndex(pageNo);
+      },
+      () => settle("unknown"),
+    );
+  }
+
+  /** Selects the request's cell (the whole row for a followed key) and says what happened. */
+  function land(j: GridJump, replaced: string | null, pg: Page) {
+    const rows = pg.rows.length;
+    let at = -1;
+    /** Back or Forward found no row to go to: the row with its key, or its place in a table with no key. */
+    let gone: string | null = null;
+    if (j.select) {
+      const { key, row } = j.select;
+      // M5: a row with a key is found by it wherever it is now; a table with no key only has the row's place.
+      // N5: a server that can't look the row up keeps its old place.
+      const index =
+        typeof key === "string" && j.located !== "unsupported"
+          ? view.findIndex((d) => d.kind === "loaded" && d.key === key)
+          : key === null
+            ? row < rows
+              ? row
+              : -1
+            : rows > 0
+              ? Math.min(row, rows - 1)
+              : -1;
+      if (index >= 0) at = rowPos(index);
+      else if (typeof key === "string" && !j.located && (j.say.kind === "back" || j.say.kind === "forward")) {
+        // M3: not on this page. The server says where the row is now; "gone" only when it is.
+        setSelection(null);
+        findElsewhere(j, key, replaced);
+        return;
+      } else if (typeof key === "string")
+        gone = j.located === "missing" ? `The row with ${keyWords(key)} is no longer here.` : `The row with ${keyWords(key)} is not on this page now.`;
+      else if (key === null) gone = `Row ${(firstRow + row).toLocaleString("en-US")} is no longer here, and ${table.name} has no key to find it by.`;
+      const c = Math.max(0, colPos(columns.findIndex((x) => x.name === j.select!.column)));
+      if (at >= 0) setSelection(j.select.wholeRow ? { ...selectRows(null, at, at, false, shownCols.length), active: { r: at, c } } : single({ r: at, c }));
+      else if (gone) setSelection(null);
+    }
+    const say = j.say;
+    let text: string;
+    const backKey = spokenKey("nav.back") ?? "Back";
+    if (say.kind === "out") text = rows === 0 ? danglingNote(table.name, keyFiltersOf(j.filters)) : outNote(say.fromTable, say.fromRow, replaced, backKey);
+    else if (say.kind === "in") text = inNote({ rows, more: pg.hasMore }, table.name, say.toTable, say.toKey, replaced, backKey);
+    else {
+      const lead = say.kind === "back" ? "Back on" : "Forward to";
+      const unsupported = j.located === "unsupported" ? ` ${NO_LOOKUP}` : "";
+      text =
+        at >= 0 && j.select
+          ? `${backNote(lead, table.name, j.select.column, firstRow + at, filtersText(j.filters))}${unsupported}`
+          : `${lead} ${table.name}.${gone ? ` ${gone}` : unsupported}`;
+    }
+    jumpNote.current = text;
+    setNote(text);
+    if ((say.kind === "out" || say.kind === "in") && at >= 0) setFlashRow(at);
+    focusGrid();
+  }
 
   // PR29: the page's rows, "of" the server's estimate when the tree has one.
   const loadedRows = page?.rows.length ?? 0;
@@ -1395,6 +1908,16 @@ export default function DataGrid({
         : editable && changes > 0
           ? savingText(changes)
           : "";
+  // M7: the selection in words, worked out only when the selection or the rows change.
+  const selectionText = useMemo(
+    () =>
+      summarize(
+        selection,
+        (r, c) => view[shownRows[r]]?.cells[shownCols[c]],
+        shownCols.map((i) => valueKind(columns[i].typeName) === "number"),
+      ),
+    [selection, view, shownRows, shownCols, columns],
+  );
   const noteText = note ?? notice ?? (editable && page && !keyed ? NO_KEY : null);
 
   /** What the larger editor names: the column and type, the row and its key, and what keeping it does. */
@@ -1442,7 +1965,12 @@ export default function DataGrid({
       separatorBefore: items.length > 0,
       onSelect: () =>
         void navigator.clipboard
-          ?.writeText(toCsv(columns.map((c) => ({ ...c, numeric: NUMERIC_TYPE.test(c.typeName) })), view.map((d) => d.cells)))
+          ?.writeText(
+            toCsv(
+              order.map((i) => ({ ...columns[i], numeric: NUMERIC_TYPE.test(columns[i].typeName) })),
+              view.map((d) => order.map((i) => d.cells[i])),
+            ),
+          )
           .catch(() => {}),
     });
     if (onExport) {
@@ -1496,17 +2024,44 @@ export default function DataGrid({
     showToast({ kind: "readOnly", text: `${connectionName ?? "This Connection"} is Read-only. Changes are not allowed.` });
   }
 
-  const gridColumns = shownCols.map((i) => ({
-    ...columns[i],
-    numeric: NUMERIC_TYPE.test(columns[i].typeName),
-    isForeignKey: fkColumns.has(columns[i].name),
-  }));
-  const allColumns = shownCols.length === columns.length;
-  // One array while the rows stay the same, so the grid keeps its copy mark until an edit changes them.
-  const gridRows = useMemo(
-    () => shownRows.map((i) => (allColumns ? view[i].cells : shownCols.map((c) => view[i].cells[c]))),
-    [view, shownRows, shownCols, allColumns],
+  /** The arrow on a key cell, and its tooltip naming where it goes; NULL keys have none. */
+  function keyCell(r: number, c: number) {
+    const column = columns[shownCols[c]];
+    const d = view[shownRows[r]];
+    if (!keySchema || !column || !fkColumns.has(column.name) || d?.kind !== "loaded") return null;
+    if (d.cells[shownCols[c]]?.t === "null") return { kind: "null" as const };
+    const ways = waysOut(keySchema, table, valueOf(d), column.name);
+    if (ways.every((w) => w.blocked)) return null;
+    const hint = followHint ? ` (${followHint})` : "";
+    const title = ways.length > 1 ? `Go to: ${ways.map((w) => w.path.name).join(" or ")}${hint}` : `Go to ${ways[0].path.name} where ${keyText(ways[0].filters)}${hint}`;
+    return { kind: "go" as const, title, onFollow: () => follow({ row: shownRows[r], column: shownCols[c] }) };
+  }
+
+  /** A column order chosen here (a move or Reset column order): shown at once and remembered for the table. */
+  function setOrderTo(next: number[], by: MoveBy | "reset" = "reset") {
+    if (next.join(",") === order.join(",")) return;
+    flushEditor();
+    worked();
+    orderMoved.current = true;
+    orderSelected.current = true;
+    const names = namesOfOrder(next, columns.map((c) => c.name));
+    setOrderNames(names);
+    // A drop, a menu item or a reset is saved at once; held move keys save when the run pauses.
+    rememberColumnOrder(connectionId, table, names, by === "keys");
+  }
+
+  function moveColumnTo(from: number, slot: number, by: MoveBy) {
+    const m = moveColumn(order, shownCols, from, slot);
+    if (m) setOrderTo(m.order, by);
+  }
+
+  // Every column, in the table's order; `shownCols` says which are shown where, so a move copies no row.
+  const gridColumns = useMemo(
+    () => columns.map((c) => ({ ...c, numeric: NUMERIC_TYPE.test(c.typeName), isForeignKey: fkColumns.has(c.name) })),
+    [columns, fkColumns],
   );
+  // One array while the rows stay the same, so the grid keeps its copy mark until an edit changes them.
+  const gridRows = useMemo(() => shownRows.map((i) => view[i].cells), [view, shownRows]);
   const editingAt = editing ? rowPos(editing.row) : -1;
 
   return (
@@ -1531,6 +2086,33 @@ export default function DataGrid({
         )}
         {production && <span className="production-label">PRODUCTION</span>}
         {(connectionName || production) && <span className="editor-header-divider" aria-hidden="true" />}
+        {nav && (
+          <span className="table-header-nav">
+            {/* UX step 8: Back and Forward over followed keys (DBeaver's results toolbar, Edge's keys). */}
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Back"
+              aria-disabled={nav.back === null}
+              title={nav.back === null ? `Back${navHint("nav.back")}` : `Back to ${nav.back}${navHint("nav.back")}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => nav.back !== null && nav.onBack()}
+            >
+              <Icon name="arrowLeft" size={14} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Forward"
+              aria-disabled={nav.forward === null}
+              title={nav.forward === null ? `Forward${navHint("nav.forward")}` : `Forward to ${nav.forward}${navHint("nav.forward")}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => nav.forward !== null && nav.onForward()}
+            >
+              <Icon name="arrowRight" size={14} />
+            </button>
+          </span>
+        )}
         <FeatureIcon name={kind === "view" ? "view" : "table"} size={18} />
         <h2 className="table-header-name" title={`${objectPrefix(table)}${table.name}`}>
           {shortName(table)}
@@ -1651,6 +2233,14 @@ export default function DataGrid({
         <ResultGrid
           columns={gridColumns}
           rows={gridRows}
+          order={shownCols}
+          onMoveColumn={moveColumnTo}
+          onResetOrder={() => setOrderTo(ownOrder(columns.length))}
+          orderMemo={` Remembered for ${table.name}${connectionName ? ` on ${connectionName}` : ""}.`}
+          ownOrderText="the table's order"
+          orderIsOwn={isOwnOrder(order)}
+          onSortTo={setSortTo}
+          onOrderNote={setOrderNote}
           resetKey={shown?.epoch ?? 0}
           widthsKey="table"
           onResized={worked}
@@ -1665,12 +2255,18 @@ export default function DataGrid({
           onSelection={(next) => {
             setSelection(next);
             setMenu(null);
+            setOrderNote(null);
+            // Moving the cell clears the note a followed key left.
+            if (jumpNote.current !== null && note === jumpNote.current) setNote(null);
+            jumpNote.current = null;
           }}
           onNote={setNote}
           gridRef={gridRef}
           onGridKey={onGridKey}
           onPaste={onPaste}
           onCellMenu={(row: number, column: number, x: number, y: number) => setMenu({ row: shownRows[row], column: shownCols[column], x, y })}
+          rowClass={(r: number) => (r === flashRow ? "row-jumped" : undefined)}
+          keyCell={canFollow ? keyCell : undefined}
           {...(editable && {
             editingRow: editingAt < 0 ? null : editingAt,
             onEditorLost: flushEditor,
@@ -1692,8 +2288,10 @@ export default function DataGrid({
               const d = view[shownRows[r]];
               if (d?.kind === "new") return "row-added";
               if (d?.deleted) return "row-deleted";
-              return d && conflict !== null && d.key === conflict ? "row-conflict" : undefined;
+              if (d && conflict !== null && d.key === conflict) return "row-conflict";
+              return r === flashRow ? "row-jumped" : undefined;
             },
+            copyCell: (r: number, c: number) => (defaultMarker(shownRows[r], shownCols[c]) ? "default" : undefined),
             renderCell: (r: number, c: number) => {
               const row = shownRows[r];
               const column = shownCols[c];
@@ -1724,6 +2322,8 @@ export default function DataGrid({
               const d = view[row];
               // T3: an unset key column shows `default`; other unset cells of a new row stay empty.
               if (d?.kind === "new" && !d.set[column]) return d.defaults[column] ? <span className="cell-default">default</span> : "";
+              // Set DEFAULT on a saved row: the server works the value out on Save.
+              if (d?.kind === "loaded" && defaultMarker(row, column)) return <span className="cell-default">default</span>;
               return undefined;
             },
           })}
@@ -1795,6 +2395,12 @@ export default function DataGrid({
             <Icon name="chevronRight" size={14} />
           </button>
         </span>
+        {selectionText && (
+          <span className="table-selection">{selectionText}</span>
+        )}
+        <span className="table-order-note" aria-live="polite" aria-atomic="true" title={orderNote ?? undefined}>
+          {orderNote}
+        </span>
         <span className="spacer" />
         {contextText && <span className="table-context">{contextText}</span>}
       </div>
@@ -1842,6 +2448,19 @@ export default function DataGrid({
         <div ref={menuBox} className="tree-menu" style={{ left: menu.x, top: menu.y }}>
           <MenuList items={cellMenuItems(menu)} label="Cell" onClose={closeMenu} compact />
         </div>
+      )}
+
+      {picker && (
+        <KeyPicker
+          key={picker.seq}
+          title={picker.title}
+          from={picker.from}
+          groups={pickGroups(picker)}
+          x={picker.x}
+          y={picker.y}
+          onPick={(id) => emit(picker.ways[Number(id)], picker.spot)}
+          onClose={closePicker}
+        />
       )}
 
       {statusSlot &&

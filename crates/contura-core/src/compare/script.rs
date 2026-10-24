@@ -151,6 +151,9 @@ pub struct SyncPlan {
     pub sqlite_pragmas: bool,
     #[serde(skip)]
     dialect: Option<DialectKind>,
+    /// What Copy script, Save and Open in editor put around the statements (`ddl::script_frame`).
+    #[serde(default)]
+    pub frame: crate::ddl::ScriptFrame,
 }
 
 impl SyncPlan {
@@ -946,6 +949,7 @@ impl Cx<'_> {
             enum_values_first: first,
             sqlite_pragmas: framed,
             dialect: Some(self.d),
+            frame: crate::ddl::script_frame(self.d),
         }
     }
 }

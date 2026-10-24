@@ -339,3 +339,105 @@ async fn sqlite_fks_carry_their_constraint_names() {
         ]
     );
 }
+
+#[tokio::test]
+async fn sqlite_fk_without_target_columns_points_at_the_parent_primary_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shop.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);
+             CREATE TABLE prices (currency TEXT, product_id INTEGER, price NUMERIC,
+                 PRIMARY KEY (product_id, currency));
+             CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers);
+             CREATE TABLE items (id INTEGER PRIMARY KEY, p INTEGER, c TEXT,
+                 FOREIGN KEY (p, c) REFERENCES prices);",
+        )
+        .unwrap();
+    let config = ConnectionConfig {
+        id: uuid::Uuid::new_v4(),
+        name: "t".into(),
+        dialect: DialectKind::Sqlite,
+        host: String::new(),
+        port: 0,
+        user: String::new(),
+        database: None,
+        ssl: SslMode::Disable,
+        group_id: None,
+        file: Some(path),
+        query_timeout_secs: None,
+        ai_access: Default::default(),
+        ai_sync: Default::default(),
+        production: false,
+        read_only: false,
+    };
+    let dialect = connect(&config, None).await.unwrap();
+    let s = dialect.sql_schema("main").await.unwrap();
+    let to = |from: &str| {
+        s.fks
+            .iter()
+            .find(|f| f.from.table == from)
+            .unwrap_or_else(|| panic!("no key from {from}"))
+            .to
+            .columns
+            .clone()
+    };
+    // `REFERENCES customers` names no column: it means the parent's primary key, in its key order.
+    assert_eq!(to("orders"), vec!["id".to_string()]);
+    assert_eq!(
+        to("items"),
+        vec!["product_id".to_string(), "currency".to_string()]
+    );
+}
+
+/// SQLite keeps `REFERENCES Customers(ID)` as written but matches it without case: the key
+/// names the parent and its columns as they are declared, and the child's columns too.
+#[tokio::test]
+async fn sqlite_fk_names_take_the_declared_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shop.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);
+             CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER,
+                 FOREIGN KEY (Customer_ID) REFERENCES Customers(ID));
+             CREATE TABLE notes (id INTEGER PRIMARY KEY, ref INTEGER REFERENCES Nowhere(X));",
+        )
+        .unwrap();
+    let config = ConnectionConfig {
+        id: uuid::Uuid::new_v4(),
+        name: "t".into(),
+        dialect: DialectKind::Sqlite,
+        host: String::new(),
+        port: 0,
+        user: String::new(),
+        database: None,
+        ssl: SslMode::Disable,
+        group_id: None,
+        file: Some(path),
+        query_timeout_secs: None,
+        ai_access: Default::default(),
+        ai_sync: Default::default(),
+        production: false,
+        read_only: false,
+    };
+    let dialect = connect(&config, None).await.unwrap();
+    let s = dialect.sql_schema("main").await.unwrap();
+    let key = |from: &str| {
+        s.fks
+            .iter()
+            .find(|f| f.from.table == from)
+            .unwrap_or_else(|| panic!("no key from {from}"))
+            .clone()
+    };
+    let orders = key("orders");
+    assert_eq!(orders.to.table, "customers");
+    assert_eq!(orders.to.columns, ["id"]);
+    assert_eq!(orders.from.columns, ["customer_id"]);
+    // A parent that does not exist keeps the name as written.
+    let notes = key("notes");
+    assert_eq!(notes.to.table, "Nowhere");
+    assert_eq!(notes.to.columns, ["X"]);
+}

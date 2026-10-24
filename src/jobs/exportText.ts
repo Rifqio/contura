@@ -33,6 +33,8 @@ export type ExportOrigin =
       estimated: boolean;
       /** Columns hidden in the grid: they start off in the column choice. */
       hidden?: string[];
+      /** Every column in the order the grid shows them (view only); the export writes them in it. */
+      order?: string[];
     }
   | {
       kind: "result";
@@ -42,6 +44,8 @@ export type ExportOrigin =
       rows: Cell[][];
       /** Columns hidden in the result: Rows shown leaves them out. */
       hidden?: string[];
+      /** The result's columns in the order the grid shows them, as indexes into `columns`; the export follows it. */
+      order?: number[];
     };
 
 const n = (v: number) => v.toLocaleString("en-US");

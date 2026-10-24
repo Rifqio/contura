@@ -49,9 +49,9 @@ const media = () =>
 test("light_and_dark_blocks_equal_dn_section_3", () => {
   const dnLight = dnBlock("### 3.2 Light: Alucard");
   const dnDark = dnBlock("### 3.3 Dark: Dracula");
-  expect(dnLight.size).toBe(98);
+  expect(dnLight.size).toBe(99);
   // Dracula alone carries the brighter comment colour (PR33).
-  expect(dnDark.size).toBe(99);
+  expect(dnDark.size).toBe(100);
   expect(Object.fromEntries(light())).toEqual(Object.fromEntries(dnLight));
   expect(Object.fromEntries(dark())).toEqual(Object.fromEntries(dnDark));
 });
@@ -163,4 +163,46 @@ test("panel_rowline_token_in_light_dark_and_follow_windows", () => {
   expect(get(blockAfter(css, ":root, .theme-light {"))).toBe("#e6e2d2");
   expect(get(blockAfter(css, DARK_OPEN))).toBe("#323443");
   expect(get(blockAfter(blockAfter(css, "@media (prefers-color-scheme: dark) {"), ':root:not([data-theme="light"]) {'))).toBe("#323443");
+});
+
+// Polish A1: Dracula's hover equals its raised surface, so rows in menus and popovers need a token of their own.
+test("raised_hover_token_differs_from_raised_and_keeps_text_contrast", () => {
+  const all = (body: string) => new Map([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const media = blockAfter(blockAfter(css, "@media (prefers-color-scheme: dark) {"), ':root:not([data-theme="light"]) {');
+  const ratio = (a: string, b: string) => {
+    const [x, y] = [luminance(a), luminance(b)];
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+  for (const body of [blockAfter(css, ":root, .theme-light {"), blockAfter(css, DARK_OPEN), media]) {
+    const t = all(body);
+    const hover = t.get("--c-bg-raised-hover") as string;
+    expect(hover).toMatch(/^#[0-9a-f]{6}$/);
+    expect(hover).not.toBe(t.get("--c-bg-raised"));
+    expect(ratio(hover, t.get("--c-text") as string)).toBeGreaterThanOrEqual(7);
+    expect(ratio(hover, t.get("--c-text-muted") as string)).toBeGreaterThanOrEqual(4.5);
+  }
+});
+
+// Fix round 2 (N1): any text token drawn on either hover fill reaches AA in every shipped theme, so no control needs
+// its own override: a button, a danger-text button, a hovered row with subtle text.
+test("every_text_token_reaches_AA_on_both_hover_fills_in_every_theme", () => {
+  const all = (body: string) => new Map([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+  const media = blockAfter(blockAfter(css, "@media (prefers-color-scheme: dark) {"), ':root:not([data-theme="light"]) {');
+  const ratio = (a: string, b: string) => {
+    const [x, y] = [luminance(a), luminance(b)];
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+  const texts = ["text", "text-muted", "text-subtle", "accent-text", "success-text", "warning-text", "danger-text", "info-text", "prod-text"].map((n) => `--c-${n}`);
+  const themes: [string, string][] = [["light", blockAfter(css, ":root, .theme-light {")], ["dark", blockAfter(css, DARK_OPEN)], ["follow-windows", media]];
+  const failures: string[] = [];
+  for (const [name, body] of themes) {
+    const t = all(body);
+    for (const fill of ["--c-bg-hover", "--c-bg-raised-hover"]) {
+      for (const tok of texts) {
+        const r = ratio(t.get(fill) as string, t.get(tok) as string);
+        if (r < 4.5) failures.push(`${name}: ${tok} on ${fill} is ${r.toFixed(2)}`);
+      }
+    }
+  }
+  expect(failures).toEqual([]);
 });

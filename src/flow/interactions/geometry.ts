@@ -1,16 +1,9 @@
-// The canvas's editing geometry (spec 6+ section 4, the motion design): the 16 px landing cell, the 4 px
-// alignment guides, the 24 px magnet that locks a drawn flow onto a node's nearest port, and which group a
+// The canvas's editing geometry (spec 6+ section 4, the motion design; the alignment guides are the canvas's own,
+// diagram/guides.ts): the 24 px magnet that locks a drawn flow onto a node's nearest port, and which group a
 // dragged node is over. Pure functions, in flow coordinates.
 
-/** The snap grid a dropped node settles onto. */
-export const SNAP = 16;
-/** An edge or centre this close to another node's shows an accent guide. */
-export const GUIDE_PX = 4;
 /** A drawn flow within this distance of a node locks onto it. */
 export const MAGNET_PX = 24;
-/** How far a guide runs past the two boxes it joins. */
-const GUIDE_OVERRUN = 12;
-
 export interface Point {
   x: number;
   y: number;
@@ -21,60 +14,6 @@ export interface Box {
   y: number;
   w: number;
   h: number;
-}
-
-export const snapTo = (v: number) => Math.round(v / SNAP) * SNAP;
-
-/** The grid cell a node at `box` lands on. */
-export function ghostCell(box: Box): Box {
-  return { x: snapTo(box.x), y: snapTo(box.y), w: box.w, h: box.h };
-}
-
-/** An accent guide: a vertical line at x = `at` (axis x) or a horizontal one at y = `at`, from `from` to `to`. */
-export interface Guide {
-  axis: "x" | "y";
-  at: number;
-  from: number;
-  to: number;
-}
-
-/**
- * The guides for `lead` against `others`: left edges, centres and right edges (then tops, middles and bottoms)
- * within `px` of each other. Each guide sits on the other node's line and spans both boxes.
- */
-export function guidesFor(lead: Box, others: readonly Box[], px = GUIDE_PX): Guide[] {
-  const out: Guide[] = [];
-  const push = (g: Guide) => {
-    const key = `${g.axis}:${g.at}`;
-    const had = out.find((o) => `${o.axis}:${o.at}` === key);
-    if (had) {
-      had.from = Math.min(had.from, g.from);
-      had.to = Math.max(had.to, g.to);
-      return;
-    }
-    out.push(g);
-  };
-  for (const o of others) {
-    const xs: [number, number][] = [
-      [lead.x, o.x],
-      [lead.x + lead.w / 2, o.x + o.w / 2],
-      [lead.x + lead.w, o.x + o.w],
-    ];
-    for (const [a, b] of xs) {
-      if (Math.abs(a - b) > px) continue;
-      push({ axis: "x", at: b, from: Math.min(lead.y, o.y) - GUIDE_OVERRUN, to: Math.max(lead.y + lead.h, o.y + o.h) + GUIDE_OVERRUN });
-    }
-    const ys: [number, number][] = [
-      [lead.y, o.y],
-      [lead.y + lead.h / 2, o.y + o.h / 2],
-      [lead.y + lead.h, o.y + o.h],
-    ];
-    for (const [a, b] of ys) {
-      if (Math.abs(a - b) > px) continue;
-      push({ axis: "y", at: b, from: Math.min(lead.x, o.x) - GUIDE_OVERRUN, to: Math.max(lead.x + lead.w, o.x + o.w) + GUIDE_OVERRUN });
-    }
-  }
-  return out.sort((a, b) => (a.axis === b.axis ? a.at - b.at : a.axis === "x" ? -1 : 1));
 }
 
 export type Side = "r" | "l" | "t" | "b";

@@ -736,14 +736,22 @@ impl AppStore {
         Ok(())
     }
 
+    /// Deletes the Connection and, in the same transaction, the settings that belong to it alone
+    /// (the table grids' column orders), so none outlives it whatever path deletes it.
     pub fn delete_connection(&self, id: ConnectionId) -> Result<()> {
-        self.db
-            .execute(
-                "DELETE FROM connections WHERE id = ?1",
-                params![id.to_string()],
-            )
-            .map_err(store_err)?;
-        Ok(())
+        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        tx.execute(
+            "DELETE FROM connections WHERE id = ?1",
+            params![id.to_string()],
+        )
+        .map_err(store_err)?;
+        let (from, to) = prefix_range(&column_order_prefix(id));
+        tx.execute(
+            "DELETE FROM settings WHERE key >= ?1 AND key < ?2",
+            params![from, to],
+        )
+        .map_err(store_err)?;
+        tx.commit().map_err(store_err)
     }
 
     pub fn list_groups(&self) -> Result<Vec<Group>> {
@@ -833,6 +841,107 @@ impl AppStore {
             .map_err(store_err)?;
         Ok(())
     }
+
+    /// Every setting whose key starts with `prefix`, as (key, value): a range of the key's
+    /// primary key index, never a scan of the table.
+    pub fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let (from, to) = prefix_range(prefix);
+        let mut stmt = self.db.prepare(SETTINGS_IN_RANGE).map_err(store_err)?;
+        let rows = stmt
+            .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(store_err)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(store_err)
+    }
+
+    /// Writes one table's column order (`value`, JSON with an `at` stamp) for Connection `id`,
+    /// and in the same transaction drops the least recently used other orders of that Connection
+    /// while they are over `max_count` rows or `max_bytes`. Reads only that Connection's rows,
+    /// through the key index. Not found when the Connection is gone, so no order outlives it.
+    pub fn put_column_order(
+        &self,
+        id: ConnectionId,
+        table: &str,
+        value: &str,
+        max_count: usize,
+        max_bytes: usize,
+    ) -> Result<()> {
+        let prefix = column_order_prefix(id);
+        let (from, to) = prefix_range(&prefix);
+        let key = format!("{prefix}{table}");
+        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        let known = tx
+            .query_row(
+                "SELECT 1 FROM connections WHERE id = ?1",
+                params![id.to_string()],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(store_err)?;
+        if known.is_none() {
+            return Err(Error::NotFound("connection not found".into()));
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )
+        .map_err(store_err)?;
+        let (mut count, mut bytes): (i64, i64) = tx
+            .query_row(
+                "SELECT count(*), coalesce(sum(length(CAST(key AS BLOB)) + length(CAST(value AS BLOB))), 0)
+                 FROM settings WHERE key >= ?1 AND key < ?2",
+                params![from, to],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(store_err)?;
+        let over =
+            |count: i64, bytes: i64| count as usize > max_count || bytes as usize > max_bytes;
+        if over(count, bytes) {
+            // Oldest stamp first; an entry that does not read (no stamp) goes before any.
+            let old: Vec<(String, i64)> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT key, length(CAST(key AS BLOB)) + length(CAST(value AS BLOB)) FROM settings
+                         WHERE key >= ?1 AND key < ?2 AND key <> ?3
+                         ORDER BY json_extract(CASE WHEN json_valid(value) THEN value END, '$.at')",
+                    )
+                    .map_err(store_err)?;
+                stmt.query_map(params![from, to, key], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .map_err(store_err)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(store_err)?
+            };
+            for (k, size) in old {
+                if !over(count, bytes) {
+                    break;
+                }
+                tx.execute("DELETE FROM settings WHERE key = ?1", params![k])
+                    .map_err(store_err)?;
+                count -= 1;
+                bytes -= size;
+            }
+        }
+        tx.commit().map_err(store_err)
+    }
+}
+
+/// Settings whose keys lie in `[from, to)`: the primary key index finds them.
+const SETTINGS_IN_RANGE: &str = "SELECT key, value FROM settings WHERE key >= ?1 AND key < ?2";
+
+/// The keys that start with `prefix` are those in `[prefix, end)`, where `end` is the prefix with
+/// its last character one higher (`column_order:<id>:` up to `column_order:<id>;`).
+fn prefix_range(prefix: &str) -> (String, String) {
+    let mut end: Vec<char> = prefix.chars().collect();
+    if let Some(last) = end.pop() {
+        end.push(char::from_u32(last as u32 + 1).unwrap_or(char::MAX));
+    }
+    (prefix.to_string(), end.into_iter().collect())
+}
+
+/// The settings key prefix of a Connection's column orders: one setting per table,
+/// `column_order:<connection id>:<table key>`, so a move rewrites only its own table's row.
+pub fn column_order_prefix(id: ConnectionId) -> String {
+    format!("column_order:{id}:")
 }
 
 /// SQL for `column`'s text with surrounding whitespace and one final ";" removed.
@@ -847,6 +956,62 @@ fn statement_key(column: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn column_orders_are_read_through_the_key_index() {
+        let (_d, s) = open_tmp();
+        let plan: Vec<String> =
+            s.db.prepare(&format!("EXPLAIN QUERY PLAN {SETTINGS_IN_RANGE}"))
+                .unwrap()
+                .query_map(params!["a:", "a;"], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+        assert!(
+            plan.iter()
+                .any(|p| p.contains("SEARCH") && p.contains("INDEX")),
+            "{plan:?}"
+        );
+        assert_eq!(
+            prefix_range("column_order:x:"),
+            ("column_order:x:".into(), "column_order:x;".into())
+        );
+    }
+
+    #[test]
+    fn a_column_order_write_evicts_in_its_own_transaction_oldest_first() {
+        let (_d, s) = open_tmp();
+        let c = conn("a", None);
+        s.save_connection(&c).unwrap();
+        let other = conn("b", None);
+        s.save_connection(&other).unwrap();
+        let v = |at: i64| format!(r#"{{"columns":["x"],"at":{at}}}"#);
+        s.put_column_order(c.id, "t1", &v(1), 2, 1 << 20).unwrap();
+        s.put_column_order(c.id, "t2", &v(3), 2, 1 << 20).unwrap();
+        s.put_column_order(other.id, "t9", &v(0), 2, 1 << 20)
+            .unwrap();
+        // t3 is the third: t1 (the oldest) goes, the other Connection's order is not touched.
+        s.put_column_order(c.id, "t3", &v(5), 2, 1 << 20).unwrap();
+        let keys = |id: ConnectionId| {
+            s.settings_with_prefix(&column_order_prefix(id))
+                .unwrap()
+                .into_iter()
+                .map(|(k, _)| k[column_order_prefix(id).len()..].to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys(c.id), vec!["t2", "t3"]);
+        assert_eq!(keys(other.id), vec!["t9"]);
+        // A byte cap smaller than two orders keeps only the one just written.
+        s.put_column_order(c.id, "t4", &v(7), 10, 60).unwrap();
+        assert_eq!(keys(c.id), vec!["t4"]);
+        // An unknown Connection writes nothing.
+        let gone = Uuid::new_v4();
+        assert!(matches!(
+            s.put_column_order(gone, "t", &v(1), 2, 1 << 20),
+            Err(Error::NotFound(_))
+        ));
+        assert!(keys(gone).is_empty());
+    }
     use crate::model::{ConnectionConfig, DialectKind, Group, GroupColor, SslMode};
     use crate::query::{HistoryFilter, HistoryOnly, NewHistory, Outcome};
     use uuid::Uuid;

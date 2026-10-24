@@ -1,3 +1,4 @@
+import { framedScript } from "../api/scriptFrame";
 import { useEffect, useState } from "react";
 import { errorText } from "../api/client";
 import type { TransferPlan } from "../api/types";
@@ -23,6 +24,8 @@ interface Props {
 /** Step 4 (frame 8.1): the exact structure SQL, the row copies, what is not copied, the mode line. */
 export default function StepReview({ plan, target, batchRows, notice, onChangeToStop, onOpenInEditor, sample, onDialog }: Props) {
   const sql = reviewSql(plan.structure, plan.afterRows);
+  // I1: Copy and Open in editor carry the plan's frame (MySQL's sql_mode); the box shows what the run sends.
+  const script = framedScript(plan.frame, sql);
   const emptied = emptiedLine(plan.emptied, target);
   const [shown, setShown] = useState<{ table: string; sql: string | null; error: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -71,13 +74,13 @@ export default function StepReview({ plan, target, batchRows, notice, onChangeTo
             type="button"
             className="button button-small"
             onClick={() => {
-              void navigator.clipboard?.writeText(sql).then(() => setCopied(true), () => undefined);
+              void navigator.clipboard?.writeText(script).then(() => setCopied(true), () => undefined);
             }}
           >
             <Icon name="copy" size={14} />
             {copied ? "Copied" : "Copy"}
           </button>
-          <button type="button" className="button button-small" onClick={() => onOpenInEditor(sql)}>
+          <button type="button" className="button button-small" onClick={() => onOpenInEditor(script)}>
             <Icon name="fileQuery" size={14} />
             Open in editor
           </button>

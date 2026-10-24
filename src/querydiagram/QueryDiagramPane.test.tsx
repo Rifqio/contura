@@ -571,3 +571,9 @@ test("a_hidden_pane_does_no_work_until_it_shows_again", async () => {
   await waitFor(() => expect(screen.getByRole("group", { name: "Table old_orders a" }).textContent).toContain("datetime"));
   client.dispose();
 });
+
+test("F32 a drag on the empty query diagram selects; it does not pan", async () => {
+  setup(LATE_SHAPE);
+  await screen.findByRole("group", { name: "Table orders o" });
+  expect((document.querySelector(".react-flow__pane") as HTMLElement).classList.contains("draggable")).toBe(false);
+});

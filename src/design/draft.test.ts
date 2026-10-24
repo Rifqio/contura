@@ -5,6 +5,7 @@ import {
   addColumn,
   addForeignKey,
   addIndex,
+  backslashNote,
   droppedIndexNotes,
   keysProblem,
   editForeignKey,
@@ -629,4 +630,14 @@ test("the_text_match_uses_the_loaded_name_not_the_draft_name", () => {
   let next = editColumn(dr, idOf(dr, "status"), { name: "state" });
   next = removeColumn(next, idOf(dr, "status"));
   expect(next.indexes.map((i) => i.name)).toEqual(["PRIMARY", "orders_open_idx"]);
+});
+
+test("M1: on MySQL a typed default with a backslash says how Contura reads it; a loaded one does not", () => {
+  const dr = fromDesign(ORDERS);
+  expect(backslashNote(dr, "mysql")).toBeNull();
+  const typed = editColumn(dr, idOf(dr, "status"), { defaultSql: "'C:\\temp'" });
+  expect(backslashNote(typed, "mysql")).toBe(
+    "MySQL default status: Contura reads a backslash in quotes as an escape, whatever the server's sql_mode, so \\\\ is one backslash and \\t a tab.",
+  );
+  expect(backslashNote(typed, "postgres")).toBeNull();
 });

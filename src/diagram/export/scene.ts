@@ -13,6 +13,8 @@ export interface SceneRow {
   left: string;
   right?: string;
   mark?: "pk" | "fk";
+  /** An ER column that is never null (a key, or `not null`): the canvas's filled diamond. */
+  notNull?: boolean;
 }
 
 export interface SceneNode {

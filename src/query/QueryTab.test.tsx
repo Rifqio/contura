@@ -148,6 +148,40 @@ test("run_all_runs_in_order_and_stops_at_the_first_error", async () => {
   expect(screen.getByRole("tab", { name: /Statement 2/, selected: true })).toBeTruthy();
 });
 
+test("N3: a framed MySQL script that stops before its footer gets the tab's sql_mode back and says so", async () => {
+  const header = "SET @OLD_SQL_MODE = @@SESSION.sql_mode, SESSION sql_mode = 'x'";
+  routes({
+    execute_sql: ({ sql }) => {
+      if ((sql as string).startsWith("ALTER")) throw { kind: "query", message: "Cannot add foreign key constraint" };
+      return { outcome: { t: "affected", rows: 0 }, elapsedMs: 1 };
+    },
+    restore_script_sql_mode: () => true,
+  });
+  const mysql = { ...conn, dialect: "mysql" as const, database: "kfc_shop" };
+  const { view } = setup(doc(`${header};\nALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u (id);\nSET SESSION sql_mode = @OLD_SQL_MODE;`), true, { connections: [mysql] });
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true, shiftKey: true });
+  expect(await screen.findByText("The script stopped before its end; sql_mode was put back.")).toBeTruthy();
+  expect(callsTo("restore_script_sql_mode")).toEqual([{ session: "s1" }]);
+});
+
+test("N3: a stop with no framed footer still to run asks nothing", async () => {
+  routes({
+    execute_sql: ({ sql }) => {
+      if (sql === "SELECT bad") throw { kind: "query", message: "no" };
+      return rowsResult(1);
+    },
+    restore_script_sql_mode: () => true,
+  });
+  const mysql = { ...conn, dialect: "mysql" as const, database: "kfc_shop" };
+  const { view } = setup(doc("SELECT 1;\nSELECT bad;\nSELECT 3;"), true, { connections: [mysql] });
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(2));
+  await screen.findByText("no");
+  expect(callsTo("restore_script_sql_mode")).toHaveLength(0);
+});
+
 test("update_without_where_asks_first", async () => {
   routes({ execute_sql: () => ({ outcome: { t: "affected", rows: 12 }, elapsedMs: 3 }) });
   const { view } = setup(doc("UPDATE sales.orders SET status = 'x'"));
@@ -191,6 +225,50 @@ test("Q8: Ctrl+Enter during a run says it is already running and that Esc cancel
   key(view(), "Enter", { ctrlKey: true });
   expect((await screen.findByRole("status")).textContent).toBe("Already running. Esc cancels it.");
   expect(callsTo("execute_sql")).toHaveLength(1);
+});
+
+// UX step 2 minor 7 and review M11: a held key (presses a few ms apart) does not keep the toast up by restarting its
+// timer, but a deliberate second press after another toast replaced it says so again.
+test("Q8: repeated Ctrl+Enter during a run does not keep the toast on screen", async () => {
+  routes({ execute_sql: () => new Promise(() => {}), cancel_query: () => null });
+  const { view } = setup(doc("SELECT pg_sleep(30)"));
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true });
+  expect(await screen.findByText("Running")).toBeTruthy();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    key(view(), "Enter", { ctrlKey: true });
+    expect(screen.getByRole("status").textContent).toBe("Already running. Esc cancels it.");
+    // The key repeats every 40 ms for 3.5 s: the toast's own 4 s timer is not restarted.
+    for (let t = 0; t < 87; t++) {
+      act(() => void vi.advanceTimersByTime(40));
+      key(view(), "Enter", { ctrlKey: true });
+    }
+    act(() => void vi.advanceTimersByTime(600));
+    expect(screen.queryByRole("status")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("Q8: a second, separate Ctrl+Enter says it is running again after the toast was closed", async () => {
+  routes({ execute_sql: () => new Promise(() => {}), cancel_query: () => null });
+  const { view } = setup(doc("SELECT pg_sleep(30)"));
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true });
+  expect(await screen.findByText("Running")).toBeTruthy();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    key(view(), "Enter", { ctrlKey: true });
+    expect(screen.getByRole("status")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("status")).toBeNull();
+    act(() => void vi.advanceTimersByTime(1000));
+    key(view(), "Enter", { ctrlKey: true });
+    expect(screen.getByRole("status").textContent).toBe("Already running. Esc cancels it.");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("Q7: a double-click on the splitter resets the editor and results split", async () => {

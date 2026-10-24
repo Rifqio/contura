@@ -1,5 +1,6 @@
 // Mermaid flowchart to .flow: Contura's own small converter (spec, "Mermaid to .flow mapping"), run in the
 // language worker. One way: the Mermaid text is not kept. A line it cannot read is left out and named.
+import { MAX_FLOW_NODES, MAX_FLOW_TEXT } from "../lang/flow/model";
 import { type FlowDoc, type FlowGroup, type FlowKind, type FlowLink, type FlowNode, needsQuotes, writeFlow } from "./flowModel";
 
 export type MermaidNote = { line: number; text: string };
@@ -14,8 +15,9 @@ export type MermaidResult = {
   links: number;
 };
 
-export const MAX_MERMAID_CHARS = 1024 * 1024;
-export const MAX_FLOW_NODES = 2000;
+// The same limits a canvas paste keeps (one place for both).
+export const MAX_MERMAID_CHARS = MAX_FLOW_TEXT;
+export { MAX_FLOW_NODES };
 /** Links past this stop the work, so the preview stays light: `a1 & ... & a1000 --> b1 & ...` alone would make a million. */
 export const MAX_FLOW_LINKS = 3000;
 /** Subgraphs nest at most this deep, and a chart has at most this many; the writer and the preview recurse no deeper. */
