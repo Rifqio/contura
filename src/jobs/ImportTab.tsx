@@ -35,6 +35,8 @@ import {
   type ScriptRequest,
   type ScriptStatement,
 } from "../api/types";
+import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
+import { baseName, type RecentStepInput, useRecordStep } from "../assistant/recentSteps";
 import DbMark from "../components/DbMark";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
@@ -68,7 +70,44 @@ import MappingTable from "./MappingTable";
 import ScriptStatements from "./ScriptStatements";
 import { useJobs } from "./useJobs";
 
+const DELIMITER_CHAR = { comma: ",", semicolon: ";", tab: "\t" } as const;
+
+/**
+ * What an Import tab tells the Ask (spec 4.8): the file's base name (never its folder), format, delimiter,
+ * encoding, header names and mapping, and the target. The file's rows are never read into it. Nothing before a
+ * file is read. Lists are cut at twice the Core's caps.
+ */
+export function importTabAsk(p: {
+  path: string;
+  summary: FileSummary | null;
+  format: Format | null;
+  options: ImportOptions;
+  mapping: ColumnMap[];
+  target: ImportTarget;
+}): TabAskFields | null {
+  const { summary } = p;
+  if (!p.path || !summary) return null;
+  const header = summary.header.slice(0, 400);
+  const delimiter = p.options.delimiter ?? summary.delimiter;
+  return {
+    tab: {
+      kind: "import",
+      file: fileName(p.path),
+      format: p.format ?? summary.format,
+      delimiter: delimiter ? DELIMITER_CHAR[delimiter] : null,
+      encoding: summary.encoding,
+      target: p.target.kind === "table" ? { kind: "table", path: p.target.path } : { kind: "database", database: p.target.database, schema: null },
+      header,
+      mapping: p.mapping.slice(0, 400).flatMap((m) => (m.fileColumn < header.length ? [[header[m.fileColumn], m.into] as [string, string | null]] : [])),
+      rowsEstimate: summary.rowsEstimate.rows,
+    },
+    tables: p.target.kind === "table" ? [{ schema: p.target.path.schema, name: p.target.path.name }] : [],
+  };
+}
+
 export interface ImportTabProps {
+  /** The tab's key: the tab publishes what the Ask may know of it (`tabAsk.ts`). */
+  askKey?: string | null;
   connection: ConnectionConfig;
   group: Group | null;
   target: ImportTarget;
@@ -113,6 +152,7 @@ interface Run {
  * Connections get no SQL dialog; Production asks once for the described job.
  */
 export default function ImportTab({
+  askKey = null,
   connection,
   group,
   target,
@@ -150,6 +190,20 @@ export default function ImportTab({
   const table = target.kind === "table" ? target.path : null;
   const production = connection.production;
   const dialect = connection.dialect;
+  const recordStep = useRecordStep();
+  /** A Recent step of this import: the file's base name, never its folder, and the table it goes into. */
+  const importStep = (verb: RecentStepInput["verb"], names: string[], extra: Partial<RecentStepInput> = {}) =>
+    recordStep({
+      verb,
+      tab: "import",
+      title: null,
+      connectionId: connection.id,
+      database,
+      schema: table?.schema ?? null,
+      names,
+      count: null,
+      ...extra,
+    });
 
   const req: ImportRequest | null =
     table && path && format && !sql ? { connectionId: connection.id, table, file: path, format, options, mapping: mapping ?? [] } : null;
@@ -214,6 +268,7 @@ export default function ImportTab({
     const picked = await open({ multiple: false, directory: false, filters: [{ name: "Data and SQL files", extensions: EXTENSIONS }] });
     if (typeof picked !== "string") return;
     setPath(picked);
+    importStep("importFile", [baseName(picked), ...(table ? [table.name] : [])]);
     setError(null);
     setSummary(null);
     setPlan(null);
@@ -296,6 +351,8 @@ export default function ImportTab({
     ? (mapping ?? summary.header.map((_, i) => ({ fileColumn: i, into: plan?.columns.find((c) => c.fileColumn === i)?.into ?? null, byHand: false })))
     : [];
 
+  usePublishTabAsk(askKey, () => importTabAsk({ path, summary, format, options, mapping: shown, target }), [path, summary, format, options, mapping, plan, target]);
+
   function mapColumn(fileColumn: number, into: string | null) {
     // Each table column takes one file column.
     setMapping(
@@ -342,9 +399,15 @@ export default function ImportTab({
 
   function onRunEvent(id: JobId, e: JobEvent) {
     if (e.kind === "progress") setRun((r) => r && { ...r, fileRow: e.fileRow });
-    else if (e.kind === "finished") onRunningChange?.(false);
-    else if (e.kind === "failed") {
+    else if (e.kind === "finished") {
       onRunningChange?.(false);
+      importStep("importRan", table ? [table.name] : [], { count: e.report.rowsWritten });
+    } else if (e.kind === "failed") {
+      onRunningChange?.(false);
+      // A file changed before anything was kept is asked about again, not an end.
+      if (!(e.error.kind === "fileChanged" && (e.rowsCommitted ?? 0) === 0)) {
+        importStep("importRan", table ? [table.name] : [], { count: e.rowsCommitted ?? null, failed: true });
+      }
       setRun((r) => r && { ...r, rowsCommitted: e.rowsCommitted ?? 0 });
       // The file changed before anything was kept: confirm the new file. With rows kept
       // the end stays, with the kept count (Q45).

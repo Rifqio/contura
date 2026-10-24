@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import type { BackupPlan, BackupRequest, ConnectionConfig, JobEvent, JobReport } from "../api/types";
@@ -100,6 +100,19 @@ async function dialog() {
   await within(d).findByText("6 tables in billing");
   return d;
 }
+
+test("J2: a changed backup form ignores a click outside; an untouched one closes", async () => {
+  const { onClose } = setup();
+  const d = await dialog();
+  fireEvent.mouseDown(d.parentElement as HTMLElement);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  onClose.mockClear();
+  await userEvent.type(within(d).getByRole("textbox", { name: "File name" }), "x");
+  fireEvent.mouseDown(d.parentElement as HTMLElement);
+  expect(onClose).not.toHaveBeenCalled();
+  await userEvent.keyboard("{Escape}");
+  expect(within(d).getByText("Discard your changes?")).toBeTruthy();
+});
 
 test("the title names the Connection and database, with the PROD chip", async () => {
   setup();

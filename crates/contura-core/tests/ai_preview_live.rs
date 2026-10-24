@@ -89,6 +89,8 @@ fn ask(saved: &ConnectionConfig) -> AskRequest {
         off: Vec::new(),
         model: None,
         picks: None,
+        tab: None,
+        steps: Vec::new(),
     }
 }
 

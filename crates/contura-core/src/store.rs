@@ -373,6 +373,23 @@ impl AppStore {
         Ok(t)
     }
 
+    /// The ids of the threads of every place whose stored JSON holds `needle` or `or`: a
+    /// cheap filter, so only those threads are read and parsed.
+    pub fn ai_threads_holding(&self, needle: &str, or: &str) -> Result<Vec<ThreadId>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT id FROM ai_threads WHERE instr(json, ?1) > 0 OR instr(json, ?2) > 0")
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map(params![needle, or], |r| r.get::<_, String>(0))
+            .map_err(store_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(ThreadId::parse_str(&row.map_err(store_err)?).map_err(store_err)?);
+        }
+        Ok(out)
+    }
+
     pub fn delete_ai_thread(&self, id: ThreadId) -> Result<()> {
         let tx = self.db.unchecked_transaction().map_err(store_err)?;
         memory::store::delete_for_threads(&tx, &[id.to_string()])?;
@@ -1046,6 +1063,7 @@ mod tests {
                 kinds: Vec::new(),
                 tables: Vec::new(),
                 action: None,
+                asked_in: None,
             }],
             updated_at,
         }
@@ -1083,6 +1101,7 @@ mod tests {
             a.record = Some(AnswerRecord {
                 sql_blocks: vec![SqlBlock {
                     fence: 0,
+                    body_sha256: String::new(),
                     label: "1 statement".into(),
                     statements: vec![StatementCheck {
                         text: sql.into(),
@@ -1602,6 +1621,7 @@ mod tests {
                 kinds: Vec::new(),
                 tables: vec!["orders".into()],
                 action: None,
+                asked_in: None,
             })
             .collect()
     }
@@ -1685,6 +1705,7 @@ mod tests {
                 kinds: Vec::new(),
                 tables: Vec::new(),
                 action: None,
+                asked_in: None,
             })
             .collect();
         for n in 0..100 {

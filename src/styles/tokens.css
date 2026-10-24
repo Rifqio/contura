@@ -40,6 +40,8 @@
   --c-accent-pressed: #4d37a0;
   --c-accent-text: #5a41bf;
   --c-accent-subtle: #cfcfde;
+  /* UX step 3: selected grid cells, a see-through accent over the cell's own colour. */
+  --grid-selection-fill: color-mix(in srgb, var(--c-accent) 20%, transparent);
   --c-focus: #644ac9;
   --c-success-subtle: #e1ecc9;
   --c-success-text: #14710a;
@@ -160,6 +162,7 @@
   --c-accent-pressed: #a87bf0;
   --c-accent-text: #c9a6ff;
   --c-accent-subtle: #44475a;
+  --grid-selection-fill: color-mix(in srgb, var(--c-accent) 24%, transparent);
   --c-focus: #bd93f9;
   --c-success-subtle: #233b2c;
   --c-success-text: #50fa7b;
@@ -283,6 +286,7 @@
     --c-accent-pressed: #a87bf0;
     --c-accent-text: #c9a6ff;
     --c-accent-subtle: #44475a;
+    --grid-selection-fill: color-mix(in srgb, var(--c-accent) 24%, transparent);
     --c-focus: #bd93f9;
     --c-success-subtle: #233b2c;
     --c-success-text: #50fa7b;

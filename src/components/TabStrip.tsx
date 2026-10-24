@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ConnectionConfig } from "../api/types";
 import { hintFor, withHint } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
+import { type MenuItem } from "./Menu";
 import { type DiagramMenuActions, diagramMenuItems, PlacedMenu, type PlacedMenuState } from "../flow/DiagramMenu";
 import { useUnsavedFlows } from "../flow/flowRegistry";
 import { type AnyTab, isUnsaved, stripSegment, tabConnectionId, tabKey } from "../shell/tabs";
@@ -158,8 +159,14 @@ interface Props {
   dirtyKeys?: ReadonlySet<string>;
   /** Item 7: a tab dragged along the strip and dropped where `to` was. */
   onReorder?(from: string, to: string): void;
-  /** A double click on a preview tab keeps it (item 1). */
+  /** A double click on a preview tab keeps it (item 1); the tab menu's Keep open does too. */
   onKeep?(key: string): void;
+  /** The tab menu's Close other tabs and Close tabs to the right: `keys` close one after another, `keep` stays. */
+  onCloseMany?(keys: string[], keep: string): void;
+  /** Ctrl+Shift+T and the tab menu's Reopen closed tab. */
+  onReopen?(): void;
+  /** False when no closed tab waits, which turns Reopen closed tab off. */
+  canReopen?: boolean;
   /** The new tab menu's New Schema Model (item 34). */
   onNewModel?(): void;
   /** Where New query opens, for its line in the new tab menu ("On kestrel-main, shop"). */
@@ -331,7 +338,7 @@ function newTabSections(o: {
   ];
 }
 
-/** The open tabs of the window and its place, in the title bar. Ctrl+W closes, Ctrl+Tab and Ctrl+Shift+Tab move. */
+/** The open tabs of the window and its place, in the title bar. Ctrl+W closes; Ctrl+Tab, Ctrl+PageDown and Ctrl+Shift+Tab, Ctrl+PageUp move. */
 export default function TabStrip({
   tabs,
   active,
@@ -347,6 +354,9 @@ export default function TabStrip({
   onNewModel,
   newQueryWhere = null,
   onKeep,
+  onCloseMany,
+  onReopen,
+  canReopen = false,
   onReorder,
 }: Props) {
   const drag = useTabDrag(tabs, onReorder);
@@ -376,6 +386,28 @@ export default function TabStrip({
     const el = Array.from(list.current?.querySelectorAll<HTMLElement>(".work-tab") ?? []).find((t) => t.dataset.key === active);
     el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [active, tabs.length]);
+  /** S3: the Chrome and Edge tab menu: Close, Close other tabs, Close tabs to the right, Reopen closed tab, Keep open, Copy name. */
+  function tabMenuItems(t: AnyTab): MenuItem[] {
+    const key = tabKey(t);
+    const at = keys.indexOf(key);
+    const others = keys.filter((k) => k !== key);
+    const right = keys.slice(at + 1);
+    return [
+      { key: "close", label: "Close", icon: <Icon name="close" />, shortcut: hintFor(map, "tab.close") ?? undefined, onSelect: () => onClose(key) },
+      { key: "others", label: "Close other tabs", disabled: others.length === 0 || !onCloseMany, onSelect: () => onCloseMany?.(others, key) },
+      { key: "right", label: "Close tabs to the right", disabled: right.length === 0 || !onCloseMany, onSelect: () => onCloseMany?.(right, key) },
+      {
+        key: "reopen",
+        label: "Reopen closed tab",
+        shortcut: hintFor(map, "tab.reopen") ?? undefined,
+        separatorBefore: true,
+        disabled: !canReopen || !onReopen,
+        onSelect: () => onReopen?.(),
+      },
+      ...(t.kind === "object" && t.preview ? [{ key: "keep", label: "Keep open", onSelect: () => onKeep?.(key) }] : []),
+      { key: "copy", label: "Copy name", icon: <Icon name="copy" />, separatorBefore: true, onSelect: () => void navigator.clipboard?.writeText(tabName(t)).catch(() => {}) },
+    ];
+  }
   const step = (by: number) => {
     if (keys.length === 0) return;
     const at = active === null ? -1 : keys.indexOf(active);
@@ -388,6 +420,16 @@ export default function TabStrip({
     },
     "tab.next": () => step(1),
     "tab.previous": () => step(-1),
+    // Edge: Ctrl+1 to Ctrl+8 go to that tab, Ctrl+9 to the last; a number past the last tab does nothing.
+    ...Object.fromEntries(
+      ["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((n) => [
+        `tab.goto.${n}`,
+        () => {
+          const key = n === "9" ? keys[keys.length - 1] : keys[Number(n) - 1];
+          if (key !== undefined) onSelect(key);
+        },
+      ]),
+    ),
   });
   return (
     // Bare drag regions: Tauri drags only on direct clicks, so the tabs and buttons inside stay clickable.
@@ -462,14 +504,13 @@ export default function TabStrip({
                 e.preventDefault();
                 onClose(key);
               }}
-              onContextMenu={
-                t.kind === "flow" && diagramActions
-                  ? (e) => {
-                      e.preventDefault();
-                      setMenu({ x: e.clientX, y: e.clientY, label: `${t.name}.flow`, items: diagramMenuItems(t.name, diagramActions) });
-                    }
-                  : undefined
-              }
+              onContextMenu={(e) => {
+                e.preventDefault();
+                const items = tabMenuItems(t);
+                // A diagram's file actions follow the tab actions.
+                const diagram = t.kind === "flow" && diagramActions ? diagramMenuItems(t.name, diagramActions).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)) : [];
+                setMenu({ x: e.clientX, y: e.clientY, label: name, items: [...items, ...diagram] });
+              }}
             >
               <button
                 type="button"

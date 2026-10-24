@@ -10,7 +10,9 @@ import type { DesignTabTarget } from "../shell/tabs";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import { ORDERS } from "./fixtures";
+import { type TabAskEntry, useTabAsk } from "../assistant/tabAsk";
 import TableDesigner, { unsupportedNote } from "./TableDesigner";
+import { typeSuggestions } from "./typeSuggestions";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -213,11 +215,12 @@ test("keys_add_remove_and_move_without_the_window_commands", async () => {
   const keys = scroller();
   fireEvent.keyDown(keys, { key: "ArrowUp", altKey: true });
   expect([...grid().querySelectorAll('tbody td[data-field="name"]')].map((c) => c.textContent)[1]).toBe("status");
-  // Ctrl+N is the window's New Connection, not the designer's: it adds nothing here. The Add column button adds.
+  // Outside the grid Ctrl+N stays the window's New Connection. D3: in the grid it adds a column, as in the data grid.
   expect(fireEvent.keyDown(screen.getByRole("tab", { name: /^Columns/ }), { key: "n", ctrlKey: true })).toBe(true);
   expect(grid().querySelector(".row-added")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Add column" }));
+  expect(fireEvent.keyDown(keys, { key: "n", ctrlKey: true })).toBe(false);
   expect(lastRow().className).toContain("row-added");
+  expect(grid().querySelectorAll(".row-added")).toHaveLength(1);
   fireEvent.keyDown(keys, { key: "Delete" });
   expect(grid().querySelector(".row-added")).toBeNull();
   // Delete on a struck-through row brings it back.
@@ -295,4 +298,60 @@ test("discard_returns_to_the_loaded_design", async () => {
   controlRef.current?.discard();
   await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
   expect(grid().querySelector(".row-added")).toBeNull();
+});
+
+// ---- What the designer tells the Ask (spec 4.4) ----
+
+test("the published draft follows edits and carries the Dialect's types", async () => {
+  routeInvoke({ table_design: () => ORDERS });
+  const client = new LangClient(() => fakeWorker());
+  let entry: TabAskEntry | null = null;
+  function Reader() {
+    entry = useTabAsk("design:orders");
+    return null;
+  }
+  render(
+    <>
+      <TableDesigner
+        askKey="design:orders"
+        connection={conn("mysql")}
+        target={alter}
+        group={null}
+        visible
+        onDirtyChange={() => {}}
+        controlRef={createRef<GridControl | null>() as MutableRefObject<GridControl | null>}
+        onApplied={() => {}}
+        lang={{ client, schemas: new SchemaCache(client) }}
+      />
+      <Reader />
+    </>,
+  );
+  await screen.findByRole("tab", { name: "Columns 5" });
+  const design = () => {
+    const t = entry?.get()?.tab;
+    if (t?.kind !== "design") throw new Error("no design tab published");
+    return t;
+  };
+  await waitFor(() => expect(design().columns.map((c) => c.name)).toEqual(["id", "email", "status", "total", "created_at"]));
+  expect(design()).toMatchObject({ create: false, path: ORDERS.path, primary: ["id"], removed: [] });
+  expect(design().types).toEqual(typeSuggestions("mysql"));
+
+  // Add a column and name it.
+  await userEvent.click(screen.getByRole("button", { name: "Add column" }));
+  fireEvent.doubleClick(lastRow().querySelector('td[data-field="name"]') as HTMLElement);
+  const box = screen.getByRole("textbox", { name: "Cell value" });
+  fireEvent.change(box, { target: { value: "note" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await waitFor(() => expect(design().columns.map((c) => c.name)).toContain("note"));
+
+  // Rename a column.
+  fireEvent.doubleClick(cell("email", "name"));
+  const rename = screen.getByRole("textbox", { name: "Cell value" });
+  fireEvent.change(rename, { target: { value: "mail" } });
+  fireEvent.keyDown(rename, { key: "Enter" });
+  await waitFor(() => expect(design().columns.map((c) => c.name)).toEqual(["id", "mail", "status", "total", "created_at", "note"]));
+
+  // The primary key takes another column.
+  await userEvent.click(within(cell("total", "key")).getByRole("button", { name: "Primary key" }));
+  await waitFor(() => expect(design().primary).toEqual(["id", "total"]));
 });

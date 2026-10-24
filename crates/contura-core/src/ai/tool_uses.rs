@@ -256,6 +256,7 @@ mod tests {
             kinds: Vec::new(),
             tables: Vec::new(),
             action: None,
+            asked_in: None,
         }
     }
 

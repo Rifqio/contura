@@ -145,7 +145,7 @@ export default function HistoryPanel({
   const runsHere = selected !== null && scopeConnection !== null && selected.connectionId === scopeConnection.id;
 
   return (
-    <aside className="history-panel" aria-label="Query History">
+    <aside className="history-panel" aria-label="Query History" data-pane>
       <div className="history-head">
         <h3>Query History</h3>
         <Menu

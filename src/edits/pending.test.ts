@@ -13,6 +13,7 @@ import {
   newRows,
   pendingValue,
   redo,
+  settle,
   revertCell,
   revertRow,
   summary,
@@ -20,6 +21,9 @@ import {
   undo,
   missingFull,
   withFullOld,
+  unsetNewCell,
+  applyMany,
+  isDeleted as deletedIn,
 } from "./pending";
 import { displayRows } from "./gridRows";
 
@@ -137,6 +141,15 @@ describe("pending edits", () => {
     let p = editCell(emptyPending(columns), keyA, rowA, "status", t("cancelled"));
     p = discard(p);
     expect(count(p)).toBe(0);
+    // G10: a discard is one undo step, so Ctrl+Z brings the edits back.
+    expect(count(undo(p))).toBe(1);
+    expect(count(redo(undo(p)))).toBe(0);
+  });
+
+  it("clears the history after a save", () => {
+    let p = editCell(emptyPending(columns), keyA, rowA, "status", t("cancelled"));
+    p = settle(p);
+    expect(count(p)).toBe(0);
     expect(count(undo(p))).toBe(0);
   });
 
@@ -188,5 +201,56 @@ describe("display rows", () => {
     expect(added[0].defaults).toEqual([true, false, false]);
     expect(added[1].defaults).toEqual([true, false, false]);
     expect(added[1].set).toEqual([false, true, false]);
+  });
+});
+
+describe("UX step 3 (G17): new rows where the user is", () => {
+  const page = { columns, rows: [rowA, rowB], hasMore: false };
+  it("a new row placed after a row shows under it, and the loaded rows keep their page numbers", () => {
+    const [p1, first] = addRow(emptyPending(columns), new Map([["status", t("a")]]), keyA);
+    const [p2] = addRow(p1, new Map([["status", t("b")]]), first);
+    const view = displayRows(p2, page);
+    expect(view.map((d) => (d.kind === "new" ? d.cells[1] : d.source[1]))).toEqual([text("paid"), text("a"), text("b"), text("shipped")]);
+    expect(view.map((d) => (d.kind === "loaded" ? d.index : null))).toEqual([0, null, null, 1]);
+    // The row it was placed after gone, a new row goes to the bottom.
+    expect(toEditSet(p2, table).inserts).toHaveLength(2);
+  });
+  it("a row with no place goes to the bottom, as before", () => {
+    const [p] = addRow(emptyPending(columns));
+    expect(displayRows(p, page).map((d) => d.kind)).toEqual(["loaded", "loaded", "new"]);
+  });
+  it("unsetting a new row's cell leaves it to the column's DEFAULT, as one undo step", () => {
+    const [p1, id] = addRow(emptyPending(columns), new Map([["status", t("a")]]));
+    const p2 = unsetNewCell(p1, id, "status");
+    expect(newRows(p2)[0].values.has("status")).toBe(false);
+    expect(newRows(undo(p2))[0].values.get("status")).toEqual(t("a"));
+  });
+});
+
+describe("C1: many edits as one step", () => {
+  it("applies cell edits, new-row edits, adds and deletes as one undo step, as the single calls would", () => {
+    const [p0, id] = addRow(emptyPending(columns));
+    const [p1, made] = applyMany(p0, [
+      { t: "set", rowKey: keyA, row: rowA, column: "status", value: t("x") },
+      { t: "set", rowKey: keyA, row: rowA, column: "note", value: t("y") },
+      { t: "set", rowKey: keyB, row: rowB, column: "status", value: t("shipped") },
+      { t: "setNew", localId: id, column: "status", value: t("n") },
+      { t: "add", values: new Map([["status", t("added")]]), after: keyA },
+      { t: "delete", ref: keyB, row: rowB },
+    ]);
+    expect(p1.past.length).toBe(p0.past.length + 1);
+    expect(pendingValue(p1, keyA, "status")).toEqual(t("x"));
+    expect(pendingValue(p1, keyA, "note")).toEqual(t("y"));
+    // The same as loaded is no change.
+    expect(pendingValue(p1, keyB, "status")).toBeUndefined();
+    expect(deletedIn(p1, keyB)).toBe(true);
+    expect(newRows(p1).map((r) => r.values.get("status"))).toEqual([t("n"), t("added")]);
+    expect(made).toHaveLength(1);
+    expect(newRows(p1)[1].after).toBe(keyA);
+    expect(undo(p1).state).toBe(p0.state);
+  });
+  it("changes nothing and adds no step when every edit is a no-op", () => {
+    const p = emptyPending(columns);
+    expect(applyMany(p, [{ t: "set", rowKey: keyA, row: rowA, column: "status", value: t("paid") }])[0]).toBe(p);
   });
 });

@@ -15,7 +15,7 @@ import Kbd from "./Kbd";
 import Menu, { type MenuItem } from "./Menu";
 import SafetyTag from "./SafetyTag";
 import InlineName from "./InlineName";
-import { UNGROUPED_NAME_LIMIT, keepTextUnselected, usePlaceRename } from "./renamePlace";
+import { UNGROUPED_NAME_LIMIT, usePlaceRename } from "./renamePlace";
 import { useUngroupedLabel } from "../prefs/usePrefs";
 import { thisComputer } from "../platform";
 import { Glyph } from "../guide/Glyph";
@@ -95,24 +95,24 @@ function matches(c: ConnectionConfig, filter: string): boolean {
   return c.name.toLowerCase().includes(f) || connectionTarget(c).toLowerCase().includes(f);
 }
 
-/** How long a click waits for a second one before it opens the place: GTK's default double-click time. */
-const DOUBLE_CLICK_MS = 400;
-
-/** A card's name: opens its place on click, renames in place on double-click or F2. */
-function CardName({ card, groups, onOpen, onRenamed }: { card: Card; groups: Group[]; onOpen: () => void; onRenamed: () => void }) {
-  const [renaming, setRenaming] = useState(false);
+/** A card's name: opens its place at once on click; F2 or the card menu's Rename renames it in place. */
+function CardName({
+  card,
+  groups,
+  renaming,
+  onRenaming,
+  onOpen,
+  onRenamed,
+}: {
+  card: Card;
+  groups: Group[];
+  renaming: boolean;
+  onRenaming: (on: boolean) => void;
+  onOpen: () => void;
+  onRenamed: () => void;
+}) {
   const button = useRef<HTMLButtonElement>(null);
-  const openTimer = useRef<number | null>(null);
   const commit = usePlaceRename(card.group, groups, onRenamed);
-  useEffect(() => () => {
-    if (openTimer.current !== null) window.clearTimeout(openTimer.current);
-  }, []);
-
-  function startRename() {
-    if (openTimer.current !== null) window.clearTimeout(openTimer.current);
-    openTimer.current = null;
-    setRenaming(true);
-  }
 
   if (renaming) {
     return (
@@ -122,40 +122,29 @@ function CardName({ card, groups, onOpen, onRenamed }: { card: Card; groups: Gro
         maxLength={card.group ? undefined : UNGROUPED_NAME_LIMIT}
         onCommit={commit}
         onClose={(refocus) => {
-          setRenaming(false);
+          onRenaming(false);
           if (refocus) requestAnimationFrame(() => button.current?.focus());
         }}
       />
     );
   }
+  // Windows Explorer: a click opens, F2 renames. A double-click only renames where a click opens nothing (the sidebar header).
   return (
     <button
       ref={button}
       type="button"
       className="group-card-name rename-label"
       aria-label={`Open ${card.name}`}
-      title="Double-click or press F2 to rename"
+      title="Press F2 to rename"
       aria-keyshortcuts="F2"
+      // A double-click opens once: its second click is ignored.
       onClick={(e) => {
-        if (openTimer.current !== null) window.clearTimeout(openTimer.current);
-        openTimer.current = null;
-        // Enter or Space (detail 0) opens at once; a mouse click waits for a second one, which renames instead.
-        if (e.detail === 0) {
-          onOpen();
-          return;
-        }
-        if (e.detail > 1) return;
-        openTimer.current = window.setTimeout(() => {
-          openTimer.current = null;
-          onOpen();
-        }, DOUBLE_CLICK_MS);
+        if (e.detail <= 1) onOpen();
       }}
-      onMouseDown={keepTextUnselected}
-      onDoubleClick={startRename}
       onKeyDown={(e) => {
         if (e.key === "F2") {
           e.preventDefault();
-          startRename();
+          onRenaming(true);
         }
       }}
     >
@@ -194,6 +183,8 @@ export default function Home({
   const [suggestions, setSuggestions] = useState<SuggestedConnection[]>([]);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const [form, setForm] = useState<Form>({ kind: "none" });
+  /** The card whose name is being renamed (a Group id, or "ungrouped"). */
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [moveError, setMoveError] = useState<string | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);
@@ -259,6 +250,7 @@ export default function Home({
         onSelect: () => setForm({ kind: "connection", groupId: g?.id ?? null }),
       },
       ...(g ? [{ key: "edit", label: "Edit Group", onSelect: () => setForm({ kind: "group", group: g }) }] : []),
+      { key: "rename", label: "Rename", shortcut: "F2", onSelect: () => setRenamingKey(g?.id ?? "ungrouped") },
     ];
   }
 
@@ -476,6 +468,8 @@ export default function Home({
                         <CardName
                           card={card}
                           groups={groups}
+                          renaming={renamingKey === key}
+                          onRenaming={(on) => setRenamingKey(on ? key : null)}
                           onOpen={() => (card.group ? onOpenGroup(card.group.id) : onOpenUngrouped())}
                           onRenamed={onChanged}
                         />

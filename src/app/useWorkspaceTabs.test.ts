@@ -73,7 +73,7 @@ describe("useWorkspaceTabs", () => {
     expect(result.current.activeKey).toBe("schema:m1");
     const ref = result.current.schemaClose("m1");
     expect(result.current.schemaClose("m1")).toBe(ref);
-    const close = () => {};
+    const close = () => Promise.resolve(true);
     ref.current = close;
     expect(result.current.schemaCloseFor("m1")).toBe(close);
     act(() => result.current.closeKey("schema:m1"));

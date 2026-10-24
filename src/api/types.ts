@@ -1081,7 +1081,7 @@ export type AiError =
 // One Ask and its preview. Mirrors crates/contura-core/src/ai/{request,preview,budget,log}.rs.
 
 /** One kind of item an Ask can send. */
-export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline" | "history" | "summary" | "diagram";
+export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline" | "history" | "summary" | "diagram" | "tab" | "steps";
 
 export interface TableRef {
   schema: string | null;
@@ -1098,7 +1098,126 @@ export interface Focus {
   tables: TableRef[];
   /** A Schema Model not tied to any Connection: with no Connection, its DBML may go and nothing else (R1.4). */
   untiedModel: boolean;
+  /** The other Connections the tab spans (a Compare source, a Transfer side); every item goes at the lowest access. */
+  also?: ConnectionId[];
 }
+
+/** Mirrors `SettingsSection` in `src/shell/tabs.ts`. */
+export type AskSettingsPage = "general" | "appearance" | "editor" | "keymap" | "ai" | "dataFolder" | "updates" | "about";
+
+/** A Visual Query's last run: a row count, `more` when the page was full. */
+export interface AskRunCount {
+  rows: number;
+  more: boolean;
+  failed: boolean;
+}
+
+/** One Compare item, typed: no free detail text goes. */
+export interface AskDiffLine {
+  kind: DiffKind;
+  object: DiffObject;
+  table: string;
+  name: string;
+  fromType: string | null;
+  toType: string | null;
+  losesData: boolean;
+  losesRows: number | null;
+}
+
+export interface AskTransferColumn {
+  name: string;
+  targetName: string;
+  sourceType: string;
+  targetType: string;
+}
+
+/** A Data Transfer mapping note without its text: the text can name values. */
+export interface AskTransferNote {
+  table: string;
+  column: string | null;
+  kind: "info" | "new" | "needsChoice" | "noMatch" | "lossy";
+}
+
+/** One ticked Data Transfer table. */
+export interface AskTransferLine {
+  source: string;
+  target: string;
+  exists: boolean;
+  ifExists: TransferIfExists;
+  columns: AskTransferColumn[];
+  emptiedRows: number | null;
+}
+
+/**
+ * What the active tab shows, as typed fields; the Core renders the This tab item from them
+ * at the Ask's AI access. Mirrors `AskTab` in `crates/contura-core/src/ai/scene.rs`.
+ */
+export type AskTab =
+  | { kind: "query"; title: string }
+  | {
+      kind: "object";
+      title: string;
+      path: ObjectPath;
+      object: ObjectKind;
+      sort: SortSpec | null;
+      /** The row filters' column names; never their values. */
+      filterColumns: string[];
+      hidden: string[];
+      pendingEdits: number;
+    }
+  | { kind: "visual"; title: string; model: VisualQuery; sqlWritten: boolean; problems: number; lastRun: AskRunCount | null }
+  | {
+      kind: "design";
+      create: boolean;
+      path: ObjectPath;
+      columns: ColumnDraft[];
+      primary: string[];
+      indexes: IndexDraft[];
+      foreignKeys: ForeignKeyDraft[];
+      removed: string[];
+      comment: string | null;
+      types: string[];
+    }
+  | { kind: "schema"; file: string; tables: number; errorLine: number | null }
+  | {
+      kind: "compare";
+      source: { kind: "database"; database: string } | { kind: "model"; file: string };
+      targetDatabase: string;
+      items: AskDiffLine[];
+      added: number;
+      removed: number;
+      changed: number;
+      notCompared: number;
+      ticked: number;
+      /** False until a result is in: the Core then renders no counts, items or ticks. Absent means true. */
+      compared?: boolean;
+    }
+  | {
+      kind: "transfer";
+      sourceDatabase: string;
+      /** Empty until a target is chosen. */
+      targetDatabase: string;
+      /** Null until a plan exists: no mode is claimed before. */
+      mode?: TransferMode | null;
+      tables: AskTransferLine[];
+      notes: AskTransferNote[];
+    }
+  | {
+      kind: "import";
+      file: string;
+      format: string;
+      delimiter: string | null;
+      encoding: string;
+      target: { kind: "table"; path: ObjectPath } | { kind: "database"; database: string; schema: string | null };
+      header: string[];
+      /** File column to target column; null skips it. Never the file's rows. */
+      mapping: [string, string | null][];
+      rowsEstimate: number | null;
+    }
+  | { kind: "lineage"; path: ObjectPath; neighbours: string[] }
+  | { kind: "savedQueries" }
+  | { kind: "home" }
+  | { kind: "settings"; section: AskSettingsPage };
 
 export interface Switches {
   rows: boolean;
@@ -1124,6 +1243,60 @@ export interface AskRequest {
   model?: string | null;
   /** The picker's thinking and caching picks; the Core clamps them to the model. */
   picks?: ModelPicks | null;
+  /** What the active tab shows; absent or null sends no This tab item. */
+  tab?: AskTab | null;
+  /** What the user did since their last question in this place; the Core renders the Recent steps item. */
+  steps?: StepIn[];
+}
+
+/**
+ * What the user did, for a Recent step. Mirrors `StepVerb` in `crates/contura-core/src/ai/steps.rs`.
+ */
+export type StepVerb =
+  | "openTab"
+  | "showTab"
+  | "runQuery"
+  | "runVisual"
+  | "vqTable"
+  | "vqTableOff"
+  | "vqTick"
+  | "vqUntick"
+  | "vqJoin"
+  | "vqFilter"
+  | "vqSort"
+  | "gridSort"
+  | "gridFilter"
+  | "editsSaved"
+  | "designApplied"
+  | "compared"
+  | "syncApplied"
+  | "transferRan"
+  | "importFile"
+  | "importRan";
+
+/**
+ * One Recent step as typed fields, never free text; the Core renders and gates its label.
+ * Mirrors `StepIn` in `crates/contura-core/src/ai/steps.rs`, whose doc says what `names`
+ * and `count` hold per verb.
+ */
+export interface StepIn {
+  at: number;
+  verb: StepVerb;
+  /** A tab kind id (`newTable` for a New table); unknown ids render as "a tab". */
+  tab: string;
+  title: string | null;
+  connectionId: ConnectionId | null;
+  database: string | null;
+  schema: string | null;
+  /** At most 6 object names are shown; the rest count into `more`. */
+  names?: string[];
+  more?: number;
+  count: number | null;
+  hasMore?: boolean;
+  failed?: boolean;
+  descending?: boolean;
+  /** Compare and Transfer: the source's Connection when it is not the step's; the source name goes at the lower access. */
+  sourceConnectionId?: ConnectionId | null;
 }
 
 /** One row of the Sends list, measured after cleaning. */
@@ -1249,6 +1422,27 @@ export interface TurnStamp {
   action: string;
   tables: string[];
   kinds: ItemKind[];
+  /** Where the question was asked; null with no tab, steps or other Connection. Stored on the question only. */
+  askedIn?: AskedIn | null;
+}
+
+/**
+ * Where a question was asked (spec 6). Mirrors `AskedIn` in crates/contura-core/src/ai/memory. The summary and steps
+ * arrive once, on the Memory event, and go to the Core with the turn; threads from the Core carry the tab and label only.
+ */
+export interface AskedIn {
+  /** The tab kind id: "query", "visual", "design" ... */
+  tab: string;
+  /** The where line as it went, or the tab's kind words. */
+  label: string;
+  summary: string;
+  steps: string[];
+  also?: ConnectionId[];
+  /**
+   * Mirrors `AskedIn.other_steps`: the Recent steps on other Connections kept with the question. The Core keeps them
+   * and never sends them to the webview (the stamp and every thread view leave them out), so they are never here.
+   */
+  otherSteps?: never;
 }
 
 /** The outline step of a preview: how big the outline is and the exact text it would send. */
@@ -1440,6 +1634,11 @@ export interface SqlBlock {
   fence: number;
   label: string;
   statements: StatementCheck[];
+  /**
+   * SHA-256 (hex) of the fence body the Core checked. The check is used only for a block whose own text has this
+   * hash; absent on records saved before it, which then read as unchecked.
+   */
+  bodySha256?: string;
 }
 
 export type AiDone = Extract<AiEvent, { type: "done" }>;
@@ -1460,6 +1659,8 @@ export interface AiMessage {
   kinds?: ItemKind[];
   tables?: string[];
   action?: string;
+  /** On a question only: where it was asked. The Core's copies hold the tab and label only. */
+  askedIn?: AskedIn;
 }
 
 export interface AiThread {

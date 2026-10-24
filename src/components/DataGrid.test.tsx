@@ -9,7 +9,9 @@ import { mockEditorDom } from "../test/editor";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import tokensCss from "../styles/tokens.css?raw";
+import { useTabAsk } from "../assistant/tabAsk";
 import DataGrid from "./DataGrid";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 import { ToastProvider } from "./Toast";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -125,7 +127,7 @@ test("next disabled when hasMore false", async () => {
   expect(nextButton().disabled).toBe(true);
 });
 
-test("sort toggles asc then desc", async () => {
+test("G11: a header click cycles ascending, descending, none", async () => {
   routeInvoke({ fetch_page: () => page(false) });
   render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
   await screen.findByText("first");
@@ -134,13 +136,16 @@ test("sort toggles asc then desc", async () => {
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
   await userEvent.click(screen.getByRole("button", { name: "Sort by id" }));
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
-  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
+  await userEvent.click(screen.getByRole("button", { name: "Sort by id" }));
   await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(4));
+  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(5));
   const sorts = callsTo("fetch_page").map((a) => (a.request as { sort: unknown }).sort);
   expect(sorts).toEqual([
     null,
     { column: "id", descending: false },
     { column: "id", descending: true },
+    null,
     { column: "note", descending: false },
   ]);
 });
@@ -778,4 +783,237 @@ test("a_header_shows_the_name_over_its_type_and_names_both", async () => {
     ["header-name", "note"],
     ["type-hint", "varchar(80)"],
   ]);
+});
+
+test("the grid publishes sort, filter text and row filter columns, never a cell value", async () => {
+  const kestrel: Page = {
+    columns: [
+      { name: "id", typeName: "int unsigned", isPrimaryKey: true },
+      { name: "note", typeName: "varchar(80)", isPrimaryKey: false },
+    ],
+    rows: [
+      [
+        { t: "number", value: "1" },
+        { t: "text", value: "Kestrel Foods Ltd", truncated: false, totalBytes: 17 },
+      ],
+    ],
+    hasMore: false,
+  };
+  routeInvoke({ fetch_page: () => kestrel });
+  let entry: ReturnType<typeof useTabAsk> = null;
+  function Reader() {
+    entry = useTabAsk("object:orders");
+    return null;
+  }
+  render(
+    <>
+      <DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" askKey="object:orders" />
+      <Reader />
+    </>,
+  );
+  await screen.findByText("Kestrel Foods Ltd");
+  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
+  await addFilter("note", "contains", "Kestrel");
+  await waitFor(() => expect(entry?.get()?.filter).toContain("Kestrel"));
+  const fields = entry!.get()!;
+  expect(fields.tab).toEqual({
+    kind: "object",
+    title: "orders",
+    path: table,
+    object: "table",
+    sort: { column: "note", descending: false },
+    filterColumns: ["note"],
+    hidden: [],
+    pendingEdits: 0,
+  });
+  expect(fields.tables).toEqual([{ schema: null, name: "orders" }]);
+  // The filter text is the WHERE the Core masks; nothing else holds the value, and no row is published.
+  const { filter, ...rest } = fields;
+  expect(filter).toBe("LOCATE('Kestrel', `note`) > 0");
+  expect(JSON.stringify(rest)).not.toContain("Kestrel");
+  expect(JSON.stringify(fields)).not.toContain("Kestrel Foods Ltd");
+  expect(JSON.stringify(fields)).not.toContain("first");
+});
+
+test("a sort and a filter are Recent steps, by column only", async () => {
+  clearAllSteps();
+  routeInvoke({ fetch_page: () => page(false) });
+  render(
+    <RecordStepContext.Provider value="ungrouped">
+      <DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />
+    </RecordStepContext.Provider>,
+  );
+  await screen.findByText("first");
+  await userEvent.click(screen.getByRole("button", { name: "Sort by id" }));
+  await userEvent.click(screen.getByRole("button", { name: "Sort by id" }));
+  // The newer sort of the same table replaces the older one.
+  expect(stepsOf("ungrouped")).toMatchObject([
+    { verb: "gridSort", tab: "object", connectionId: "c1", database: "shop", names: ["orders", "id"], descending: true },
+  ]);
+  await addFilter("id", "is more than", "5000");
+  await waitFor(() => expect(stepsOf("ungrouped").map((s) => s.verb)).toEqual(["gridSort", "gridFilter"]));
+  expect(stepsOf("ungrouped")[1].names).toEqual(["orders", "id"]);
+  expect(JSON.stringify(stepsOf("ungrouped"))).not.toContain("5000");
+  clearAllSteps();
+});
+
+test("G5: a dragged column width survives Reload", async () => {
+  stubWidths(49);
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+  fireEvent.mouseDown(document.querySelectorAll(".col-resize")[0], { clientX: 100, button: 0 });
+  fireEvent.mouseMove(window, { clientX: 200 });
+  fireEvent.mouseUp(window);
+  expect(colWidths()).toEqual(["48px", "180px", "80px"]);
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 30));
+  expect(colWidths()).toEqual(["48px", "180px", "80px"]);
+});
+
+/** jsdom has no layout: every cell's text takes `width` px, by the cell's text. */
+function stubCellContent(widths: Record<string, number>) {
+  const original = Object.getOwnPropertyDescriptor(Range.prototype, "getBoundingClientRect");
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value(this: Range) {
+      const w = widths[this.commonAncestorContainer.textContent ?? ""] ?? 0;
+      return { width: w, height: 0, top: 0, left: 0, right: w, bottom: 0, x: 0, y: 0, toJSON() {} };
+    },
+  });
+  onTestFinished(() => {
+    if (original) Object.defineProperty(Range.prototype, "getBoundingClientRect", original);
+    else delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+  });
+}
+
+async function openFitted(w: Record<string, number>) {
+  stubWidths(49);
+  stubCellContent(w);
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+}
+const edge = (i: number) => document.querySelectorAll(".col-resize")[i];
+
+test("G6: double-clicking a header edge fits the column to its widest visible cell", async () => {
+  await openFitted({ first: 150 });
+  fireEvent.doubleClick(edge(1));
+  // The cell's own padding and border come on top of its 150 px of text.
+  const [, other, fitted] = colWidths().map((w) => parseInt(w));
+  expect(other).toBe(80);
+  expect(fitted).toBeGreaterThanOrEqual(150);
+  expect(fitted).toBeLessThan(170);
+});
+
+test("G6: a fit never goes under the header, and never past the cap", async () => {
+  await openFitted({ "1": 10, first: 5000 });
+  fireEvent.doubleClick(edge(0));
+  // The header is 50 px of label and 16 px of padding.
+  expect(colWidths()).toEqual(["48px", "66px", "80px"]);
+  fireEvent.doubleClick(edge(1));
+  expect(colWidths()).toEqual(["48px", "66px", "500px"]);
+});
+
+test("G6: dragged and fitted widths stay through a new page and a sort", async () => {
+  stubWidths(49);
+  routeInvoke({ fetch_page: () => page(true) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+  fireEvent.mouseDown(edge(0), { clientX: 100, button: 0 });
+  fireEvent.mouseMove(window, { clientX: 200 });
+  fireEvent.mouseUp(window);
+  expect(colWidths()).toEqual(["48px", "180px", "80px"]);
+  await waitFor(() => expect(nextButton().disabled).toBe(false));
+  await userEvent.click(nextButton());
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 30));
+  expect(colWidths()).toEqual(["48px", "180px", "80px"]);
+  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
+  await new Promise((r) => setTimeout(r, 30));
+  expect(colWidths()).toEqual(["48px", "180px", "80px"]);
+});
+
+test("G15: sorting and filtering tell the tab it was worked in", async () => {
+  stubWidths(49);
+  routeInvoke({ fetch_page: () => page(false) });
+  const worked = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onWorked={worked} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+  expect(worked).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Sort by note" }));
+  expect(worked).toHaveBeenCalledTimes(1);
+  await addFilter("note", "contains", "first");
+  expect(worked.mock.calls.length).toBeGreaterThan(1);
+});
+
+test("G15: a column drag or fit tells the tab", async () => {
+  stubWidths(49);
+  routeInvoke({ fetch_page: () => page(false) });
+  const worked = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onWorked={worked} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+  fireEvent.mouseDown(edge(0), { clientX: 100, button: 0 });
+  expect(worked).not.toHaveBeenCalled();
+  fireEvent.mouseMove(window, { clientX: 150 });
+  fireEvent.mouseMove(window, { clientX: 200 });
+  expect(worked).not.toHaveBeenCalled();
+  fireEvent.mouseUp(window);
+  expect(worked).toHaveBeenCalledTimes(1);
+  fireEvent.doubleClick(edge(1));
+  expect(worked).toHaveBeenCalledTimes(2);
+});
+
+test("G5: confirming a filter unchanged does not start the next Reload over at the top", async () => {
+  stubViewport();
+  routeInvoke({ fetch_page: () => bigPage() });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />);
+  await screen.findByText("note 1");
+  await addFilter("note", "contains", "note");
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  scrollGrid(28 * 115);
+  await screen.findByText("note 116");
+  const cell = () => document.querySelector('tr[data-row="115"] td[data-col="1"]') as HTMLElement;
+  fireEvent.mouseDown(cell());
+  await userEvent.click(screen.getByRole("button", { name: /^Edit filter:/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Keep filter/ }));
+  expect(callsTo("fetch_page")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(3));
+  await new Promise((r) => setTimeout(r, 30));
+  expect((document.querySelector(".grid-scroll") as HTMLElement).scrollTop).toBe(28 * 115);
+  expect(cell().className).toContain("cell-selected");
+});
+
+test("G6: dragged widths stay through a filter", async () => {
+  stubWidths(49);
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" />);
+  await screen.findByText("first");
+  await waitFor(() => expect(colWidths()).toEqual(["48px", "80px", "80px"]));
+  fireEvent.mouseDown(edge(0), { clientX: 100, button: 0 });
+  fireEvent.mouseMove(window, { clientX: 200 });
+  fireEvent.mouseUp(window);
+  await addFilter("note", "contains", "first");
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 30));
+  expect(colWidths()).toEqual(["48px", "180px", "80px"]);
+});
+
+test("G15: hiding a column in the Columns menu tells the tab", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  const worked = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} onWorked={worked} />);
+  await screen.findByText("first");
+  await userEvent.click(screen.getByRole("button", { name: "Table" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Columns" }));
+  await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "note" }));
+  expect(worked).toHaveBeenCalledTimes(1);
 });

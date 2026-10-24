@@ -112,6 +112,7 @@ fn message(role: AiRole, text: &str, at: i64) -> AiMessage {
         kinds: vec![ItemKind::Question, ItemKind::Cards],
         tables: vec!["orders".into()],
         action: Some("ask".into()),
+        asked_in: None,
     }
 }
 

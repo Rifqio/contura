@@ -347,6 +347,7 @@ async fn clear_all_ai_data() {
                 kinds: Vec::new(),
                 tables: Vec::new(),
                 action: None,
+                asked_in: None,
             }],
             updated_at: 1,
         })

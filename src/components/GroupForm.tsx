@@ -195,6 +195,7 @@ export default function GroupForm({ group, connections, openIds, onSaved, onChan
       title={group ? "Edit Group" : "New Group"}
       icon={group ? "folder" : "plus"}
       subtitle={group?.name}
+      dirty={name !== (group?.name ?? "") || color !== (group?.color ?? "teal") || picture.kind !== "keep"}
       onClose={onCancel}
     >
       <form

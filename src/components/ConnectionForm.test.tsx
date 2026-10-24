@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { expect, test, vi } from "vitest";
@@ -885,4 +885,30 @@ test("with the keyring the password field shows no session notice", async () => 
   await Promise.resolve();
   expect(screen.queryByText(/kept only until Contura closes/)).toBeNull();
   expect(screen.getByLabelText("Password").getAttribute("aria-describedby")).toBeNull();
+});
+
+test("J2: New Connection with a typed name survives a click outside and asks before Escape discards it", async () => {
+  const onCancel = vi.fn();
+  render(<ConnectionForm groups={groups} defaultGroupId={null} onSaved={() => {}} onCancel={onCancel} />);
+  const scrim = screen.getByRole("dialog").parentElement as HTMLElement;
+  // Untouched: a click outside closes as before.
+  fireEvent.mouseDown(scrim);
+  expect(onCancel).toHaveBeenCalledTimes(1);
+
+  await userEvent.type(screen.getByLabelText("Name"), "Staging");
+  fireEvent.mouseDown(scrim);
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Staging");
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByText("Discard your changes?")).toBeTruthy();
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect(onCancel).toHaveBeenCalledTimes(2);
+});
+
+test("J2: editing a Connection is clean until a field changes", async () => {
+  const onCancel = vi.fn();
+  render(<ConnectionForm connection={existing} groups={groups} defaultGroupId={null} onSaved={() => {}} onCancel={onCancel} />);
+  fireEvent.mouseDown(screen.getByRole("dialog").parentElement as HTMLElement);
+  expect(onCancel).toHaveBeenCalledTimes(1);
 });

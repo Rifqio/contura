@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { nextQueryName, parseDrafts, placeKey, serializeDrafts } from "../query/drafts";
@@ -226,6 +226,36 @@ test("ctrl_w_closes_and_ctrl_tab_cycles", async () => {
   // A middle click closes the tab under the pointer.
   fireEvent(screen.getByRole("tab", { name: "Query 2" }), new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
   expect(onClose).toHaveBeenLastCalledWith("query:b");
+});
+
+test("ctrl_page_down_and_page_up_move_to_the_next_and_previous_tab_as_in_edge", async () => {
+  const onSelect = vi.fn();
+  const tabs: AnyTab[] = [{ kind: "home" }, q("a", "Query 1"), q("b", "Query 2")];
+  const { rerender } = render(<TabStrip tabs={tabs} active="query:a" onSelect={onSelect} onClose={() => {}} onNew={() => {}} />);
+  await userEvent.keyboard("{Control>}{PageDown}{/Control}");
+  expect(onSelect).toHaveBeenLastCalledWith("query:b");
+  await userEvent.keyboard("{Control>}{PageUp}{/Control}");
+  expect(onSelect).toHaveBeenLastCalledWith("home");
+  // It wraps at either end.
+  rerender(<TabStrip tabs={tabs} active="query:b" onSelect={onSelect} onClose={() => {}} onNew={() => {}} />);
+  await userEvent.keyboard("{Control>}{PageDown}{/Control}");
+  expect(onSelect).toHaveBeenLastCalledWith("home");
+});
+
+test("ctrl_1_to_8_go_to_that_tab_and_ctrl_9_to_the_last_as_in_edge", async () => {
+  const onSelect = vi.fn();
+  const tabs: AnyTab[] = [{ kind: "home" }, q("a", "Query 1"), q("b", "Query 2")];
+  render(<TabStrip tabs={tabs} active="home" onSelect={onSelect} onClose={() => {}} onNew={() => {}} />);
+  await userEvent.keyboard("{Control>}2{/Control}");
+  expect(onSelect).toHaveBeenLastCalledWith("query:a");
+  await userEvent.keyboard("{Control>}1{/Control}");
+  expect(onSelect).toHaveBeenLastCalledWith("home");
+  await userEvent.keyboard("{Control>}9{/Control}");
+  expect(onSelect).toHaveBeenLastCalledWith("query:b");
+  // Ctrl+8 with fewer than eight tabs does nothing (Edge).
+  onSelect.mockClear();
+  await userEvent.keyboard("{Control>}8{/Control}");
+  expect(onSelect).not.toHaveBeenCalled();
 });
 
 test("new_query_names_count_up", () => {
@@ -489,10 +519,91 @@ test("a_diagram_tab_has_its_file_actions_on_right_click", async () => {
   );
   fireEvent.contextMenu(screen.getByRole("tab", { name: "checkout.flow" }));
   const menu = screen.getByRole("menu", { name: "checkout.flow" });
-  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Rename...", "Save a copy as...", "Delete..."]);
+  // S3: the tab menu first, then the diagram's file actions.
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+    "Close",
+    "Close other tabs",
+    "Close tabs to the right",
+    "Reopen closed tab",
+    "Copy name",
+    "Rename...",
+    "Save a copy as...",
+    "Delete...",
+  ]);
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Save a copy as..." }));
   expect(actions.saveCopy).toHaveBeenCalledWith("checkout");
   expect(screen.queryByRole("menu", { name: "checkout.flow" })).toBeNull();
+});
+
+const menuTabs: AnyTab[] = [{ kind: "home" }, q("a", "Query 1"), q("b", "Query 2"), q("c", "Query 3")];
+
+function tabMenu(over: Partial<React.ComponentProps<typeof TabStrip>> = {}, tabs: AnyTab[] = menuTabs, on = "Query 2") {
+  const props = { onSelect: vi.fn(), onClose: vi.fn(), onCloseMany: vi.fn(), onReopen: vi.fn(), onKeep: vi.fn(), canReopen: true, ...over };
+  render(<TabStrip tabs={tabs} active="home" onNew={() => {}} {...props} />);
+  fireEvent.contextMenu(screen.getByRole("tab", { name: on }));
+  return { props, menu: screen.getByRole("menu", { name: on }) };
+}
+
+test("s3_right_click_on_any_tab_opens_the_chrome_tab_menu", () => {
+  const { menu } = tabMenu();
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+    "Close",
+    "Close other tabs",
+    "Close tabs to the right",
+    "Reopen closed tab",
+    "Copy name",
+  ]);
+  expect(within(within(menu).getByRole("menuitem", { name: "Close" })).getByText("Ctrl+W")).toBeTruthy();
+  expect(within(within(menu).getByRole("menuitem", { name: "Reopen closed tab" })).getByText("Ctrl+Shift+T")).toBeTruthy();
+});
+
+test("s3_close_closes_that_tab_and_the_menu_goes", async () => {
+  const { props, menu } = tabMenu();
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Close" }));
+  expect(props.onClose).toHaveBeenCalledWith("query:b");
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("s3_close_other_tabs_and_close_tabs_to_the_right_name_the_tabs_and_the_one_kept", async () => {
+  const { props, menu } = tabMenu();
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Close other tabs" }));
+  expect(props.onCloseMany).toHaveBeenLastCalledWith(["home", "query:a", "query:c"], "query:b");
+  fireEvent.contextMenu(screen.getByRole("tab", { name: "Query 2" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Close tabs to the right" }));
+  expect(props.onCloseMany).toHaveBeenLastCalledWith(["query:c"], "query:b");
+});
+
+test("s3_nothing_to_close_turns_those_rows_off", () => {
+  const { menu } = tabMenu({}, [q("a", "Query 1")], "Query 1");
+  expect((within(menu).getByRole("menuitem", { name: "Close other tabs" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((within(menu).getByRole("menuitem", { name: "Close tabs to the right" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("s3_reopen_closed_tab_runs_and_is_off_with_nothing_closed", async () => {
+  const { props, menu } = tabMenu();
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Reopen closed tab" }));
+  expect(props.onReopen).toHaveBeenCalledTimes(1);
+  cleanup();
+  const off = tabMenu({ canReopen: false });
+  expect((within(off.menu).getByRole("menuitem", { name: "Reopen closed tab" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("s3_keep_open_is_only_on_a_preview_tab", async () => {
+  const preview: AnyTab = { ...(table as Extract<WorkTab, { kind: "object" }>), preview: true };
+  const { props, menu } = tabMenu({}, [preview, q("a", "Query 1")], "stores");
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Keep open" }));
+  expect(props.onKeep).toHaveBeenCalledWith(tabKey(preview));
+  cleanup();
+  const plain = tabMenu();
+  expect(within(plain.menu).queryByRole("menuitem", { name: "Keep open" })).toBeNull();
+});
+
+test("s3_copy_name_puts_the_tab_name_on_the_clipboard", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const { menu } = tabMenu();
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy name" }));
+  expect(writeText).toHaveBeenCalledWith("Query 2");
 });
 
 test("item_34_the_new_tab_menu_draws_large_icon_tiles_with_a_line_each_and_closes_on_escape", async () => {

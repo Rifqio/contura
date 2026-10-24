@@ -232,7 +232,7 @@ export default function StartModel({ connections, openIds, initial, file, onStar
         : { icon: "folder" as const, text: "Open..." };
 
   return (
-    <Dialog title="New Schema Model" icon="layers" size="model" onClose={onCancel}>
+    <Dialog title="New Schema Model" icon="layers" size="model" dirty={connectionId !== (initial?.connectionId ?? "")} onClose={onCancel}>
       <div className="dialog-body model-body" onKeyDown={onBodyKey}>
         <div className="model-cards" role="radiogroup" aria-label="Start from">
           {WAYS.map((w, i) => (

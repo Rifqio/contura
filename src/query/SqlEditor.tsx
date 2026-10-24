@@ -8,6 +8,7 @@ import {
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { MySQL, PostgreSQL, SQLite, sql } from "@codemirror/lang-sql";
 import { type Diagnostic as CmDiagnostic, lintGutter, openLintPanel, setDiagnostics } from "@codemirror/lint";
+import { closeSearchPanel, searchPanelOpen } from "@codemirror/search";
 import { Compartment, EditorSelection, EditorState, Prec, RangeSet, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration,
@@ -34,6 +35,7 @@ import { iconElement } from "../components/Icon";
 import type { LangClient } from "../lang/client";
 import { insertionLine } from "../lang/insertionLine";
 import { editorTheme } from "../lang/editorTheme";
+import { editingBasics } from "../lang/editingBasics";
 import type { Diagnostic, TextEdit } from "../lang/protocol";
 import { findTable } from "../lang/sql/analyze";
 import type { SqlCompletion } from "../lang/sql/complete";
@@ -720,6 +722,7 @@ export default function SqlEditor({
     });
 
     const escape = (view: EditorView) => {
+      if (searchPanelOpen(view.state)) return closeSearchPanel(view);
       if (view.state.field(paramsField)) {
         view.dispatch({ effects: setParams.of(null) });
         return true;
@@ -794,6 +797,7 @@ export default function SqlEditor({
           ),
           // Every command key, above the editor's defaults, so a confirmed override wins (PR11).
           commandKeys.current.of(editorCommandKeymap(latest.current.cmds.map, (id) => runCommand.current(id))),
+          oneLine ? [] : editingBasics(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.contentAttributes.of({ "aria-label": oneLine ? "Filter" : "SQL" }),
           EditorView.updateListener.of((u) => {

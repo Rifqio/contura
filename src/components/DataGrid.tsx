@@ -12,7 +12,7 @@ import {
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { durationText } from "../format/units";
-import { applyEdits, confirmEdits, errorText, fetchFullValue, fetchPage, isNotOpen, planEdits } from "../api/client";
+import { applyEdits, confirmEdits, errorText, fetchFullValue, fetchPage, isNotOpen, planEdits, tableDesign } from "../api/client";
 import type {
   Cell,
   ColumnInfo,
@@ -27,16 +27,16 @@ import type {
   PassId,
   RunVerdict,
   SortSpec,
+  TableColumn,
 } from "../api/types";
 import ConfirmRun from "../query/ConfirmRun";
 import EditsBar from "./EditsBar";
 import PreviewSql from "./PreviewSql";
 import {
   addRow,
-  batch,
   count,
-  deleteRow,
   discard,
+  settle,
   summary,
   toEditSet,
   editCell,
@@ -50,23 +50,41 @@ import {
   revertCell,
   revertRow,
   undo,
+  applyMany,
+  type CellOp,
 } from "../edits/pending";
 import { cellText, cellValue, type DisplayRow, displayRows, hasKey, parsePaste } from "../edits/gridRows";
 import CellEditor, { type LargeEditor } from "./CellEditor";
 import type { LangClient } from "../lang/client";
 import { type SchemaCache, schemaKey } from "../lang/sql/schemaCache";
 import type { AskContext, AskKit } from "../assistant/context";
+import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
+import { type RecentStepInput, useRecordStep } from "../assistant/recentSteps";
 import FilterBar from "../grid/FilterBar";
-import { filtersSql, type RowFilter, valueKind } from "../grid/rowFilters";
+import { planCells, plural } from "../edits/cellOps";
+import { filterForValue, filtersSql, OPS, type RowFilter, valueKind } from "../grid/rowFilters";
+import {
+  altGraph,
+  cellCount,
+  clampSelection,
+  isLetter,
+  norm,
+  rowsOf,
+  type Selection,
+  single,
+  wholeRows,
+} from "../grid/selection";
+import { readClipboard } from "../grid/clipboard";
+import { FullValueDialog } from "./CellValue";
 import FeatureIcon from "./FeatureIcon";
 import Kbd from "./Kbd";
-import ResultGrid from "./ResultGrid";
+import ResultGrid, { type GridHandle } from "./ResultGrid";
 import Icon from "./Icon";
 import DbMark from "./DbMark";
 import MenuButton, { MenuList, type MenuItem } from "./Menu";
 import { useToast } from "./Toast";
 import { toCsv } from "../query/ResultTools";
-import { useCommandKeys } from "../commands/useCommandKeys";
+import { type CommandHandlers, useCommandKeys } from "../commands/useCommandKeys";
 import type { ExportOrigin } from "../jobs/exportText";
 import { objectPrefix } from "../objectPath";
 
@@ -106,6 +124,8 @@ interface Props {
   group?: Group | null;
   /** Told when the grid gains or loses Pending Edits. */
   onDirtyChange?(dirty: boolean): void;
+  /** G15: the user worked in this grid (a sort, filter, hidden column, column width or edit): a preview tab becomes a kept tab. */
+  onWorked?(): void;
   /** Lets the parent save before closing; resolves false when the save failed or was cancelled. */
   controlRef?: MutableRefObject<GridControl | null>;
   /** The tab is on screen: its status (rows, time, Pending Edits) then shows in the window status bar. */
@@ -132,6 +152,38 @@ interface Props {
   onNoticeDone?(): void;
   /** Pending Edits were saved: a meaningful change, so the owner may list the table in Recent (item 12). */
   onSaved?(): void;
+  /** The tab's key: the grid publishes what the Ask may know of it (`tabAsk.ts`). */
+  askKey?: string | null;
+}
+
+/**
+ * What a table or view tab tells the Ask (spec 4.2): the sort, the row filters' column names, the hidden columns
+ * and the Pending Edits count, never a value; the filter's WHERE goes as the filter text the Core masks. Lists are
+ * cut at twice the Core's caps.
+ */
+export function gridTabAsk(
+  table: ObjectPath,
+  kind: "table" | "view",
+  sort: SortSpec | null,
+  rowFilters: readonly RowFilter[],
+  filter: string | null,
+  hidden: ReadonlySet<string>,
+  pendingEdits: number,
+): TabAskFields {
+  return {
+    tab: {
+      kind: "object",
+      title: table.name,
+      path: table,
+      object: kind,
+      sort,
+      filterColumns: [...new Set(rowFilters.map((f) => f.column))].slice(0, 100),
+      hidden: [...hidden].slice(0, 40),
+      pendingEdits,
+    },
+    filter: filter ?? undefined,
+    tables: [{ schema: table.schema, name: table.name }],
+  };
 }
 
 export interface GridControl {
@@ -154,6 +206,9 @@ const PASTE_KEY_NOTE = "Pasting can't change key columns.";
 const PASTE_DELETED_NOTE = "Deleted rows can't be edited. Revert the row first.";
 const PROD_SAVE_NOTE = "Saving runs on Production and asks you to confirm the SQL first.";
 const READ_ONLY_FOOT = "Read-only Connection: cells cannot be edited";
+const VIEW_NOTE = "Views are shown here, not edited.";
+
+let filterSeq = 0;
 
 /** "Saving runs the 3 statements in one transaction.": Save writes one statement per changed row. */
 function savingText(n: number): string {
@@ -182,11 +237,33 @@ const fullText = (value: string): Cell => ({
 type Menu = Spot & { x: number; y: number };
 
 /** The page on screen and its index. Replaced, never accumulated. */
-type Shown = { index: number; page: Page };
+type Shown = { index: number; page: Page; epoch: number };
 
-function nextSort(current: SortSpec | null, column: string): SortSpec {
-  if (current?.column === column) return { column, descending: !current.descending };
+/** G11, the AG Grid order: ascending, then descending, then no sort. */
+function nextSort(current: SortSpec | null, column: string): SortSpec | null {
+  if (current?.column === column) return current.descending ? null : { column, descending: true };
   return { column, descending: false };
+}
+
+/**
+ * G5: where the selected cell is in a reloaded page of the same view: the row with the same key and the same
+ * column, or when that row is gone the row now at its place (the last one when it was past the end).
+ */
+function findAgain(
+  prev: { columns: ColumnInfo[]; view: DisplayRow[] },
+  sel: { row: number; column: number },
+  columns: ColumnInfo[],
+  view: DisplayRow[],
+): { row: number; column: number } | null {
+  const column = columns.findIndex((c) => c.name === prev.columns[sel.column]?.name);
+  if (column < 0 || view.length === 0) return null;
+  const old = prev.view[sel.row];
+  let row = -1;
+  if (old?.kind === "loaded" && hasKey(prev.columns)) {
+    const text = JSON.stringify(rowKey(prev.columns, old.source));
+    row = view.findIndex((d) => d.kind === "loaded" && JSON.stringify(rowKey(columns, d.source)) === text);
+  }
+  return { row: row >= 0 ? row : Math.min(sel.row, view.length - 1), column };
 }
 
 function rowKey(columns: ColumnInfo[], row: Page["rows"][number]): KeyPart[] {
@@ -282,6 +359,7 @@ export default function DataGrid({
   production = false,
   group = null,
   onDirtyChange,
+  onWorked,
   controlRef,
   visible = true,
   connectionName,
@@ -296,8 +374,26 @@ export default function DataGrid({
   onImport,
   onSaved,
   onTransfer,
+  askKey = null,
 }: Props) {
   const { show: showToast } = useToast();
+  const recordStep = useRecordStep();
+  /** A Recent step on this table: its name first, then the columns; never a value. */
+  const gridStep = (verb: RecentStepInput["verb"], columns: string[], extra: Partial<RecentStepInput> = {}) =>
+    recordStep({
+      verb,
+      tab: "object",
+      title: null,
+      connectionId,
+      database: table.database,
+      schema: table.schema,
+      names: [table.name, ...columns],
+      count: null,
+      ...extra,
+    });
+  const workedRef = useRef(onWorked);
+  workedRef.current = onWorked;
+  const worked = () => workedRef.current?.();
   const [pageIndex, setPageIndex] = useState(0);
   const [sort, setSort] = useState<SortSpec | null>(null);
   /** The hidden columns of the Table menu's Columns list (PR28). */
@@ -316,6 +412,11 @@ export default function DataGrid({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  /**
+   * G5: counts the changes of what the grid shows (another page, sort, filter or design), not the reloads of it.
+   * A page fetched in the same epoch as the one on screen keeps the scroll position, the selected cell and the widths.
+   */
+  const epochRef = useRef(0);
   const [fetchMs, setFetchMs] = useState<number | null>(null);
   const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => {
@@ -328,11 +429,12 @@ export default function DataGrid({
     setLoading(true);
     setError(null);
     const started = performance.now();
+    const epoch = epochRef.current;
     fetchPage(connectionId, { table, page: pageIndex, sort, filter })
       .then((page) => {
         if (!live) return;
         setFetchMs(performance.now() - started);
-        setShown({ index: pageIndex, page });
+        setShown({ index: pageIndex, page, epoch });
       })
       .catch((e) => {
         if (!live) return;
@@ -350,9 +452,14 @@ export default function DataGrid({
   /** Item 2: new filters fetch page 0 with the WHERE they make. */
   function applyFilters(next: RowFilter[]) {
     flushEditor();
+    worked();
     setRowFilters(next);
+    if (next.length > 0) gridStep("gridFilter", [...new Set(next.map((f) => f.column))]);
     const kinds = new Map(columns.map((c) => [c.name, valueKind(c.typeName)]));
-    setFilter(filtersSql(dialect, next, (c) => kinds.get(c) ?? "text"));
+    const where = filtersSql(dialect, next, (c) => kinds.get(c) ?? "text");
+    // Only a change of what is fetched starts the view over: the same WHERE fetches nothing new.
+    if (where !== filter || pageIndex !== 0) epochRef.current++;
+    setFilter(where);
     setPageIndex(0);
   }
 
@@ -363,15 +470,16 @@ export default function DataGrid({
   }
 
   function chooseSort(column: string) {
-    flushEditor();
-    setSort(nextSort(sort, column));
-    setPageIndex(0);
+    setSortTo(nextSort(sort, column));
   }
 
   function setSortTo(next: SortSpec | null) {
     flushEditor();
+    worked();
+    if (next?.column !== sort?.column || next?.descending !== sort?.descending || pageIndex !== 0) epochRef.current++;
     setSort(next);
     setPageIndex(0);
+    if (next) gridStep("gridSort", [next.column], next.descending ? { descending: true } : {});
   }
 
   function clearSort() {
@@ -387,7 +495,15 @@ export default function DataGrid({
   // The refs hold the latest values, so a save right after an edit (Ctrl+S in the editor) sees it.
   const [pending, setPendingState] = useState<Pending | null>(null);
   const pendingRef = useRef<Pending | null>(null);
-  const [sel, setSel] = useState<Spot | null>(null);
+  /** G2: the selected ranges, in the grid's positions (rows and shown columns); `sel` is its active cell. */
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const gridRef = useRef<GridHandle | null>(null);
+  /** The Add filter form Ctrl+F opens with the active cell's column and value (G13). */
+  const [filterRequest, setFilterRequest] = useState<{ draft: Omit<RowFilter, "id">; seq: number } | null>(null);
+  /** Open full value on a cell the larger editor does not open for. */
+  const [full, setFull] = useState<{ title: string; cell: Cell; source?: { column: string; key: KeyPart[] } } | null>(null);
+  /** Nullability and defaults (ruling 2, Set DEFAULT), from the table's design; null until loaded. */
+  const [design, setDesign] = useState<Map<string, TableColumn> | null>(null);
   const [editing, setEditingState] = useState<Editing | null>(null);
   const editingRef = useRef<Editing | null>(null);
   /** What is typed in the open editor. */
@@ -408,13 +524,21 @@ export default function DataGrid({
     setEditingState(e);
   }
 
+  const view = useMemo(() => displayRows(pending, page), [pending, page]);
+  /** G5: the page and rows the grid showed before this one, to find the selected cell again after a reload. */
+  const before = useRef<{ epoch: number; columns: ColumnInfo[]; view: DisplayRow[] } | null>(null);
   useEffect(() => {
     if (page && !pendingRef.current) put(emptyPending(page.columns));
-    setSel(null);
+    const prev = before.current;
+    const again = prev && shown && prev.epoch === shown.epoch && sel ? findAgain(prev, sel, page?.columns ?? [], view) : null;
+    // The same row in its place keeps the whole selection; a row found elsewhere keeps the active cell.
+    if (again && again.row === sel?.row && again.column === sel.column) {
+      setSelection((s) => clampSelection(s, { rows: view.length, cols: shownCols.length }));
+    } else setSel(again);
     setEditing(null);
     setMenu(null);
+    before.current = shown ? { epoch: shown.epoch, columns: page?.columns ?? [], view } : null;
   }, [page]);
-  const view = useMemo(() => displayRows(pending, page), [pending, page]);
   // The latest page and rows, for answers that arrive after the grid moved on.
   const pageRef = useRef(page);
   pageRef.current = page;
@@ -429,8 +553,35 @@ export default function DataGrid({
   const shownRows = useMemo(() => view.map((_, i) => i), [view]);
   const rowPos = (row: number) => shownRows.indexOf(row);
   const colPos = (column: number) => shownCols.indexOf(column);
+  /** The active cell, in `view` and `columns` indexes. */
+  const sel: Spot | null =
+    selection && shownRows[selection.active.r] !== undefined && shownCols[selection.active.c] !== undefined
+      ? { row: shownRows[selection.active.r], column: shownCols[selection.active.c] }
+      : null;
+  /** Selects one cell, given in `view` and `columns` indexes; null clears the selection. */
+  function setSel(spot: Spot | null) {
+    const r = spot ? rowPos(spot.row) : -1;
+    const c = spot ? colPos(spot.column) : -1;
+    setSelection(r >= 0 && c >= 0 ? single({ r, c }) : null);
+  }
   /** The selected cell is on screen: the header's filter or columns menu has not hidden it. */
-  const selShown = !!sel && rowPos(sel.row) >= 0 && colPos(sel.column) >= 0;
+  const selShown = !!sel;
+  /** The selected cells as `view` and `columns` indexes, each once. */
+  function selectedCells(): Spot[] {
+    if (!selection) return [];
+    const out: Spot[] = [];
+    const seen = selection.ranges.map(norm);
+    seen.forEach((n, i) => {
+      for (let r = n.t; r <= n.b; r++)
+        for (let c = n.l; c <= n.r; c++) {
+          if (seen.slice(0, i).some((m) => r >= m.t && r <= m.b && c >= m.l && c <= m.r)) continue;
+          if (shownRows[r] !== undefined && shownCols[c] !== undefined) out.push({ row: shownRows[r], column: shownCols[c] });
+        }
+    });
+    return out.sort((a, b) => a.row - b.row || a.column - b.column);
+  }
+  /** The rows the selection spans, as `view` indexes. */
+  const selectedRows = () => rowsOf(selection).flatMap((r) => (shownRows[r] === undefined ? [] : [shownRows[r]]));
   /**
    * What Export opens on: the table's columns (those hidden here start off), the applied WHERE and
    * ORDER BY, and the selected cell's row by its key (D7).
@@ -453,12 +604,61 @@ export default function DataGrid({
   }
   // Ctrl+E (D21): the focused grid, else the visible one, opens Export.
   useCommandKeys(onExport && kind === "table" ? { "export.open": () => onExport(exportOrigin()) } : {}, { region: sectionRef });
-  // A selection the filter or columns menu hides is dropped, so nothing acts on a cell off screen.
+  // G12: F5 in the focused grid reloads its rows, as the Reload button does.
+  // The handler exists only while focus is inside the grid, so with focus elsewhere F5 falls to the tree.
+  const reloadKey: CommandHandlers = {};
+  if (kind === "table") {
+    Object.defineProperty(reloadKey, "tree.refresh", {
+      enumerable: true,
+      get: () => (sectionRef.current?.contains(document.activeElement) ? () => !loading && reloadRows() : undefined),
+    });
+  }
+  useCommandKeys(reloadKey, { region: sectionRef });
+  // Hiding or showing a column keeps the active cell on its column, or drops the selection when the column is
+  // hidden, so nothing acts on a cell off screen. Fewer rows (an undone new row) cut the ranges back.
   // The cell menu follows the same rule: it closes when its row or column leaves the screen.
+  const colsBefore = useRef(shownCols);
   useEffect(() => {
-    if (sel && (!shownRows.includes(sel.row) || !shownCols.includes(sel.column))) setSel(null);
+    const prev = colsBefore.current;
+    colsBefore.current = shownCols;
+    setSelection((s) => {
+      if (!s) return s;
+      if (prev.join(",") !== shownCols.join(",")) {
+        const c = shownCols.indexOf(prev[s.active.c]);
+        return c < 0 || s.active.r >= shownRows.length ? null : single({ r: s.active.r, c });
+      }
+      const fits = s.ranges.every((g) => Math.max(g.r0, g.r1) < shownRows.length && Math.max(g.c0, g.c1) < shownCols.length);
+      return fits ? s : clampSelection(s, { rows: shownRows.length, cols: shownCols.length });
+    });
     if (menu && (!shownRows.includes(menu.row) || !shownCols.includes(menu.column))) setMenu(null);
-  }, [sel, menu, shownRows, shownCols]);
+  }, [menu, shownRows, shownCols]);
+
+  // A new design may change nullability and defaults: read them again when next needed.
+  const designFailed = useRef(false);
+  useEffect(() => {
+    setDesign(null);
+    designFailed.current = false;
+  }, [version]);
+
+  /**
+   * Ruling 2 and Set DEFAULT need each column's nullability and default: read from the table's design the first
+   * time Delete, Set NULL or Set DEFAULT is used, then kept. Null when it can't be read; every column then counts
+   * as nullable with no default, and Save reports what the server refuses.
+   */
+  function withDesign(run: (d: Map<string, TableColumn> | null) => void) {
+    if (design || designFailed.current) return run(design);
+    const at = pageRef.current;
+    tableDesign(connectionId, table)
+      .then((d) => new Map(d.columns.map((c) => [c.name, c])))
+      .catch(() => null)
+      .then((m) => {
+        // A failed read is not asked again until the design changes (M6).
+        if (m) setDesign(m);
+        else designFailed.current = true;
+        if (pageRef.current === at) run(m);
+      });
+  }
+
   // A press outside the cell menu, or a scroll anywhere outside it, closes it.
   const menuBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -573,18 +773,46 @@ export default function DataGrid({
     setValue(row, column, { t: "null" });
   }
 
+  /** What a row is called in a note: "Row 3", or "The new row". */
+  const rowName = (d: DisplayRow | undefined) => (d?.kind === "loaded" ? `Row ${(firstRow + d.index).toLocaleString("en-US")}` : "The new row");
+
+  /**
+   * G3, G4: Delete clears the selected cells (text to '', other types to NULL, ruling 2), Set NULL and Set DEFAULT
+   * set them, all as one undo step of Pending Edits. Key columns, NOT NULL columns a value can't go into and rows
+   * marked for deletion are left as they are, and the note says so.
+   */
+  function setCells(kind: "clear" | "null" | "default") {
+    if (!editable || !pendingRef.current || inflight.current) return;
+    withDesign((design) => applyCells(kind, design));
+  }
+
+  function applyCells(kind: "clear" | "null" | "default", design: Map<string, TableColumn> | null) {
+    if (!pendingRef.current || inflight.current) return;
+    const plan = planCells({ kind, view, columns, cells: selectedCells(), design });
+    if (plan.ops.length) update((p) => applyMany(p, plan.ops)[0]);
+    setNote(plan.note);
+  }
+
+  /** The row the new one goes under: the active cell's row (G17), or none for the bottom. */
+  function placeOf(d: DisplayRow | undefined): string | undefined {
+    if (!d) return undefined;
+    return d.kind === "new" ? d.id : (d.key ?? undefined);
+  }
+
+  /** Ctrl+N, Alt+Insert, the Add row button: a new row under the current one (DBeaver), else at the bottom. */
   function addNewRow(values?: Map<string, NewValue>) {
     if (!editable || !pendingRef.current || inflight.current) return;
-    update((p) => addRow(p, values)[0]);
-    // New rows go at the bottom (T3): the row just added is the last one.
-    setSel({ row: view.length, column: shownCols[0] ?? 0 });
+    const after = sel ? placeOf(view[sel.row]) : undefined;
+    update((p) => addRow(p, values, after)[0]);
+    const firstValue = shownCols.findIndex((c) => !columns[c]?.isPrimaryKey);
+    const row = after !== undefined && sel ? sel.row + 1 : view.length;
+    setSelection(single({ r: row, c: Math.max(0, firstValue) }));
+    setNote(null);
     focusGrid();
   }
 
-  async function duplicateRow(row: number) {
-    const d = view[row];
-    if (!d || !editable || !pendingRef.current || inflight.current) return;
-    const at = pageRef.current;
+  /** The values a duplicate of `d` takes: every column but the key; cut-short text is loaded in full first. */
+  async function copyOf(d: DisplayRow): Promise<{ values: Map<string, NewValue>; binary: boolean } | string> {
     const values = new Map<string, NewValue>();
     let binary = false;
     for (const [i, c] of columns.entries()) {
@@ -601,41 +829,97 @@ export default function DataGrid({
           if (full.t === "text") v = { t: "text", value: full.value };
           else binary = true;
         } catch (e) {
-          return setNote(errorText(e));
+          return errorText(e);
         }
       }
       if (v) values.set(c.name, v);
     }
+    return { values, binary };
+  }
+
+  /** Ctrl+D and the menu's Duplicate: copies of the rows, under the last of them (TablePlus). */
+  async function duplicateRows(rows: number[]) {
+    const ds = rows.map((r) => view[r]).filter((d): d is DisplayRow => !!d && !(d.kind === "loaded" && d.deleted));
+    if (!ds.length || !editable || !pendingRef.current || inflight.current) return;
+    const at = pageRef.current;
+    const copies: Map<string, NewValue>[] = [];
+    let binary = false;
+    for (const d of ds) {
+      const c = await copyOf(d);
+      if (typeof c === "string") return setNote(c);
+      copies.push(c.values);
+      binary ||= c.binary;
+    }
     // The page may have changed while full values loaded.
     if (pageRef.current !== at || inflight.current) return;
-    setNote(binary ? "Binary values aren't copied." : null);
-    addNewRow(values);
+    const last = Math.max(...rows);
+    const after = placeOf(view[last]);
+    update((p) => applyMany(p, copies.map((values, i): CellOp => ({ t: "add", values, after: i === 0 ? after : "previous" })))[0]);
+    const start = after !== undefined ? last + 1 : view.length;
+    setSelection(single({ r: start, c: 0 }));
+    setNote(`Duplicated ${plural(copies.length, "row")} below.${binary ? " Binary values aren't copied." : ""}`);
+    focusGrid();
   }
 
-  function deleteAt(row: number) {
-    const d = view[row];
-    if (!d || !editable) return;
-    if (d.kind === "new") update((p) => deleteRow(p, d.id));
-    else if (!d.key) setNote(NO_KEY);
-    else update((p) => deleteRow(p, d.key!, d.source));
+  /** Marks the rows deleted (new rows go at once), as one undo step. */
+  function deleteRows(rows: number[]) {
+    if (!editable || !pendingRef.current || inflight.current) return;
+    const ds = rows.map((r) => view[r]).filter((d): d is DisplayRow => !!d && !(d.kind === "loaded" && d.deleted));
+    if (!ds.length) return;
+    if (ds.some((d) => d.kind === "loaded" && !d.key)) return setNote(NO_KEY);
+    update((p) => applyMany(p, ds.map((d): CellOp => (d.kind === "new" ? { t: "delete", ref: d.id } : { t: "delete", ref: d.key!, row: d.source })))[0]);
+    setNote(ds.length === 1 ? `${rowName(ds[0])} marked for deletion. Ctrl+Z undoes.` : `${plural(ds.length, "row")} marked for deletion. Ctrl+Z undoes.`);
   }
 
+  /** The toolbar's Delete row and Alt+Delete: the rows the selection spans (ruling 6). */
   function deleteSelected() {
-    if (sel && selShown) deleteAt(sel.row);
+    deleteRows(selectedRows());
   }
 
   function onPaste(e: ClipboardEvent<HTMLDivElement>) {
-    if (!editable || editing || !pendingRef.current || inflight.current) return;
+    if (editing) return;
     const text = e.clipboardData.getData("text/plain");
     if (!text) return;
     e.preventDefault();
-    // The block lands on the rows and columns on screen, from the selected cell; lines past the
-    // last row become new rows.
-    const at = sel ?? { row: shownRows[0] ?? 0, column: shownCols[0] ?? 0 };
-    const r0 = sel ? rowPos(at.row) : 0;
-    const c0 = colPos(at.column);
-    if (r0 < 0 || c0 < 0) return;
+    if (!editable) return refuse();
+    pasteText(text);
+  }
+
+  /**
+   * Paste lands from the top-left cell of the selection on the rows and columns on screen; lines past the last row
+   * become new rows. One value pasted over several selected cells fills them all (Excel).
+   */
+  function pasteText(text: string) {
+    if (!editable || !pendingRef.current || inflight.current) return;
     const lines = parsePaste(text);
+    const many = cellCount(selection) > 1;
+    if (lines.length === 1 && lines[0].length === 1 && many) {
+      const cells = selectedCells();
+      for (const at of cells) {
+        const d = view[at.row];
+        if (d?.kind !== "loaded") continue;
+        if (!d.key) return setNote(NO_KEY);
+        if (d.deleted) return setNote(PASTE_DELETED_NOTE);
+        if (columns[at.column].isPrimaryKey) return setNote(PASTE_KEY_NOTE);
+      }
+      setNote(null);
+      const value: NewValue = { t: "text", value: lines[0][0] };
+      update((p) =>
+        applyMany(
+          p,
+          cells.map((at): CellOp => {
+            const d = view[at.row];
+            const column = columns[at.column].name;
+            return d.kind === "new" ? { t: "setNew", localId: d.id, column, value } : { t: "set", rowKey: d.key!, row: d.source, column, value };
+          }),
+        )[0],
+      );
+      return;
+    }
+    const top = selection ? norm(selection.ranges[selection.ranges.length - 1]) : null;
+    const r0 = top ? top.t : 0;
+    const c0 = top ? top.l : 0;
+    if (r0 < 0 || c0 < 0 || c0 >= shownCols.length) return;
     const span = (line: string[]) => line.slice(0, shownCols.length - c0);
     const column = (j: number) => columns[shownCols[c0 + j]];
     const target = (i: number) => (r0 + i < shownRows.length ? view[shownRows[r0 + i]] : undefined);
@@ -647,72 +931,133 @@ export default function DataGrid({
       if (span(line).some((_, j) => column(j).isPrimaryKey)) return setNote(PASTE_KEY_NOTE);
     }
     setNote(null);
-    update((p0) =>
-      batch(p0, (p) => {
-        let out = p;
-        lines.forEach((line, i) => {
-          const d = target(i);
-          const cells = span(line).map((value, j) => [column(j).name, { t: "text", value }] as const);
-          if (!d) {
-            out = addRow(out, new Map<string, NewValue>(cells))[0];
-          } else if (d.kind === "new") {
-            for (const [name, v] of cells) out = editNewCell(out, d.id, name, v);
-          } else if (d.key && !d.deleted) {
-            for (const [name, v] of cells) out = editCell(out, d.key, d.source, name, v);
-          }
-        });
-        return out;
-      }),
-    );
+    const ops: CellOp[] = [];
+    lines.forEach((line, i) => {
+      const d = target(i);
+      const cells = span(line).map((value, j) => [column(j).name, { t: "text", value } as NewValue] as const);
+      if (!d) ops.push({ t: "add", values: new Map<string, NewValue>(cells) });
+      else if (d.kind === "new") for (const [name, value] of cells) ops.push({ t: "setNew", localId: d.id, column: name, value });
+      else if (d.key && !d.deleted) for (const [name, value] of cells) ops.push({ t: "set", rowKey: d.key, row: d.source, column: name, value });
+    });
+    update((p) => applyMany(p, ops)[0]);
   }
 
+  /** Why an edit key does nothing here: the Read-only toast, or a note on a view. */
+  function refuse() {
+    if (readOnly) readOnlyEdit();
+    else if (kind === "view") setNote(VIEW_NOTE);
+  }
+
+  /** G13 (TablePlus): Add filter on the active cell's column, its value filled in. */
+  function filterDraft(): Omit<RowFilter, "id"> | null {
+    if (!sel) {
+      // M10: with no cell selected, Add filter opens on the first column, empty.
+      const first = columns[shownCols[0]];
+      return first ? { column: first.name, op: OPS[valueKind(first.typeName)][0].op, value: "" } : null;
+    }
+    const c = columns[sel.column];
+    const cell = view[sel.row]?.cells[sel.column];
+    if (!c || !cell) return null;
+    const f = filterForValue(c.name, valueKind(c.typeName), cell);
+    if (!f) setNote("Binary values can't be filtered by.");
+    return f;
+  }
+
+  function filterByValue() {
+    const f = filterDraft();
+    if (f && sel) applyFilters([...rowFilters, { ...f, id: `cell${++filterSeq}` }]);
+  }
+
+  /** Shift+F2 and the menu's Open full value: the larger editor where the cell can be edited, else the value to read. */
+  function openFull(spot: Spot) {
+    const d = view[spot.row];
+    const c = columns[spot.column];
+    if (!d || !c) return;
+    if (editable && blocked(d, spot.column) === null && !inflight.current) return openEditor(spot.row, spot.column, undefined, true);
+    const where = d.kind === "loaded" ? `row ${(firstRow + d.index).toLocaleString("en-US")}` : "new row";
+    setFull({
+      title: `${c.name}, ${where}`,
+      cell: d.cells[spot.column],
+      source: d.kind === "loaded" && d.key ? { column: c.name, key: rowKey(columns, d.source) } : undefined,
+    });
+  }
+
+  function openMenuAtActive(target: HTMLElement) {
+    if (!sel || !selection) return;
+    const cell = sectionRef.current?.querySelector(`tr[data-row="${selection.active.r}"] td[data-col="${selection.active.c}"]`);
+    const box = (cell ?? target).getBoundingClientRect();
+    setMenu({ row: sel.row, column: sel.column, x: box.left, y: box.bottom });
+  }
+
+  /**
+   * The table grid's own keys, before the grid's movement and copy keys. A key handled here calls preventDefault, so
+   * the grid does not act on it too and no app command takes it (Ctrl+Alt+N is Set NULL here, New diagram elsewhere).
+   */
   function onGridKey(e: KeyboardEvent<HTMLDivElement>) {
-    if (!editable || editing) return;
-    const mod = e.ctrlKey || e.metaKey;
-    const k = e.key.toLowerCase();
-    if (e.key === "Escape" && menu) return setMenu(null);
-    // The context menu key (or Shift+F10) opens the cell menu on the selected cell.
-    if ((e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) && sel && selShown) {
-      e.preventDefault();
-      const cell = sectionRef.current?.querySelector(`tr[data-row="${rowPos(sel.row)}"] td[data-col="${colPos(sel.column)}"]`);
-      const box = (cell ?? e.currentTarget).getBoundingClientRect();
-      setMenu({ row: sel.row, column: sel.column, x: box.left, y: box.bottom });
+    if (editing) return;
+    const handled = () => e.preventDefault();
+    if (altGraph(e)) {
+      // An AltGr character types like any other (M1).
+      if (!editable) return view.length > 0 ? (handled(), refuse()) : undefined;
+      if (!sel) return;
+      flushSync(() => openEditor(sel.row, sel.column, ""));
+      if (!editingRef.current) e.preventDefault();
       return;
     }
-    if (mod && k === "s") return e.preventDefault(), void save();
-    if (mod && k === "z" && !e.shiftKey) return e.preventDefault(), update(undo);
-    if (mod && (k === "y" || (k === "z" && e.shiftKey))) return e.preventDefault(), update(redo);
-    if (mod && k === "n") return e.preventDefault(), addNewRow();
-    if (shownRows.length === 0 || shownCols.length === 0) return;
-    // Arrow keys move over the rows and columns on screen.
-    const r = Math.max(0, sel ? rowPos(sel.row) : 0);
-    const c = Math.max(0, sel ? colPos(sel.column) : 0);
-    const at = { row: shownRows[r], column: shownCols[c] };
-    const moves: Record<string, Spot> = {
-      ArrowDown: { row: shownRows[Math.min(r + 1, shownRows.length - 1)], column: at.column },
-      ArrowUp: { row: shownRows[Math.max(r - 1, 0)], column: at.column },
-      ArrowRight: { row: at.row, column: shownCols[Math.min(c + 1, shownCols.length - 1)] },
-      ArrowLeft: { row: at.row, column: shownCols[Math.max(c - 1, 0)] },
-    };
-    if (moves[e.key]) {
-      e.preventDefault();
-      setSel(selShown ? moves[e.key] : at);
-    } else if (sel && !selShown) {
-      // The selected cell is hidden: only the arrow keys act, selecting a cell on screen.
+    const mod = e.ctrlKey || e.metaKey;
+    const letter = (l: string) => isLetter(e, l);
+    if (e.key === "Escape" && menu) return handled(), setMenu(null);
+    if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+      handled();
+      return openMenuAtActive(e.currentTarget);
+    }
+    if (mod && !e.altKey && !e.shiftKey && letter("f")) {
+      handled();
+      const draft = filterDraft();
+      if (draft) setFilterRequest((r) => ({ draft, seq: (r?.seq ?? 0) + 1 }));
       return;
-    } else if (e.key === "Enter" || e.key === "F2") {
-      e.preventDefault();
-      // Shift+F2 opens the larger editor (item 4).
-      openEditor(at.row, at.column, undefined, e.key === "F2" && e.shiftKey);
-    } else if (e.key === "Delete") {
-      e.preventDefault();
-      deleteSelected();
-    } else if (e.key.length === 1 && !mod && !e.altKey) {
+    }
+    if (e.shiftKey && e.key === "F2" && !mod) {
+      handled();
+      if (sel) openFull(sel);
+      return;
+    }
+    const editKey =
+      (mod && e.altKey && (letter("n") || letter("d"))) ||
+      (e.altKey && (e.key === "Delete" || e.key === "Insert")) ||
+      (mod && !e.altKey && letter("d") && !e.shiftKey) ||
+      (!mod && !e.altKey && (e.key === "Enter" || e.key === "F2" || e.key === "Delete" || e.key === "Backspace")) ||
+      (e.key.length === 1 && !mod && !e.altKey && !(e.key === " " && e.shiftKey));
+    if (!editable) {
+      if (editKey && view.length > 0) {
+        handled();
+        refuse();
+      }
+      return;
+    }
+    if (mod && !e.altKey && letter("s")) return handled(), void save();
+    if (mod && !e.altKey && letter("z") && !e.shiftKey) return handled(), update(undo);
+    if (mod && !e.altKey && (letter("y") || (letter("z") && e.shiftKey))) return handled(), update(redo);
+    if (mod && e.altKey && letter("n")) return handled(), setCells("null");
+    if (mod && e.altKey && letter("d")) return handled(), setCells("default");
+    if (e.altKey && !mod && e.key === "Delete") return handled(), deleteSelected();
+    if ((e.altKey && !mod && e.key === "Insert") || (mod && !e.altKey && !e.shiftKey && letter("n"))) return handled(), addNewRow();
+    if (mod && !e.altKey && !e.shiftKey && letter("d")) return handled(), void duplicateRows(selectedRows());
+    if (!sel) return;
+    if (!mod && !e.altKey && (e.key === "Enter" || e.key === "F2")) {
+      handled();
+      openEditor(sel.row, sel.column);
+    } else if (!mod && !e.altKey && (e.key === "Delete" || e.key === "Backspace")) {
+      handled();
+      // Rows chosen from their numbers are deleted (TablePlus); any other selection is cleared (Excel).
+      if (e.key === "Delete" && selection?.rows && wholeRows(selection, shownCols.length)) deleteSelected();
+      else setCells("clear");
+    } else if (e.key.length === 1 && !mod && !e.altKey && !(e.key === " " && e.shiftKey)) {
       // Item 47: the editor opens empty and takes focus before the browser handles the key, so the
       // browser types the character itself. Writing it in from here bypassed the WebView's text input
       // (the IME on Windows), which then lost it when the next characters went in (`::s` became `:s`).
       // Typing over a cut-short cell opens at once too: Save loads its full old value (`missingFull`).
-      flushSync(() => openEditor(at.row, at.column, ""));
+      flushSync(() => openEditor(sel.row, sel.column, ""));
       if (!editingRef.current) e.preventDefault();
     }
   }
@@ -726,10 +1071,14 @@ export default function DataGrid({
   const confirmDone = useRef<((ok: boolean) => void) | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const changes = pending ? count(pending) : 0;
+  usePublishTabAsk(askKey, () => gridTabAsk(table, kind, sort, rowFilters, filter, hidden, changes), [table, kind, sort, rowFilters, filter, hidden, changes]);
 
   const dirtyChange = useRef(onDirtyChange);
   dirtyChange.current = onDirtyChange;
   useEffect(() => dirtyChange.current?.(changes > 0), [changes > 0]);
+  useEffect(() => {
+    if (changes > 0) workedRef.current?.();
+  }, [changes > 0]);
   // A grid that goes away takes its Pending Edits with it.
   useEffect(() => () => dirtyChange.current?.(false), []);
 
@@ -748,7 +1097,9 @@ export default function DataGrid({
     try {
       await applyEdits(connectionId, edits, pass);
       const now = pendingRef.current;
-      if (now && now.state === state) put(discard(now));
+      if (now && now.state === state) put(settle(now));
+      // The rows the save sent, even when more edits were made while it ran.
+      gridStep("editsSaved", [], { count: edits.updates.length + edits.inserts.length + edits.deletes.length });
       setConflict(null);
       setSaveError(null);
       setAttempt((n) => n + 1);
@@ -851,6 +1202,26 @@ export default function DataGrid({
     return true;
   }
 
+  /** The Discard button: one undo step, and a toast whose Undo brings the changes back. */
+  function discardWithUndo() {
+    const before = pendingRef.current;
+    const n = before ? count(before) : 0;
+    if (!discardAll() || n === 0) return;
+    const emptied = pendingRef.current?.state;
+    showToast({
+      kind: "info",
+      text: `Discarded ${n} ${n === 1 ? "change" : "changes"}.`,
+      stays: 8000,
+      action: {
+        label: "Undo",
+        run: () => {
+          if (pendingRef.current?.state === emptied) update(undo);
+          else showToast({ kind: "info", text: "Undo no longer applies: the grid changed since. Ctrl+Z steps back through your edits." });
+        },
+      },
+    });
+  }
+
   function reloadRows() {
     flushEditor();
     // With no Pending Edits the reloaded page brings its columns with it (a design may have changed them).
@@ -866,6 +1237,7 @@ export default function DataGrid({
   useEffect(() => {
     if (shownVersion.current === version) return;
     shownVersion.current = version;
+    epochRef.current++;
     setEditing(null);
     put(null);
     setSel(null);
@@ -880,6 +1252,7 @@ export default function DataGrid({
 
   function goToPage(index: number) {
     flushEditor();
+    if (index !== pageIndex) epochRef.current++;
     setPageIndex(index);
   }
 
@@ -899,8 +1272,7 @@ export default function DataGrid({
     const d = view[r];
     if (!d) return undefined;
     if (d.kind === "new") return "+";
-    // The loaded page comes first, so a loaded row's place in `view` is its place on the page.
-    const n = (firstRow + r).toLocaleString("en-US");
+    const n = (firstRow + d.index).toLocaleString("en-US");
     // A deleted row reads "-" in the gutter, as a new row reads "+"; its number stays in the tooltip.
     if (d.deleted) return <span className="row-number-deleted" title={`Row ${n}, deleted`}>-</span>;
     const edited = d.key && pending && columns.some((c) => pendingValue(pending, d.key!, c.name));
@@ -918,38 +1290,77 @@ export default function DataGrid({
     focusGrid();
   }
 
-  /** The cell menu's rows; each acts only while its row and column are still on screen. */
+  /**
+   * G9: the cell menu, target first (DataGrip, DBeaver): what it acts on as its heading, then Copy, Copy with
+   * headers and Paste; Set NULL and Set DEFAULT; Filter by this value and Open full value; then the row items, in
+   * the plural over several rows. A read-only grid keeps only what reads. Each acts while its cell is on screen.
+   */
   function cellMenuItems(m: Menu): MenuItem[] {
-    const shown = () => shownRows.includes(m.row) && shownCols.includes(m.column);
-    const items: MenuItem[] = menuItems(m).map((item) => ({
-      key: item.label,
-      label: item.label,
-      onSelect: () => {
-        if (shown()) item.run();
-      },
-    }));
-    if (view[m.row]?.kind === "loaded" && columns[m.column]?.isPrimaryKey) {
-      items.push({ key: "key-note", label: KEY_NOTE, heading: KEY_NOTE, separatorBefore: items.length > 0 });
-    }
-    return items;
-  }
-
-  function menuItems(m: Menu): { label: string; run: () => void }[] {
     const d = view[m.row];
     if (!d) return [];
-    const items: { label: string; run: () => void }[] = [];
-    if (d.kind === "new" || !d.deleted) {
-      items.push({ label: "Delete row", run: () => deleteAt(m.row) });
-      items.push({ label: "Duplicate row", run: () => void duplicateRow(m.row) });
+    const shown = () => shownRows.includes(m.row) && shownCols.includes(m.column);
+    const act = (run: () => void) => () => {
+      if (shown()) run();
+    };
+    const rows = selectedRows();
+    const many = rows.length > 1;
+    const count = cellCount(selection);
+    const heading =
+      count > 1
+        ? wholeRows(selection, shownCols.length)
+          ? plural(rows.length, "row")
+          : plural(count, "cell")
+        : `${columns[m.column].name}, ${d.kind === "loaded" ? `row ${(firstRow + d.index).toLocaleString("en-US")}` : "new row"}`;
+    const items: MenuItem[] = [
+      { key: "head", label: heading, heading },
+      { key: "copy", label: "Copy", shortcut: "Ctrl+C", onSelect: act(() => gridRef.current?.copy(false)) },
+      { key: "copyHeaders", label: "Copy with headers", shortcut: "Ctrl+Shift+C", onSelect: act(() => gridRef.current?.copy(true)) },
+    ];
+    if (editable) {
+      items.push(
+        {
+          key: "paste",
+          label: "Paste",
+          shortcut: "Ctrl+V",
+          onSelect: act(() => {
+            void readClipboard().then((text) => {
+              if (text) pasteText(text);
+              else setNote("Nothing to paste: the clipboard has no text, or Contura may not read it. Ctrl+V pastes.");
+            });
+          }),
+        },
+        { key: "null", label: "Set NULL", shortcut: "Ctrl+Alt+N", separatorBefore: true, onSelect: act(() => setCells("null")) },
+        { key: "default", label: "Set DEFAULT", shortcut: "Ctrl+Alt+D", onSelect: act(() => setCells("default")) },
+      );
     }
-    if (blocked(d, m.column, true) === null) items.push({ label: "Set NULL", run: () => setNull(m.row, m.column) });
+    items.push(
+      { key: "filter", label: "Filter by this value", separatorBefore: true, onSelect: act(filterByValue) },
+      { key: "full", label: "Open full value", shortcut: "Shift+F2", onSelect: act(() => openFull({ row: m.row, column: m.column })) },
+    );
+    if (!editable) return items;
+    const live = rows.some((r) => view[r] && !(view[r].kind === "loaded" && (view[r] as { deleted: boolean }).deleted));
+    if (live) {
+      items.push(
+        {
+          key: "duplicate",
+          label: many ? `Duplicate ${rows.length} rows` : "Duplicate row",
+          shortcut: "Ctrl+D",
+          separatorBefore: true,
+          onSelect: act(() => void duplicateRows(rows)),
+        },
+        { key: "delete", label: many ? `Delete ${rows.length} rows` : "Delete row", shortcut: "Alt+Delete", danger: true, onSelect: act(() => deleteRows(rows)) },
+      );
+    }
+    // Contura today: a changed cell or row can be put back from its menu.
+    let first = true;
     if (d.kind === "loaded" && d.key && editedAt(m.row, m.column)) {
       const name = columns[m.column].name;
-      items.push({ label: "Revert", run: () => update((p) => revertCell(p, d.key!, name)) });
+      items.push({ key: "revert", label: "Revert", separatorBefore: true, onSelect: act(() => update((p) => revertCell(p, d.key!, name))) });
+      first = false;
     }
     const ref = d.kind === "new" ? d.id : d.key;
     if (ref && (d.kind === "new" || d.deleted || columns.some((_, i) => editedAt(m.row, i)))) {
-      items.push({ label: "Revert row", run: () => update((p) => revertRow(p, ref)) });
+      items.push({ key: "revertRow", label: "Revert row", separatorBefore: first, onSelect: act(() => update((p) => revertRow(p, ref))) });
     }
     return items;
   }
@@ -991,7 +1402,7 @@ export default function DataGrid({
     const c = columns[e.column];
     const d = view[e.row];
     const key = d?.kind === "loaded" && keyed ? rowKey(columns, d.source)[0] : undefined;
-    const where = d?.kind === "new" ? "new row" : `row ${(firstRow + e.row).toLocaleString("en-US")}${key ? `, ${key.column} ${cellText(key.value)}` : ""}`;
+    const where = d?.kind !== "loaded" ? "new row" : `row ${(firstRow + d.index).toLocaleString("en-US")}${key ? `, ${key.column} ${cellText(key.value)}` : ""}`;
     return {
       column: `${c.name} ${c.typeName}`,
       where,
@@ -1059,12 +1470,14 @@ export default function DataGrid({
           key: c.name,
           label: c.name,
           checked: !hidden.has(c.name),
-          onSelect: () =>
+          onSelect: () => {
+            worked();
             setHidden((h) => {
               const next = new Set(h);
               if (!next.delete(c.name)) next.add(c.name);
               return next;
-            }),
+            });
+          },
         })),
       });
     }
@@ -1089,8 +1502,11 @@ export default function DataGrid({
     isForeignKey: fkColumns.has(columns[i].name),
   }));
   const allColumns = shownCols.length === columns.length;
-  const gridRows = shownRows.map((i) => (allColumns ? view[i].cells : shownCols.map((c) => view[i].cells[c])));
-  const selected = sel && rowPos(sel.row) >= 0 && colPos(sel.column) >= 0 ? { row: rowPos(sel.row), column: colPos(sel.column) } : null;
+  // One array while the rows stay the same, so the grid keeps its copy mark until an edit changes them.
+  const gridRows = useMemo(
+    () => shownRows.map((i) => (allColumns ? view[i].cells : shownCols.map((c) => view[i].cells[c]))),
+    [view, shownRows, shownCols, allColumns],
+  );
   const editingAt = editing ? rowPos(editing.row) : -1;
 
   return (
@@ -1100,6 +1516,7 @@ export default function DataGrid({
         .join(" ")}
       aria-label={`Data of ${table.name}`}
       ref={sectionRef}
+      data-pane
     >
       {/*
         Item 5 (frame Table): the strip names the table and holds its tools: Refresh, the row edits, Edit
@@ -1151,7 +1568,7 @@ export default function DataGrid({
               type="button"
               className="icon-button"
               aria-label="Delete row"
-              title="Delete row (Delete)"
+              title="Delete the selected rows (Alt+Delete)"
               disabled={!selShown || !keyed || busy}
               onClick={deleteSelected}
             >
@@ -1195,6 +1612,7 @@ export default function DataGrid({
         onFilters={applyFilters}
         onSort={setSortTo}
         disabled={!page || (page.rows.length === 0 && rowFilters.length === 0 && pageIndex === 0)}
+        request={filterRequest}
       />
 
       {page && noteText && (
@@ -1233,7 +1651,9 @@ export default function DataGrid({
         <ResultGrid
           columns={gridColumns}
           rows={gridRows}
-          resetKey={page}
+          resetKey={shown?.epoch ?? 0}
+          widthsKey="table"
+          onResized={worked}
           label={`Rows of ${table.name}`}
           firstRow={firstRow}
           stale={loading}
@@ -1241,19 +1661,20 @@ export default function DataGrid({
           onSort={chooseSort}
           rowLabel={(r) => rowLabel(shownRows[r])}
           {...(readOnly && kind === "table" && { onOpen: readOnlyEdit })}
+          selection={selection}
+          onSelection={(next) => {
+            setSelection(next);
+            setMenu(null);
+          }}
+          onNote={setNote}
+          gridRef={gridRef}
+          onGridKey={onGridKey}
+          onPaste={onPaste}
+          onCellMenu={(row: number, column: number, x: number, y: number) => setMenu({ row: shownRows[row], column: shownCols[column], x, y })}
           {...(editable && {
             editingRow: editingAt < 0 ? null : editingAt,
             onEditorLost: flushEditor,
-            selected,
-            onSelect: (row: number, column: number) => {
-              setSel({ row: shownRows[row], column: shownCols[column] });
-              setMenu(null);
-            },
             onOpen: (row: number, column: number) => openEditor(shownRows[row], shownCols[column]),
-            onGridKey,
-            onPaste,
-            onCellMenu: (row: number, column: number, x: number, y: number) =>
-              setMenu({ row: shownRows[row], column: shownCols[column], x, y }),
             cellClass: (r: number, c: number) => {
               // Item 3: the cell being edited draws no ring of its own; the editor's one ring is the only border.
               const on = editing && editing.row === shownRows[r] && editing.column === shownCols[c] ? "cell-editing" : "";
@@ -1344,7 +1765,7 @@ export default function DataGrid({
           production={production}
           previewOpen={previewOpen}
           onPreview={() => setPreviewOpen((o) => !o)}
-          onDiscard={() => void discardAll()}
+          onDiscard={discardWithUndo}
           onSave={() => void save()}
         />
       )}
@@ -1402,6 +1823,18 @@ export default function DataGrid({
           onRun={() => void confirmSave()}
           onCancel={cancelSave}
           onAddWhere={() => {}}
+        />
+      )}
+
+      {full && (
+        <FullValueDialog
+          title={full.title}
+          cell={full.cell}
+          source={full.source && { connectionId, table, column: full.source.column, rowKey: full.source.key }}
+          onClose={() => {
+            setFull(null);
+            focusGrid();
+          }}
         />
       )}
 

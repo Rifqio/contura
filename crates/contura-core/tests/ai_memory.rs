@@ -10,14 +10,18 @@ use contura_core::ai::budget::PAYLOAD_CAP;
 use contura_core::ai::compact::TOPIC_SUMMARY_MAX_TOKENS;
 use contura_core::ai::context::store::{ContextStore, StoreContext};
 use contura_core::ai::memory::store::StoreThreads;
-use contura_core::ai::memory::{BreakReason, MemoryInfo, ThreadStore, TurnStamp, rule_summary};
+use contura_core::ai::memory::{
+    AskedIn, BreakReason, MemoryInfo, ThreadStore, TurnStamp, rule_summary,
+};
 use contura_core::ai::models::{ModelInfo, info_for};
 use contura_core::ai::preview::{CatalogReader, Preview, PreviewItem, preview};
 use contura_core::ai::provider::scripted::ScriptedProvider;
 use contura_core::ai::provider::{ChatRequest, ChatRole, ProviderEvent, StopReason, Usage};
 use contura_core::ai::rails::Secrets;
 use contura_core::ai::request::{AskRequest, Focus, ItemKind, Switches, TableRef};
+use contura_core::ai::scene::AskTab;
 use contura_core::ai::sent::{AnswerRecord, SentRecord};
+use contura_core::ai::steps::{StepIn, StepVerb};
 use contura_core::ai::stream::{AiEvent, ask_stream, context_used};
 use contura_core::ai::{
     AiAccess, AiError, AiMessage, AiProviderKind, AiRole, AiSettings, AiThread,
@@ -225,6 +229,8 @@ fn ask(question: &str, thread: Option<Uuid>) -> AskRequest {
         off: Vec::new(),
         model: None,
         picks: None,
+        tab: None,
+        steps: Vec::new(),
     }
 }
 
@@ -259,6 +265,7 @@ fn message(role: AiRole, text: &str, at: i64, s: &Stamp) -> AiMessage {
         kinds: s.kinds.to_vec(),
         tables: s.tables.iter().map(|t| t.to_string()).collect(),
         action: Some("ask".into()),
+        asked_in: None,
     }
 }
 
@@ -1346,5 +1353,472 @@ async fn a_turn_without_rows_is_not_gated_as_one() {
     assert_eq!(
         cat.sample_reads.load(std::sync::atomic::Ordering::SeqCst),
         0
+    );
+}
+
+// Spec 6: the Asked in stamp, kept with the question and replayed through the gate.
+
+fn shop_step(verb: StepVerb, names: &[&str], ago_ms: i64) -> StepIn {
+    StepIn {
+        at: now() - ago_ms,
+        verb,
+        tab: "visual".into(),
+        title: Some("Orders over 1M".into()),
+        connection_id: Some(conn_id()),
+        database: Some("shop".into()),
+        schema: None,
+        names: names.iter().map(|n| n.to_string()).collect(),
+        more: 0,
+        count: Some(1),
+        has_more: false,
+        failed: false,
+        descending: false,
+        source_connection_id: None,
+    }
+}
+
+/// A turn as the panel stores it from an Ask's stamp: the Asked in on the question only.
+fn stamped_turn(q: &str, a: &str, at: i64, s: &TurnStamp) -> Vec<AiMessage> {
+    let m = |role, text: &str, at| AiMessage {
+        role,
+        text: text.into(),
+        context: Vec::new(),
+        at,
+        record: None,
+        topic: Some(s.topic),
+        connection_id: s.connection_id,
+        database: s.database.clone(),
+        kinds: s.kinds.clone(),
+        tables: s.tables.clone(),
+        action: Some(s.action.clone()),
+        asked_in: None,
+    };
+    let mut question = m(AiRole::User, q, at);
+    question.asked_in = s.asked_in.clone();
+    vec![question, m(AiRole::Assistant, a, at + 1_000)]
+}
+
+fn visual_asked(also: Vec<ConnectionId>) -> AskedIn {
+    AskedIn {
+        tab: "visual".into(),
+        label: "Visual Query in shop".into(),
+        summary: "tables orders; ticked orders.id".into(),
+        steps: vec!["opened Visual Query in shop".into()],
+        also,
+        other_steps: Vec::new(),
+    }
+}
+
+/// A turn of Topic 1 asked on a Visual Query tab, minutes ago.
+fn asked_turn(
+    q: &str,
+    a: &str,
+    at: i64,
+    database: &str,
+    also: Vec<ConnectionId>,
+) -> Vec<AiMessage> {
+    let mut m = turn(
+        q,
+        a,
+        at,
+        &Stamp {
+            database,
+            kinds: &[
+                ItemKind::Question,
+                ItemKind::Names,
+                ItemKind::Cards,
+                ItemKind::Tab,
+            ],
+            ..stamp(1)
+        },
+    );
+    m[0].asked_in = Some(visual_asked(also));
+    m
+}
+
+/// The request's boundary, read from its turn.
+fn boundary_of(chat: &ChatRequest) -> String {
+    let turn = &chat.messages.last().unwrap().text;
+    let at = turn.find("context id=").expect("a framed turn") + "context id=".len();
+    turn[at..at + 16].to_string()
+}
+
+#[tokio::test]
+async fn past_turn_replays_asked_in_framed() {
+    let cat = catalog(AiAccess::Schema);
+    let t = now() - 10 * MIN;
+    let mut messages = asked_turn(
+        "How many orders today?",
+        "About 40 orders.",
+        t,
+        "shop",
+        Vec::new(),
+    );
+    messages.extend(turn(
+        "And yesterday?",
+        "52 orders yesterday.",
+        t + 2 * MIN,
+        &stamp(1),
+    ));
+    let id = save(&cat, PLACE, messages);
+    let req = ask("And last week?", Some(id));
+
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(chat.messages.len(), 5);
+    let b = boundary_of(&chat);
+    // Framed as the turn is, with the same boundary, then the question.
+    assert_eq!(
+        chat.messages[0].text,
+        format!(
+            "<<contura:context id={b}>>\n\
+             {{\"source\":\"asked_in\",\"text\":\"Visual Query in shop: tables orders; ticked orders.id\"}}\n\
+             {{\"source\":\"asked_in\",\"text\":\"steps before it: opened Visual Query in shop\"}}\n\
+             <</contura:context id={b}>>\n\nQuestion: How many orders today?"
+        )
+    );
+    // A turn without an Asked in goes as today: plain text.
+    let texts: Vec<&str> = chat.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(
+        texts[1..4],
+        ["About 40 orders.", "And yesterday?", "52 orders yesterday."]
+    );
+
+    // The preview shows the same, and the Thread row counts the framed question.
+    let p = show(&cat, &req).await;
+    assert_eq!(same_boundary(&p.exact), same_boundary(&exact_of(&chat)));
+    let thread = row(&p, ItemKind::History).unwrap();
+    assert_eq!(thread.label, "Thread · 2 turns");
+    let sent: usize = chat.messages[..4].iter().map(|m| m.text.len()).sum();
+    assert_eq!(thread.bytes as usize, sent);
+}
+
+#[tokio::test]
+async fn lowered_access_holds_asked_in_turn() {
+    let mut cat = catalog(AiAccess::SchemaQuery);
+    // An Ask on a query tab at query text: its title went, so the stamp carries `sql`
+    // though no query text item went.
+    let mut first = ask("find orders over 1M", None);
+    first.tab = Some(AskTab::Query {
+        title: "Orders over 1M".into(),
+    });
+    first.steps = vec![shop_step(StepVerb::VqTable, &["orders"], MIN)];
+    let (_, events) = ask_once(&cat, &first).await;
+    let s = memory_of(&events);
+    let asked = s.asked_in.clone().expect("an Asked in");
+    assert_eq!(asked.label, "Query tab \"Orders over 1M\" in shop");
+    assert!(!asked.steps.is_empty(), "{asked:?}");
+    assert!(
+        s.kinds.contains(&ItemKind::Tab) && s.kinds.contains(&ItemKind::Sql),
+        "{:?}",
+        s.kinds
+    );
+    let id = save(
+        &cat,
+        PLACE,
+        stamped_turn(
+            "find orders over 1M",
+            "Filter on total.",
+            now() - 5 * MIN,
+            &s,
+        ),
+    );
+    let req = ask("and per customer?", Some(id));
+
+    // At the access it was written at, it goes framed.
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    assert!(all.contains("find orders over 1M"), "{all}");
+    assert!(
+        all.contains(r#""source":"asked_in","text":"Query tab \"Orders over 1M\" in shop""#),
+        "{all}"
+    );
+
+    // Lowered to Schema only: the whole turn stays, counted as held back.
+    cat.configs[0].ai_access = AiAccess::Schema;
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(roles(&chat), [ChatRole::User]);
+    let all = all_text(&chat);
+    assert!(!all.contains("find orders over 1M"), "{all}");
+    assert!(!all.contains("Orders over 1M"), "{all}");
+    assert!(!all.contains(r#""source":"asked_in""#), "{all}");
+    let p = show(&cat, &req).await;
+    let m = p.memory.clone().unwrap();
+    assert_eq!((m.turns, m.blocked), (0, 2));
+}
+
+#[tokio::test]
+async fn other_database_turn_not_replayed() {
+    let cat = catalog(AiAccess::SchemaQuery);
+    let t = now() - 5 * MIN;
+    let id = save(
+        &cat,
+        PLACE,
+        asked_turn(
+            "orders in staging?",
+            "12 orders.",
+            t,
+            "shop_staging",
+            Vec::new(),
+        ),
+    );
+    let req = ask("and in shop?", Some(id));
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(roles(&chat), [ChatRole::User]);
+    let all = all_text(&chat);
+    assert!(!all.contains("orders in staging?"), "{all}");
+    assert!(!all.contains(r#""source":"asked_in""#), "{all}");
+    let m = show(&cat, &req).await.memory.unwrap();
+    // Another database is not lower access.
+    assert_eq!((m.turns, m.blocked), (0, 0));
+}
+
+#[tokio::test]
+async fn turn_asked_across_two_connections_follows_the_lower_access() {
+    let other = Uuid::from_u128(43);
+    let mut cat = catalog(AiAccess::Schema);
+    cat.configs.push(ConnectionConfig {
+        id: other,
+        name: "Kestrel staging".into(),
+        ..shop_conn(AiAccess::Schema)
+    });
+    let t = now() - 5 * MIN;
+    let id = save(
+        &cat,
+        PLACE,
+        asked_turn("compare the two", "3 changed.", t, "shop", vec![other]),
+    );
+    let req = ask("which changed?", Some(id));
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert!(all_text(&chat).contains("compare the two"));
+
+    // The other Connection lowered to Never: held, though the Ask's own allows it.
+    cat.configs[1].ai_access = AiAccess::Never;
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(roles(&chat), [ChatRole::User]);
+    assert!(!all_text(&chat).contains("compare the two"));
+    assert_eq!(show(&cat, &req).await.memory.unwrap().blocked, 2);
+
+    // Deleted: the same.
+    cat.configs.pop();
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(roles(&chat), [ChatRole::User]);
+}
+
+/// Task 3 ruling N4: a Continue extends an answer asked across another Connection, so its
+/// stamp takes the continued question's other Connections (with its own, each once), and
+/// the continued answer is held when that Connection is lowered, as the first one is.
+#[tokio::test]
+async fn continue_stamp_takes_the_continued_questions_other_connections() {
+    let (b, c) = (Uuid::from_u128(43), Uuid::from_u128(44));
+    let mut cat = catalog(AiAccess::Schema);
+    for (id, name) in [(b, "Kestrel staging"), (c, "Kestrel archive")] {
+        cat.configs.push(ConnectionConfig {
+            id,
+            name: name.into(),
+            ..shop_conn(AiAccess::Schema)
+        });
+    }
+    let id = save(
+        &cat,
+        PLACE,
+        asked_turn(
+            "compare the two",
+            "3 changed: orders, refunds and",
+            now() - 2 * MIN,
+            "shop",
+            vec![b],
+        ),
+    );
+    // From a tab with no other Connection.
+    let req = continue_ask(Some(id));
+    let (_, events) = ask_once(&cat, &req).await;
+    assert_eq!(memory_of(&events).asked_in.expect("an Asked in").also, [b]);
+    assert_eq!(show(&cat, &req).await.stamp.asked_in.unwrap().also, [b]);
+
+    // From a tab that spans another Connection itself: both, each once.
+    let mut req = continue_ask(Some(id));
+    req.focus.also = vec![c, b];
+    let (_, events) = ask_once(&cat, &req).await;
+    let mut also = memory_of(&events).asked_in.unwrap().also;
+    also.sort();
+    assert_eq!(also, [b, c]);
+
+    // A plain Ask after it keeps its own stamp: no other Connection.
+    let (_, events) = ask_once(&cat, &ask("and the totals?", Some(id))).await;
+    assert_eq!(memory_of(&events).asked_in, None);
+}
+
+/// A turn asked on A whose Asked in keeps one step on B at Schema only and one at query
+/// text, and one step on C.
+fn turn_with_other_steps(b: ConnectionId, c: ConnectionId) -> Vec<AiMessage> {
+    use contura_core::ai::memory::OtherStep;
+    let mut m = asked_turn(
+        "what did I just run?",
+        "You ran Late orders.",
+        now() - 5 * MIN,
+        "shop",
+        Vec::new(),
+    );
+    m[0].asked_in.as_mut().unwrap().other_steps = vec![
+        OtherStep {
+            connection_id: b,
+            text: "opened Visual Query on another Connection".into(),
+            level: AiAccess::Schema,
+        },
+        OtherStep {
+            connection_id: b,
+            text: "ran the Visual Query \"Late orders\" on another Connection, 3 rows".into(),
+            level: AiAccess::SchemaQuery,
+        },
+        OtherStep {
+            connection_id: c,
+            text: "opened Query tab on another Connection".into(),
+            level: AiAccess::Schema,
+        },
+    ];
+    m
+}
+
+fn with_others(access: AiAccess, b: (ConnectionId, AiAccess), c: ConnectionId) -> Catalog {
+    let mut cat = catalog(access);
+    cat.configs.push(ConnectionConfig {
+        id: b.0,
+        name: "Kestrel staging".into(),
+        ..shop_conn(b.1)
+    });
+    cat.configs.push(ConnectionConfig {
+        id: c,
+        name: "Kestrel archive".into(),
+        ..shop_conn(AiAccess::Schema)
+    });
+    cat
+}
+
+/// The other Connections' steps line of the framed question, if one went.
+fn other_steps_line(chat: &ChatRequest) -> Option<String> {
+    let lead = r#"{"source":"asked_in","text":"steps on other Connections before it: "#;
+    chat.messages
+        .iter()
+        .flat_map(|m| m.text.lines())
+        .find(|l| l.starts_with(lead))
+        .map(|l| l[lead.len()..l.len() - 2].to_string())
+}
+
+/// Task 5b, test 2: a stored step on B is replayed only while B still exists and its
+/// current access reaches the level the step needed; the rest of the turn replays.
+#[tokio::test]
+async fn other_steps_replay_at_their_connection_current_access() {
+    let (b, c) = (Uuid::from_u128(43), Uuid::from_u128(44));
+    let mut cat = with_others(AiAccess::Schema, (b, AiAccess::SchemaQuery), c);
+    let id = save(&cat, PLACE, turn_with_other_steps(b, c));
+    let req = ask("and before that?", Some(id));
+    let lines = |chat: &ChatRequest| {
+        assert!(all_text(chat).contains("what did I just run?"));
+        assert!(all_text(chat).contains("You ran Late orders."));
+        assert!(all_text(chat).contains("steps before it: opened Visual Query in shop"));
+        other_steps_line(chat)
+    };
+
+    // B at query text: every line goes.
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(
+        lines(&chat).as_deref(),
+        Some(
+            r#"opened Visual Query on another Connection; ran the Visual Query \"Late orders\" on another Connection, 3 rows; opened Query tab on another Connection"#
+        )
+    );
+    // The preview sends the same.
+    assert_eq!(
+        same_boundary(&show(&cat, &req).await.exact),
+        same_boundary(&exact_of(&chat))
+    );
+
+    // B lowered to Schema only: its query-text line is dropped.
+    cat.configs[1].ai_access = AiAccess::Schema;
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(
+        lines(&chat).as_deref(),
+        Some("opened Visual Query on another Connection; opened Query tab on another Connection")
+    );
+    assert!(!all_text(&chat).contains("3 rows"));
+
+    // B at Never: none of B's lines.
+    cat.configs[1].ai_access = AiAccess::Never;
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(
+        lines(&chat).as_deref(),
+        Some("opened Query tab on another Connection")
+    );
+    assert_eq!(show(&cat, &req).await.memory.unwrap().blocked, 0);
+
+    // B deleted: the same.
+    cat.configs.remove(1);
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(
+        lines(&chat).as_deref(),
+        Some("opened Query tab on another Connection")
+    );
+    // C deleted too: no line of other steps at all, the turn still replays.
+    cat.configs.remove(1);
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(lines(&chat), None);
+}
+
+/// Task 5b, test 3: Continue replays the stored steps under the same check.
+#[tokio::test]
+async fn continue_regates_other_steps() {
+    let (b, c) = (Uuid::from_u128(43), Uuid::from_u128(44));
+    let mut cat = with_others(AiAccess::Schema, (b, AiAccess::SchemaQuery), c);
+    let id = save(&cat, PLACE, turn_with_other_steps(b, c));
+    let req = continue_ask(Some(id));
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert!(
+        chat.messages
+            .last()
+            .unwrap()
+            .text
+            .ends_with("Question: Continue")
+    );
+    assert!(other_steps_line(&chat).unwrap().contains("3 rows"));
+    cat.configs[1].ai_access = AiAccess::Schema;
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(
+        other_steps_line(&chat).as_deref(),
+        Some("opened Visual Query on another Connection; opened Query tab on another Connection")
+    );
+    cat.configs.remove(1);
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(
+        other_steps_line(&chat).as_deref(),
+        Some("opened Query tab on another Connection")
+    );
+}
+
+/// Task 5b, test 7: a thread stored before other steps loads and replays unchanged.
+#[tokio::test]
+async fn old_asked_in_without_other_steps_replays_unchanged() {
+    let cat = catalog(AiAccess::Schema);
+    let mut messages = asked_turn(
+        "How many orders today?",
+        "About 40 orders.",
+        now() - 5 * MIN,
+        "shop",
+        Vec::new(),
+    );
+    // As an older build wrote it: no `otherSteps` key.
+    let json = serde_json::to_string(&messages[0]).unwrap();
+    assert!(!json.contains("otherSteps"));
+    messages[0] = serde_json::from_str(&json).unwrap();
+    let id = save(&cat, PLACE, messages);
+    let (chat, _) = ask_once(&cat, &ask("And last week?", Some(id))).await;
+    let b = boundary_of(&chat);
+    assert_eq!(
+        chat.messages[0].text,
+        format!(
+            "<<contura:context id={b}>>\n\
+             {{\"source\":\"asked_in\",\"text\":\"Visual Query in shop: tables orders; ticked orders.id\"}}\n\
+             {{\"source\":\"asked_in\",\"text\":\"steps before it: opened Visual Query in shop\"}}\n\
+             <</contura:context id={b}>>\n\nQuestion: How many orders today?"
+        )
     );
 }

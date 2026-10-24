@@ -127,6 +127,18 @@ _Avoid_: Schema map, table list
 A named group of related tables in a Context Tree, such as the tables around orders.
 _Avoid_: Cluster, module, folder
 
+**This tab**:
+The Sends row with what the active tab shows, built by the Core from the tab's fields and gated by AI access. A tab spanning two Connections (Schema Compare, Data Transfer) is gated at the lower access.
+_Avoid_: Tab context, screen context
+
+**Recent steps**:
+The Sends row with a short trail of what the user did since their last question in this place (opened New table, ran the Visual Query, 1 row), as labels only: no SQL and no row data. Kept in memory until an Ask sends it; each step is gated by its own Connection's AI access.
+_Avoid_: History, activity log, breadcrumbs
+
+**Asked in**:
+The stamp on a question saying where it was asked, with a short summary of that tab and the Recent steps that went with it. It is kept with the thread and sent with later questions only as far as AI access still allows.
+_Avoid_: Origin, source tab
+
 **Topic**:
 A stretch of a chat thread about one subject, with a short summary. A new Topic starts after a long pause, in a new place, or when the subject changes.
 _Avoid_: Session, conversation, chapter

@@ -684,7 +684,23 @@ interface EndOptions {
  * The card under a SQL block that writes (board 11.6, "Answer writes"): Insert puts it in the editor
  * commented out. `writes` is what it does, such as "1 delete" or "2 updates, 1 delete".
  */
-export function answerWrites(writes: string, o: { onInsert?(): void; onCopy?(): void }): ReactElement {
+export function answerWrites(writes: string, o: { onInsert?(): void; onCopy?(): void; noEditor?: boolean; onOpen?(): void }): ReactElement {
+  if (o.noEditor) {
+    // A tab with no editor: the write opens in a new query tab, commented out (spec 8).
+    return (
+      <Card
+        kicker="Answer writes"
+        tone="warn"
+        icon="alert"
+        title={`This answer writes to the database: ${writes}.`}
+        body="The SQL check found a write. It opens in a new query tab commented out, so Run cannot pick it up by accident."
+        actions={[
+          { label: "Open in new query tab, commented out", run: o.onOpen ?? (() => {}), disabled: !o.onOpen },
+          { label: "Copy", run: o.onCopy },
+        ]}
+      />
+    );
+  }
   return (
     <Card
       kicker="Answer writes"

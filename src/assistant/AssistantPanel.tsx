@@ -54,7 +54,7 @@ import answerState, { aiErrorOf, answerEnd, endMark, modelToUse } from "./answer
 import { type AnswerStream, stopText, useAnswerStream, useStreamText } from "./answerStream";
 import CompactNote from "./CompactNote";
 import ContextMeter, { type MeterPart } from "./ContextMeter";
-import { type AskContext, sharedSchema, toAskRequest } from "./context";
+import { type AskContext, REMOVED_CONNECTION, sharedSchema, toAskRequest, withTabFields } from "./context";
 import { queueOffline } from "./offlineQueue";
 import ContextLine from "./ContextLine";
 import { contextNotice } from "./contextText";
@@ -71,8 +71,10 @@ import AnswerText from "./AnswerText";
 import type { InsertTarget } from "./InsertDiff";
 import SlashCommands, { optionId } from "./SlashCommands";
 import { matchSlash, type SlashCommand, slashKey } from "./slash";
+import { useTabAsk } from "./tabAsk";
 import { useAiPreview } from "./usePreview";
 import { onThreadsCleared } from "./threadsCleared";
+import { clearSteps, stepsOf, takeSteps, useRecentSteps } from "./recentSteps";
 
 
 interface Props {
@@ -82,6 +84,8 @@ interface Props {
   placeName?: string;
   groupId: string | null;
   context: AskContext | null;
+  /** The active tab's key: what its screen publishes (`tabAsk.ts`) goes over `context`. */
+  tabKey?: string | null;
   /** Not read: the Core reads the schema for the preview itself. Kept until the callers drop it. */
   schema: SqlSchema | null;
   onOpenSettings(): void;
@@ -113,7 +117,22 @@ const newId = () =>
     : `t${Date.now()}${Math.random().toString(36).slice(2)}`;
 
 /** The items a turn records as its context: what was on, without the question and the switches. */
-const RECORDED: ReadonlySet<ItemKind> = new Set(["names", "cards", "dbml", "sql", "error", "savedQueries"]);
+const RECORDED: ReadonlySet<ItemKind> = new Set(["names", "cards", "dbml", "sql", "error", "savedQueries", "tab", "steps"]);
+
+/**
+ * "Asked in <label>" above a question asked in another tab than the question before it (spec 6.2); none on the
+ * first question, nor for a stamp with no tab.
+ */
+export function askedInCaption(messages: readonly AiMessage[], i: number): string | null {
+  const a = messages[i]?.askedIn;
+  if (!a || a.tab === "" || a.label === "") return null;
+  for (let j = i - 1; j >= 0; j--) {
+    if (messages[j].role !== "user") continue;
+    const b = messages[j].askedIn;
+    return b && b.tab === a.tab && b.label === a.label ? null : `Asked in ${a.label}`;
+  }
+  return null;
+}
 
 function hostOf(url: string): string {
   try {
@@ -135,7 +154,9 @@ function sendsLabel(item: PreviewItem, ctx: AskContext, preview: Preview | null)
     case "cards":
       return `schema of ${n} ${n === 1 ? "table" : "tables"}`;
     case "sql":
-      return ctx.kind === "filter" ? "the filter text" : "the current statement";
+      if (ctx.kind === "filter") return "the filter text";
+      // Outside a query tab the SQL is the tab's own: the Visual Query's text, a sync script.
+      return ctx.tab && ctx.tab.kind !== "query" ? item.label.toLowerCase() : "the current statement";
     case "error":
       return "the error";
     case "dbml":
@@ -244,6 +265,7 @@ function LiveAnswer({ stream, notes, dialect, onCopy, onGrow }: { stream: Answer
 }
 
 function chipLabel(item: PreviewItem, ctx: AskContext): string {
+  if (item.kind === "sql" && ctx.tab && ctx.tab.kind !== "query") return item.label;
   if (item.kind === "sql" && ctx.kind !== "filter") return `Selected SQL · lines ${ctx.lines?.[0] ?? 1} to ${ctx.lines?.[1] ?? ctx.sql?.split("\n").length ?? 1}`;
   if (item.kind === "error") return "Error";
   return item.label;
@@ -254,6 +276,7 @@ export default function AssistantPanel({
   placeName,
   groupId,
   context,
+  tabKey = null,
   onOpenSettings,
   seed,
   connections,
@@ -262,15 +285,18 @@ export default function AssistantPanel({
   onOpenInNewTab,
   openIds,
 }: Props) {
+  // Only the active tab is listened to, and its getter is read once per change it publishes, never per draw.
+  const published = useTabAsk(seed ? null : tabKey);
+  const fields = useMemo(() => published?.get() ?? null, [published]);
   const ctx = useMemo<AskContext>(() => {
-    if (!seed) return context ?? NO_CONTEXT;
+    if (!seed) return withTabFields(context ?? NO_CONTEXT, fields, connections ?? []);
     const asked = seed.context;
     const was = asked.connection;
     if (!was || !connections) return asked;
     const live = connections.find((c) => c.id === was.id);
     if (!live) return { ...asked, connection: null };
     return { ...asked, connection: { ...was, name: live.name, access: live.aiAccess } };
-  }, [seed, context, connections]);
+  }, [seed, context, fields, connections]);
   const conn = ctx.connection;
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   /** The place's chats as summaries; the open one is fetched in full. */
@@ -300,6 +326,11 @@ export default function AssistantPanel({
   const [off, setOff] = useState<ItemKind[]>([]);
   const [values, setValues] = useState(false);
   const [rows, setRows] = useState(false);
+  /** Recent steps left out of this Ask only, from the Sends row; back on after every Ask and on a new context. */
+  const [stepsOff, setStepsOff] = useState(false);
+  const recent = useRecentSteps(place);
+  /** The steps as they go: typed fields only, without the store's count. */
+  const steps = useMemo(() => recent.map(({ seq: _seq, ...s }) => s), [recent]);
   const [failure, setFailure] = useState<Failure | null>(null);
   /** Stopped before anything arrived (P11-29): nothing is saved, the question is back in the composer, the card says so. */
   const [stoppedEarly, setStoppedEarly] = useState<{ q: string; millis: number; action?: string } | null>(null);
@@ -428,6 +459,7 @@ export default function AssistantPanel({
     setOff([]);
     setValues(false);
     setRows(false);
+    setStepsOff(false);
     setAnswered(null);
     setFullRecords(new Map());
     setFullErrors(new Map());
@@ -518,7 +550,7 @@ export default function AssistantPanel({
   };
 
   // New context, new items. The text itself is left out of the key: typing in the editor must not switch a turned-off item back on.
-  const ctxKey = `${conn?.id ?? ""}|${ctx.kind}|${ctx.label}|${conn?.access ?? ""}`;
+  const ctxKey = `${conn?.id ?? ""}|${ctx.tab?.kind ?? ""}|${ctx.kind}|${ctx.label}|${conn?.access ?? ""}`;
   const ctxKeyRef = useRef(ctxKey);
   ctxKeyRef.current = ctxKey;
   useEffect(() => {
@@ -526,6 +558,7 @@ export default function AssistantPanel({
     setOff([]);
     setValues(false);
     setRows(false);
+    setStepsOff(false);
     setAnswered(null);
     setResyncError(null);
   }, [ctxKey]);
@@ -535,11 +568,13 @@ export default function AssistantPanel({
   }, [seed]);
 
   const switches = useMemo(() => ({ rows, values }), [rows, values]);
+  /** What Sends leaves out: the rows switched off, and the Recent steps when their pill is off for this Ask. */
+  const offNow = useMemo<ItemKind[]>(() => (stepsOff ? [...off, "steps"] : off), [off, stepsOff]);
   const modelId = model?.id ?? null;
   const picks = model?.picks ?? null;
   const previewed = useMemo(
-    () => toAskRequest(ctx, question.trim(), off, switches, { groupId, threadId: currentId, model: modelId, picks }),
-    [ctx, question, off, switches, groupId, currentId, modelId, picks],
+    () => toAskRequest(ctx, question.trim(), offNow, switches, { groupId, threadId: currentId, model: modelId, picks, steps }),
+    [ctx, question, offNow, switches, groupId, currentId, modelId, picks, steps],
   );
   const { preview, error: previewError } = useAiPreview(previewed, `${conn?.access ?? ""}|${resyncs}`);
   useEffect(() => {
@@ -580,6 +615,8 @@ export default function AssistantPanel({
     : "Nothing is sent until a provider is set.";
   const providerName = provider ? PROVIDERS[provider].name : undefined;
   const accessChip = conn ? ACCESS_CHIP[conn.access] : null;
+  /** The tab's Connection is gone: it asks at Nothing under its id, and is not named as if it were there. */
+  const removed = !!conn && conn.name === REMOVED_CONNECTION;
 
   // A compaction made by the Ask that is running: its messages give way to the note at once.
   const liveCompaction = stream.compaction;
@@ -644,6 +681,10 @@ export default function AssistantPanel({
       setRows((v) => !v);
       return;
     }
+    if (kind === "steps") {
+      setStepsOff((v) => !v);
+      return;
+    }
     setOff((o) => (o.includes(kind) ? o.filter((k) => k !== kind) : [...o, kind]));
   };
 
@@ -661,12 +702,18 @@ export default function AssistantPanel({
       setConfirmStop(true);
       return;
     }
-    const request = toAskRequest(ctx, q, off, switches, {
+    // The tab's fields as they are now, not as the last bump left them: the DBML being typed, a draft cell just set.
+    const now = seed ? ctx : withTabFields(context ?? NO_CONTEXT, published?.get() ?? null, connections ?? []);
+    // The trail as it is now; only these go, and only these leave the store once the turn is kept.
+    const carried = stepsOf(place);
+    const carriedUpTo = carried.reduce((m, s) => Math.max(m, s.seq), 0);
+    const request = toAskRequest(now, q, offNow, switches, {
       groupId,
       threadId: currentId,
       model: use?.id ?? modelId,
       picks: use?.picks ?? picks,
       action,
+      steps: carried.map(({ seq: _seq, ...s }) => s),
     });
     const included = (preview?.items ?? [])
       .filter((i) => i.on && !i.locked && RECORDED.has(i.kind))
@@ -682,9 +729,10 @@ export default function AssistantPanel({
     setMore(0);
     follow.current = true;
     if (asked === undefined) setQuestion("");
-    // "Include values" and "Sample rows" are off at the start of every Ask.
+    // "Include values" and "Sample rows" are off at the start of every Ask; Recent steps are back on.
     setValues(false);
     setRows(false);
+    setStepsOff(false);
     const end = await stream.start(request);
     if (placeRef.current === forPlace) setPending(null);
     const usage = end.done?.usage;
@@ -703,6 +751,8 @@ export default function AssistantPanel({
       setStoppedEarly({ q, millis: end.at - askedAt, action });
     }
     if (keep) {
+      // The steps went with this turn; steps made while it streamed stay for the next Ask.
+      if (carriedUpTo > 0) takeSteps(forPlace, carriedUpTo);
       const record = buildRecord(end, end.live);
       record.millis ??= end.at - askedAt;
       const at = await persist(forPlace, base, saved, q, included, askedAt, end.text, end.at, record, request.requestId, end.stamp ?? null, action);
@@ -743,6 +793,8 @@ export default function AssistantPanel({
             kinds: stamp.kinds,
             tables: stamp.tables,
             action: stamp.action,
+            // Where it was asked goes on the question only.
+            ...(m.role === "user" && stamp.askedIn && { askedIn: stamp.askedIn }),
           }
         : m;
     // The Core's stamp carries the action; without one the Continue turn is still marked, so its bubble stays muted.
@@ -751,17 +803,24 @@ export default function AssistantPanel({
       asking(stamped({ role: "user", text: q, context: included, at: askedAt })),
       stamped({ role: "assistant", text, context: [], at, record }),
     ];
+    // The open copy keeps the Asked in label only (memory): its summary and steps go to the Core with the turn. The other
+    // Connections' ids stay, so a later save of this copy (a failed append) keeps the gate on them.
+    const shown = add.map((m) => {
+      if (!m.askedIn) return m;
+      const { tab, label, also } = m.askedIn;
+      return { ...m, askedIn: { tab, label, summary: "", steps: [], ...(also && also.length > 0 && { also }) } };
+    });
     const kept = base ? (replace ? base.messages.slice(0, -2) : base.messages) : [];
     const next: AiThread = base
-      ? { ...base, messages: [...kept, ...add], updatedAt: askedAt }
-      : { id: newId(), place: forPlace, title: q.length > 40 ? `${q.slice(0, 40)}…` : q, messages: add, updatedAt: askedAt };
+      ? { ...base, messages: [...kept, ...shown], updatedAt: askedAt }
+      : { id: newId(), place: forPlace, title: q.length > 40 ? `${q.slice(0, 40)}…` : q, messages: shown, updatedAt: askedAt };
     // Only the new turn goes to the Core, which adds it to the stored thread (memory: the whole thread used to go
     // both ways on each Ask). A chat whose last save failed goes whole once more: the Core may lack turns it shows.
     // The Core's copy replaces ours: it holds the memory stamps and the trimmed records.
     const replaceFrom = base && replace ? base.messages[base.messages.length - 2]?.at : undefined;
     let returned: { thread: (now: AiThread | null) => AiThread; count: number; topics: Topic[]; compactions: Compaction[] } | null;
     if (base && unsaved.current.has(base.id)) {
-      returned = await saveAiThread(next, requestId).then(
+      returned = await saveAiThread({ ...next, messages: [...kept, ...add] }, requestId).then(
         (v) => ({ thread: () => v.thread, count: v.thread.messages.length, topics: v.topics, compactions: v.compactions }),
         () => null,
       );
@@ -910,6 +969,7 @@ export default function AssistantPanel({
       setChatError(errorText(e));
       return;
     }
+    clearSteps(place);
     setThreads([]);
     openThread(null);
   }
@@ -1265,6 +1325,8 @@ export default function AssistantPanel({
   const liveNotice = contextNotice(stream.context);
   const copySql = (sql: string) => void navigator.clipboard?.writeText(sql).catch(() => {});
   const openInNewTab = onOpenInNewTab && ((sql: string) => onOpenInNewTab(sql, conn));
+  // A tab with no editor (Home, a grid, New table, ...): answers open in a new query tab instead (spec 8).
+  const noEditor = !insertTarget && !!ctx.tabKind && ctx.tabKind !== "query";
 
   // Show log replaces the thread and the composer (board 11.3): a saved answer's record, or the Ask being streamed.
   let logView: ReactNode = null;
@@ -1300,7 +1362,7 @@ export default function AssistantPanel({
   }
 
   return (
-    <aside className="ai-panel" aria-label="Ask" ref={panel}>
+    <aside className="ai-panel" aria-label="Ask" ref={panel} data-pane>
       <header className="ai-panel-head">
         <span className="t">Ask</span>
         {accessChip && conn && (
@@ -1410,6 +1472,10 @@ export default function AssistantPanel({
                   return (
                 m.role === "user" ? (
                   <Fragment key={`${m.at}-u`}>
+                    {(() => {
+                      const caption = askedInCaption(current.messages, mi);
+                      return caption && <div className="msg-asked-in">{caption}</div>;
+                    })()}
                     <div className={m.action === "continue" ? "msg-user msg-user-muted" : "msg-user"}>{m.text}</div>
                     <div className="ts">{dayClock(m.at, Date.now())}</div>
                   </Fragment>
@@ -1427,6 +1493,7 @@ export default function AssistantPanel({
                           notes={notice ? [notice, ...(record?.notes ?? [])] : record?.notes}
                           dialect={conn?.dialect ?? "postgres"}
                           target={insertTarget}
+                          noEditor={noEditor}
                           onOpenInNewTab={openInNewTab}
                           onCopy={copySql}
                           onAction={(kind) => recordAction(current.id, m.at, kind)}
@@ -1544,7 +1611,7 @@ export default function AssistantPanel({
           <textarea
             ref={input}
             aria-label="Message"
-            placeholder={`Ask about ${conn?.name ?? "your database"}, or type / for commands`}
+            placeholder={conn && !removed ? `Ask about ${conn.name}, or type / for commands` : "Ask about Contura or SQL"}
             value={question}
             aria-controls={slashOpen ? slashId : undefined}
             aria-autocomplete="list"

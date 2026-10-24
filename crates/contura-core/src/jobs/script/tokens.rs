@@ -154,7 +154,11 @@ impl Lexer<'_> {
                         .is_none_or(|x| x.is_ascii_whitespace() || x.is_ascii_control()))
                 || self.mysql && c == b'#'
             {
-                while self.at(self.i).is_some_and(|x| x != b'\n') {
+                // PostgreSQL ends a line comment at a lone CR too, as the safety lexer does.
+                while self
+                    .at(self.i)
+                    .is_some_and(|x| x != b'\n' && !(self.postgres && x == b'\r'))
+                {
                     self.i += 1;
                 }
             } else if c == b'/' && n1 == Some(b'*') {

@@ -16,7 +16,7 @@ import { NODE_TOKENS, type NodeKind } from "../diagram/types";
 import { exportPalette } from "./exportPalette";
 import { exportSvg } from "./exportSvg";
 import { CARD_WIDTH } from "./layout";
-import SchemaBuilder, { type ModelDoc } from "./SchemaBuilder";
+import SchemaBuilder, { type ModelDoc, schemaTabAsk } from "./SchemaBuilder";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
@@ -85,9 +85,9 @@ test("renaming_a_table_on_its_card_keeps_its_saved_position", async () => {
 
 test("close_with_changes_asks_to_save", async () => {
   const onClose = vi.fn();
-  const closeRef = { current: null as (() => void) | null };
+  const closeRef = { current: null as (() => Promise<boolean>) | null };
   render(<SchemaBuilder doc={doc({ savedDbml: "" })} onClose={onClose} closeRef={closeRef} client={new LangClient(() => fakeWorker())} />);
-  act(() => closeRef.current!());
+  act(() => void closeRef.current!());
   expect(screen.getByText("Save changes to shop?")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Don't save" }));
   expect(onClose).toHaveBeenCalled();
@@ -99,7 +99,15 @@ test("apply_to_connection_opens_compare_with_the_model", async () => {
   const apply = (await screen.findByRole("button", { name: "Apply to Connection..." })) as HTMLButtonElement;
   expect(apply.disabled).toBe(false);
   await userEvent.click(apply);
-  expect(onApply).toHaveBeenCalledWith({ model: KFC_MODEL, path: "C:\\m\\shop.dbml", dialect: "postgres", notice: null });
+  expect(onApply).toHaveBeenCalledWith({ model: KFC_MODEL, path: "C:\\m\\shop.dbml", dialect: "postgres", notice: null, connectionId: null });
+});
+
+test("apply_to_connection_passes_the_models_source_connection", async () => {
+  // A model made from a Connection: the compare spans it, so the Ask gates by it too.
+  const onApply = vi.fn();
+  setup(doc({ connectionId: "c7" }), onApply);
+  await userEvent.click(await screen.findByRole("button", { name: "Apply to Connection..." }));
+  expect(onApply.mock.calls[0][0].connectionId).toBe("c7");
 });
 
 test("apply_to_connection_during_an_error_uses_the_last_valid_version", async () => {
@@ -279,3 +287,14 @@ test(
   }),
   LOAD_TIMEOUT,
 );
+
+test("schemaTabAsk sends the file's base name, the counts and the DBML cut at a line end", () => {
+  const f = schemaTabAsk("C:\\Users\\kestrel\\models\\shop.dbml", 12, 4, "Table orders {\n  id int\n}\n");
+  expect(f.tab).toEqual({ kind: "schema", file: "shop.dbml", tables: 12, errorLine: 4 });
+  expect(f.dbml).toBe("Table orders {\n  id int\n}\n");
+  const long = Array.from({ length: 20_000 }, (_, i) => `Table t${i} { id int }`).join("\n");
+  const cut = schemaTabAsk("shop.dbml", 20_000, null, long).dbml!;
+  expect(cut.length).toBeLessThanOrEqual(128 * 1024);
+  expect(long.startsWith(cut)).toBe(true);
+  expect(cut.endsWith("}")).toBe(true);
+});

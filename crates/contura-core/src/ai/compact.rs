@@ -13,11 +13,13 @@ use crate::ai::budget::{PAYLOAD_CAP, estimate_tokens};
 use crate::ai::context::cards::cleaner;
 use crate::ai::log::{Level, Log, LogLine, ProcessStep, StepKind, error_kind};
 use crate::ai::memory::{
-    AskFacts, Compaction, CompactionId, SummaryBy, Turn, history_allowed, rule_summary,
+    AskFacts, Compaction, CompactionId, SummaryBy, Turn, history_allowed, message_allowed,
+    rule_summary,
 };
 use crate::ai::models::{ModelInfo, ModelPicks, ThinkingLevel, clamp};
 use crate::ai::preview::{
-    CatalogReader, Gathered, Preview, Recall, SummaryPreview, long_secrets, window_text,
+    CatalogReader, Gathered, Preview, Recall, SummaryPreview, long_secrets, others_access,
+    window_text,
 };
 use crate::ai::prompt::system_prompt;
 use crate::ai::provider::url::host_of;
@@ -366,6 +368,9 @@ struct Span<'a> {
     last_at: i64,
     /// The visible turns kept.
     kept: Vec<(&'a AiMessage, &'a AiMessage)>,
+    /// Every question of the Topic asked across another Connection, hidden ones too: an
+    /// earlier compaction's summary folded in covers those up to its end.
+    across: Vec<&'a AiMessage>,
 }
 
 fn fold_span<'a>(thread: &'a AiThread, compactions: &[Compaction], seq: u32) -> Option<Span<'a>> {
@@ -387,13 +392,32 @@ fn fold_span<'a>(thread: &'a AiThread, compactions: &[Compaction], seq: u32) -> 
                 && !hidden(compactions, m.at)
         })
         .collect();
+    let across = thread
+        .messages
+        .iter()
+        .filter(|m| m.topic == Some(seq) && m.asked_in.as_ref().is_some_and(|a| !a.also.is_empty()))
+        .collect();
     Some(Span {
         turns,
         messages,
         first_at,
         last_at,
         kept,
+        across,
     })
+}
+
+/// The `others` the Ask's recall read, else read now (a recall at Never reads none).
+async fn known_others(
+    catalog: &dyn CatalogReader,
+    recall: &Recall,
+    thread: &AiThread,
+    log: &mut Log,
+) -> Vec<(ConnectionId, AiAccess)> {
+    match &recall.others {
+        Some(o) => o.clone(),
+        None => others_access(catalog, thread, log).await,
+    }
 }
 
 fn count(n: usize) -> u32 {
@@ -414,9 +438,11 @@ fn union<'a>(kinds: impl IntoIterator<Item = &'a ItemKind>) -> Vec<ItemKind> {
 fn turn_of(q: &AiMessage, a: &AiMessage, clean: &dyn Fn(&str) -> String) -> Turn {
     let (question, answer) = (clean(&q.text), clean(&a.text));
     let tokens = estimate_tokens(&question, false).saturating_add(estimate_tokens(&answer, false));
+    // A summary call reads the questions and answers only.
     Turn {
         question,
         answer,
+        asked_in: None,
         at: q.at,
         tokens,
     }
@@ -455,7 +481,7 @@ pub(crate) fn measure(
         .unwrap_or(crate::ai::stream::DEFAULT_MAX_TOKENS);
     let thinking = wire_thinking(model, picks.thinking, settings.share_thinking);
     let tokens = preview.tokens.saturating_add(estimate_tokens(
-        &system_prompt(&req.action, preview.dialect),
+        &system_prompt(&req.action, preview.dialect, req.tab.as_ref()),
         false,
     ));
     let room = settings.provider.map_or(max_tokens, |kind| {
@@ -583,11 +609,13 @@ pub(crate) async fn plan(
             now_ms: now_ms(),
         };
         let earlier = active_compaction(&compactions, seq);
+        let others = known_others(catalog, recall, thread, log).await;
         return Plan::Compact(compact_plan(
             span,
             earlier,
             &facts,
             g.access,
+            &others,
             req.switches,
             &clean,
             used,
@@ -644,6 +672,8 @@ pub(crate) async fn plan(
     let pass = |c: Option<ConnectionId>, d: Option<&str>, k: &[ItemKind]| {
         history_allowed(c, d, k, &facts, access, req.switches)
     };
+    // A question asked across another Connection is gated at the lower access too.
+    let others = known_others(catalog, recall, thread, log).await;
     let topic_messages = thread
         .messages
         .iter()
@@ -651,7 +681,7 @@ pub(crate) async fn plan(
     let gate = access != AiAccess::Never
         && topic_messages
             .clone()
-            .all(|m| pass(m.connection_id, m.database.as_deref(), &m.kinds))
+            .all(|m| message_allowed(m, &facts, access, &others, req.switches))
         && earlier.is_none_or(|c| pass(c.connection_id, c.database.as_deref(), &c.kinds));
     if !gate {
         return Plan::TopicSkipped {
@@ -675,6 +705,7 @@ fn compact_plan(
     earlier: Option<&Compaction>,
     facts: &AskFacts,
     access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
     switches: Switches,
     clean: &dyn Fn(&str) -> String,
     used: u32,
@@ -682,15 +713,7 @@ fn compact_plan(
     on: bool,
 ) -> CompactPlan {
     let pass = |m: &AiMessage| {
-        access != AiAccess::Never
-            && history_allowed(
-                m.connection_id,
-                m.database.as_deref(),
-                &m.kinds,
-                facts,
-                access,
-                switches,
-            )
+        access != AiAccess::Never && message_allowed(m, facts, access, others, switches)
     };
     let earlier_ok = earlier.is_some_and(|c| {
         access != AiAccess::Never
@@ -702,8 +725,32 @@ fn compact_plan(
                 access,
                 switches,
             )
+            // Its summary folds every earlier one of the Topic: each question asked across
+            // another Connection up to its end must still pass.
+            && span
+                .across
+                .iter()
+                .filter(|m| m.at <= c.last_at)
+                .all(|m| pass(m))
     });
-    let allowed: Vec<&AiMessage> = span.messages.iter().copied().filter(|m| pass(m)).collect();
+    // Whole turns: an answer goes only with its question, so a held question's answer
+    // never feeds the rules summary.
+    let mut question_ok = true;
+    let allowed: Vec<&AiMessage> = span
+        .messages
+        .iter()
+        .copied()
+        .filter(|m| {
+            let ok = pass(m);
+            match m.role {
+                AiRole::User => {
+                    question_ok = ok;
+                    ok
+                }
+                _ => ok && question_ok,
+            }
+        })
+        .collect();
     let gate = allowed.len() == span.messages.len() && (earlier.is_none() || earlier_ok);
     let earlier_kinds = earlier
         .filter(|_| earlier_ok)
@@ -1072,6 +1119,7 @@ async fn compact_now_logged(
     let exact_secrets = long_secrets(secrets);
     let clean = cleaner(&exact_secrets);
     let earlier = active_compaction(&compactions, seq);
+    let others = others_access(catalog, &thread, log).await;
     let kept: Vec<Turn> = span
         .kept
         .iter()
@@ -1082,6 +1130,7 @@ async fn compact_now_logged(
         earlier,
         &facts,
         access,
+        &others,
         Switches::default(),
         &clean,
         0,
@@ -1246,4 +1295,156 @@ async fn compact_now_logged(
         compaction: Box::new(compaction.trimmed_copy()),
     });
     Ok(compaction)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::memory::AskedIn;
+    use uuid::Uuid;
+
+    const OWN: u128 = 42;
+    const OTHER: u128 = 43;
+
+    fn msg(role: AiRole, text: &str, at: i64, across: bool) -> AiMessage {
+        AiMessage {
+            role,
+            text: text.into(),
+            context: Vec::new(),
+            at,
+            record: None,
+            topic: Some(1),
+            connection_id: Some(Uuid::from_u128(OWN)),
+            database: Some("shop".into()),
+            // A turn asked across went at query text: Schema only is lower than it.
+            kinds: if across {
+                vec![ItemKind::Question, ItemKind::Tab, ItemKind::Sql]
+            } else {
+                vec![ItemKind::Question, ItemKind::Tab]
+            },
+            tables: Vec::new(),
+            action: Some("ask".into()),
+            asked_in: (across && role == AiRole::User).then(|| AskedIn {
+                tab: "compare".into(),
+                label: "Schema Compare".into(),
+                also: vec![Uuid::from_u128(OTHER)],
+                ..AskedIn::default()
+            }),
+        }
+    }
+
+    fn turn(q: &str, a: &str, at: i64, across: bool) -> [AiMessage; 2] {
+        [
+            msg(AiRole::User, q, at, across),
+            msg(AiRole::Assistant, a, at + 1, across),
+        ]
+    }
+
+    fn thread(messages: Vec<AiMessage>) -> AiThread {
+        AiThread {
+            id: Uuid::nil(),
+            place: "ungrouped".into(),
+            title: "t".into(),
+            messages,
+            updated_at: 1,
+        }
+    }
+
+    fn compaction(first_at: i64, last_at: i64, summary: &str) -> Compaction {
+        Compaction {
+            id: Uuid::new_v4(),
+            thread_id: Uuid::nil(),
+            topic: 1,
+            first_at,
+            last_at,
+            messages: 2,
+            summary: summary.into(),
+            summary_by: SummaryBy::Rules,
+            connection_id: Some(Uuid::from_u128(OWN)),
+            database: Some("shop".into()),
+            kinds: vec![ItemKind::Question],
+            before: 100,
+            after: 10,
+            at: last_at + 1,
+            undone: false,
+            record: AnswerRecord::default(),
+        }
+    }
+
+    fn plan(th: &AiThread, comps: &[Compaction], other: AiAccess) -> CompactPlan {
+        let facts = AskFacts {
+            connection_id: Some(Uuid::from_u128(OWN)),
+            database: Some("shop"),
+            action: "ask",
+            tables: &[],
+            now_ms: 10_000,
+        };
+        let span = fold_span(th, comps, 1).expect("a span to fold");
+        compact_plan(
+            span,
+            comps.last(),
+            &facts,
+            AiAccess::SchemaQuery,
+            &[(Uuid::from_u128(OTHER), other)],
+            Switches::default(),
+            &|s| s.to_string(),
+            0,
+            100_000,
+            true,
+        )
+    }
+
+    /// I2: the earlier compaction's summary covers a question asked across another
+    /// Connection; once that Connection is lowered, it is not folded into the next one.
+    #[test]
+    fn earlier_summary_over_a_lowered_connection_is_not_folded() {
+        let mut m: Vec<AiMessage> = turn("compare the two", "3 changed.", 100, true).into();
+        for i in 0..4 {
+            m.extend(turn(
+                &format!("q{i}"),
+                &format!("a{i}"),
+                200 + i * 10,
+                false,
+            ));
+        }
+        let th = thread(m);
+        let c1 = [compaction(100, 101, "folded compare summary")];
+        let open = plan(&th, &c1, AiAccess::SchemaQuery);
+        assert_eq!(open.earlier.as_deref(), Some("folded compare summary"));
+        assert!(open.gate);
+        assert!(
+            open.rules.contains("folded compare summary"),
+            "{}",
+            open.rules
+        );
+        for lowered in [AiAccess::Schema, AiAccess::Never] {
+            let held = plan(&th, &c1, lowered);
+            assert_eq!(held.earlier, None);
+            assert!(!held.gate);
+            assert!(!held.rules.contains("folded compare"), "{}", held.rules);
+        }
+    }
+
+    /// M1: a held question's answer never feeds the rules summary.
+    #[test]
+    fn rules_summary_takes_whole_turns() {
+        let mut m: Vec<AiMessage> =
+            turn("compare the two", "Secretly 3 changed.", 100, true).into();
+        for i in 0..3 {
+            m.extend(turn(
+                &format!("q{i}"),
+                &format!("a{i}"),
+                200 + i * 10,
+                false,
+            ));
+        }
+        let th = thread(m);
+        let held = plan(&th, &[], AiAccess::Never);
+        assert!(!held.gate);
+        assert!(!held.rules.contains("Secretly"), "{}", held.rules);
+        assert!(!held.rules.contains("compare the two"), "{}", held.rules);
+        assert!(held.rules.contains("a0"), "{}", held.rules);
+        let open = plan(&th, &[], AiAccess::SchemaQuery);
+        assert!(open.rules.contains("Secretly"), "{}", open.rules);
+    }
 }

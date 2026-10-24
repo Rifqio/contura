@@ -21,7 +21,7 @@ use crate::ai::memory::{Compaction, SummaryBy, TurnStamp};
 use crate::ai::models::{CachingKind, ModelInfo, ModelPicks, ThinkingLevel, clamp};
 use crate::ai::preview::{
     CatalogReader, Gathered, Preview, Recall, assemble_with, check_continue, count_of, gather,
-    memory_line, precheck_continue, recall,
+    memory_line, precheck_continue, recall, stamp_continued,
 };
 use crate::ai::prompt::system_prompt;
 use crate::ai::provider::url::host_of;
@@ -916,7 +916,7 @@ impl SummaryStep<'_> {
         match store.add_compaction(&c) {
             Err(e) => log.push(Level::Warn, "memory", &[("error", error_kind(&e))]),
             Ok(()) => {
-                *memory = recall(self.catalog, g, log);
+                *memory = recall(self.catalog, g, log, memory.others.take()).await;
                 let turn = assemble_with(g, &memory.pick, memory.memory.clone(), log, false)?;
                 let (_, needed) = compact::measure(&turn, req, self.settings, self.model);
                 c.after = needed;
@@ -1262,7 +1262,7 @@ pub async fn ask_stream(
     // Read once, here: assembling again after a summary step reads nothing.
     let read = gathered.rows_read();
     let read = read.as_ref();
-    let mut memory = recall(catalog, &gathered, &mut log);
+    let mut memory = recall(catalog, &gathered, &mut log, None).await;
     if let Err(e) = check_continue(req, &memory) {
         return fail_build(e, read, &mut log, &pump, emit);
     }
@@ -1362,7 +1362,7 @@ pub async fn ask_stream(
             // The model's summary replaces the rule summary the history picked: pick
             // again and assemble the turn again, as after a compaction.
             if stored {
-                memory = recall(catalog, &gathered, &mut log);
+                memory = recall(catalog, &gathered, &mut log, memory.others.take()).await;
                 match assemble_with(
                     &gathered,
                     &memory.pick,
@@ -1418,7 +1418,7 @@ pub async fn ask_stream(
     // Mark 1 after the system prompt, mark 2 after the schema block; nothing that changes
     // per request comes before mark 2.
     let mut system = vec![PromptBlock {
-        text: system_prompt(&req.action, dialect),
+        text: system_prompt(&req.action, dialect, req.tab.as_ref()),
         cache_mark,
     }];
     let parts = preview.parts;
@@ -1507,6 +1507,7 @@ pub async fn ask_stream(
         picks,
     );
     pump.drain(emit);
+    stamp_continued(req, &memory, &mut preview.stamp);
     emit(AiEvent::Memory {
         stamp: preview.stamp.clone(),
     });

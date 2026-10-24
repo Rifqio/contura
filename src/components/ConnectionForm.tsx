@@ -177,6 +177,14 @@ export default function ConnectionForm({
     };
   }, [savedId]);
 
+  // J2: changes the form would lose. The AI access a new form picks up from Settings is not one.
+  const fields = JSON.stringify([
+    name, dialect, host, port, user, passwordTouched, removePassword, database, ssl, caPath, file, groupId,
+    aiChosen.current ? aiAccess : null, aiSync, production, readOnly, timeout,
+  ]);
+  const firstFields = useRef(fields);
+  const dirty = fields !== firstFields.current;
+
   const sqlite = dialect === "sqlite";
   const accessDescription = AI_ACCESS_OPTIONS.find((o) => o.value === aiAccess)?.description ?? "";
 
@@ -401,6 +409,7 @@ export default function ConnectionForm({
       icon="plug"
       subtitle={editing ? connection.name : undefined}
       className="connection-dialog"
+      dirty={dirty}
       onClose={onCancel}
     >
       <form

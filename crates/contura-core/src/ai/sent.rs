@@ -466,6 +466,7 @@ mod tests {
             error: None,
             sql_blocks: vec![SqlBlock {
                 fence: 0,
+                body_sha256: String::new(),
                 label: "1 statement: 1 read".into(),
                 statements: vec![StatementCheck {
                     text: "select 1".into(),
@@ -532,6 +533,7 @@ mod tests {
                     kinds: Vec::new(),
                     tables: Vec::new(),
                     action: None,
+                    asked_in: None,
                 },
                 AiMessage {
                     role: AiRole::Assistant,
@@ -545,6 +547,7 @@ mod tests {
                     kinds: Vec::new(),
                     tables: Vec::new(),
                     action: None,
+                    asked_in: None,
                 },
             ],
             updated_at: 2,

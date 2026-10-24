@@ -1,7 +1,10 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { errorText, isCommandError, listDatabases, listObjects, listSchemas, openConnection, schemaSnapshot } from "../api/client";
 import { confirmTransfer, newJobId, planTransfer, startTransfer, transferSample } from "../api/jobs";
-import type { ConnectionConfig, Group, JobEvent, JobId, ObjectPath, PassId, TransferPlan, TransferSide } from "../api/types";
+import type { AskTransferLine, ConnectionConfig, Group, JobEvent, JobId, ObjectPath, PassId, TransferPlan, TransferSide } from "../api/types";
+import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
+import { type RecentStepInput, useRecordStep } from "../assistant/recentSteps";
+import { alsoOf } from "../assistant/context";
 import DbMark from "../components/DbMark";
 import Icon from "../components/Icon";
 import Kbd from "../components/Kbd";
@@ -60,8 +63,80 @@ interface Run {
   warning: string | null;
 }
 
+/**
+ * What a Data Transfer tab tells the Ask (spec 4.7): both databases, the mode, the ticked tables with their columns
+ * and the plan's notes as typed kinds, never their text (it can name a default). Before a target is chosen the Ask
+ * is on the source; after, on the target with the source as the other Connection. Lists are cut at twice the
+ * Core's caps.
+ */
+/** The Ask's place for a transfer: the target once chosen, else the source; the source's Connection goes beside a target. */
+function transferSides(state: TransferState): Required<Pick<TabAskFields, "also" | "where">> {
+  const { source, target } = state;
+  const side = target ?? source;
+  return {
+    also: target ? [source.connectionId] : [],
+    where: { connectionId: side.connectionId, database: side.database, schema: side.schema },
+  };
+}
+
+/**
+ * A run's Recent step: on the target, as the Ask is, naming the source database then the tables copied, with the
+ * source's Connection when it is another, so the Core gives the source name at the lower access.
+ */
+export function transferStep(state: TransferState, plan: TransferPlan | null, rows: number | null, failed: boolean): RecentStepInput {
+  const { also, where } = transferSides(state);
+  const other = alsoOf(where.connectionId, also)[0];
+  return {
+    verb: "transferRan",
+    tab: "transfer",
+    title: null,
+    connectionId: where.connectionId,
+    database: where.database,
+    schema: where.schema,
+    // The tables the run copied, as its plan has them; before a plan, the ones ticked.
+    names: [state.source.database, ...(plan ? plan.tables.map((t) => t.name) : state.tables.filter((t) => t.ticked && !t.view).map((t) => t.name))],
+    count: rows,
+    ...(failed && { failed: true }),
+    ...(other !== undefined && { sourceConnectionId: other }),
+  };
+}
+
+export function transferTabAsk(state: TransferState, plan: TransferPlan | null): TabAskFields {
+  const { source, target } = state;
+  let columnsLeft = 1000;
+  const tables: AskTransferLine[] = state.tables
+    .filter((t) => t.ticked && !t.view)
+    .slice(0, 1000)
+    .map((t) => {
+      const planned = plan?.tables.find((x) => x.name === t.name);
+      const columns = (planned?.columns ?? []).slice(0, Math.max(0, columnsLeft));
+      columnsLeft -= columns.length;
+      return {
+        source: t.name,
+        target: planned?.target ?? t.name,
+        exists: planned?.exists ?? false,
+        ifExists: t.ifExists,
+        columns: columns.map((c) => ({ name: c.name, targetName: c.targetName, sourceType: c.sourceType, targetType: c.targetType })),
+        emptiedRows: plan?.emptied.find((e) => e.table === t.name)?.rows ?? null,
+      };
+    });
+  return {
+    tab: {
+      kind: "transfer",
+      sourceDatabase: source.database,
+      targetDatabase: target?.database ?? "",
+      mode: plan?.mode ?? null,
+      tables,
+      notes: (plan?.mappingNotes ?? []).slice(0, 100).map((n) => ({ table: n.table, column: n.column, kind: n.kind.kind })),
+    },
+    ...transferSides(state),
+  };
+}
+
 export interface TransferTabProps {
   seed: TransferSeed;
+  /** The tab's key: the tab publishes what the Ask may know of it (`tabAsk.ts`). */
+  askKey?: string | null;
   /** Every Connection, across Groups: a transfer may span two. */
   connections: ConnectionConfig[];
   groups: Group[];
@@ -85,7 +160,7 @@ function complete(side: TransferSide | null, connections: ConnectionConfig[]): s
 }
 
 /** The Data Transfer tab (frame 8.1): five steps, nothing runs until Review SQL is confirmed. */
-export default function TransferTab({ seed, connections, groups, onMeta, onJob, onOpenInEditor, onOpenTarget }: TransferTabProps) {
+export default function TransferTab({ seed, askKey = null, connections, groups, onMeta, onJob, onOpenInEditor, onOpenTarget }: TransferTabProps) {
   const jobs = useJobs();
   const root = useRef<HTMLDivElement>(null);
   const sourceConn = connections.find((c) => c.id === seed.connectionId) ?? null;
@@ -118,6 +193,8 @@ export default function TransferTab({ seed, connections, groups, onMeta, onJob, 
   const tgt = state.target;
   const srcConn = connections.find((c) => c.id === src.connectionId) ?? null;
   const tgtConn = connections.find((c) => c.id === tgt?.connectionId) ?? null;
+  const recordStep = useRecordStep();
+  usePublishTabAsk(askKey, () => transferTabAsk(state, plan), [state, plan]);
   const same = tgt !== null && complete(tgt, connections) && sameSide(src, tgt);
   const production = tgtConn?.production ?? false;
   const req = buildRequest(state, target?.tables === null);
@@ -296,6 +373,7 @@ export default function TransferTab({ seed, connections, groups, onMeta, onJob, 
     if (e.kind === "finished" || e.kind === "failed") {
       onJob?.(null);
       if (e.kind === "finished") setRan(true);
+      recordStep(e.kind === "finished" ? transferStep(state, plan, e.report.rowsWritten, false) : transferStep(state, plan, e.rowsCommitted ?? null, true));
     }
   }
 

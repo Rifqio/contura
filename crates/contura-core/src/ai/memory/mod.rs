@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::request::ItemKind;
 use crate::ai::sent::AnswerRecord;
-use crate::ai::{AiMessage, AiThread, ThreadId};
+use crate::ai::{AiAccess, AiMessage, AiThread, ThreadId};
 use crate::error::Result;
 use crate::model::ConnectionId;
 
 pub use history::{
-    HistoryPick, HistorySummary, SummarySource, Turn, closing_topic, history_allowed,
-    select_history,
+    HistoryPick, HistorySummary, SummarySource, Turn, access_now, also_of, closing_topic,
+    history_allowed, message_access, message_allowed, select_history,
 };
 pub use rules::{
     AskFacts, BreakReason, EARLIER_TOPICS, IDLE_MS, RECENT_TURNS, SUMMARY_CHARS, TITLE_CHARS,
@@ -22,6 +22,205 @@ pub use rules::{
 };
 
 pub type CompactionId = uuid::Uuid;
+
+/// The Asked in label: the where line as it went.
+pub const ASKED_IN_LABEL_CHARS: usize = 120;
+/// The Asked in summary of the This tab item as it went.
+pub const ASKED_IN_SUMMARY_BYTES: usize = 400;
+/// The Asked in steps, as the Recent steps item.
+pub const ASKED_IN_STEPS_BYTES: usize = crate::ai::steps::STEPS_CAP;
+/// The other Connections an Asked in names: a tab spans two at most today. An Ask that
+/// names more is refused (`gather`), so the stamp always holds every one it was gated by.
+pub const ASKED_IN_ALSO: usize = 4;
+/// What a replayed steps line adds before the steps.
+const STEPS_LEAD: &str = "steps before it: ";
+/// What the replayed line of steps on other Connections adds before them.
+pub(crate) const OTHER_STEPS_LEAD: &str = "steps on other Connections before it: ";
+/// A tab kind id is a short word.
+const TAB_ID_CHARS: usize = 32;
+
+/// Where a question was asked (spec 6): the tab kind, the where line, a summary of the
+/// This tab item and the Recent steps labels, each as they went, so it never holds more
+/// than the turn sent. Kept on the question in the thread JSON and replayed framed with
+/// the turn; the webview holds only `label_only`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AskedIn {
+    /// The tab kind id: `query`, `object`, `visual`, `design`, `schema`, `compare`,
+    /// `transfer`, `import`, `lineage`, `home`, `settings`, `savedQueries`.
+    pub tab: String,
+    /// The where line as it went (gated): `Visual Query "Orders over 1M" in shop`; the
+    /// kind words when no This tab item went.
+    pub label: String,
+    /// The first facts of the This tab item as it went, joined with `; `; empty when no
+    /// This tab item went.
+    #[serde(default)]
+    pub summary: String,
+    /// The Recent steps labels that went on this Ask's Connection or on none, oldest
+    /// first, without their age.
+    #[serde(default)]
+    pub steps: Vec<String>,
+    /// The other Connections the tab spanned (`focus.also`): the turn is replayed only
+    /// while each of them still allows what it carried (see `history::message_access`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<ConnectionId>,
+    /// The Recent steps labels that went and are on another Connection, oldest first,
+    /// without their age. Each is replayed only while its own Connection still allows the
+    /// level its text needed (`replay_lines`), and is removed when that Connection's
+    /// history is cleared or it is deleted (`AiService::forget_steps`). The webview never
+    /// holds them: `label_only` drops them and the stamp it is sent leaves them out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_steps: Vec<OtherStep>,
+}
+
+/// A Recent step on a Connection other than the Ask's, kept with the Ask (the user's
+/// ruling of 2026-10-23: sent and stored).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OtherStep {
+    /// The Connection the step happened on.
+    pub connection_id: ConnectionId,
+    /// The rendered label as it went (gated at send time by that Connection's level).
+    pub text: String,
+    /// The access level the text needed when it was rendered (the highest part that went:
+    /// Schema only for names, Schema and query text for titles and counts).
+    pub level: AiAccess,
+}
+
+/// `text` on one line: control characters and line separators become spaces.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+impl AskedIn {
+    /// The copy the webview is given: the tab and the label only (spec 6.2, memory), and
+    /// the other Connections, which are ids, not data: a copy the webview saves back for a
+    /// message the Core lacks (a failed append) keeps the gate on them.
+    pub fn label_only(&self) -> AskedIn {
+        AskedIn {
+            tab: self.tab.clone(),
+            label: self.label.clone(),
+            also: self.also.clone(),
+            ..AskedIn::default()
+        }
+    }
+
+    /// Held to its caps, each part on one line: the label at 120 characters, the summary
+    /// at 400 bytes cut at a `; ` boundary then a character boundary, each step at 160
+    /// bytes and the steps at 1 KB as their replayed lines (`steps before it: a; b`, then
+    /// the other Connections' line), the Ask's own steps first and the oldest dropped
+    /// first. `append_turn` stores it so, whoever built it, and the replay reads it so.
+    pub fn capped(&self) -> AskedIn {
+        use crate::ai::rails::cap_chars;
+        let tab: String = one_line(&self.tab).chars().take(TAB_ID_CHARS).collect();
+        let label = one_line(&self.label);
+        let label = if label.chars().count() > ASKED_IN_LABEL_CHARS {
+            let mut cut: String = label.chars().take(ASKED_IN_LABEL_CHARS - 1).collect();
+            cut.push('…');
+            cut
+        } else {
+            label
+        };
+        let facts: Vec<String> = one_line(&self.summary)
+            .split("; ")
+            .map(str::to_string)
+            .collect();
+        let summary = crate::ai::scene::summary(&facts);
+        let mut steps: Vec<String> = Vec::new();
+        let mut bytes = STEPS_LEAD.len();
+        // Newest first, so the oldest whole steps are the ones dropped.
+        for step in self.steps.iter().rev() {
+            let step = one_line(step);
+            let step = cap_chars(&step, crate::ai::steps::STEP_LABEL_CAP).to_string();
+            let add = step.len() + if steps.is_empty() { 0 } else { 2 };
+            if step.is_empty() || bytes + add > ASKED_IN_STEPS_BYTES {
+                break;
+            }
+            bytes += add;
+            steps.push(step);
+        }
+        steps.reverse();
+        // The other Connections' steps share what the own steps left of the 1 KB.
+        let left = ASKED_IN_STEPS_BYTES.saturating_sub(if steps.is_empty() { 0 } else { bytes });
+        let mut other_steps: Vec<OtherStep> = Vec::new();
+        let mut bytes = OTHER_STEPS_LEAD.len();
+        for step in self.other_steps.iter().rev() {
+            let text = one_line(&step.text);
+            let text = cap_chars(&text, crate::ai::steps::STEP_LABEL_CAP).to_string();
+            let add = text.len() + if other_steps.is_empty() { 0 } else { 2 };
+            if text.is_empty() || bytes + add > left {
+                break;
+            }
+            bytes += add;
+            // A step on a Connection needs Schema only at least.
+            let level = match step.level {
+                AiAccess::Never => AiAccess::Schema,
+                l => l,
+            };
+            other_steps.push(OtherStep {
+                connection_id: step.connection_id,
+                text,
+                level,
+            });
+        }
+        other_steps.reverse();
+        let mut also: Vec<ConnectionId> = Vec::new();
+        for id in &self.also {
+            if !also.contains(id) && also.len() < ASKED_IN_ALSO {
+                also.push(*id);
+            }
+        }
+        AskedIn {
+            tab,
+            label,
+            summary,
+            steps,
+            also,
+            other_steps,
+        }
+    }
+
+    /// The lines a past turn replays, each framed as `asked_in`: `<label>: <summary>` (the
+    /// label alone with no summary), then `steps before it: <steps>` when steps went, then
+    /// the steps on other Connections whose Connection's current access in `others` (the
+    /// gate of `also`, `access_now`: one not listed is Never) still reaches the level each
+    /// needed. One that does not is left out silently; the turn itself is gated as before.
+    pub fn replay_lines(&self, others: &[(ConnectionId, AiAccess)]) -> Vec<String> {
+        let a = self.capped();
+        let mut out = Vec::new();
+        match (a.label.is_empty(), a.summary.is_empty()) {
+            (true, true) => {}
+            (false, true) => out.push(a.label),
+            (true, false) => out.push(a.summary),
+            (false, false) => out.push(format!("{}: {}", a.label, a.summary)),
+        }
+        if !a.steps.is_empty() {
+            out.push(format!("{STEPS_LEAD}{}", a.steps.join("; ")));
+        }
+        use crate::ai::rails::input::rank;
+        let go: Vec<&str> = a
+            .other_steps
+            .iter()
+            .filter(|s| {
+                let now = access_now(s.connection_id, others);
+                now != AiAccess::Never && rank(now) >= rank(s.level)
+            })
+            .map(|s| s.text.as_str())
+            .collect();
+        if !go.is_empty() {
+            out.push(format!("{OTHER_STEPS_LEAD}{}", go.join("; ")));
+        }
+        out
+    }
+}
 
 /// The memory stamp of one Ask: the UI stores it on both messages of the turn, and the
 /// gate on history reads it back (R1.7). `kinds` are the kinds the turn sent, the thread
@@ -38,6 +237,25 @@ pub struct TurnStamp {
     pub action: String,
     pub tables: Vec<String>,
     pub kinds: Vec<ItemKind>,
+    /// Where the question was asked; `None` with no tab, steps or other Connection. The
+    /// UI stores it on the question only. Sent to the webview without `other_steps`: the
+    /// Core holds those until the turn is stored (`AiService::hold_other_steps`).
+    #[serde(serialize_with = "without_other_steps")]
+    pub asked_in: Option<AskedIn>,
+}
+
+/// The stamp's Asked in as the webview is sent it: no steps on other Connections.
+fn without_other_steps<S: serde::Serializer>(
+    asked_in: &Option<AskedIn>,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    asked_in
+        .as_ref()
+        .map(|a| AskedIn {
+            other_steps: Vec::new(),
+            ..a.clone()
+        })
+        .serialize(s)
 }
 
 /// What the thread gives one Ask, as Sends shows it: the Topic and what goes of it.
@@ -234,4 +452,286 @@ pub trait ThreadStore: Send + Sync {
     fn add_compaction(&self, c: &Compaction) -> Result<()>;
     /// False when the compaction is missing or already undone.
     fn undo_compaction(&self, thread: ThreadId, id: CompactionId) -> Result<bool>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asked_in_caps() {
+        // A 2 KB summary is cut at the last `; ` that fits 400 bytes.
+        let fact = format!("ticked {}", "é".repeat(60));
+        let facts: Vec<String> = (0..20).map(|i| format!("{fact}{i}")).collect();
+        let long = facts.join("; ");
+        assert!(long.len() > 2_000);
+        let a = AskedIn {
+            tab: "visual".into(),
+            label: format!("Visual Query \"{}\" in shop", "ü".repeat(200)),
+            summary: long,
+            steps: (0..30)
+                .map(|i| format!("ran the query {i} {}", "ß".repeat(40)))
+                .collect(),
+            also: Vec::new(),
+            other_steps: Vec::new(),
+        }
+        .capped();
+        assert!(a.summary.len() <= ASKED_IN_SUMMARY_BYTES);
+        assert_eq!(a.summary, facts[..3].join("; "));
+        assert!(!a.summary.ends_with("; "));
+        // The label at 120 characters, `…` last; multi-byte characters stay whole.
+        assert_eq!(a.label.chars().count(), ASKED_IN_LABEL_CHARS);
+        assert!(a.label.ends_with('…'));
+        // Steps over 1 KB lose the oldest whole steps; the newest stays last.
+        // The cap holds for the replayed line, its lead and `; ` joins counted.
+        let replayed = a.replay_lines(&[]).pop().unwrap();
+        assert!(replayed.starts_with(STEPS_LEAD), "{replayed}");
+        assert!(replayed.len() <= ASKED_IN_STEPS_BYTES, "{}", replayed.len());
+        assert!(a.steps.len() < 30);
+        assert!(a.steps.last().unwrap().starts_with("ran the query 29 "));
+        assert!(a.steps[0].starts_with(&format!("ran the query {} ", 30 - a.steps.len())));
+
+        // One fact alone over 400 bytes is cut at a character boundary.
+        let one = AskedIn {
+            summary: "ü".repeat(300),
+            ..AskedIn::default()
+        }
+        .capped();
+        assert_eq!(one.summary, "ü".repeat(200));
+        // A step over 160 bytes is cut at a character boundary.
+        let step = AskedIn {
+            steps: vec!["ü".repeat(100)],
+            ..AskedIn::default()
+        }
+        .capped();
+        assert_eq!(step.steps, vec!["ü".repeat(80)]);
+        // Line breaks never reach a framed line.
+        let lines = AskedIn {
+            tab: "query".into(),
+            label: "Query tab\n\"x\"".into(),
+            summary: "a\u{2028}b".into(),
+            steps: vec!["ran\rit".into()],
+            also: Vec::new(),
+            other_steps: Vec::new(),
+        }
+        .replay_lines(&[]);
+        assert_eq!(
+            lines,
+            vec![
+                "Query tab \"x\": a b".to_string(),
+                "steps before it: ran it".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_lines_follow_what_is_kept() {
+        let a = AskedIn {
+            tab: "visual".into(),
+            label: "Visual Query in shop".into(),
+            summary: "tables orders".into(),
+            steps: vec![
+                "opened Visual Query in shop".into(),
+                "ticked orders.id".into(),
+            ],
+            also: Vec::new(),
+            other_steps: Vec::new(),
+        };
+        assert_eq!(
+            a.replay_lines(&[]),
+            vec![
+                "Visual Query in shop: tables orders".to_string(),
+                "steps before it: opened Visual Query in shop; ticked orders.id".to_string()
+            ]
+        );
+        let bare = AskedIn {
+            summary: String::new(),
+            steps: Vec::new(),
+            ..a.clone()
+        };
+        assert_eq!(
+            bare.replay_lines(&[]),
+            vec!["Visual Query in shop".to_string()]
+        );
+        assert!(AskedIn::default().replay_lines(&[]).is_empty());
+        let label = a.label_only();
+        assert_eq!(
+            (label.tab.as_str(), label.label.as_str()),
+            ("visual", "Visual Query in shop")
+        );
+        assert!(label.summary.is_empty() && label.steps.is_empty());
+        // The other Connections stay: the gate on them must survive a save of the copy.
+        let other = uuid::Uuid::from_u128(43);
+        let across = AskedIn {
+            also: vec![other],
+            ..a.clone()
+        };
+        assert_eq!(across.label_only().also, vec![other]);
+    }
+
+    fn other(id: u128, text: &str, level: AiAccess) -> OtherStep {
+        OtherStep {
+            connection_id: uuid::Uuid::from_u128(id),
+            text: text.into(),
+            level,
+        }
+    }
+
+    /// Task 5b, test 6: own steps and other steps share the 1 KB; own steps are kept first,
+    /// then the newest other steps, each whole.
+    #[test]
+    fn other_steps_share_the_steps_budget() {
+        let b = uuid::Uuid::from_u128(43);
+        let all = [(b, AiAccess::SchemaQuery)];
+        let own: Vec<String> = (0..5)
+            .map(|i| format!("ran the query {i} {}", "s".repeat(100)))
+            .collect();
+        let others: Vec<OtherStep> = (0..10)
+            .map(|i| {
+                other(
+                    43,
+                    &format!(
+                        "ran the Visual Query {i} on another Connection {}",
+                        "o".repeat(90)
+                    ),
+                    AiAccess::Schema,
+                )
+            })
+            .collect();
+        let a = AskedIn {
+            steps: own.clone(),
+            other_steps: others.clone(),
+            ..AskedIn::default()
+        }
+        .capped();
+        // Every own step fits and is kept; the other steps fill what is left.
+        assert_eq!(a.steps, own);
+        assert!(!a.other_steps.is_empty() && a.other_steps.len() < 10);
+        // The newest other steps are the ones kept.
+        assert_eq!(a.other_steps.last(), others.last());
+        let lines = a.replay_lines(&all);
+        let bytes: usize = lines[lines.len() - 2..].iter().map(String::len).sum();
+        assert!(bytes <= ASKED_IN_STEPS_BYTES, "{bytes}");
+        assert!(lines.last().unwrap().starts_with(OTHER_STEPS_LEAD));
+
+        // Own steps over 1 KB leave no room for other steps.
+        let many: Vec<String> = (0..30)
+            .map(|i| format!("ran the query {i} {}", "s".repeat(100)))
+            .collect();
+        let a = AskedIn {
+            steps: many,
+            other_steps: others.clone(),
+            ..AskedIn::default()
+        }
+        .capped();
+        assert!(!a.steps.is_empty());
+        assert!(a.other_steps.is_empty());
+
+        // Other steps alone have the whole 1 KB; each is one line of at most 160 bytes.
+        let a = AskedIn {
+            other_steps: vec![other(
+                43,
+                &format!("a\nb{}", "ü".repeat(100)),
+                AiAccess::Schema,
+            )],
+            ..AskedIn::default()
+        }
+        .capped();
+        assert_eq!(a.other_steps[0].text, format!("a b{}", "ü".repeat(78)));
+        assert!(a.other_steps[0].text.len() <= crate::ai::steps::STEP_LABEL_CAP);
+    }
+
+    /// Task 5b, test 2 (unit): each other step is replayed only while its own Connection's
+    /// current access reaches the level its text needed; a deleted one counts as Never.
+    #[test]
+    fn other_steps_replay_at_their_connection_access() {
+        let b = uuid::Uuid::from_u128(43);
+        let c = uuid::Uuid::from_u128(44);
+        let a = AskedIn {
+            tab: "visual".into(),
+            label: "Visual Query in shop".into(),
+            steps: vec!["ticked orders.id".into()],
+            other_steps: vec![
+                other(
+                    43,
+                    "opened Visual Query on another Connection",
+                    AiAccess::Schema,
+                ),
+                other(
+                    43,
+                    "ran the Visual Query \"Late\" on another Connection, 3 rows",
+                    AiAccess::SchemaQuery,
+                ),
+                other(
+                    44,
+                    "opened Query tab on another Connection",
+                    AiAccess::Schema,
+                ),
+            ],
+            ..AskedIn::default()
+        };
+        let lead = OTHER_STEPS_LEAD;
+        let at = |others: &[(ConnectionId, AiAccess)]| a.replay_lines(others);
+        assert_eq!(
+            at(&[(b, AiAccess::SchemaQuery), (c, AiAccess::Schema)]),
+            vec![
+                "Visual Query in shop".to_string(),
+                "steps before it: ticked orders.id".to_string(),
+                format!(
+                    "{lead}opened Visual Query on another Connection; ran the Visual Query \"Late\" on another Connection, 3 rows; opened Query tab on another Connection"
+                ),
+            ]
+        );
+        // B lowered to Schema only: its query-text line is dropped, the rest replays.
+        assert_eq!(
+            at(&[(b, AiAccess::Schema), (c, AiAccess::Schema)])[2],
+            format!(
+                "{lead}opened Visual Query on another Connection; opened Query tab on another Connection"
+            )
+        );
+        // B at Never, or deleted (not listed): none of B's lines.
+        for others in [
+            vec![(b, AiAccess::Never), (c, AiAccess::Schema)],
+            vec![(c, AiAccess::Schema)],
+        ] {
+            assert_eq!(
+                at(&others)[2],
+                format!("{lead}opened Query tab on another Connection")
+            );
+        }
+        // None may go: no other steps line at all; the own steps and label stay.
+        assert_eq!(
+            at(&[]),
+            vec![
+                "Visual Query in shop".to_string(),
+                "steps before it: ticked orders.id".to_string()
+            ]
+        );
+        // The webview's copy never carries them.
+        assert!(a.label_only().other_steps.is_empty());
+    }
+
+    /// Task 5b, test 7: an Asked in stored before other steps loads, and saves back without
+    /// the field.
+    #[test]
+    fn asked_in_without_other_steps_loads() {
+        let old = r#"{"tab":"visual","label":"Visual Query in shop","summary":"tables orders","steps":["ticked orders.id"]}"#;
+        let a: AskedIn = serde_json::from_str(old).unwrap();
+        assert!(a.other_steps.is_empty());
+        assert_eq!(serde_json::to_string(&a).unwrap(), old);
+        let with = AskedIn {
+            other_steps: vec![other(
+                43,
+                "opened Query tab on another Connection",
+                AiAccess::SchemaQuery,
+            )],
+            ..a
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(
+            json.contains(r#""otherSteps":[{"connectionId":"00000000-0000-0000-0000-00000000002b","text":"opened Query tab on another Connection","level":"schemaQuery"}]"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<AskedIn>(&json).unwrap(), with);
+    }
 }

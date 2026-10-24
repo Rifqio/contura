@@ -20,6 +20,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+test("a toast can ask to stay longer, such as an Undo window", () => {
+  act(() => show({ kind: "info", text: "Discarded", stays: 8000, action: { label: "Undo", run: () => {} } }));
+  act(() => void vi.advanceTimersByTime(7999));
+  expect(screen.queryByText("Discarded")).not.toBeNull();
+  act(() => void vi.advanceTimersByTime(1));
+  expect(screen.queryByText("Discarded")).toBeNull();
+});
+
 test("info_stays_4s_success_3s_error_until_closed", () => {
   act(() => show({ kind: "info", text: "Info" }));
   act(() => void vi.advanceTimersByTime(3999));

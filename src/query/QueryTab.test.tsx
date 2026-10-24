@@ -16,6 +16,7 @@ import { mockReactFlowDom } from "../test/reactFlow";
 import { ToastProvider } from "../components/Toast";
 import appCss from "../styles/app.css?raw";
 import QueryTab, { type QueryTabDoc } from "./QueryTab";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 import type { SqlEditorApi } from "./SqlEditor";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -23,7 +24,10 @@ beforeAll(() => {
   mockReactFlowDom();
   mockEditorDom();
 });
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  clearAllSteps();
+});
 // Full-suite load stretches the 1s findBy waits (Task 13 follow-up).
 patientFile();
 
@@ -96,8 +100,13 @@ function setup(d: QueryTabDoc, open = true, extra: Partial<Parameters<typeof Que
       {...extra}
     />
   );
-  const utils = render(<ToastProvider>{ui(d)}</ToastProvider>);
-  return { ...utils, onChange, onSaved, view, rerenderCurrent: () => utils.rerender(<ToastProvider>{ui(current)}</ToastProvider>) };
+  const wrap = (x: QueryTabDoc) => (
+    <RecordStepContext.Provider value="ungrouped">
+      <ToastProvider>{ui(x)}</ToastProvider>
+    </RecordStepContext.Provider>
+  );
+  const utils = render(wrap(d));
+  return { ...utils, onChange, onSaved, view, rerenderCurrent: () => utils.rerender(wrap(current)) };
 }
 
 const key = (view: EditorView, k: string, mods: Partial<KeyboardEventInit> = {}) =>
@@ -171,6 +180,30 @@ test("escape_cancels_a_running_query", async () => {
   expect(await screen.findByText("Running")).toBeTruthy();
   key(view(), "Escape");
   await waitFor(() => expect(callsTo("cancel_query")).toEqual([{ session: "s1" }]));
+});
+
+test("Q8: Ctrl+Enter during a run says it is already running and that Esc cancels", async () => {
+  routes({ execute_sql: () => new Promise(() => {}), cancel_query: () => null });
+  const { view } = setup(doc("SELECT pg_sleep(30)"));
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true });
+  expect(await screen.findByText("Running")).toBeTruthy();
+  key(view(), "Enter", { ctrlKey: true });
+  expect((await screen.findByRole("status")).textContent).toBe("Already running. Esc cancels it.");
+  expect(callsTo("execute_sql")).toHaveLength(1);
+});
+
+test("Q7: a double-click on the splitter resets the editor and results split", async () => {
+  routes();
+  setup(doc("SELECT 1"));
+  const bar = screen.getByRole("separator", { name: "Resize the editor and results" });
+  expect(bar.getAttribute("aria-valuenow")).toBe("46");
+  fireEvent.keyDown(bar, { key: "ArrowDown" });
+  fireEvent.keyDown(bar, { key: "ArrowDown" });
+  expect(bar.getAttribute("aria-valuenow")).toBe("56");
+  fireEvent.doubleClick(bar);
+  expect(bar.getAttribute("aria-valuenow")).toBe("46");
+  expect(localStorage.getItem("dbview.queryEditorShare")).toBe("0.46");
 });
 
 test("fetch_next_appends_rows", async () => {
@@ -1419,4 +1452,29 @@ test("a_result_export_names_the_database_the_session_is_in_after_use_q43", async
   await userEvent.click(screen.getByRole("button", { name: "Export" }));
   await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
   expect(onExport.mock.calls[0][0]).toMatchObject({ kind: "result", database: "archive", sql: "SELECT 1" });
+});
+
+test("a_run_records_a_recent_step_with_its_row_count", async () => {
+  routes({ execute_sql: () => rowsResult(12) });
+  const { view } = setup(doc("SELECT * FROM orders"));
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true });
+  expect(await screen.findByText("12 rows in 4ms")).toBeTruthy();
+  expect(stepsOf("ungrouped")).toMatchObject([
+    { verb: "runQuery", tab: "query", title: "Query 1", connectionId: "c1", database: "kfc_shop", count: 12 },
+  ]);
+  // Never the SQL text.
+  expect(JSON.stringify(stepsOf("ungrouped"))).not.toContain("SELECT");
+});
+
+test("a_failed_run_records_a_failed_step", async () => {
+  routes({
+    execute_sql: () => {
+      throw { kind: "query", message: "relation \"nope\" does not exist" };
+    },
+  });
+  const { view } = setup(doc("SELECT * FROM nope"));
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(stepsOf("ungrouped")).toMatchObject([{ verb: "runQuery", failed: true, count: null }]));
 });

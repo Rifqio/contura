@@ -25,7 +25,7 @@ interface Props {
   };
   schema: {
     onClose(key: string): void;
-    closeRef(id: string): MutableRefObject<(() => void) | null>;
+    closeRef(id: string): MutableRefObject<(() => Promise<boolean>) | null>;
     onPathChange(id: string, path: string): void;
     ask: ComponentProps<typeof SchemaBuilder>["ask"];
     sourceConnection(id: string): ComponentProps<typeof SchemaBuilder>["sourceConnection"];
@@ -98,6 +98,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
           return (
             <div key={key} className="work-pane transfer-main" hidden={key !== activeKey}>
               <TransferTab
+                askKey={key}
                 seed={t.seed}
                 connections={transfer.connections}
                 groups={transfer.groups}
@@ -115,6 +116,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
           return (
             <div key={key} className="work-pane compare-main" hidden={key !== activeKey}>
               <CompareTab
+                askKey={key}
                 seed={t.seed}
                 connections={compare.connections}
                 groups={compare.groups}
@@ -130,6 +132,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
         return (
           <div key={key} className="work-pane schema-main" hidden={key !== activeKey}>
             <SchemaBuilder
+              askKey={key}
               doc={t.doc}
               onClose={() => schema.onClose(key)}
               closeRef={schema.closeRef(t.id)}

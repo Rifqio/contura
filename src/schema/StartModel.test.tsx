@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ConnectionConfig } from "../api/types";
@@ -39,6 +39,19 @@ async function chooseConnection(name: RegExp | string = /kfc/) {
   await userEvent.click(screen.getByRole("combobox", { name: "Connection" }));
   await userEvent.click(screen.getByRole("option", { name }));
 }
+
+test("J2: a chosen Connection ignores a click outside; an untouched dialog closes", async () => {
+  routeInvoke({ recent_items: () => [], list_databases: () => DATABASES, list_objects: () => [] });
+  const onCancel = vi.fn();
+  setup(["c1"], [kfc], onCancel);
+  const scrim = () => screen.getByRole("dialog").parentElement as HTMLElement;
+  fireEvent.mouseDown(scrim());
+  expect(onCancel).toHaveBeenCalledTimes(1);
+  onCancel.mockClear();
+  await chooseConnection();
+  fireEvent.mouseDown(scrim());
+  expect(onCancel).not.toHaveBeenCalled();
+});
 
 test("three_radio_cards_with_from_a_connection_first", async () => {
   noRecent();

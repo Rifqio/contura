@@ -29,6 +29,7 @@ export default function SaveQueryDialog({ sql, existing, connections = [], conne
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [others, setOthers] = useState<SavedQuery[]>([]);
+  const dirty = name !== (existing?.name ?? "") || opensOn !== (connectionId ?? NONE);
 
   // The names in use, so a taken one turns Save into Replace before anything is sent.
   useEffect(() => {
@@ -90,7 +91,7 @@ export default function SaveQueryDialog({ sql, existing, connections = [], conne
         : null);
 
   return (
-    <Dialog title={existing ? "Rename Saved Query" : "Save query"} icon="bookmark" size="form" onClose={onCancel}>
+    <Dialog title={existing ? "Rename Saved Query" : "Save query"} icon="bookmark" size="form" dirty={dirty} onClose={onCancel}>
       <form
         className="form"
         onSubmit={(e) => {

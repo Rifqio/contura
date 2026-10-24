@@ -8,7 +8,7 @@ use contura_core::ai::memory::{
     AppendTurn, Compaction, CompactionId, ThreadHit, ThreadSummary, ThreadView, TurnView,
 };
 use contura_core::ai::models::{ModelList, ModelPicks};
-use contura_core::ai::preview::{Preview, preview};
+use contura_core::ai::preview::{Preview, SameProvider, preview};
 use contura_core::ai::request::AskRequest;
 use contura_core::ai::sent::{AnswerAction, AnswerActionKind, AnswerRecord, ToolOutcome};
 use contura_core::ai::stream::{AiEvent, ask_stream};
@@ -142,9 +142,19 @@ pub fn ai_clear_all(app: AppHandle) -> Result<(), Error> {
     app.state::<ConnectionService>().clear_ai_context(None)
 }
 
+/// Deletes the Connection, then its Recent steps kept with Asks on other Connections. The
+/// purge reads and rewrites threads, so it runs off the async runtime; one that fails stays
+/// pending in the AI store and runs on the next start, so the delete itself succeeded.
 #[tauri::command]
-pub async fn delete_connection(service: Service<'_>, id: ConnectionId) -> Result<(), Error> {
-    service.delete(id).await
+pub async fn delete_connection(
+    app: AppHandle,
+    service: Service<'_>,
+    ai: Ai<'_>,
+    id: ConnectionId,
+) -> Result<(), Error> {
+    ai.delete_connection(&service, id).await?;
+    let _ = off_runtime(move || app.state::<AiService>().run_pending_purges()).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -806,9 +816,15 @@ pub fn query_history(
     service.query_history(id, filter)
 }
 
+/// Clears the Connection's history (every Connection's with `None`), then its Recent steps
+/// kept with Asks on other Connections.
 #[tauri::command]
-pub fn clear_query_history(service: Service<'_>, id: Option<ConnectionId>) -> Result<(), Error> {
-    service.clear_query_history(id)
+pub fn clear_query_history(
+    service: Service<'_>,
+    ai: Ai<'_>,
+    id: Option<ConnectionId>,
+) -> Result<(), Error> {
+    ai.clear_query_history(&service, id)
 }
 
 #[tauri::command]
@@ -1022,7 +1038,7 @@ pub async fn ai_ask_stream(
     let group = request.group_id;
     let reader = app.clone();
     let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
-    let (provider, model, settings, secrets) = off_runtime(move || {
+    let (provider, model, settings, secrets, same) = off_runtime(move || {
         let ai = reader.state::<AiService>();
         let (provider, settings, model) = ai.provider_for(group)?;
         // From the same read as the provider, so a save in between cannot mix the two.
@@ -1033,6 +1049,7 @@ pub async fn ai_ask_stream(
             model,
             settings,
             ai.secrets_for_redaction(&connections)?,
+            ai.same_provider(group, &connections)?,
         ))
     })
     .await?;
@@ -1050,25 +1067,30 @@ pub async fn ai_ask_stream(
             request_id: request.request_id.clone(),
         };
         let mut end = EndOnDrop::new(send_to(&events));
-        let catalog = task_app.state::<ConnectionService>();
+        let connections = task_app.state::<ConnectionService>();
+        // Nothing about a Connection whose Group sends to another provider goes.
+        let catalog = SameProvider::new(&*connections, same);
         let asks = task_app.state::<AiService>();
         let emit = |e: AiEvent| {
             // R6.3: the answer's SQL goes into the register, whatever the Ask's Connection.
             if let AiEvent::Done { sql_blocks, .. } = &e {
                 for block in sql_blocks {
-                    catalog.register_ai_sql(&block.statements);
+                    connections.register_ai_sql(&block.statements);
                 }
             }
             // The save of the answer writes it into the record.
             if let AiEvent::Context { info } = &e {
                 asks.remember_context(&request.request_id, info.clone());
             }
+            // The webview is sent the stamp without the steps on other Connections; the
+            // save of the turn puts them back on the question.
+            asks.hold_other_steps(&request.request_id, &e);
             // A page that has gone away is not an error.
             let _ = events.send(e);
         };
         // Every error has already been sent as the last event.
         let _ = ask_stream(
-            &*provider, &*catalog, &settings, &model, &secrets, &request, &emit,
+            &*provider, &catalog, &settings, &model, &secrets, &request, &emit,
         )
         .await;
         end.ended();
@@ -1209,7 +1231,7 @@ pub async fn ai_compact(
     let group = request.group_id;
     let reader = app.clone();
     let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
-    let (provider, model, settings, secrets) = off_runtime(move || {
+    let (provider, model, settings, secrets, same) = off_runtime(move || {
         let ai = reader.state::<AiService>();
         let (provider, settings, model) = ai.provider_for(group)?;
         let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&model))?;
@@ -1219,6 +1241,7 @@ pub async fn ai_compact(
             model,
             settings,
             ai.secrets_for_redaction(&connections)?,
+            ai.same_provider(group, &connections)?,
         ))
     })
     .await?;
@@ -1226,14 +1249,15 @@ pub async fn ai_compact(
     let request_id = request.request_id.clone();
     let task_app = app.clone();
     let work = async move {
-        let catalog = task_app.state::<ConnectionService>();
+        let connections = task_app.state::<ConnectionService>();
+        let catalog = SameProvider::new(&*connections, same);
         let mut end = EndOnDrop::new(send_to(&events));
         let emit = |e: AiEvent| {
             // A page that has gone away is not an error.
             let _ = events.send(e);
         };
         let out = compact_now(
-            &*provider, &*catalog, &settings, &model, &secrets, &request, &emit,
+            &*provider, &catalog, &settings, &model, &secrets, &request, &emit,
         )
         .await;
         end.ended();
@@ -1343,9 +1367,11 @@ pub fn delete_ai_thread(ai: Ai<'_>, id: ThreadId) -> Result<(), Error> {
     ai.delete_thread(id)
 }
 
+/// Clears the place's threads, then the Recent steps of its Connections kept with Asks of
+/// other places.
 #[tauri::command]
-pub fn clear_ai_threads(ai: Ai<'_>, place: String) -> Result<(), Error> {
-    ai.clear_threads(&place)
+pub fn clear_ai_threads(ai: Ai<'_>, service: Service<'_>, place: String) -> Result<(), Error> {
+    ai.clear_place_history(&place, &service)
 }
 
 /// Runs `f` on the blocking pool: Credential Manager reads block, and an async command
@@ -1367,15 +1393,21 @@ pub async fn ai_preview(
 ) -> Result<Preview, Error> {
     let group = request.group_id;
     let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
-    let (settings, model, secrets) = off_runtime(move || {
+    let (settings, model, secrets, same) = off_runtime(move || {
         let ai = app.state::<AiService>();
         let settings = ai.settings(group)?.settings;
         let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&settings.model))?;
         let connections = app.state::<ConnectionService>().list()?;
-        Ok((settings, model, ai.secrets_for_redaction(&connections)?))
+        Ok((
+            settings,
+            model,
+            ai.secrets_for_redaction(&connections)?,
+            ai.same_provider(group, &connections)?,
+        ))
     })
     .await?;
-    preview(&*service, &settings, &model, &secrets, &request).await
+    let catalog = SameProvider::new(&*service, same);
+    preview(&catalog, &settings, &model, &secrets, &request).await
 }
 
 /// Opens an https link (an icon set's source in Icon credits) in the system browser. The

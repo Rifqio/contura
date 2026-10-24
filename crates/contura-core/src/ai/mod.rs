@@ -14,7 +14,9 @@ pub mod provider;
 pub mod rails;
 pub mod request;
 pub mod rows;
+pub mod scene;
 pub mod sent;
+pub mod steps;
 pub mod stream;
 pub mod tool_uses;
 
@@ -398,6 +400,21 @@ pub struct AiMessage {
     pub tables: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// Where the question was asked, on the question only. Stored whole; the webview is
+    /// given `AskedIn::label_only`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_in: Option<memory::AskedIn>,
+}
+
+impl AiMessage {
+    /// The copy the webview is given: the record trimmed, the Asked in label only.
+    fn for_view(&self) -> AiMessage {
+        AiMessage {
+            record: self.record.as_ref().map(AnswerRecord::trimmed_copy),
+            asked_in: self.asked_in.as_ref().map(memory::AskedIn::label_only),
+            ..self.clone()
+        }
+    }
 }
 
 pub type ThreadId = uuid::Uuid;
@@ -429,6 +446,18 @@ pub struct AiService {
     /// The AI Context each recent Ask used, by request id, newest last, until its answer
     /// is saved.
     asked: Mutex<VecDeque<(String, ContextInfo)>>,
+    /// The steps on other Connections each recent Ask's stamp kept, by request id, newest
+    /// last, until its turn is stored: the webview is never sent them (`hold_other_steps`).
+    held: Mutex<VecDeque<(String, Vec<memory::OtherStep>)>>,
+    /// The Connections whose steps were forgotten (`None`: every Connection) and when,
+    /// newest last: a turn whose Ask began before is stored without their steps, whatever
+    /// the webview sends back (`after_forgets`). One entry per Connection, its newest
+    /// forget; at most `FORGOTTEN_KEPT` Connections, those forgotten longest ago dropped
+    /// first.
+    forgotten: Mutex<VecDeque<(Option<ConnectionId>, i64)>>,
+    /// Makes the next purge fail, for the test of its retry.
+    #[cfg(feature = "test-util")]
+    fail_purge: std::sync::atomic::AtomicBool,
     /// Held across each read-modify-write of a settings record, so a Settings save and a
     /// model pick never undo each other.
     writing: Mutex<()>,
@@ -436,6 +465,23 @@ pub struct AiService {
 
 /// How many Asks' AI Contexts are kept for the save of their answer.
 const ASKED_KEPT: usize = 32;
+/// How many forgotten Connections (one entry each, `None` for every Connection) are
+/// remembered for the turns of Asks still running. Past it, the Connection forgotten
+/// longest ago is dropped first: an Ask that began before that forget and is still
+/// running then could keep that Connection's labels in its kept exact text.
+const FORGOTTEN_KEPT: usize = 256;
+/// The settings row of the step purges a Connection delete left to do: a JSON list of
+/// Connection ids, written before the delete and cleared once the purge is done.
+pub const PENDING_PURGE_KEY: &str = "ai.pending_step_purge";
+
+/// What one purge of stored steps did (`AiService::forget_steps`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StepPurge {
+    /// Threads rewritten without the forgotten steps.
+    pub rewritten: u32,
+    /// Thread rows that could not be read, skipped.
+    pub unreadable: u32,
+}
 
 fn group_key(group: GroupId) -> String {
     format!("{SETTINGS_KEY}.{group}")
@@ -541,8 +587,27 @@ impl AiService {
             secrets,
             running: Mutex::new(HashMap::new()),
             asked: Mutex::new(VecDeque::new()),
+            held: Mutex::new(VecDeque::new()),
+            forgotten: Mutex::new(VecDeque::new()),
+            #[cfg(feature = "test-util")]
+            fail_purge: std::sync::atomic::AtomicBool::new(false),
             writing: Mutex::new(()),
         }
+    }
+
+    /// As `new`, then runs the step purges a Connection delete left pending (a purge that
+    /// failed after its delete). Bounded by the thread caps; a failure stays pending.
+    pub fn open(store: AppStore, secrets: Arc<dyn SecretStore>) -> Self {
+        let svc = Self::new(store, secrets);
+        let _ = svc.run_pending_purges();
+        svc
+    }
+
+    /// Makes the next purge fail once.
+    #[cfg(feature = "test-util")]
+    pub fn fail_next_purge(&self) {
+        self.fail_purge
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn writing(&self) -> MutexGuard<'_, ()> {
@@ -743,6 +808,45 @@ impl AiService {
             Some(g) => store.set_setting(&group_key(g), &json),
             None => store.set_setting(SETTINGS_KEY, &json),
         }
+    }
+
+    /// The Connections of `connections` whose Group's AI settings send to the same
+    /// provider as `group`'s: the same provider kind, key and base URL. An Ask in `group`'s
+    /// place reads every other one as AI access Never (`preview::SameProvider`).
+    pub fn same_provider(
+        &self,
+        group: Option<GroupId>,
+        connections: &[ConnectionConfig],
+    ) -> Result<Vec<ConnectionId>> {
+        // Where a record sends: the model and the other picks do not matter.
+        let destination = |s: &AiSettings| {
+            (
+                s.provider,
+                s.key_account(),
+                s.effective_base_url()
+                    .map(|u| u.trim().trim_end_matches('/').to_string()),
+            )
+        };
+        let ask = destination(&self.effective(group)?.0);
+        // Each Group's settings are read once; one that cannot be read is held back.
+        let mut groups: Vec<(Option<GroupId>, bool)> = Vec::new();
+        let mut out = Vec::new();
+        for c in connections {
+            let same = match groups.iter().find(|(g, _)| *g == c.group_id) {
+                Some((_, same)) => *same,
+                None => {
+                    let same = self
+                        .effective(c.group_id)
+                        .is_ok_and(|(s, _)| destination(&s) == ask);
+                    groups.push((c.group_id, same));
+                    same
+                }
+            };
+            if same {
+                out.push(c.id);
+            }
+        }
+        Ok(out)
     }
 
     /// The provider for `group`'s settings, those settings and the model to ask, from one
@@ -1097,7 +1201,7 @@ impl AiService {
             return Ok(None);
         };
         for m in &mut thread.messages {
-            m.record = m.record.as_ref().map(AnswerRecord::trimmed_copy);
+            *m = m.for_view();
         }
         let topics = memory::store::topics(conn, id)?;
         let mut compactions = memory::store::compactions(conn, id)?;
@@ -1138,8 +1242,98 @@ impl AiService {
         }
     }
 
+    /// Keeps the steps on other Connections of the Ask `request_id`'s stamp (its `Memory`
+    /// event) for the save of its turn: the event reaches the webview without them (the
+    /// stamp's `asked_in` is serialized so), and the save puts them back on the question.
+    /// At most `ASKED_KEPT` Asks are kept; an Ask whose turn is never stored is dropped.
+    pub fn hold_other_steps(&self, request_id: &str, event: &stream::AiEvent) {
+        let stream::AiEvent::Memory { stamp } = event else {
+            return;
+        };
+        let Some(steps) = stamp
+            .asked_in
+            .as_ref()
+            .map(|a| a.other_steps.clone())
+            .filter(|s| !s.is_empty())
+        else {
+            return;
+        };
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        held.retain(|(id, _)| id != request_id);
+        held.push_back((request_id.to_string(), steps));
+        while held.len() > ASKED_KEPT {
+            held.pop_front();
+        }
+    }
+
+    /// The steps `hold_other_steps` kept for `request_id`. They stay held until the turn
+    /// is written (`drop_held`), so the full save after a failed append still has them.
+    fn peek_held(&self, request_id: Option<&str>) -> Option<Vec<memory::OtherStep>> {
+        let id = request_id?;
+        let held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        held.iter()
+            .find(|(r, _)| r == id)
+            .map(|(_, steps)| steps.clone())
+    }
+
+    /// Lets go of the steps held for `request_id`, once its turn is written.
+    fn drop_held(&self, request_id: Option<&str>) {
+        let Some(id) = request_id else { return };
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        held.retain(|(r, _)| r != id);
+    }
+
+    /// Remembers that the steps of `which` (every Connection with `None`) were forgotten
+    /// now, and takes them out of the steps held for Asks still running.
+    fn forget_running(&self, which: Option<&[ConnectionId]>) {
+        let now = now_ms();
+        {
+            let mut forgotten = self.forgotten.lock().unwrap_or_else(|e| e.into_inner());
+            let keys: Vec<Option<ConnectionId>> = match which {
+                None => vec![None],
+                Some(ids) => ids.iter().map(|id| Some(*id)).collect(),
+            };
+            // One entry per Connection: the newest forget covers every Ask an older one did.
+            forgotten.retain(|(c, _)| !keys.contains(c));
+            forgotten.extend(keys.into_iter().map(|c| (c, now)));
+            while forgotten.len() > FORGOTTEN_KEPT {
+                forgotten.pop_front();
+            }
+        }
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        for (_, steps) in held.iter_mut() {
+            steps.retain(|s| which.is_some_and(|w| !w.contains(&s.connection_id)));
+        }
+    }
+
+    /// Holds the messages of `thread` that `is_new` names to the forgets made since their
+    /// Ask began (the question's time): as `forget_steps` would have left them on disk.
+    fn after_forgets(&self, thread: &mut AiThread, is_new: &dyn Fn(usize) -> bool) {
+        let forgets: Vec<(Option<ConnectionId>, i64)> = self
+            .forgotten
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .copied()
+            .collect();
+        if forgets.is_empty() {
+            return;
+        }
+        scrub_thread(
+            thread,
+            is_new,
+            &|asked, id| {
+                forgets
+                    .iter()
+                    .any(|(c, at)| *at >= asked && c.is_none_or(|c| c == *id))
+            },
+            &|asked| forgets.iter().any(|(_, at)| *at >= asked),
+        );
+    }
+
     /// As `save_thread`, for the save that adds the answer to the Ask `request_id`: the
-    /// Core writes the AI Context that Ask used into the last answer's record.
+    /// Core writes the AI Context that Ask used into the last answer's record, and the
+    /// steps on other Connections it holds for that Ask onto the last question.
     pub fn save_thread_for(
         &self,
         thread: &AiThread,
@@ -1150,20 +1344,21 @@ impl AiService {
             let at = asked.iter().position(|(r, _)| r == id)?;
             asked.remove(at).map(|(_, info)| info)
         });
-        let Some(info) = used else {
-            return self.save_thread(thread);
-        };
+        let held = self.peek_held(request_id);
         let mut thread = thread.clone();
-        if let Some(record) = thread
-            .messages
-            .iter_mut()
-            .rev()
-            .find(|m| m.role == AiRole::Assistant)
-            .and_then(|m| m.record.as_mut())
+        if let Some(info) = used
+            && let Some(record) = thread
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|m| m.role == AiRole::Assistant)
+                .and_then(|m| m.record.as_mut())
         {
             record.context = Some(info);
         }
-        self.save_thread(&thread)
+        let view = self.save_held(&thread, held)?;
+        self.drop_held(request_id);
+        Ok(view)
     }
 
     /// Appends one Ask's turn to the stored thread (made from `turn` when there is none),
@@ -1192,9 +1387,17 @@ impl AiService {
         {
             record.context = Some(info);
         }
+        let held = self.peek_held(request_id);
         for m in &mut add {
             m.record = m.record.take().map(AnswerRecord::capped);
+            // On the question only, held to its caps.
+            m.asked_in = m
+                .asked_in
+                .take()
+                .filter(|_| m.role == AiRole::User)
+                .map(from_webview);
         }
+        with_held(add.iter_mut(), held);
         let added = add.len();
         let store = self.store()?;
         let mut thread = store
@@ -1211,17 +1414,17 @@ impl AiService {
         {
             thread.messages.truncate(at);
         }
+        let new_at = thread.messages.len();
         thread.messages.extend(add);
         thread.updated_at = turn.updated_at;
+        self.after_forgets(&mut thread, &|i| i >= new_at);
         let written = store.write_ai_thread(thread)?;
+        self.drop_held(request_id);
         let conn = store.conn();
         let new_from = written.messages.len().saturating_sub(added);
         let messages = written.messages[new_from..]
             .iter()
-            .map(|m| AiMessage {
-                record: m.record.as_ref().map(AnswerRecord::trimmed_copy),
-                ..m.clone()
-            })
+            .map(AiMessage::for_view)
             .collect();
         let mut compactions = memory::store::compactions(conn, written.id)?;
         for c in &mut compactions {
@@ -1247,18 +1450,195 @@ impl AiService {
     /// stored `log`, `steps`, `thinking` and exact text, and the stamp fields of a stored
     /// message win over the saved copy's.
     pub fn save_thread(&self, thread: &AiThread) -> Result<memory::ThreadView> {
+        self.save_held(thread, None)
+    }
+
+    /// As `save_thread`, putting `held` (the steps on other Connections the Core kept for
+    /// the Ask) on the last question when it is new to the store.
+    fn save_held(
+        &self,
+        thread: &AiThread,
+        held: Option<Vec<memory::OtherStep>>,
+    ) -> Result<memory::ThreadView> {
         {
             let store = self.store()?;
             let before = store.get_ai_thread(thread.id)?;
-            let thread = Self::merged(thread, before.as_ref());
+            let mut thread = Self::merged(thread, before.as_ref(), held);
+            let stored = |m: &AiMessage| {
+                before
+                    .as_ref()
+                    .is_some_and(|b| b.messages.iter().any(|o| o.role == m.role && o.at == m.at))
+            };
+            let new: Vec<bool> = thread.messages.iter().map(|m| !stored(m)).collect();
+            self.after_forgets(&mut thread, &|i| new[i]);
             store.save_ai_thread(&thread)?;
         }
         self.thread_view(thread.id)?
             .ok_or_else(|| Error::Store("the saved thread is gone".into()))
     }
 
-    fn merged(thread: &AiThread, before: Option<&AiThread>) -> AiThread {
+    /// Removes the stored steps on the Connections `which` names (every Connection with
+    /// `None`) from every Ask of every place, and their labels from every kept copy of sent
+    /// text (an answer record's exact text, and its outline and summary calls'), then
+    /// rewrites each thread that changed with the threads' own write (one transaction
+    /// each). Only threads whose JSON holds steps on other Connections are read.
+    ///
+    /// A label in a kept copy is tied to a Connection by the stored steps: in the Recent
+    /// steps item, those of the turn's own question; in a replayed Asked in line, those of
+    /// any question of the thread. A label tied to no Connection, or to more than one that
+    /// includes a forgotten one, goes too. Returns how many threads were rewritten and how
+    /// many rows could not be read.
+    ///
+    /// A thread row that cannot be read is skipped and counted in `unreadable` (the count
+    /// goes to the error output, never the row's text), so one bad row never blocks the
+    /// purge of the others or keeps a delete's purge pending for ever.
+    pub fn forget_steps(&self, which: Option<&[ConnectionId]>) -> Result<StepPurge> {
+        // Asks still running store their turns without them, whatever comes back.
+        self.forget_running(which);
+        #[cfg(feature = "test-util")]
+        if self
+            .fail_purge
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(Error::Store("the purge failed (test)".into()));
+        }
+        let forgotten = |_: i64, id: &ConnectionId| which.is_none_or(|w| w.contains(id));
+        let store = self.store()?;
+        let mut done = StepPurge::default();
+        for id in store.ai_threads_holding("\"otherSteps\"", "on another Connection")? {
+            let mut thread = match store.get_ai_thread(id) {
+                Ok(Some(t)) => t,
+                Ok(None) => continue,
+                Err(_) => {
+                    done.unreadable += 1;
+                    continue;
+                }
+            };
+            if scrub_thread(&mut thread, &|_| true, &forgotten, &|_| true) {
+                store.write_ai_thread(thread)?;
+                done.rewritten += 1;
+            }
+        }
+        if done.unreadable > 0 {
+            eprintln!(
+                "AI step purge: {} thread rows could not be read and were skipped",
+                done.unreadable
+            );
+        }
+        Ok(done)
+    }
+
+    /// Runs the step purges a Connection delete left pending (`delete_connection`), and
+    /// clears each once done. A failure leaves it pending for the next try or start.
+    pub fn run_pending_purges(&self) -> Result<StepPurge> {
+        let ids = self.pending_purges()?;
+        if ids.is_empty() {
+            return Ok(StepPurge::default());
+        }
+        let done = self.forget_steps(Some(&ids))?;
+        // Only the ids purged here: a delete may have added one since the read.
+        self.update_pending_purges(|pending| pending.retain(|id| !ids.contains(id)))?;
+        Ok(done)
+    }
+
+    /// Reads, changes and writes the pending purges as one step, under the settings write
+    /// lock, so overlapping deletes and purges never lose each other's ids.
+    fn update_pending_purges(&self, change: impl FnOnce(&mut Vec<ConnectionId>)) -> Result<()> {
+        let _writing = self.writing();
+        let mut ids = self.pending_purges()?;
+        change(&mut ids);
+        self.set_pending_purges(&ids)
+    }
+
+    fn pending_purges(&self) -> Result<Vec<ConnectionId>> {
+        let json = self.store()?.get_setting(PENDING_PURGE_KEY)?;
+        // An unreadable row purges nothing and is replaced by the next write.
+        Ok(json
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default())
+    }
+
+    fn set_pending_purges(&self, ids: &[ConnectionId]) -> Result<()> {
+        let store = self.store()?;
+        if ids.is_empty() {
+            return store.delete_setting(PENDING_PURGE_KEY);
+        }
+        let json = serde_json::to_string(ids).map_err(|e| Error::Store(e.to_string()))?;
+        store.set_setting(PENDING_PURGE_KEY, &json)
+    }
+
+    /// "Clear AI history" of `place`: its threads, as `clear_threads`, then the steps of
+    /// the Connections in that place kept with the Asks of every other place.
+    pub fn clear_place_history(
+        &self,
+        place: &str,
+        connections: &crate::connections::ConnectionService,
+    ) -> Result<()> {
+        self.clear_threads(place)?;
+        let ids: Vec<ConnectionId> = connections
+            .list()?
+            .into_iter()
+            .filter(|c| place_key(c) == place)
+            .map(|c| c.id)
+            .collect();
+        if !ids.is_empty() {
+            self.forget_steps(Some(&ids))?;
+        }
+        Ok(())
+    }
+
+    /// Deletes the Connection (`ConnectionService::delete`) and marks the purge of its
+    /// steps kept with the Asks of every place as pending, in the AI store, before the
+    /// delete. Asks still running store their turns without its steps. The caller then runs
+    /// `run_pending_purges` off the async runtime; one that fails stays pending and runs
+    /// again on the next try or the next start (`open`), so the steps never stay behind.
+    pub async fn delete_connection(
+        &self,
+        connections: &crate::connections::ConnectionService,
+        id: ConnectionId,
+    ) -> Result<()> {
+        self.update_pending_purges(|pending| {
+            if !pending.contains(&id) {
+                pending.push(id);
+            }
+        })?;
+        if let Err(e) = connections.delete(id).await {
+            // Not deleted: its steps stay.
+            let _ = self.update_pending_purges(|pending| pending.retain(|p| *p != id));
+            return Err(e);
+        }
+        self.forget_running(Some(&[id]));
+        Ok(())
+    }
+
+    /// "Clear history" of a Connection, or of every Connection with `None`
+    /// (`ConnectionService::clear_query_history`), then its steps kept with the Asks of
+    /// every place.
+    pub fn clear_query_history(
+        &self,
+        connections: &crate::connections::ConnectionService,
+        id: Option<ConnectionId>,
+    ) -> Result<()> {
+        connections.clear_query_history(id)?;
+        self.forget_steps(id.as_ref().map(std::slice::from_ref))?;
+        Ok(())
+    }
+
+    fn merged(
+        thread: &AiThread,
+        before: Option<&AiThread>,
+        held: Option<Vec<memory::OtherStep>>,
+    ) -> AiThread {
         let mut thread = thread.clone();
+        // The last question, when it is new to the store, takes the held steps.
+        let last_new = thread
+            .messages
+            .iter()
+            .rposition(|m| m.role == AiRole::User)
+            .filter(|i| {
+                let m = &thread.messages[*i];
+                !before.is_some_and(|b| b.messages.iter().any(|o| o.role == m.role && o.at == m.at))
+            });
         for m in &mut thread.messages {
             let old_message =
                 before.and_then(|b| b.messages.iter().find(|o| o.role == m.role && o.at == m.at));
@@ -1273,6 +1653,14 @@ impl AiService {
                 if o.action.is_some() {
                     m.action = o.action.clone();
                 }
+                // The webview holds the label only: the stored Asked in wins, as stored.
+                m.asked_in = o.asked_in.clone();
+            } else {
+                m.asked_in = m
+                    .asked_in
+                    .take()
+                    .filter(|_| m.role == AiRole::User)
+                    .map(from_webview);
             }
             let old = old_message.and_then(|o| o.record.as_ref());
             let kept = old.map(|r| r.actions.as_slice()).unwrap_or_default();
@@ -1325,6 +1713,9 @@ impl AiService {
             }
             m.record = m.record.take().map(AnswerRecord::capped);
         }
+        if let Some(i) = last_new {
+            with_held(thread.messages[i..=i].iter_mut(), held);
+        }
         thread
     }
 
@@ -1352,6 +1743,118 @@ impl AiService {
     /// Every thread of every place ("Clear all AI data").
     pub fn clear_all_threads(&self) -> Result<()> {
         self.store()?.clear_all_ai_threads()
+    }
+}
+
+/// Takes the steps on forgotten Connections out of the messages of `thread` that `scope`
+/// names, for the turns `any` says a forget reaches (by the question's time): from each
+/// question's Asked in, those `forgotten` names; from each answer's kept copies of sent
+/// text (its exact text, and its outline and summary calls'), their labels. A label is tied
+/// to its Connection by the stored steps, read before any is removed: in the Recent steps
+/// item, those of the turn's own question; in a replayed Asked in line, those of any
+/// question of the thread. A label of the question's own steps never goes; a label on
+/// another Connection tied to none, or to more than one including a forgotten one, goes.
+/// True when anything changed.
+fn scrub_thread(
+    thread: &mut AiThread,
+    scope: &dyn Fn(usize) -> bool,
+    forgotten: &dyn Fn(i64, &ConnectionId) -> bool,
+    any: &dyn Fn(i64) -> bool,
+) -> bool {
+    let steps_of = |m: &AiMessage| -> Vec<(String, ConnectionId)> {
+        m.asked_in
+            .as_ref()
+            .map(|a| {
+                a.other_steps
+                    .iter()
+                    .map(|s| (s.text.clone(), s.connection_id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let all: Vec<(String, ConnectionId)> = thread.messages.iter().flat_map(steps_of).collect();
+    let mut changed = false;
+    let mut turn: Vec<(String, ConnectionId)> = Vec::new();
+    let mut own: Vec<String> = Vec::new();
+    let mut asked = i64::MIN;
+    for (i, m) in thread.messages.iter_mut().enumerate() {
+        if m.role == AiRole::User {
+            turn = steps_of(m);
+            own = m
+                .asked_in
+                .as_ref()
+                .map(|a| a.steps.clone())
+                .unwrap_or_default();
+            asked = m.at;
+        }
+        if !scope(i) || !any(asked) {
+            continue;
+        }
+        let gone = |known: &[(String, ConnectionId)], label: &str| {
+            let mut owners = known.iter().filter(|(t, _)| t == label).peekable();
+            owners.peek().is_none() || owners.any(|(_, c)| forgotten(asked, c))
+        };
+        if let Some(sent) = m.record.as_mut().and_then(|r| r.sent.as_mut()) {
+            let exacts = [
+                sent.exact.as_mut(),
+                sent.outline.as_mut().and_then(|o| o.exact.as_mut()),
+                sent.summary.as_mut().and_then(|s| s.exact.as_mut()),
+            ];
+            for exact in exacts.into_iter().flatten() {
+                if let Some(clean) = rails::retrieval::without_steps_of(
+                    exact,
+                    memory::OTHER_STEPS_LEAD,
+                    &|l| !own.iter().any(|o| o == l) && gone(&turn, l),
+                    &|l| gone(&all, l),
+                ) {
+                    *exact = clean;
+                    changed = true;
+                }
+            }
+        }
+        if let Some(a) = m.asked_in.as_mut() {
+            let before = a.other_steps.len();
+            a.other_steps
+                .retain(|s| !forgotten(asked, &s.connection_id));
+            changed |= a.other_steps.len() != before;
+        }
+    }
+    changed
+}
+
+/// An Asked in the webview sent, held to its caps: steps on other Connections are never in
+/// the webview, so any it sends are dropped (`hold_other_steps` keeps the real ones).
+fn from_webview(a: memory::AskedIn) -> memory::AskedIn {
+    memory::AskedIn {
+        other_steps: Vec::new(),
+        ..a
+    }
+    .capped()
+}
+
+/// Puts `held` on the last question of `messages`, when it has an Asked in, held to its
+/// caps.
+fn with_held<'m>(
+    messages: impl DoubleEndedIterator<Item = &'m mut AiMessage>,
+    held: Option<Vec<memory::OtherStep>>,
+) {
+    let Some(held) = held else { return };
+    if let Some(a) = messages
+        .rev()
+        .find(|m| m.role == AiRole::User)
+        .and_then(|m| m.asked_in.as_mut())
+    {
+        a.other_steps = held;
+        *a = a.capped();
+    }
+}
+
+/// The place a Connection's threads are kept under, as the UI names it: its Group's, or
+/// Ungrouped.
+fn place_key(c: &ConnectionConfig) -> String {
+    match c.group_id {
+        Some(g) => format!("group:{g}"),
+        None => "ungrouped".into(),
     }
 }
 
@@ -1468,6 +1971,44 @@ mod tests {
             dir,
             AiService::new(store, Arc::new(MemorySecretStore::new())),
         )
+    }
+
+    /// Task 5b review N3: the forget record keeps one entry per Connection, its newest
+    /// forget, so forgetting one Connection again and again never pushes another out; past
+    /// `FORGOTTEN_KEPT` Connections, those forgotten longest ago go first.
+    #[test]
+    fn forget_record_keeps_the_newest_forget_per_connection() {
+        let (_dir, ai) = service();
+        let kept = |ai: &AiService| -> Vec<Option<ConnectionId>> {
+            ai.forgotten
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(c, _)| *c)
+                .collect()
+        };
+        let (first, again) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        ai.forget_running(Some(&[first]));
+        for _ in 0..FORGOTTEN_KEPT + 10 {
+            ai.forget_running(Some(&[again]));
+        }
+        assert_eq!(kept(&ai), [Some(first), Some(again)]);
+        // Every Connection is one entry too, and a newer forget moves an entry to the end.
+        ai.forget_running(None);
+        ai.forget_running(None);
+        ai.forget_running(Some(&[first]));
+        assert_eq!(kept(&ai), [Some(again), None, Some(first)]);
+        // Past the cap: the oldest go first, the newest forget of each stays.
+        let many: Vec<ConnectionId> = (100..100 + FORGOTTEN_KEPT as u128 - 1)
+            .map(uuid::Uuid::from_u128)
+            .collect();
+        ai.forget_running(Some(&many));
+        let now = kept(&ai);
+        assert_eq!(now.len(), FORGOTTEN_KEPT);
+        // `again` and every Connection were forgotten longest ago; `first` is next.
+        assert_eq!(now[0], Some(first));
+        assert!(!now.contains(&Some(again)) && !now.contains(&None));
+        assert_eq!(now.last(), Some(&many.last().copied()));
     }
 
     fn groq(base_url: &str) -> AiSettings {
@@ -1742,6 +2283,191 @@ mod tests {
             .set_setting(SETTINGS_KEY, r#"{"diagramTool":false}"#)
             .unwrap();
         assert!(!svc.effective(Some(g)).unwrap().0.diagram_tool);
+    }
+
+    fn raw_thread(svc: &AiService, id: ThreadId) -> serde_json::Value {
+        let store = svc.store().unwrap();
+        let raw: String = store
+            .conn()
+            .query_row(
+                "SELECT json FROM ai_threads WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    fn asked_in() -> memory::AskedIn {
+        memory::AskedIn {
+            tab: "visual".into(),
+            label: "Visual Query \"Orders over 1M\" in shop".into(),
+            summary: "tables orders, customers; ticked orders.id, orders.total".into(),
+            steps: vec![
+                "opened Visual Query in shop".into(),
+                "ticked orders.id".into(),
+            ],
+            also: Vec::new(),
+            other_steps: Vec::new(),
+        }
+    }
+
+    fn asked_turn(thread: ThreadId) -> memory::AppendTurn {
+        let msg = |role, text: &str, at| AiMessage {
+            role,
+            text: text.into(),
+            context: Vec::new(),
+            at,
+            record: None,
+            topic: Some(1),
+            connection_id: Some(uuid::Uuid::from_u128(42)),
+            database: Some("shop".into()),
+            kinds: vec![ItemKind::Question, ItemKind::Tab],
+            tables: vec!["orders".into()],
+            action: Some("ask".into()),
+            asked_in: Some(asked_in()),
+        };
+        memory::AppendTurn {
+            thread_id: thread,
+            place: "ungrouped".into(),
+            title: "orders".into(),
+            updated_at: 10,
+            messages: vec![
+                msg(AiRole::User, "find orders over 1M", 10),
+                msg(AiRole::Assistant, "Filter on total.", 11),
+            ],
+            replace_from: None,
+        }
+    }
+
+    #[test]
+    fn append_turn_keeps_asked_in_and_view_has_label_only() {
+        let (_dir, svc) = service();
+        let id = uuid::Uuid::new_v4();
+        let view = svc.append_turn(asked_turn(id), None).unwrap();
+
+        // Stored whole on the question; never on the answer.
+        let raw = raw_thread(&svc, id);
+        let stored = &raw["messages"][0]["askedIn"];
+        assert_eq!(
+            stored["summary"],
+            "tables orders, customers; ticked orders.id, orders.total"
+        );
+        assert_eq!(stored["steps"].as_array().unwrap().len(), 2);
+        assert!(raw["messages"][1].get("askedIn").is_none(), "{raw}");
+
+        // The webview gets the tab and the label only, from the append and the view.
+        let label_only = Some(asked_in().label_only());
+        assert_eq!(view.messages[0].asked_in, label_only);
+        assert_eq!(view.messages[1].asked_in, None);
+        let shown = svc.thread_view(id).unwrap().unwrap();
+        assert_eq!(shown.thread.messages[0].asked_in, label_only);
+        let a = shown.thread.messages[0].asked_in.as_ref().unwrap();
+        assert!(a.summary.is_empty() && a.steps.is_empty());
+        assert_eq!(a.label, "Visual Query \"Orders over 1M\" in shop");
+        let json = serde_json::to_string(&shown).unwrap();
+        assert!(!json.contains("ticked orders.id"), "{json}");
+    }
+
+    #[test]
+    fn append_turn_caps_asked_in() {
+        let (_dir, svc) = service();
+        let id = uuid::Uuid::new_v4();
+        let mut turn = asked_turn(id);
+        let a = turn.messages[0].asked_in.as_mut().unwrap();
+        a.summary = "x".repeat(5_000);
+        a.steps = vec!["s".repeat(100); 40];
+        svc.append_turn(turn, None).unwrap();
+        let back = svc.store().unwrap().get_ai_thread(id).unwrap().unwrap();
+        let a = back.messages[0].asked_in.as_ref().unwrap();
+        assert_eq!(a.summary.len(), memory::ASKED_IN_SUMMARY_BYTES);
+        let steps: usize = a.steps.iter().map(|s| s.len() + 1).sum();
+        assert!(steps <= memory::ASKED_IN_STEPS_BYTES + 1, "{steps}");
+    }
+
+    #[test]
+    fn save_thread_keeps_stored_asked_in() {
+        let (_dir, svc) = service();
+        let id = uuid::Uuid::new_v4();
+        svc.append_turn(asked_turn(id), None).unwrap();
+        // The webview's copy: label only, as it was given; a forged summary loses too.
+        let mut copy = svc.thread_view(id).unwrap().unwrap().thread;
+        assert!(
+            copy.messages[0]
+                .asked_in
+                .as_ref()
+                .unwrap()
+                .summary
+                .is_empty()
+        );
+        copy.messages[1].asked_in = Some(memory::AskedIn {
+            summary: "forged".into(),
+            ..asked_in()
+        });
+        svc.save_thread(&copy).unwrap();
+        let back = svc.store().unwrap().get_ai_thread(id).unwrap().unwrap();
+        assert_eq!(back.messages[0].asked_in, Some(asked_in()));
+        assert_eq!(back.messages[1].asked_in, None);
+    }
+
+    /// A failed append: the webview's next save sends its label-only copy for a question
+    /// the Core does not hold. The other Connection's id stays, so the gate still holds
+    /// the turn once that Connection is lowered.
+    #[test]
+    fn label_only_copy_keeps_the_gate_on_other_connections() {
+        let (_dir, svc) = service();
+        let id = uuid::Uuid::new_v4();
+        let other = uuid::Uuid::from_u128(43);
+        let mut turn = asked_turn(id);
+        turn.messages[0].asked_in.as_mut().unwrap().also = vec![other];
+        let copy = AiThread {
+            id,
+            place: turn.place.clone(),
+            title: turn.title.clone(),
+            messages: turn.messages.iter().map(AiMessage::for_view).collect(),
+            updated_at: turn.updated_at,
+        };
+        let shown = copy.messages[0].asked_in.as_ref().unwrap();
+        assert!(shown.summary.is_empty() && shown.steps.is_empty());
+        svc.save_thread(&copy).unwrap();
+        let back = svc.store().unwrap().get_ai_thread(id).unwrap().unwrap();
+        assert_eq!(
+            back.messages[0].asked_in.as_ref().unwrap().also,
+            vec![other]
+        );
+        // Gated at the lower access, held at Never.
+        let q = &back.messages[0];
+        let own = AiAccess::SchemaQuery;
+        assert_eq!(
+            memory::message_access(q, own, &[(other, AiAccess::Schema)]),
+            AiAccess::Schema
+        );
+        assert_eq!(
+            memory::message_access(q, own, &[(other, AiAccess::Never)]),
+            AiAccess::Never
+        );
+        assert_eq!(memory::message_access(q, own, &[]), AiAccess::Never);
+    }
+
+    #[test]
+    fn old_threads_load() {
+        const OLD: &str = r#"{"id":"00000000-0000-0000-0000-00000000002a","place":"ungrouped","title":"orders","messages":[{"role":"user","text":"how many orders?","context":["Question"],"at":10,"topic":1,"connectionId":"00000000-0000-0000-0000-00000000002a","database":"shop","kinds":["question","names"],"tables":["orders"],"action":"ask"},{"role":"assistant","text":"About 40.","context":[],"at":11,"topic":1,"connectionId":"00000000-0000-0000-0000-00000000002a","database":"shop","kinds":["question","names"],"tables":["orders"],"action":"ask"}],"updatedAt":11}"#;
+        let (_dir, svc) = service();
+        let id = uuid::Uuid::from_u128(42);
+        svc.store()
+            .unwrap()
+            .conn()
+            .execute(
+                "INSERT INTO ai_threads (id, place, json, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id.to_string(), "ungrouped", OLD, 11],
+            )
+            .unwrap();
+        let view = svc.thread_view(id).unwrap().unwrap();
+        assert_eq!(view.thread.messages.len(), 2);
+        assert!(view.thread.messages.iter().all(|m| m.asked_in.is_none()));
+        svc.save_thread(&view.thread).unwrap();
+        let old: serde_json::Value = serde_json::from_str(OLD).unwrap();
+        assert_eq!(raw_thread(&svc, id), old);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { SqlBlock } from "../api/types";
@@ -6,6 +6,7 @@ import type { SqlEditorApi } from "../query/SqlEditor";
 import { type Stmt, splitStatements, statementAt } from "../query/statements";
 import AnswerSql from "./AnswerSql";
 import AnswerText from "./AnswerText";
+import { sha256Hex } from "./sha256";
 
 /** An editor holding `doc`, typing at `at`, with an optional selection. */
 function fakeEditor(doc: string, at: number, selection?: [number, number]) {
@@ -32,6 +33,7 @@ const READ: SqlBlock = {
   fence: 0,
   label: "1 statement: 1 read",
   statements: [{ text: "SELECT id FROM invoices", class: "read", flags: [] }],
+  bodySha256: sha256Hex("SELECT id FROM invoices"),
 };
 
 const NO_WHERE: SqlBlock = {
@@ -332,4 +334,147 @@ test("a_commented_insert_is_reported_as_such", async () => {
   await user.click(screen.getByRole("button", { name: "Insert commented out" }));
   await user.click(screen.getByRole("button", { name: "Insert" }));
   expect(onAction).toHaveBeenCalledWith("insertedCommented");
+});
+
+test("non-query tab offers Open in new query tab", async () => {
+  const onAction = vi.fn();
+  const { ed, onOpenInNewTab } = renderSql({ target: null, noEditor: true, onAction });
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Insert/ })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Open in new query tab" }));
+  expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT id FROM invoices");
+  expect(onAction).toHaveBeenCalledWith("openedInNewTab");
+  // Nothing went into an editor and nothing ran.
+  expect(ed.api.replaceRange).not.toHaveBeenCalled();
+  expect(ed.api.insert).not.toHaveBeenCalled();
+});
+
+test("non-query tab: a write opens in a new query tab, commented out", async () => {
+  const { onOpenInNewTab } = renderSql({ sql: "UPDATE t SET a = 1", check: NO_WHERE, target: null, noEditor: true });
+  expect(screen.queryByRole("button", { name: "Open in new query tab" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert commented out" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Open in new query tab, commented out" }));
+  expect(onOpenInNewTab).toHaveBeenCalledWith("-- UPDATE t SET a = 1;\n");
+});
+
+test("non-query tab: an unchecked block opens commented out too", async () => {
+  const { onOpenInNewTab } = renderSql({ check: null, unchecked: true, target: null, noEditor: true });
+  expect(screen.queryByRole("button", { name: "Insert commented out" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Open in new query tab, commented out" }));
+  expect(onOpenInNewTab).toHaveBeenCalledWith("-- SELECT id FROM invoices;\n");
+});
+
+test("a query tab keeps Insert and Open in new tab", () => {
+  renderSql();
+  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open in new tab" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Open in new query tab" })).toBeNull();
+});
+
+/** A Core check whose statements are all of `cls`. */
+const checked = (label: string, statements: [string, "read" | "write"][]): SqlBlock => ({
+  fence: 0,
+  label,
+  statements: statements.map(([text, cls]) => ({ text, class: cls, flags: [] })),
+});
+
+/** Every line of an opened text is behind `-- `, whatever line ends it had. */
+const allCommented = (text: string) =>
+  text
+    .trimEnd()
+    .split(/\r\n|\r|\n|\u0085|\u2028|\u2029/)
+    .every((l) => l.startsWith("-- "));
+
+test.each([
+  ["a write after a lone CR", "SELECT 1;\rDROP TABLE orders;", checked("2 statements", [["SELECT 1", "read"], ["DROP TABLE orders", "write"]])],
+  ["mixed line ends", "SELECT 1;\r\nDELETE FROM a;\rDELETE FROM b;\nDELETE FROM c;", checked("4 statements", [["SELECT 1", "read"], ["DELETE FROM a", "write"], ["DELETE FROM b", "write"], ["DELETE FROM c", "write"]])],
+  ["a read then a write", "SELECT id FROM orders;\nUPDATE orders SET total = 0;", checked("2 statements", [["SELECT id FROM orders", "read"], ["UPDATE orders SET total = 0", "write"]])],
+  ["a CTE with DML", "WITH gone AS (DELETE FROM orders RETURNING id)\nSELECT count(*) FROM gone;", checked("1 statement", [["WITH gone AS (DELETE FROM orders RETURNING id) SELECT count(*) FROM gone", "write"]])],
+  ["DDL", "CREATE TABLE monthly_totals (\n  customer_id int not null\n);", checked("1 statement", [["CREATE TABLE monthly_totals (customer_id int not null)", "write"]])],
+  ["a CALL", "CALL refresh_totals();", checked("1 statement", [["CALL refresh_totals()", "write"]])],
+])("non-query tab: %s opens only commented out", async (_name, sql, check) => {
+  const { onOpenInNewTab } = renderSql({ sql, check, target: null, noEditor: true });
+  expect(screen.queryByRole("button", { name: "Open in new query tab" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Insert/ })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Open in new query tab, commented out" }));
+  const opened = onOpenInNewTab.mock.calls[0][0] as string;
+  expect(allCommented(opened)).toBe(true);
+  expect(opened).not.toMatch(/[\r\u0085\u2028\u2029]/);
+});
+
+test("a lone CR in an answer opens as the Core checked it: the write after it only commented out", async () => {
+  // MySQL reads `-- note\rDROP ...` as one comment, the editor as two lines. The Core and the parser both read the
+  // CR as a line end, so the DROP is checked as the write the editor would run.
+  const check: SqlBlock = {
+    fence: 0,
+    label: "2 statements: 1 read, 1 write (DROP)",
+    statements: [
+      { text: "SELECT 1", class: "read", flags: [] },
+      { text: "-- note\nDROP TABLE orders", class: "write", flags: [] },
+    ],
+  };
+  const onOpenInNewTab = vi.fn();
+  render(<AnswerText text={"```sql\nSELECT 1; -- note\rDROP TABLE orders;\n```"} blocks={[check]} dialect="mysql" target={null} noEditor onOpenInNewTab={onOpenInNewTab} onCopy={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Open in new query tab" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Insert/ })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Open in new query tab, commented out" }));
+  expect(onOpenInNewTab).toHaveBeenCalledWith("-- SELECT 1; -- note\n-- DROP TABLE orders;\n");
+});
+
+test("a block that still holds a CR is never opened or inserted live", () => {
+  // Defence in depth: the parser removes every CR, but a block that has one is treated as unchecked.
+  renderSql({ sql: "SELECT 1; -- note\rDROP TABLE orders" });
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Insert commented out" })).toBeTruthy();
+  cleanup();
+  renderSql({ sql: "SELECT 1; -- note\rDROP TABLE orders", target: null, noEditor: true });
+  expect(screen.queryByRole("button", { name: "Open in new query tab" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Open in new query tab, commented out" })).toBeTruthy();
+});
+
+// ---- A check is used only for the block it was made on (its body's hash) ----
+
+const readCheck = (body: string, fence = 0): SqlBlock => ({
+  fence,
+  label: "1 statement: 1 read",
+  statements: [{ text: body, class: "read", flags: [] }],
+  bodySha256: sha256Hex(body),
+});
+
+test("a check whose body is another block's gives no plain Open and no Insert", () => {
+  // The Core checked `SELECT 1` as fence 0; the UI's fence 0 holds a DROP: the check is not used.
+  renderAnswer("```sql\nDROP TABLE orders\n```", [readCheck("SELECT 1")]);
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Insert commented out" })).toBeTruthy();
+  expect(screen.queryByText("1 statement: 1 read")).toBeNull();
+});
+
+test("a check with no body hash (saved before it) is not used either", () => {
+  const { bodySha256: _, ...old } = readCheck("SELECT 1");
+  renderAnswer("```sql\nSELECT 1\n```", [old]);
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Insert commented out" })).toBeTruthy();
+});
+
+test("a check on its own block is used, and so on a non-query tab", () => {
+  renderAnswer("Run:\n```sql\nSELECT 1\n```", [readCheck("SELECT 1")]);
+  expect(screen.getByText("1 statement: 1 read")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+});
+
+test("an answer that ends mid-fence binds its check to that block", () => {
+  // The Core checks an unclosed last fence when the answer ended normally; its body is the text to the end.
+  renderAnswer("Try:\n```sql\nSELECT 1", [readCheck("SELECT 1")]);
+  expect(screen.getByText("1 statement: 1 read")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+});
+
+test("the NEL answer from the review: the read check never lands on the DROP", () => {
+  // The Core numbers this answer's one fence as the DROP block (only space and tab indent a fence), so a read check
+  // made on `SELECT 1` elsewhere cannot be used for it.
+  renderAnswer("Here:\n\u0085```sql\nSELECT 1\n```\nDROP TABLE orders\n```", [readCheck("SELECT 1")]);
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
 });

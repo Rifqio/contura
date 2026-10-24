@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::ai::budget::{
-    LEFT_OUT, NAME_MATCH, NAMES_ONLY, ONE_KEY, OPEN_TAB, SENT_FULL, SENT_NAME, SENT_NONE, TWO_KEYS,
-    TableFit, WHOLE_FITS, WORD_MATCH, estimate_tokens,
+    IN_STEPS, LEFT_OUT, NAME_MATCH, NAMES_ONLY, ONE_KEY, OPEN_TAB, SENT_FULL, SENT_NAME, SENT_NONE,
+    TWO_KEYS, TableFit, WHOLE_FITS, WORD_MATCH, estimate_tokens,
 };
 use crate::ai::context::build::split_words;
 use crate::ai::context::store::{ContextKey, ContextStore, FtsHit, GraphRow, StoredSavedQuery};
@@ -77,6 +77,9 @@ pub const SYNONYMS: &[(&str, &str)] = &[
 pub struct Seeds<'a> {
     pub dialect: DialectKind,
     pub open_tables: &'a [TableRef],
+    /// Tables the Recent steps name on the Ask's Connection and database; ranked right
+    /// after the open tabs. Never a reason to read rows.
+    pub step_tables: &'a [TableRef],
     pub texts: Vec<&'a str>,
     pub question: &'a str,
     /// Tables the outline step picked, in order; tier 1 ignores them.
@@ -509,6 +512,17 @@ pub fn retrieve(
             ranking.add(i, OPEN_TAB, || "in the editor".into());
         }
     }
+    for step in seeds.step_tables {
+        let hit = index.exact.get(step.name.as_str()).copied().or_else(|| {
+            index
+                .folded
+                .get(&step.name.to_lowercase())
+                .and_then(|v| v.first().copied())
+        });
+        if let (true, Some(i)) = (open_here(step, &key.schema), hit) {
+            ranking.add(i, IN_STEPS, || "a step names it".into());
+        }
+    }
 
     let whole: u64 = graph.iter().map(|r| u64::from(cost(r, with_rows))).sum();
     let ranked = whole > u64::from(schema_tokens);
@@ -853,6 +867,7 @@ mod tests {
             let seeds = Seeds {
                 dialect: DialectKind::MySql,
                 open_tables: open,
+                step_tables: &[],
                 texts: sql.into_iter().collect(),
                 question: "",
                 picked: &[],
@@ -914,6 +929,7 @@ mod tests {
         let seeds = Seeds {
             dialect: DialectKind::MySql,
             open_tables: &open,
+            step_tables: &[],
             texts: sql.into_iter().collect(),
             question,
             picked: &[],
@@ -932,6 +948,7 @@ mod tests {
         let seeds = Seeds {
             dialect: DialectKind::MySql,
             open_tables: &[],
+            step_tables: &[],
             texts: vec![sql.as_str()],
             question: "",
             picked: &[],
@@ -993,6 +1010,7 @@ mod tests {
         let seeds = Seeds {
             dialect: DialectKind::Postgres,
             open_tables: &open,
+            step_tables: &[],
             texts: Vec::new(),
             question: "",
             picked: &[],

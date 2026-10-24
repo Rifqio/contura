@@ -1,4 +1,4 @@
-import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiContextChanged,
   errorText,
@@ -43,6 +43,8 @@ import { usePendingEditsGuard } from "./app/usePendingEditsGuard";
 import StartupFailed from "./app/StartupFailed";
 import DefinitionView from "./app/DefinitionView";
 import { newId } from "./app/ids";
+import { useClosedTabs } from "./app/useClosedTabs";
+import { type ClosedTab, withoutGoneConnection } from "./shell/closedTabs";
 import PlaceSidebar from "./app/PlaceSidebar";
 import WindowPanes from "./app/WindowPanes";
 import { FormDialogs, StartModelDialog, type Form, type ModelStart } from "./app/WorkspaceDialogs";
@@ -111,7 +113,9 @@ import { pendingWork } from "./update/pendingWork";
 import { setRestartGuard } from "./update/restartGuard";
 import FirstStartGuide, { GUIDE_AGAIN, type GuideResult } from "./guide/FirstStartGuide";
 import UpdatePill from "./update/UpdatePill";
+import { recordStep, RecordStepContext, tabSteps } from "./assistant/recentSteps";
 import { dailyCheck, loadUpdates } from "./update/updateStore";
+import { cyclePane, rememberPaneFocus } from "./app/panes";
 
 /** The one prefs holder and the one command registry, around the whole app. */
 export default function App() {
@@ -201,6 +205,8 @@ function Workspace() {
   } | null>(null);
   // The one tree's load state, kept here so table tabs can read row estimates from it.
   const tree = useTreeData({ connections, openIds, onNotOpen: (id) => lost(id), onRevealed: () => setReveal(null) });
+  // F6 returns to where focus last was in each pane.
+  useEffect(() => rememberPaneFocus(document), []);
   useEffect(() => {
     if (reveal) tree.reveal(reveal);
     // Once per request.
@@ -222,6 +228,19 @@ function Workspace() {
     },
   });
 
+  /**
+   * The tab strip as Recent steps last saw it (spec 7.1). Tabs that come back by themselves (a place's saved tabs, the
+   * Home opened at startup) are added to it before they show, so they are no step; a key that was already open
+   * changes nothing, and the next tab the user opens is still one.
+   */
+  const stepStrip = useRef<{ place: string; keys: string[]; active: string | null } | null>(null);
+  const tabsCameBack = (keys: string[]) => {
+    const s = stepStrip.current;
+    if (!s || keys.length === 0) return;
+    s.keys = [...new Set([...s.keys, ...keys])];
+    // The first one is made active only when none was, as the restore does.
+    if (s.active === null) s.active = keys[0];
+  };
   const drafts = usePlaceDrafts({
     place,
     tabs,
@@ -240,17 +259,36 @@ function Workspace() {
         .sort((a, b) => at(a.t) - at(b.t) || a.i - b.i)
         .map((x) => x.t);
       if (restored.length > 0) {
+        tabsCameBack(restored.map(tabKey));
         setTabs((t) => withRestored(t, restored));
         setActiveKey((k) => k ?? tabKey(restored[0]));
       }
       if (homeIfEmpty.current) {
         homeIfEmpty.current = false;
         // A tab you opened meanwhile stays active.
-        if (restored.length === 0) showHome(true);
+        if (restored.length === 0) {
+          // Home opened for the user at startup is no step either.
+          tabsCameBack(["home"]);
+          showHome(true);
+        }
       }
     },
   });
   const { placeNow, visit, whenDraftsLoaded } = drafts;
+
+  // Recent steps (spec 7.1): a tab added to the strip is opened, an open tab made active is gone to. A place change
+  // swaps the place's tabs and a restore brings back saved ones; neither is a step.
+  const stepPlace = placeKey(place);
+  const stripKeys = allTabs.map(tabKey);
+  const stripKey = stripKeys.join("\n");
+  useEffect(() => {
+    const was = stepStrip.current;
+    stepStrip.current = { place: stepPlace, keys: stripKeys, active: activeKey };
+    if (!was || was.place !== stepPlace || startup.s !== "ready") return;
+    for (const s of tabSteps(was.keys, was.active, allTabs, activeKey)) recordStep(stepPlace, s);
+    // The strip's keys, the active key and the place are what changes a step; the tabs are read as they are then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stripKey, activeKey, stepPlace, startup.s]);
 
   // A Connection moved to another Group leaves this place: drop it as the active one and close its tables.
   useEffect(() => {
@@ -265,6 +303,16 @@ function Workspace() {
     if (tabs.some(away)) removeTabs(away);
   }, [connections, place, activeId, tabs]);
 
+  /** A preview table tab becomes a kept tab (a double click on it, or working in it, G15). */
+  const keepTab = useCallback(
+    (key: string) =>
+      setTabs((all) =>
+        all.some((t) => t.kind === "object" && t.key === key && t.preview)
+          ? all.map((t) => (t.kind === "object" && t.key === key && t.preview ? { ...t, preview: false } : t))
+          : all,
+      ),
+    [],
+  );
   const dirtyRef = useRef<ReadonlySet<string>>(new Set());
   const { dirtyKeys, gridControl, markDirty, isDirty, tableKeys, groupTableKeys, confirmLeave, leaveAll, confirmCloseUnsaved, confirmCloseFlow, dialog: leaveDialog } =
     usePendingEditsGuard({
@@ -590,32 +638,77 @@ function Workspace() {
     if (tab) setActiveKey(tabKey(tab));
   }
 
+  const closed = useClosedTabs({
+    connections,
+    open: openClosed,
+    note: (text) => toast.show({ kind: "info", text }),
+  });
+
   /** A New table tab its create turned into a design tab: its key then, or null when it closed instead. */
   const createdTabs = useRef(new Map<string, string | null>());
 
   /** Closes a tab: a table with Pending Edits or an unapplied design asks first, a Schema Model through its own Close. */
-  async function closeTab(key: string) {
+  async function closeTab(key: string): Promise<boolean> {
     const tab = [...tabs, ...windowTabs].find((t) => tabKey(t) === key);
-    if (!tab) return;
-    if (objectTabOf(tab) && !(await confirmLeave([key]))) return;
+    if (!tab) return false;
+    if (objectTabOf(tab) && !(await confirmLeave([key]))) return false;
     // A running import asks to cancel and roll back; one with only a mapping closes at once.
-    if (tab.kind === "import" && !(await jobsGuard.confirmCloseImport(importJobOf(key)))) return;
+    if (tab.kind === "import" && !(await jobsGuard.confirmCloseImport(importJobOf(key)))) return false;
     // A running transfer asks "Cancel the transfer and roll back?"; one only set up closes at once.
-    if (tab.kind === "transfer" && !(await jobsGuard.confirmCloseTransfer(transferJobs.current.get(tab.id) ?? null))) return;
+    if (tab.kind === "transfer" && !(await jobsGuard.confirmCloseTransfer(transferJobs.current.get(tab.id) ?? null))) return false;
     // A compare whose Apply runs asks "Cancel Apply?" (R6).
-    if (tab.kind === "compare" && !(await jobsGuard.confirmCloseCompare(compareJobs.current.get(tab.id) ?? null))) return;
+    if (tab.kind === "compare" && !(await jobsGuard.confirmCloseCompare(compareJobs.current.get(tab.id) ?? null))) return false;
     // A New table created through the ask's Apply is its table's design tab now: that tab closes (M2).
     const created = createdTabs.current.get(key);
     if (created !== undefined) {
       createdTabs.current.delete(key);
       if (created) dropTab(created);
-      return;
+      return true;
     }
-    if (!(await confirmCloseUnsaved(tab))) return;
-    if (tab.kind === "flow" && !(await confirmCloseFlow(tab.name))) return;
+    if (!(await confirmCloseUnsaved(tab))) return false;
+    if (tab.kind === "flow" && !(await confirmCloseFlow(tab.name))) return false;
+    closed.remember(tab);
     const builderClose = tab.kind === "schema" ? schemaCloseFor(tab.id) : null;
-    if (builderClose) builderClose();
-    else dropTab(key);
+    // A Schema Model closes through its own ask; Cancel there keeps the tab and answers false.
+    if (builderClose) return builderClose();
+    dropTab(key);
+    return true;
+  }
+
+  /**
+   * Closes several tabs one after another, each through its own unsaved-changes ask (so no work is lost); the first
+   * one kept (Cancel) stops the rest. The tab the menu was opened on stays and is shown.
+   */
+  async function closeTabs(keys: string[], keep: string) {
+    const hadActive = keys.includes(activeKey ?? "");
+    for (const key of keys) if (!(await closeTab(key))) return;
+    // Only once every ask is through: a Cancel leaves the tab that was shown where it was.
+    if (hadActive) setActiveKey(keep);
+  }
+
+  /** Shows a tab Reopen closed tab took off the stack: by its object, so a table is read again. */
+  function openClosed(shown: ClosedTab) {
+    const { closed: c, note } = withoutGoneConnection(shown, new Set(connections.map((x) => x.id)));
+    if (note) toast.show({ kind: "info", text: note });
+    switch (c.kind) {
+      case "object":
+        return openObject(c.selection, { newTab: true });
+      case "design":
+        return openDesign(c.connectionId, c.path);
+      case "lineage":
+        return openLineage(c.connectionId, c.path);
+      case "flow":
+        return openFlowTab(c.name);
+      case "savedQueries":
+        return openSavedList();
+      case "query":
+      case "visual": {
+        if (c.kind === "query" && c.tooLarge) toast.show({ kind: "info", text: "This query was too large to keep after closing." });
+        const tab: WorkTab = c.kind === "query" ? { kind: "query", doc: c.doc } : { kind: "visual", doc: c.doc };
+        setTabs((all) => (all.some((t) => tabKey(t) === tabKey(tab)) ? all : [...all, tab]));
+        setActiveKey(tabKey(tab));
+      }
+    }
   }
 
   /** Removes a tab at once; the right neighbour, else the left, becomes active when it was. */
@@ -888,7 +981,7 @@ function Workspace() {
   // Reconciles the painted theme with the Core setting; the status bar's theme switch chooses through it.
   const theme = useTheme();
 
-  /** Ctrl+1 to Ctrl+9: the places in the switcher's order (PR7). */
+  /** Ctrl+Alt+1 to Ctrl+Alt+9: the places in the switcher's order (PR7). */
   const openPlaceAt = (n: number) => {
     const p = menuPlaces(groups)[n - 1];
     if (p) void enterPlace(p);
@@ -927,11 +1020,20 @@ function Workspace() {
   useCommandKeys({
     // A new query tab, on the active Connection.
     "query.new": () => newQuery(activeId),
+    // The panel follows every tab but a diagram, which has its own assistant (ADR 0023).
     "assistant.toggle": () => {
-      if (!activeWindow) setAssistantOpen((o) => !o);
+      if (activeWindow?.kind === "flow") {
+        // S11: the key always answers.
+        toast.show({ kind: "info", text: "A diagram has its own Assistant, so the Ask panel stays closed here." });
+        return;
+      }
+      setAssistantOpen((o) => !o);
     },
     "settings.open": () => openSettings(),
+    "tab.reopen": () => void closed.reopen(),
     "home.open": () => goHome(),
+    "pane.next": () => cyclePane(1),
+    "pane.previous": () => cyclePane(-1),
     "connection.new": () => setForm({ kind: "connection" }),
     "group.open.1": () => openPlaceAt(1),
     "group.open.2": () => openPlaceAt(2),
@@ -990,6 +1092,7 @@ function Workspace() {
   /** Moves the window to another place: its tabs go, the window's tabs stay (PR5), and the place shows. */
   function goTo(next: Place) {
     drafts.leaveFor(next);
+    closed.clear();
     lastPlaceKey.current = null;
     setPlace(next);
     setActiveId(null);
@@ -1152,16 +1255,19 @@ function Workspace() {
     historyOpen && current?.kind === "query" ? (inPlace.find((c) => c.id === current.doc.connectionId) ?? null) : null;
   const historyAllShown = historyOpen && historyAll && current?.kind === "query";
 
-  const assistantShown = assistantOpen && !activeWindow;
+  const assistantShown = assistantOpen && activeWindow?.kind !== "flow";
   // An answer's SQL goes into the active query tab, through the Insert diff.
   const answerTarget: InsertTarget | null =
     current?.kind === "query" ? { editor: () => refs.editor(current.doc.id), name: current.doc.name } : null;
-  const assistantTarget = assistantTargetFor(current, inPlace);
-  const assistantSchema = assistantTarget?.database
-    ? lang.client.sqlSchemaFor(schemaKey(assistantTarget.connection.id, assistantTarget.database))
-    : null;
+  // Every tab but a diagram has a target; the screen's own fields come through the tab registry (tabAsk.ts).
+  const assistantTab = activeWindow ?? current;
+  const assistantTarget = assistantTargetFor(assistantTab, inPlace, connections);
+  const assistantSchema =
+    assistantTarget?.doc && assistantTarget.connection && assistantTarget.database
+      ? lang.client.sqlSchemaFor(schemaKey(assistantTarget.connection.id, assistantTarget.database))
+      : null;
   // Read from the editor on each draw, so the Ask context follows the statement where you are typing (see the note below).
-  const stmt = assistantShown && assistantTarget ? (refs.editor(assistantTarget.doc.id)?.runTarget() ?? null) : null;
+  const stmt = assistantShown && assistantTarget?.doc ? (refs.editor(assistantTarget.doc.id)?.runTarget() ?? null) : null;
   const assistantContext = assistantShown && assistantTarget ? assistantContextFor(assistantTarget, assistantSchema, stmt) : null;
 
   // ---- The feature bar (item 16): each feature on the open Connection and database, or off saying why ----
@@ -1175,7 +1281,7 @@ function Workspace() {
     postgres: featureConn?.dialect === "postgres",
     table: selection?.kind === "table",
     keys: { newQuery: hintFor(keymap, "query.new"), diagram: hintFor(keymap, "flow.new"), ask: hintFor(keymap, "assistant.toggle") },
-    askReady: !activeWindow && current !== undefined,
+    askReady: activeWindow?.kind !== "flow",
     newQuery: () => newQuery(activeId),
     newVisualQuery: () => visualTarget && newVisualQuery(visualTarget.id, visualTarget.database),
     newTable: () => featureTarget && newTable(featureTarget.connectionId, featureTarget.database, null),
@@ -1229,7 +1335,10 @@ function Workspace() {
             if (tabs.some((t) => tabKey(t) === from) && tabs.some((t) => tabKey(t) === to)) setTabs((all) => moveTab(all, from, to));
             else setWindowTabs((all) => moveTab(all, from, to));
           }}
-          onKeep={(key) => setTabs((all) => all.map((t) => (t.kind === "object" && t.key === key && t.preview ? { ...t, preview: false } : t)))}
+          onKeep={keepTab}
+          onCloseMany={(keys, keep) => void closeTabs(keys, keep)}
+          onReopen={() => void closed.reopen()}
+          canReopen={closed.count > 0}
           dirtyKeys={dirtyKeys}
           onNew={() => newQuery(activeId)}
           onNewVisual={() => visualTarget && newVisualQuery(visualTarget.id, visualTarget.database)}
@@ -1247,7 +1356,11 @@ function Workspace() {
       <FeatureBar groups={features.groups} end={features.end} />
 
       <div
-        className={activeWindow ? "body body-home" : `body${historyFor || historyAllShown ? " body-history" : ""}${assistantShown ? " body-ai" : ""}`}
+        className={
+          activeWindow
+            ? `body body-home${assistantShown ? " body-ai" : ""}`
+            : `body${historyFor || historyAllShown ? " body-history" : ""}${assistantShown ? " body-ai" : ""}`
+        }
       >
         <div className="place-wrap">
           {/* The place's sidebar stays mounted under a window tab, so its tree keeps where you were. */}
@@ -1314,7 +1427,7 @@ function Workspace() {
             />
           </PlaceSidebar>
 
-          <main className="work">
+          <main className="work" data-pane>
             {/* Window tabs are panes of the work area like any tab; each stays mounted while hidden. */}
             <WindowPanes
               windowTabs={windowTabs}
@@ -1411,6 +1524,7 @@ function Workspace() {
               return (
                 <div key={t.key} className="work-pane" hidden={t.key !== activeKey}>
                   <DataGrid
+                    askKey={t.key}
                     connectionId={s.connectionId}
                     table={s.path}
                     onClose={() => void closeTab(t.key)}
@@ -1421,6 +1535,7 @@ function Workspace() {
                     production={c?.production ?? false}
                     group={c?.groupId ? groups.find((g) => g.id === c.groupId) ?? null : null}
                     onDirtyChange={(dirty) => markDirty(t.key, dirty)}
+                    onWorked={t.preview ? () => keepTab(t.key) : undefined}
                     controlRef={gridControl(t.key)}
                     visible={t.key === activeKey}
                     connectionName={c?.name}
@@ -1458,6 +1573,7 @@ function Workspace() {
               return (
                 <div key={t.key} className="work-pane" hidden={t.key !== activeKey}>
                   <TableDesigner
+                    askKey={t.key}
                     connection={c}
                     target={t.target}
                     group={c.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
@@ -1567,6 +1683,7 @@ function Workspace() {
               return (
                 <div key={key} className="work-pane" hidden={key !== activeKey}>
                   <VisualQueryTab
+                    askKey={key}
                     doc={t.doc}
                     databases={(() => {
                       const d = c ? tree.branches[c.id]?.databases : undefined;
@@ -1605,6 +1722,7 @@ function Workspace() {
               return (
                 <div key={t.uid ?? key} className="work-pane" hidden={key !== activeKey}>
                   <ImportTab
+                    askKey={key}
                     connection={c}
                     group={c.groupId ? (groups.find((g) => g.id === c.groupId) ?? null) : null}
                     target={t.target}
@@ -1648,6 +1766,7 @@ function Workspace() {
               placeName={placeName}
               groupId={workspaceGroupId}
               context={assistantContext}
+              tabKey={assistantTab && assistantTab.kind !== "flow" ? tabKey(assistantTab) : null}
               schema={assistantSchema}
               onOpenSettings={() => openSettings("ai")}
               seed={chatSeed}
@@ -1801,5 +1920,9 @@ function Workspace() {
       />
     </div>
   );
-  return <GroupImagesProvider value={groupImages}>{app}</GroupImagesProvider>;
+  return (
+    <GroupImagesProvider value={groupImages}>
+      <RecordStepContext.Provider value={stepPlace}>{app}</RecordStepContext.Provider>
+    </GroupImagesProvider>
+  );
 }

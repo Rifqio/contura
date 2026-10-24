@@ -40,7 +40,7 @@ export default function SaveDialog({ initial, existing, sqlNames = [], onSave, o
   }
 
   return (
-    <Dialog title="Save Visual Query" icon="bookmark" size="form" onClose={onCancel}>
+    <Dialog title="Save Visual Query" icon="bookmark" size="form" dirty={name !== initial} onClose={onCancel}>
       <form
         className="form"
         onSubmit={(e) => {

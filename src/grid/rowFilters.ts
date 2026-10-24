@@ -1,7 +1,7 @@
 // Item 2: filters built without writing SQL. Each filter is a column, a condition worded for the column's kind of
 // value, and a value; together they become the WHERE the table view fetches with (every filter must hold). The SQL
 // quotes names and values for the Dialect, so nothing typed into a value can change the statement.
-import type { DialectKind } from "../api/types";
+import type { Cell, DialectKind } from "../api/types";
 
 export type ValueKind = "number" | "date" | "boolean" | "text";
 
@@ -244,4 +244,18 @@ export function quickDays(today: Date): { label: string; value: string }[] {
     { label: "Start of this month", value: iso(new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1))) },
     { label: "30d ago", value: iso(new Date(t.getTime() - 30 * 86_400_000)) },
   ];
+}
+
+/**
+ * G13: the filter a cell's value makes (Ctrl+F, Filter by this value): "is" the value, "is on" its day for a date,
+ * "is true" or "is false", "is NULL" for NULL, "starts with" the loaded part of a cut-short text. Binary values make
+ * none.
+ */
+export function filterForValue(column: string, kind: ValueKind, cell: Cell): Omit<RowFilter, "id"> | null {
+  if (cell.t === "null") return { column, op: "null", value: "" };
+  if (cell.t === "bytes") return null;
+  if (kind === "boolean") return { column, op: /^(t|true|1|y|yes)$/i.test(cell.value) ? "isTrue" : "isFalse", value: "" };
+  if (kind === "date") return { column, op: "on", value: /^\d{4}-\d{2}-\d{2}/.exec(cell.value)?.[0] ?? cell.value };
+  if (cell.t === "text" && cell.truncated) return { column, op: "startsWith", value: cell.value };
+  return { column, op: "eq", value: cell.value };
 }

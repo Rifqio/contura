@@ -1,5 +1,6 @@
-import { expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import {
+  filterForValue,
   filterCondition,
   filterProblem,
   filterSentence,
@@ -69,4 +70,18 @@ test("chips_and_sentences_read_as_words", () => {
     { label: "Start of this month", value: "2026-10-01" },
     { label: "30d ago", value: "2026-09-19" },
   ]);
+});
+
+describe("G13: a filter from a cell's value", () => {
+  const text = (value: string) => ({ t: "text" as const, value, truncated: false, totalBytes: value.length });
+  it("is the column's own condition for its kind, NULL as is NULL", () => {
+    expect(filterForValue("status", "text", text("paid"))).toEqual({ column: "status", op: "eq", value: "paid" });
+    expect(filterForValue("total", "number", { t: "number", value: "58.00" })).toEqual({ column: "total", op: "eq", value: "58.00" });
+    expect(filterForValue("at", "date", text("2026-10-01 09:14:07+07"))).toEqual({ column: "at", op: "on", value: "2026-10-01" });
+    expect(filterForValue("ok", "boolean", text("t"))).toEqual({ column: "ok", op: "isTrue", value: "" });
+    expect(filterForValue("ok", "boolean", text("false"))).toEqual({ column: "ok", op: "isFalse", value: "" });
+    expect(filterForValue("at", "date", { t: "null" })).toEqual({ column: "at", op: "null", value: "" });
+    expect(filterForValue("note", "text", { t: "text", value: "a long", truncated: true, totalBytes: 900 })).toEqual({ column: "note", op: "startsWith", value: "a long" });
+    expect(filterForValue("data", "text", { t: "bytes", previewHex: "ff", truncated: false, totalBytes: 1 })).toBeNull();
+  });
 });

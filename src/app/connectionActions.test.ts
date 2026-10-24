@@ -3,6 +3,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import type { ConnectionConfig } from "../api/types";
 import { connectionMenu } from "../sidebar/connectionMenu";
 import { type ConnectionActionsEnv, connectionActions } from "./connectionActions";
+import { clearAllSteps, recordStep, stepsOf } from "../assistant/recentSteps";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -108,6 +109,23 @@ describe("connectionActions", () => {
     await connectionActions(no).deleteFromTree("a");
     expect(callsTo("delete_connection")).toHaveLength(1);
     expect(no.markClosed).not.toHaveBeenCalled();
+  });
+
+  it("clear_history_and_delete_drop_the_connections_recent_steps", async () => {
+    clearAllSteps();
+    const step = (connectionId: string) => ({ verb: "runQuery" as const, tab: "query", title: null, connectionId, database: "shop", schema: null, count: 1 });
+    recordStep("ungrouped", step("a"));
+    recordStep("ungrouped", step("b"));
+    await connectionActions(fakeEnv()).clearHistoryFromTree("b");
+    expect(stepsOf("ungrouped").map((s) => s.connectionId)).toEqual(["a"]);
+    recordStep("ungrouped", step("b"));
+    await connectionActions(fakeEnv()).deleteFromTree("a");
+    expect(stepsOf("ungrouped").map((s) => s.connectionId)).toEqual(["b"]);
+    // A failed clear keeps them.
+    routeInvoke({ clear_query_history: () => { throw new Error("locked"); } });
+    await connectionActions(fakeEnv()).clearHistoryFromTree("b");
+    expect(stepsOf("ungrouped").map((s) => s.connectionId)).toEqual(["b"]);
+    clearAllSteps();
   });
 
   it("clear_history_tells_the_owner", async () => {

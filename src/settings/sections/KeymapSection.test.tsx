@@ -22,7 +22,7 @@ const titles = () => [...document.querySelectorAll(".krow .krow-title > span:fir
 const search = () => screen.getByRole("textbox", { name: "Search shortcuts" });
 
 test("every_command_of_the_registry_is_listed_once_in_the_boards_groups", async () => {
-  const ids = KEYMAP_GROUPS.flatMap((g) => g.ids).flatMap((id) => (id === "group.open" ? COMMANDS.filter((c) => c.id.startsWith("group.open.")).map((c) => c.id) : [id]));
+  const ids = KEYMAP_GROUPS.flatMap((g) => g.ids).flatMap((id) => (id === "group.open" || id === "tab.goto" ? COMMANDS.filter((c) => c.id.startsWith(`${id}.`)).map((c) => c.id) : [id]));
   expect([...ids].sort()).toEqual(COMMANDS.map((c) => c.id).sort());
 
   await renderKeymap();
@@ -43,8 +43,21 @@ test("open_group_1_to_9_is_folded_until_show_9", async () => {
   expect(within(connections).getByText("Open Group 1 to 9")).toBeTruthy();
   expect(rowOf("group.open.1")).toBeNull();
   await userEvent.click(within(connections).getByRole("button", { name: "Show 9" }));
-  for (let n = 1; n <= 9; n++) expect(rowOf(`group.open.${n}`).textContent).toContain(`Ctrl+${n}`);
+  for (let n = 1; n <= 9; n++) expect(rowOf(`group.open.${n}`).textContent).toContain(`Ctrl+Alt+${n}`);
   expect(within(connections).queryByText("Open Group 1 to 9")).toBeNull();
+});
+
+test("go_to_tab_1_to_9_is_folded_in_tabs_and_windows_until_show_9", async () => {
+  await renderKeymap();
+  const tabs = group("Tabs and windows");
+  expect(within(tabs).getByText("Go to tab 1 to 9")).toBeTruthy();
+  expect(within(tabs).getByText("Ctrl+9 goes to the last tab")).toBeTruthy();
+  expect(rowOf("tab.goto.1")).toBeNull();
+  await userEvent.click(within(tabs).getByRole("button", { name: "Show 9" }));
+  for (let n = 1; n <= 9; n++) expect(rowOf(`tab.goto.${n}`).textContent).toContain(`Ctrl+${n}`);
+  expect(within(tabs).queryByText("Go to tab 1 to 9")).toBeNull();
+  // The Groups fold stays folded.
+  expect(rowOf("group.open.1")).toBeNull();
 });
 
 test("search_by_words_and_keys_and_the_filters", async () => {
@@ -217,7 +230,7 @@ test("a_per_row_reset_moves_focus_to_the_change_button_and_show_9_to_the_first_g
   await waitFor(() => expect(rowOf("query.format").textContent).not.toContain("Changed"));
   expect(document.activeElement).toBe(changeButton("Format"));
 
-  await userEvent.click(screen.getByRole("button", { name: "Show 9" }));
+  await userEvent.click(within(group("Connections and schema")).getByRole("button", { name: "Show 9" }));
   expect(document.activeElement).toBe(changeButton("Open Group 1"));
 });
 

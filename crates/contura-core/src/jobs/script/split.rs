@@ -192,7 +192,8 @@ impl Splitter {
                 }
                 Mode::Dollar => self.dollar(c, eof),
                 Mode::LineComment => {
-                    if c == '\n' {
+                    // PostgreSQL ends a line comment at a lone CR too, as the safety lexer does.
+                    if c == '\n' || c == '\r' && self.dialect == DialectKind::Postgres {
                         self.mode = Mode::Top;
                     } else {
                         self.bump(c);

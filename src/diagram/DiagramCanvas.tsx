@@ -502,7 +502,7 @@ function Flow(props: DiagramCanvasProps) {
             connectionLineComponent={connectionLineComponent}
             onEdgeDoubleClick={onEdgeDoubleClick && ((_, edge) => onEdgeDoubleClick(edge.id))}
             onNodeDoubleClick={onNodeDoubleClick && ((_, node) => onNodeDoubleClick(node.id))}
-            zoomOnDoubleClick={!onPaneDoubleClick}
+            zoomOnDoubleClick={!onPaneDoubleClick && !boxSelect}
             onPaneContextMenu={onContextMenu && ((e) => menuAt(e, null))}
             onNodeContextMenu={onContextMenu && ((e, node) => menuAt(e, node.id))}
             {...(boxSelect ? { selectionOnDrag: true, selectionMode: SelectionMode.Partial, panOnDrag: [1], panOnScroll: true } : {})}

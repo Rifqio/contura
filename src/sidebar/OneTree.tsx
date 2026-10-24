@@ -737,6 +737,7 @@ export default function OneTree(props: OneTreeProps) {
             filterRef.current?.focus();
             filterRef.current?.select();
           },
+          // G12: a focused grid takes F5 first; with focus in the tree or in neither, this refreshes the branch.
           "tree.refresh": () => {
             const id = (currentRow ? branchOf(currentRow.node) : null) ?? selected?.connectionId ?? null;
             if (id) refreshBranch(id);

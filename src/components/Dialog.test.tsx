@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import appCss from "../styles/app.css?raw";
@@ -139,4 +139,86 @@ test("the_subtitle_sits_right_after_the_title_and_close_keeps_right", () => {
   // The title does not grow, so nothing pushes the subtitle to the right edge.
   expect(rule("\\.dialog-header h2")).toMatch(/flex:\s*0 1 auto/);
   expect(rule("\\.dialog-close")).toMatch(/margin-left:\s*auto/);
+});
+
+test("J2: a dirty dialog ignores a click outside and asks before Escape or the close button discard it", async () => {
+  const onClose = vi.fn();
+  render(
+    <Dialog title="New Connection" onClose={onClose} dirty>
+      <input aria-label="Name" />
+    </Dialog>,
+  );
+  fireEvent.mouseDown(screen.getByRole("dialog").parentElement as HTMLElement);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.queryByText("Discard your changes?")).toBeNull();
+
+  await userEvent.keyboard("{Escape}");
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByText("Discard your changes?")).toBeTruthy();
+  // Escape again answers the question: keep editing.
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByText("Discard your changes?")).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.getByText("Discard your changes?")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(screen.queryByText("Discard your changes?")).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test("J2: Keep editing puts focus back on the field and Tab stays inside the dialog", async () => {
+  render(
+    <>
+      <button type="button">Outside</button>
+      <Dialog title="New Connection" onClose={() => {}} dirty>
+        <input aria-label="Name" />
+        <input aria-label="Host" />
+      </Dialog>
+    </>,
+  );
+  const host = screen.getByLabelText("Host");
+  host.focus();
+  await userEvent.keyboard("{Escape}");
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep editing" }));
+  await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(document.activeElement).toBe(host);
+  await userEvent.tab();
+  expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+  // Escape then Escape again also lands back on the field.
+  await userEvent.keyboard("{Escape}{Escape}");
+  expect(document.activeElement).toBe(screen.getByRole("dialog").querySelector("input, button"));
+});
+
+test("J2: a question left open when the form turns clean does not come back by itself", async () => {
+  function Host({ dirty }: { dirty: boolean }) {
+    return (
+      <Dialog title="Save query" onClose={() => {}} dirty={dirty}>
+        <input aria-label="Name" />
+      </Dialog>
+    );
+  }
+  const { rerender } = render(<Host dirty />);
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByText("Discard your changes?")).toBeTruthy();
+  rerender(<Host dirty={false} />);
+  rerender(<Host dirty />);
+  expect(screen.queryByText("Discard your changes?")).toBeNull();
+});
+
+test("J2: an untouched dialog still closes on a click outside and on Escape", async () => {
+  const onClose = vi.fn();
+  render(
+    <Dialog title="New Connection" onClose={onClose} dirty={false}>
+      <input aria-label="Name" />
+    </Dialog>,
+  );
+  fireEvent.mouseDown(screen.getByRole("dialog").parentElement as HTMLElement);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await userEvent.keyboard("{Escape}");
+  expect(onClose).toHaveBeenCalledTimes(2);
 });

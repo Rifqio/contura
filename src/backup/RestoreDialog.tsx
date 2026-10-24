@@ -2,7 +2,7 @@
 // exact structure SQL and the INSERT shape (on every Connection, so the SQL is always reviewed), then
 // the running view and its end line.
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { errorText, fileName, isCommandError } from "../api/client";
 import { confirmRestore, inspectRestore, newJobId, planRestore, restoreStatements, startRestore } from "../api/jobs";
 import type {
@@ -156,6 +156,7 @@ export default function RestoreDialog({ connection, group, target, onClose, onRe
   const [newName, setNewName] = useState(attach && attach.run.mode === "newDatabase" ? attach.run.into : "");
   const [backupFirst, setBackupFirst] = useState(true);
   const [addConnection, setAddConnection] = useState(attach?.run.addConnection ?? true);
+  const [asking, setAsking] = useState(false);
   const [view, setView] = useState<View>(attach ? "running" : "checks");
   const [plan, setPlan] = useState<RestorePlan | null>(attach?.run.plan ?? null);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -323,6 +324,13 @@ export default function RestoreDialog({ connection, group, target, onClose, onRe
     onClose();
   }
 
+  /** Esc, a click outside and the close button never stop a Restore: it goes to the background, as Backup does. */
+  function closeRunning() {
+    if (end) onClose();
+    else if (asking) setAsking(false);
+    else toBackground();
+  }
+
   const badge = (
     <span className="confirm-badges">
       <SafetyTag connection={connection} />
@@ -399,7 +407,7 @@ export default function RestoreDialog({ connection, group, target, onClose, onRe
         badge={badge}
         size="form"
         className={connection.production ? "restore-dialog prod-wash" : "restore-dialog"}
-        onClose={() => (end ? onClose() : cancelRun())}
+        onClose={closeRunning}
       >
         {end ? (
           <>
@@ -455,7 +463,12 @@ export default function RestoreDialog({ connection, group, target, onClose, onRe
               elapsed={Math.max(0, now - startedAt)}
               connection={connection.name}
               onBackground={toBackground}
-              onCancel={cancelRun}
+              asking={asking}
+              onAsk={setAsking}
+              onCancel={() => {
+                setAsking(false);
+                cancelRun();
+              }}
             />
           )
         )}
@@ -827,10 +840,13 @@ interface RunningProps {
   connection: string;
   onBackground(): void;
   onCancel(): void;
+  /** True while the footer asks to confirm the cancel. */
+  asking: boolean;
+  onAsk(asking: boolean): void;
 }
 
 /** Percent and bar by bytes read, the facts, the phase list and the transaction note. */
-function RunningBody({ plan, mode, dialect, progress, statements, bytesTotal, elapsed, connection, onBackground, onCancel }: RunningProps) {
+function RunningBody({ plan, mode, dialect, progress, statements, bytesTotal, elapsed, connection, onBackground, onCancel, asking, onAsk }: RunningProps) {
   const bytesDone = progress?.bytesDone ?? 0;
   const total = progress?.bytesTotal ?? bytesTotal;
   const percent = total ? Math.min(100, Math.floor((bytesDone / Math.max(1, total)) * 100)) : null;
@@ -882,15 +898,31 @@ function RunningBody({ plan, mode, dialect, progress, statements, bytesTotal, el
         </div>
       </div>
       <footer className="dialog-footer">
-        <span className="restore-hint">{`Recorded in Query History for ${connection}.`}</span>
-        <span className="spacer" />
-        <button type="button" className="button" onClick={onBackground}>
-          Run in the background
-        </button>
-        <button type="button" className="button" data-autofocus onClick={onCancel}>
-          Cancel and roll back
-          <Kbd keys="Esc" />
-        </button>
+        {asking ? (
+          <Fragment key="ask">
+            <span className="restore-hint" role="alert">Roll back everything this Restore has written?</span>
+            <span className="spacer" />
+            <button type="button" className="button" autoFocus onClick={() => onAsk(false)}>
+              Keep running
+              <Kbd keys="Esc" />
+            </button>
+            <button type="button" className="button" onClick={onCancel}>
+              Yes, roll back
+            </button>
+          </Fragment>
+        ) : (
+          <Fragment key="run">
+            <span className="restore-hint">{`Recorded in Query History for ${connection}.`}</span>
+            <span className="spacer" />
+            <button type="button" className="button" data-autofocus autoFocus onClick={onBackground}>
+              Run in the background
+              <Kbd keys="Esc" />
+            </button>
+            <button type="button" className="button" onClick={() => onAsk(true)}>
+              Cancel and roll back
+            </button>
+          </Fragment>
+        )}
       </footer>
     </>
   );

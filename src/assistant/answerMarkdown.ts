@@ -92,8 +92,19 @@ function prose(lines: string[], out: Block[]) {
 }
 
 /**
+ * Only space and tab are white space on a fence line (its indent, the end of its language word, a closing line's
+ * tail), as in the Core's `fences`: JS and Rust disagree on NEL and BOM, and a fence counted by one and not the other
+ * would number the blocks apart.
+ */
+const FENCE_BLANK_LEAD = /^[ \t]+/;
+const FENCE_BLANK = /^[ \t]*$/;
+const fenceLang = (rest: string): string | null => rest.split(/[ \t]+/).find((w) => w !== "") ?? null;
+
+/**
  * An answer as blocks. A fence opens on a line whose first non-space characters are three or more backticks with
  * no other backtick after them, and closes on a line of at least as many backticks; an unclosed fence runs to the end.
+ * CRLF and a lone CR are line ends, as in the editor and the Core's `fences`, so a block holds the text the Core
+ * checked and the fence numbers match.
  */
 export function parseAnswer(text: string): Block[] {
   parseCost.chars += text.length;
@@ -101,20 +112,19 @@ export function parseAnswer(text: string): Block[] {
   let pending: string[] = [];
   let open: { ticks: number; lang: string | null; body: string[] } | null = null;
   let fence = 0;
-  for (const raw of text.split("\n")) {
-    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-    const lead = line.trimStart();
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const lead = line.replace(FENCE_BLANK_LEAD, "");
     const ticks = /^`*/.exec(lead)![0].length;
     const rest = lead.slice(ticks);
     if (!open) {
       if (ticks >= 3 && !rest.includes("`")) {
         prose(pending, out);
         pending = [];
-        open = { ticks, lang: rest.trim().split(/\s+/)[0] || null, body: [] };
+        open = { ticks, lang: fenceLang(rest), body: [] };
       } else {
         pending.push(line);
       }
-    } else if (ticks >= open.ticks && rest.trim() === "") {
+    } else if (ticks >= open.ticks && FENCE_BLANK.test(rest)) {
       out.push({ kind: "code", lang: open.lang, text: open.body.join("\n"), fence: fence++, closed: true });
       open = null;
     } else {
@@ -235,9 +245,8 @@ export function createAnswerParser(): AnswerParser {
     return { next: { para, list: null }, closed: [] };
   }
 
-  const strip = (raw: string) => (raw.endsWith("\r") ? raw.slice(0, -1) : raw);
   const fenceOf = (line: string) => {
-    const lead = line.trimStart();
+    const lead = line.replace(FENCE_BLANK_LEAD, "");
     const ticks = /^`*/.exec(lead)![0].length;
     return { ticks, rest: lead.slice(ticks) };
   };
@@ -245,18 +254,18 @@ export function createAnswerParser(): AnswerParser {
   /** A finished line, read once. */
   function finished(raw: string) {
     parseCost.chars += raw.length;
-    const line = strip(raw);
+    const line = raw;
     const { ticks, rest } = fenceOf(line);
     if (!open) {
       if (ticks >= 3 && !rest.includes("`")) {
         flush();
-        open = { ticks, lang: rest.trim().split(/\s+/)[0] || null, text: "", lines: 0 };
+        open = { ticks, lang: fenceLang(rest), text: "", lines: 0 };
       } else {
         const { next, closed } = proseLine(prose, line, inlines);
         blocks.push(...closed);
         prose = next;
       }
-    } else if (ticks >= open.ticks && rest.trim() === "") {
+    } else if (ticks >= open.ticks && FENCE_BLANK.test(rest)) {
       blocks.push({ kind: "code", lang: open.lang, text: open.text, fence: fence++, closed: true });
       open = null;
     } else {
@@ -273,6 +282,18 @@ export function createAnswerParser(): AnswerParser {
     return joinInlines(settled.inl, tail);
   }
 
+  /** The blocks with the line being written, as `parseAnswer` would read it if the text ended here; the state is not changed. */
+  function partial(line: string): Block[] {
+    const { ticks, rest } = fenceOf(line);
+    if (open) {
+      if (ticks >= open.ticks && FENCE_BLANK.test(rest)) return [...blocks, { kind: "code", lang: open.lang, text: open.text, fence, closed: true }];
+      return [...blocks, { kind: "code", lang: open.lang, text: open.lines === 0 ? line : `${open.text}\n${line}`, fence, closed: false }];
+    }
+    if (ticks >= 3 && !rest.includes("`")) return [...blocks, ...proseBlocks(prose), { kind: "code", lang: fenceLang(rest), text: "", fence, closed: false }];
+    const { next, closed } = proseLine(prose, line, partialInline);
+    return [...blocks, ...closed, ...proseBlocks(next)];
+  }
+
   function reset() {
     seen = "";
     lineAt = 0;
@@ -287,22 +308,29 @@ export function createAnswerParser(): AnswerParser {
     parse(text: string): Block[] {
       if (!text.startsWith(seen)) reset();
       seen = text;
-      for (let nl = text.indexOf("\n", lineAt); nl >= 0; nl = text.indexOf("\n", lineAt)) {
-        finished(text.slice(lineAt, nl));
-        lineAt = nl + 1;
+      // Line ends as `parseAnswer` reads them: LF, CRLF or a lone CR. A CR at the very end may still become a CRLF,
+      // so it is not taken yet.
+      const ends = /\r\n|\r|\n/g;
+      for (;;) {
+        ends.lastIndex = lineAt;
+        const hit = ends.exec(text);
+        if (!hit || (hit[0] === "\r" && hit.index === text.length - 1)) break;
+        finished(text.slice(lineAt, hit.index));
+        lineAt = hit.index + hit[0].length;
       }
-      // The line being written, as `parseAnswer` would read it if the text ended here; the state is not changed.
-      const line = strip(text.slice(lineAt));
-      const { ticks, rest } = fenceOf(line);
-      if (open) {
-        if (ticks >= open.ticks && rest.trim() === "") return [...blocks, { kind: "code", lang: open.lang, text: open.text, fence, closed: true }];
-        return [...blocks, { kind: "code", lang: open.lang, text: open.lines === 0 ? line : `${open.text}\n${line}`, fence, closed: false }];
-      }
-      if (ticks >= 3 && !rest.includes("`")) return [...blocks, ...proseBlocks(prose), { kind: "code", lang: rest.trim().split(/\s+/)[0] || null, text: "", fence, closed: false }];
-      const { next, closed } = proseLine(prose, line, partialInline);
-      return [...blocks, ...closed, ...proseBlocks(next)];
+      const tail = text.slice(lineAt);
+      if (!tail.endsWith("\r")) return partial(tail);
+      // As `parseAnswer` reads the text now, the CR ends the line and an empty one follows: read so on a copy of the
+      // state, which is put back, since the next piece may make the CR a CRLF.
+      const kept = { lineAt, blocks: blocks.slice(), fence, open: open && { ...open }, prose, settled };
+      finished(tail.slice(0, -1));
+      lineAt = text.length;
+      const out = partial("");
+      ({ lineAt, blocks, fence, open, prose, settled } = kept);
+      return out;
     },
   };
+
 }
 
 const SQL_TAGS = new Set(["sql", "postgresql", "postgres", "pgsql", "mysql", "sqlite", "plpgsql"]);

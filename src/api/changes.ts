@@ -1,3 +1,5 @@
+import type { ConnectionId } from "./types";
+
 /** A change made through the Core that open views read again on, so they never wait for a reopen. */
 export interface Change {
   /** Tells every listener. */
@@ -30,3 +32,23 @@ export const toolUsesChanged = change();
  * while Settings is the active tab.
  */
 export const aiSettingsChanged = change();
+
+/**
+ * A Connection's history was cleared, or the Connection deleted; null: every Connection's history was cleared. The
+ * Recent steps store drops the steps on it, in every place, as the Core drops them from stored Asks.
+ */
+export const connectionForgotten = (() => {
+  const listeners = new Set<(id: ConnectionId | null) => void>();
+  return {
+    emit(id: ConnectionId | null) {
+      for (const listener of [...listeners]) listener(id);
+    },
+    /** Calls `listener` on each; returns the unsubscribe. */
+    on(listener: (id: ConnectionId | null) => void): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+})();

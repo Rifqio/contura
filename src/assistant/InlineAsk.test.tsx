@@ -17,6 +17,7 @@ import { type AskContext, type AskKit, type AskSetup, tablesIn } from "./context
 import InlineAsk from "./InlineAsk";
 import appCss from "../styles/app.css?raw";
 import { queueOffline } from "./offlineQueue";
+import { sha256Hex } from "./sha256";
 
 vi.mock("./offlineQueue", async (original) => {
   const actual = await original<typeof import("./offlineQueue")>();
@@ -557,7 +558,7 @@ test("inline_answer_inserts_into_its_own_tab_through_the_diff", async () => {
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
   stream.emit(delta("Use this:\n```sql\nSELECT 2\n```"));
   stream.emit(
-    done({ sqlBlocks: [{ fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read", flags: [] }] }] }),
+    done({ sqlBlocks: [{ fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read", flags: [] }], bodySha256: sha256Hex("SELECT 2") }] }),
   );
   expect(await screen.findByText("1 statement: 1 read")).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
@@ -595,7 +596,7 @@ async function answeredWithInsert(onClose = vi.fn()) {
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
   stream.emit(delta("Use this:\n```sql\nSELECT 2\n```\nIt reads less."));
   stream.emit(
-    done({ sqlBlocks: [{ fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read", flags: [] }] }] }),
+    done({ sqlBlocks: [{ fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read", flags: [] }], bodySha256: sha256Hex("SELECT 2") }] }),
   );
   expect(await screen.findByText("1 statement: 1 read")).toBeTruthy();
   return { user, onClose };

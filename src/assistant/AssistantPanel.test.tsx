@@ -2,20 +2,25 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
-import type { AiAccess, AiError, AiEvent, AiSettings, AiSettingsView, AiThread, AppendTurn, ThreadView, AnswerRecord, AskRequest, Compaction, CompactRequest, ContextInfo, ModelList, ModelPicks, SqlBlock, Topic } from "../api/types";
+import type { AiAccess, AiError, AiEvent, AiSettings, AiSettingsView, AiThread, AppendTurn, ThreadView, AnswerRecord, AskRequest, Compaction, CompactRequest, ConnectionConfig, ContextInfo, ModelList, ModelPicks, SqlBlock, Topic } from "../api/types";
+import { assistantContextFor, assistantTargetFor } from "../app/assistantContext";
+import { type AnyTab, tabKey } from "../shell/tabs";
+import { type TabAskFields, usePublishTabAsk } from "./tabAsk";
+import { sha256Hex } from "./sha256";
 import type { SqlEditorApi } from "../query/SqlEditor";
 import { splitStatements, statementAt } from "../query/statements";
 import { iconElement, type IconName } from "../components/Icon";
 import { fakePreview } from "../test/aiPreview";
 import { aiStream, delta, done, failed, line, memory, sent, sentRecord, step } from "../test/aiStream";
 import { summaryOf, turnViewOf, viewOf } from "../test/aiThreads";
-import { withTurn } from "../api/client";
+import { clearQueryHistory, deleteConnection, withTurn } from "../api/client";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { modelInfo, modelList } from "../test/settingsRoutes";
 import { useCommandKeys } from "../commands/useCommandKeys";
 import AssistantPanel, { meterParts } from "./AssistantPanel";
 import type { AskContext } from "./context";
 import { threadsCleared } from "./threadsCleared";
+import { clearAllSteps, recordStep, type RecentStepInput, stepsOf } from "./recentSteps";
 import { SENDS_OPEN_KEY, saveSendsOpen } from "./sendsFold";
 
 /** How many times each answer text was drawn, by its text. */
@@ -126,6 +131,7 @@ let coreSave: (t: AiThread) => ThreadView = (t) => viewOf(t);
 const saves = () => saved;
 
 beforeEach(() => {
+  clearAllSteps();
   localStorage.removeItem(SENDS_OPEN_KEY);
   saved = [];
   coreSave = (t) => viewOf(t);
@@ -860,6 +866,16 @@ test("ctrl_shift_n_starts_a_new_chat", async () => {
   expect(screen.queryByText("Old chat", { selector: ".msg-user" })).toBeNull();
 });
 
+test("ctrl_n_starts_a_new_chat_while_focus_is_in_the_panel", async () => {
+  const user = userEvent.setup();
+  threads = [thread("a", "ungrouped", "Old chat", 1)];
+  renderPanel();
+  await screen.findByText("Old chat", { selector: ".msg-user" });
+  (document.querySelector(".ai-panel-head button") as HTMLElement).focus();
+  await user.keyboard("{Control>}n{/Control}");
+  expect(screen.queryByText("Old chat", { selector: ".msg-user" })).toBeNull();
+});
+
 test("loads_summaries_then_the_open_thread", async () => {
   threads = [thread("a", "ungrouped", "Old chat", 1), thread("b", "ungrouped", "Newer chat", 2)];
   renderPanel();
@@ -885,6 +901,7 @@ test("clear_this_chat_deletes_the_open_thread", async () => {
 test("clear_all_chats_clears_the_place", async () => {
   const user = userEvent.setup();
   threads = [thread("a", "ungrouped", "Old chat", 1)];
+  recordStep("ungrouped", { verb: "runVisual", tab: "visual", title: "Orders", connectionId: "c1", database: "shop", schema: null, count: 1 });
   renderPanel({ placeName: "Ungrouped" });
   await screen.findByText("Old chat", { selector: ".msg-user" });
   await openHistory(user);
@@ -892,6 +909,8 @@ test("clear_all_chats_clears_the_place", async () => {
   await user.click(screen.getByRole("button", { name: "Clear" }));
   await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "ungrouped" }]));
   expect(screen.queryByText("Old chat", { selector: ".msg-user" })).toBeNull();
+  // The place's Recent steps go with its chats.
+  expect(stepsOf("ungrouped")).toEqual([]);
 });
 
 const fullRecord = (log: string): AnswerRecord => ({
@@ -1142,6 +1161,7 @@ const ORDERS_BLOCK: SqlBlock = {
   fence: 0,
   label: "1 statement: 1 read",
   statements: [{ text: "SELECT id FROM orders", class: "read", flags: [] }],
+  bodySha256: sha256Hex("SELECT id FROM orders"),
 };
 
 test("answer_sql_renders_with_insert_open_and_copy", async () => {
@@ -1206,6 +1226,7 @@ const SLEEP_BLOCK: SqlBlock = {
   fence: 0,
   label: "1 statement: 1 read. Calls pg_sleep().",
   statements: [{ text: "SELECT pg_sleep(1)", class: "read", flags: [{ kind: "riskyFunction", name: "pg_sleep" }] }],
+  bodySha256: sha256Hex("SELECT pg_sleep(1)"),
 };
 
 test("notes_show_above_answer", async () => {
@@ -2084,6 +2105,27 @@ test("persist_stamps_both_messages", async () => {
   }
 });
 
+test("stores askedIn on the question only", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  const askedIn = {
+    tab: "visual",
+    label: 'Visual Query "Orders over 1M" in shop',
+    summary: "tables orders; ticked orders.id",
+    steps: ["opened Visual Query in shop"],
+  };
+  reply = () => [memory({ topic: 2, kinds: ["question", "tab", "sql"], askedIn }), delta("Use an index."), done()];
+  renderPanel();
+  await user.type(await screen.findByRole("textbox", { name: "Message" }), "find orders over 1M{Enter}");
+  await screen.findByText("Use an index.");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(1));
+  const turn = callsTo("ai_append_turn")[0].turn as AppendTurn;
+  expect(turn.messages[0]).toMatchObject({ role: "user", askedIn });
+  expect(turn.messages[1].role).toBe("assistant");
+  expect(turn.messages[1].askedIn).toBeUndefined();
+});
+
 test("meter_has_a_thread_part", () => {
   const p = fakePreview({ ...({} as AskRequest), focus: { tables: [], dbml: null, sql: "select 1", filter: null, error: null, selection: null, untiedModel: false }, connectionId: "c1", off: [], switches: { rows: false, values: false }, question: "q" } as AskRequest);
   p.items = [
@@ -2871,6 +2913,34 @@ test("an_ask_sends_only_its_turn_and_a_chat_whose_save_failed_goes_whole_next_ti
   expect((callsTo("ai_append_turn")[1].turn as AppendTurn).messages.map((m) => m.text)).toEqual(["third", "Use an index."]);
 });
 
+test("a failed append keeps the other Connections of askedIn for the next save", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  const askedIn = { tab: "compare", label: "Schema Compare shop (source) to shop_staging (target)", summary: "3 added, 1 removed, 4 changed", steps: ["compared shop"], also: ["c2"] };
+  reply = (_r, n) => (n === 1 ? [memory({ kinds: ["question", "tab"], askedIn }), delta("Use an index."), done()] : [delta("Use an index."), done()]);
+  let failAppend = true;
+  const routes = handlersNow();
+  routeInvoke({
+    ...routes,
+    ai_append_turn: (a) => {
+      if (failAppend) throw { kind: "store", message: "locked" };
+      return routes.ai_append_turn(a);
+    },
+  });
+  renderPanel();
+  const input = await screen.findByRole("textbox", { name: "Message" });
+  await user.type(input, "what changed?{Enter}");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(1));
+  expect((callsTo("ai_append_turn")[0].turn as AppendTurn).messages[0].askedIn).toEqual(askedIn);
+  // The retry sends the open copy: label only, but the other Connection's id is kept.
+  failAppend = false;
+  await user.type(input, "and why?{Enter}");
+  await waitFor(() => expect(callsTo("save_ai_thread")).toHaveLength(1));
+  const question = (callsTo("save_ai_thread")[0].thread as AiThread).messages.find((m) => m.text === "what changed?");
+  expect(question?.askedIn).toEqual({ tab: "compare", label: askedIn.label, summary: "", steps: [], also: ["c2"] });
+});
+
 test("a_full_record_is_kept_only_while_its_log_is_open", async () => {
   const user = userEvent.setup();
   threads = [
@@ -2894,4 +2964,333 @@ test("a_full_record_is_kept_only_while_its_log_is_open", async () => {
   await user.click(await screen.findByRole("button", { name: "Show log" }));
   expect(await screen.findByText(/the full log line/)).toBeTruthy();
   expect(callsTo("ai_answer_record")).toHaveLength(2);
+});
+
+/** Publishes `fields` under `tabKey`, as a screen does. */
+function Publisher({ tabKey, fields }: { tabKey: string; fields: TabAskFields }) {
+  usePublishTabAsk(tabKey, () => fields, [fields]);
+  return null;
+}
+
+const kestrel = (over: Partial<ConnectionConfig> = {}): ConnectionConfig => ({
+  id: "c1",
+  name: "Kestrel Foods",
+  dialect: "postgres",
+  host: "h",
+  port: 1,
+  user: "u",
+  database: null,
+  ssl: { mode: "disable" },
+  file: null,
+  groupId: null,
+  queryTimeoutSecs: null,
+  aiAccess: "schemaQuery",
+  production: false,
+  readOnly: false,
+  ...over,
+});
+
+test("sends This tab per tab kind", async () => {
+  const a = kestrel();
+  const b = kestrel({ id: "c2", name: "Kestrel staging" });
+  const connections = [a, b];
+  const path = { database: "shop", schema: "public", name: "orders" };
+  const visualDoc = { id: "v1", name: "Orders over 1M", connectionId: "c1", database: "shop", model: {} as never, savedId: null, savedJson: null };
+  const cases: { tab: AnyTab; fields: TabAskFields; expect: (r: AskRequest) => void }[] = [
+    {
+      tab: { kind: "object", key: "o1", selection: { connectionId: "c1", kind: "table", path } },
+      fields: {
+        tab: { kind: "object", title: "orders", path, object: "table", sort: { column: "total", descending: true }, filterColumns: ["status"], hidden: [], pendingEdits: 2 },
+        filter: "status = 'paid'",
+        tables: [{ schema: "public", name: "orders" }],
+      },
+      expect: (r) => {
+        expect(r.tab).toMatchObject({ kind: "object", sort: { column: "total", descending: true }, filterColumns: ["status"], pendingEdits: 2 });
+        expect(r.focus.filter).toBe("status = 'paid'");
+        expect(r.focus.sql).toBeNull();
+        expect(r.connectionId).toBe("c1");
+        expect(r.database).toBe("shop");
+        expect(r.schema).toBe("public");
+      },
+    },
+    {
+      tab: { kind: "visual", doc: visualDoc },
+      fields: {
+        tab: { kind: "visual", title: "Orders over 1M", model: { tables: [] } as never, sqlWritten: true, problems: 0, lastRun: { rows: 1, more: false, failed: false } },
+        sql: "SELECT o.id FROM orders o",
+      },
+      expect: (r) => {
+        expect(r.tab).toMatchObject({ kind: "visual", title: "Orders over 1M", sqlWritten: true });
+        expect(r.focus.sql).toBe("SELECT o.id FROM orders o");
+        expect(r.focus.filter).toBeNull();
+      },
+    },
+    {
+      tab: { kind: "schema", id: "s1", doc: { path: null, dbml: "", savedDbml: "", layout: {} as never, dialect: "postgres", source: "blank", connectionId: null } },
+      fields: { tab: { kind: "schema", file: "kestrel.dbml", tables: 1, errorLine: null }, dbml: "Table orders { id int }" },
+      expect: (r) => {
+        expect(r.tab).toEqual({ kind: "schema", file: "kestrel.dbml", tables: 1, errorLine: null });
+        expect(r.focus.dbml).toBe("Table orders { id int }");
+        expect(r.connectionId).toBeNull();
+        expect(r.focus.untiedModel).toBe(true);
+      },
+    },
+    {
+      tab: {
+        kind: "compare",
+        id: "k1",
+        title: "",
+        connectionId: "c2",
+        seed: { source: { kind: "database", connectionId: "c1", database: "shop", schema: "public" }, target: { connectionId: "c2", database: "shop_staging", schema: "public" } },
+      },
+      fields: {
+        tab: { kind: "compare", source: { kind: "database", database: "shop" }, targetDatabase: "shop_staging", items: [], added: 1, removed: 0, changed: 0, notCompared: 0, ticked: 1 },
+        sql: "CREATE TABLE refunds (id int);",
+        also: ["c1"],
+        where: { connectionId: "c2", database: "shop_staging", schema: "public" },
+      },
+      expect: (r) => {
+        expect(r.connectionId).toBe("c2");
+        expect(r.database).toBe("shop_staging");
+        expect(r.focus.also).toEqual(["c1"]);
+        expect(r.focus.sql).toBe("CREATE TABLE refunds (id int);");
+        expect(r.tab).toMatchObject({ kind: "compare", added: 1 });
+      },
+    },
+    {
+      tab: { kind: "transfer", id: "t1", title: "", dirty: false, seed: { connectionId: "c1", database: "shop", schema: "public", table: null } },
+      fields: {
+        tab: { kind: "transfer", sourceDatabase: "shop", targetDatabase: "analytics", mode: "perTable", tables: [], notes: [] },
+        also: ["c1"],
+        where: { connectionId: "c2", database: "analytics", schema: "public" },
+      },
+      expect: (r) => {
+        // Once the target is chosen the Ask is on it, with the source as the other Connection.
+        expect(r.connectionId).toBe("c2");
+        expect(r.database).toBe("analytics");
+        expect(r.schema).toBe("public");
+        expect(r.focus.also).toEqual(["c1"]);
+        expect(r.tab).toMatchObject({ kind: "transfer", targetDatabase: "analytics", mode: "perTable" });
+      },
+    },
+  ];
+  for (const c of cases) {
+    const target = assistantTargetFor(c.tab, connections, connections)!;
+    const key = tabKey(c.tab);
+    const { unmount } = render(
+      <>
+        <Publisher tabKey={key} fields={c.fields} />
+        <AssistantPanel place="ungrouped" groupId={null} context={assistantContextFor(target, null, null)} tabKey={key} schema={null} connections={connections} onOpenSettings={() => {}} />
+      </>,
+    );
+    await waitFor(() => expect(lastPreview()?.tab?.kind).toBe(c.fields.tab.kind));
+    c.expect(lastPreview());
+    unmount();
+  }
+});
+
+test("a tab with nothing published sends what App knows of it", async () => {
+  const a = kestrel();
+  const target = assistantTargetFor({ kind: "settings", section: "ai" }, [a], [a])!;
+  renderPanel({ context: assistantContextFor(target, null, null), tabKey: "settings", connections: [a] });
+  await waitFor(() => expect(lastPreview()?.tab).toEqual({ kind: "settings", section: "ai" }));
+  expect(lastPreview().connectionId).toBeNull();
+  expect("also" in lastPreview().focus).toBe(false);
+});
+
+test("Home asks with no Connection", async () => {
+  const target = assistantTargetFor({ kind: "home" }, [], [])!;
+  renderPanel({ context: assistantContextFor(target, null, null), tabKey: "home", connections: [] });
+  await waitFor(() => expect(lastPreview()?.tab).toEqual({ kind: "home" }));
+  expect(lastPreview().connectionId).toBeNull();
+  expect(lastPreview().database).toBeNull();
+  expect(document.querySelector('[title^="AI access for"]')).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Message" }).getAttribute("placeholder")).toBe("Ask about Contura or SQL");
+});
+
+test("answers on a tab with no editor open in a new query tab", async () => {
+  const user = userEvent.setup();
+  const onOpenInNewTab = vi.fn();
+  const a = kestrel();
+  const target = assistantTargetFor({ kind: "home" }, [a], [a])!;
+  await askHeld(user, "list orders", { context: assistantContextFor(target, null, null), tabKey: "home", connections: [a], insertTarget: null, onOpenInNewTab });
+  stream.emit(delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] }));
+  const open = await screen.findByRole("button", { name: "Open in new query tab" });
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  await user.click(open);
+  expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT id FROM orders", null);
+  expect(callsTo("run_query")).toHaveLength(0);
+});
+
+test("a tab that has published nothing yet still has no editor: answers open in a new query tab", async () => {
+  const user = userEvent.setup();
+  const onOpenInNewTab = vi.fn();
+  const a = kestrel();
+  // A Table Designer before its draft loads publishes nothing.
+  const design: AnyTab = { kind: "design", key: "d1", connectionId: "c1", target: { kind: "alter", path: { database: "shop", schema: null, name: "orders" } } };
+  const target = assistantTargetFor(design, [a], [a])!;
+  await askHeld(user, "add a column", { context: assistantContextFor(target, null, null), tabKey: "d1", connections: [a], insertTarget: null, onOpenInNewTab });
+  stream.emit(delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] }));
+  expect(await screen.findByRole("button", { name: "Open in new query tab" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
+});
+
+test("a tab whose Connection is gone is not named in the placeholder and asks at Nothing", async () => {
+  const object: AnyTab = { kind: "object", key: "o1", selection: { connectionId: "gone", kind: "table", path: { database: "shop", schema: null, name: "orders" } } };
+  const target = assistantTargetFor(object, [], [])!;
+  renderPanel({ context: assistantContextFor(target, null, null), tabKey: "o1", connections: [] });
+  await waitFor(() => expect(lastPreview()?.connectionId).toBe("gone"));
+  expect(screen.getByRole("textbox", { name: "Message" }).getAttribute("placeholder")).toBe("Ask about Contura or SQL");
+});
+
+test("the Ask reads the tab's fields when it is sent, not as the last change left them", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  stream.hold();
+  let dbml = "Table orders { id int }";
+  function Live() {
+    // The count does not change while the text does, as between two parses.
+    usePublishTabAsk("schema:s1", () => ({ tab: { kind: "schema", file: "shop.dbml", tables: 1, errorLine: null }, dbml }), []);
+    return null;
+  }
+  const model: AnyTab = { kind: "schema", id: "s1", doc: { path: null, dbml: "", savedDbml: "", layout: {} as never, dialect: "postgres", source: "blank", connectionId: null } };
+  const target = assistantTargetFor(model, [], [])!;
+  render(
+    <>
+      <Live />
+      <AssistantPanel place="ungrouped" groupId={null} context={assistantContextFor(target, null, null)} tabKey="schema:s1" schema={null} connections={[]} onOpenSettings={() => {}} />
+    </>,
+  );
+  await waitFor(() => expect(lastPreview()?.focus.dbml).toBe("Table orders { id int }"));
+  dbml = "Table orders { id int }\nTable refunds { id int }";
+  await waitFor(() => expect(callsTo("ai_settings").length).toBeGreaterThan(0));
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "why?{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(askSent().focus.dbml).toBe("Table orders { id int }\nTable refunds { id int }");
+});
+
+const trail: RecentStepInput[] = [
+  { verb: "openTab", tab: "visual", title: "Orders over 1M", connectionId: "c1", database: "shop", schema: null, count: null },
+  { verb: "vqTick", tab: "visual", title: "Orders over 1M", connectionId: "c1", database: "shop", schema: null, names: ["orders.total"], count: null },
+  { verb: "runVisual", tab: "visual", title: "Orders over 1M", connectionId: "c1", database: "shop", schema: null, count: 1 },
+];
+
+test("Recent steps row and switch", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  for (const s of trail) recordStep("ungrouped", s);
+  unfoldSends();
+  renderPanel();
+  const pill = async () => screen.findByRole("button", { name: /^Recent steps/ });
+  expect((await pill()).textContent).toBe("Recent steps · 3");
+  await waitFor(() => expect(lastPreview().steps).toHaveLength(3));
+  // Off for this Ask only: the steps still go, and `off` leaves them out.
+  await user.click(await pill());
+  await waitFor(() => expect(lastPreview().off).toContain("steps"));
+  expect((await pill()).textContent).toBe("Recent steps · 3 · off");
+  // The off row stays, so it can be switched back on, and off again.
+  await user.click(await pill());
+  await waitFor(() => expect(lastPreview().off).not.toContain("steps"));
+  expect((await pill()).getAttribute("aria-pressed")).toBe("true");
+  await user.click(await pill());
+  await waitFor(() => expect(lastPreview().off).toContain("steps"));
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "one{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(askSent().steps).toHaveLength(3);
+  expect(askSent().off).toContain("steps");
+  expect(askSent().steps!.every((x) => !("seq" in x))).toBe(true);
+  await screen.findByText("Use an index.");
+  // The turn was kept: the steps it carried are gone, and the switch is back on.
+  await waitFor(() => expect(stepsOf("ungrouped")).toEqual([]));
+  await waitFor(() => expect(lastPreview().off).not.toContain("steps"));
+  expect(screen.queryByRole("button", { name: /^Recent steps/ })).toBeNull();
+  act(() => recordStep("ungrouped", trail[2]));
+  expect((await pill()).getAttribute("aria-pressed")).toBe("true");
+  expect((await pill()).textContent).toBe("Recent steps · 1");
+});
+
+test("clearing a Connection's history or deleting it drops its Recent steps before the next Ask", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  routeInvoke({ ...handlersNow(), clear_query_history: () => undefined, delete_connection: () => undefined });
+  const onB: RecentStepInput = { verb: "runQuery", tab: "query", title: "Late orders", connectionId: "c2", database: "staging", schema: null, count: 3 };
+  const fromB: RecentStepInput = { verb: "transferRan", tab: "transfer", title: null, connectionId: "c1", sourceConnectionId: "c2", database: "shop", schema: null, names: ["staging", "orders"], count: 12 };
+  for (const s of [...trail, onB, fromB]) recordStep("ungrouped", s);
+  recordStep("group:g1", onB);
+  await act(() => clearQueryHistory("c2"));
+  // Every place: steps on B and steps that name B as their source.
+  expect(stepsOf("ungrouped").map((s) => s.verb)).toEqual(["openTab", "vqTick", "runVisual"]);
+  expect(stepsOf("group:g1")).toEqual([]);
+  renderPanel();
+  await waitFor(() => expect(lastPreview().steps).toHaveLength(3));
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "what did I do?{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(askSent().steps!.every((x) => x.connectionId !== "c2" && x.sourceConnectionId !== "c2")).toBe(true);
+  await screen.findByText("Use an index.");
+
+  // Delete does the same; steps on no Connection stay.
+  clearAllSteps();
+  recordStep("ungrouped", trail[0]);
+  recordStep("ungrouped", { verb: "openTab", tab: "settings", title: null, connectionId: null, database: null, schema: null, count: null });
+  await act(() => deleteConnection("c1"));
+  expect(stepsOf("ungrouped").map((s) => s.tab)).toEqual(["settings"]);
+  // Clearing every Connection's history drops every step on a Connection.
+  recordStep("ungrouped", onB);
+  await act(() => clearQueryHistory(null));
+  expect(stepsOf("ungrouped").map((s) => s.tab)).toEqual(["settings"]);
+});
+
+test("a failed Ask that sent nothing keeps the Recent steps", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = { kind: "notConfigured" };
+  for (const s of trail) recordStep("ungrouped", s);
+  renderPanel();
+  await waitFor(() => expect(lastPreview().steps).toHaveLength(3));
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "one{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(askSent().steps).toHaveLength(3);
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "Message" })).toHaveProperty("value", "one"));
+  expect(stepsOf("ungrouped")).toHaveLength(3);
+});
+
+const askedThread = (first: { tab: string; label: string }, second: { tab: string; label: string }): AiThread => ({
+  id: "t1",
+  place: "ungrouped",
+  title: "orders",
+  updatedAt: 40,
+  messages: [
+    { role: "user", text: "first question", context: [], at: 10, askedIn: { ...first, summary: "", steps: [] } },
+    { role: "assistant", text: "First answer.", context: [], at: 20 },
+    { role: "user", text: "second question", context: [], at: 30, askedIn: { ...second, summary: "", steps: [] } },
+    { role: "assistant", text: "Second answer.", context: [], at: 40 },
+  ],
+});
+
+test("Asked in caption", async () => {
+  const visual = { tab: "visual", label: 'Visual Query "Orders over 1M" in shop' };
+  threads = [askedThread({ tab: "query", label: 'Query tab "Query 1" in shop' }, visual)];
+  renderPanel();
+  await screen.findByText("Second answer.");
+  const caption = screen.getByText('Asked in Visual Query "Orders over 1M" in shop');
+  // Above the second question, never the first.
+  expect(caption.nextElementSibling?.textContent).toBe("second question");
+  expect(screen.queryByText(/Asked in Query tab/)).toBeNull();
+
+  cleanup();
+  threads = [askedThread(visual, visual)];
+  renderPanel();
+  await screen.findByText("Second answer.");
+  expect(screen.queryByText(/^Asked in/)).toBeNull();
+
+  // An Asked in with no tab says nothing.
+  cleanup();
+  threads = [askedThread(visual, { tab: "", label: "" })];
+  renderPanel();
+  await screen.findByText("Second answer.");
+  expect(screen.queryByText(/^Asked in/)).toBeNull();
 });

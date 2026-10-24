@@ -10,6 +10,7 @@ import { cellText, toCsv } from "../query/ResultTools";
 import appCss from "../styles/app.css?raw";
 import tokensCss from "../styles/tokens.css?raw";
 import ResultGrid from "./ResultGrid";
+import { single } from "../grid/selection";
 
 afterEach(() => act(() => setNullDisplay("null")));
 
@@ -42,8 +43,8 @@ test("the_selected_row_and_a_row_with_its_own_state_take_no_stripe", () => {
       rows={rows}
       resetKey={1}
       label="Result"
-      selected={{ row: 1, column: 0 }}
-      onSelect={() => {}}
+      selection={single({ r: 1, c: 0 })}
+      onSelection={() => {}}
       rowClass={(r) => (r === 3 ? "row-added" : r === 5 ? "row-deleted" : undefined)}
     />,
   );

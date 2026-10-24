@@ -4,6 +4,7 @@ import { DIALECT_LABEL, errorText, exportSql, writeBinaryFile, writeModelFiles, 
 import type { DialectKind, SchemaModel } from "../api/types";
 import { dbmlErrorNotice } from "../compare/compareModel";
 import type { AskContext, AskKit } from "../assistant/context";
+import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
 import Menu, { type MenuItem } from "../components/Menu";
@@ -44,6 +45,18 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 const basename = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
+/** The DBML the Ask gets: twice the Core's 64 KB cap at most, cut at a line end. */
+const DBML_MAX = 128 * 1024;
+
+/**
+ * What a Schema Builder tab tells the Ask (spec 4.5): the file's base name, the table count and the first error's
+ * line, with the DBML the editor holds as the DBML item.
+ */
+export function schemaTabAsk(file: string, tables: number, errorLine: number | null, dbml: string): TabAskFields {
+  const cut = dbml.length > DBML_MAX ? dbml.slice(0, Math.max(0, dbml.lastIndexOf("\n", DBML_MAX))) : dbml;
+  return { tab: { kind: "schema", file: basename(file), tables, errorLine }, dbml: cut };
+}
+
 interface Props {
   doc: ModelDoc;
   onClose: () => void;
@@ -54,17 +67,20 @@ interface Props {
   /** The live source Connection of the model, if it still exists; carries the AI access for card asks. */
   sourceConnection?: AskContext["connection"];
   /** Set to the builder's own Close, so its tab's close asks about unsaved changes the same way. */
-  closeRef?: MutableRefObject<(() => void) | null>;
+  /** Asks to close; resolves true once the builder closed, false when the user kept it open (Cancel). */
+  closeRef?: MutableRefObject<(() => Promise<boolean>) | null>;
+  /** The tab's key: the builder publishes what the Ask may know of the model (`tabAsk.ts`). */
+  askKey?: string | null;
   /** The file the model was saved to, once a Save picks one; its tab is named after it. */
   onPathChange?: (path: string) => void;
   /**
    * Apply to Connection...: opens Schema Compare with this model as the source (saving nothing).
    * `notice` is set while the DBML has an error and the compare uses the last valid version.
    */
-  onApplyToConnection?: (source: { model: SchemaModel; path: string | null; dialect: DialectKind; notice: string | null }) => void;
+  onApplyToConnection?: (source: { model: SchemaModel; path: string | null; dialect: DialectKind; notice: string | null; connectionId: string | null }) => void;
 }
 
-export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnection, closeRef, onPathChange, onApplyToConnection }: Props) {
+export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnection, closeRef, onPathChange, onApplyToConnection, askKey = null }: Props) {
   const [text, setText] = useState(doc.dbml);
   const [saved, setSaved] = useState(doc.savedDbml);
   const [path, setPath] = useState(doc.path);
@@ -90,7 +106,23 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
   const blocked = !!result && result.r.model === null;
   const firstError = result?.r.diagnostics.find((d) => d.severity === "error");
   const dirty = text !== saved || layoutDirty;
-  const requestClose = () => (dirty ? setConfirmClose(true) : onClose());
+  const pendingClose = useRef<((closed: boolean) => void) | null>(null);
+  const settleClose = (closed: boolean) => {
+    pendingClose.current?.(closed);
+    pendingClose.current = null;
+  };
+  useEffect(() => () => settleClose(false), []);
+  const requestClose = (): Promise<boolean> => {
+    if (!dirty) {
+      onClose();
+      return Promise.resolve(true);
+    }
+    settleClose(false);
+    setConfirmClose(true);
+    return new Promise((resolve) => {
+      pendingClose.current = resolve;
+    });
+  };
   if (closeRef) closeRef.current = requestClose;
 
   // The blocks of the selected cards. While a newer parse is pending the old ranges would be off, so the band waits.
@@ -168,6 +200,11 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
     if (blocked) setPendingExport(kind);
     else void runExport(kind);
   }
+
+  // The DBML is read from the editor's ref when the Ask asks; a new parse, not each key, bumps the count.
+  const tableCount = model?.tables.length ?? 0;
+  const errorLine = firstError?.line ?? null;
+  usePublishTabAsk(askKey, () => schemaTabAsk(`${name}.dbml`, tableCount, errorLine, textRef.current), [name, tableCount, errorLine, result]);
 
   const problems = result ? result.r.diagnostics.filter((d) => d.severity !== "hint").length : 0;
   const counts = model ? `${plural(model.tables.length, "table")}, ${plural(model.refs.length, "ref")}` : "";
@@ -291,6 +328,7 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
                     path,
                     dialect: doc.dialect,
                     notice: blocked && firstError ? dbmlErrorNotice(firstError.line) : null,
+                    connectionId: doc.connectionId,
                   }))
               }
               onShowText={collapsed ? () => setCollapsed(false) : undefined}
@@ -340,23 +378,47 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
         </Dialog>
       )}
       {confirmClose && (
-        <Dialog title="Unsaved changes" size="confirm" onClose={() => setConfirmClose(false)}>
+        <Dialog
+          title="Unsaved changes"
+          size="confirm"
+          onClose={() => {
+            setConfirmClose(false);
+            settleClose(false);
+          }}
+        >
           <div className="dialog-body">
             <p>Save changes to {name}?</p>
           </div>
           <footer className="dialog-footer">
-            <button type="button" className="button" onClick={onClose}>
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                onClose();
+                settleClose(true);
+              }}
+            >
               Don't save
             </button>
             <span className="spacer" />
-            <button type="button" className="button" onClick={() => setConfirmClose(false)}>
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                setConfirmClose(false);
+                settleClose(false);
+              }}
+            >
               Cancel
             </button>
             <button
               type="button"
               className="button button-primary"
               onClick={async () => {
-                if (await saveModel()) onClose();
+                if (await saveModel()) {
+                  onClose();
+                  settleClose(true);
+                }
               }}
             >
               Save

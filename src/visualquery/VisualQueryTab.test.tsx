@@ -15,7 +15,9 @@ import { emptyQuery } from "./model";
 import { fitWidth, type QueryCardData, queryCardHeight } from "./QueryCard";
 import { rowAnchor } from "./JoinEdge";
 import { parseVisualDrafts } from "./drafts";
-import VisualQueryTab, { type VisualQueryTabProps, joinBrings, pairsSentence, warningLines } from "./VisualQueryTab";
+import { type TabAskEntry, useTabAsk } from "../assistant/tabAsk";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
+import VisualQueryTab, { type VisualQueryTabProps, joinBrings, pairsSentence, visualTabAsk, warningLines } from "./VisualQueryTab";
 import appCss from "../styles/app.css?raw";
 
 /** Item 30: the SQL is a tab of the bottom panel; this shows it. */
@@ -1038,4 +1040,230 @@ test("release_a_card_resize_follows_3px_steps_in_both_axes_and_ends_mid_row", as
   // 121 px ends mid-row: kept as it is, the rows clip and scroll.
   await waitFor(() => expect(changes[changes.length - 1]?.heights).toEqual({ t1: 121 }));
   expect(changes[changes.length - 1].widths).toEqual({ t1: 231 });
+});
+
+// ---- What the tab tells the Ask (spec 4.3) ----
+
+function AskReader({ onEntry }: { onEntry(e: TabAskEntry | null): void }) {
+  onEntry(useTabAsk("visual:v1"));
+  return null;
+}
+
+test("the tab publishes the SQL pane text, and with problems no SQL", async () => {
+  let entry: TabAskEntry | null = null;
+  const doc = docWith({ tables: [card("t1", "orders", "o")], filters: [{ joiner: "and", table: "t1", column: "total", op: "gt", values: ["1000000"] }] }, { name: "Orders over 1M" });
+  render(
+    <>
+      <Harness initial={doc} askKey="visual:v1" />
+      <AskReader onEntry={(e) => (entry = e)} />
+    </>,
+  );
+  await waitFor(() => expect(entry?.get()?.sql).toBe("SELECT *\nFROM orders o"));
+  const fields = entry!.get()!;
+  expect(fields.tab).toMatchObject({ kind: "visual", title: "Orders over 1M", sqlWritten: true, problems: 0, lastRun: null });
+  // The filter's value never leaves the tab; its column does.
+  expect(JSON.stringify(fields.tab)).not.toContain("1000000");
+  expect(fields.tab.kind === "visual" && fields.tab.model.filters[0]).toMatchObject({ table: "t1", column: "total", values: [] });
+});
+
+test("a model with problems publishes sqlWritten false and no SQL", async () => {
+  routeInvoke({ visual_query_sql: () => ({ query: null, problems: [{ target: { kind: "columns" }, message: "Group by needs a column." }] }) });
+  let entry: TabAskEntry | null = null;
+  render(
+    <>
+      <Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} askKey="visual:v1" />
+      <AskReader onEntry={(e) => (entry = e)} />
+    </>,
+  );
+  await waitFor(() => expect(entry?.get()?.tab).toMatchObject({ sqlWritten: false, problems: 1 }));
+  expect(entry!.get()!.sql).toBeUndefined();
+});
+
+test("visualTabAsk carries the last run's count and leaves card places out", () => {
+  const doc = docWith({ tables: [card("t1", "orders", "o", 340)] });
+  const ran = visualTabAsk(doc, "SELECT *\nFROM orders o", 0, { rows: 200, more: true, failed: false });
+  expect(ran.tab).toMatchObject({ kind: "visual", lastRun: { rows: 200, more: true, failed: false } });
+  expect(ran.tab.kind === "visual" && ran.tab.model.tables[0]).toMatchObject({ name: "orders", x: 0, y: 0 });
+  expect(visualTabAsk(doc, null, 0, { rows: 0, more: false, failed: true }).tab).toMatchObject({ sqlWritten: false, lastRun: { failed: true } });
+});
+
+test("a_tick_is_a_recent_step_on_the_tab", async () => {
+  clearAllSteps();
+  render(
+    <RecordStepContext.Provider value="ungrouped">
+      <Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} />
+    </RecordStepContext.Provider>,
+  );
+  const box = await screen.findByRole("checkbox", { name: "o.id" });
+  const row = box.closest("li")!;
+  row.focus();
+  fireEvent.keyDown(row, { key: " ", code: "Space" });
+  expect((box as HTMLInputElement).checked).toBe(true);
+  expect(stepsOf("ungrouped")).toMatchObject([
+    { verb: "vqTick", tab: "visual", title: "New Visual Query", connectionId: "c1", database: "shop", names: ["orders.id"] },
+  ]);
+  clearAllSteps();
+});
+
+// ---- UX step 7: V1 undo and redo, V4 Delete the selection, V2 canvas navigation ----
+const cardGone = (label: string) => waitFor(() => expect(screen.queryByRole("group", { name: label })).toBeNull());
+const ctrl = (key: string, extra: { shiftKey?: boolean } = {}) => fireEvent.keyDown(canvas(), { key, ctrlKey: true, ...extra });
+const twoCards = () => render(<Harness initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 300)] })} />);
+
+test("v1_ctrl_z_undoes_a_removed_card_with_its_ticks_and_ctrl_y_and_ctrl_shift_z_redo", async () => {
+  twoCards();
+  const orders = await cardEl("Table orders o");
+  await userEvent.click(within(orders).getByRole("button", { name: "Remove orders" }));
+  await cardGone("Table orders o");
+  ctrl("z");
+  expect(await cardEl("Table orders o")).toBeTruthy();
+  ctrl("y");
+  await cardGone("Table orders o");
+  ctrl("z");
+  expect(await cardEl("Table orders o")).toBeTruthy();
+  ctrl("z", { shiftKey: true });
+  await cardGone("Table orders o");
+});
+
+test("v1_every_gesture_is_one_step_a_tick_a_drop_and_a_clear", async () => {
+  render(<Harness initial={docWith()} />);
+  await screen.findByText("Add tables to start");
+  dropTable("orders");
+  await cardEl("Table orders o");
+  await new Promise((r) => setTimeout(r, 0));
+  dropTable("stores");
+  await cardEl("Table stores s");
+  ctrl("z");
+  await cardGone("Table stores s");
+  expect(screen.getByRole("group", { name: "Table orders o" })).toBeTruthy();
+  ctrl("z");
+  await cardGone("Table orders o");
+  ctrl("z");
+  expect(screen.queryByRole("group", { name: /Table/ })).toBeNull();
+});
+
+test("v1_ticking_a_column_undoes_and_redoes_one_step_each", async () => {
+  twoCards();
+  const box = (await screen.findByRole("checkbox", { name: "o.id" })) as HTMLInputElement;
+  const row = box.closest("li")!;
+  row.focus();
+  fireEvent.keyDown(row, { key: " ", code: "Space" });
+  expect(box.checked).toBe(true);
+  ctrl("z");
+  await waitFor(() => expect((screen.getByRole("checkbox", { name: "o.id" }) as HTMLInputElement).checked).toBe(false));
+  ctrl("y");
+  await waitFor(() => expect((screen.getByRole("checkbox", { name: "o.id" }) as HTMLInputElement).checked).toBe(true));
+});
+
+test("v1_undo_leaves_a_text_field_to_its_own_undo_and_typing_is_one_step", async () => {
+  twoCards();
+  await cardEl("Table orders o");
+  await userEvent.click(screen.getByRole("tab", { name: /^Filter and sort/ }));
+  await userEvent.click(await screen.findByRole("button", { name: /Add condition/ }));
+  const value = (await screen.findByRole("textbox", { name: "Value for filter 1" })) as HTMLInputElement;
+  await userEvent.type(value, "ab");
+  expect(value.value).toBe("ab");
+  // In the field, Ctrl+Z is the field's own: the filter stays as it is.
+  fireEvent.keyDown(value, { key: "z", ctrlKey: true });
+  expect((screen.getByRole("textbox", { name: "Value for filter 1" }) as HTMLInputElement).value).toBe("ab");
+  // On the canvas it is one step for the whole typing, then one for the filter row.
+  ctrl("z");
+  await waitFor(() => expect((screen.getByRole("textbox", { name: "Value for filter 1" }) as HTMLInputElement).value).toBe(""));
+  ctrl("z");
+  await waitFor(() => expect(screen.queryByRole("group", { name: "Filter 1" })).toBeNull());
+});
+
+test("v1_the_clear_toast_undo_is_an_ordinary_step_so_redo_clears_again", async () => {
+  twoCards();
+  await cardEl("Table orders o");
+  fireEvent.contextMenu(document.querySelector(".react-flow__pane") as HTMLElement, { clientX: 500, clientY: 300 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Clear the canvas" }));
+  await cardGone("Table orders o");
+  await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+  expect(await cardEl("Table orders o")).toBeTruthy();
+  ctrl("y");
+  await cardGone("Table orders o");
+  ctrl("z");
+  expect(await cardEl("Table orders o")).toBeTruthy();
+});
+
+
+test("v4_delete_and_backspace_remove_the_whole_selection_as_one_undo_step", async () => {
+  twoCards();
+  await cardEl("Table orders o");
+  fireEvent.contextMenu(document.querySelector(".react-flow__pane") as HTMLElement, { clientX: 500, clientY: 300 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Select all" }));
+  canvas().focus();
+  fireEvent.keyDown(canvas(), { key: "Delete" });
+  await cardGone("Table orders o");
+  await cardGone("Table stores s");
+  ctrl("z");
+  expect(await cardEl("Table orders o")).toBeTruthy();
+  expect(await cardEl("Table stores s")).toBeTruthy();
+  fireEvent.contextMenu(document.querySelector(".react-flow__pane") as HTMLElement, { clientX: 500, clientY: 300 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Select all" }));
+  fireEvent.keyDown(canvas(), { key: "Backspace" });
+  await cardGone("Table orders o");
+  await cardGone("Table stores s");
+});
+
+test("v2_the_canvas_navigates_like_the_flow_canvas_drag_selects_and_wheel_pans", async () => {
+  twoCards();
+  await cardEl("Table orders o");
+  const pane = document.querySelector(".react-flow__pane") as HTMLElement;
+  // Left-drag on empty canvas selects (does not pan); the middle button or Space pans.
+  expect(pane.classList.contains("draggable")).toBe(false);
+});
+
+test("zoom_control_drops_to_the_corner_where_the_overview_is_hidden_so_it_never_covers_the_first_cards", () => {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  // The zoom control sits above the overview (162px) only while the overview shows.
+  expect(css).toMatch(/\.diagram-canvas \.react-flow__panel\.canvas-zoom \{[^}]*margin: 0 12px 162px 0/);
+  const small = /@container diagram-canvas \(max-height: 360px\) or \(max-width: 480px\) \{([\s\S]*?\n\})\n/.exec(css)?.[1] ?? "";
+  expect(small).toMatch(/\.react-flow__minimap \{\s*display: none/);
+  expect(small).toMatch(/\.react-flow__panel\.canvas-zoom \{\s*margin-bottom: 12px/);
+});
+
+const key = (k: string, extra: object = {}) => fireEvent.keyDown(document.activeElement ?? document.body, { key: k, ...extra });
+
+test("fix1_after_the_remove_button_focus_stays_on_the_canvas_so_ctrl_z_works", async () => {
+  twoCards();
+  const orders = await cardEl("Table orders o");
+  await userEvent.click(within(orders).getByRole("button", { name: "Remove orders" }));
+  await cardGone("Table orders o");
+  expect(document.activeElement).toBe(canvas());
+  key("z", { ctrlKey: true });
+  expect(await cardEl("Table orders o")).toBeTruthy();
+});
+
+test("fix1_after_delete_on_a_card_focus_stays_on_the_canvas_so_ctrl_z_works", async () => {
+  twoCards();
+  const orders = await cardEl("Table orders o");
+  (orders.closest(".react-flow__node") as HTMLElement).focus();
+  key("Delete");
+  await cardGone("Table orders o");
+  expect(document.activeElement).toBe(canvas());
+  key("z", { ctrlKey: true });
+  expect(await cardEl("Table orders o")).toBeTruthy();
+});
+
+test("fix1_delete_and_backspace_in_a_text_field_remove_nothing", async () => {
+  twoCards();
+  await cardEl("Table orders o");
+  await userEvent.click(screen.getByRole("tab", { name: /^Filter and sort/ }));
+  await userEvent.click(await screen.findByRole("button", { name: /Add condition/ }));
+  const value = await screen.findByRole("textbox", { name: "Value for filter 1" });
+  fireEvent.keyDown(value, { key: "Delete" });
+  fireEvent.keyDown(value, { key: "Backspace" });
+  expect(screen.getByRole("group", { name: "Table orders o" })).toBeTruthy();
+  expect(screen.getByRole("group", { name: "Table stores s" })).toBeTruthy();
+});
+
+test("fix1_backspace_on_a_column_row_does_not_remove_its_card_but_delete_on_the_card_does", async () => {
+  twoCards();
+  const box = await screen.findByRole("checkbox", { name: "o.id" });
+  const row = box.closest("li")!;
+  row.focus();
+  fireEvent.keyDown(row, { key: "Backspace" });
+  expect(screen.getByRole("group", { name: "Table orders o" })).toBeTruthy();
 });

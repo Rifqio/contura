@@ -5,7 +5,8 @@ use serde::Serialize;
 use super::rules::{AskFacts, EARLIER_TOPICS, RECENT_TURNS, TopicPick, rule_summary};
 use super::{Compaction, CompactionId, SummaryBy, Topic};
 use crate::ai::budget::estimate_tokens;
-use crate::ai::rails::input::allowed;
+use crate::ai::rails::input::{allowed, rank};
+use crate::ai::rails::retrieval::{ASKED_IN_SOURCE, framed_lines};
 use crate::ai::request::{ItemKind, Switches};
 use crate::ai::{AiAccess, AiMessage, AiRole, AiThread};
 use crate::model::ConnectionId;
@@ -27,12 +28,87 @@ pub fn history_allowed(
     database == ask.database && kinds.iter().all(|k| allowed(access, *k, switches))
 }
 
+/// The other Connections the turns of `thread` were asked across (`AskedIn::also`) and
+/// those of their stored steps on other Connections (`AskedIn::other_steps`), each once:
+/// the memory stage reads their current access before the gate runs.
+pub fn also_of(thread: &AiThread) -> Vec<ConnectionId> {
+    let mut out: Vec<ConnectionId> = Vec::new();
+    for id in thread
+        .messages
+        .iter()
+        .filter_map(|m| m.asked_in.as_ref())
+        .flat_map(|a| {
+            a.also
+                .iter()
+                .chain(a.other_steps.iter().map(|s| &s.connection_id))
+        })
+    {
+        if !out.contains(id) {
+            out.push(*id);
+        }
+    }
+    out
+}
+
+/// The access a stored message is gated at: `access` (the Ask's own Connection's),
+/// lowered to the current access of every other Connection its question was asked across.
+/// One not in `others` (deleted) is Never, and at Never the message is held whatever it
+/// carried: a turn on a two-Connection tab goes only while both Connections still allow
+/// every kind it was stamped with, which include the highest level its tab used.
+pub fn message_access(
+    m: &AiMessage,
+    access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
+) -> AiAccess {
+    let Some(asked) = m.asked_in.as_ref() else {
+        return access;
+    };
+    asked.also.iter().fold(access, |low, id| {
+        let level = access_now(*id, others);
+        if rank(level) < rank(low) { level } else { low }
+    })
+}
+
+/// The current access of another Connection, as the memory stage read it into `others`
+/// (`also_of`); one not there (deleted, or unreadable) is Never.
+pub fn access_now(id: ConnectionId, others: &[(ConnectionId, AiAccess)]) -> AiAccess {
+    others
+        .iter()
+        .find(|(c, _)| *c == id)
+        .map_or(AiAccess::Never, |(_, a)| *a)
+}
+
+/// The gate on one stored message: `history_allowed` at `message_access`, and never at
+/// Never.
+pub fn message_allowed(
+    m: &AiMessage,
+    ask: &AskFacts,
+    access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
+    switches: Switches,
+) -> bool {
+    let access = message_access(m, access, others);
+    access != AiAccess::Never
+        && history_allowed(
+            m.connection_id,
+            m.database.as_deref(),
+            &m.kinds,
+            ask,
+            access,
+            switches,
+        )
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
     pub question: String,
     pub answer: String,
+    /// The question's Asked in as replayed, one framed line each (`AskedIn::replay_lines`),
+    /// cleaned; `None` for a question stored without one.
+    pub asked_in: Option<String>,
     pub at: i64,
+    /// The question, its Asked in lines as framed, and the answer.
     pub tokens: u32,
 }
 
@@ -72,6 +148,10 @@ pub struct HistoryPick {
     pub tokens: u32,
 }
 
+/// A boundary as long as a request's, to measure framed Asked in lines before the request
+/// has one.
+const MEASURE_BOUNDARY: &str = "0000000000000000";
+
 fn hidden(compactions: &[Compaction], at: i64) -> bool {
     compactions
         .iter()
@@ -105,7 +185,10 @@ pub fn closing_topic(
 
 /// The history an Ask may send: the open Topic's newest whole turns, its newest compaction
 /// summary, and the summaries of up to two earlier Topics, all behind the gate and within
-/// `share_tokens`. `clean` runs on every text before it is measured.
+/// `share_tokens`. `others` is the current access of each Connection in `also_of(thread)`:
+/// a message asked across one is gated at the lower access (`message_allowed`), and so is
+/// a summary of a span or Topic holding such a message. `clean` runs on every text before
+/// it is measured.
 #[allow(clippy::too_many_arguments)]
 pub fn select_history(
     thread: Option<&AiThread>,
@@ -114,6 +197,7 @@ pub fn select_history(
     pick: &TopicPick,
     ask: &AskFacts,
     access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
     switches: Switches,
     matches: &[u32],
     share_tokens: u32,
@@ -123,7 +207,17 @@ pub fn select_history(
     let gate = |c: Option<ConnectionId>, d: Option<&str>, k: &[ItemKind]| {
         history_allowed(c, d, k, ask, access, switches)
     };
-    let msg_ok = |m: &AiMessage| gate(m.connection_id, m.database.as_deref(), &m.kinds);
+    let msg_ok = |m: &AiMessage| message_allowed(m, ask, access, others, switches);
+    // A summary covers its messages: one asked across a Connection now lower holds it.
+    let across = |m: &AiMessage| m.asked_in.as_ref().is_some_and(|a| !a.also.is_empty());
+    let covered_ok = |covers: &dyn Fn(&AiMessage) -> bool| {
+        thread.is_none_or(|t| {
+            t.messages
+                .iter()
+                .filter(|m| across(m) && covers(m))
+                .all(msg_ok)
+        })
+    };
     // History of another place is not held back by AI access: Sends must not count it.
     let here = |c: Option<ConnectionId>, d: Option<&str>| {
         c.is_some() && c == ask.connection_id && d == ask.database
@@ -183,8 +277,19 @@ pub fn select_history(
             continue;
         }
         let (question, answer) = (clean(&q.text), clean(&a.text));
-        let tokens =
-            estimate_tokens(&question, false).saturating_add(estimate_tokens(&answer, false));
+        // Each line cleaned alone, so a match never joins two lines.
+        let asked_in = q
+            .asked_in
+            .as_ref()
+            .map(|a| a.replay_lines(others))
+            .filter(|l| !l.is_empty())
+            .map(|l| l.iter().map(|x| clean(x)).collect::<Vec<_>>().join("\n"));
+        let framed = asked_in.as_deref().map_or(0, |a| {
+            estimate_tokens(&framed_lines(MEASURE_BOUNDARY, ASKED_IN_SOURCE, a), false)
+        });
+        let tokens = estimate_tokens(&question, false)
+            .saturating_add(framed)
+            .saturating_add(estimate_tokens(&answer, false));
         if tokens > left {
             full = true;
             out.dropped += 1;
@@ -195,6 +300,7 @@ pub fn select_history(
         kept.push(Turn {
             question,
             answer,
+            asked_in,
             at: q.at,
             tokens,
         });
@@ -208,7 +314,10 @@ pub fn select_history(
         .filter(|c| c.topic == pick.seq && !c.undone && !c.summary.trim().is_empty())
         .max_by_key(|c| c.at);
     if let Some(c) = newest {
-        if !gate(c.connection_id, c.database.as_deref(), &c.kinds) {
+        // Compactions chain within a Topic (each folds the summary before it), so it
+        // covers every message of its Topic up to its end, not only its own span.
+        let span = |m: &AiMessage| m.topic == Some(c.topic) && m.at <= c.last_at;
+        if !(gate(c.connection_id, c.database.as_deref(), &c.kinds) && covered_ok(&span)) {
             if here(c.connection_id, c.database.as_deref()) {
                 out.blocked = out.blocked.saturating_add(c.messages);
             }
@@ -250,7 +359,8 @@ pub fn select_history(
         if sent + skipped >= EARLIER_TOPICS {
             break;
         }
-        if !gate(t.connection_id, t.database.as_deref(), &t.kinds) {
+        let of_topic = |m: &AiMessage| m.topic == Some(t.seq);
+        if !(gate(t.connection_id, t.database.as_deref(), &t.kinds) && covered_ok(&of_topic)) {
             // Counted while it would have taken one of the two places.
             if here(t.connection_id, t.database.as_deref())
                 && sent + skipped + held < EARLIER_TOPICS
@@ -313,6 +423,7 @@ mod tests {
             kinds: kinds.to_vec(),
             tables: Vec::new(),
             action: None,
+            asked_in: None,
         }
     }
 
@@ -410,6 +521,7 @@ mod tests {
             p,
             ask,
             access,
+            &[],
             Switches::default(),
             matches,
             share,
@@ -439,6 +551,216 @@ mod tests {
         assert_eq!(r.turns[0].at, 40);
         assert_eq!(r.turns[0].tokens, 2);
         assert_eq!((r.tokens, r.blocked, r.dropped), (16, 0, 0));
+    }
+
+    fn asked(m: &mut AiMessage, summary: &str, also: Option<ConnectionId>) {
+        m.asked_in = Some(crate::ai::memory::AskedIn {
+            tab: "visual".into(),
+            label: "Visual Query in shop".into(),
+            summary: summary.into(),
+            steps: vec!["ticked orders.id".into()],
+            also: also.into_iter().collect(),
+            other_steps: Vec::new(),
+        });
+    }
+
+    #[test]
+    fn asked_in_counts_in_history_tokens() {
+        let mut m = Vec::new();
+        for i in 0..3 {
+            m.extend(turn(1, i * 10, "qqqq", "aaaaaaa")); // 2 + 2 tokens
+        }
+        let plain = thread(m.clone());
+        let all = |th: &AiThread, share| {
+            run(
+                th,
+                &[],
+                &[],
+                &pick(1),
+                &facts(&[]),
+                AiAccess::Schema,
+                &[],
+                share,
+            )
+        };
+        assert_eq!(all(&plain, 1_000).tokens, 12);
+        // The newest question was asked with a long summary.
+        asked(&mut m[4], &"tables orders, customers; ".repeat(8), None);
+        let th = thread(m);
+        let wide = all(&th, 1_000);
+        let newest = wide.turns.last().unwrap();
+        let lines = newest.asked_in.as_deref().unwrap();
+        assert!(
+            lines.starts_with("Visual Query in shop: tables orders"),
+            "{lines}"
+        );
+        assert!(
+            lines.ends_with("\nsteps before it: ticked orders.id"),
+            "{lines}"
+        );
+        // Its framed lines count, frame and all.
+        let framed = estimate_tokens(
+            &framed_lines(MEASURE_BOUNDARY, ASKED_IN_SOURCE, lines),
+            false,
+        );
+        assert_eq!(newest.tokens, 4 + framed);
+        // A share that holds the three plain turns and the newest with its Asked in plus
+        // one more: the oldest turn is dropped first.
+        let r = all(&th, newest.tokens + 4 + 3);
+        assert_eq!(r.turns.len(), 2);
+        assert_eq!((r.turns[0].at, r.turns[1].at), (10, 20));
+        assert!(r.turns[0].asked_in.is_none());
+        assert_eq!(r.dropped, 1);
+        assert_eq!(all(&plain, newest.tokens + 4 + 3).turns.len(), 3);
+    }
+
+    #[test]
+    fn asked_across_another_connection_takes_its_lower_access() {
+        let other = Uuid::from_u128(9);
+        let mut m = turn(2, 100, "compare them", "3 changed.");
+        asked(&mut m[0], "3 added, 1 removed, 4 changed", Some(other));
+        m[0].kinds = vec![ItemKind::Question, ItemKind::Names, ItemKind::Tab];
+        m[1].kinds = m[0].kinds.clone();
+        let th = thread(m);
+        let go = |access, others: &[(ConnectionId, AiAccess)]| {
+            select_history(
+                Some(&th),
+                &[],
+                &[],
+                &pick(2),
+                &facts(&[]),
+                access,
+                others,
+                Switches::default(),
+                &[],
+                10_000,
+                &|s| s.to_string(),
+            )
+        };
+        assert_eq!(also_of(&th), vec![other]);
+        let r = go(AiAccess::Schema, &[(other, AiAccess::SchemaQuery)]);
+        assert_eq!((r.turns.len(), r.blocked), (1, 0));
+        // The other Connection lowered to Never, or deleted: held, counted as lower access.
+        let r = go(AiAccess::SchemaQuery, &[(other, AiAccess::Never)]);
+        assert_eq!((r.turns.len(), r.blocked), (0, 2));
+        let r = go(AiAccess::SchemaQuery, &[]);
+        assert_eq!((r.turns.len(), r.blocked), (0, 2));
+
+        // Stamped at query text: the lower of the two must still allow it.
+        let mut m = th.messages.clone();
+        for x in &mut m {
+            x.kinds.push(ItemKind::Sql);
+        }
+        let th = thread(m);
+        let go = |access, others: &[(ConnectionId, AiAccess)]| {
+            select_history(
+                Some(&th),
+                &[topic(1, "earlier compare", &[])],
+                &[],
+                &pick(2),
+                &facts(&[]),
+                access,
+                others,
+                Switches::default(),
+                &[1],
+                10_000,
+                &|s| s.to_string(),
+            )
+        };
+        assert_eq!(
+            go(AiAccess::SchemaQuery, &[(other, AiAccess::SchemaQuery)])
+                .turns
+                .len(),
+            1
+        );
+        let r = go(AiAccess::SchemaQuery, &[(other, AiAccess::Schema)]);
+        assert_eq!((r.turns.len(), r.blocked), (0, 2));
+        let r = go(AiAccess::Schema, &[(other, AiAccess::SchemaQuery)]);
+        assert_eq!((r.turns.len(), r.blocked), (0, 2));
+
+        // A summary over such a question is held with it: an earlier Topic's and a
+        // compaction's.
+        let mut m = th.messages.clone();
+        for x in &mut m {
+            x.topic = Some(1);
+        }
+        m.extend(turn(2, 300, "next", "ok"));
+        let th = thread(m);
+        let mut c = compaction(1, 100, 101, false);
+        c.kinds = vec![ItemKind::Question];
+        let summaries =
+            |others: &[(ConnectionId, AiAccess)], p: &TopicPick, comps: &[Compaction]| {
+                select_history(
+                    Some(&th),
+                    &[topic(1, "earlier compare", &[])],
+                    comps,
+                    p,
+                    &facts(&[]),
+                    AiAccess::SchemaQuery,
+                    others,
+                    Switches::default(),
+                    &[1],
+                    10_000,
+                    &|s| s.to_string(),
+                )
+                .summaries
+                .len()
+            };
+        assert_eq!(
+            summaries(&[(other, AiAccess::SchemaQuery)], &pick(2), &[]),
+            1
+        );
+        assert_eq!(summaries(&[(other, AiAccess::Schema)], &pick(2), &[]), 0);
+        let c = [c];
+        assert_eq!(
+            summaries(&[(other, AiAccess::SchemaQuery)], &pick(1), &c),
+            1
+        );
+        assert_eq!(summaries(&[(other, AiAccess::Schema)], &pick(1), &c), 0);
+    }
+
+    /// I2: compactions chain within a Topic, so the newest one covers every question of
+    /// the Topic up to its end, also those of the compaction it folded.
+    #[test]
+    fn chained_compactions_hold_a_folded_question_across() {
+        let other = Uuid::from_u128(9);
+        let mut m = turn(1, 100, "compare them", "3 changed.");
+        asked(&mut m[0], "3 added", Some(other));
+        for i in 0..3 {
+            m.extend(turn(1, 200 + i * 10, &format!("q{i}"), &format!("a{i}")));
+        }
+        let th = thread(m);
+        // C1 folded the compare turn; C2 folded later turns and C1's summary.
+        let c1 = compaction(1, 100, 101, false);
+        let mut c2 = compaction(1, 200, 211, false);
+        c2.at = 600;
+        let comps = [c1, c2];
+        let go = |others: &[(ConnectionId, AiAccess)]| {
+            select_history(
+                Some(&th),
+                &[],
+                &comps,
+                &pick(1),
+                &facts(&[]),
+                AiAccess::Schema,
+                others,
+                Switches::default(),
+                &[],
+                10_000,
+                &|s| s.to_string(),
+            )
+        };
+        let open = go(&[(other, AiAccess::Schema)]);
+        assert_eq!(open.summaries.len(), 1);
+        assert!(matches!(
+            open.summaries[0].source,
+            SummarySource::Compaction { .. }
+        ));
+        let held = go(&[(other, AiAccess::Never)]);
+        assert!(held.summaries.is_empty());
+        assert_eq!(held.blocked, 4);
+        // The turn after C2 still goes: it is not asked across.
+        assert_eq!(held.turns.len(), 1);
     }
 
     #[test]
@@ -821,6 +1143,7 @@ mod tests {
             &pick(1),
             &facts(&tables),
             AiAccess::Schema,
+            &[],
             Switches::default(),
             &[],
             1_000,

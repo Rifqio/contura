@@ -993,6 +993,26 @@ test("f5_refreshes_the_focused_branch", async () => {
   expect(document.activeElement).toBe(item("leads"));
 });
 
+test("g12_f5_refreshes_the_tree_when_focus_is_in_the_tree_or_in_neither", async () => {
+  routeMy();
+  const h = handlers();
+  render(
+    <>
+      <Harness connections={[conn("a", "Shop")]} open={["a"]} saved={SAVED} {...h} />
+      <button type="button">Elsewhere</button>
+    </>,
+  );
+  await findItem("orders");
+  screen.getByRole("button", { name: "Elsewhere" }).focus();
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: "F5", code: "F5" });
+  // Focus in neither a grid nor the tree: the key still answers, with the tree's refresh.
+  expect(h.onRefresh).toHaveBeenCalledWith("a");
+  h.onRefresh.mockClear();
+  item("orders").focus();
+  fireEvent.keyDown(item("orders"), { key: "F5", code: "F5" });
+  expect(h.onRefresh).toHaveBeenCalledWith("a");
+});
+
 test("focus_tells_the_owner_which_branch_leads", async () => {
   routeMy();
   const h = handlers();

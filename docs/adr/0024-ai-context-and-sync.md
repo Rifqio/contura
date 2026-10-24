@@ -12,7 +12,7 @@ The Assistant sends the tables a question needs, not the whole schema. To pick t
 
 **Saved queries** are stored masked (`mask_literals`) and sent only at level 3 and 4 (schema and query text).
 
-**Thread memory.** Topics break by rule only (idle time, a new place or Connection, a changed subject) and each has a rule-made or model-made summary. History is sent only through the gate on the Connection's AI access. At 85% of the window (`COMPACT_AT_PERCENT`) the Assistant compacts the older turns into a summary, which the user can show and Undo. Retention is 50 threads per place and 200 messages per thread, cut in whole turns.
+**Thread memory.** Topics break by rule only (idle time, a new place or Connection, a changed subject) and each has a rule-made or model-made summary. History is sent only through the gate on the Connection's AI access. At 85% of the window (`COMPACT_AT_PERCENT`) the Assistant compacts the older turns into a summary, which the user can show and Undo. Retention is 50 threads per place and 200 messages per thread, cut in whole turns. ADR 0027 adds where each question was asked, a summary of that tab and the Recent steps to the stored question, replayed through the same gate, which then also reads the current access of every other Connection the tab spanned.
 
 **Sample rows** are read live from the database at Ask time, 5 per table (`SAMPLE_ROWS`), each cell cut at 200 characters (`CELL_CHARS`), secret columns redacted, and never written to `app.sqlite`.
 

@@ -232,6 +232,8 @@ fn ask(question: &str, thread: Option<Uuid>) -> AskRequest {
         off: Vec::new(),
         model: None,
         picks: None,
+        tab: None,
+        steps: Vec::new(),
     }
 }
 
@@ -256,6 +258,7 @@ fn message(role: AiRole, text: &str, at: i64, topic: u32, kinds: &[ItemKind]) ->
         kinds: kinds.to_vec(),
         tables: vec!["orders".into()],
         action: Some("ask".into()),
+        asked_in: None,
     }
 }
 

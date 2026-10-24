@@ -1,10 +1,17 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, expect, test, vi } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { mockEditorDom } from "./test/editor";
 import { LOAD_TIMEOUT, patientFile } from "./test/load";
 import { mockReactFlowDom } from "./test/reactFlow";
 import { callsTo, routeInvoke } from "./test/invoke";
+import { fakePreview } from "./test/aiPreview";
+import { aiStream, delta, done } from "./test/aiStream";
+import { summaryOf, turnViewOf, viewOf } from "./test/aiThreads";
+import { withTurn } from "./api/client";
+import { sha256Hex } from "./assistant/sha256";
+import { clearAllSteps } from "./assistant/recentSteps";
+import type { AiThread, AppendTurn, AskRequest, VisualQuery } from "./api/types";
 import { EditorView } from "@codemirror/view";
 import App from "./App";
 import { appLang } from "./lang/appLang";
@@ -182,6 +189,58 @@ test("ctrl_t_opens_numbered_query_tabs_and_closing_activates_a_neighbour", async
   expect(screen.queryByRole("tab", { name: "Query 2" })).toBeNull();
 });
 
+test("ctrl_shift_t_reopens_closed_tabs_last_first_and_repeatedly", async () => {
+  workspaceRoutes();
+  render(<App />);
+  await screen.findByRole("button", { name: "Switch Group, current KFC" });
+  await closeHome();
+  await userEvent.keyboard("{Control>}t{/Control}");
+  await userEvent.click(stripNew());
+  expect(await screen.findByRole("tab", { name: "Query 2", selected: true })).toBeTruthy();
+  await userEvent.keyboard("{Control>}w{/Control}");
+  await userEvent.keyboard("{Control>}w{/Control}");
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /Query/ })).toBeNull());
+  await userEvent.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+  expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+  await userEvent.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+  expect(await screen.findByRole("tab", { name: "Query 2", selected: true })).toBeTruthy();
+  // The stack is empty now: nothing more opens.
+  await userEvent.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+  expect(tabNames()).toEqual(["Query 1", "Query 2"]);
+});
+
+test("ctrl_shift_t_reopens_a_table_tab_and_loads_its_rows_again", async () => {
+  recentRoutes();
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await waitFor(() => expect(document.querySelector('tr[data-row="0"]')).not.toBeNull());
+  const pages = callsTo("fetch_page").length;
+  await userEvent.click(tabClose());
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /orders/ })).toBeNull());
+  await userEvent.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+  expect(await screen.findByRole("tab", { name: /orders/, selected: true })).toBeTruthy();
+  await waitFor(() => expect(callsTo("fetch_page").length).toBeGreaterThan(pages));
+  await waitFor(() => expect(document.querySelector('tr[data-row="0"]')).not.toBeNull());
+});
+
+test("ctrl_shift_t_skips_a_table_that_is_gone_with_a_short_note", async () => {
+  let listing = [{ kind: "table", name: "orders" }];
+  recentRoutes({ list_objects: () => listing });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await waitFor(() => expect(document.querySelector('tr[data-row="0"]')).not.toBeNull());
+  await userEvent.click(tabClose());
+  await waitFor(() => expect(screen.queryByRole("tab", { name: /orders/ })).toBeNull());
+  listing = [];
+  await userEvent.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+  expect(await screen.findByText("orders is gone, so it was not reopened.")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: /orders/ })).toBeNull();
+});
+
 test("ctrl_alt_i_toggles_the_assistant_through_the_registry", async () => {
   workspaceRoutes({ ai_settings: () => { throw { kind: "storage", message: "no" }; }, list_ai_threads: () => [] });
   render(<App />);
@@ -205,6 +264,19 @@ test("handled_keys_prevent_the_browser_default", async () => {
   document.body.dispatchEvent(ctrlN);
   expect(ctrlN.defaultPrevented).toBe(true);
   // Ctrl+N is New Connection.
+  expect(await screen.findByRole("dialog", { name: "New Connection" })).toBeTruthy();
+});
+
+test("ctrl_n_is_new_connection_with_the_ask_panel_open_and_focus_in_the_tree", async () => {
+  workspaceRoutes({ ai_settings: () => { throw { kind: "storage", message: "no" }; }, list_ai_threads: () => [] });
+  render(<App />);
+  await screen.findByRole("button", { name: "Switch Group, current KFC" });
+  await closeHome();
+  await userEvent.keyboard("{Control>}{Alt>}i{/Alt}{/Control}");
+  expect(await screen.findByRole("complementary", { name: "Ask" })).toBeTruthy();
+  (await screen.findByRole("tree")).querySelector<HTMLElement>('[role="treeitem"]')?.focus();
+  expect(document.activeElement?.closest("[aria-label='Ask']")).toBeNull();
+  await userEvent.keyboard("{Control>}n{/Control}");
   expect(await screen.findByRole("dialog", { name: "New Connection" })).toBeTruthy();
 });
 
@@ -400,6 +472,33 @@ test("closing a table tab with Pending Edits asks; cancel keeps it, discard clos
   await waitFor(() => expect(screen.queryByRole("tab", { name: /orders/ })).toBeNull());
 });
 
+test("s3_close_other_tabs_asks_for_each_tab_with_pending_edits_and_a_cancel_stops_the_rest", async () => {
+  await openOrdersWithAnEdit();
+  await userEvent.keyboard("{Control>}t{/Control}");
+  expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+  await userEvent.keyboard("{Control>}t{/Control}");
+  expect(await screen.findByRole("tab", { name: "Query 2", selected: true })).toBeTruthy();
+  // Close other tabs on Query 1: orders (with Pending Edits) asks first; Cancel keeps it and stops the rest.
+  fireEvent.contextMenu(screen.getByRole("tab", { name: "Query 1" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Close other tabs" }));
+  await screen.findByText("Save changes to orders?");
+  await userEvent.click(inAsk("Cancel"));
+  expect(screen.getByRole("tab", { name: /orders/ })).toBeTruthy();
+  // The tab the ask was about is shown, and the right-clicked tab was not forced on top by the Cancel.
+  expect(screen.getByRole("tab", { name: /orders/, selected: true })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Query 2" })).toBeTruthy();
+  // Again, and Discard: every other tab closes and Query 1 stays, shown.
+  fireEvent.contextMenu(screen.getByRole("tab", { name: "Query 1" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Close other tabs" }));
+  await screen.findByText("Save changes to orders?");
+  await userEvent.click(inAsk("Discard"));
+  await waitFor(() => expect(tabNames()).toEqual(["Query 1"]));
+  expect(screen.getByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+  // The closed tabs wait for Reopen closed tab.
+  await userEvent.keyboard("{Control>}{Shift>}t{/Shift}{/Control}");
+  expect(await screen.findByRole("tab", { name: "Query 2" })).toBeTruthy();
+});
+
 test("save in the ask closes the tab only after the save worked", async () => {
   let fail = true;
   await openOrdersWithAnEdit({
@@ -572,7 +671,7 @@ test("a_group_change_while_the_tree_has_focus_drops_the_tree_branch_from_the_sta
   const reports = await screen.findByRole("treeitem", { name: "reports" });
   reports.focus();
   await waitFor(() => expect(bar.textContent).toContain("KFC Reporting"));
-  await userEvent.keyboard("{Control>}1{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}1{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current Acme" })).toBeTruthy();
   await waitFor(() => expect(bar.textContent).not.toContain("KFC Reporting"));
   expect(bar.textContent).toContain("No Connection open");
@@ -586,9 +685,9 @@ test("back_in_the_place_the_focused_branch_leads_the_status_bar_again", async ()
   const bar = document.querySelector("footer.app-status") as HTMLElement;
   (await screen.findByRole("treeitem", { name: "reports" })).focus();
   await waitFor(() => expect(bar.textContent).toContain("KFC Reporting"));
-  await userEvent.keyboard("{Control>}1{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}1{/Alt}{/Control}");
   await waitFor(() => expect(bar.textContent).not.toContain("KFC Reporting"));
-  await userEvent.keyboard("{Control>}2{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
   await userEvent.click(await screen.findByRole("button", { name: "More actions for KFC Postgres" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "New query" }));
@@ -894,13 +993,13 @@ test("ctrl_2_opens_the_second_group", async () => {
   shellRoutes({ last_group: () => "g2" });
   render(<App />);
   await screen.findByRole("button", { name: "Switch Group, current Acme" });
-  // Groups by name: Acme is Ctrl+1, KFC Ctrl+2, then Ungrouped Ctrl+3.
-  await userEvent.keyboard("{Control>}2{/Control}");
+  // Groups by name: Acme is Ctrl+Alt+1, KFC Ctrl+Alt+2, then Ungrouped Ctrl+Alt+3.
+  await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
   await waitFor(() => expect(callsTo("set_last_group")).toEqual([{ id: "g1" }]));
-  await userEvent.keyboard("{Control>}3{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}3{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current Ungrouped" })).toBeTruthy();
-  await userEvent.keyboard("{Control>}1{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}1{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current Acme" })).toBeTruthy();
 });
 
@@ -912,7 +1011,7 @@ test("ctrl_2_during_a_sidebar_rename_cancels_it_so_enter_renames_nothing", async
   const side = () => screen.getByRole("complementary", { name: /Connections$/ });
   await userEvent.dblClick(within(side()).getByRole("heading", { name: "Acme" }));
   await userEvent.keyboard("Acme Prod");
-  await userEvent.keyboard("{Control>}2{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
   await waitFor(() => expect(within(side()).queryByRole("textbox")).toBeNull());
   await userEvent.keyboard("{Enter}");
@@ -929,7 +1028,7 @@ test("window_tabs_survive_a_group_change", async () => {
   await userEvent.keyboard("{Control>},{/Control}");
   expect(await screen.findByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
   expect(tabNames()).toEqual(["Home", "Query 1", "Settings"]);
-  await userEvent.keyboard("{Control>}2{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
   // The query tab belonged to Acme; Home and Settings belong to the window.
   await waitFor(() => expect(tabNames()).toEqual(["Home", "Settings"]));
@@ -1031,6 +1130,31 @@ test("ctrl_w_on_a_table_tab_with_pending_edits_asks_like_the_close_button", asyn
   await waitFor(() => expect(screen.queryByRole("tab", { name: /orders/ })).toBeNull());
 });
 
+test("close_other_tabs_stops_at_a_cancel_on_the_schema_models_ask_and_no_two_asks_overlap", async () => {
+  shellRoutes({ last_group: () => null, list_connections: () => [{ ...pg, groupId: null }] });
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "Open Ungrouped" }));
+  await userEvent.click(await screen.findByRole("button", { name: `More actions for ${pg.name}` }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "New Schema Model..." }));
+  await userEvent.click(screen.getByRole("radio", { name: /Blank model/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Create blank model/ }));
+  await screen.findByRole("tab", { name: "untitled.dbml", selected: true });
+  await userEvent.keyboard("{Control>},{/Control}");
+  await screen.findByRole("tab", { name: "Settings", selected: true });
+  await userEvent.keyboard("{Control>}t{/Control}");
+  await screen.findByRole("tab", { name: "Query 1", selected: true });
+  fireEvent.contextMenu(screen.getByRole("tab", { name: "Query 1" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Close other tabs" }));
+  expect(await screen.findByText("Save changes to schema?")).toBeTruthy();
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  // The Cancel stops the rest: the tabs after the model stay.
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.getByRole("tab", { name: "untitled.dbml" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Query 1" })).toBeTruthy();
+});
+
 test("a_schema_models_unsaved_text_survives_a_group_change", async () => {
   shellRoutes({ last_group: () => "g2", list_connections: () => [{ ...pg, groupId: "g2" }] });
   render(<App />);
@@ -1044,7 +1168,7 @@ test("a_schema_models_unsaved_text_survives_a_group_change", async () => {
   const view = () => EditorView.findFromDOM(pane().querySelector(".cm-editor") as HTMLElement)!;
   await waitFor(() => expect(pane().querySelector(".cm-editor")).not.toBeNull());
   view().dispatch({ changes: { from: 0, insert: "// kept across Groups\n" } });
-  await userEvent.keyboard("{Control>}2{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
   expect(await screen.findByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
   await userEvent.click(screen.getByRole("tab", { name: "untitled.dbml" }));
   expect(view().state.doc.toString().startsWith("// kept across Groups\n")).toBe(true);
@@ -1544,7 +1668,7 @@ test("group_switch_with_an_unapplied_design_asks_by_click_and_by_ctrl_number", a
   expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
   // Ctrl+2 is Ungrouped here (KFC is the only Group).
   (document.activeElement as HTMLElement | null)?.blur();
-  await userEvent.keyboard("{Control>}2{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
   expect(await screen.findByText("Apply changes to orders?")).toBeTruthy();
   await userEvent.click(inAsk("Cancel"));
   expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
@@ -2298,7 +2422,7 @@ test("closing_a_running_import_tab_asks_and_keep_running_keeps_it", async () => 
 test("switching_group_with_a_running_import_asks_and_no_keeps_the_place_q43_i1", async () => {
   await startRunningImport();
   // Ctrl+2 is Ungrouped, after KFC.
-  await userEvent.keyboard("{Control>}2{/Control}");
+  await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}");
   const ask = await screen.findByRole("dialog", { name: "Cancel the import and roll back?" });
   await userEvent.click(within(ask).getByRole("button", { name: /Keep running/ }));
   expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
@@ -2469,4 +2593,301 @@ test("first_start_guide_keeps_the_title_bar_out_of_reach_and_owns_esc", async ()
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(document.documentElement.classList.contains("fsg-open")).toBe(false);
   expect(callsTo("first_start_guide_seen")).toEqual([{}]);
+});
+
+// ---- Ask on every tab (spec 9) ----
+
+const askPanel = () => screen.queryByRole("complementary", { name: "Ask" });
+const toggleAsk = () => userEvent.keyboard("{Control>}{Alt>}i{/Alt}{/Control}");
+
+test("the Ask panel shows on Home and Settings, not on a diagram, where the toggle says why", async () => {
+  workspaceRoutes({
+    ai_settings: () => {
+      throw { kind: "storage", message: "no" };
+    },
+    list_ai_threads: () => [],
+    list_diagrams: () => [{ name: "checkout", kind: "flow", title: "Checkout", modifiedMs: Date.now() - 60_000 }],
+    read_diagram: () => ({ text: 'diagram flow "Checkout"\n\nStart [start]\n', layout: null }),
+  });
+  render(<App />);
+  expect(await screen.findByRole("tab", { name: "Home", selected: true })).toBeTruthy();
+  expect(askPanel()).toBeNull();
+  await toggleAsk();
+  expect(await screen.findByRole("complementary", { name: "Ask" })).toBeTruthy();
+  // The window pane narrows by the panel's width.
+  expect(document.querySelector(".body")!.className).toBe("body body-home body-ai");
+  expect(screen.getByRole("textbox", { name: "Message" }).getAttribute("placeholder")).toBe("Ask about Contura or SQL");
+
+  await userEvent.keyboard("{Control>},{/Control}");
+  expect(await screen.findByRole("tab", { name: "Settings", selected: true })).toBeTruthy();
+  expect(askPanel()).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^checkout\.flow/ }));
+  await waitFor(() => expect(screen.getByRole("tab", { name: /checkout/, selected: true })).toBeTruthy());
+  expect(askPanel()).toBeNull();
+  expect(document.querySelector(".body")!.className).toBe("body body-home");
+  // S11: the toggle opens no panel on a diagram, and says why; the panel is still open on Home.
+  await toggleAsk();
+  expect(askPanel()).toBeNull();
+  expect(await screen.findByText("A diagram has its own Assistant, so the Ask panel stays closed here.")).toBeTruthy();
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  expect(await screen.findByRole("complementary", { name: "Ask" })).toBeTruthy();
+});
+
+test("the Ask panel shows on New table and Schema Compare", async () => {
+  await openOrders({
+    ai_settings: () => {
+      throw { kind: "storage", message: "no" };
+    },
+    list_ai_threads: () => [],
+  });
+  await toggleAsk();
+  expect(await screen.findByRole("complementary", { name: "Ask" })).toBeTruthy();
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
+  await screen.findByRole("tab", { name: "Columns 1" });
+  expect(askPanel()).toBeTruthy();
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Schema Compare" }));
+  await waitFor(() => expect(document.querySelector(".compare-main:not([hidden])")).toBeTruthy());
+  expect(askPanel()).toBeTruthy();
+  expect(document.querySelector(".body")!.className).toBe("body body-home body-ai");
+});
+
+// ---- Ask everywhere, end to end (spec 11): a Visual Query, then New table ----
+
+test("visual query to new table", async () => {
+  // The trail is a module store: earlier tests of this file recorded steps in this place.
+  clearAllSteps();
+  const hope = { ...pg, id: "c4", name: "hope-4", dialect: "mysql", port: 3306, database: "shop", aiAccess: "schemaQuery" };
+  const col = (name: string, typeName: string, pk = false) => ({ name, typeName, pk });
+  const shopSchema = {
+    searchPath: [],
+    tables: [
+      { schema: null, name: "orders", kind: "table", columns: [col("id", "int", true), col("customer_id", "int"), col("total", "decimal(14,2)"), col("created_at", "datetime")] },
+      { schema: null, name: "customers", kind: "table", columns: [col("id", "int", true), col("name", "varchar(80)")] },
+    ],
+    functions: [],
+    fks: [{ from: { schema: null, table: "orders", columns: ["customer_id"] }, to: { schema: null, table: "customers", columns: ["id"] } }],
+  };
+  const model = {
+    version: 1,
+    database: "shop",
+    dialect: "mysql",
+    tables: [{ id: "t1", schema: null, name: "orders", alias: "o", x: 48, y: 48 }],
+    joins: [],
+    columns: [],
+    filters: [],
+    groupBy: { kind: "auto" },
+    orderBy: [],
+    limit: null,
+    distinct: false,
+  };
+  const sqlOf = (q: VisualQuery) => `SELECT ${q.columns.length ? q.columns.map((c) => `o.${c.column}`).join(", ") : "*"}\nFROM orders AS o${q.filters.length ? "\nWHERE o.total > ?" : ""}`;
+  const create = "CREATE TABLE monthly_totals (customer_id int not null, month date not null, total decimal(14,2) not null, primary key (customer_id, month))";
+  // The Core's check of that answer: a write, so it opens only commented out.
+  const createBlock = { fence: 0, label: "1 statement: 1 write (CREATE)", statements: [{ text: create, class: "write" as const, flags: [] }], bodySha256: sha256Hex(create) };
+  const stream = aiStream((_, n) =>
+    n === 1 ? [delta("Add a filter on orders.total greater than one million."), done()] : [delta("```sql\n" + create + "\n```"), done({ sqlBlocks: [createBlock] })],
+  );
+  let stored: AiThread | null = null;
+  workspaceRoutes({
+    list_connections: () => [hope],
+    list_databases: () => ["shop"],
+    list_objects: () => [
+      { kind: "table", name: "orders", rows: 1204 },
+      { kind: "table", name: "customers", rows: 40 },
+    ],
+    set_last_group: () => null,
+    sql_schema: () => shopSchema,
+    list_saved_queries: () => [
+      { id: "sv1", name: "Untitled 1", sql: "SELECT *\nFROM orders AS o", updatedAtMs: 1, connectionId: "c4", kind: "visual", visualJson: JSON.stringify(model) },
+    ],
+    visual_query_sql: ({ query }) => {
+      const q = query as VisualQuery;
+      return { query: { sql: sqlOf(q), parts: [{ part: { kind: "select" }, fromLine: 1, toLine: 1 }], outputs: q.columns.map((c) => c.column), warnings: [] }, problems: [] };
+    },
+    run_visual_query: ({ query }) => ({
+      sql: sqlOf(query as VisualQuery),
+      execution: { outcome: { t: "rows", columns: [{ name: "id", typeName: "int", numeric: true }], rows: [[{ t: "number", value: "7" }]], hasMore: false }, elapsedMs: 12 },
+    }),
+    close_query_result: () => null,
+    cancel_query: () => null,
+    ai_settings: () => ({
+      settings: { ...aiSettingsReply().settings, provider: "groq", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
+      groupOverride: false,
+      keySaved: true,
+      keyLast4: "abcd",
+    }),
+    ai_known_models: () => ({ current: "llama-3.3-70b-versatile", models: [], fetchedAt: null, error: null }),
+    ai_preview: (a) => fakePreview(a.request as AskRequest),
+    list_ai_threads: ({ place }) => (stored && stored.place === place ? [summaryOf(stored)] : []),
+    get_ai_thread: () => (stored ? viewOf(stored) : null),
+    ai_answer_record: () => null,
+    ai_append_turn: (a) => {
+      const turn = a.turn as AppendTurn;
+      stored = withTurn(stored, turnViewOf(turn, stored), turn.replaceFrom);
+      const v = viewOf(stored);
+      return { ...turnViewOf(turn, null, v.topics, v.compactions), title: stored.title, messages: stored.messages.slice(-turn.messages.length) };
+    },
+    save_ai_thread: (a) => {
+      stored = a.thread as AiThread;
+      return viewOf(stored);
+    },
+    ai_ask_stream: (a) => stream.handler(a),
+    ai_cancel: () => true,
+    table_design: () => ordersDesign,
+  });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open hope-4" }));
+
+  // 1. Open the Visual Query on shop with orders on the canvas, and tick three columns.
+  await userEvent.click(await screen.findByRole("treeitem", { name: /^Untitled 1/ }));
+  expect(await screen.findByRole("tab", { name: "Untitled 1", selected: true })).toBeTruthy();
+  for (const c of ["o.id", "o.customer_id", "o.total"]) await userEvent.click(await screen.findByRole("checkbox", { name: c }));
+
+  // 2. Ask in the Visual Query.
+  await toggleAsk();
+  const panel = await screen.findByRole("complementary", { name: "Ask" });
+  await userEvent.type(within(panel).getByRole("textbox", { name: "Message" }), "find orders over 1M{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  const first = callsTo("ai_ask_stream")[0].request as AskRequest;
+  expect(first.tab?.kind).toBe("visual");
+  expect(first.question).toBe("find orders over 1M");
+  expect(first.steps!.map((x) => x.verb)).toEqual(["openTab", "vqTick"]);
+  await within(panel).findByText("Add a filter on orders.total greater than one million.");
+
+  // 3. Add the filter on the canvas's query and run it: 1 row.
+  await userEvent.click(screen.getByRole("tab", { name: /^Filter and sort/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Add condition" }));
+  await userEvent.click(screen.getByRole("combobox", { name: "Column for filter 1" }));
+  await userEvent.click(await screen.findByRole("option", { name: "o.total" }));
+  await userEvent.click(screen.getByRole("combobox", { name: "Operator for filter 1" }));
+  await userEvent.click(await screen.findByRole("option", { name: ">" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Value for filter 1" }), "1000000");
+  const run = within(screen.getByRole("toolbar", { name: "Visual Query" })).getByRole("button", { name: /^Run/ }) as HTMLButtonElement;
+  await waitFor(() => expect(run.disabled).toBe(false));
+  await userEvent.click(run);
+  await waitFor(() => expect(callsTo("run_visual_query")).toHaveLength(1));
+  expect(JSON.stringify(callsTo("run_visual_query")[0].query)).toContain("1000000");
+  expect(await screen.findByText(/^1 row in/)).toBeTruthy();
+
+  // 4. New table on shop, from the tree.
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
+  await screen.findByRole("tab", { name: "Columns 1" });
+
+  // 5. Ask in New table: the request carries the tab and the three steps since the first Ask.
+  await userEvent.type(within(panel).getByRole("textbox", { name: "Message" }), "make a pivot table for monthly totals per customer{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
+  const second = callsTo("ai_ask_stream")[1].request as AskRequest;
+  expect(second.tab?.kind).toBe("design");
+  expect(second.tab).toMatchObject({ kind: "design", create: true });
+  expect(second.connectionId).toBe("c4");
+  expect(second.database).toBe("shop");
+  expect(second.threadId).toBe(first.threadId ?? stored!.id);
+  expect(second.steps!.map((x) => [x.verb, x.names ?? [], x.count])).toEqual([
+    ["vqFilter", ["orders.total"], null],
+    ["runVisual", [], 1],
+    ["openTab", [], null],
+  ]);
+  // No filter value is ever in the request.
+  expect(JSON.stringify(second)).not.toContain("1000000");
+
+  // 6. The answer's write opens only commented out in a new query tab, and nothing runs.
+  expect(await within(panel).findByRole("button", { name: "Open in new query tab, commented out" })).toBeTruthy();
+  expect(within(panel).queryByRole("button", { name: "Open in new query tab" })).toBeNull();
+  expect(within(panel).queryByRole("button", { name: "Run" })).toBeNull();
+  expect(within(panel).queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+}, LOAD_TIMEOUT);
+
+test("clearing_recent_shows_the_cleared_toast_with_undo", async () => {
+  const item = { target: ordersTarget, connectionId: "c1", openedAtMs: Date.now() - 60_000 };
+  recentRoutes({ last_group: () => null, recent_items: () => [item], clear_recent: () => [item] });
+  render(<App />);
+  await screen.findByRole("button", { name: /^shop\.orders, Table on KFC Shop, / });
+  await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+  const toast = (await screen.findByText("Cleared Recent.", {}, { timeout: 2000 })).closest(".toast") as HTMLElement;
+  expect(toast.getAttribute("role")).toBe("status");
+  expect(within(toast).getByRole("button", { name: "Undo" })).toBeTruthy();
+});
+
+test("discarding_pending_edits_in_a_table_tab_shows_the_undo_toast", async () => {
+  await openOrdersWithAnEdit();
+  await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull());
+  const toast = (await screen.findByText("Discarded 1 change.", {}, { timeout: 2000 })).closest(".toast") as HTMLElement;
+  expect(toast.getAttribute("role")).toBe("status");
+  expect(within(toast).getByRole("button", { name: "Undo" })).toBeTruthy();
+});
+
+test("G15: single-click orders, sort by status, single-click customers, single-click orders keeps the sorted orders tab", async () => {
+  workspaceRoutes({
+    list_connections: () => [shopMy],
+    list_databases: () => ["shop"],
+    list_objects: () => [
+      { kind: "table", name: "customers" },
+      { kind: "table", name: "orders" },
+    ],
+    fetch_page: () => ordersPage,
+    set_last_group: () => null,
+    sql_schema: () => ({ tables: [], functions: [] }),
+  });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Sort by status" }));
+  await waitFor(() => expect(callsTo("fetch_page").some((a) => (a.request as { sort: unknown }).sort)).toBe(true));
+  await userEvent.click(await screen.findByRole("treeitem", { name: "customers" }));
+  expect(await screen.findByRole("tab", { name: /customers/ })).toBeTruthy();
+  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  expect(screen.getByRole("tab", { name: /orders/ })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /customers/ })).toBeTruthy();
+  // The worked-in tab is a kept tab; the later single click made customers the preview.
+  expect(screen.getByRole("tab", { name: /orders/ }).closest(".work-tab")!.className).not.toContain("work-tab-preview");
+  expect(screen.getByRole("tab", { name: /customers/ }).closest(".work-tab")!.className).toContain("work-tab-preview");
+});
+
+describe("S13: a single click on a table right after switching tables is not ignored", () => {
+  const routes = (over: Record<string, (a: Record<string, unknown>) => unknown> = {}) =>
+    workspaceRoutes({
+      list_connections: () => [shopMy],
+      list_databases: () => ["shop"],
+      list_objects: () => [
+        { kind: "table", name: "customers" },
+        { kind: "table", name: "orders" },
+        { kind: "table", name: "stores" },
+      ],
+      fetch_page: () => ordersPage,
+      set_last_group: () => null,
+      sql_schema: () => ({ tables: [], functions: [] }),
+      ...over,
+    });
+
+  test("each of three quick clicks on different tables shows that table at once", async () => {
+    routes();
+    render(<App />);
+    await closeHome();
+    await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+    for (const name of ["orders", "customers", "stores", "orders"]) {
+      await userEvent.click(await screen.findByRole("treeitem", { name }));
+      expect(screen.getByRole("tab", { name: new RegExp(name), selected: true })).toBeTruthy();
+    }
+  });
+
+  test("the same while the first table's rows are still loading", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    routes({ fetch_page: async () => (await held, ordersPage) });
+    render(<App />);
+    await closeHome();
+    await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: "customers" }));
+    expect(screen.getByRole("tab", { name: /customers/, selected: true })).toBeTruthy();
+    release();
+  });
 });

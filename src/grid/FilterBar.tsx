@@ -34,6 +34,8 @@ interface Props {
   onSort(next: SortSpec | null): void;
   /** No rows to filter (an empty table): adding is off. */
   disabled?: boolean;
+  /** G13: Ctrl+F in the grid opens Add filter with this column, condition and value; each new `seq` opens it again. */
+  request?: { draft: Omit<RowFilter, "id">; seq: number } | null;
 }
 
 type Draft = Omit<RowFilter, "id"> & { id: string | null };
@@ -228,7 +230,7 @@ function SortForm({
   );
 }
 
-export default function FilterBar({ columns, filters, sort, onFilters, onSort, disabled }: Props) {
+export default function FilterBar({ columns, filters, sort, onFilters, onSort, disabled, request = null }: Props) {
   const [open, setOpen] = useState<{ kind: "filter"; draft: Draft } | { kind: "sort" } | null>(null);
   const addRef = useRef<HTMLButtonElement>(null);
   const sortRef = useRef<HTMLSpanElement>(null);
@@ -255,6 +257,12 @@ export default function FilterBar({ columns, filters, sort, onFilters, onSort, d
     const now = document.activeElement;
     if (now === null || now === document.body) target?.focus();
   }, [open]);
+
+  useEffect(() => {
+    if (!request || !columns.some((c) => c.name === request.draft.column)) return;
+    editAnchor.current = addRef.current;
+    setOpen({ kind: "filter", draft: { ...request.draft, id: null } });
+  }, [request?.seq]);
 
   const startAdd = () => {
     if (!first) return;

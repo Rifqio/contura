@@ -11,6 +11,7 @@ import { useKeymap } from "../commands/useCommandKeys";
 import { LangClient } from "../lang/client";
 import { insertionLine } from "../lang/insertionLine";
 import { editorTheme } from "../lang/editorTheme";
+import { editingBasics } from "../lang/editingBasics";
 import { completeDbml } from "../lang/dbml/complete";
 import { renameColumn, renameTable } from "../lang/dbml/edits";
 import { DBML_TEMPLATES } from "../lang/dbml/templates";
@@ -222,6 +223,7 @@ export default function DbmlEditor({
           Prec.high(keymap.of([{ key: "Tab", run: expandTemplate }])),
           // Every command key, above the editor's defaults, so a confirmed override wins (PR11).
           commandKeys.current.of(editorCommandKeymap(latest.current.cmds.map, (id) => runCommand.current(id))),
+          editingBasics(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.contentAttributes.of({ "aria-label": "DBML" }),
           EditorView.updateListener.of((u) => {

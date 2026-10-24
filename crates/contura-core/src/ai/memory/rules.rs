@@ -222,6 +222,7 @@ mod tests {
             kinds: vec![ItemKind::Question],
             tables: tables.iter().map(|t| t.to_string()).collect(),
             action: Some(action.into()),
+            asked_in: None,
         }
     }
 
@@ -358,6 +359,43 @@ mod tests {
             !topic_for(Some(&bare), &facts(&other, "ask", 2_000), "q").opened,
             "no topic tables"
         );
+    }
+
+    /// Spec 6.3 and 7.5: the tables of the Recent steps that went are the Ask's tables
+    /// here (`gather` widens `g.tables` with them), so a move to another tab after work on
+    /// the same table keeps one Topic, whatever the action.
+    #[test]
+    fn steps_tables_keep_the_topic() {
+        let th = thread(vec![
+            msg(
+                AiRole::User,
+                "find orders over 1M",
+                1_000,
+                1,
+                &["orders"],
+                "ask",
+            ),
+            msg(
+                AiRole::Assistant,
+                "filter on total",
+                1_001,
+                1,
+                &["orders"],
+                "ask",
+            ),
+        ]);
+        // The question names no table; a step ticked `orders`.
+        let from_steps = ["orders".to_string()];
+        let p = topic_for(
+            Some(&th),
+            &facts(&from_steps, "explain", 2_000),
+            "make a pivot",
+        );
+        assert_eq!((p.seq, p.opened, p.reason), (1, false, None));
+        // Without the step hint a new subject on a new action still breaks.
+        let other = ["monthly_totals".to_string()];
+        let p = topic_for(Some(&th), &facts(&other, "explain", 2_000), "make a pivot");
+        assert_eq!((p.seq, p.reason), (2, Some(BreakReason::Subject)));
     }
 
     #[test]

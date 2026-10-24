@@ -17,7 +17,7 @@ export function useWorkspaceTabs() {
   const setActiveKey = useCallback((next: SetStateAction<string | null>) => dispatch({ type: "active", next }), []);
 
   /** Each Schema Model tab's own Close, so closing its tab asks about unsaved changes. */
-  const schemaCloses = useRef(new Map<string, MutableRefObject<(() => void) | null>>());
+  const schemaCloses = useRef(new Map<string, MutableRefObject<(() => Promise<boolean>) | null>>());
   /** The strip's keys in order, as last drawn, for picking the tab after a close. */
   const stripKeys = useRef<string[]>([]);
   /** The place tab last active, to come back to when the place is chosen again. */
@@ -45,7 +45,7 @@ export function useWorkspaceTabs() {
   }
 
   /** Each Schema Model tab's own Close, so closing its tab asks about unsaved changes. */
-  function schemaClose(id: string): MutableRefObject<(() => void) | null> {
+  function schemaClose(id: string): MutableRefObject<(() => Promise<boolean>) | null> {
     let ref = schemaCloses.current.get(id);
     if (!ref) {
       ref = { current: null };
@@ -54,7 +54,7 @@ export function useWorkspaceTabs() {
     return ref;
   }
 
-  function schemaCloseFor(id: string): (() => void) | null {
+  function schemaCloseFor(id: string): (() => Promise<boolean>) | null {
     return schemaCloses.current.get(id)?.current ?? null;
   }
 

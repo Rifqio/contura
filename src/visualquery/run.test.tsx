@@ -14,6 +14,7 @@ import { mockReactFlowDom } from "../test/reactFlow";
 import CrossJoinDialog, { aboutRows } from "./CrossJoinDialog";
 import { emptyQuery } from "./model";
 import VisualQueryTab, { type VisualQueryTabProps, runBlock } from "./VisualQueryTab";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 
 /** Item 30: the SQL is a tab of the bottom panel; this shows it. */
 async function showSql() {
@@ -636,4 +637,23 @@ test("ctrl_c_in_the_sql_pane_with_nothing_selected_copies_the_sql", async () => 
     vi.unstubAllGlobals();
     vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }));
   }
+});
+
+test("a_run_is_a_recent_step_with_its_row_count_and_never_its_sql", async () => {
+  // The clipboard test above unstubs every global, the canvas's ResizeObserver among them.
+  mockReactFlowDom();
+  clearAllSteps();
+  render(
+    <RecordStepContext.Provider value="ungrouped">
+      <Harness initial={docWith(ORDERS_STORES)} />
+    </RecordStepContext.Provider>,
+  );
+  await ready();
+  ctrlEnter();
+  expect(await screen.findByText("10 rows in 38ms")).toBeTruthy();
+  expect(stepsOf("ungrouped")).toMatchObject([
+    { verb: "runVisual", tab: "visual", title: "New Visual Query", connectionId: "c1", database: "shop", count: 10 },
+  ]);
+  expect(JSON.stringify(stepsOf("ungrouped"))).not.toContain("SELECT");
+  clearAllSteps();
 });

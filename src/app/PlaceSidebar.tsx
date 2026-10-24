@@ -50,7 +50,7 @@ export default function PlaceSidebar({ group, groups, placeName, hidden, empty, 
   }
 
   return (
-    <aside className="side" aria-label={`${placeName} Connections`} hidden={hidden}>
+    <aside className="side" aria-label={`${placeName} Connections`} hidden={hidden} data-pane>
       <div className="side-header">
         {/* Layout A and D19: the Group square (its image when set) before the name. */}
         <GroupBadge id={group?.id} name={group?.name ?? ""} color={group?.color ?? null} />

@@ -30,12 +30,25 @@ export function fakePreview(req: AskRequest, locked: string | null = null): Prev
     const bytes = on ? new TextEncoder().encode(text).length : 0;
     return { kind, label, bytes, tokens: Math.ceil(bytes / 4), locked: lock, on };
   });
+  // The Core's This tab and Recent steps rows, right after the question: switched off they keep their row with
+  // nothing sent, so they can be switched back on (`previewParity.json` holds the fake to the Core).
+  const rows: PreviewItem[] = [];
+  const offRow = (kind: ItemKind, label: string, bytes: number): PreviewItem => {
+    const lock = lockFor(kind);
+    const on = !lock && !req.off.includes(kind);
+    return { kind, label, bytes: on ? bytes : 0, tokens: on ? Math.ceil(bytes / 4) : 0, locked: lock, on };
+  };
+  if (req.tab) rows.push(offRow("tab", "This tab", 120));
+  const steps = req.steps?.length ?? 0;
+  if (steps > 0) rows.push(offRow("steps", `Recent steps · ${steps}`, 40 * steps));
+  const byPart = [...items];
+  items.splice(1, 0, ...rows);
   // The Core's rows item: merged into one, with the label it gives and what it read.
   const rowsAt = items.findIndex((i) => i.kind === "rows");
   const rowsOn = rowsAt >= 0 && items[rowsAt].on;
   if (rowsOn) items[rowsAt] = { ...items[rowsAt], label: "Sample rows · 2 tables", bytes: 643, tokens: 161 };
   const exact = parts
-    .filter((_, i) => items[i].on && parts[i][2] !== "")
+    .filter((_, i) => byPart[i].on && parts[i][2] !== "")
     .map(([, label, text]) => `${label}:\n${text}`)
     .join("\n\n");
   const totalBytes = new TextEncoder().encode(exact).length;

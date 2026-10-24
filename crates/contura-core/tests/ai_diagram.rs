@@ -1538,6 +1538,7 @@ fn answer(at: i64, record: AnswerRecord) -> contura_core::ai::AiMessage {
         kinds: Vec::new(),
         tables: Vec::new(),
         action: None,
+        asked_in: None,
     }
 }
 

@@ -41,6 +41,7 @@ import type { TextEdit } from "../lang/protocol";
 import { appLang } from "../lang/appLang";
 import { insertionLine } from "../lang/insertionLine";
 import { editorTheme } from "../lang/editorTheme";
+import { editingBasics } from "../lang/editingBasics";
 import type { LangClient } from "../lang/client";
 import { flowLanguageWith } from "../lang/flow/cm";
 import { defaultArrow, type DiagramKind, FIXED_KINDS, type FlowDoc, type FlowNode, type FlowNodeKind, STATE_END, STATE_START } from "../lang/flow/model";
@@ -367,6 +368,7 @@ function FlowEditor({ initialText, doc, client, bandLines, ghost, onLineClick, o
           lintGutter(),
           doc.extensions,
           flowLanguageWith(client, doc.docId),
+          editingBasics(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.contentAttributes.of({ "aria-label": "Diagram text" }),
           EditorView.updateListener.of((u) => {

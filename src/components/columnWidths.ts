@@ -70,3 +70,26 @@ export function fitColumns(o: {
   }
   return out;
 }
+
+/** A double-click on a header edge never fits a column wider than this (Excel and AG Grid cap a fit too). */
+export const FIT_CAP = 500;
+
+/** The width a cell's content takes, with the cell's own padding and borders; 0 when the browser can't say. */
+export function cellContentWidth(td: HTMLElement): number {
+  const range = document.createRange();
+  range.selectNodeContents(td);
+  const w = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect().width : 0;
+  if (!(w > 0)) return 0;
+  const cs = getComputedStyle(td);
+  const sides = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"] as const;
+  return Math.ceil(w + sides.reduce((a, k) => a + (parseFloat(cs[k]) || 0), 0));
+}
+
+/**
+ * Item G6, the Excel and AG Grid auto-fit: the widest of the header and the cells in view, never under the
+ * header's floor and never past the cap.
+ */
+export function fitToContent(o: { header: number; floor: number; cells: number[]; cap?: number }): number {
+  const wanted = Math.max(o.header, ...o.cells);
+  return Math.round(Math.max(o.floor, Math.min(o.cap ?? FIT_CAP, wanted)));
+}

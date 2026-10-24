@@ -56,6 +56,8 @@ pub const LEFT_OUT: &str = "left out: over the budget";
 pub const FULL_BEFORE_CUT: &str = "in full: before the 200 KB cut";
 /// Tier 2 reasons, in the order a table can get them; the first one it gets is kept.
 pub const OPEN_TAB: &str = "open tab";
+/// A table a Recent step names on the Ask's Connection and database: ranked as an open tab.
+pub const IN_STEPS: &str = "in Recent steps";
 pub const NAME_MATCH: &str = "name match";
 pub const WORD_MATCH: &str = "word match";
 pub const ONE_KEY: &str = "one key away";

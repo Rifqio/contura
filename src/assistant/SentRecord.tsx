@@ -25,6 +25,8 @@ const KIND_WORDS: Record<ItemKind, string> = {
   history: "the thread",
   summary: "a summary of earlier messages",
   diagram: "the diagram text",
+  tab: "This tab",
+  steps: "Recent steps",
 };
 
 const plural = (count: number, word: string) => `${n(count)} ${word}${count === 1 ? "" : "s"}`;

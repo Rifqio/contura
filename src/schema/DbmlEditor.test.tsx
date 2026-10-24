@@ -136,3 +136,24 @@ test("the editor takes the dark flag in the dark theme, so its suggestions are r
     document.documentElement.removeAttribute("data-theme");
   }
 });
+
+test("the_dbml_editor_has_find_and_replace_and_closes_brackets_like_the_sql_editor", () => {
+  const { view } = setup("");
+  key(view, "f", { ctrlKey: true });
+  expect(view.dom.querySelector(".cm-search")).not.toBeNull();
+  const insert = () => view.state.update({ changes: { from: 0, insert: "(" }, selection: { anchor: 1 } });
+  view.state.facet(EditorView.inputHandler).some((f) => f(view, 0, 0, "(", insert));
+  expect(view.state.doc.toString()).toBe("()");
+});
+
+test("esc_in_the_dbml_find_box_closes_only_the_find_panel", () => {
+  const { view } = setup("Table a {\n  id int\n}");
+  key(view, "f", { ctrlKey: true });
+  const box = view.dom.querySelector(".cm-search [name=search]") as HTMLInputElement;
+  const outer = vi.fn();
+  document.addEventListener("keydown", outer);
+  fireEvent.keyDown(box, { key: "Escape", keyCode: 27 });
+  document.removeEventListener("keydown", outer);
+  expect(view.dom.querySelector(".cm-search")).toBeNull();
+  expect(outer.mock.calls.every(([e]) => (e as KeyboardEvent).defaultPrevented)).toBe(true);
+});

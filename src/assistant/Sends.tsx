@@ -50,6 +50,8 @@ const ICON: Record<ItemKind, IconName> = {
   history: "history",
   summary: "history",
   diagram: "flow",
+  tab: "layers",
+  steps: "history",
 };
 
 /**
@@ -60,6 +62,13 @@ const ICON: Record<ItemKind, IconName> = {
 function lockText(i: PreviewItem, connection: ContextConnection | null): string | null {
   if (i.kind === "values" && i.locked !== null && connection?.access === "schemaQuery") return `Values stay masked for ${connection.name}`;
   return i.locked;
+}
+
+/** The hover text of the pills that are on or off for this Ask only. */
+function pillTitle(i: PreviewItem): string | undefined {
+  if (i.kind === "rows") return i.on ? "Sent with this Ask. Click to leave it out." : "Left out. Click to send up to 5 rows of each named table.";
+  if (i.kind === "steps") return i.on ? "Sent with this Ask. Click to leave it out." : "Left out of this Ask. Click to send it.";
+  return undefined;
 }
 
 /** "Summary step · last topic" or "Summary step · 14 older messages". */
@@ -117,7 +126,7 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
         className={i.kind === "outline" ? "send-pill send-pill-tall" : "send-pill"}
         aria-pressed={i.on}
         aria-disabled={fixed ? true : undefined}
-        title={lockText(i, connection) ?? (i.kind === "rows" ? (i.on ? "Sent with this Ask. Click to leave it out." : "Left out. Click to send up to 5 rows of each named table.") : undefined)}
+        title={lockText(i, connection) ?? pillTitle(i)}
         onClick={() => {
           if (!fixed) onToggle(i.kind);
         }}

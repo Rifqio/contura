@@ -408,3 +408,27 @@ test("the_literal_values_reason_does_not_read_the_core_wording", () => {
   view.rerender(<Sends preview={items("ai-prod shares schema only")} header="h" onToggle={() => {}} connection={{ name: "ai-prod", access: "schema" }} />);
   expect(reasons()).toEqual(["ai-prod shares schema only", "ai-prod shares schema only"]);
 });
+
+test("recent_steps_pill_titles_and_off_state", async () => {
+  const user = userEvent.setup();
+  const onToggle = vi.fn();
+  const steps = (on: boolean): PreviewItem => ({ kind: "steps", label: "Recent steps · 4", bytes: on ? 180 : 0, tokens: on ? 45 : 0, locked: null, on });
+  const held = "2 steps stay on this computer: their Connection shares nothing with AI";
+  const { rerender } = render(<Sends preview={preview({ items: [steps(true)], notes: [held] })} header="h" onToggle={onToggle} />);
+  const pill = screen.getByRole("button", { name: /^Recent steps/ });
+  expect(pill.textContent).toBe("Recent steps · 4");
+  expect(pill.getAttribute("title")).toBe("Sent with this Ask. Click to leave it out.");
+  expect(screen.getByText(held)).toBeTruthy();
+  await user.click(pill);
+  expect(onToggle).toHaveBeenCalledWith("steps");
+
+  rerender(<Sends preview={preview({ items: [steps(false)] })} header="h" onToggle={onToggle} />);
+  const off = screen.getByRole("button", { name: /^Recent steps/ });
+  expect(off.textContent).toBe("Recent steps · 4 · off");
+  expect(off.getAttribute("aria-pressed")).toBe("false");
+  expect(off.getAttribute("title")).toBe("Left out of this Ask. Click to send it.");
+
+  // No steps: no row at all.
+  rerender(<Sends preview={preview()} header="h" onToggle={onToggle} />);
+  expect(screen.queryByRole("button", { name: /^Recent steps/ })).toBeNull();
+});

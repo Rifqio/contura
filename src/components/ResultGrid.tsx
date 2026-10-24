@@ -2,6 +2,7 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
   type ReactNode,
   useCallback,
   useEffect,
@@ -10,8 +11,27 @@ import {
   useState,
 } from "react";
 import type { Cell, SortSpec } from "../api/types";
+import {
+  addCell,
+  block,
+  colCoverage,
+  coversAll,
+  contains,
+  copyText,
+  extendRowsTo,
+  extendTo,
+  navigate,
+  norm,
+  type Range,
+  rowCoverage,
+  selectAll,
+  selectRows,
+  type Selection,
+  single,
+} from "../grid/selection";
+import { writeClipboard } from "../grid/clipboard";
 import CellValue, { type CellSource } from "./CellValue";
-import { fitColumns, headerFloor, headerPadding, headerWidth } from "./columnWidths";
+import { cellContentWidth, fitColumns, fitToContent, headerFloor, headerPadding, headerWidth } from "./columnWidths";
 import Icon from "./Icon";
 
 /** Rows are one line high (app.css `.grid td`); measured once rendered. */
@@ -36,6 +56,10 @@ interface Props {
   rows: Cell[][];
   /** Changing it starts the grid over at the top, with fresh column widths. */
   resetKey: unknown;
+  /** Dragged and fitted widths are kept, by column name, while this stays the same; it defaults to `resetKey`. */
+  widthsKey?: unknown;
+  /** The user dragged or fitted a column. */
+  onResized?(): void;
   label: string;
   /** The number shown on the first row. */
   firstRow?: number;
@@ -54,10 +78,18 @@ interface Props {
   /** The row with an open cell editor; when it leaves the rendered rows, `onEditorLost` runs. */
   editingRow?: number | null;
   onEditorLost?(): void;
-  /** Editing hooks for the table grid; query results pass none of them. */
-  selected?: { row: number; column: number } | null;
-  onSelect?(row: number, column: number): void;
+  /**
+   * G2: the selected ranges, in grid positions. With `onSelection` the grid selects: clicks, Shift and Ctrl clicks,
+   * drags, the row numbers, the corner, and the movement keys; Ctrl+C and Ctrl+Shift+C copy (G1).
+   */
+  selection?: Selection | null;
+  onSelection?(next: Selection): void;
+  /** What the grid says about a copy, for the owner's status line. */
+  onNote?(text: string): void;
+  /** Lets the owner's menu copy as Ctrl+C does. */
+  gridRef?: MutableRefObject<GridHandle | null>;
   onOpen?(row: number, column: number): void;
+  /** The owner's keys run first; a key it handles (`preventDefault`) is not moved or copied on. */
   onGridKey?(e: KeyboardEvent<HTMLDivElement>): void;
   onCellMenu?(row: number, column: number, x: number, y: number): void;
   onPaste?(e: ClipboardEvent<HTMLDivElement>): void;
@@ -67,6 +99,29 @@ interface Props {
   rowLabel?(row: number): ReactNode | undefined;
   /** Replaces the cell's content, such as the open editor. */
   renderCell?(row: number, column: number): ReactNode | undefined;
+}
+
+export interface GridHandle {
+  /** Copies the selection, with a header line when asked: as Ctrl+C and Ctrl+Shift+C. */
+  copy(headers: boolean): void;
+}
+
+const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`;
+
+/** A cell as copied text: NULL is an empty field (ruling 3), and so is a binary value, which has only a preview. */
+function copyValue(c: Cell | undefined): string | null {
+  if (!c || c.t === "null" || c.t === "bytes") return null;
+  return c.value;
+}
+
+/** A cell whose copy is not its whole value: text cut short at the preview limit, or binary. */
+const cutShort = (c: Cell | undefined) => !!c && (c.t === "bytes" || (c.t === "text" && c.truncated));
+
+/** A field: a key typed into it is its own. */
+function typing(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  return /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(el.tagName) || el.isContentEditable;
 }
 
 /** Holds the scroll height of rows that are not rendered. */
@@ -85,8 +140,8 @@ type Visible = { first: number; last: number };
  * the row-number gutter.
  */
 type Measure = { key: unknown; cols: string; gutter: number; natural: number[]; header: number[]; floor: number[] };
-/** Widths the user dragged, per reset. */
-type Pins = { key: unknown; cols: string; px: (number | null)[] };
+/** Widths the user dragged or fitted, by column name, while their `widthsKey` stays. */
+type Pins = { key: unknown; px: Record<string, number> };
 
 /**
  * A read-only, virtualized grid: only the rows near the viewport are in the DOM,
@@ -96,6 +151,8 @@ export default function ResultGrid({
   columns,
   rows,
   resetKey,
+  widthsKey = resetKey,
+  onResized,
   label,
   firstRow = 1,
   stale = false,
@@ -108,8 +165,10 @@ export default function ResultGrid({
   corner,
   editingRow = null,
   onEditorLost,
-  selected = null,
-  onSelect,
+  selection = null,
+  onSelection,
+  onNote,
+  gridRef,
   onOpen,
   onGridKey,
   onCellMenu,
@@ -215,7 +274,7 @@ export default function ResultGrid({
   const start = Math.max(0, visible.first - OVERSCAN);
   const end = Math.min(rowCount, visible.last + OVERSCAN);
   const current = measure && measure.key === resetKey && measure.cols === cols ? measure : null;
-  const pinned = pins && current && pins.key === resetKey && pins.cols === cols ? pins.px : null;
+  const pinned = pins && current && pins.key === widthsKey ? columns.map((c) => pins.px[c.name] ?? null) : null;
   const fixed = current
     ? [
         current.gutter,
@@ -233,6 +292,20 @@ export default function ResultGrid({
   // Dragging a header's right edge pins that column's width, never under its header label.
   const stopDrag = useRef<(() => void) | null>(null);
   useEffect(() => () => stopDrag.current?.(), []);
+  function pin(name: string, w: number) {
+    setPins((p) => ({ key: widthsKey, px: { ...(p && p.key === widthsKey ? p.px : {}), [name]: w } }));
+  }
+
+  // Double-clicking a header's right edge fits the column to its header and the cells in view.
+  function fitColumn(e: ReactMouseEvent, ci: number) {
+    if (!current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const cells = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>(`tbody td[data-col="${ci}"]`) ?? [], cellContentWidth);
+    onResized?.();
+    pin(columns[ci].name, fitToContent({ header: current.header[ci], floor: current.floor[ci] ?? current.header[ci], cells }));
+  }
+
   function startResize(e: ReactMouseEvent, ci: number) {
     if (e.button !== 0 || !current || !fixed) return;
     e.preventDefault();
@@ -241,17 +314,16 @@ export default function ResultGrid({
     const startX = e.clientX;
     const startWidth = fixed[ci + 1];
     const min = current.floor[ci] ?? current.header[ci];
-    const { key, cols: sig } = current;
-    const count = current.natural.length;
+    const name = columns[ci].name;
+    let moved = false;
     const move = (ev: MouseEvent) => {
+      moved = true;
       const w = Math.max(min, Math.round(startWidth + ev.clientX - startX));
-      setPins((p) => {
-        const px = p && p.key === key && p.cols === sig ? [...p.px] : Array<number | null>(count).fill(null);
-        px[ci] = w;
-        return { key, cols: sig, px };
-      });
+      pin(name, w);
     };
     const stop = () => {
+      if (moved) onResized?.();
+      moved = false;
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", stop);
       document.body.classList.remove("col-resizing");
@@ -281,30 +353,151 @@ export default function ResultGrid({
     if (editingRow !== null && (editingRow < start || editingRow >= end)) editorLost.current?.();
   }, [editingRow, start, end]);
 
+  // The moving corner of the selection stays in view; a row not rendered yet is scrolled to first.
+  const endRow = selection?.end.r;
+  const endCol = selection?.end.c;
   useEffect(() => {
-    if (!selected) return;
-    const td = scrollRef.current?.querySelector<HTMLElement>(
-      `tr[data-row="${selected.row}"] td[data-col="${selected.column}"]`,
-    );
-    td?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [selected?.row, selected?.column]);
+    if (endRow === undefined || endCol === undefined) return;
+    const box = scrollRef.current;
+    const td = box?.querySelector<HTMLElement>(`tr[data-row="${endRow}"] td[data-col="${endCol}"]`);
+    if (td) td.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    else if (box) box.scrollTop = Math.max(0, endRow * rowHeight.current - box.clientHeight / 2);
+  }, [endRow, endCol]);
 
-  const editable = !!onSelect;
+  const selectable = !!onSelection;
+  const active = selection && selectable ? selection.active : null;
+
+  // G1: the copied block wears a dashed mark until Esc or a change of the rows (an edit).
+  const [copied, setCopied] = useState<Range[] | null>(null);
+  useEffect(() => setCopied(null), [rows]);
+
+  function copy(headers: boolean) {
+    if (!selection) return;
+    const b = block(selection);
+    if (!b) {
+      onNote?.("Not copied: copy takes one block, or blocks sharing rows or columns.");
+      return;
+    }
+    const text = copyText(
+      b,
+      (r, c) => copyValue(rows[r]?.[c]),
+      headers ? b.cols.map((c) => columns[c].name) : undefined,
+    );
+    // The note says it was copied at once; a clipboard that refuses takes the copy mark and the note back (M2).
+    void writeClipboard(text).then((ok) => {
+      if (ok) return;
+      setCopied(null);
+      onNote?.("Not copied: the clipboard refused.");
+    });
+    setCopied(selection.ranges.map((g) => ({ ...g })));
+    let cut = 0;
+    for (const r of b.rows) for (const c of b.cols) if (cutShort(rows[r]?.[c])) cut++;
+    const copied = `Copied ${plural(b.rows.length * b.cols.length, "cell")}${headers ? " with headers" : ""}`;
+    // I1: never a silent cut. The Core sends at most 1 KB of a value (PREVIEW_BYTES).
+    onNote?.(
+      cut
+        ? `${copied}; ${cut.toLocaleString("en-US")} ${cut === 1 ? "was" : "were"} cut short at 1 KB. Open full value (Shift+F2) copies one in full.`
+        : `${copied}.`,
+    );
+  }
+  const copyRef = useRef(copy);
+  copyRef.current = copy;
+  if (gridRef) gridRef.current = { copy: (headers) => copyRef.current(headers) };
+
+  const dims = { rows: rows.length, cols: columns.length };
+  /** A drag from a cell or a row number extends the selection over what the pointer passes. */
+  const drag = useRef<"cells" | "rows" | null>(null);
+  useEffect(() => {
+    const up = () => (drag.current = null);
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, []);
+  const latest = useRef(selection);
+  latest.current = selection;
+
+  function cellDown(e: ReactMouseEvent, r: number, c: number) {
+    // A press in the cell's editor, or in a panel it opened elsewhere on the page, is the editor's own.
+    if (!onSelection || e.button !== 0 || !e.currentTarget.contains(e.target as Node) || typing(e.target)) return;
+    const s = latest.current;
+    const p = { r, c };
+    const next = e.shiftKey && s ? extendTo(s, p) : (e.ctrlKey || e.metaKey) && s ? addCell(s, p) : single(p);
+    drag.current = "cells";
+    // Keys work on the grid at once, whatever had focus.
+    if (!scrollRef.current?.contains(document.activeElement)) scrollRef.current?.focus({ preventScroll: true });
+    onSelection(next);
+  }
+
+  function rowDown(e: ReactMouseEvent, r: number) {
+    if (!onSelection || e.button !== 0 || columns.length === 0) return;
+    e.preventDefault();
+    const s = latest.current;
+    const next = e.shiftKey && s ? extendRowsTo(s, r, columns.length) : selectRows(s, r, r, (e.ctrlKey || e.metaKey) && !!s, columns.length);
+    drag.current = "rows";
+    scrollRef.current?.focus({ preventScroll: true });
+    onSelection(next);
+  }
+
+  function dragOver(e: ReactMouseEvent) {
+    const mode = drag.current;
+    const s = latest.current;
+    if (!mode || !onSelection || !s) return;
+    const el = e.target as HTMLElement;
+    const tr = el.closest?.("tr[data-row]");
+    if (!tr) return;
+    const r = Number(tr.getAttribute("data-row"));
+    if (mode === "rows") {
+      if (s.end.r !== r) onSelection(extendRowsTo(s, r, columns.length));
+      return;
+    }
+    const td = el.closest("td[data-col]");
+    if (!td) return;
+    const c = Number(td.getAttribute("data-col"));
+    if (s.end.r !== r || s.end.c !== c) onSelection(extendTo(s, { r, c }));
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (typing(e.target)) return;
+    onGridKey?.(e);
+    if (e.defaultPrevented || !onSelection) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (e.key === "Escape") {
+      // Esc clears the copy mark; it never shrinks the selection (ruling 8).
+      if (copied) {
+        e.preventDefault();
+        setCopied(null);
+      }
+      return;
+    }
+    if (mod && !e.altKey && (e.code === "KeyC" || e.key.toLowerCase() === "c")) {
+      e.preventDefault();
+      copy(e.shiftKey);
+      return;
+    }
+    const page = Math.max(1, visible.last - visible.first - 1);
+    const next = navigate(selection, e, dims, page);
+    if (next) {
+      e.preventDefault();
+      onSelection(next);
+    }
+  }
 
   return (
     <div
       className="grid-scroll"
       ref={scrollRef}
       onScroll={measureViewport}
-      tabIndex={editable ? 0 : undefined}
-      onKeyDown={onGridKey}
+      tabIndex={selectable ? 0 : undefined}
+      data-pane-focus={selectable || undefined}
+      onKeyDown={onKeyDown}
       onPaste={onPaste}
+      onMouseOver={selectable ? dragOver : undefined}
     >
       {columns.length > 0 && (
         <table
           className={stale ? "grid grid-stale" : "grid"}
           aria-label={label}
           aria-rowcount={rowCount + 1}
+          aria-multiselectable={selectable || undefined}
           style={fixed ? { tableLayout: "fixed", width: fixed.reduce((a, b) => a + b, 0) } : undefined}
         >
           {fixed && (
@@ -316,7 +509,21 @@ export default function ResultGrid({
           )}
           <thead>
             <tr aria-rowindex={1}>
-              <th className="row-number" scope="col">
+              <th
+                className={selectable && coversAll(selection, dims) ? "row-number corner-all" : "row-number"}
+                scope="col"
+                title={selectable ? "Select all (Ctrl+A)" : undefined}
+                onMouseDown={
+                  selectable
+                    ? (e) => {
+                        if (e.button !== 0 || rowCount === 0) return;
+                        e.preventDefault();
+                        scrollRef.current?.focus({ preventScroll: true });
+                        onSelection?.(selectAll(dims, latest.current?.active));
+                      }
+                    : undefined
+                }
+              >
                 <span className="visually-hidden">Row</span>
                 {corner}
               </th>
@@ -342,19 +549,30 @@ export default function ResultGrid({
                     )}
                   </span>
                 );
+                const cover = selectable ? colCoverage(selection, ci, rowCount) : null;
+                const thClass = [c.numeric ? "align-end" : "", cover ? `col-sel-${cover}` : ""].filter(Boolean).join(" ");
                 return (
                   <th
                     key={`${ci}:${c.name}`}
                     scope="col"
                     aria-sort={onSort ? sorted : undefined}
                     aria-label={`${c.name}, ${c.typeName}`}
-                    className={c.numeric ? "align-end" : undefined}
+                    className={thClass || undefined}
                   >
                     {onSort ? (
                       <button
                         type="button"
                         className="header-button"
                         aria-label={`Sort by ${c.name}`}
+                        // M9: a click sorts but leaves focus on the grid, so its keys go on working.
+                        onMouseDown={
+                          selectable
+                            ? (e) => {
+                                e.preventDefault();
+                                scrollRef.current?.focus({ preventScroll: true });
+                              }
+                            : undefined
+                        }
                         onClick={() => onSort(c.name)}
                       >
                         {name}
@@ -367,6 +585,7 @@ export default function ResultGrid({
                         className="col-resize"
                         aria-hidden="true"
                         onMouseDown={(e) => startResize(e, ci)}
+                        onDoubleClick={(e) => fitColumn(e, ci)}
                       />
                     )}
                   </th>
@@ -382,16 +601,45 @@ export default function ResultGrid({
               // (new, deleted, conflict) or the selected cell keeps its own colour. `data-grid-stripes` on the
               // root turns the shade on.
               const own = rowClass?.(r);
-              const alt = !own && (firstRow + r) % 2 === 0 && selected?.row !== r ? "grid-row-alt" : undefined;
+              const alt = !own && (firstRow + r) % 2 === 0 && active?.r !== r ? "grid-row-alt" : undefined;
+              const rowCover = selectable ? rowCoverage(selection, r, columns.length) : null;
               return (
                 <tr key={r} data-row={r} aria-rowindex={r + 2} className={own ?? alt}>
-                  <td className="row-number">{rowLabel?.(r) ?? (firstRow + r).toLocaleString("en-US")}</td>
+                  <td
+                    className={rowCover ? `row-number row-sel-${rowCover}` : "row-number"}
+                    onMouseDown={selectable ? (e) => rowDown(e, r) : undefined}
+                    onContextMenu={
+                      onCellMenu
+                        ? (e) => {
+                            e.preventDefault();
+                            const s = latest.current;
+                            const full = !!s && rowCoverage(s, r, columns.length) === "full";
+                            const next = full && s ? s : selectRows(s, r, r, false, columns.length);
+                            if (!full) onSelection?.(next);
+                            onCellMenu(r, next.active.r === r ? next.active.c : 0, e.clientX, e.clientY);
+                          }
+                        : undefined
+                    }
+                  >
+                    {rowLabel?.(r) ?? (firstRow + r).toLocaleString("en-US")}
+                  </td>
                   {row.map((cell, i) => {
-                    const isSelected = selected?.row === r && selected.column === i;
+                    const isSelected = active?.r === r && active.c === i;
+                    const inSel = selectable && contains(selection, r, i);
+                    const mark = copied && copied.some((g) => {
+                      const n = norm(g);
+                      return r >= n.t && r <= n.b && i >= n.l && i <= n.r;
+                    });
                     const classes = [
                       cell.t === "number" ? "align-end" : "",
                       cellClass?.(r, i) ?? "",
                       isSelected ? "cell-selected" : "",
+                      inSel && !isSelected ? "cell-in" : "",
+                      inSel && !contains(selection, r - 1, i) ? "sel-t" : "",
+                      inSel && !contains(selection, r + 1, i) ? "sel-b" : "",
+                      inSel && !contains(selection, r, i - 1) ? "sel-l" : "",
+                      inSel && !contains(selection, r, i + 1) ? "sel-r" : "",
+                      mark ? "cell-copied" : "",
                     ].filter(Boolean);
                     const custom = renderCell?.(r, i);
                     return (
@@ -401,14 +649,17 @@ export default function ResultGrid({
                         className={classes.length ? classes.join(" ") : undefined}
                         // A blank NULL has no size of its own to hover, so the cell says NULL.
                         title={cellTitle?.(r, i) ?? (cell.t === "null" && custom == null ? "NULL" : undefined)}
-                        aria-selected={editable ? isSelected : undefined}
-                        onMouseDown={editable ? () => onSelect?.(r, i) : undefined}
+                        aria-selected={selectable ? inSel : undefined}
+                        onMouseDown={selectable ? (e) => cellDown(e, r, i) : undefined}
                         onDoubleClick={onOpen ? () => onOpen(r, i) : undefined}
                         onContextMenu={
                           onCellMenu
                             ? (e) => {
                                 e.preventDefault();
-                                onSelect?.(r, i);
+                                // A right-click inside the selection keeps it; outside, it selects the cell first.
+                                const s = latest.current;
+                                if (s && contains(s, r, i)) onSelection?.({ ...s, active: { r, c: i } });
+                                else onSelection?.(single({ r, c: i }));
                                 onCellMenu(r, i, e.clientX, e.clientY);
                               }
                             : undefined

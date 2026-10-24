@@ -312,7 +312,8 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let secrets = Arc::new(secret_store(&store, data_dir.join("app.sqlite"))?);
     app.manage(commands::Secrets(secrets.clone()));
     let ai_store = AppStore::open(&data_dir.join("app.sqlite"))?;
-    app.manage(AiService::new(ai_store, secrets.clone()));
+    // A step purge a Connection delete left pending runs here (bounded by the thread caps).
+    app.manage(AiService::open(ai_store, secrets.clone()));
     app.manage(ConnectionService::new(store, secrets).with_data_dir(data_dir.clone()));
     app.manage(commands::DataDir(data_dir.clone()));
     let (kind, target) = updater::install_target();

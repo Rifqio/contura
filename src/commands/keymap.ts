@@ -1,6 +1,6 @@
 import type { KeymapOverrides } from "../api/types";
 import { normalizeKeys, parseKeys } from "./keys";
-import { COMMANDS, type CommandId, commandById } from "./registry";
+import { COMMANDS, type CommandId, REGION_SHARED_KEYS, commandById } from "./registry";
 
 export type Keymap = ReadonlyMap<CommandId, string[]>;
 
@@ -54,7 +54,8 @@ export type Clash = { kind: "command"; id: CommandId; title: string } | { kind: 
 export function findClash(map: Keymap, id: CommandId, keys: string): Clash | null {
   const k = normalizeKeys(keys);
   for (const [other, ks] of map) {
-    if (other !== id && ks.includes(k)) return { kind: "command", id: other, title: commandById(other)!.title };
+    if (other !== id && ks.includes(k) && !REGION_SHARED_KEYS.some((r) => r.keys === k && r.ids.includes(id) && r.ids.includes(other)))
+      return { kind: "command", id: other, title: commandById(other)!.title };
   }
   const reserved = EDITOR_RESERVED.find((r) => r.keys === k);
   return reserved ? { kind: "editor", title: reserved.title } : null;

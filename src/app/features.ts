@@ -16,7 +16,7 @@ export interface FeatureDeps {
   /** The table tab on top, for Export. */
   table: boolean;
   keys: { newQuery: string | null; diagram: string | null; ask: string | null };
-  /** A window tab (Home, Settings, a diagram) is on top: Ask works beside a place's tabs only. */
+  /** False on a diagram tab, which has its own assistant: Ask works beside every other tab. */
   askReady: boolean;
   newQuery(): void;
   newVisualQuery(): void;
@@ -74,7 +74,7 @@ export function featureGroups(d: FeatureDeps): { groups: Feature[][]; end: Featu
       tip: "Ask about this database",
       shortcut: d.keys.ask,
       run: d.ask,
-      disabledWhy: d.askReady ? null : "Open a query or table tab first",
+      disabledWhy: d.askReady ? null : "The diagram has its own assistant",
     },
   };
 }

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { keysFromEvent, normalizeKeys, toCodeMirror } from "./keys";
 import { applyRebind, findClash, hintFor, keyProblem, keysFor, resetCommand, resolveKeymap } from "./keymap";
-import { COMMANDS } from "./registry";
+import { COMMANDS, type CommandId } from "./registry";
 import { KeymapProvider, useCommandKeys, useKeymap } from "./useCommandKeys";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -28,6 +28,19 @@ test("keys_from_event_use_the_physical_key", () => {
   expect(keysFromEvent(ev({ ctrlKey: true, key: "," , code: "Comma" }))).toBe("Ctrl+,");
 });
 
+test("altgr_never_makes_a_ctrl_alt_command", () => {
+  // Windows sends AltGr as Ctrl+Alt; on a German layout AltGr+7 types "{", so it must reach the field.
+  const altGr = (init: KeyboardEventInit) => {
+    const e = ev(init);
+    e.getModifierState = (k: string) => k === "AltGraph";
+    return e;
+  };
+  expect(keysFromEvent(altGr({ ctrlKey: true, altKey: true, code: "Digit7", key: "{" }))).toBeNull();
+  expect(keysFromEvent(altGr({ ctrlKey: true, altKey: true, code: "KeyI", key: "i" }))).toBeNull();
+  // The same keys without AltGr are the command's keys.
+  expect(keysFromEvent(ev({ ctrlKey: true, altKey: true, code: "Digit7", key: "7" }))).toBe("Ctrl+Alt+7");
+});
+
 test("to_code_mirror", () => {
   expect(toCodeMirror("Ctrl+Shift+Enter")).toBe("Ctrl-Shift-Enter");
   expect(toCodeMirror("Shift+Alt+F")).toBe("Shift-Alt-f");
@@ -37,7 +50,8 @@ test("to_code_mirror", () => {
 
 test("default_keys_are_unique_per_scope", () => {
   for (const scope of ["app", "editor"] as const) {
-    const keys = COMMANDS.filter((c) => c.scope === scope).flatMap((c) => c.keys);
+    // New chat shares Ctrl+N with New Connection: it runs only with focus in the Ask panel.
+    const keys = COMMANDS.filter((c) => c.scope === scope && c.id !== "assistant.newChat").flatMap((c) => c.keys);
     expect(new Set(keys).size).toBe(keys.length);
   }
   // Every default is already in its printed form.
@@ -48,7 +62,15 @@ test("the_registry_has_the_defaults", () => {
   const map = resolveKeymap({});
   expect(keysFor(map, "query.run")).toEqual(["Ctrl+Enter"]);
   expect(keysFor(map, "editor.quickFix")).toEqual(["Ctrl+.", "Alt+Enter"]);
-  expect(keysFor(map, "group.open.9")).toEqual(["Ctrl+9"]);
+  // Edge: Ctrl+1 to Ctrl+8 go to that tab, Ctrl+9 to the last. Groups moved to Ctrl+Alt+1 to 9.
+  for (let n = 1; n <= 9; n++) expect(keysFor(map, `tab.goto.${n}` as CommandId)).toEqual([`Ctrl+${n}`]);
+  expect(keysFor(map, "group.open.9")).toEqual(["Ctrl+Alt+9"]);
+  expect(keysFor(map, "group.open.1")).toEqual(["Ctrl+Alt+1"]);
+  expect(keysFor(map, "tab.next")).toEqual(["Ctrl+Tab", "Ctrl+PageDown"]);
+  expect(keysFor(map, "tab.previous")).toEqual(["Ctrl+Shift+Tab", "Ctrl+PageUp"]);
+  // S12: Ctrl+N in the Ask panel is a new chat (VS Code Chat); Ctrl+Shift+N stays the first key.
+  expect(keysFor(map, "assistant.newChat")).toEqual(["Ctrl+Shift+N", "Ctrl+N"]);
+  expect(keysFor(map, "connection.new")).toEqual(["Ctrl+N"]);
   expect(hintFor(map, "settings.open")).toBe("Ctrl+,");
   expect(hintFor(map, "query.explain")).toBeNull();
   expect(hintFor(map, "history.toggle")).toBeNull();
@@ -59,6 +81,13 @@ test("find_clash_names_the_other_command", () => {
   expect(findClash(map, "query.run", "Ctrl+T")).toEqual({ kind: "command", id: "query.new", title: "New query" });
   expect(findClash(map, "query.new", "Ctrl+T")).toBeNull();
   expect(findClash(map, "query.run", "Ctrl+Q")).toBeNull();
+});
+
+test("ctrl_n_shared_by_new_connection_and_new_chat_is_not_a_clash", () => {
+  const map = resolveKeymap({});
+  expect(findClash(map, "assistant.newChat", "Ctrl+N")).toBeNull();
+  expect(findClash(map, "connection.new", "Ctrl+N")).toBeNull();
+  expect(findClash(map, "query.new", "Ctrl+N")).toEqual({ kind: "command", id: "connection.new", title: "New Connection" });
 });
 
 test("find_clash_names_the_editor_key", () => {
@@ -238,6 +267,22 @@ describe("useCommandKeys", () => {
     filterKey();
     expect(owner).toHaveBeenCalledTimes(1);
     expect(global).not.toHaveBeenCalled();
+  });
+
+  test("ctrl_n_is_new_chat_with_focus_in_the_ask_panel_and_new_connection_elsewhere", () => {
+    const newChat = vi.fn();
+    const newConnection = vi.fn();
+    const panel = pane();
+    renderHook(() => useCommandKeys({ "connection.new": newConnection }));
+    renderHook(() => useCommandKeys({ "assistant.newChat": newChat }, { region: { current: panel } }));
+    const ctrlN = () => window.dispatchEvent(ev({ ctrlKey: true, key: "n", code: "KeyN" }));
+    ctrlN();
+    expect(newConnection).toHaveBeenCalledTimes(1);
+    expect(newChat).not.toHaveBeenCalled();
+    focusIn(panel);
+    ctrlN();
+    expect(newChat).toHaveBeenCalledTimes(1);
+    expect(newConnection).toHaveBeenCalledTimes(1);
   });
 
   test("an_open_dialog_still_holds_a_region_command", () => {

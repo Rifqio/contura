@@ -1014,3 +1014,22 @@ test("the .flow editor takes the dark flag in the dark theme, so its suggestions
     document.documentElement.removeAttribute("data-theme");
   }
 });
+
+test("the_diagram_text_has_find_and_replace_like_the_sql_editor", async () => {
+  const s = setup();
+  await drawn(s);
+  fireEvent.keyDown(s.view().contentDOM, { key: "f", ctrlKey: true });
+  expect(s.view().dom.querySelector(".cm-search")).not.toBeNull();
+});
+
+test("esc_in_the_diagram_find_box_closes_only_the_find_panel_and_keeps_the_selection", async () => {
+  const s = setup();
+  await drawn(s);
+  select(s, "Process Checkout");
+  await waitFor(() => expect(banded(s.container)).toEqual(["Checkout [process, id: 1.0]"]));
+  fireEvent.keyDown(s.view().contentDOM, { key: "f", ctrlKey: true });
+  const box = s.view().dom.querySelector(".cm-search [name=search]") as HTMLInputElement;
+  fireEvent.keyDown(box, { key: "Escape", keyCode: 27 });
+  expect(s.view().dom.querySelector(".cm-search")).toBeNull();
+  expect(banded(s.container)).toEqual(["Checkout [process, id: 1.0]"]);
+});

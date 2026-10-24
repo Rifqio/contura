@@ -2,6 +2,7 @@ import { Fragment, memo, useMemo, useRef } from "react";
 import type { AnswerActionKind, DialectKind, SqlBlock } from "../api/types";
 import Icon from "../components/Icon";
 import AnswerSql from "./AnswerSql";
+import { sha256Hex } from "./sha256";
 import { type AnswerParser, type Block, createAnswerParser, type Inline, looksLikeSql, parseAnswer } from "./answerMarkdown";
 import type { InsertTarget } from "./InsertDiff";
 
@@ -14,6 +15,8 @@ interface Props {
   streaming?: boolean;
   dialect: DialectKind;
   target?: InsertTarget | null;
+  /** The tab has no editor: SQL blocks offer Open in new query tab, never Insert (spec 8). */
+  noEditor?: boolean;
   onOpenInNewTab?(sql: string): void;
   onCopy(sql: string): void;
   /** What the user did with a block's SQL, for the answer's record. */
@@ -68,6 +71,7 @@ interface BlockProps {
   streaming: boolean;
   dialect: DialectKind;
   target?: InsertTarget | null;
+  noEditor: boolean;
   onOpenInNewTab?(sql: string): void;
   onCopy(sql: string): void;
   onAction?(kind: AnswerActionKind): void;
@@ -75,7 +79,7 @@ interface BlockProps {
 }
 
 /** One block; a finished block of a streaming answer keeps its object, so a new delta does not draw it again. */
-const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dialect, target, onOpenInNewTab, onCopy, onAction, sqlBlocks }: BlockProps) {
+const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dialect, target, noEditor, onOpenInNewTab, onCopy, onAction, sqlBlocks }: BlockProps) {
   switch (b.kind) {
     case "para":
       return (
@@ -99,8 +103,12 @@ const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dial
       return b.ordered ? <ol className="answer-list">{items}</ol> : <ul className="answer-list">{items}</ul>;
     }
     case "code": {
-      const check = known?.find((c) => c.fence === b.fence) ?? null;
-      const sql = sqlBlocks && (known ? check !== null : looksLikeSql(b));
+      // The Core's check of this fence number, used only when it was made on this very text: a check made on another
+      // block (the two parsers numbering apart) or saved without its hash leaves the block unchecked, so it goes in
+      // or opens only commented out.
+      const numbered = known?.find((c) => c.fence === b.fence) ?? null;
+      const check = numbered && numbered.bodySha256 === sha256Hex(b.text) ? numbered : null;
+      const sql = sqlBlocks && (known ? numbered !== null : looksLikeSql(b));
       if (sql && b.text.trim())
         return (
           <AnswerSql
@@ -108,9 +116,10 @@ const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dial
             dialect={dialect}
             check={check}
             streaming={streaming}
-            unchecked={!streaming && !known}
+            unchecked={!streaming && check === null}
             closed={b.closed}
             target={target}
+            noEditor={noEditor}
             onOpenInNewTab={onOpenInNewTab}
             onCopy={onCopy}
             onAction={onAction}
@@ -126,7 +135,19 @@ const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dial
 });
 
 /** An answer in the strict subset (R5.1): text is only ever text, never HTML or links; SQL blocks get their label and actions. */
-export default function AnswerText({ text, blocks, notes = [], streaming = false, dialect, target, onOpenInNewTab, onCopy, onAction, sqlBlocks = true }: Props) {
+export default function AnswerText({
+  text,
+  blocks,
+  notes = [],
+  streaming = false,
+  dialect,
+  target,
+  noEditor = false,
+  onOpenInNewTab,
+  onCopy,
+  onAction,
+  sqlBlocks = true,
+}: Props) {
   // A streaming answer is read as it grows: finished blocks are parsed once and kept (see `createAnswerParser`).
   const parser = useRef<AnswerParser | null>(null);
   const parsed = useMemo(() => {
@@ -151,6 +172,7 @@ export default function AnswerText({ text, blocks, notes = [], streaming = false
           streaming={streaming}
           dialect={dialect}
           target={target}
+          noEditor={noEditor}
           onOpenInNewTab={onOpenInNewTab}
           onCopy={onCopy}
           onAction={onAction}

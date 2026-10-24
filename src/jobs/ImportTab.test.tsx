@@ -5,7 +5,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ConnectionConfig, FileSummary, ImportPlan, JobEvent, ScriptPlan, ScriptStatement } from "../api/types";
 import { callsTo, routeInvoke } from "../test/invoke";
+import { type TabAskEntry, useTabAsk } from "../assistant/tabAsk";
 import ImportTab from "./ImportTab";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 import type { ImportTarget } from "./importModel";
 import { JobsProvider, useJobs } from "./useJobs";
 
@@ -128,10 +130,12 @@ function renderTab(over: Partial<Parameters<typeof ImportTab>[0]> = {}) {
     ...over,
   };
   render(
-    <JobsProvider>
-      <Probe />
-      <ImportTab {...props} />
-    </JobsProvider>,
+    <RecordStepContext.Provider value="ungrouped">
+      <JobsProvider>
+        <Probe />
+        <ImportTab {...props} />
+      </JobsProvider>
+    </RecordStepContext.Provider>,
   );
   return props;
 }
@@ -804,4 +808,55 @@ test("the_tab_reports_its_job_id_when_a_run_starts_q43", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^Import 1,204 rows/ }));
   await waitFor(() => expect(sent.run).toHaveLength(1));
   expect(onJob).toHaveBeenCalledWith(callsTo("start_import")[0].job);
+});
+
+// ---- What the tab tells the Ask (spec 4.8) ----
+
+test("the published fields carry the header and the file's base name, never its rows or folder", async () => {
+  routes();
+  let entry: TabAskEntry | null = null;
+  function Reader() {
+    entry = useTabAsk("import:menu");
+    return null;
+  }
+  render(
+    <JobsProvider>
+      <ImportTab connection={CONN} group={null} target={TABLE} visible writable={[CONN]} onRetarget={vi.fn()} onTargetChange={vi.fn()} onOpenTable={vi.fn()} askKey="import:menu" />
+      <Reader />
+    </JobsProvider>,
+  );
+  // Nothing is published before a file is read.
+  await waitFor(() => expect(entry).not.toBeNull());
+  expect(entry!.get()).toBeNull();
+  await chooseFile("C:\\Users\\kestrel\\exports\\menu.csv");
+  await waitFor(() => expect(entry?.get()?.tab).toBeTruthy());
+  const fields = entry!.get()!;
+  expect(fields.tab).toMatchObject({
+    kind: "import",
+    file: "menu.csv",
+    format: "csv",
+    delimiter: ";",
+    encoding: "UTF-8",
+    target: { kind: "table", path: PATH },
+    header: ["id", "name", "price"],
+    rowsEstimate: 1204,
+  });
+  const text = JSON.stringify(fields);
+  expect(text).not.toContain("rows\"");
+  expect(text).not.toContain("Tea");
+  expect(text).not.toContain("Cake");
+  expect(text).not.toContain("kestrel\\\\exports");
+  expect(text).not.toContain("Users");
+});
+
+test("choosing_a_file_records_its_base_name_only", async () => {
+  clearAllSteps();
+  routes();
+  renderTab();
+  await chooseFile("C:\\data\\exports\\menu.csv");
+  expect(stepsOf("ungrouped")).toMatchObject([
+    { verb: "importFile", tab: "import", connectionId: CONN.id, database: "shop", schema: "public", names: ["menu.csv", "menu_items"] },
+  ]);
+  expect(JSON.stringify(stepsOf("ungrouped"))).not.toContain("exports");
+  clearAllSteps();
 });

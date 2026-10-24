@@ -16,6 +16,24 @@ describe("commentedOut", () => {
     expect(commentedOut("DELETE FROM t;\n")).toBe("-- DELETE FROM t;\n");
     expect(commentedOut("A\r\nB")).toBe("-- A\n-- B\n");
   });
+
+  it("every line end starts a commented line", () => {
+    expect(commentedOut("SELECT 1;\rDROP TABLE orders;")).toBe("-- SELECT 1;\n-- DROP TABLE orders;\n");
+    const mixed = commentedOut("SELECT 1;\r\nDELETE FROM a;\rDELETE FROM b;\nDELETE FROM c;\u2028DELETE FROM d;\u2029DELETE FROM e;\u0085DELETE FROM f;");
+    const lines = mixed.trimEnd().split(/\r\n|\r|\n|\u0085|\u2028|\u2029/);
+    expect(lines).toHaveLength(7);
+    for (const l of lines) expect(l.startsWith("-- ")).toBe(true);
+    expect(mixed).not.toMatch(/[\r\u0085\u2028\u2029]/);
+  });
+
+  it("commented text is not wrapped again: no live `;` after it", () => {
+    const once = commentedOut(answerText("DELETE FROM t\u0085"));
+    expect(once).toBe("-- DELETE FROM t;\n");
+    expect(answerText(once)).toBe(once);
+    expect(answerText(commentedOut("SELECT 1;\rDROP TABLE t;\u0085"))).toBe("-- SELECT 1;\n-- DROP TABLE t;\n");
+    // Live SQL still gets its one `;`.
+    expect(answerText("SELECT 1\u0085")).toBe("SELECT 1;\n");
+  });
 });
 
 describe("useQueryTabRefs", () => {

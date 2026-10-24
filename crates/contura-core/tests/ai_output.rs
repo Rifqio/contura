@@ -255,7 +255,7 @@ fn fences_count_every_block() {
 }
 
 #[test]
-fn unknown_dialect_reads_as_postgres() {
+fn unknown_dialect_still_flags_a_risky_function() {
     let blocks = check_answer(&sql("SELECT pg_sleep(1)"), None, "ask", false);
     assert_eq!(
         flags(&blocks[0]),
@@ -291,7 +291,9 @@ fn serialized_shape() {
                 "text": "UPDATE t SET a = 1",
                 "class": "write",
                 "flags": [{ "kind": "noWhere", "verb": "UPDATE" }]
-            }]
+            }],
+            // The hash of the body checked, which the UI matches against the block's own text.
+            "bodySha256": contura_core::ai::rails::output::sha256_hex("UPDATE t SET a = 1")
         })
     );
 }

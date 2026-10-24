@@ -23,10 +23,15 @@ interface Props {
   icon?: IconName;
   /** Subtle text after the title. */
   subtitle?: ReactNode;
+  /**
+   * A form with changes: a click outside does nothing, and Escape or the close button ask
+   * "Discard your changes?" first. Leave it off for dialogs with nothing to lose.
+   */
+  dirty?: boolean;
 }
 
 /** A modal dialog: Escape closes it, focus moves in on open and back on close, Tab stays inside. */
-export default function Dialog({ title, onClose, children, size = "form", wide, className, badge, lead, icon, subtitle }: Props) {
+export default function Dialog({ title, onClose, children, size = "form", wide, className, badge, lead, icon, subtitle, dirty = false }: Props) {
   const width = `dialog-size-${wide ? "wide" : size}`;
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -41,18 +46,42 @@ export default function Dialog({ title, onClose, children, size = "form", wide, 
   }, [previous]);
 
   // On the document, so Escape works even when focus has fallen to <body>.
+  const [asking, setAsking] = useState(false);
+  const returnTo = useRef<HTMLElement | null>(null);
+  const wasAsking = useRef(false);
+  /** Opens the discard question, remembering the field to give focus back to. */
+  const ask = useRef(() => {
+    const at = document.activeElement as HTMLElement | null;
+    returnTo.current = at && panel.current?.contains(at) ? at : null;
+    setAsking(true);
+  });
   const close = useRef(onClose);
   close.current = onClose;
+  const state = useRef({ dirty, asking });
+  state.current = { dirty, asking };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.preventDefault();
-        close.current();
+        if (state.current.asking) setAsking(false);
+        else if (state.current.dirty) ask.current();
+        else close.current();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+  const asked = asking && dirty;
+  const requestClose = () => (dirty ? ask.current() : onClose());
+  // A question left open when the form turns clean must not come back with the next change.
+  useEffect(() => {
+    if (!dirty) setAsking(false);
+  }, [dirty]);
+  // The bar's buttons leave with it: focus goes back to the field that had it, so the Tab trap holds.
+  useEffect(() => {
+    if (wasAsking.current && !asked) (returnTo.current ?? panel.current)?.focus();
+    wasAsking.current = asked;
+  }, [asked]);
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key !== "Tab" || !panel.current) return;
@@ -74,7 +103,7 @@ export default function Dialog({ title, onClose, children, size = "form", wide, 
   }
 
   return createPortal(
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && !dirty && onClose()}>
       <div
         ref={panel}
         className={["dialog", width, className].filter(Boolean).join(" ")}
@@ -90,11 +119,23 @@ export default function Dialog({ title, onClose, children, size = "form", wide, 
           <h2 id={titleId}>{title}</h2>
           {subtitle && <span className="dialog-subtitle">{subtitle}</span>}
           {badge}
-          <button type="button" className="icon-button dialog-close" aria-label="Close" onClick={onClose}>
+          <button type="button" className="icon-button dialog-close" aria-label="Close" onClick={requestClose}>
             <Icon name="close" />
           </button>
         </header>
         {children}
+        {asked && (
+          <div className="dialog-discard" role="alert">
+            <span>Discard your changes?</span>
+            <span className="spacer" />
+            <button type="button" className="button" data-autofocus autoFocus onClick={() => setAsking(false)}>
+              Keep editing
+            </button>
+            <button type="button" className="button" onClick={onClose}>
+              Discard
+            </button>
+          </div>
+        )}
       </div>
     </div>,
     document.body,

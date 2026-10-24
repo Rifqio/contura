@@ -253,6 +253,7 @@ pub fn diagram_preview(
         action: "diagram".into(),
         tables: Vec::new(),
         kinds: vec![ItemKind::Question, ItemKind::Diagram],
+        asked_in: None,
     };
     Ok(Preview {
         items,

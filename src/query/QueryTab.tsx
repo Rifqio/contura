@@ -52,6 +52,7 @@ import SqlEditor, { type AskSelection, type SqlEditorApi } from "./SqlEditor";
 import { type Stmt, splitStatements } from "./statements";
 import { useCommandKeys } from "../commands/useCommandKeys";
 import QueryDiagramPane from "../querydiagram/QueryDiagramPane";
+import { type RecentStepInput, useRecordStep } from "../assistant/recentSteps";
 
 /** A query tab as the app keeps it, and as its draft is saved. */
 export type QueryTabDoc = {
@@ -168,13 +169,14 @@ const NO_WRITES: Safety = { current: null, anyWrite: false };
 const noSubscribe = () => () => {};
 
 const SPLIT_KEY = "dbview.queryEditorShare";
+const DEFAULT_SHARE = 0.46;
 
 function loadShare(): number {
   try {
     const v = Number(localStorage.getItem(SPLIT_KEY));
-    return v >= 0.2 && v <= 0.8 ? v : 0.46;
+    return v >= 0.2 && v <= 0.8 ? v : DEFAULT_SHARE;
   } catch {
-    return 0.46;
+    return DEFAULT_SHARE;
   }
 }
 
@@ -234,6 +236,19 @@ export default function QueryTab({
   const [session, setSession] = useState<QuerySessionId | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [state, dispatch] = useReducer(runnerReducer, EMPTY_RUNNER);
+  const recordStep = useRecordStep();
+  /** A run that ended, as a Recent step: the tab's title and place and the row count, never the SQL. */
+  const ranStep = (count: number | null, extra: Partial<RecentStepInput> = {}) =>
+    recordStep({
+      verb: "runQuery",
+      tab: "query",
+      title: latest.current.name,
+      connectionId: latest.current.connectionId,
+      database: latest.current.database,
+      schema: null,
+      count,
+      ...extra,
+    });
   const [databases, setDatabases] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
   const { show } = useToast();
@@ -418,6 +433,8 @@ export default function QueryTab({
           settleExternal(o.t === "rows" ? { ran: true, rows: o.rows.length, ...(o.hasMore ? { more: true } : {}) } : { ran: true, rows: o.rows });
         }
         dispatch({ type: "done", id, outcome: ex.outcome, ms: ex.elapsedMs });
+        const o = ex.outcome;
+        ranStep(o.t === "rows" ? o.rows.length : o.rows, o.t === "rows" && o.hasMore ? { hasMore: true } : {});
         const used = connection?.dialect === "mysql" ? usedDatabase(stmt.text) : null;
         if (used) setSessionDb(used);
         if (DDL.test(stmt.text) && connection) lang?.schemas.invalidate(connection.id);
@@ -434,6 +451,7 @@ export default function QueryTab({
         }
         if (externalIn([stmt])) settleExternal({ ran: false });
         dispatch({ type: "failed", id, error, ms: performance.now() - started });
+        ranStep(null, { failed: true });
         onRan?.();
       },
     );
@@ -681,7 +699,13 @@ export default function QueryTab({
     setOpening({ s: "idle" });
   }
 
-  const runCurrent = () => run([editorRef.current?.runTarget() ?? null]);
+  /** Q8: Run pressed during a run says so instead of doing nothing. */
+  function runAgain(): boolean {
+    if (!running) return false;
+    show({ kind: "info", text: "Already running. Esc cancels it." });
+    return true;
+  }
+  const runCurrent = () => runAgain() || run([editorRef.current?.runTarget() ?? null]);
   // Not in the editor, so it has no place in the text: Add WHERE and Go to find nothing to act on.
   // Split as Run all splits, so each statement gets its own no-WHERE check and result (an AI answer can hold several).
   if (runRef)
@@ -692,7 +716,7 @@ export default function QueryTab({
         external.current = { stmts, resolve, phase: "preparing" };
         if (!run(stmts)) settleExternal({ ran: false });
       });
-  const runAll = () => run(splitStatements(editorText(), dialect));
+  const runAll = () => runAgain() || run(splitStatements(editorText(), dialect));
 
   /** Adds WHERE after the statement, only if the editor still holds it where it was when the run was asked for. */
   function addWhere(stmt: Stmt) {
@@ -878,7 +902,7 @@ export default function QueryTab({
       />
 
       <div className="query-work" ref={work} style={{ gridTemplateRows: `${share}fr 6px ${1 - share}fr` }}>
-        <div className={production ? "query-editor prod-wash" : "query-editor"}>
+        <div className={production ? "query-editor prod-wash" : "query-editor"} data-pane>
           <SqlEditor
             value={tab.text}
             dialect={dialect}
@@ -975,6 +999,11 @@ export default function QueryTab({
           aria-valuemax={80}
           tabIndex={0}
           onPointerDown={startDrag}
+          onDoubleClick={() => {
+            // Q7: as in the Visual Query panel, a double-click puts the split back.
+            setShare(DEFAULT_SHARE);
+            saveShare(DEFAULT_SHARE);
+          }}
           onKeyDown={(e) => {
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
             e.preventDefault();

@@ -24,6 +24,11 @@ interface Props {
   closed?: boolean;
   /** The query tab Insert works on; Insert is disabled without one. */
   target?: InsertTarget | null;
+  /**
+   * The tab has no editor (spec 8): the primary action is Open in new query tab and there is no Insert; SQL that
+   * writes, or that the Core did not check, opens commented out. Nothing runs either way.
+   */
+  noEditor?: boolean;
   onOpenInNewTab?(sql: string): void;
   onCopy(sql: string): void;
   /** Told once an Insert went in or the SQL opened in a new tab, so the answer's record keeps it. */
@@ -73,9 +78,10 @@ export default function AnswerSql({
   dialect,
   check = null,
   streaming = false,
-  unchecked = false,
+  unchecked: uncheckedBlock = false,
   closed = true,
   target = null,
+  noEditor = false,
   onOpenInNewTab,
   onCopy,
   onAction,
@@ -83,6 +89,9 @@ export default function AnswerSql({
   /** The diff, with the editor it was made on, so Insert never writes into another tab. */
   const [diff, setDiff] = useState<{ plan: InsertPlan; remade: boolean; editor: SqlEditorApi; commented: boolean } | null>(null);
   const [inserted, setInserted] = useState(false);
+  // The answer parser turns every CR into a line end, as the Core's check does; a block that still holds one was not
+  // checked as the editor will hold it, so it is taken as unchecked: it goes in or opens only commented out.
+  const unchecked = uncheckedBlock || /\r/.test(sql);
   const statements = check?.statements ?? [];
   const warn = statements.some((s) => s.class === "write" || s.flags.length > 0);
   const flags = [...new Set(statements.flatMap((s) => s.flags.map(flagSentence)))];
@@ -98,6 +107,13 @@ export default function AnswerSql({
   };
   const commented = writes || unchecked;
   const insertText = () => (commented ? commentedOut(answerText(sql)) : answerText(sql));
+
+  /** Opens the SQL in a new query tab; `commentedText` puts every line behind `-- ` first. */
+  const openNew = (commentedText: boolean) => {
+    if (!onOpenInNewTab) return;
+    onOpenInNewTab(commentedText ? commentedOut(answerText(sql)) : sql);
+    onAction?.("openedInNewTab");
+  };
 
   const apply = () => {
     const editor = target?.editor();
@@ -129,7 +145,26 @@ export default function AnswerSql({
           </button>
         </div>
         <SqlBlock sql={sql} dialect={dialect} lineNumbers={false} />
-        {!streaming && unchecked && (
+        {!streaming && noEditor && unchecked && (
+          <div className="answer-sql-actions">
+            {closed && (
+              <button type="button" className="button button-small" disabled={!onOpenInNewTab} onClick={() => openNew(true)}>
+                Open in new query tab, commented out
+              </button>
+            )}
+            <button type="button" className="button button-small button-ghost" onClick={() => onCopy(sql)}>
+              Copy
+            </button>
+          </div>
+        )}
+        {!streaming && noEditor && !unchecked && !writes && (
+          <div className="answer-sql-actions">
+            <button type="button" className="button button-small" disabled={!onOpenInNewTab} onClick={() => openNew(false)}>
+              Open in new query tab
+            </button>
+          </div>
+        )}
+        {!streaming && !noEditor && unchecked && (
           <div className="answer-sql-actions">
             {closed && (
               <button
@@ -146,7 +181,7 @@ export default function AnswerSql({
             </button>
           </div>
         )}
-        {!streaming && !unchecked && !writes && (
+        {!streaming && !noEditor && !unchecked && !writes && (
           <div className="answer-sql-actions">
             <button
               type="button"
@@ -173,9 +208,12 @@ export default function AnswerSql({
       </div>
       {!streaming &&
         writes &&
+        !unchecked &&
         answerWrites(writesText(statements), {
           onInsert: target ? () => open(commentedOut(answerText(sql)), true) : undefined,
           onCopy: () => onCopy(sql),
+          noEditor,
+          onOpen: onOpenInNewTab ? () => openNew(true) : undefined,
         })}
       {diff && (
         <InsertDiff plan={diff.plan} flags={flags} remade={diff.remade} onInsert={apply} onCancel={() => setDiff(null)} />

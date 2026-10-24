@@ -1,0 +1,13 @@
+# Find and Replace and the typing basics come from @codemirror/search and CodeMirror's own bracket tools
+
+The SQL editor had no Find, no Replace, no bracket matching or closing, no Ctrl+D and no Alt+Click for another place to type. "Types like VS Code" is a stated requirement, and these are the habits it means (`docs/requirements.md`, UX audit Q1 to Q3). The rule is to copy VS Code's keys and CodeMirror's defaults, not to invent.
+
+**The package.** `@codemirror/search` 6.7.2, pinned exactly (released 2026-08-31, so past the two week wait), the official CodeMirror package from the same author as the other `@codemirror/*` packages already in use. It needs `@codemirror/state` ^6 and `@codemirror/view` ^6.37, which 6.7.6 and 6.43.14 meet, and adds one small dependency, `crelt`, already in the tree through `@codemirror/view`. It supplies the search panel (find, replace, replace all, case, whole word, regular expression), `highlightSelectionMatches` and `selectNextOccurrence`. Brackets come from `bracketMatching` (`@codemirror/language`) and `closeBrackets` (`@codemirror/autocomplete`), both already installed.
+
+**One shared setup.** `src/lang/editingBasics.ts` returns the whole set; the SQL, DBML and diagram text editors add it, so the three behave alike. The one-line filter editors (a grid's WHERE and ORDER BY) do not take it: a panel inside a single line has no room, and quote pairs would get in the way of typing a filter. The Mermaid import box keeps its plain setup.
+
+**Keys.** Ctrl+F finds, Ctrl+H opens the same panel with the Replace field focused (CodeMirror opens one panel for both; VS Code has two keys), F3 and Shift+F3 step through matches, Esc closes the panel (before it does anything else in the editor), Ctrl+D selects the next occurrence of the word or selection. Alt+Click adds another place to type (`clickAddsSelectionRange` follows `altKey`); Ctrl+Click no longer does, so it stays free for go to definition later. None of these are in the command registry, so none can be rebound in Settings yet; the registry's keys (Ctrl+Shift+F for the tree filter, Ctrl+Shift+H, Ctrl+Shift+D) do not clash with them, and the registry's keys still run first inside the editor.
+
+**Style.** The panel, the match highlights and the bracket marks use the app's tokens in `app.css`, so both themes follow. No new colours.
+
+**Considered.** Writing a find panel by hand: more code to own and test for no gain over the package everyone embedding CodeMirror uses. The browser's own find (Ctrl+F in a web view): not available in the Tauri window, and it cannot replace. A search that spans every open tab: not asked for; it is a later feature.

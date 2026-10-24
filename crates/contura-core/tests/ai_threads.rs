@@ -41,6 +41,7 @@ impl Fx {
 fn block(sql: &str) -> SqlBlock {
     SqlBlock {
         fence: 0,
+        body_sha256: String::new(),
         label: "1 statement: 1 read".into(),
         statements: vec![StatementCheck {
             text: sql.into(),
@@ -94,6 +95,7 @@ fn msg(role: AiRole, text: &str, at: i64, topic: u32) -> AiMessage {
         kinds: vec![ItemKind::Question],
         tables: Vec::new(),
         action: None,
+        asked_in: None,
     }
 }
 
@@ -427,6 +429,7 @@ async fn list_registers_sql_of_every_thread() {
     let record = AnswerRecord {
         sql_blocks: vec![SqlBlock {
             fence: 0,
+            body_sha256: String::new(),
             label: "1 statement".into(),
             statements: vec![StatementCheck {
                 text: "select pg_sleep(1)".into(),
@@ -602,4 +605,840 @@ fn append_for_an_ask_writes_its_context_and_caps_the_record() {
     let r = f.svc.answer_record(t.id, 11).unwrap().unwrap();
     assert_eq!(r.context, Some(info));
     assert!(r.thinking.unwrap().len() < 200 * 1024);
+}
+
+/// Task 5b: an AI service and a Connection service on one store file, with A and C
+/// ungrouped and B in a Group.
+struct Purge {
+    dir: tempfile::TempDir,
+    conns: ConnectionService,
+    ai: AiService,
+    a: Uuid,
+    b: Uuid,
+    c: Uuid,
+    group: contura_core::model::GroupId,
+}
+
+async fn purge_fx() -> Purge {
+    let dir = tempfile::tempdir().unwrap();
+    let app = dir.path().join("app.sqlite");
+    let conns = ConnectionService::new(
+        AppStore::open(&app).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    let ai = AiService::new(
+        AppStore::open(&app).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    let group = conns
+        .save_group(contura_core::connections::GroupInput {
+            id: None,
+            name: "Kestrel staging".into(),
+            color: contura_core::model::GroupColor::Teal,
+        })
+        .unwrap()
+        .id;
+    let mut ids = Vec::new();
+    for (name, group_id) in [("shop", None), ("staging", Some(group)), ("archive", None)] {
+        let saved = conns
+            .save(ConnectionInput {
+                id: None,
+                name: name.into(),
+                dialect: DialectKind::Sqlite,
+                host: String::new(),
+                port: 0,
+                user: String::new(),
+                database: None,
+                ssl: SslMode::Disable,
+                password: PasswordChange::Keep,
+                group_id,
+                file: Some(dir.path().join(format!("{name}.sqlite"))),
+                query_timeout_secs: None,
+                ai_access: Default::default(),
+                ai_sync: Default::default(),
+                production: false,
+                read_only: false,
+            })
+            .await
+            .unwrap();
+        ids.push(saved.id);
+    }
+    Purge {
+        dir,
+        conns,
+        ai,
+        a: ids[0],
+        b: ids[1],
+        c: ids[2],
+        group,
+    }
+}
+
+fn other_step(id: Uuid, text: &str) -> contura_core::ai::memory::OtherStep {
+    contura_core::ai::memory::OtherStep {
+        connection_id: id,
+        text: text.into(),
+        level: contura_core::ai::AiAccess::Schema,
+    }
+}
+
+impl Purge {
+    /// A thread on A's place whose questions keep steps on B and C, and one of the
+    /// Group's place (B's) with a step on A; returns their ids.
+    fn threads(&self) -> (Uuid, Uuid) {
+        use contura_core::ai::memory::AskedIn;
+        let asked = |others: Vec<contura_core::ai::memory::OtherStep>| AskedIn {
+            tab: "visual".into(),
+            label: "Visual Query in shop".into(),
+            summary: "tables orders".into(),
+            steps: vec!["ticked orders.id".into()],
+            other_steps: others,
+            ..AskedIn::default()
+        };
+        let mut on_a = turn(1, 10, "what did I run?", None);
+        on_a[0].asked_in = Some(asked(vec![
+            other_step(self.b, "ran the Visual Query on another Connection"),
+            other_step(self.c, "opened Query tab on another Connection"),
+            other_step(self.b, "opened Visual Query on another Connection"),
+        ]));
+        let mut second = turn(1, 20, "and then?", None);
+        second[0].asked_in = Some(asked(vec![other_step(
+            self.c,
+            "sorted orders on another Connection",
+        )]));
+        on_a.extend(second);
+        let t = thread("ungrouped", "what did I run?", on_a);
+        // As the Core stored them: a save from the webview never carries other steps.
+        let store = AppStore::open(&self.dir.path().join("app.sqlite")).unwrap();
+        store.save_ai_thread(&t).unwrap();
+        let mut on_b = turn(1, 30, "and here?", None);
+        on_b[0].asked_in = Some(asked(vec![other_step(
+            self.a,
+            "opened Query tab on another Connection",
+        )]));
+        let u = thread(&format!("group:{}", self.group), "and here?", on_b);
+        store.save_ai_thread(&u).unwrap();
+        (t.id, u.id)
+    }
+
+    /// The thread as it is on disk, read through a new handle on the file.
+    fn on_disk(&self, id: Uuid) -> AiThread {
+        AppStore::open(&self.dir.path().join("app.sqlite"))
+            .unwrap()
+            .get_ai_thread(id)
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Each question's other steps, as (Connection, text).
+    fn others(&self, id: Uuid) -> Vec<Vec<(Uuid, String)>> {
+        self.on_disk(id)
+            .messages
+            .iter()
+            .filter_map(|m| m.asked_in.as_ref())
+            .map(|a| {
+                a.other_steps
+                    .iter()
+                    .map(|s| (s.connection_id, s.text.clone()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// B's steps are gone everywhere; A's own steps, C's steps and A's steps elsewhere stay.
+    fn assert_b_forgotten(&self, (t, u): (Uuid, Uuid)) {
+        assert_eq!(
+            self.others(t),
+            vec![
+                vec![(self.c, "opened Query tab on another Connection".to_string())],
+                vec![(self.c, "sorted orders on another Connection".to_string())],
+            ]
+        );
+        for m in self
+            .on_disk(t)
+            .messages
+            .iter()
+            .filter_map(|m| m.asked_in.as_ref())
+        {
+            assert_eq!(m.steps, ["ticked orders.id"]);
+            assert_eq!(m.summary, "tables orders");
+        }
+        assert_eq!(
+            self.others(u),
+            vec![vec![(
+                self.a,
+                "opened Query tab on another Connection".to_string()
+            )]]
+        );
+    }
+}
+
+/// Task 5b, test 4: clearing the AI history of B's place also removes B's steps from the
+/// threads of every other place, on disk.
+#[tokio::test]
+async fn clearing_a_place_history_forgets_its_connections_steps() {
+    let f = purge_fx().await;
+    let (t, _) = f.threads();
+    // B's own place, with a thread of its own that is cleared as today.
+    let mut on_b = turn(1, 40, "B's own", None);
+    on_b[0].connection_id = Some(f.b);
+    let own = thread(&format!("group:{}", f.group), "B's own", on_b);
+    f.ai.save_thread(&own).unwrap();
+    f.ai.clear_place_history(&format!("group:{}", f.group), &f.conns)
+        .unwrap();
+    assert!(
+        f.ai.list_threads(&format!("group:{}", f.group))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        f.others(t),
+        vec![
+            vec![(f.c, "opened Query tab on another Connection".to_string())],
+            vec![(f.c, "sorted orders on another Connection".to_string())],
+        ]
+    );
+    // Clearing the Ungrouped place forgets A's and C's steps in the Group's threads: none
+    // are left there now, so nothing else changes.
+    let (_, u2) = f.threads();
+    f.ai.clear_place_history("ungrouped", &f.conns).unwrap();
+    assert!(f.ai.list_threads("ungrouped").unwrap().is_empty());
+    assert!(f.others(u2).iter().all(Vec::is_empty));
+}
+
+/// Task 5b, test 5: deleting B removes its steps from every stored Ask, on disk.
+#[tokio::test]
+async fn deleting_a_connection_forgets_its_steps() {
+    let f = purge_fx().await;
+    let ids = f.threads();
+    f.ai.delete_connection(&f.conns, f.b).await.unwrap();
+    // As the command does, off the async runtime.
+    f.ai.run_pending_purges().unwrap();
+    assert!(f.conns.list().unwrap().iter().all(|c| c.id != f.b));
+    f.assert_b_forgotten(ids);
+}
+
+/// Task 5b: clearing B's history (its Query History, "Clear history") does the same, and
+/// clearing every Connection's history forgets every stored step on another Connection.
+#[tokio::test]
+async fn clearing_a_connection_history_forgets_its_steps() {
+    let f = purge_fx().await;
+    let ids = f.threads();
+    f.ai.clear_query_history(&f.conns, Some(f.b)).unwrap();
+    f.assert_b_forgotten(ids);
+    f.ai.clear_query_history(&f.conns, None).unwrap();
+    assert!(f.others(ids.0).iter().all(Vec::is_empty));
+    assert!(f.others(ids.1).iter().all(Vec::is_empty));
+    // The rest of the Asked in stays.
+    let t = f.on_disk(ids.0);
+    assert!(
+        t.messages
+            .iter()
+            .filter_map(|m| m.asked_in.as_ref())
+            .all(|a| a.steps == ["ticked orders.id"])
+    );
+}
+
+/// Task 5b, test 8: the webview never holds steps on other Connections. The Core keeps
+/// those of the Ask's stamp until its turn is stored, drops any the webview sends, and
+/// views never carry them.
+#[test]
+fn other_steps_never_reach_the_webview() {
+    use contura_core::ai::memory::{AskedIn, TurnStamp};
+    use contura_core::ai::stream::AiEvent;
+    let f = fx();
+    let b = Uuid::from_u128(43);
+    let asked = AskedIn {
+        tab: "visual".into(),
+        label: "Visual Query in shop".into(),
+        summary: "tables orders".into(),
+        steps: vec!["ticked orders.id".into()],
+        other_steps: vec![other_step(b, "ran the Visual Query on another Connection")],
+        ..AskedIn::default()
+    };
+    let stamp = TurnStamp {
+        topic: 1,
+        opened: true,
+        reason: None,
+        title: "t".into(),
+        connection_id: Some(Uuid::from_u128(7)),
+        database: Some("shop".into()),
+        action: "ask".into(),
+        tables: Vec::new(),
+        kinds: vec![ItemKind::Question],
+        asked_in: Some(asked.clone()),
+    };
+    let event = AiEvent::Memory { stamp };
+    // The event as the webview gets it.
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(
+        !json.contains("otherSteps") && !json.contains("ran the Visual Query"),
+        "{json}"
+    );
+    f.svc.hold_other_steps("req-1", &event);
+
+    // The webview's copy of the question: the stamp as it got it, plus a forged step.
+    let sent = AskedIn {
+        other_steps: vec![other_step(b, "forged")],
+        ..asked.clone()
+    };
+    let t = thread("ungrouped", "what did I run?", Vec::new());
+    let mut messages = turn(1, 10, "what did I run?", None);
+    messages[0].asked_in = Some(sent);
+    let view = f
+        .svc
+        .append_turn(appended(&t, messages, None), Some("req-1"))
+        .unwrap();
+    assert!(
+        view.messages
+            .iter()
+            .filter_map(|m| m.asked_in.as_ref())
+            .all(|a| a.other_steps.is_empty())
+    );
+    let stored = f.svc.thread_view(t.id).unwrap().unwrap();
+    assert!(
+        stored
+            .thread
+            .messages
+            .iter()
+            .filter_map(|m| m.asked_in.as_ref())
+            .all(|a| a.other_steps.is_empty())
+    );
+    let on_disk = AppStore::open(&f.dir.path().join("app.sqlite"))
+        .unwrap()
+        .get_ai_thread(t.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        on_disk.messages[0].asked_in.as_ref().unwrap().other_steps,
+        asked.other_steps
+    );
+
+    // Without a held stamp (another request), a webview copy keeps none.
+    let mut messages = turn(1, 20, "and then?", None);
+    messages[0].asked_in = Some(AskedIn {
+        other_steps: vec![other_step(b, "forged")],
+        ..asked.clone()
+    });
+    f.svc
+        .append_turn(appended(&t, messages, None), Some("req-2"))
+        .unwrap();
+    let on_disk = AppStore::open(&f.dir.path().join("app.sqlite"))
+        .unwrap()
+        .get_ai_thread(t.id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        on_disk.messages[2]
+            .asked_in
+            .as_ref()
+            .unwrap()
+            .other_steps
+            .is_empty()
+    );
+
+    // The full save of an unsaved chat (a failed append) takes the held steps too.
+    f.svc.hold_other_steps("req-3", &event);
+    let mut messages = turn(1, 10, "what did I run?", None);
+    messages[0].asked_in = Some(asked.label_only());
+    let u = thread("ungrouped", "what did I run?", messages);
+    let view = f.svc.save_thread_for(&u, Some("req-3")).unwrap();
+    assert!(
+        view.thread
+            .messages
+            .iter()
+            .filter_map(|m| m.asked_in.as_ref())
+            .all(|a| a.other_steps.is_empty())
+    );
+    let on_disk = AppStore::open(&f.dir.path().join("app.sqlite"))
+        .unwrap()
+        .get_ai_thread(u.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        on_disk.messages[0].asked_in.as_ref().unwrap().other_steps,
+        asked.other_steps
+    );
+}
+
+/// Task 5b follow-up: with Keep the exact text on, forgetting B also scrubs B's step lines
+/// from every kept exact text (the Steps item and the replayed Asked in lines), on disk. A
+/// line that cannot be tied to one Connection goes too; A's own steps and C's stay, and one
+/// line says what was cleared.
+#[tokio::test]
+async fn forgetting_a_connection_scrubs_the_kept_exact_text() {
+    use contura_core::ai::memory::AskedIn;
+    use contura_core::ai::sent::OutlineSent;
+    let f = purge_fx().await;
+    let late = "ran the Visual Query \"Late orders\" on another Connection, 3 rows";
+    let b_open = "opened Visual Query on another Connection";
+    let c_sort = "sorted orders on another Connection";
+    let unknown = "opened Schema Builder on another Connection";
+    let asked = |others: Vec<contura_core::ai::memory::OtherStep>| AskedIn {
+        tab: "visual".into(),
+        label: "Visual Query in shop".into(),
+        summary: "tables orders".into(),
+        steps: vec!["ticked orders.id".into()],
+        other_steps: others,
+        ..AskedIn::default()
+    };
+    let line = |source: &str, text: &str| {
+        serde_json::json!({ "source": source, "text": text }).to_string()
+    };
+    let exact = [
+        "<<contura:context id=abcdefabcdefabcd>>".to_string(),
+        line("asked_in", "Visual Query in shop: tables orders"),
+        line(
+            "asked_in",
+            &format!("steps on other Connections before it: {b_open}; {c_sort}"),
+        ),
+        "<</contura:context id=abcdefabcdefabcd>>".to_string(),
+        String::new(),
+        "Question: what did I run?".to_string(),
+        line(
+            "steps",
+            &format!(
+                "(3 min ago) {late}\n(2 min ago) added orders to the Visual Query\n(1 min ago) {c_sort}\n(just now) {unknown}"
+            ),
+        ),
+        "Question: and then?".to_string(),
+    ]
+    .join("\n");
+    let mut messages = turn(1, 10, "what did I run?", None);
+    messages[0].asked_in = Some(asked(vec![
+        other_step(f.b, b_open),
+        other_step(f.c, c_sort),
+    ]));
+    let mut record = heavy_record(10);
+    record.sent.as_mut().unwrap().exact = Some(exact.clone());
+    record.sent.as_mut().unwrap().outline = Some(OutlineSent {
+        exact: Some(exact.clone()),
+        ..OutlineSent::default()
+    });
+    let mut second = turn(1, 20, "and then?", Some(record));
+    second[0].asked_in = Some(asked(vec![other_step(f.b, late), other_step(f.c, c_sort)]));
+    messages.extend(second);
+    let t = thread("ungrouped", "what did I run?", messages);
+    AppStore::open(&f.dir.path().join("app.sqlite"))
+        .unwrap()
+        .save_ai_thread(&t)
+        .unwrap();
+
+    f.ai.delete_connection(&f.conns, f.b).await.unwrap();
+    f.ai.run_pending_purges().unwrap();
+
+    let raw: String = rusqlite::Connection::open(f.dir.path().join("app.sqlite"))
+        .unwrap()
+        .query_row(
+            "SELECT json FROM ai_threads WHERE id = ?1",
+            [t.id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    for gone in ["Late orders", b_open, "Schema Builder"] {
+        assert!(!raw.contains(gone), "{gone} is still in {raw}");
+    }
+    for kept in [
+        "added orders to the Visual Query",
+        "ticked orders.id",
+        c_sort,
+    ] {
+        assert!(raw.contains(kept), "{kept} is gone from {raw}");
+    }
+    let back = f.on_disk(t.id);
+    let sent = back.messages[3]
+        .record
+        .as_ref()
+        .unwrap()
+        .sent
+        .as_ref()
+        .unwrap();
+    let marker = "(steps from a removed Connection were cleared)";
+    let want = [
+        "<<contura:context id=abcdefabcdefabcd>>".to_string(),
+        line("asked_in", "Visual Query in shop: tables orders"),
+        line(
+            "asked_in",
+            &format!("steps on other Connections before it: {marker}; {c_sort}"),
+        ),
+        "<</contura:context id=abcdefabcdefabcd>>".to_string(),
+        String::new(),
+        "Question: what did I run?".to_string(),
+        line(
+            "steps",
+            &format!(
+                "{marker}\n(2 min ago) added orders to the Visual Query\n(1 min ago) {c_sort}"
+            ),
+        ),
+        "Question: and then?".to_string(),
+    ]
+    .join("\n");
+    assert_eq!(sent.exact.as_deref(), Some(want.as_str()));
+    assert_eq!(
+        sent.outline.as_ref().unwrap().exact.as_deref(),
+        Some(want.as_str())
+    );
+
+    // A second forget (C) finds nothing of B and leaves the marker alone.
+    f.ai.forget_steps(Some(&[f.c])).unwrap();
+    let back = f.on_disk(t.id);
+    let exact = back.messages[3]
+        .record
+        .as_ref()
+        .unwrap()
+        .sent
+        .as_ref()
+        .unwrap()
+        .exact
+        .clone()
+        .unwrap();
+    assert!(!exact.contains(c_sort), "{exact}");
+    assert!(exact.contains("added orders to the Visual Query"));
+    assert!(
+        exact.contains(&line(
+            "steps",
+            &format!("{marker}\n(2 min ago) added orders to the Visual Query")
+        )),
+        "{exact}"
+    );
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+fn framed_line(source: &str, text: &str) -> String {
+    serde_json::json!({ "source": source, "text": text }).to_string()
+}
+
+/// The Memory event of an Ask whose stamp keeps `others`.
+fn memory_event(
+    others: Vec<contura_core::ai::memory::OtherStep>,
+) -> contura_core::ai::stream::AiEvent {
+    use contura_core::ai::memory::{AskedIn, TurnStamp};
+    contura_core::ai::stream::AiEvent::Memory {
+        stamp: TurnStamp {
+            topic: 1,
+            opened: true,
+            reason: None,
+            title: "t".into(),
+            connection_id: Some(Uuid::from_u128(7)),
+            database: Some("shop".into()),
+            action: "ask".into(),
+            tables: Vec::new(),
+            kinds: vec![ItemKind::Question],
+            asked_in: Some(AskedIn {
+                tab: "visual".into(),
+                label: "Visual Query in shop".into(),
+                steps: vec!["added orders to the Visual Query".into()],
+                other_steps: others,
+                ..AskedIn::default()
+            }),
+        },
+    }
+}
+
+const LATE: &str = "ran the Visual Query \"Late orders\" on another Connection, 3 rows";
+const C_SORT: &str = "sorted orders on another Connection";
+
+/// The turn as the webview saves it: the question's Asked in as the stamp it was sent
+/// (no other steps), the answer's record with its exact text kept.
+fn streamed_turn(at: i64) -> Vec<AiMessage> {
+    let mut m = turn(1, at, "what did I run?", None);
+    m[0].asked_in = Some(contura_core::ai::memory::AskedIn {
+        tab: "visual".into(),
+        label: "Visual Query in shop".into(),
+        steps: vec!["added orders to the Visual Query".into()],
+        ..Default::default()
+    });
+    let mut record = heavy_record(1);
+    record.sent.as_mut().unwrap().exact = Some(
+        [
+            "Question: what did I run?".to_string(),
+            framed_line(
+                "steps",
+                &format!(
+                    "(3 min ago) {LATE}\n(2 min ago) added orders to the Visual Query\n(1 min ago) {C_SORT}"
+                ),
+            ),
+        ]
+        .join("\n"),
+    );
+    m[1].record = Some(record);
+    m
+}
+
+/// Fix round 1, finding 1: a purge while an Ask streams holds that Ask's turn when it is
+/// stored, whatever the webview sends back; an Ask begun after it keeps its steps.
+#[tokio::test]
+async fn a_purge_while_an_ask_streams_holds_its_turn() {
+    use contura_core::ai::AiAccess;
+    let f = purge_fx().await;
+    let all_on = [
+        (f.b, AiAccess::SchemaQueryRows),
+        (f.c, AiAccess::SchemaQueryRows),
+    ];
+    let raw = |id: Uuid| -> String {
+        rusqlite::Connection::open(f.dir.path().join("app.sqlite"))
+            .unwrap()
+            .query_row(
+                "SELECT json FROM ai_threads WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+
+    // Clear history of B while the Ask streams; the turn is appended after.
+    let started = now_ms() - 5_000;
+    f.ai.hold_other_steps(
+        "r1",
+        &memory_event(vec![other_step(f.b, LATE), other_step(f.c, C_SORT)]),
+    );
+    f.ai.clear_query_history(&f.conns, Some(f.b)).unwrap();
+    let t = thread("ungrouped", "what did I run?", Vec::new());
+    f.ai.append_turn(appended(&t, streamed_turn(started), None), Some("r1"))
+        .unwrap();
+    let json = raw(t.id);
+    assert!(!json.contains("Late orders"), "{json}");
+    assert!(
+        json.contains(C_SORT) && json.contains("added orders to the Visual Query"),
+        "{json}"
+    );
+    let q = f.on_disk(t.id).messages[0].asked_in.clone().unwrap();
+    assert_eq!(q.other_steps, vec![other_step(f.c, C_SORT)]);
+    // A later replay, even with B allowing everything, sends nothing of B.
+    let replayed = q.replay_lines(&all_on).join("\n");
+    assert!(
+        !replayed.contains("Late") && replayed.contains(C_SORT),
+        "{replayed}"
+    );
+
+    // An Ask begun after the Clear keeps its step on B.
+    let later = now_ms() + 1_000;
+    f.ai.hold_other_steps("r3", &memory_event(vec![other_step(f.b, LATE)]));
+    let u = thread("ungrouped", "what did I run?", Vec::new());
+    f.ai.append_turn(appended(&u, streamed_turn(later), None), Some("r3"))
+        .unwrap();
+    assert_eq!(
+        f.on_disk(u.id).messages[0]
+            .asked_in
+            .as_ref()
+            .unwrap()
+            .other_steps,
+        vec![other_step(f.b, LATE)]
+    );
+
+    // Delete B while another Ask streams; its turn comes back by the full save.
+    let started = now_ms() - 5_000;
+    f.ai.hold_other_steps(
+        "r2",
+        &memory_event(vec![other_step(f.b, LATE), other_step(f.c, C_SORT)]),
+    );
+    f.ai.delete_connection(&f.conns, f.b).await.unwrap();
+    f.ai.run_pending_purges().unwrap();
+    let v = thread("ungrouped", "what did I run?", streamed_turn(started));
+    f.ai.save_thread_for(&v, Some("r2")).unwrap();
+    for id in [t.id, u.id, v.id] {
+        let json = raw(id);
+        assert!(!json.contains("Late orders"), "{json}");
+    }
+    assert!(raw(v.id).contains(C_SORT));
+}
+
+/// Fix round 1, finding 2: the steps held for an Ask stay until its turn is written, so
+/// the full save after a failed append still stores them.
+#[test]
+fn held_steps_survive_a_failed_append() {
+    let f = fx();
+    let b = Uuid::from_u128(43);
+    f.svc
+        .hold_other_steps("r1", &memory_event(vec![other_step(b, LATE)]));
+    let t = thread("ungrouped", "what did I run?", Vec::new());
+    let db = rusqlite::Connection::open(f.dir.path().join("app.sqlite")).unwrap();
+    // A stored row that cannot be read makes the append fail.
+    db.execute(
+        "INSERT INTO ai_threads (id, place, json, updated_at) VALUES (?1, 'ungrouped', '{', 1)",
+        [t.id.to_string()],
+    )
+    .unwrap();
+    assert!(
+        f.svc
+            .append_turn(appended(&t, streamed_turn(10), None), Some("r1"))
+            .is_err()
+    );
+    db.execute("DELETE FROM ai_threads WHERE id = ?1", [t.id.to_string()])
+        .unwrap();
+    let full = thread("ungrouped", "what did I run?", streamed_turn(10));
+    let full = AiThread { id: t.id, ..full };
+    f.svc.save_thread_for(&full, Some("r1")).unwrap();
+    let back = AppStore::open(&f.dir.path().join("app.sqlite"))
+        .unwrap()
+        .get_ai_thread(t.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        back.messages[0].asked_in.as_ref().unwrap().other_steps,
+        vec![other_step(b, LATE)]
+    );
+}
+
+/// Fix round 1, finding 4: a purge that fails after the delete committed is kept pending
+/// in the AI store and runs again on the next start.
+#[tokio::test]
+async fn a_failed_purge_after_a_delete_runs_on_the_next_start() {
+    let f = purge_fx().await;
+    let ids = f.threads();
+    f.ai.fail_next_purge();
+    f.ai.delete_connection(&f.conns, f.b).await.unwrap();
+    assert!(f.conns.list().unwrap().iter().all(|c| c.id != f.b));
+    assert!(f.ai.run_pending_purges().is_err());
+    // B is gone; its steps are still on disk, and the purge is pending.
+    assert!(f.others(ids.0).iter().flatten().any(|(c, _)| *c == f.b));
+    let app = f.dir.path().join("app.sqlite");
+    assert!(
+        AppStore::open(&app)
+            .unwrap()
+            .get_setting(contura_core::ai::PENDING_PURGE_KEY)
+            .unwrap()
+            .is_some()
+    );
+    // The next start runs it.
+    let next = AiService::open(
+        AppStore::open(&app).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    );
+    f.assert_b_forgotten(ids);
+    assert!(
+        AppStore::open(&app)
+            .unwrap()
+            .get_setting(contura_core::ai::PENDING_PURGE_KEY)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(next.run_pending_purges().unwrap().rewritten, 0);
+}
+
+/// Task 5b review N2: a thread row that cannot be read is skipped, and the purge goes on
+/// through the others: the delete's pending purge is cleared, and a Clear history works.
+#[tokio::test]
+async fn an_unreadable_thread_row_does_not_block_a_purge() {
+    let f = purge_fx().await;
+    let ids = f.threads();
+    let db = rusqlite::Connection::open(f.dir.path().join("app.sqlite")).unwrap();
+    // A cut write that still names other steps, so the purge reads it.
+    db.execute(
+        "INSERT INTO ai_threads (id, place, json, updated_at) VALUES (?1, 'ungrouped', '{\"otherSteps\":[', 1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    f.ai.delete_connection(&f.conns, f.b).await.unwrap();
+    let done = f.ai.run_pending_purges().unwrap();
+    assert_eq!((done.rewritten, done.unreadable), (1, 1));
+    f.assert_b_forgotten(ids);
+    let app = f.dir.path().join("app.sqlite");
+    assert!(
+        AppStore::open(&app)
+            .unwrap()
+            .get_setting(contura_core::ai::PENDING_PURGE_KEY)
+            .unwrap()
+            .is_none()
+    );
+    f.ai.clear_query_history(&f.conns, Some(f.c)).unwrap();
+    assert!(f.others(ids.0).iter().all(Vec::is_empty));
+}
+
+/// Task 5b review N1: deletes that overlap each other and the purges they start lose no
+/// pending purge: every deleted Connection's steps are gone once the purges have run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn overlapping_deletes_lose_no_pending_purge() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = dir.path().join("app.sqlite");
+    let conns = Arc::new(ConnectionService::new(
+        AppStore::open(&app).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    ));
+    let ai = Arc::new(AiService::new(
+        AppStore::open(&app).unwrap(),
+        Arc::new(MemorySecretStore::new()),
+    ));
+    let mut ids = Vec::new();
+    for n in 0..32 {
+        let saved = conns
+            .save(ConnectionInput {
+                id: None,
+                name: format!("kestrel {n}"),
+                dialect: DialectKind::Sqlite,
+                host: String::new(),
+                port: 0,
+                user: String::new(),
+                database: None,
+                ssl: SslMode::Disable,
+                password: PasswordChange::Keep,
+                group_id: None,
+                file: Some(dir.path().join(format!("k{n}.sqlite"))),
+                query_timeout_secs: None,
+                ai_access: Default::default(),
+                ai_sync: Default::default(),
+                production: false,
+                read_only: false,
+            })
+            .await
+            .unwrap();
+        ids.push(saved.id);
+    }
+    let mut messages = turn(1, 10, "what did I run?", None);
+    messages[0].asked_in = Some(contura_core::ai::memory::AskedIn {
+        tab: "home".into(),
+        label: "Home".into(),
+        other_steps: ids
+            .iter()
+            .map(|id| other_step(*id, "opened Query tab on another Connection"))
+            .collect(),
+        ..Default::default()
+    });
+    let t = thread("ungrouped", "what did I run?", messages);
+    AppStore::open(&app).unwrap().save_ai_thread(&t).unwrap();
+
+    // Each delete as the command runs it: the delete, then its purges off the runtime.
+    let tasks: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            let (ai, conns, id) = (ai.clone(), conns.clone(), *id);
+            tokio::spawn(async move {
+                ai.delete_connection(&conns, id).await.unwrap();
+                let ai = ai.clone();
+                tokio::task::spawn_blocking(move || ai.run_pending_purges().unwrap())
+                    .await
+                    .unwrap();
+            })
+        })
+        .collect();
+    for t in tasks {
+        t.await.unwrap();
+    }
+    let left: Vec<Uuid> = AppStore::open(&app)
+        .unwrap()
+        .get_ai_thread(t.id)
+        .unwrap()
+        .unwrap()
+        .messages[0]
+        .asked_in
+        .as_ref()
+        .unwrap()
+        .other_steps
+        .iter()
+        .map(|s| s.connection_id)
+        .collect();
+    assert_eq!(left, Vec::<Uuid>::new(), "steps left behind");
+    assert!(
+        AppStore::open(&app)
+            .unwrap()
+            .get_setting(contura_core::ai::PENDING_PURGE_KEY)
+            .unwrap()
+            .is_none()
+    );
 }

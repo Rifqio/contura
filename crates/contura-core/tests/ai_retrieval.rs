@@ -87,6 +87,7 @@ fn ask_with(
     let seeds = Seeds {
         dialect: MY,
         open_tables: &open,
+        step_tables: &[],
         texts: sql.into_iter().collect(),
         question,
         picked: &[],
@@ -372,6 +373,7 @@ fn case_distinct_tables_both_rank() {
         let seeds = Seeds {
             dialect: DialectKind::Postgres,
             open_tables: &open,
+            step_tables: &[],
             texts: sql.into_iter().collect(),
             question,
             picked: &[],
@@ -532,6 +534,7 @@ fn ask_picked(
     let seeds = Seeds {
         dialect: MY,
         open_tables: &open,
+        step_tables: &[],
         texts: sql.into_iter().collect(),
         question,
         picked,
@@ -791,6 +794,8 @@ fn ask_request(question: &str) -> AskRequest {
         off: Vec::new(),
         model: None,
         picks: None,
+        tab: None,
+        steps: Vec::new(),
     }
 }
 

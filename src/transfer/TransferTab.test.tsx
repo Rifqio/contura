@@ -6,7 +6,9 @@ import type { ConnectionConfig, DbObject, JobEvent, SchemaModel, TransferPlan } 
 import { callsTo, routeInvoke } from "../test/invoke";
 import type { TransferSeed } from "../shell/tabs";
 import { JobsProvider } from "../jobs/useJobs";
-import TransferTab from "./TransferTab";
+import TransferTab, { transferStep, transferTabAsk } from "./TransferTab";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
+import { emptyTransfer } from "./transferModel";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -69,15 +71,17 @@ function routes() {
 function renderTab(seed: Partial<TransferSeed> = {}) {
   const onMeta = vi.fn();
   render(
-    <JobsProvider>
-      <TransferTab
-        seed={{ connectionId: "my", database: "pos_live", schema: null, table: null, ...seed }}
-        connections={CONNS}
-        groups={[]}
-        visible
-        onMeta={onMeta}
-      />
-    </JobsProvider>,
+    <RecordStepContext.Provider value="ungrouped">
+      <JobsProvider>
+        <TransferTab
+          seed={{ connectionId: "my", database: "pos_live", schema: null, table: null, ...seed }}
+          connections={CONNS}
+          groups={[]}
+          visible
+          onMeta={onMeta}
+        />
+      </JobsProvider>
+    </RecordStepContext.Provider>,
   );
   return { onMeta };
 }
@@ -679,4 +683,86 @@ test("the run passes the whole run's rows to the overall line", async () => {
     }),
   );
   expect(await screen.findByText("700 of 3,000 rows")).toBeTruthy();
+});
+
+// ---- What the tab tells the Ask (spec 4.7) ----
+
+test("transferTabAsk asks on the source until a target is chosen, then on the target with the source beside it", () => {
+  const source = { connectionId: "c1", database: "pos", schema: null };
+  const before = transferTabAsk({ ...emptyTransfer(source), tables: [{ name: "sales", view: false, rows: 1500, bytes: null, needs: [], ticked: true, ifExists: "stop" }] }, null);
+  expect(before.where).toEqual({ connectionId: "c1", database: "pos", schema: null });
+  expect(before.also).toEqual([]);
+  // No plan and no target yet: no mode is claimed and the target is empty, which the Core words as not chosen.
+  expect(before.tab).toMatchObject({ kind: "transfer", targetDatabase: "", mode: null });
+  const target = { connectionId: "c2", database: "analytics", schema: "pos" };
+  const after = transferTabAsk(
+    {
+      ...emptyTransfer(source),
+      target,
+      tables: [
+        { name: "sales", view: false, rows: 1500, bytes: null, needs: [], ticked: true, ifExists: "append" },
+        { name: "daily_totals", view: true, rows: null, bytes: null, needs: [], ticked: true, ifExists: "stop" },
+        { name: "staff", view: false, rows: 10, bytes: null, needs: [], ticked: false, ifExists: "stop" },
+      ],
+    },
+    PLAN,
+  );
+  expect(after.where).toEqual({ connectionId: "c2", database: "analytics", schema: "pos" });
+  expect(after.also).toEqual(["c1"]);
+  expect(after.tab).toMatchObject({ kind: "transfer", sourceDatabase: "pos", targetDatabase: "analytics", mode: "oneTransaction" });
+  const t = after.tab.kind === "transfer" ? after.tab : null;
+  // Ticked tables only, never views.
+  expect(t!.tables.map((x) => x.source)).toEqual(["sales"]);
+  expect(t!.tables[0]).toMatchObject({ target: "sales", exists: false, ifExists: "append", emptiedRows: null });
+  expect(t!.tables[0]!.columns).toHaveLength(3);
+  // Notes as typed kinds: their text names values.
+  expect(t!.notes).toEqual([
+    { table: "sales", column: "is_refund", kind: "needsChoice" },
+    { table: "sales", column: "drop_point", kind: "noMatch" },
+  ]);
+  expect(JSON.stringify(after)).not.toContain("POINT(");
+});
+
+test("transferStep is on the target, names the source database then the tables, and the source's Connection beside it", () => {
+  const source = { connectionId: "c1", database: "pos", schema: null };
+  const target = { connectionId: "c2", database: "analytics", schema: "pos" };
+  const tables = [
+    { name: "sales", view: false, rows: 1500, bytes: null, needs: [], ticked: true, ifExists: "append" as const },
+    { name: "staff", view: false, rows: 10, bytes: null, needs: [], ticked: false, ifExists: "stop" as const },
+  ];
+  expect(transferStep({ ...emptyTransfer(source), target, tables }, null, 12_000, false)).toEqual({
+    verb: "transferRan",
+    tab: "transfer",
+    title: null,
+    connectionId: "c2",
+    database: "analytics",
+    schema: "pos",
+    names: ["pos", "sales"],
+    count: 12_000,
+    sourceConnectionId: "c1",
+  });
+  const same = transferStep({ ...emptyTransfer(source), target: { ...target, connectionId: "c1" }, tables }, null, null, true);
+  expect(same).toMatchObject({ failed: true, count: null });
+  expect(same.sourceConnectionId).toBeUndefined();
+});
+
+test("a finished run is a Recent step on the target with the source beside it", async () => {
+  clearAllSteps();
+  const sent = runRoutes();
+  renderTab();
+  await toReview();
+  await userEvent.click(screen.getByRole("button", { name: /^Run/ }));
+  await waitFor(() => expect(sent).toHaveLength(1));
+  act(() =>
+    sent[0]!.onmessage({
+      kind: "finished",
+      report: { kind: "transfer", rowsRead: 1500, rowsWritten: 1500, statements: 1, elapsedMs: 9_000, committed: 1500 } as never,
+    }),
+  );
+  await waitFor(() =>
+    expect(stepsOf("ungrouped")).toMatchObject([
+      { verb: "transferRan", tab: "transfer", connectionId: "pg", database: "analytics", names: ["pos_live", "sales"], count: 1500, sourceConnectionId: "my" },
+    ]),
+  );
+  clearAllSteps();
 });

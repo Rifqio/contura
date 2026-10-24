@@ -6,6 +6,7 @@ import type { DesignRequest } from "../api/types";
 import { mockEditorDom } from "../test/editor";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { patientFile } from "../test/load";
+import { clearAllSteps, stepsOf } from "../assistant/recentSteps";
 import { mockReactFlowDom } from "../test/reactFlow";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -222,4 +223,21 @@ test("closing_a_new_table_through_the_asks_apply_creates_it_and_closes_the_tab",
   // The user asked to close: neither the New table tab nor the design tab it became stays open (M2).
   await waitFor(() => expect(screen.queryByRole("tab", { name: /^New table/ })).toBeNull());
   await waitFor(() => expect(screen.queryByRole("tab", { name: /^orders design/ })).toBeNull());
+});
+
+test("a_new_table_apply_is_a_recent_step_after_its_tab_was_opened", async () => {
+  clearAllSteps();
+  routes();
+  await openNewTable();
+  await screen.findByRole("tab", { name: "Columns 1" });
+  await userEvent.type(screen.getByRole("textbox", { name: "Table name" }), "orders");
+  await fillIdColumn();
+  await waitFor(() => expect(applyButton().disabled).toBe(false));
+  await screen.findByLabelText("SQL Apply runs");
+  await userEvent.click(applyButton());
+  expect(await screen.findByText("Created orders.")).toBeTruthy();
+  const steps = stepsOf("group:g1");
+  expect(steps[0]).toMatchObject({ verb: "openTab", tab: "newTable", connectionId: "c2", database: "shop" });
+  expect(steps.find((s) => s.verb === "designApplied")).toMatchObject({ tab: "newTable", connectionId: "c2", database: "shop", names: ["orders"] });
+  clearAllSteps();
 });

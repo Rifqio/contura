@@ -14,6 +14,8 @@ export interface ToastSpec {
   kind: "info" | "success" | "readOnly" | "error";
   text: ReactNode;
   action?: { label: string; run(): void };
+  /** Milliseconds on screen, instead of the kind's usual time; an Undo needs longer than a note. */
+  stays?: number;
 }
 
 interface Api {
@@ -52,7 +54,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const show = useCallback((t: ToastSpec) => {
     clearTimeout(timer.current);
     setToast(t);
-    const ms = STAYS[t.kind];
+    const ms = t.stays ?? STAYS[t.kind];
     if (ms !== null) timer.current = setTimeout(() => setToast(null), ms);
   }, []);
   useEffect(() => () => clearTimeout(timer.current), []);

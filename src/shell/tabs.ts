@@ -100,7 +100,8 @@ export interface TransferSeed {
 export interface CompareSeed {
   source:
     | ({ kind: "database" } & CompareDatabase)
-    | { kind: "model"; model: SchemaModel; path: string | null; dialect: DialectKind; notice: string | null };
+    /** `connectionId`: the Connection the model was made from, if any; the compare then spans it. */
+    | { kind: "model"; model: SchemaModel; path: string | null; dialect: DialectKind; notice: string | null; connectionId?: ConnectionId | null };
   target: CompareDatabase | null;
 }
 

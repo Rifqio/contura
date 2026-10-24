@@ -1081,6 +1081,8 @@ ul {
 .grid-scroll {
   overflow: auto;
   min-height: 0;
+  /* A cell scrolled into view (the keys, Ctrl+Home) lands under the sticky header, not behind it. */
+  scroll-padding-top: var(--grid-header-height);
 }
 
 .grid {
@@ -2280,6 +2282,17 @@ button.group-card-name:hover {
   animation: dialog-in var(--motion-slow) var(--ease-enter);
 }
 
+/* "Discard your changes?" under a form that has changes (Dialog dirty). */
+.dialog-discard {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  border-top: var(--border-hairline) solid var(--c-border);
+  background: var(--c-bg-raised);
+  flex: none;
+}
+
 /* A short window (1,024 x 480 is 384 px at 80 vh): a dialog may use all but the scrim's padding. */
 @media (max-height: 600px) {
   .dialog {
@@ -2781,6 +2794,10 @@ textarea.input {
 @container diagram-canvas (max-height: 360px) or (max-width: 480px) {
   .diagram-canvas .react-flow__minimap {
     display: none;
+  }
+  /* No overview below it: the zoom control takes the corner, not the 162 px that cleared the overview. */
+  .diagram-canvas .react-flow__panel.canvas-zoom {
+    margin-bottom: 12px;
   }
 }
 .diagram-canvas .react-flow__minimap {
@@ -4010,6 +4027,14 @@ textarea.input {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* G7: what the last grid action did ("Copied 6 cells."), or why an edit key does nothing. */
+.results-grid-note {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--c-text);
 }
 .result-state {
   display: grid;
@@ -6052,6 +6077,10 @@ button.chip[aria-pressed="true"] {
 }
 /* History and Ask together left the work area 8 px wide at 1,024 px (and 264 px at 1,280): the three side columns
    now give way, down to 180, 220 and 260 px, so the work area keeps at least 320 px. */
+/* Under a window tab (Home, Settings, Compare, ...) the sidebar is not drawn: the pane narrows by the panel's width. */
+.body-home.body-ai {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
 .body-history.body-ai {
   grid-template-columns: minmax(180px, 264px) minmax(320px, 1fr) minmax(220px, 360px) minmax(260px, 360px);
 }
@@ -8262,6 +8291,87 @@ button.dbox:hover,
 }
 .grid td.cell-selected {
   box-shadow: inset 0 0 0 2px var(--c-accent);
+}
+/* The active cell is dimmer while focus is elsewhere (Excel). */
+.grid-scroll:not(:focus-within) .grid td.cell-selected {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--c-accent) 55%, transparent);
+}
+/*
+ * UX step 3 (G2): selected cells take a see-through accent layered over their own background, so a Pending Edit
+ * tint still shows; each block has a 1 px accent edge. Excel's shaded range.
+ */
+.grid[aria-multiselectable] td:not(.row-number) {
+  user-select: none;
+}
+.grid td.cell-in {
+  background-image: linear-gradient(var(--grid-selection-fill), var(--grid-selection-fill));
+}
+.grid td.sel-t,
+.grid td.sel-b,
+.grid td.sel-l,
+.grid td.sel-r,
+.grid td.cell-copied {
+  position: relative;
+}
+.grid td.sel-t::before,
+.grid td.sel-b::before,
+.grid td.sel-l::before,
+.grid td.sel-r::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 0 solid var(--c-accent);
+}
+.grid td.sel-t::before {
+  border-top-width: 1px;
+}
+.grid td.sel-b::before {
+  border-bottom-width: 1px;
+}
+.grid td.sel-l::before {
+  border-left-width: 1px;
+}
+.grid td.sel-r::before {
+  border-right-width: 1px;
+}
+/* A copied block: a dashed accent outline until Esc or an edit (Excel's marching ants, still). */
+.grid td.cell-copied::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  pointer-events: none;
+  outline: 1.5px dashed var(--c-accent);
+  outline-offset: -1px;
+}
+/* The row numbers and headers of the selection: a bar on the cell side, filled for a whole row or column. */
+.grid td.row-number.row-sel-part {
+  background: var(--c-bg-active);
+  box-shadow: inset -2px 0 0 var(--c-accent);
+}
+.grid td.row-number.row-sel-full {
+  background-color: var(--c-bg-active);
+  background-image: linear-gradient(var(--grid-selection-fill), var(--grid-selection-fill));
+  color: var(--c-accent-text);
+  font-weight: 600;
+  box-shadow: inset -2px 0 0 var(--c-accent);
+}
+.grid th.col-sel-part {
+  background: var(--c-bg-active);
+  box-shadow: inset 0 -2px 0 var(--c-accent);
+}
+.grid th.col-sel-full {
+  background-color: var(--c-bg-active);
+  background-image: linear-gradient(var(--grid-selection-fill), var(--grid-selection-fill));
+  color: var(--c-accent-text);
+  box-shadow: inset 0 -2px 0 var(--c-accent);
+}
+.grid[aria-multiselectable] td.row-number,
+.grid[aria-multiselectable] th.row-number {
+  cursor: default;
+}
+.grid th.row-number.corner-all {
+  box-shadow: inset -2px -2px 0 var(--c-accent);
 }
 /*
  * Pending Edits (DN 10.5). On a Production grid in Dracula the warning tint sits close to the
@@ -11962,6 +12072,14 @@ button.dbox:hover,
   display: flex;
   gap: var(--spacing-sm);
 }
+/* Asked in <label>: above a question asked in another tab than the one before it (spec 6.2). */
+.msg-asked-in {
+  justify-self: end;
+  margin-bottom: calc(var(--spacing-xs) * -1);
+  font: var(--font-small);
+  color: var(--c-text-muted);
+  overflow-wrap: anywhere;
+}
 /* The time of a question: small, quiet, right-aligned under the bubble. */
 .msg-user + .ts {
   justify-self: end;
@@ -12471,4 +12589,87 @@ button.dbox:hover,
   background: var(--c-bg-raised);
   font: var(--font-small);
   white-space: normal;
+}
+
+/* Find and Replace (@codemirror/search), bracket matching and other copies of the selection: app tokens only, so
+   both themes follow. */
+.cm-editor .cm-panels {
+  background: var(--c-bg-raised);
+  color: var(--c-text);
+  border-color: var(--c-border);
+}
+.cm-editor .cm-panels-top {
+  border-bottom: var(--border-hairline) solid var(--c-border);
+}
+.cm-editor .cm-search {
+  font: var(--font-small);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+.cm-editor .cm-search br {
+  display: none;
+}
+.cm-editor .cm-search .cm-textfield {
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  padding: 2px var(--spacing-xs);
+  font: inherit;
+}
+.cm-editor .cm-search .cm-textfield:focus {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -1px;
+}
+.cm-editor .cm-search .cm-button {
+  background: var(--c-bg-hover);
+  background-image: none;
+  color: var(--c-text);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  padding: 2px var(--spacing-sm);
+  font: inherit;
+  cursor: pointer;
+}
+.cm-editor .cm-search .cm-button:hover {
+  background: var(--c-bg-active);
+}
+.cm-editor .cm-search .cm-button:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.cm-editor .cm-search label {
+  color: var(--c-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.cm-editor .cm-search [name="close"] {
+  background: transparent;
+  color: var(--c-text-muted);
+  border: 0;
+  cursor: pointer;
+  margin-left: auto;
+}
+.cm-editor .cm-searchMatch {
+  background: var(--c-warning-subtle);
+  outline: 1px solid var(--c-warning-solid);
+}
+.cm-editor .cm-searchMatch.cm-searchMatch-selected {
+  background: var(--c-accent-subtle);
+  outline-color: var(--c-accent);
+}
+.cm-editor .cm-selectionMatch {
+  background: var(--c-accent-subtle);
+}
+.cm-editor.cm-focused .cm-matchingBracket {
+  background: var(--c-accent-subtle);
+  outline: 1px solid var(--c-accent);
+}
+.cm-editor.cm-focused .cm-nonmatchingBracket {
+  background: var(--c-danger-subtle);
+  outline: 1px solid var(--c-danger-solid);
 }

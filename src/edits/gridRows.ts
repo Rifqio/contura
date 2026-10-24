@@ -5,7 +5,8 @@ import { isDeleted, keyOf, type LocalId, newRows, type Pending, pendingValue, ty
 export type DisplayRow =
   /** `defaults`: the unset key columns, which show `default`; other unset cells stay empty. */
   | { kind: "new"; id: LocalId; cells: Cell[]; set: boolean[]; defaults: boolean[] }
-  | { kind: "loaded"; key: RowKey | null; source: Cell[]; cells: Cell[]; deleted: boolean };
+  /** `index`: the row's place on the loaded page, for its row number. */
+  | { kind: "loaded"; key: RowKey | null; source: Cell[]; cells: Cell[]; deleted: boolean; index: number };
 
 export function valueCell(v: NewValue): Cell {
   return v.t === "null" ? { t: "null" } : { t: "text", value: v.value, truncated: false, totalBytes: v.value.length };
@@ -25,10 +26,14 @@ export function cellText(c: Cell): string {
   return c.value;
 }
 
+/**
+ * The loaded page, then the new rows: each under the row it was added after (G17), else at the bottom (T3).
+ */
 export function displayRows(p: Pending | null, page: Page | null): DisplayRow[] {
   const columns = page?.columns ?? p?.columns ?? [];
+  const fresh = p ? newRows(p) : [];
   const added: DisplayRow[] = p
-    ? newRows(p).map((r) => ({
+    ? fresh.map((r) => ({
         kind: "new" as const,
         id: r.localId,
         cells: columns.map((c) => {
@@ -39,7 +44,7 @@ export function displayRows(p: Pending | null, page: Page | null): DisplayRow[] 
         defaults: columns.map((c) => c.isPrimaryKey && !r.values.has(c.name)),
       }))
     : [];
-  const loaded: DisplayRow[] = (page?.rows ?? []).map((row) => {
+  const loaded: DisplayRow[] = (page?.rows ?? []).map((row, index) => {
     const key = keyOf(columns, row);
     return {
       kind: "loaded" as const,
@@ -50,16 +55,78 @@ export function displayRows(p: Pending | null, page: Page | null): DisplayRow[] 
         return v ? valueCell(v) : cell;
       }),
       deleted: !!(p && key && isDeleted(p, key)),
+      index,
     };
   });
-  return [...loaded, ...added];
+  if (!fresh.some((r) => r.after !== undefined)) return [...loaded, ...added];
+  const out: DisplayRow[] = [...loaded];
+  const refOf = (d: DisplayRow) => (d.kind === "new" ? d.id : d.key);
+  const bottom: DisplayRow[] = [];
+  fresh.forEach((r, i) => {
+    const at = r.after === undefined ? -1 : out.findIndex((d) => refOf(d) === r.after);
+    if (at < 0) bottom.push(added[i]);
+    else out.splice(at + 1, 0, added[i]);
+  });
+  return [...out, ...bottom];
 }
 
-/** Tab-separated text as rows of values; a trailing line break adds no row. */
+/**
+ * Tab-separated text as rows of values, read as Excel writes it: a field that starts with a double quote runs to
+ * its closing quote, takes tabs and line breaks inside it, and reads a doubled quote as one. CRLF, LF and CR all end
+ * a line; a trailing line break adds no row.
+ */
 export function parsePaste(text: string): string[][] {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  return lines.map((l) => l.split("\t"));
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let i = 0;
+  let start = true;
+  const endField = () => {
+    row.push(field);
+    field = "";
+    start = true;
+  };
+  while (i < text.length) {
+    const ch = text[i];
+    if (start && ch === '"') {
+      // A quoted field: to the quote not followed by another.
+      i++;
+      for (;;) {
+        if (i >= text.length) break;
+        if (text[i] === '"') {
+          if (text[i + 1] === '"') {
+            field += '"';
+            i += 2;
+            continue;
+          }
+          i++;
+          break;
+        }
+        field += text[i++];
+      }
+      start = false;
+      continue;
+    }
+    start = false;
+    if (ch === "\t") {
+      endField();
+      i++;
+    } else if (ch === "\r" || ch === "\n") {
+      endField();
+      rows.push(row);
+      row = [];
+      i += ch === "\r" && text[i + 1] === "\n" ? 2 : 1;
+    } else {
+      field += ch;
+      i++;
+    }
+  }
+  if (!start || field !== "" || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  if (rows.length === 0) rows.push([""]);
+  return rows;
 }
 
 export function hasKey(columns: ColumnInfo[]): boolean {

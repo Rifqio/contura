@@ -4,6 +4,7 @@ import { errorText, fileName, isCommandError, listDatabases, listSchemas, openCo
 import { applySync, compareDdl, compareSchemas, confirmSync, planSync } from "../api/compare";
 import { newJobId } from "../api/jobs";
 import type {
+  AskDiffLine,
   CompareDatabase,
   CompareRequest,
   CompareResult,
@@ -18,6 +19,9 @@ import type {
   PassId,
   SyncPlan,
 } from "../api/types";
+import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
+import { type RecentStepInput, useRecordStep } from "../assistant/recentSteps";
+import { alsoOf } from "../assistant/context";
 import DbMark from "../components/DbMark";
 import Icon from "../components/Icon";
 import Kbd from "../components/Kbd";
@@ -67,8 +71,95 @@ export const REPLAN_DEBOUNCE_MS = 150;
 
 type ModelSource = Extract<CompareSeed["source"], { kind: "model" }>;
 
+/** One item as the Ask gets it: names and types only, never the detail text, which can carry a value. */
+function diffLine(i: DiffItem): AskDiffLine {
+  const type = i.changes.find((c) => c.kind === "type");
+  return {
+    kind: i.kind,
+    object: i.object,
+    table: i.path.table ?? i.path.name,
+    name: i.path.name,
+    fromType: type?.kind === "type" ? type.from : null,
+    toType: type?.kind === "type" ? type.to : null,
+    losesData: i.losesData,
+    losesRows: i.dataLoss?.rows ?? null,
+  };
+}
+
+/** The sync script the Ask gets: twice the Core's 16 KB cap at most, cut at a line end. */
+const SCRIPT_MAX = 32 * 1024;
+
+/**
+ * What a Schema Compare tab tells the Ask (spec 4.6): both sides, the items in tree order (cut at twice the Core's
+ * 300 lines), the counts and the ticked script. The Ask goes to the target; a database source, or a Schema Model
+ * made from a Connection, is the other Connection, so every item goes at the lower access of the two.
+ */
+type CompareSource = { kind: "database"; side: CompareDatabase | null } | { kind: "model"; file: string; connectionId: string | null };
+
+/** The Ask's place for a compare: the target; the source's Connection goes beside it. */
+function compareSides(source: CompareSource, target: CompareDatabase | null): Required<Pick<TabAskFields, "also" | "where">> {
+  return {
+    also: source.kind === "database" ? (source.side ? [source.side.connectionId] : []) : source.connectionId ? [source.connectionId] : [],
+    where: { connectionId: target?.connectionId ?? null, database: target?.database ?? null, schema: target?.schema ?? null },
+  };
+}
+
+/**
+ * A compare's Recent step: on the target, as the Ask is, naming the source database or model file. The source's
+ * Connection goes with a compare when it is another, so the Core gives the source name at the lower access.
+ */
+export function compareStep(source: CompareSource, target: CompareDatabase | null, verb: "compared" | "syncApplied", count: number | null, failed = false): RecentStepInput {
+  const { also, where } = compareSides(source, target);
+  const other = verb === "compared" ? alsoOf(where.connectionId, also)[0] : undefined;
+  const name = source.kind === "model" ? source.file : (source.side?.database ?? null);
+  return {
+    verb,
+    tab: "compare",
+    title: null,
+    connectionId: where.connectionId,
+    database: where.database,
+    schema: where.schema,
+    ...(verb === "compared" && name && { names: [name] }),
+    count,
+    ...(failed && { failed: true }),
+    ...(other !== undefined && { sourceConnectionId: other }),
+  };
+}
+
+export function compareTabAsk(p: {
+  source: CompareSource;
+  target: CompareDatabase | null;
+  items: DiffItem[];
+  notCompared: number;
+  ticked: number;
+  script: string | null;
+  /** A result is in; until then no counts or items are claimed. */
+  compared?: boolean;
+}): TabAskFields {
+  const count = (k: DiffItem["kind"]) => p.items.filter((i) => i.kind === k).length;
+  const script = p.script && p.script.length > SCRIPT_MAX ? p.script.slice(0, Math.max(0, p.script.lastIndexOf("\n", SCRIPT_MAX))) : p.script;
+  return {
+    tab: {
+      kind: "compare",
+      source: p.source.kind === "model" ? { kind: "model", file: p.source.file } : { kind: "database", database: p.source.side?.database ?? "" },
+      targetDatabase: p.target?.database ?? "",
+      items: p.items.slice(0, 600).map(diffLine),
+      added: count("added"),
+      removed: count("removed"),
+      changed: count("changed"),
+      notCompared: p.notCompared,
+      ticked: p.ticked,
+      compared: p.compared ?? true,
+    },
+    sql: script || undefined,
+    ...compareSides(p.source, p.target),
+  };
+}
+
 export interface CompareTabProps {
   seed: CompareSeed;
+  /** The tab's key: the tab publishes what the Ask may know of it (`tabAsk.ts`). */
+  askKey?: string | null;
   /** Every Connection, across Groups: a compare may span two. */
   connections: ConnectionConfig[];
   groups: Group[];
@@ -204,7 +295,7 @@ function SidePicker({ role, connections, side, onlyDialect, onChange }: PickerPr
 }
 
 /** The Schema Compare tab (frame 10.1): Differences and the Sync Script; Apply runs exactly the shown script. */
-export default function CompareTab({ seed, connections, groups, visible, onMeta, onOpenInEditor, onApplied, onJob }: CompareTabProps) {
+export default function CompareTab({ seed, askKey = null, connections, groups, visible, onMeta, onOpenInEditor, onApplied, onJob }: CompareTabProps) {
   const jobs = useJobs();
   const root = useRef<HTMLDivElement>(null);
   const model: ModelSource | null = seed.source.kind === "model" ? seed.source : null;
@@ -311,6 +402,23 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
   const rows = useMemo(() => buildTree(items, filter, scope, ncTotal), [items, filter, scope, ncTotal]);
   const selectedRow = rows.find((r) => r.id === selected) ?? null;
   const selectedTable = selectedRow?.table ?? null;
+  const recordStep = useRecordStep();
+  const modelConnection = model?.connectionId ?? null;
+  const stepSource = (): CompareSource => (kind === "model" ? { kind: "model", file: modelName, connectionId: modelConnection } : { kind: "database", side: dbSource });
+  usePublishTabAsk(
+    askKey,
+    () =>
+      compareTabAsk({
+        source: stepSource(),
+        target,
+        items,
+        notCompared: ncTotal,
+        ticked: ticked.size,
+        script: plan ? scriptText(plan.statements) : null,
+        compared: result !== null,
+      }),
+    [kind, modelName, modelConnection, dbSource, target, items, ncTotal, ticked, plan, result],
+  );
 
   function applyPlan(p: SyncPlan) {
     setPlan(p);
@@ -370,6 +478,7 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
         if (!live) return;
         setResult(r);
         setNow(Date.now());
+        recordStep(compareStep(stepSource(), target, "compared", r.items.length));
         let p = await pending.plan;
         // Compare again keeps the user's ticks on the items it had; new items take the default.
         if (keep && before) {
@@ -527,6 +636,7 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
         if (e.kind === "finished" || e.kind === "failed") ended = true;
         if (e.kind === "progress") setRun((r) => (r && r.id === id ? { ...r, done: e.statementsDone } : r));
       });
+      recordStep(compareStep(stepSource(), target, "syncApplied", ticked.size));
       const dropped = droppedTables(p);
       const gone = new Set(dropped.map((d) => d.name));
       onApplied?.(
@@ -549,6 +659,7 @@ export default function CompareTab({ seed, connections, groups, visible, onMeta,
         reopenConfirm.current = production;
       } else if (!(isCommandError(e) && e.kind === "readOnly")) {
         // A failed or cancelled run may have changed the target (MySQL keeps what ran).
+        recordStep(compareStep(stepSource(), target, "syncApplied", ticked.size, true));
         onApplied?.(target, touchedTables(p), []);
         freshTicks.current = true;
       }

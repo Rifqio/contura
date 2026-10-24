@@ -6,6 +6,9 @@ import appCss from "../styles/app.css?raw";
 import { mockEditorDom } from "../test/editor";
 import { callsTo, routeInvoke } from "../test/invoke";
 import DataGrid from "./DataGrid";
+import { useCommandKeys } from "../commands/useCommandKeys";
+import { ToastProvider } from "./Toast";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 mockEditorDom();
@@ -102,10 +105,20 @@ test("a binary cell only offers Set NULL", async () => {
   expect(editor()).toBeNull();
   expect(screen.getByRole("status").textContent).toBe("Binary values can only be set to NULL here");
   fireEvent.contextMenu(td(0, 3));
-  const items = screen.getAllByRole("menuitem").map((b) => b.textContent);
-  expect(items).toEqual(["Delete row", "Duplicate row", "Set NULL"]);
+  const items = screen.getAllByRole("menuitem").map((b) => b.getAttribute("aria-label"));
+  expect(items).toEqual([
+    "Copy",
+    "Copy with headers",
+    "Paste",
+    "Set NULL",
+    "Set DEFAULT",
+    "Filter by this value",
+    "Open full value",
+    "Duplicate row",
+    "Delete row",
+  ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Set NULL" }));
-  expect(td(0, 3).textContent).toBe("NULL");
+  await waitFor(() => expect(td(0, 3).textContent).toBe("NULL"));
   expect(td(0, 3).className).toContain("cell-edited");
 });
 
@@ -140,35 +153,38 @@ test("read-only and view grids never open the editor", async () => {
   expect(screen.queryByRole("button", { name: "Add row" })).toBeNull();
 });
 
-test("ctrl+n adds a new row at the bottom with default in its key, and it can be typed into", async () => {
+test("ctrl+n adds a new row under the current one with default in its key, and it can be typed into", async () => {
   await open();
   fireEvent.mouseDown(td(0, 1));
   key("n", { ctrlKey: true });
-  const row = document.querySelector('tr[data-row="2"]')!;
+  // G17 (DBeaver): the new row goes under the current row; the loaded rows keep their numbers.
+  const row = document.querySelector('tr[data-row="1"]')!;
   expect(row.className).toContain("row-added");
   expect(row.querySelector(".row-number")!.textContent).toBe("+");
   // T3: `default` only in the key column; the other unset cells stay empty.
-  expect(td(2, 0).textContent).toBe("default");
-  expect(td(2, 1).textContent).toBe("");
-  expect(td(2, 0).className).toContain("cell-selected");
+  expect(td(1, 0).textContent).toBe("default");
+  expect(td(1, 1).textContent).toBe("");
+  expect(td(1, 1).className).toContain("cell-selected");
   expect(document.querySelector('tr[data-row="0"] .row-number')!.textContent).toBe("1");
-  fireEvent.doubleClick(td(2, 1));
+  expect(document.querySelector('tr[data-row="2"] .row-number')!.textContent).toBe("2");
+  fireEvent.doubleClick(td(1, 1));
   fireEvent.change(editor()!, { target: { value: "pending" } });
   fireEvent.keyDown(editor()!, { key: "Enter" });
-  expect(td(2, 1).textContent).toBe("pending");
+  expect(td(1, 1).textContent).toBe("pending");
 });
 
 test("duplicate copies the row except its key; delete marks and removes", async () => {
   await open();
   fireEvent.contextMenu(td(0, 1));
   fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate row" }));
-  expect(td(2, 0).textContent).toBe("default");
-  expect(td(2, 1).textContent).toBe("paid");
-  expect(td(2, 2).textContent).toBe("short");
-  key("Delete");
+  // TablePlus: the copy goes under the row it copies.
+  await waitFor(() => expect(td(1, 0).textContent).toBe("default"));
+  expect(td(1, 1).textContent).toBe("paid");
+  expect(td(1, 2).textContent).toBe("short");
+  key("Delete", { altKey: true });
   expect(document.querySelector(".row-added")).toBeNull();
   fireEvent.mouseDown(td(0, 1));
-  key("Delete");
+  key("Delete", { altKey: true });
   expect(document.querySelector('tr[data-row="0"]')!.className).toContain("row-deleted");
 });
 
@@ -247,6 +263,80 @@ test("the bar appears with the first edit, counts changes and discards", async (
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
   expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
   expect(td(0, 1).textContent).toBe("paid");
+});
+
+test("G10: Undo says so when the grid changed since the discard", async () => {
+  routeInvoke({ fetch_page: () => orders() });
+  render(
+    <ToastProvider>
+      <DataGrid connectionId="c1" table={table} onClose={() => {}} />
+    </ToastProvider>,
+  );
+  await screen.findByText("paid");
+  await editStatus(0);
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  const undo = screen.getByRole("button", { name: "Undo" });
+  await editStatus(1, "gone");
+  fireEvent.click(undo);
+  expect(screen.getByText("Undo no longer applies: the grid changed since. Ctrl+Z steps back through your edits.")).toBeTruthy();
+  expect(td(0, 1).textContent).toBe("paid");
+});
+
+test("G12: F5 in the grid reloads its rows", async () => {
+  await open();
+  expect(callsTo("fetch_page")).toHaveLength(1);
+  grid().focus();
+  const f5 = new KeyboardEvent("keydown", { key: "F5", code: "F5", bubbles: true, cancelable: true });
+  grid().dispatchEvent(f5);
+  expect(f5.defaultPrevented).toBe(true);
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+});
+
+test("G12: with focus outside the grid, F5 goes to the tree's refresh, not the grid", async () => {
+  const refresh = vi.fn();
+  function Tree() {
+    useCommandKeys({ "tree.refresh": refresh });
+    return <button type="button">Elsewhere</button>;
+  }
+  routeInvoke({ fetch_page: () => orders() });
+  render(
+    <>
+      <Tree />
+      <DataGrid connectionId="c1" table={table} onClose={() => {}} />
+    </>,
+  );
+  await screen.findByText("paid");
+  screen.getByRole("button", { name: "Elsewhere" }).focus();
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: "F5", code: "F5" });
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(callsTo("fetch_page")).toHaveLength(1);
+  grid().focus();
+  fireEvent.keyDown(grid(), { key: "F5", code: "F5" });
+  expect(refresh).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+});
+
+test("G10: Discard offers an Undo toast and Ctrl+Z brings the edits back", async () => {
+  routeInvoke({ fetch_page: () => orders() });
+  render(
+    <ToastProvider>
+      <DataGrid connectionId="c1" table={table} onClose={() => {}} />
+    </ToastProvider>,
+  );
+  await screen.findByText("paid");
+  await editStatus(0);
+  await editStatus(1, "gone");
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
+  expect(screen.getByRole("status").textContent).toContain("Discarded 2 changes");
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(screen.getByRole("region", { name: "Pending Edits" }).textContent).toContain("2 changes");
+  expect(td(0, 1).textContent).toBe("lost");
+
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull();
+  key("z", { ctrlKey: true });
+  expect(screen.getByRole("region", { name: "Pending Edits" }).textContent).toContain("2 changes");
 });
 
 test("save on a plain Connection plans, applies without a pass and reloads", async () => {
@@ -532,7 +622,7 @@ test("the cell menu has Delete row: it marks a loaded row and removes a new one"
   fireEvent.click(screen.getByRole("menuitem", { name: "Revert row" }));
   expect(document.querySelector(".row-deleted")).toBeNull();
   key("n", { ctrlKey: true });
-  fireEvent.contextMenu(td(2, 1));
+  fireEvent.contextMenu(td(1, 1));
   fireEvent.click(screen.getByRole("menuitem", { name: "Delete row" }));
   expect(document.querySelector(".row-added")).toBeNull();
 });
@@ -548,7 +638,7 @@ test("Delete row on a table without a primary key says why and deletes nothing",
 test("a paste that lands on a deleted row is refused and changes nothing", async () => {
   await open();
   fireEvent.mouseDown(td(0, 1));
-  key("Delete");
+  key("Delete", { altKey: true });
   fireEvent.mouseDown(td(0, 1));
   fireEvent.paste(grid(), { clipboardData: { getData: () => "a\nb" } });
   expect(screen.getByRole("status").textContent).toBe("Deleted rows can't be edited. Revert the row first.");
@@ -567,7 +657,7 @@ test("duplicate loads the full value of a cut-short cell and says binary values 
   });
   // The binary cell is not copied: it is unset, and only key columns show `default` (T3).
   expect(td(2, 3).textContent).toBe("");
-  expect(screen.getByRole("status").textContent).toBe("Binary values aren't copied.");
+  expect(screen.getByRole("status").textContent).toBe("Duplicated 1 row below. Binary values aren't copied.");
 });
 
 function longPage(): Page {
@@ -709,14 +799,15 @@ test("the cell menu opens from the keyboard and works with the arrow keys", asyn
   fireEvent.mouseDown(td(0, 1));
   key("ContextMenu");
   const menu = screen.getByRole("menu", { name: "Cell" });
-  expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Delete row" }));
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Copy" }));
   fireEvent.keyDown(menu, { key: "ArrowDown" });
-  expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Duplicate row" }));
+  expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Copy with headers" }));
+  fireEvent.keyDown(menu, { key: "ArrowDown" });
   fireEvent.keyDown(menu, { key: "ArrowDown" });
   expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Set NULL" }));
   fireEvent.click(document.activeElement as HTMLElement);
   expect(screen.queryByRole("menu", { name: "Cell" })).toBeNull();
-  expect(td(0, 1).textContent).toBe("NULL");
+  await waitFor(() => expect(td(0, 1).textContent).toBe("NULL"));
   expect(document.activeElement).toBe(grid());
 });
 
@@ -830,4 +921,96 @@ test("the key that opens the editor is typed by the browser into the focused edi
   expect(editor()).not.toBeNull();
   expect(document.activeElement).toBe(editor());
   expect(editor()!.value).toBe("");
+});
+
+test("a save is a Recent step with the rows it sent, never a value", async () => {
+  clearAllSteps();
+  routeInvoke({ fetch_page: () => orders(), plan_edits: okPlan, apply_edits: saved });
+  render(
+    <RecordStepContext.Provider value="ungrouped">
+      <DataGrid connectionId="c1" table={table} onClose={() => {}} />
+    </RecordStepContext.Provider>,
+  );
+  await screen.findByText("paid");
+  await editStatus(0);
+  await editStatus(1, "gone");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(stepsOf("ungrouped")).toMatchObject([{ verb: "editsSaved", tab: "object", connectionId: "c1", database: "shop", names: ["orders"], count: 2 }]));
+  expect(JSON.stringify(stepsOf("ungrouped"))).not.toContain("gone");
+  clearAllSteps();
+});
+
+/** G5: a 300-row keyed table; `without` leaves out the rows with those ids on the next fetch. */
+function tallOrders(without: number[] = []): Page {
+  const ids = Array.from({ length: 300 }, (_, i) => i + 1).filter((id) => !without.includes(id));
+  return {
+    columns: orders().columns,
+    rows: ids.map((id) => [num(String(id)), text(`s${id}`), text("n"), bytes]),
+    hasMore: false,
+  };
+}
+const selectedCell = () => {
+  const c = document.querySelector("td.cell-selected") as HTMLElement | null;
+  if (!c) return null;
+  return { id: c.closest("tr")!.querySelectorAll("td")[1].textContent, col: c.dataset.col };
+};
+
+test("G5: after Save the grid keeps its scroll position and the selected cell", async () => {
+  let removed: number[] = [];
+  routeInvoke({ fetch_page: () => tallOrders(removed), plan_edits: okPlan, apply_edits: saved });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("s1");
+  grid().scrollTop = 28 * 115;
+  fireEvent.scroll(grid());
+  await screen.findByText("s116");
+  fireEvent.doubleClick(td(115, 1));
+  fireEvent.change(editor()!, { target: { value: "lost" } });
+  fireEvent.keyDown(editor()!, { key: "Enter" });
+  fireEvent.mouseDown(td(115, 2));
+  expect(selectedCell()).toEqual({ id: "116", col: "2" });
+  key("s", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Pending Edits" })).toBeNull());
+  await screen.findByText("s116");
+  expect(grid().scrollTop).toBe(28 * 115);
+  expect(selectedCell()).toEqual({ id: "116", col: "2" });
+  removed = [];
+});
+
+test("G5: Reload with no Pending Edits keeps the place, and the nearest row stays selected when its row is gone", async () => {
+  let removed: number[] = [];
+  routeInvoke({ fetch_page: () => tallOrders(removed) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("s1");
+  grid().scrollTop = 28 * 115;
+  fireEvent.scroll(grid());
+  await screen.findByText("s116");
+  fireEvent.mouseDown(td(115, 1));
+  removed = [116];
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await waitFor(() => expect(selectedCell()).toEqual({ id: "117", col: "1" }));
+  expect(grid().scrollTop).toBe(28 * 115);
+});
+
+test("G5: a new page, a sort or a filter still starts at the top with nothing selected", async () => {
+  routeInvoke({ fetch_page: () => tallOrders() });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} />);
+  await screen.findByText("s1");
+  grid().scrollTop = 28 * 115;
+  fireEvent.scroll(grid());
+  await screen.findByText("s116");
+  fireEvent.mouseDown(td(115, 1));
+  fireEvent.click(screen.getByRole("button", { name: "Sort by status" }));
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await waitFor(() => expect(grid().scrollTop).toBe(0));
+  expect(selectedCell()).toBeNull();
+});
+
+test("G15: the first edit tells the tab it was worked in", async () => {
+  const worked = vi.fn();
+  await open(orders(), { onWorked: worked });
+  expect(worked).not.toHaveBeenCalled();
+  await editStatus(0);
+  expect(worked).toHaveBeenCalled();
 });

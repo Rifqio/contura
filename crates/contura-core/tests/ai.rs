@@ -84,6 +84,8 @@ fn ask(question: &str) -> AskRequest {
         off: Vec::new(),
         model: None,
         picks: None,
+        tab: None,
+        steps: Vec::new(),
     }
 }
 
@@ -561,6 +563,284 @@ fn item(p: &Preview, kind: ItemKind) -> &PreviewItem {
         .unwrap_or_else(|| panic!("no {kind:?} item in {:?}", p.items))
 }
 
+/// Ask knows every tab: a tab over two Connections (Compare, Transfer) is gated at the lower
+/// access, and lock reasons name the Connection that set it.
+#[tokio::test]
+async fn lowest_access_over_also() {
+    let mut staging = shop_conn(AiAccess::Schema);
+    staging.id = Uuid::from_u128(43);
+    staging.name = "Kestrel staging".into();
+    let cat = fake(
+        vec![shop_conn(AiAccess::SchemaQueryRows), staging.clone()],
+        shop_schema(),
+    );
+    let mut req = shop_ask("why slow?");
+    req.switches.rows = true;
+    req.focus.also = vec![staging.id];
+    let p = run(&cat, &req).await;
+    for kind in [ItemKind::Sql, ItemKind::Rows] {
+        let i = item(&p, kind);
+        assert!(!i.on, "{kind:?}");
+        assert_eq!(
+            i.locked.as_deref(),
+            Some("Kestrel staging shares schema only"),
+            "{kind:?}"
+        );
+    }
+    assert!(item(&p, ItemKind::Cards).on);
+    assert!(!p.exact.contains("total > "), "{}", p.exact);
+    let access = p.log.iter().find(|l| l.source == "access").unwrap();
+    assert!(access.fields.contains(&("also".into(), "1".into())));
+    assert!(access.fields.contains(&("lowest".into(), "schema".into())));
+    assert!(
+        access
+            .fields
+            .contains(&("level".into(), "schemaQueryRows".into()))
+    );
+
+    // A Connection the tab names that is gone counts as Never: only the question goes.
+    req.focus.also = vec![Uuid::from_u128(99)];
+    let p = run(&cat, &req).await;
+    for i in p.items.iter().filter(|i| i.kind != ItemKind::Question) {
+        assert!(!i.on && i.bytes == 0, "{:?}", i.kind);
+    }
+    assert_eq!(
+        item(&p, ItemKind::Sql).locked.as_deref(),
+        Some("The other Connection shares nothing with AI")
+    );
+    assert_eq!(p.dialect, None);
+}
+
+/// The This tab item of a tab over two Connections goes at the lower access: a Compare
+/// whose own Connection allows sample rows and whose other side shares schema only sends
+/// nothing above Schema only, then the L2 parts once the other side is raised.
+#[tokio::test]
+async fn compare_tab_goes_at_the_lower_access() {
+    use contura_core::ai::scene::{AskTab, CompareSide, DiffLine};
+    use contura_core::compare::diff::{DiffKind, DiffObject};
+    let mut staging = shop_conn(AiAccess::Schema);
+    staging.id = Uuid::from_u128(43);
+    staging.name = "Kestrel staging".into();
+    let mut req = shop_ask("is this safe to apply?");
+    req.focus = Focus {
+        sql: Some("ALTER TABLE orders DROP INDEX orders_status_idx;".into()),
+        also: vec![staging.id],
+        ..Focus::default()
+    };
+    req.switches = Switches {
+        rows: true,
+        values: true,
+    };
+    req.tab = Some(AskTab::Compare {
+        source: CompareSide::Model {
+            file: "/home/kestrel/kestrel.dbml".into(),
+        },
+        target_database: "shop".into(),
+        items: vec![DiffLine {
+            kind: DiffKind::Removed,
+            object: DiffObject::Index,
+            table: "orders".into(),
+            name: "orders_status_idx".into(),
+            from_type: None,
+            to_type: None,
+            loses_data: true,
+            loses_rows: Some(1_204),
+        }],
+        added: 0,
+        removed: 1,
+        changed: 0,
+        not_compared: 0,
+        ticked: 1,
+        compared: true,
+    });
+    let cat = fake(
+        vec![shop_conn(AiAccess::SchemaQueryRows), staging.clone()],
+        shop_schema(),
+    );
+    let p = run(&cat, &req).await;
+    assert!(item(&p, ItemKind::Tab).on);
+    assert!(
+        p.exact.contains(r#"{"source":"tab","text":"Schema Compare model (source) to shop (target)\n0 added, 1 removed, 0 changed\nremoved index orders_status_idx (loses data)\nticked: 1 of 1"}"#),
+        "{}",
+        p.exact
+    );
+    for above in ["kestrel.dbml", "loses about", "1,204", "ALTER TABLE"] {
+        assert!(!p.exact.contains(above), "{above} in {}", p.exact);
+    }
+    let sync = item(&p, ItemKind::Sql);
+    assert_eq!(sync.label, "Sync script");
+    assert!(!sync.on);
+    assert_eq!(
+        sync.locked.as_deref(),
+        Some("Kestrel staging shares schema only")
+    );
+
+    // The other side at Schema and query text: the L2 parts go, and the rows reason
+    // names the Connection that holds them back.
+    staging.ai_access = AiAccess::SchemaQuery;
+    let cat = fake(
+        vec![shop_conn(AiAccess::SchemaQueryRows), staging.clone()],
+        shop_schema(),
+    );
+    let p = run(&cat, &req).await;
+    assert!(
+        p.exact.contains(r#"model \"kestrel.dbml\" (source)"#),
+        "{}",
+        p.exact
+    );
+    assert!(p.exact.contains("(loses about 1,204 rows)"));
+    assert!(item(&p, ItemKind::Sql).on);
+    assert!(
+        p.exact
+            .contains("ALTER TABLE orders DROP INDEX orders_status_idx")
+    );
+    let rows = item(&p, ItemKind::Rows);
+    assert!(!rows.on);
+    assert_eq!(
+        rows.locked.as_deref(),
+        Some("Sample rows are off for Kestrel staging")
+    );
+    // Literal values need sample rows access too: none go unmasked.
+    assert!(item(&p, ItemKind::Values).locked.is_some());
+}
+
+/// The 200 KB cut end to end, with content the per-item caps leave whole: a wide window
+/// and a large schema, so the cards fill their share, and a DBML under its own cap. The
+/// JSON framing of each card line takes the payload over 200 KB.
+#[tokio::test]
+async fn payload_cap_trims_at_200_kb_end_to_end() {
+    let cat = fake(vec![shop_conn(AiAccess::SchemaQuery)], many_tables(3_000));
+    let question = format!("{}END", "q".repeat(16 * 1024 - 3));
+    let mut req = shop_ask(&question);
+    req.focus.tables.clear();
+    let sql = "select id from orders;\n".repeat(60 * 1024 / 23);
+    req.focus.sql = Some(sql.clone());
+    req.focus.selection = Some(sql.clone());
+    req.focus.filter = Some(sql);
+    req.focus.dbml = Some("Table t {}\n".repeat(60 * 1024 / 11));
+    let settings = AiSettings::default();
+    let p = preview(
+        &cat,
+        &settings,
+        &windowed(&settings, 1_000_000),
+        &Secrets::default(),
+        &req,
+    )
+    .await
+    .unwrap();
+    assert!(p.exact.len() <= 200 * 1024, "{}", p.exact.len());
+    assert!(p.exact.ends_with(&format!("Question: {question}")));
+    assert!(!p.notes.iter().any(|n| n.starts_with("DBML cut")));
+    let payload = p.log.iter().find(|l| l.source == "payload").unwrap();
+    assert!(
+        payload
+            .fields
+            .iter()
+            .any(|(k, v)| k == "trimmed" && v != "0"),
+        "{:?}",
+        payload.fields
+    );
+    // DBML goes first in the cut: it is cut before any query text.
+    assert!(item(&p, ItemKind::Dbml).bytes < 60 * 1024);
+    assert!(p.exact.contains(r#""source":"sql""#));
+}
+
+#[tokio::test]
+async fn tab_item_goes_framed_and_gated() {
+    use contura_core::ai::scene::AskTab;
+    use contura_core::model::ObjectKind;
+    let shop = |name: &str| ObjectPath {
+        database: "shop".into(),
+        schema: None,
+        name: name.into(),
+    };
+    let cat = catalog(AiAccess::Schema);
+    let mut req = shop_ask("what is in here?");
+    req.focus = Focus::default();
+    req.tab = Some(AskTab::Object {
+        title: "orders".into(),
+        path: shop("orders"),
+        object: ObjectKind::Table,
+        sort: None,
+        filter_columns: vec!["total".into()],
+        hidden: Vec::new(),
+        pending_edits: 3,
+    });
+    let p = run(&cat, &req).await;
+    let tab = item(&p, ItemKind::Tab);
+    assert!(tab.on && tab.locked.is_none());
+    assert_eq!(tab.label, "This tab");
+    // After Names, before the cards; the tab's table is a card hint.
+    let kinds: Vec<ItemKind> = p.items.iter().map(|i| i.kind).collect();
+    let at = |k| kinds.iter().position(|x| *x == k).unwrap();
+    assert!(at(ItemKind::Names) < at(ItemKind::Tab) && at(ItemKind::Tab) < at(ItemKind::Cards));
+    assert!(
+        p.tables.full.contains(&"orders".to_string()),
+        "{:?}",
+        p.tables
+    );
+    assert!(
+        p.exact.contains(
+            r#"{"source":"tab","text":"Table data \"orders\" in shop\nfiltered on total"}"#
+        ),
+        "{}",
+        p.exact
+    );
+    // The count needs query text access.
+    assert!(!p.exact.contains("Pending Edits"));
+    let line = p.log.iter().find(|l| l.source == "tab").unwrap();
+    assert_eq!(
+        line.fields,
+        vec![
+            ("kind".to_string(), "object".to_string()),
+            ("bytes".to_string(), "45".to_string())
+        ]
+    );
+
+    // Switched off: the row stays off with nothing sent, so it can be switched back on.
+    req.off = vec![ItemKind::Tab];
+    let p = run(&cat, &req).await;
+    let tab = item(&p, ItemKind::Tab);
+    assert!(!tab.on && tab.locked.is_none());
+    assert_eq!((tab.bytes, tab.tokens), (0, 0));
+    assert!(!p.exact.contains(r#""source":"tab""#));
+    assert!(!p.stamp.kinds.contains(&ItemKind::Tab));
+
+    // At Never nothing about the Connection goes.
+    req.off.clear();
+    let p = run(&catalog(AiAccess::Never), &req).await;
+    assert!(p.items.iter().all(|i| i.kind != ItemKind::Tab));
+
+    // A New table tab lists the stored AI Context's table names.
+    req.tab = Some(AskTab::Design {
+        create: true,
+        path: shop("monthly_totals"),
+        columns: Vec::new(),
+        primary: Vec::new(),
+        indexes: Vec::new(),
+        foreign_keys: Vec::new(),
+        removed: Vec::new(),
+        comment: None,
+        types: Vec::new(),
+    });
+    let p = run(&cat, &req).await;
+    assert!(
+        p.exact.contains(r#"New table \"monthly_totals\" in shop\ndialect: PostgreSQL\ntables in shop: customers, orders"#),
+        "{}",
+        p.exact
+    );
+
+    // No Connection: Home goes.
+    let mut home = ask("what can you do?");
+    home.tab = Some(AskTab::Home);
+    let p = run(&cat, &home).await;
+    assert!(
+        p.exact.contains(r#"{"source":"tab","text":"Home"}"#),
+        "{}",
+        p.exact
+    );
+}
+
 #[tokio::test]
 async fn schema_level_sends_cards_not_sql() {
     let cat = catalog(AiAccess::Schema);
@@ -837,13 +1117,17 @@ async fn payload_cap_trims_context_not_the_question() {
     }
     // Query text goes last: the first SQL item is still sent.
     assert!(p.exact.contains(r#""source":"sql""#));
-    let payload = p.log.iter().find(|l| l.source == "payload").unwrap();
+    // The 330 KB DBML is cut to its own 64 KB cap at a line end before the 200 KB cut, so
+    // the cut has nothing left to trim; `trim_to_cap`'s own tests cover the trimming.
     assert!(
-        payload
-            .fields
+        p.notes
             .iter()
-            .any(|(k, v)| k == "trimmed" && v != "0")
+            .any(|n| n.starts_with("DBML cut at 64 KB: lines after ")),
+        "{:?}",
+        p.notes
     );
+    let dbml = item(&p, ItemKind::Dbml);
+    assert!(dbml.bytes as usize <= 64 * 1024 && dbml.bytes > 60 * 1024);
 }
 
 #[tokio::test]
@@ -4175,6 +4459,7 @@ async fn e2e_stored_answers_are_registered_on_load() {
             kinds: Vec::new(),
             tables: Vec::new(),
             action: None,
+            asked_in: None,
         }],
         updated_at: 2,
     };
@@ -4497,6 +4782,7 @@ fn answered_thread(id: u128) -> AiThread {
                 kinds: Vec::new(),
                 tables: Vec::new(),
                 action: None,
+                asked_in: None,
             },
             AiMessage {
                 role: AiRole::Assistant,
@@ -4510,6 +4796,7 @@ fn answered_thread(id: u128) -> AiThread {
                 kinds: Vec::new(),
                 tables: Vec::new(),
                 action: None,
+                asked_in: None,
             },
         ],
         updated_at: 2,
@@ -5140,7 +5427,7 @@ async fn privacy_end_to_end() {
 async fn too_big_counts_the_system_prompt() {
     use contura_core::ai::budget::estimate_tokens;
     use contura_core::ai::prompt::system_prompt;
-    let system = estimate_tokens(&system_prompt("ask", None), false);
+    let system = estimate_tokens(&system_prompt("ask", None, None), false);
     assert!(system > 4, "{system}");
     // A question that fits the 8,000 window with the 4,096 answer room, but not with the
     // system prompt as well.
@@ -7108,4 +7395,742 @@ fn settings_save_and_model_pick_interleave() {
             assert_eq!(info.picks, clamp(&info, last), "{id}");
         }
     }
+}
+
+fn shop_step(
+    verb: contura_core::ai::steps::StepVerb,
+    names: &[&str],
+    ago_ms: i64,
+) -> contura_core::ai::steps::StepIn {
+    contura_core::ai::steps::StepIn {
+        at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+            - ago_ms,
+        verb,
+        tab: "visual".into(),
+        title: Some("Orders over 1M".into()),
+        connection_id: Some(Uuid::from_u128(42)),
+        database: Some("shop".into()),
+        schema: None,
+        names: names.iter().map(|n| n.to_string()).collect(),
+        more: 0,
+        count: Some(1),
+        has_more: false,
+        failed: false,
+        descending: false,
+        source_connection_id: None,
+    }
+}
+
+/// Recent steps: a Sends row after This tab, framed as `steps`, switched off through `off`,
+/// and no row when every step is held, with the note in its place.
+#[tokio::test]
+async fn steps_item_and_switch() {
+    use contura_core::ai::scene::AskTab;
+    use contura_core::ai::steps::StepVerb;
+    let cat = catalog(AiAccess::SchemaQuery);
+    let mut req = shop_ask("what next?");
+    req.tab = Some(AskTab::Query {
+        title: "Query 3".into(),
+    });
+    req.steps = vec![
+        shop_step(StepVerb::OpenTab, &[], 180_000),
+        shop_step(StepVerb::VqTable, &["orders"], 120_000),
+        shop_step(StepVerb::RunVisual, &[], 10_000),
+    ];
+    let p = run(&cat, &req).await;
+    let steps = item(&p, ItemKind::Steps);
+    assert!(steps.on && steps.locked.is_none());
+    assert_eq!(steps.label, "Recent steps · 3");
+    let kinds: Vec<ItemKind> = p.items.iter().map(|i| i.kind).collect();
+    let at = |k| kinds.iter().position(|x| *x == k).unwrap();
+    assert_eq!(at(ItemKind::Steps), at(ItemKind::Tab) + 1);
+    let want = r#"{"source":"steps","text":"(3 min ago) opened Visual Query \"Orders over 1M\" in shop\n(2 min ago) added orders to the Visual Query\n(just now) ran the Visual Query \"Orders over 1M\", 1 row"}"#;
+    assert!(p.exact.contains(want), "{}", p.exact);
+    let line = p.log.iter().find(|l| l.source == "steps").unwrap();
+    assert_eq!(
+        line.fields,
+        vec![
+            ("n".to_string(), "3".to_string()),
+            ("dropped".to_string(), "0".to_string()),
+            ("left_out".to_string(), "0".to_string())
+        ]
+    );
+
+    // At Schema only: no title and no count.
+    let p = run(&catalog(AiAccess::Schema), &req).await;
+    assert!(
+        p.exact.contains(r#"(just now) ran the Visual Query"}"#),
+        "{}",
+        p.exact
+    );
+    assert!(!p.exact.contains("Orders over 1M"));
+
+    // Switched off: the row stays, off, with its count and nothing sent, so it can be
+    // switched back on, as Sample rows does.
+    req.off = vec![ItemKind::Steps];
+    let p = run(&cat, &req).await;
+    let steps = item(&p, ItemKind::Steps);
+    assert!(!steps.on && steps.locked.is_none());
+    assert_eq!(steps.label, "Recent steps · 3");
+    assert_eq!((steps.bytes, steps.tokens), (0, 0));
+    assert!(!p.exact.contains(r#""source":"steps""#));
+    assert!(!p.exact.contains("added orders"));
+    assert!(!p.stamp.kinds.contains(&ItemKind::Steps));
+
+    // Every step held: no row, and the note.
+    req.off.clear();
+    for s in &mut req.steps {
+        s.connection_id = Some(Uuid::from_u128(99));
+    }
+    let p = run(&cat, &req).await;
+    assert!(p.items.iter().all(|i| i.kind != ItemKind::Steps));
+    assert!(!p.exact.contains(r#""source":"steps""#));
+    assert!(
+        p.notes.contains(
+            &"3 steps stay on this computer: their Connection shares nothing with AI.".to_string()
+        ),
+        "{:?}",
+        p.notes
+    );
+
+    // At Never nothing about the Connection goes, steps included.
+    req.steps = vec![shop_step(StepVerb::VqTable, &["orders"], 1_000)];
+    let p = run(&catalog(AiAccess::Never), &req).await;
+    assert!(p.items.iter().all(|i| i.kind != ItemKind::Steps));
+    assert!(!p.exact.contains("orders"));
+}
+
+/// The UI's fake preview (`src/test/aiPreview.ts`) is held to the same fixture as this test,
+/// so the This tab and Recent steps rows the fake gives are the ones the Core gives.
+#[tokio::test]
+async fn preview_parity_fixture() {
+    use contura_core::ai::scene::AskTab;
+    use contura_core::ai::steps::StepVerb;
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../src/test/previewParity.json"
+    );
+    let fixture: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let r = &fixture["request"];
+    let cat = catalog(AiAccess::SchemaQuery);
+    let mut req = shop_ask(r["question"].as_str().unwrap());
+    assert_eq!(req.database.as_deref(), r["database"].as_str());
+    req.tab = Some(AskTab::Query {
+        title: r["tab"]["title"].as_str().unwrap().into(),
+    });
+    let verbs = [StepVerb::OpenTab, StepVerb::VqTable, StepVerb::RunVisual];
+    req.steps = verbs
+        .iter()
+        .enumerate()
+        .map(|(n, v)| shop_step(*v, &["orders"], 60_000 * (3 - n as i64)))
+        .collect();
+    assert_eq!(req.steps.len() as u64, r["steps"].as_u64().unwrap());
+    for case in fixture["cases"].as_array().unwrap() {
+        req.off = serde_json::from_value(case["off"].clone()).unwrap();
+        let p = run(&cat, &req).await;
+        let got: Vec<serde_json::Value> = p
+            .items
+            .iter()
+            .filter(|i| matches!(i.kind, ItemKind::Tab | ItemKind::Steps))
+            .map(|i| {
+                serde_json::json!({
+                    "kind": i.kind,
+                    "label": i.label,
+                    "on": i.on,
+                    "sends": i.bytes > 0,
+                })
+            })
+            .collect();
+        assert_eq!(
+            serde_json::Value::Array(got),
+            case["items"],
+            "off {:?}",
+            req.off
+        );
+    }
+}
+
+/// A table a Recent step names on the Ask's Connection and database ranks as an open tab.
+#[tokio::test]
+async fn steps_rank_tables() {
+    use contura_core::ai::budget::IN_STEPS;
+    use contura_core::ai::steps::StepVerb;
+    let cat = catalog(AiAccess::Schema);
+    let settings = AiSettings {
+        provider: Some(AiProviderKind::Custom),
+        context_window: Some(100),
+        max_tokens: Some(30),
+        ..AiSettings::default()
+    };
+    let mut req = shop_ask("q");
+    req.focus = Focus::default();
+    let go = |req: AskRequest| {
+        let (cat, settings) = (&cat, &settings);
+        async move {
+            preview(cat, settings, &info(settings), &Secrets::default(), &req)
+                .await
+                .unwrap()
+        }
+    };
+    // On the question alone, orders does not rank.
+    let p = go(req.clone()).await;
+    assert!(
+        !p.tables.full.contains(&"orders".to_string()),
+        "{:?}",
+        p.tables
+    );
+    // A step names it: it goes in full, for that reason.
+    req.steps = vec![shop_step(StepVerb::VqTable, &["orders"], 1_000)];
+    let p = go(req.clone()).await;
+    assert_eq!(p.tables.full, ["orders"], "{:?}", p.tables);
+    let reason = p.tables.reasons.iter().find(|r| r.0 == "orders").unwrap();
+    assert_eq!(reason.1, IN_STEPS);
+    // The same step in another database is no hint.
+    req.steps[0].database = Some("archive".into());
+    let p = go(req.clone()).await;
+    assert!(
+        !p.tables.full.contains(&"orders".to_string()),
+        "{:?}",
+        p.tables
+    );
+}
+
+/// A step on another Connection goes at that Connection's own access whatever the Ask's:
+/// from Home (no Connection), from an Ask at Never and from an Ask whose Connection is gone.
+/// The Ask's own steps are held there.
+#[tokio::test]
+async fn other_connection_steps_go_at_their_own_access() {
+    use contura_core::ai::scene::AskTab;
+    use contura_core::ai::steps::StepVerb;
+    let mut other = shop_conn(AiAccess::Schema);
+    other.id = Uuid::from_u128(43);
+    other.name = "Kestrel analytics".into();
+    let theirs = || {
+        let mut s = shop_step(StepVerb::RunVisual, &[], 60_000);
+        s.connection_id = Some(Uuid::from_u128(43));
+        s
+    };
+    let want =
+        r#"{"source":"steps","text":"(1 min ago) ran the Visual Query on another Connection"}"#;
+
+    // Home: no Connection.
+    let cat = fake(
+        vec![shop_conn(AiAccess::SchemaQuery), other.clone()],
+        shop_schema(),
+    );
+    let mut home = ask("what did I just do?");
+    home.tab = Some(AskTab::Home);
+    home.steps = vec![theirs()];
+    let p = run(&cat, &home).await;
+    assert_eq!(item(&p, ItemKind::Steps).label, "Recent steps · 1");
+    assert!(p.exact.contains(want), "{}", p.exact);
+    // At Schema only: no title and no count.
+    assert!(!p.exact.contains("Orders over 1M") && !p.exact.contains("1 row"));
+
+    // An Ask on a Connection at Never: its own step is held, the other goes.
+    let cat = fake(
+        vec![shop_conn(AiAccess::Never), other.clone()],
+        shop_schema(),
+    );
+    let mut req = shop_ask("what next?");
+    req.steps = vec![shop_step(StepVerb::VqTable, &["orders"], 120_000), theirs()];
+    let p = run(&cat, &req).await;
+    assert!(p.exact.contains(want), "{}", p.exact);
+    assert!(!p.exact.contains("orders"), "{}", p.exact);
+    assert!(
+        p.notes.contains(
+            &"1 step stays on this computer: its Connection shares nothing with AI.".to_string()
+        ),
+        "{:?}",
+        p.notes
+    );
+
+    // An Ask on a Connection that is gone: the same.
+    let cat = fake(vec![other.clone()], shop_schema());
+    let p = run(&cat, &req).await;
+    assert!(p.exact.contains(want), "{}", p.exact);
+    assert!(!p.exact.contains("orders"), "{}", p.exact);
+
+    // An Ask lowered to Never by another Connection its tab spans: its own step is held
+    // because of the Ask, and says so; the other Connection's step still goes.
+    let cat = fake(vec![shop_conn(AiAccess::SchemaQuery), other], shop_schema());
+    req.focus.also = vec![Uuid::from_u128(99)];
+    let p = run(&cat, &req).await;
+    assert!(p.exact.contains(want), "{}", p.exact);
+    assert!(!p.exact.contains("orders"), "{}", p.exact);
+    assert!(
+        p.notes.contains(
+            &"1 step stays on this computer: this Ask shares nothing with AI.".to_string()
+        ),
+        "{:?}",
+        p.notes
+    );
+}
+
+/// The 200 KB cut drops the oldest Recent steps before This tab and the cards, and the
+/// Sends row counts what went: no row once none went.
+#[tokio::test]
+async fn steps_row_counts_what_went_after_the_200_kb_cut() {
+    use contura_core::ai::steps::StepVerb;
+    let cat = fake(vec![shop_conn(AiAccess::SchemaQuery)], many_tables(3_000));
+    let question = format!("{}END", "q".repeat(16 * 1024 - 3));
+    let mut req = shop_ask(&question);
+    req.focus.tables.clear();
+    let sql = "select id from orders;\n".repeat(60 * 1024 / 23);
+    req.focus.sql = Some(sql.clone());
+    req.focus.selection = Some(sql.clone());
+    req.focus.filter = Some(sql);
+    req.steps = (0..10)
+        .map(|i| shop_step(StepVerb::VqTable, &["orders"], 60_000 * (10 - i)))
+        .collect();
+    let settings = AiSettings::default();
+    let p = preview(
+        &cat,
+        &settings,
+        &windowed(&settings, 1_000_000),
+        &Secrets::default(),
+        &req,
+    )
+    .await
+    .unwrap();
+    assert!(p.exact.len() <= 200 * 1024, "{}", p.exact.len());
+    let sent = p
+        .exact
+        .lines()
+        .find(|l| l.starts_with(r#"{"source":"steps""#))
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            v["text"].as_str().unwrap().lines().count()
+        })
+        .unwrap_or(0);
+    assert!(sent < 10, "the cut did not reach the steps");
+    let row = p.items.iter().find(|i| i.kind == ItemKind::Steps);
+    match sent {
+        0 => assert!(row.is_none(), "{row:?}"),
+        n => assert_eq!(row.unwrap().label, format!("Recent steps · {n}")),
+    }
+}
+
+/// A Visual Query on `orders` and `customers` with two ticked columns, a filter and a run.
+fn vq_tab(title: &str, tables: &[&str]) -> contura_core::ai::scene::AskTab {
+    use contura_core::ai::scene::{AskTab, RunCount};
+    use contura_core::visual_query::{
+        FilterOp, GroupBy, Joiner, VisualQuery, VqColumn, VqFilter, VqTable,
+    };
+    let column = |column: &str| VqColumn {
+        table: "t0".into(),
+        column: column.into(),
+        alias: None,
+        aggregate: None,
+    };
+    AskTab::Visual {
+        title: title.into(),
+        model: VisualQuery {
+            version: 1,
+            database: Some("shop".into()),
+            dialect: None,
+            tables: tables
+                .iter()
+                .enumerate()
+                .map(|(i, name)| VqTable {
+                    id: format!("t{i}"),
+                    schema: None,
+                    name: name.to_string(),
+                    alias: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                })
+                .collect(),
+            joins: Vec::new(),
+            columns: vec![column("id"), column("total")],
+            filters: vec![VqFilter {
+                joiner: Joiner::And,
+                table: "t0".into(),
+                column: "total".into(),
+                op: FilterOp::Gt,
+                values: vec!["1000000".into()],
+            }],
+            group_by: GroupBy::Auto,
+            order_by: Vec::new(),
+            limit: None,
+            distinct: false,
+        },
+        sql_written: true,
+        problems: 0,
+        last_run: Some(RunCount {
+            rows: 1,
+            more: false,
+            failed: false,
+        }),
+    }
+}
+
+/// The text of the framed item `source` in `exact`, if it went.
+fn framed_text(exact: &str, source: &str) -> Option<String> {
+    let lead = format!(r#"{{"source":"{source}","#);
+    exact.lines().find(|l| l.starts_with(&lead)).map(|l| {
+        let v: serde_json::Value = serde_json::from_str(l).unwrap();
+        v["text"].as_str().unwrap().to_string()
+    })
+}
+
+/// Spec 6.1: the stamp's Asked in is built from what went, after `off`, the gate and the
+/// rails.
+#[tokio::test]
+async fn stamp_has_asked_in_from_what_went() {
+    use contura_core::ai::steps::StepVerb;
+    let mut req = shop_ask("find orders over 1M");
+    req.focus.sql = None;
+    req.tab = Some(vq_tab("Orders over 1M", &["orders", "customers"]));
+    req.steps = vec![
+        shop_step(StepVerb::OpenTab, &[], 180_000),
+        shop_step(StepVerb::VqTable, &["orders"], 120_000),
+    ];
+    let p = run(&catalog(AiAccess::SchemaQuery), &req).await;
+    let a = p.stamp.asked_in.clone().expect("an Asked in");
+    assert_eq!(a.tab, "visual");
+    assert_eq!(a.label, "Visual Query \"Orders over 1M\" in shop");
+    assert_eq!(
+        a.summary,
+        "tables orders, customers; ticked orders.id, orders.total; filters on orders.total; last run 1 row"
+    );
+    // The steps that went, without their age.
+    let went = framed_text(&p.exact, "steps").unwrap();
+    let labels: Vec<String> = went
+        .lines()
+        .map(|l| l.split_once(") ").unwrap().1.to_string())
+        .collect();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(a.steps, labels);
+    assert!(a.also.is_empty());
+    // The label is the where line that went.
+    assert!(framed_text(&p.exact, "tab").unwrap().starts_with(&a.label));
+
+    // The This tab row off: the kind words only, no summary.
+    req.off = vec![ItemKind::Tab];
+    let a = run(&catalog(AiAccess::SchemaQuery), &req)
+        .await
+        .stamp
+        .asked_in
+        .unwrap();
+    assert_eq!((a.label.as_str(), a.summary.as_str()), ("Visual Query", ""));
+    assert!(!a.steps.is_empty());
+    // The Recent steps row off: no steps.
+    req.off = vec![ItemKind::Steps];
+    let a = run(&catalog(AiAccess::SchemaQuery), &req)
+        .await
+        .stamp
+        .asked_in
+        .unwrap();
+    assert!(a.steps.is_empty());
+    assert!(!a.summary.is_empty());
+
+    // At Never with a Connection: the kind words only, nothing of the Connection.
+    req.off.clear();
+    let p = run(&catalog(AiAccess::Never), &req).await;
+    let a = p.stamp.asked_in.unwrap();
+    assert_eq!(a.label, "Visual Query");
+    assert!(a.summary.is_empty() && a.steps.is_empty(), "{a:?}");
+
+    // At Schema only the title and the run count stay out of the label and summary.
+    let a = run(&catalog(AiAccess::Schema), &req)
+        .await
+        .stamp
+        .asked_in
+        .unwrap();
+    assert_eq!(a.label, "Visual Query in shop");
+    assert!(!a.summary.contains("last run"), "{}", a.summary);
+    assert!(
+        a.steps.iter().all(|s| !s.contains("Orders over 1M")),
+        "{:?}",
+        a.steps
+    );
+
+    // No tab, no step: no Asked in.
+    let p = run(&catalog(AiAccess::SchemaQuery), &shop_ask("why slow?")).await;
+    assert_eq!(p.stamp.asked_in, None);
+}
+
+/// Spec 6.1: the stamped kinds hold the highest level the This tab and Recent steps
+/// parts used, so the gate on history holds their replay to it.
+#[tokio::test]
+async fn stamp_kinds_cover_used_levels() {
+    let mut req = shop_ask("find orders over 1M");
+    req.focus.sql = None;
+    req.tab = Some(vq_tab("Orders over 1M", &["orders"]));
+    let p = run(&catalog(AiAccess::SchemaQuery), &req).await;
+    assert!(
+        p.items.iter().all(|i| i.kind != ItemKind::Sql),
+        "{:?}",
+        p.items
+    );
+    let kinds = &p.stamp.kinds;
+    assert!(
+        kinds.contains(&ItemKind::Tab) && kinds.contains(&ItemKind::Sql),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&ItemKind::Names), "{kinds:?}");
+    // At Schema only, names only.
+    let p = run(&catalog(AiAccess::Schema), &req).await;
+    let kinds = &p.stamp.kinds;
+    assert!(
+        kinds.contains(&ItemKind::Tab) && !kinds.contains(&ItemKind::Sql),
+        "{kinds:?}"
+    );
+    // Switched off, the tab adds nothing.
+    req.off = vec![ItemKind::Tab];
+    let p = run(&catalog(AiAccess::SchemaQuery), &req).await;
+    assert!(
+        !p.stamp.kinds.contains(&ItemKind::Sql),
+        "{:?}",
+        p.stamp.kinds
+    );
+    // Steps alone: a step's title went at query text.
+    use contura_core::ai::steps::StepVerb;
+    req.steps = vec![shop_step(StepVerb::RunVisual, &[], 60_000)];
+    let p = run(&catalog(AiAccess::SchemaQuery), &req).await;
+    assert!(
+        p.stamp.kinds.contains(&ItemKind::Sql),
+        "{:?}",
+        p.stamp.kinds
+    );
+}
+
+/// The summary holds what the rails left of a line: a saved password in a table name is
+/// redacted from the This tab line and from its fact alike.
+#[tokio::test]
+async fn asked_in_summary_drops_changed_lines() {
+    let mut req = shop_ask("find orders over 1M");
+    req.focus.sql = None;
+    req.tab = Some(vq_tab("Orders over 1M", &["orders", "kestrel_pw"]));
+    let secrets = Secrets {
+        keys: Vec::new(),
+        passwords: vec!["kestrel_pw".into()],
+    };
+    let p = preview(
+        &catalog(AiAccess::SchemaQuery),
+        &AiSettings::default(),
+        &model_m(),
+        &secrets,
+        &req,
+    )
+    .await
+    .unwrap();
+    assert!(!p.exact.contains("kestrel_pw"));
+    let a = p.stamp.asked_in.unwrap();
+    assert!(!a.summary.contains("kestrel_pw"), "{}", a.summary);
+    assert!(
+        a.summary
+            .starts_with("tables orders, [redacted]; ticked orders.id"),
+        "{}",
+        a.summary
+    );
+}
+
+/// The 200 KB cut takes the This tab lines before the cards: the stamp keeps only what
+/// is left of it, never a fact of a line that was cut.
+#[tokio::test]
+async fn asked_in_follows_the_200_kb_cut() {
+    use contura_core::ai::steps::StepVerb;
+    let cat = fake(vec![shop_conn(AiAccess::SchemaQuery)], many_tables(3_000));
+    let question = format!("{}END", "q".repeat(16 * 1024 - 3));
+    let mut req = shop_ask(&question);
+    req.focus.tables.clear();
+    let sql = "select id from orders;\n".repeat(60 * 1024 / 23);
+    req.focus.sql = Some(sql.clone());
+    req.focus.selection = Some(sql.clone());
+    req.focus.filter = Some(sql);
+    req.tab = Some(vq_tab("Orders over 1M", &["orders", "customers"]));
+    req.steps = vec![shop_step(StepVerb::VqTable, &["orders"], 60_000)];
+    let settings = AiSettings::default();
+    let p = preview(
+        &cat,
+        &settings,
+        &windowed(&settings, 1_000_000),
+        &Secrets::default(),
+        &req,
+    )
+    .await
+    .unwrap();
+    assert!(p.exact.len() <= 200 * 1024, "{}", p.exact.len());
+    let a = p.stamp.asked_in.unwrap();
+    // The steps went first: none is kept.
+    assert!(framed_text(&p.exact, "steps").is_none());
+    assert!(a.steps.is_empty(), "{:?}", a.steps);
+    match framed_text(&p.exact, "tab") {
+        None => {
+            assert_eq!(a.label, "Visual Query");
+            assert_eq!(a.summary, "");
+        }
+        Some(went) => {
+            assert!(
+                went.lines().count() < 6,
+                "the cut did not reach This tab: {went}"
+            );
+            assert_eq!(Some(a.label.as_str()), went.lines().next());
+            for (fact, line) in [
+                ("tables ", "tables: "),
+                ("ticked ", "ticked: "),
+                ("filters on ", "filters on: "),
+                ("last run ", "last run: "),
+            ] {
+                if a.summary.contains(fact) {
+                    assert!(went.lines().any(|l| l.starts_with(line)), "{fact}: {went}");
+                }
+            }
+        }
+    }
+}
+
+/// The stamp keeps every Connection an Ask was gated by: an Ask naming more than it can
+/// hold is refused before anything is read or sent.
+#[tokio::test]
+async fn too_many_other_connections_are_refused() {
+    let cat = catalog(AiAccess::SchemaQuery);
+    let mut req = shop_ask("compare them");
+    req.focus.also = (43..48).map(Uuid::from_u128).collect();
+    let err = preview(
+        &cat,
+        &AiSettings::default(),
+        &model_m(),
+        &Secrets::default(),
+        &req,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, Error::InvalidInput(_)), "{err:?}");
+    // The same id twice counts once.
+    req.focus.also = vec![Uuid::from_u128(43); 6];
+    assert!(
+        preview(
+            &cat,
+            &AiSettings::default(),
+            &model_m(),
+            &Secrets::default(),
+            &req
+        )
+        .await
+        .is_ok()
+    );
+}
+
+/// Task 5b, tests 1, 8 and 9: a step on Connection B, sent with an Ask on A at B's L2, is
+/// kept in the stamp's Asked in with B's id, its label as it went and the level L2. It does
+/// not raise the stamped kinds (it is gated by B at replay), and the stamp the webview is
+/// sent leaves it out. It holds no SQL text and no value.
+#[tokio::test]
+async fn other_connection_step_is_kept_with_the_ask() {
+    use contura_core::ai::memory::OtherStep;
+    use contura_core::ai::steps::StepVerb;
+    let b = Uuid::from_u128(43);
+    let mut cat = catalog(AiAccess::Schema);
+    cat.configs.push(ConnectionConfig {
+        id: b,
+        name: "Kestrel staging".into(),
+        ..shop_conn(AiAccess::SchemaQuery)
+    });
+    let mut req = shop_ask("what did I run?");
+    req.focus.sql = None;
+    let mut ran = shop_step(StepVerb::RunVisual, &[], 60_000);
+    ran.connection_id = Some(b);
+    ran.title = Some("Late 'vip' orders".into());
+    ran.count = Some(3);
+    let mut mine = shop_step(StepVerb::VqTable, &["orders"], 30_000);
+    mine.title = None;
+    req.steps = vec![ran, mine];
+    let p = run(&cat, &req).await;
+    let went = framed_text(&p.exact, "steps").unwrap();
+    let first = went.lines().next().unwrap().split_once(") ").unwrap().1;
+    assert_eq!(
+        first,
+        "ran the Visual Query \"Late '…' orders\" on another Connection, 3 rows"
+    );
+    let a = p.stamp.asked_in.clone().unwrap();
+    assert_eq!(
+        a.other_steps,
+        vec![OtherStep {
+            connection_id: b,
+            text: first.to_string(),
+            level: AiAccess::SchemaQuery,
+        }]
+    );
+    assert_eq!(a.steps, ["added orders to the Visual Query"]);
+    // The Ask's own Connection is at Schema only: B's title and count do not raise the
+    // kinds the turn is gated by on A.
+    assert!(
+        !p.stamp.kinds.contains(&ItemKind::Sql),
+        "{:?}",
+        p.stamp.kinds
+    );
+    // What the webview is sent (the preview, and the Memory event's stamp) leaves them out.
+    let json = serde_json::to_string(&p.stamp).unwrap();
+    assert!(
+        !json.contains("otherSteps") && !json.contains("Late"),
+        "{json}"
+    );
+    assert!(json.contains("added orders to the Visual Query"), "{json}");
+    // No SQL text and no value.
+    assert!(!a.other_steps[0].text.contains("vip"));
+
+    // At B's Schema only the label goes without title and count, at that level.
+    cat.configs[1].ai_access = AiAccess::Schema;
+    let a = run(&cat, &req).await.stamp.asked_in.unwrap();
+    assert_eq!(
+        (a.other_steps[0].text.as_str(), a.other_steps[0].level),
+        (
+            "ran the Visual Query on another Connection",
+            AiAccess::Schema
+        )
+    );
+    // B at Never: nothing of it goes, nothing is kept.
+    cat.configs[1].ai_access = AiAccess::Never;
+    let a = run(&cat, &req).await.stamp.asked_in.unwrap();
+    assert!(a.other_steps.is_empty());
+    // The Recent steps row off: nothing kept either.
+    cat.configs[1].ai_access = AiAccess::SchemaQuery;
+    req.off = vec![ItemKind::Steps];
+    let p = run(&cat, &req).await;
+    assert!(p.stamp.asked_in.is_none_or(|a| a.other_steps.is_empty()));
+}
+
+/// Task 5a review, Minor 8: This tab and Recent steps switched off are logged as off, with
+/// nothing sent, like the other switchable rows.
+#[tokio::test]
+async fn switched_off_tab_and_steps_log_as_off() {
+    use contura_core::ai::steps::StepVerb;
+    let mut req = shop_ask("find orders over 1M");
+    req.focus.sql = None;
+    req.tab = Some(vq_tab("Orders over 1M", &["orders", "customers"]));
+    req.steps = vec![shop_step(StepVerb::VqTable, &["orders"], 60_000)];
+    let cat = catalog(AiAccess::SchemaQuery);
+    let field = |p: &Preview, source: &str| {
+        p.log
+            .iter()
+            .find(|l| l.source == source)
+            .unwrap()
+            .fields
+            .clone()
+    };
+    let p = run(&cat, &req).await;
+    assert_ne!(field(&p, "tab")[1], ("bytes".to_string(), "0".to_string()));
+    assert_eq!(field(&p, "steps")[0], ("n".to_string(), "1".to_string()));
+    req.off = vec![ItemKind::Tab, ItemKind::Steps];
+    let p = run(&cat, &req).await;
+    let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+    assert_eq!(
+        field(&p, "tab"),
+        vec![
+            pair("kind", "visual"),
+            pair("bytes", "0"),
+            pair("off", "true")
+        ]
+    );
+    assert_eq!(
+        field(&p, "steps"),
+        vec![pair("n", "0"), pair("off", "true")]
+    );
 }

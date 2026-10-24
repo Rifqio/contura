@@ -30,6 +30,7 @@ import {
   visualQuerySql,
 } from "../api/client";
 import type {
+  AskRunCount,
   ConnectionConfig,
   ConnectionId,
   DialectKind,
@@ -42,9 +43,13 @@ import type {
   VqPreview,
   VqTable,
 } from "../api/types";
+import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
+import { useRecordStep } from "../assistant/recentSteps";
+import { vqSteps } from "./askSteps";
 import { keysFromEvent } from "../commands/keys";
 import { hintFor, keysFor } from "../commands/keymap";
 import { useCommandKeys, useKeymap } from "../commands/useCommandKeys";
+import { clearHistory, createHistory, type History, record, redo, undo } from "./history";
 import DbMark from "../components/DbMark";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
@@ -125,8 +130,35 @@ export interface VisualTabControl {
   save(): Promise<boolean>;
 }
 
+/**
+ * What a Visual Query tab tells the Ask (spec 4.3): its model with the filter values left out, the SQL the pane
+ * shows (none while the model has problems), the problem count and the last run's count. Lists are cut at twice
+ * the Core's caps.
+ */
+export function visualTabAsk(doc: VisualTabDoc, sql: string | null, problems: number, lastRun: AskRunCount | null): TabAskFields {
+  const m = doc.model;
+  const model: VisualQuery = {
+    ...m,
+    // Where a card sits is no business of the Ask's; dragging one then changes nothing sent.
+    tables: m.tables.slice(0, 60).map((t) => ({ ...t, x: 0, y: 0 })),
+    // A pending Foreign Key choice is the canvas's, not the Ask's.
+    joins: m.joins.slice(0, 100).map((j) => ({ ...j, on: j.on.slice(0, 40), pending: null })),
+    columns: m.columns.slice(0, 400),
+    filters: m.filters.slice(0, 100).map((f) => ({ ...f, values: [] })),
+    orderBy: m.orderBy.slice(0, 100),
+    groupBy: m.groupBy.kind === "manual" ? { kind: "manual", columns: m.groupBy.columns.slice(0, 400) } : m.groupBy,
+  };
+  const written = sql !== null && problems === 0;
+  return {
+    tab: { kind: "visual", title: doc.name, model, sqlWritten: written, problems, lastRun },
+    sql: written ? sql : undefined,
+  };
+}
+
 export interface VisualQueryTabProps {
   doc: VisualTabDoc;
+  /** The tab's key: the tab publishes what the Ask may know of it (`tabAsk.ts`). */
+  askKey?: string | null;
   /** Null when the tab's Connection was removed (P10). */
   connection: ConnectionConfig | null;
   open: boolean;
@@ -511,6 +543,9 @@ function findTable(schema: VqSchema, t: VqTable) {
 /** Item 30 (frame VisualQuery): the bottom area is one panel of tabs, the SQL among them. */
 type PanelTab = "columns" | "filter" | "results" | "sql";
 
+const isTypingTarget = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
+
 export default function VisualQueryTab(props: VisualQueryTabProps) {
   const { doc, connection, open, visible, lang, rowEstimate, onChange, onOpenInEditor, databases } = props;
   const model = doc.model;
@@ -524,16 +559,48 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   // Every change builds on the latest doc, so two in one event (a multi-card drag) both hold.
   const latest = useRef(doc);
   latest.current = doc;
+  const recordStep = useRecordStep();
+  /** V1: the model as it was before each gesture; Ctrl+Z and Ctrl+Y walk it. */
+  const history = useRef<History<VisualQuery>>(createHistory());
   const changeModel = useCallback(
-    (f: (q: VisualQuery) => VisualQuery) => {
+    (f: (q: VisualQuery) => VisualQuery, merge?: string) => {
       const d = latest.current;
       const next = f(d.model);
       if (next === d.model) return;
+      record(history.current, d.model, { now: Date.now(), merge });
       latest.current = { ...d, model: next, ...keptSizes(d, next) };
       onChange(latest.current);
+      // Recent steps: tables, ticks, joins, filter columns and the order by; a move or a value typed is none.
+      for (const step of vqSteps(d.model, next, { title: d.name, connectionId: d.connectionId, database: d.database })) recordStep(step);
     },
-    [onChange],
+    [onChange, recordStep],
   );
+  /** Puts a model from the history on the canvas; it is no new step and no Recent step. */
+  const showModel = (model: VisualQuery) => {
+    const d = latest.current;
+    latest.current = { ...d, model, ...keptSizes(d, model) };
+    onChange(latest.current);
+  };
+  const stepBack = (back: boolean) => {
+    const d = latest.current;
+    const to = back ? undo(history.current, d.model) : redo(history.current, d.model);
+    if (to) showModel(to);
+  };
+  /** A run that ended, as a Recent step: the row count or failed, never the SQL. */
+  const ranStep = (count: number | null, hasMore: boolean, failed: boolean) => {
+    const d = latest.current;
+    recordStep({
+      verb: "runVisual",
+      tab: "visual",
+      title: d.name,
+      connectionId: d.connectionId,
+      database: d.database,
+      schema: null,
+      count,
+      ...(hasMore && { hasMore: true }),
+      ...(failed && { failed: true }),
+    });
+  };
 
   // Item 35: tables come only by dragging from the tree (or its row menu); there is no finder.
   const empty = model.tables.length === 0;
@@ -942,7 +1009,11 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const actions = useMemo<CardActions>(
     () => ({
       toggle: (id, column) => changeModel((q) => toggleColumn(q, id, column)),
-      remove: (id) => changeModel((q) => removeTable(q, id)),
+      remove: (id) => {
+        changeModel((q) => removeTable(q, id));
+        // The Remove button or the card held focus and goes with it; the canvas keeps it, so Ctrl+Z works next.
+        canvasBox.current?.querySelector<HTMLElement>(".diagram-canvas")?.focus();
+      },
       rename: (id, alias) => changeModel((q) => setAlias(q, id, alias)),
       setRoot: (id) => changeModel((q) => setRoot(q, id)),
       expand: (id) => setExpanded((s) => new Set([...s, id])),
@@ -1152,7 +1223,8 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           toast.show({
             kind: "info",
             text: `Cleared ${ids.length === 1 ? "1 table" : `${ids.length} tables`} from the canvas.`,
-            action: { label: "Undo", run: () => changeModel(() => before) },
+            // The same history as Ctrl+Z; if other steps came after, the old canvas comes back as a new step.
+            action: { label: "Undo", run: () => (history.current.past[history.current.past.length - 1] === before ? stepBack(true) : changeModel(() => before)) },
           });
         },
       },
@@ -1229,11 +1301,14 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
       (r) => {
         if (token !== runToken.current) return;
         dispatch({ type: "done", id, outcome: r.execution.outcome, ms: r.execution.elapsedMs, sql: r.sql });
+        const o = r.execution.outcome;
+        ranStep(o.t === "rows" ? o.rows.length : o.rows, o.t === "rows" && o.hasMore, false);
         props.onRan?.();
       },
       (error) => {
         if (token !== runToken.current) return;
         dispatch({ type: "failed", id, error, ms: performance.now() - started });
+        ranStep(null, false, true);
         if (isCommandError(error) && error.kind === "query" && typeof error.message === "string") {
           const said = serverError(error.message, dialect, text);
           if (said.position) {
@@ -1322,6 +1397,34 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const onTabKey = (e: ReactKeyboardEvent) => {
     // Keys in a dialog or popover (portalled, so they bubble here) are theirs: Esc closes it, Ctrl+Enter runs nothing.
     if (e.defaultPrevented || (e.target as Element).closest?.('[role="dialog"]')) return;
+    const typing = isTypingTarget(e.target);
+    const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+    const k = e.key.toLowerCase();
+    // V1: Windows undo keys; a text field keeps its own undo.
+    if (mod && !typing && (k === "z" || (k === "y" && !e.shiftKey))) {
+      e.preventDefault();
+      stepBack(k === "z" && !e.shiftKey);
+      return;
+    }
+    // V4: Delete and Backspace remove the whole selection as one step (draw.io, Figma). Backspace only from the canvas or
+    // a card itself, not from a column row inside it.
+    const el = e.target as Element;
+    const atCard = el.classList?.contains("diagram-canvas") || el.classList?.contains("react-flow__node");
+    if (!mod && !e.altKey && !e.shiftKey && (e.key === "Delete" || (e.key === "Backspace" && atCard)) && !typing && canvasBox.current?.contains(e.target as globalThis.Node)) {
+      const focused = el.closest?.(".react-flow__node")?.getAttribute("data-id") ?? null;
+      const cards = focused && !selected.includes(focused) ? [focused] : selected;
+      // An open Join popover is not a selection: its Join goes only when no card is picked; else it just closes.
+      const join = cards.length === 0 && openJoin ? openJoin.id : null;
+      if (cards.length > 0 || join) {
+        e.preventDefault();
+        setOpenJoin(null);
+        setOpenPick(null);
+        changeModel((q) => removeJoin(cards.reduce((m, id) => removeTable(m, id), q), join ?? ""));
+        // The removed card held focus; the canvas keeps it, so Ctrl+Z works next.
+        focusCanvas();
+      }
+      return;
+    }
     const keys = keysFromEvent(e.nativeEvent);
     if (keys && runKeys.includes(keys)) {
       e.preventDefault();
@@ -1482,6 +1585,8 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     if ((db && databases.includes(db)) || !home || home === db) return;
     latest.current = { ...d, database: home, model: { ...d.model, database: home } };
     onChange(latest.current);
+    // Older steps hold the old database: they would put it back.
+    clearHistory(history.current);
     // Runs when the rebound Connection opens and its databases arrive.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid, open, databases]);
@@ -1518,6 +1623,22 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           durationText(shownRun.ms),
         ]
       : [];
+  // The last run as the status line says it: its row count, or failed.
+  const runCount: AskRunCount | null =
+    lastRun && shownRun?.s === "rows"
+      ? { rows: shownRun.rows.length, more: shownRun.hasMore, failed: false }
+      : lastRun && shownRun?.s === "error"
+        ? { rows: 0, more: false, failed: true }
+        : null;
+  usePublishTabAsk(props.askKey ?? null, () => visualTabAsk(doc, sql, problems.length, runCount), [
+    doc.name,
+    queryKey,
+    sql,
+    problems.length,
+    runCount?.rows,
+    runCount?.more,
+    runCount?.failed,
+  ]);
   const status = (
     <>
       {ranLine.map((t) => (
@@ -1712,6 +1833,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
                 onConnectPorts={(from, to, shift) =>
                   changeModel((q) => connectColumns(q, { table: from.node, column: from.port }, { table: to.node, column: to.port }, shift))
                 }
+                boxSelect
                 onMove={(id, x, y) => changeModel((q) => moveTable(q, id, { x, y }))}
                 // The canvas reports the selection on every draw; an equal one keeps the state, so nothing loops.
                 onSelect={(ids) => setSelected((prev) => (prev.length === ids.length && prev.every((x, i) => x === ids[i]) ? prev : ids))}

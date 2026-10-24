@@ -601,6 +601,7 @@ mod tests {
             },
             tables: tables.iter().map(|t| t.to_string()).collect(),
             action: None,
+            asked_in: None,
         }
     }
 

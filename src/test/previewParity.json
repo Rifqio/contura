@@ -1,0 +1,34 @@
+{
+  "about": "What the Core's preview gives for the This tab and Recent steps rows, on and switched off. Checked by crates/contura-core/tests/ai.rs (preview_parity_fixture) against the real Core and by src/test/aiPreview.test.ts against the fake, so the two cannot drift.",
+  "request": { "question": "what next?", "database": "shop", "tab": { "kind": "query", "title": "Query 3" }, "steps": 3 },
+  "cases": [
+    {
+      "off": [],
+      "items": [
+        { "kind": "tab", "label": "This tab", "on": true, "sends": true },
+        { "kind": "steps", "label": "Recent steps · 3", "on": true, "sends": true }
+      ]
+    },
+    {
+      "off": ["steps"],
+      "items": [
+        { "kind": "tab", "label": "This tab", "on": true, "sends": true },
+        { "kind": "steps", "label": "Recent steps · 3", "on": false, "sends": false }
+      ]
+    },
+    {
+      "off": ["tab"],
+      "items": [
+        { "kind": "tab", "label": "This tab", "on": false, "sends": false },
+        { "kind": "steps", "label": "Recent steps · 3", "on": true, "sends": true }
+      ]
+    },
+    {
+      "off": ["tab", "steps"],
+      "items": [
+        { "kind": "tab", "label": "This tab", "on": false, "sends": false },
+        { "kind": "steps", "label": "Recent steps · 3", "on": false, "sends": false }
+      ]
+    }
+  ]
+}

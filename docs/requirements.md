@@ -75,7 +75,9 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 - **Safety:** an UPDATE or DELETE with no WHERE, typed in the editor, asks for confirmation before it runs. This comes on top of the Production and Read-only rules.
 - **Grid:**
   - Start editing with double-click, Enter or F2. Editing happens in place: the value never moves.
-  - Ctrl C copies tab-separated text with headers, which pastes into Excel.
+  - Cells select as in Excel (UX step 3): click, drag, Shift and Ctrl clicks, Shift and Ctrl arrows, the row numbers, the corner and Ctrl A; Tab stays in the grid and F6 moves between panes.
+  - Ctrl C copies the selection as tab-separated text that pastes into Excel (NULL as an empty field, CRLF on Windows); Ctrl Shift C adds the header line. Query results select and copy the same way.
+  - Delete clears the selected cells (text to empty, other nullable types to NULL); Ctrl Alt N and Ctrl Alt D set NULL and DEFAULT; Alt Delete deletes the rows the selection spans; Delete on rows chosen by their numbers deletes them.
   - NULL is shown as italic grey "NULL".
   - Numbers and dates are shown exactly as stored, with no grouping and no time-zone conversion.
 - **Feedback:** saving confirms with a toast in the bottom right.
@@ -96,6 +98,7 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
   - **Completion** as you type and on Ctrl Space: tables and views after FROM and JOIN (picking one adds a short alias, `orders o`), an alias's or CTE's columns after `o.`, a whole JOIN from a Foreign Key, keywords and functions of the Connection's Dialect. Names that need quotes are inserted with them.
   - **Inspections** with quick-fixes on Ctrl . or Alt Enter: an unknown table or column ("Did you mean orders?", or qualify a table that is only in another schema), an ambiguous column (qualify it), UPDATE or DELETE without WHERE (a warning: Add WHERE), an unused alias (a faint hint: Remove alias), unbalanced parentheses and stray commas. An error where you are typing waits 1.5 s. Checks against the schema wait until it has loaded, so nothing is flagged unknown while it loads.
   - **Refactors:** expand `*` or `o.*` into the column list; F2 selects every use of an alias or CTE so typing renames them all (a table or column is renamed in the Table Designer); F12 goes to an alias's or CTE's declaration, and on a table shows it in the Database Tree; Ctrl Shift Space shows a function's parameters.
+  - **Typing basics, the way VS Code does them** (ADR 0028): Find and Replace (Ctrl F, Ctrl H, F3 and Shift F3, Esc), the matching bracket lit, brackets and quotes closed as you type, other copies of the selection lit, Ctrl D selects the next occurrence, Alt Click adds another place to type. The DBML and diagram text editors have the same.
   - **Live templates** on Tab at the start of a statement: `sel`, `selw`, `cnt`, `ins` (fills in every column of its table, each value a field) and `upd`.
   - The schema index is one per Connection and database, loaded once in the background. It reloads after a statement starting with CREATE, ALTER, DROP, RENAME, TRUNCATE or COMMENT succeeds, and on the Database Tree's Refresh; it is dropped when the Connection closes. The status line says Loading schema while it loads.
 - Running queries can be cancelled with Esc or the Cancel button; the Core stops them on the server. Each Connection has an optional query timeout in seconds, past which the query is cancelled on the server.
@@ -142,11 +145,11 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 
 ## AI assistant
 
-Answers come from a real provider that the user sets up. The decisions are in ADR 0010 (providers and consent), ADR 0023 (the diagram tool), ADR 0024 (the AI Context and thread memory) and ADR 0025 (guardrails).
+Answers come from a real provider that the user sets up. The decisions are in ADR 0010 (providers and consent), ADR 0023 (the diagram tool), ADR 0024 (the AI Context and thread memory), ADR 0025 (guardrails) and ADR 0027 (Ask on every tab, Asked in and Recent steps).
 
 - **Placement**
   - Inline Ask: a small "Ask" button at the end of a non-empty SQL selection, and Ctrl+I, offering actions that fit (Explain, Fix this error, Optimize, Suggest indexes). It also appears on a failed query ("Ask AI" in the error), the grid filter box (Write a WHERE for this filter) and a Schema Builder table card.
-  - Chat panel: docked on the right, toggled with Ctrl+Alt+I, with its context as removable chips (the open table, the selected SQL, the Schema Model). Esc closes the inline Ask.
+  - Chat panel: docked on the right on every tab but a diagram (which has its own assistant), toggled with Ctrl+Alt+I, with its context as removable chips (the open table, the selected SQL, the Schema Model). Esc closes the inline Ask.
   - "Open in chat" carries an inline question and its context into the panel.
 - **Safety and privacy**
   - AI-written SQL is never run automatically. Running it follows the normal rules (Production confirmation, Read-only, UPDATE or DELETE without WHERE).
@@ -163,6 +166,11 @@ Answers come from a real provider that the user sets up. The decisions are in AD
   - Re-sync rebuilds the AI Context and Clear deletes it. Clear also happens when AI access is set to "Never send anything" and when the Connection is deleted.
   - The footer of the Sends list says which Connection and how many tables are indexed, when it last synced and how it stays current. A Context line under the Sends rows appears only when the AI Context needs attention (the schema changed, the check failed, it could not be read, the Connection sends nothing) or when it re-syncs only by hand, with Re-sync beside it.
   - Small schemas go in full. For a larger one the best-matching tables go in. Above 150 tables, a model with a large enough window is shown the Context Tree and picks the Areas and tables to use (the outline pick); a table name that is not in the AI Context is dropped.
+- **What an Ask sends from each tab** (ADR 0027)
+  - This tab: what the active tab shows, as typed fields the Core turns into text. A query tab sends its statement; table data its table, sort, filtered columns and hidden columns; a Visual Query its canvas tables, ticked columns, joins, filtered columns and generated SQL; the Table Designer and New table the draft, the Dialect's types and the database's table names; the Schema Builder its DBML; Schema Compare the differences; Data Transfer the tables and type mapping; Import the file's columns and the mapping; Home and Settings only their name. Names need "Schema only"; titles the user typed, counts and SQL need "Schema and query text"; no row value, filter value or import file row goes at any level. A tab spanning two Connections is gated at the lower access.
+  - Recent steps: up to 10 labels of what the user did since their last question in this place (opened New table in shop; ran the Visual Query, 1 row), 1 KB at most, each gated by its own Connection's AI access, with a switch to leave them out of one Ask. They are kept in memory until an Ask sends them.
+  - Asked in: each question keeps where it was asked, a short summary of that tab and the steps that went with it, and later questions get them with the history, only as far as AI access still allows. Clearing a Connection's history, or deleting it, removes its steps from every stored question.
+  - On a tab without an editor, an answer's SQL opens in a new query tab and never runs; a write opens commented out.
 - **Thread memory**
   - A thread is split into Topics by rule (a long pause, a new place or Connection, a changed subject). Each Topic has a summary, and earlier turns are sent only as far as the Connection's AI access allows.
   - At 85% of the model's context window the older turns are compacted into a summary (auto-compact). The user can show the summary and undo it.

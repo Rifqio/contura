@@ -124,6 +124,8 @@ export default function BackupDialog({ connection, group, database, schema, onCl
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // J2: set by the user's own choices, not by the defaults the plan fills in.
+  const [edited, setEdited] = useState(false);
 
   useEffect(() => {
     if (folder !== null) return;
@@ -247,9 +249,11 @@ export default function BackupDialog({ connection, group, database, schema, onCl
     const parts = splitPath(target);
     setFolder(parts.folder);
     setName(parts.name);
+    setEdited(true);
   }
 
   function tick(key: Tick, on: boolean) {
+    setEdited(true);
     setInclude((inc) => {
       const next = { ...inc, [key]: on };
       if (key === "tables" && !on) for (const k of NEEDS_TABLES) next[k] = false;
@@ -259,6 +263,7 @@ export default function BackupDialog({ connection, group, database, schema, onCl
 
   function changeFormat(f: BackupFormat) {
     setFormat(f);
+    setEdited(true);
     setName((current) => nameFor(current, f));
   }
 
@@ -308,6 +313,7 @@ export default function BackupDialog({ connection, group, database, schema, onCl
       badge={badge}
       size={asking ? "confirm" : "form"}
       className={["backup-dialog", !asking && !running && "backup-form", connection.production && "prod-wash"].filter(Boolean).join(" ")}
+      dirty={edited && !running && !asking}
       onClose={closeDialog}
     >
       <div className="backup-keys" style={groupStyle(group?.color)} onKeyDown={onKeyDown}>
@@ -386,7 +392,10 @@ export default function BackupDialog({ connection, group, database, schema, onCl
                         aria-label="File name"
                         value={name}
                         spellCheck={false}
-                        onChange={(e) => setName(e.target.value)}
+                        onChange={(e) => {
+                          setName(e.target.value);
+                          setEdited(true);
+                        }}
                       />
                       <button type="button" className="button" onClick={() => void browse()}>
                         <Icon name="folder" size={14} />
@@ -422,7 +431,10 @@ export default function BackupDialog({ connection, group, database, schema, onCl
                         <Segmented<"100" | "500" | "1000">
                           label="Rows per INSERT"
                           value={String(rowsPer) as "100" | "500" | "1000"}
-                          onChange={(v) => setRowsPer(Number(v))}
+                          onChange={(v) => {
+                            setRowsPer(Number(v));
+                            setEdited(true);
+                          }}
                           options={[
                             { value: "100", label: "100" },
                             { value: "500", label: "500" },
@@ -430,7 +442,10 @@ export default function BackupDialog({ connection, group, database, schema, onCl
                           ]}
                         />
                       </div>
-                      <Switch label="Add DROP TABLE before each table" checked={dropTables} onChange={setDropTables} />
+                      <Switch label="Add DROP TABLE before each table" checked={dropTables} onChange={(on) => {
+                          setDropTables(on);
+                          setEdited(true);
+                        }} />
                     </>
                   )}
                 </div>

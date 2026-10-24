@@ -221,7 +221,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   const flowLines = (result?.flow ?? "").replace(/\n$/, "").split("\n");
 
   return (
-    <Dialog title="New flow from Mermaid" icon="flow" subtitle="Flowcharts only, one way" size="large" className="mermaid-dialog" onClose={onClose}>
+    <Dialog title="New flow from Mermaid" icon="flow" subtitle="Flowcharts only, one way" size="large" className="mermaid-dialog" dirty={text.trim() !== ""} onClose={onClose}>
       <div className="dialog-body mermaid-body">
         <div className="mermaid-panes">
           <section className="mermaid-pane" aria-label="Mermaid">

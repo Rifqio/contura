@@ -19,24 +19,27 @@ use crate::ai::context::sync::{ContextInfo, Purpose, context_key, ensure};
 use crate::ai::context::tree::{Area, areas_for};
 use crate::ai::log::{Level, Log, LogLine, ProcessStep, StepKind, error_kind};
 use crate::ai::memory::{
-    AskFacts, HistoryPick, HistorySummary, MemoryInfo, SummarySource, ThreadStore, TopicPick, Turn,
-    TurnStamp, closing_topic, select_history, topic_for,
+    ASKED_IN_ALSO, AskFacts, AskedIn, HistoryPick, HistorySummary, MemoryInfo, SummarySource,
+    ThreadStore, TopicPick, Turn, TurnStamp, also_of, closing_topic, select_history, topic_for,
 };
 use crate::ai::models::{ModelInfo, clamp};
 use crate::ai::prompt::outline_prompt;
 use crate::ai::provider::{ChatRole, max_tokens_on_wire, wire_thinking};
-use crate::ai::rails::retrieval::outline_block;
+use crate::ai::rails::input::rank;
+use crate::ai::rails::retrieval::{ASKED_IN_SOURCE, framed_lines, outline_block};
 use crate::ai::rails::{
     Ask, InputRail, RetrievalRail, Secrets, allowed, cap_chars, framed_text, lock_reason,
     new_boundary, run_rails, schema_text,
 };
-use crate::ai::request::{AskRequest, Item, ItemKind, Switches};
+use crate::ai::request::{AskRequest, Item, ItemKind, Switches, TableRef};
 use crate::ai::rows::{SAMPLE_ROWS, SampleTable, fit_rows, format_rows};
+use crate::ai::scene::{AskTab, TabText, kind_id, kind_words, tab_text};
 use crate::ai::sent::{CallKind, OutlineSent, RowsSent};
+use crate::ai::steps::{StepIn, StepsOut, render_steps, step_connections, steps_notes};
 use crate::ai::{AiAccess, AiRole, AiSettings, AiThread, now_ms};
 use crate::common::grouped;
 use crate::error::{Error, Result};
-use crate::model::{ConnectionConfig, ConnectionId, DialectKind, ObjectPath, Page};
+use crate::model::{ConnectionConfig, ConnectionId, DialectKind, ObjectKind, ObjectPath, Page};
 use crate::query::SavedQuery;
 use crate::schema_model::SchemaModel;
 
@@ -49,17 +52,32 @@ const MIN_SECRET_CHARS: usize = 4;
 /// The order context is cut in when the framed text is over the 200 KB cap. DBML has no
 /// budget share, so it goes before the fitted cards; the saved queries follow the cards in
 /// the schema share, so they go just before them; the thread goes after the saved queries
-/// (its summaries, then its oldest turns); query text goes last; the question is never cut.
-const TRIM_ORDER: [ItemKind; 8] = [
+/// (its summaries, then its oldest turns); Recent steps (oldest first) and This tab follow
+/// the thread and go before the cards, which carry the facts the model needs most; query
+/// text goes last; the question is never cut.
+const TRIM_ORDER: [ItemKind; 10] = [
     ItemKind::Rows,
     ItemKind::Dbml,
     ItemKind::SavedQueries,
     ItemKind::History,
+    ItemKind::Steps,
+    ItemKind::Tab,
     ItemKind::Cards,
     ItemKind::Names,
     ItemKind::Error,
     ItemKind::Sql,
 ];
+
+/// The Sends row of the This tab item; the injection note names it so.
+const TAB_LABEL: &str = "This tab";
+/// The Sends row of the Recent steps item, then ` · <n>`.
+const STEPS_LABEL: &str = "Recent steps";
+/// The SQL item of a Compare tab (its ticked statements) and of a view, routine or
+/// trigger tab (its definition).
+pub(crate) const SYNC_LABEL: &str = "Sync script";
+const DEFINITION_LABEL: &str = "Definition";
+/// How lock reasons name a Connection `focus.also` names that is gone.
+const MISSING_ALSO: &str = "The other Connection";
 
 const UNREADABLE_NOTE: &str = "The AI Context could not be read, so no tables are sent.";
 
@@ -111,6 +129,98 @@ pub trait CatalogReader: Send + Sync {
     async fn sample_rows(&self, id: ConnectionId, path: &ObjectPath, limit: u32) -> Result<Page> {
         let _ = (id, path, limit);
         Err(Error::NotFound("sample rows are not available".into()))
+    }
+    /// Whether `id`'s Group sends to another AI provider than this Ask's, so nothing
+    /// about it goes with the Ask (`SameProvider`). A plain catalog holds none back.
+    fn other_provider(&self, id: ConnectionId) -> bool {
+        let _ = id;
+        false
+    }
+}
+
+/// The catalog one Ask reads through: a Connection whose Group sends to another AI
+/// provider than the Ask's (ADR 0010's per-Group override) reads as AI access Never, so
+/// nothing about it is sent with this Ask, stored with its turn or replayed by it: not
+/// the Ask's own Connection, not another Connection the tab spans, not a step on it.
+/// `same` lists the Connections whose Group sends where the Ask sends
+/// (`AiService::same_provider`); any other one is held back.
+pub struct SameProvider<'a> {
+    inner: &'a dyn CatalogReader,
+    same: Vec<ConnectionId>,
+}
+
+impl<'a> SameProvider<'a> {
+    pub fn new(inner: &'a dyn CatalogReader, same: Vec<ConnectionId>) -> Self {
+        Self { inner, same }
+    }
+
+    /// At Never nothing reads a Connection's schema or rows; this holds if a path forgets.
+    fn refuse(&self, id: ConnectionId) -> Result<()> {
+        if self.other_provider(id) {
+            return Err(Error::NotFound(
+                "that Connection uses another Group's AI provider".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The Sends note for a Connection held back by `SameProvider`.
+fn other_provider_note(name: &str) -> String {
+    format!("{name} uses another Group's AI provider, so nothing about it goes.")
+}
+
+#[async_trait::async_trait]
+impl CatalogReader for SameProvider<'_> {
+    async fn connection_config(&self, id: ConnectionId) -> Result<Option<ConnectionConfig>> {
+        let config = self.inner.connection_config(id).await?;
+        Ok(config.map(|mut c| {
+            if self.other_provider(c.id) {
+                c.ai_access = AiAccess::Never;
+            }
+            c
+        }))
+    }
+
+    async fn schema_snapshot(
+        &self,
+        id: ConnectionId,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<SchemaModel> {
+        self.refuse(id)?;
+        self.inner.schema_snapshot(id, database, schema).await
+    }
+
+    async fn schema_fingerprint(
+        &self,
+        id: ConnectionId,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<String> {
+        self.refuse(id)?;
+        self.inner.schema_fingerprint(id, database, schema).await
+    }
+
+    fn context(&self) -> &dyn ContextStore {
+        self.inner.context()
+    }
+
+    fn threads(&self) -> &dyn ThreadStore {
+        self.inner.threads()
+    }
+
+    async fn saved_queries(&self) -> Result<Vec<SavedQuery>> {
+        self.inner.saved_queries().await
+    }
+
+    async fn sample_rows(&self, id: ConnectionId, path: &ObjectPath, limit: u32) -> Result<Page> {
+        self.refuse(id)?;
+        self.inner.sample_rows(id, path, limit).await
+    }
+
+    fn other_provider(&self, id: ConnectionId) -> bool {
+        !self.same.contains(&id)
     }
 }
 
@@ -174,6 +284,20 @@ impl PromptParts {
     }
 }
 
+/// A past question as it goes: with an Asked in, framed with the request's boundary as the
+/// turn is, then `Question: `; without one, as it was asked.
+fn past_question(t: &Turn, boundary: &str) -> String {
+    match &t.asked_in {
+        Some(lines) => {
+            let mut out = framed_lines(boundary, ASKED_IN_SOURCE, lines);
+            out.push_str("Question: ");
+            out.push_str(&t.question);
+            out
+        }
+        None => t.question.clone(),
+    }
+}
+
 fn compose(ask: &Ask, boundary: &str, question: &str, turns: &[Turn]) -> PromptParts {
     PromptParts {
         schema: schema_text(ask),
@@ -181,7 +305,7 @@ fn compose(ask: &Ask, boundary: &str, question: &str, turns: &[Turn]) -> PromptP
             .iter()
             .flat_map(|t| {
                 [
-                    (ChatRole::User, t.question.clone()),
+                    (ChatRole::User, past_question(t, boundary)),
                     (ChatRole::Assistant, t.answer.clone()),
                 ]
             })
@@ -380,6 +504,8 @@ struct SavedItems {
 /// is no Cards row: no focus tables and no Connection.
 fn build_items(
     req: &AskRequest,
+    tab: Option<&TabText>,
+    trail: Option<&StepsOut>,
     cards_label: Option<String>,
     cards: &str,
     saved: &SavedItems,
@@ -389,6 +515,30 @@ fn build_items(
     let mut items = vec![new_item(ItemKind::Question, "Question", &req.question)];
     if let Some(text) = names_text(req.database.as_deref(), req.schema.as_deref()) {
         items.push(new_item(ItemKind::Names, "Database names", &text));
+    }
+    // This tab and Recent steps switched off keep their row with nothing in it, as Sample
+    // rows does, so the row can be switched back on; the gate pass marks it off.
+    let sent = |kind: ItemKind, text: &str| {
+        if req.off.contains(&kind) {
+            String::new()
+        } else {
+            text.to_string()
+        }
+    };
+    if let Some(tab) = tab {
+        items.push(new_item(
+            ItemKind::Tab,
+            TAB_LABEL,
+            &sent(ItemKind::Tab, &tab.text),
+        ));
+    }
+    if let Some(trail) = trail {
+        let label = format!("{STEPS_LABEL} · {}", grouped(trail.lines() as u64));
+        items.push(new_item(
+            ItemKind::Steps,
+            &label,
+            &sent(ItemKind::Steps, &trail.text),
+        ));
     }
     if let Some(label) = cards_label {
         items.push(new_item(ItemKind::Cards, &label, cards));
@@ -404,8 +554,13 @@ fn build_items(
         items.push(new_item(ItemKind::SavedQueries, &label, text));
     }
     // Selection and filter text are SQL to the gate, so they are masked like it.
+    let sql_label = match &req.tab {
+        Some(AskTab::Compare { .. }) => SYNC_LABEL,
+        Some(AskTab::Object { object, .. }) if *object != ObjectKind::Table => DEFINITION_LABEL,
+        _ => "Query text",
+    };
     let sql = [
-        ("Query text", &focus.sql),
+        (sql_label, &focus.sql),
         ("Selection", &focus.selection),
         ("Filter text", &focus.filter),
     ];
@@ -442,6 +597,11 @@ fn build_items(
         }
     }
     items
+}
+
+/// The tab kind id the AI log names; never a label.
+fn tab_kind(tab: Option<&AskTab>) -> String {
+    tab.map_or("none", kind_id).into()
 }
 
 fn rows_label(tables: usize) -> String {
@@ -507,6 +667,27 @@ fn trim_to_cap(
                     .unwrap_or(0);
                 item.text.truncate(kept);
                 drop_cut_tables(fit, line_tables, item.text.lines().count());
+            } else if kind == ItemKind::Steps {
+                // Whole lines, the oldest (first) ones first: from the first line start
+                // at or after the bytes to cut.
+                let cut = item.text.len() - keep;
+                let from = match cut {
+                    0 => 0,
+                    _ => item.text.as_bytes()[cut - 1..]
+                        .iter()
+                        .position(|b| *b == b'\n')
+                        .map_or(item.text.len(), |at| cut + at),
+                };
+                item.text.drain(..from);
+            } else if kind == ItemKind::Tab {
+                // Whole lines from the end; the where line, the first, always stays.
+                let floor = item.text.find('\n').unwrap_or(item.text.len());
+                let kept = item.text.as_bytes()[..=keep]
+                    .iter()
+                    .rposition(|b| *b == b'\n')
+                    .unwrap_or(0)
+                    .max(floor);
+                item.text.truncate(kept);
             } else if kind == ItemKind::Rows {
                 // A cut mid-line drops the partial last line: never a broken JSON line.
                 let whole = keep == item.text.len() || item.text.as_bytes()[keep] == b'\n';
@@ -528,6 +709,32 @@ fn trim_to_cap(
         }
     }
     (parts, trimmed)
+}
+
+/// The Recent steps row counts the lines that go after the rails and the 200 KB cut; with
+/// none left it has no row. The Cleaning rows the rails wrote under the earlier label
+/// follow it.
+fn recount_steps(ask: &mut Ask, cleaned: &mut [[String; 3]]) {
+    let Some(at) = ask.items.iter().position(|i| i.kind == ItemKind::Steps) else {
+        return;
+    };
+    // Switched off, the row keeps the count it was built with: nothing of it goes.
+    if !ask.items[at].on && ask.items[at].locked.is_none() {
+        return;
+    }
+    let lines = ask.items[at].text.lines().count();
+    let before = ask.items[at].label.clone();
+    if lines == 0 {
+        ask.items.remove(at);
+        return;
+    }
+    let label = format!("{STEPS_LABEL} · {}", grouped(lines as u64));
+    for row in cleaned.iter_mut() {
+        if row[0] == before {
+            row[0] = label.clone();
+        }
+    }
+    ask.items[at].label = label;
 }
 
 /// Cuts the sent SQL and Error items, longest first, until their estimates together fit
@@ -1301,8 +1508,16 @@ pub struct Gathered {
     /// Where this Ask's lines start in the log.
     first_line: usize,
     config: Option<ConnectionConfig>,
-    /// Read from the stored Connection, never from the request; `Never` without one.
+    /// Read from the stored Connection, never from the request; `Never` without one. With
+    /// `focus.also`, the lowest access among the Ask's Connection and those.
     pub access: AiAccess,
+    /// The Connection the lock reasons name: the one that set `access`.
+    lock_name: String,
+    /// The This tab item at `access`; `None` without a tab or when none may go.
+    tab: Option<TabText>,
+    /// The Recent steps item, each step gated by its own Connection and `access`; `None`
+    /// without steps, with the row off, or when none may go.
+    pub(crate) trail: Option<StepsOut>,
     untied_model: bool,
     /// The secrets long enough to match exactly.
     secrets: Secrets,
@@ -1372,9 +1587,10 @@ pub async fn preview_with_log(
         log,
     )
     .await?;
-    let recall = recall(catalog, &gathered, log);
+    let recall = recall(catalog, &gathered, log, None).await;
     check_continue(req, &recall)?;
     let mut preview = assemble(&gathered, &recall.pick, recall.memory.clone(), log)?;
+    stamp_continued(req, &recall, &mut preview.stamp);
     // The summary step the Ask would make, under the same rules; no call is made here.
     preview.summary =
         crate::ai::compact::summary_preview(catalog, settings, model, &gathered, &recall, &preview)
@@ -1416,8 +1632,48 @@ pub async fn gather(
         Some(id) => catalog.connection_config(id).await?,
         None => None,
     };
+    // A Connection whose Group sends to another AI provider reads as Never (ADR 0027):
+    // Sends names each one once.
+    let mut held_by_provider: Vec<String> = Vec::new();
+    let mut hold = |c: &ConnectionConfig| {
+        if catalog.other_provider(c.id) && !held_by_provider.contains(&c.name) {
+            held_by_provider.push(c.name.clone());
+        }
+    };
+    if let Some(c) = &config {
+        hold(c);
+    }
     // R1.3: no Connection, or one that is gone, sends the question only.
-    let access = config.as_ref().map_or(AiAccess::Never, |c| c.ai_access);
+    let own = config.as_ref().map_or(AiAccess::Never, |c| c.ai_access);
+    // A tab over two Connections is gated at the lower access; a missing one is Never.
+    let (mut access, mut lock_name) = (
+        own,
+        config.as_ref().map_or("", |c| c.name.as_str()).to_string(),
+    );
+    // The stamp keeps every Connection the Ask was gated by, so more than it can hold
+    // is refused, as any other input out of bounds.
+    let mut also: Vec<ConnectionId> = Vec::new();
+    for id in &req.focus.also {
+        if !also.contains(id) {
+            also.push(*id);
+        }
+    }
+    if also.len() > ASKED_IN_ALSO {
+        return Err(Error::InvalidInput(format!(
+            "A tab spans at most {ASKED_IN_ALSO} other Connections."
+        )));
+    }
+    for id in &also {
+        let other = catalog.connection_config(*id).await?;
+        if let Some(c) = &other {
+            hold(c);
+        }
+        let level = other.as_ref().map_or(AiAccess::Never, |c| c.ai_access);
+        if rank(level) < rank(access) {
+            access = level;
+            lock_name = other.map_or_else(|| MISSING_ALSO.to_string(), |c| c.name);
+        }
+    }
     let connection = match (&config, req.connection_id) {
         (Some(_), _) => "found",
         (None, Some(_)) => "missing",
@@ -1427,21 +1683,143 @@ pub async fn gather(
     // R1.4: only with no Connection at all; a tied model whose Connection is gone or shares
     // nothing still sends the question only.
     let untied_model = req.connection_id.is_none() && req.focus.untied_model;
-    log.push(
-        Level::Info,
-        "access",
-        &[
-            ("connection", connection.into()),
-            ("level", access_id(access).into()),
-            (
-                "dialect",
-                dialect.map_or_else(String::new, |d| format!("{d:?}").to_lowercase()),
-            ),
-        ],
-    );
+    let mut fields = vec![
+        ("connection", connection.into()),
+        ("level", access_id(own).into()),
+        (
+            "dialect",
+            dialect.map_or_else(String::new, |d| format!("{d:?}").to_lowercase()),
+        ),
+    ];
+    if !req.focus.also.is_empty() {
+        fields.push(("also", req.focus.also.len().to_string()));
+        fields.push(("lowest", access_id(access).into()));
+    }
+    log.push(Level::Info, "access", &fields);
     steps.push(access_step(log, access, req.switches));
 
     let exact_secrets = long_secrets(secrets);
+    let clean = cleaner(&exact_secrets);
+    // This tab: with no Connection chosen it renders as such; a chosen one that is gone
+    // is Never. The tables it shows are hints for the cards, as open tabs are.
+    // Switched off, the tab is still rendered for its row, but none of it goes and its
+    // tables are no hints.
+    let tab_off = req.off.contains(&ItemKind::Tab);
+    let tab_access = req.connection_id.map(|_| access);
+    let render = |outline: &[String]| {
+        req.tab.as_ref().and_then(|t| {
+            tab_text(
+                t,
+                tab_access,
+                req.database.as_deref(),
+                req.schema.as_deref(),
+                dialect,
+                outline,
+                &clean,
+            )
+        })
+    };
+    let mut tab = render(&[]);
+
+    // Recent steps: each step's Connection is read once. A step on another Connection
+    // goes at its own access; one on the Ask's Connection at the Ask's lowest access.
+    let mut trail = None;
+    let mut step_tables: Vec<TableRef> = Vec::new();
+    // Switched off, the steps are still rendered for the row's count, but none of them go:
+    // no text, no notes and no table hints.
+    let steps_off = req.off.contains(&ItemKind::Steps);
+    if !req.steps.is_empty() {
+        let now = now_ms();
+        let mut levels: Vec<(ConnectionId, Option<AiAccess>)> = Vec::new();
+        for id in step_connections(&req.steps, now) {
+            let level = if Some(id) == req.connection_id {
+                config.as_ref().map(|c| c.ai_access)
+            } else {
+                let other = catalog.connection_config(id).await?;
+                if let Some(c) = &other {
+                    hold(c);
+                }
+                other.map(|c| c.ai_access)
+            };
+            levels.push((id, level));
+        }
+        // A step on a Connection of another provider is left out whole: Sends names the
+        // Connection instead of counting it as held. A source there reads as Never, so
+        // the label says `a database`.
+        let kept_steps: Vec<StepIn>;
+        let steps: &[StepIn] = if req
+            .steps
+            .iter()
+            .any(|s| s.connection_id.is_some_and(|c| catalog.other_provider(c)))
+        {
+            kept_steps = req
+                .steps
+                .iter()
+                .filter(|s| !s.connection_id.is_some_and(|c| catalog.other_provider(c)))
+                .cloned()
+                .collect();
+            &kept_steps
+        } else {
+            &req.steps
+        };
+        let access_of = |id: ConnectionId| {
+            levels
+                .iter()
+                .find(|(c, _)| *c == id)
+                .and_then(|(_, level)| *level)
+        };
+        let out = render_steps(
+            steps,
+            now,
+            (req.connection_id, req.database.as_deref()),
+            &access_of,
+            access,
+            &clean,
+        );
+        if !steps_off {
+            notes.extend(steps_notes(&out));
+        }
+        // Switched off, the log says so: nothing of it is sent.
+        if steps_off {
+            log.push(
+                Level::Info,
+                "steps",
+                &[("n", "0".to_string()), ("off", "true".to_string())],
+            );
+        } else {
+            log.push(
+                Level::Info,
+                "steps",
+                &[
+                    ("n", out.lines().to_string()),
+                    ("dropped", (out.held + out.held_by_ask).to_string()),
+                    ("left_out", out.left_out.to_string()),
+                ],
+            );
+        }
+        if !steps_off {
+            step_tables = out.tables.clone();
+        }
+        trail = Some(out).filter(|o| !o.text.is_empty());
+    }
+    notes.splice(
+        0..0,
+        held_by_provider.iter().map(|n| other_provider_note(n)),
+    );
+    let with_tab;
+    let req = match &tab {
+        Some(t) if !tab_off && t.tables.iter().any(|r| !req.focus.tables.contains(r)) => {
+            let mut wider = req.clone();
+            for r in &t.tables {
+                if !wider.focus.tables.contains(r) {
+                    wider.focus.tables.push(r.clone());
+                }
+            }
+            with_tab = wider;
+            &with_tab
+        }
+        _ => req,
+    };
 
     // The answer's room as the Ask sends it: a thinking budget raises it (TooBig counts it).
     let max_tokens = settings.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
@@ -1477,7 +1855,6 @@ pub async fn gather(
             req.schema.as_deref(),
             &req.focus.tables,
         );
-        let clean = cleaner(&exact_secrets);
         let (info, schema_step) =
             ensure(catalog, config, &key, purpose, &clean, now_ms(), log).await;
         if info.built_at.is_none() {
@@ -1500,6 +1877,7 @@ pub async fn gather(
             let seeds = Seeds {
                 dialect: config.dialect,
                 open_tables: &req.focus.tables,
+                step_tables: &step_tables,
                 texts,
                 question: &req.question,
                 picked: &[],
@@ -1601,8 +1979,45 @@ pub async fn gather(
         rows = read_rows(catalog, config, &key, named, status, &mut notes, log).await;
     }
 
+    // A design tab's outline: the table names of the stored AI Context, never the catalog.
+    if let (Some(AskTab::Design { .. }), Some(config), Some(_), false) =
+        (&req.tab, &config, &tab, tab_off)
+    {
+        let key = context_key(
+            config,
+            req.database.as_deref(),
+            req.schema.as_deref(),
+            &req.focus.tables,
+        );
+        let outline: Vec<String> = catalog
+            .context()
+            .context_graph(&key)
+            .map(|rows| rows.into_iter().map(|r| r.table).collect())
+            .unwrap_or_default();
+        if !outline.is_empty() {
+            tab = render(&outline);
+        }
+    }
+    if let Some(t) = &tab {
+        // Switched off, nothing of it is sent.
+        let mut fields = vec![
+            ("kind", tab_kind(req.tab.as_ref())),
+            ("bytes", if tab_off { 0 } else { t.text.len() }.to_string()),
+        ];
+        if tab_off {
+            fields.push(("off", "true".to_string()));
+        }
+        log.push(Level::Info, "tab", &fields);
+    }
+
     let tables = if fit.full.is_empty() {
-        req.focus.tables.iter().map(|t| t.name.clone()).collect()
+        let mut named: Vec<String> = req.focus.tables.iter().map(|t| t.name.clone()).collect();
+        for t in &step_tables {
+            if !named.contains(&t.name) {
+                named.push(t.name.clone());
+            }
+        }
+        named
     } else {
         fit.full.clone()
     };
@@ -1611,8 +2026,11 @@ pub async fn gather(
         first_line,
         config,
         access,
+        lock_name,
+        tab,
+        trail,
         untied_model,
-        secrets: exact_secrets,
+        secrets: exact_secrets.clone(),
         shares,
         model_name: model.name.clone(),
         window: model.context_window,
@@ -1635,6 +2053,28 @@ pub async fn gather(
     })
 }
 
+/// The current access of each other Connection the questions of `thread` were asked
+/// across (`AskedIn::also`), each read once; one that is gone or cannot be read is Never.
+/// The gate on history lowers such a message to it (`message_access`).
+pub(crate) async fn others_access(
+    catalog: &dyn CatalogReader,
+    thread: &AiThread,
+    log: &mut Log,
+) -> Vec<(ConnectionId, AiAccess)> {
+    let mut out = Vec::new();
+    for id in also_of(thread) {
+        let level = match catalog.connection_config(id).await {
+            Ok(c) => c.map_or(AiAccess::Never, |c| c.ai_access),
+            Err(e) => {
+                log.push(Level::Warn, "memory", &[("error", error_kind(&e))]);
+                AiAccess::Never
+            }
+        };
+        out.push((id, level));
+    }
+    out
+}
+
 /// What the memory stage found for one Ask.
 #[derive(Clone, Debug)]
 pub struct Recall {
@@ -1645,6 +2085,9 @@ pub struct Recall {
     pub thread: bool,
     /// That thread as stored, for the 85% check and the summary step.
     pub source: Option<AiThread>,
+    /// The current access of the other Connections the thread's questions were asked
+    /// across, once read (`others_access`); an Ask reads them once and passes them on.
+    pub others: Option<Vec<(ConnectionId, AiAccess)>>,
     /// The Topic pick: the Topic this Ask closes, when it opens a new one.
     pub topic: TopicPick,
 }
@@ -1655,8 +2098,14 @@ pub struct Recall {
 /// Otherwise the open Topic's turns and matching summaries pass the gate on history with
 /// the access read from the stored Connection (R1.2, R1.7), cleaned by the input rail's
 /// cleaner (R2.1, R2.2); no masking, since the gate already holds values back. A store
-/// that cannot be read sends no history.
-pub fn recall(catalog: &dyn CatalogReader, g: &Gathered, log: &mut Log) -> Recall {
+/// that cannot be read sends no history. `known` is the `others` an earlier recall of the
+/// same Ask read, so they are read once per Ask.
+pub async fn recall(
+    catalog: &dyn CatalogReader,
+    g: &Gathered,
+    log: &mut Log,
+    known: Option<Vec<(ConnectionId, AiAccess)>>,
+) -> Recall {
     let req = &g.req;
     let store = catalog.threads();
     let warn = |log: &mut Log, e: &crate::error::Error| {
@@ -1680,7 +2129,12 @@ pub fn recall(catalog: &dyn CatalogReader, g: &Gathered, log: &mut Log) -> Recal
     let topic = topic_for(thread.as_ref(), &facts, &req.question);
     let picked = topic.clone();
     let mut pick = HistoryPick::default();
+    let mut others = known;
     if let Some(t) = thread.as_ref().filter(|_| g.access != AiAccess::Never) {
+        if others.is_none() {
+            others = Some(others_access(catalog, t, log).await);
+        }
+        let others = others.as_deref().unwrap_or_default();
         let read = (|| {
             let topics = store.topics(t.id)?;
             let compactions = store.compactions(t.id)?;
@@ -1701,6 +2155,7 @@ pub fn recall(catalog: &dyn CatalogReader, g: &Gathered, log: &mut Log) -> Recal
                     &topic,
                     &facts,
                     g.access,
+                    others,
                     req.switches,
                     &matches,
                     g.shares.history,
@@ -1726,6 +2181,7 @@ pub fn recall(catalog: &dyn CatalogReader, g: &Gathered, log: &mut Log) -> Recal
         memory,
         thread: thread.is_some(),
         source: thread,
+        others,
         topic: picked,
     }
 }
@@ -1786,6 +2242,31 @@ pub fn check_continue(req: &AskRequest, recall: &Recall) -> Result<()> {
     }
 }
 
+/// A Continue extends the continued answer, so its stamp takes the continued question's
+/// other Connections (`AskedIn::also`) beside its own: the extended answer is then held
+/// at replay whenever the first one is (Task 3 ruling N4). Other actions are unchanged.
+pub fn stamp_continued(req: &AskRequest, recall: &Recall, stamp: &mut TurnStamp) {
+    if req.action != "continue" {
+        return;
+    }
+    let continued = recall.source.as_ref().and_then(|t| {
+        t.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == AiRole::User)
+            .and_then(|m| m.asked_in.as_ref())
+    });
+    let Some(also) = continued.map(|a| &a.also).filter(|a| !a.is_empty()) else {
+        return;
+    };
+    let asked = stamp.asked_in.get_or_insert_with(AskedIn::default);
+    // The continued question's first, so the cap never drops the reason for this one.
+    let mut all = also.clone();
+    all.extend(asked.also.iter().copied());
+    asked.also = all;
+    *asked = asked.capped();
+}
+
 /// The Thread row's label: `Thread · 2 turns, 1 summary`.
 fn thread_label(turns: usize, summaries: usize) -> String {
     match (turns, summaries) {
@@ -1825,6 +2306,54 @@ fn break_id(memory: &MemoryInfo) -> String {
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default(),
     }
+}
+
+/// The Asked in stamp, built from the This tab and Recent steps items as they went (after
+/// `off`, the gate, the rails and the 200 KB cut), and the highest level the parts that
+/// went used. The label is the where line that went, else the tab's kind words; the
+/// summary keeps only facts whose lines went; the steps are the Ask's own that went, and
+/// the other steps those on other Connections that went (each gated by its own Connection
+/// at replay, so they do not raise the level). `None` with no tab, no step kept and no
+/// other Connection.
+fn asked_in(req: &AskRequest, g: &Gathered, items: &[Item]) -> (Option<AskedIn>, u8) {
+    let sent = |kind: ItemKind| {
+        items
+            .iter()
+            .find(|i| i.kind == kind && goes(i) && !i.text.is_empty())
+            .map(|i| i.text.as_str())
+    };
+    let clean = cleaner(&g.secrets);
+    let mut used = 0;
+    let (label, summary) = match (req.tab.as_ref(), g.tab.as_ref(), sent(ItemKind::Tab)) {
+        (_, Some(t), Some(text)) => {
+            used = t.used;
+            let label = text.lines().next().unwrap_or_default().to_string();
+            (label, t.sent_summary(text, &clean))
+        }
+        (Some(tab), _, _) => (kind_words(tab).to_string(), String::new()),
+        (None, _, _) => (String::new(), String::new()),
+    };
+    let (steps, other_steps) = match (g.trail.as_ref(), sent(ItemKind::Steps)) {
+        (Some(trail), Some(text)) => {
+            // The answer may lean on the steps that went, kept or not.
+            used = used.max(trail.used);
+            (trail.kept_for_turn(text), trail.others_for_turn(text))
+        }
+        _ => (Vec::new(), Vec::new()),
+    };
+    if req.tab.is_none() && steps.is_empty() && other_steps.is_empty() && req.focus.also.is_empty()
+    {
+        return (None, used);
+    }
+    let stamp = AskedIn {
+        tab: req.tab.as_ref().map_or("", kind_id).to_string(),
+        label,
+        summary,
+        steps,
+        also: req.focus.also.clone(),
+        other_steps,
+    };
+    (Some(stamp.capped()), used)
 }
 
 /// The kinds of the items that go, each once.
@@ -1887,10 +2416,18 @@ pub(crate) fn assemble_with(
     let history_on = !req.off.contains(&ItemKind::History);
     let mut turns: Vec<Turn> = history.turns.clone();
 
-    let name = g.config.as_ref().map_or("", |c| c.name.as_str());
+    let name = g.lock_name.as_str();
     let cards_label =
         (g.config.is_some() || !req.focus.tables.is_empty()).then(|| tables_label(req));
-    let mut items = build_items(req, cards_label, &g.cards, &g.saved, &g.rows);
+    let mut items = build_items(
+        req,
+        g.tab.as_ref(),
+        g.trail.as_ref(),
+        cards_label,
+        &g.cards,
+        &g.saved,
+        &g.rows,
+    );
     // The summaries come first in the framed block, right after the question.
     let label = thread_label(turns.len(), history.summaries.len());
     for (n, s) in history.summaries.iter().enumerate() {
@@ -1924,7 +2461,7 @@ pub(crate) fn assemble_with(
         boundary: boundary.clone(),
     };
     run_rails(&[&input, &retrieval], &mut ask, log)?;
-    let cleaning = cleaning_step(log, std::mem::take(&mut ask.cleaned));
+    let mut cleaned = std::mem::take(&mut ask.cleaned);
     let rows_kept = fit_sample_rows(&mut ask, g, log);
     if cap_query_share(&mut ask, g.shares.query) {
         log.push(
@@ -1957,6 +2494,9 @@ pub(crate) fn assemble_with(
         &mut turns,
         history_on,
     );
+    recount_steps(&mut ask, &mut cleaned);
+    let (asked_in, used) = asked_in(req, g, &ask.items);
+    let cleaning = cleaning_step(log, cleaned);
     let sent = fit.full.len() + fit.names_only.len();
     log.push(
         Level::Info,
@@ -2052,9 +2592,9 @@ pub(crate) fn assemble_with(
         });
     }
     for t in &turns {
-        thread_row.bytes = thread_row
-            .bytes
-            .saturating_add(bytes_u32(t.question.len() + t.answer.len()));
+        thread_row.bytes = thread_row.bytes.saturating_add(bytes_u32(
+            past_question(t, &boundary).len() + t.answer.len(),
+        ));
         thread_row.tokens = thread_row.tokens.saturating_add(t.tokens);
     }
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
@@ -2087,6 +2627,17 @@ pub(crate) fn assemble_with(
         Some(run) => (Some(run.preview.clone()), run.sent.clone()),
         None => (None, None),
     };
+    let mut kinds: Vec<ItemKind> = sent_kinds(&items)
+        .into_iter()
+        .filter(|k| *k != ItemKind::History)
+        .collect();
+    // The highest level the This tab and Recent steps parts used, so the gate holds their
+    // replay to it (spec 6.1): names at Schema only, titles and counts at query text.
+    for (level, kind) in [(1, ItemKind::Names), (2, ItemKind::Sql)] {
+        if used >= level && !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
     let stamp = TurnStamp {
         topic: memory.topic,
         opened: memory.opened,
@@ -2096,10 +2647,8 @@ pub(crate) fn assemble_with(
         database: req.database.clone(),
         action: req.action.clone(),
         tables: g.tables.clone(),
-        kinds: sent_kinds(&items)
-            .into_iter()
-            .filter(|k| *k != ItemKind::History)
-            .collect(),
+        kinds,
+        asked_in,
     };
     let config = g.config.as_ref();
     Ok(Preview {
@@ -2113,7 +2662,7 @@ pub(crate) fn assemble_with(
         context: g.context.clone(),
         parts,
         dialect: config
-            .filter(|c| c.ai_access != AiAccess::Never)
+            .filter(|_| g.access != AiAccess::Never)
             .map(|c| c.dialect),
         steps,
         sql_dialect: config.map(|c| c.dialect),
@@ -2211,6 +2760,299 @@ mod tests {
         };
         trim_to_cap(&mut ask, "b0", "q", &mut f, &[], &mut Vec::new(), true);
         assert_eq!(ask.items[1].text, "");
+    }
+
+    fn tab_req(tab: AskTab) -> AskRequest {
+        AskRequest {
+            request_id: "r1".into(),
+            place: "ungrouped".into(),
+            group_id: None,
+            connection_id: None,
+            database: Some("shop".into()),
+            schema: None,
+            action: "ask".into(),
+            question: "q".into(),
+            thread_id: None,
+            focus: crate::ai::request::Focus {
+                sql: Some("select 1".into()),
+                ..Default::default()
+            },
+            switches: Switches::default(),
+            off: Vec::new(),
+            model: None,
+            picks: None,
+            tab: Some(tab),
+            steps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn tab_item_order_and_trim() {
+        let tab = TabText {
+            where_line: "Home".into(),
+            text: "Home".into(),
+            summary: String::new(),
+            facts: Vec::new(),
+            used: 0,
+            tables: Vec::new(),
+        };
+        let saved = SavedItems {
+            texts: Vec::new(),
+            locked: false,
+        };
+        let rows = GatheredRows::default();
+        let items = build_items(
+            &tab_req(AskTab::Home),
+            Some(&tab),
+            None,
+            Some("Schema".into()),
+            "orders(id int)",
+            &saved,
+            &rows,
+        );
+        let kinds: Vec<ItemKind> = items.iter().map(|i| i.kind).collect();
+        assert_eq!(
+            kinds[..4],
+            [
+                ItemKind::Question,
+                ItemKind::Names,
+                ItemKind::Tab,
+                ItemKind::Cards
+            ]
+        );
+        assert_eq!(items[2].label, "This tab");
+        assert_eq!(items[2].text, "Home");
+        let sql = items.iter().find(|i| i.kind == ItemKind::Sql).unwrap();
+        assert_eq!(sql.label, "Query text");
+
+        // The SQL a Compare tab or a view tab shows is named for what it is.
+        let compare = AskTab::Compare {
+            source: crate::ai::scene::CompareSide::Database {
+                database: "shop".into(),
+            },
+            target_database: "shop_staging".into(),
+            items: Vec::new(),
+            added: 0,
+            removed: 0,
+            changed: 0,
+            not_compared: 0,
+            ticked: 0,
+            compared: true,
+        };
+        let view = AskTab::Object {
+            title: "v_orders".into(),
+            path: ObjectPath {
+                database: "shop".into(),
+                schema: None,
+                name: "v_orders".into(),
+            },
+            object: ObjectKind::View,
+            sort: None,
+            filter_columns: Vec::new(),
+            hidden: Vec::new(),
+            pending_edits: 0,
+        };
+        for (tab, label) in [(compare, "Sync script"), (view, "Definition")] {
+            let items = build_items(&tab_req(tab), None, None, None, "", &saved, &rows);
+            let sql = items.iter().find(|i| i.kind == ItemKind::Sql).unwrap();
+            assert_eq!(sql.label, label);
+        }
+
+        // Over 200 KB: the thread goes first, then This tab by whole lines; the cards stay.
+        let item = |kind, text: String| Item {
+            kind,
+            label: String::new(),
+            text,
+            locked: None,
+            on: true,
+        };
+        let line = "x".repeat(99);
+        let tab_text = format!("Home\n{}", vec![line.as_str(); 600].join("\n"));
+        let cards: String = (0..1_400)
+            .map(|i| format!("t{i:04}(id int, {})", "c".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut ask = Ask {
+            items: vec![
+                item(ItemKind::Question, "q".into()),
+                item(ItemKind::History, "h".repeat(30_000)),
+                item(ItemKind::Tab, tab_text.clone()),
+                item(ItemKind::Cards, cards.clone()),
+            ],
+            access: AiAccess::Schema,
+            dialect: None,
+            notes: Vec::new(),
+            untied_model: false,
+            diagram: false,
+            cleaned: Vec::new(),
+        };
+        let mut f = fit(&[], &[], &[]);
+        let (parts, _) = trim_to_cap(&mut ask, "b0", "q", &mut f, &[], &mut Vec::new(), true);
+        assert!(parts.exact().len() <= PAYLOAD_CAP);
+        assert!(ask.items.iter().all(|i| i.kind != ItemKind::History));
+        let tab = ask.items.iter().find(|i| i.kind == ItemKind::Tab).unwrap();
+        assert!(!tab.text.is_empty() && tab.text.len() < tab_text.len());
+        assert!(tab.text.starts_with("Home\n"));
+        assert!(
+            tab.text.lines().skip(1).all(|l| l == line),
+            "a broken line was kept"
+        );
+        let kept = ask
+            .items
+            .iter()
+            .find(|i| i.kind == ItemKind::Cards)
+            .unwrap();
+        assert_eq!(kept.text, cards);
+    }
+
+    #[test]
+    fn the_200_kb_cut_keeps_the_tab_where_line() {
+        let item = |kind, text: String| Item {
+            kind,
+            label: String::new(),
+            text,
+            locked: None,
+            on: true,
+        };
+        let where_line = "Schema Compare: shop to shop_staging";
+        let tab_text = format!("{where_line}\n{}", vec!["x".repeat(99); 600].join("\n"));
+        // Cards past 200 KB on their own: the whole tab body must go, its where line stays.
+        let cards: String = (0..2_400)
+            .map(|i| format!("t{i:04}(id int, {})", "c".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut ask = Ask {
+            items: vec![
+                item(ItemKind::Question, "q".into()),
+                item(ItemKind::Tab, tab_text),
+                item(ItemKind::Cards, cards),
+            ],
+            access: AiAccess::Schema,
+            dialect: None,
+            notes: Vec::new(),
+            untied_model: false,
+            diagram: false,
+            cleaned: Vec::new(),
+        };
+        let mut f = fit(&[], &[], &[]);
+        let (parts, _) = trim_to_cap(&mut ask, "b0", "q", &mut f, &[], &mut Vec::new(), true);
+        assert!(parts.exact().len() <= PAYLOAD_CAP);
+        let tab = ask.items.iter().find(|i| i.kind == ItemKind::Tab).unwrap();
+        assert_eq!(tab.text, where_line);
+    }
+
+    #[test]
+    fn steps_item_order_and_trim() {
+        let tab = TabText {
+            where_line: "Home".into(),
+            text: "Home".into(),
+            summary: String::new(),
+            facts: Vec::new(),
+            used: 0,
+            tables: Vec::new(),
+        };
+        let trail = StepsOut {
+            text: "(2 min ago) opened Settings\n(just now) opened Home".into(),
+            ..StepsOut::default()
+        };
+        let saved = SavedItems {
+            texts: Vec::new(),
+            locked: false,
+        };
+        let rows = GatheredRows::default();
+        let items = build_items(
+            &tab_req(AskTab::Home),
+            Some(&tab),
+            Some(&trail),
+            Some("Schema".into()),
+            "orders(id int)",
+            &saved,
+            &rows,
+        );
+        let kinds: Vec<ItemKind> = items.iter().map(|i| i.kind).collect();
+        assert_eq!(
+            kinds[..5],
+            [
+                ItemKind::Question,
+                ItemKind::Names,
+                ItemKind::Tab,
+                ItemKind::Steps,
+                ItemKind::Cards
+            ]
+        );
+        assert_eq!(items[3].label, "Recent steps · 2");
+        assert_eq!(items[3].text, trail.text);
+
+        // Over 200 KB: after the thread, the oldest steps go by whole lines, before This tab.
+        let item = |kind, text: String| Item {
+            kind,
+            label: String::new(),
+            text,
+            locked: None,
+            on: true,
+        };
+        let steps_text = (0..1_000)
+            .map(|i| format!("({i:04} min ago) ticked orders.é{}", "x".repeat(40)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tab_text = format!("Home\n{}", vec!["y".repeat(99); 600].join("\n"));
+        let cards: String = (0..800)
+            .map(|i| format!("t{i:04}(id int, {})", "c".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut ask = Ask {
+            items: vec![
+                item(ItemKind::Question, "q".into()),
+                item(ItemKind::History, "h".repeat(30_000)),
+                item(ItemKind::Tab, tab_text.clone()),
+                item(ItemKind::Steps, steps_text.clone()),
+                item(ItemKind::Cards, cards.clone()),
+            ],
+            access: AiAccess::Schema,
+            dialect: None,
+            notes: Vec::new(),
+            untied_model: false,
+            diagram: false,
+            cleaned: Vec::new(),
+        };
+        let mut f = fit(&[], &[], &[]);
+        let (parts, _) = trim_to_cap(&mut ask, "b0", "q", &mut f, &[], &mut Vec::new(), true);
+        assert!(parts.exact().len() <= PAYLOAD_CAP);
+        let text = |ask: &Ask, kind| {
+            ask.items
+                .iter()
+                .find(|i| i.kind == kind)
+                .unwrap()
+                .text
+                .clone()
+        };
+        let steps = text(&ask, ItemKind::Steps);
+        assert!(!steps.is_empty() && steps.len() < steps_text.len());
+        // The newest whole lines stay.
+        assert!(steps_text.ends_with(steps.as_str()));
+        assert!(steps.starts_with('('), "a broken line was kept");
+        let left = steps.lines().count();
+        recount_steps(&mut ask, &mut []);
+        let row = ask
+            .items
+            .iter()
+            .find(|i| i.kind == ItemKind::Steps)
+            .unwrap();
+        assert_eq!(
+            row.label,
+            format!("Recent steps · {}", grouped(left as u64))
+        );
+        // Cut to nothing: no row.
+        ask.items
+            .iter_mut()
+            .find(|i| i.kind == ItemKind::Steps)
+            .unwrap()
+            .text
+            .clear();
+        recount_steps(&mut ask, &mut []);
+        assert!(ask.items.iter().all(|i| i.kind != ItemKind::Steps));
+        assert_eq!(text(&ask, ItemKind::Tab), tab_text);
+        assert_eq!(text(&ask, ItemKind::Cards), cards);
     }
 
     #[test]
@@ -2321,6 +3163,8 @@ mod tests {
             off: Vec::new(),
             model: None,
             picks: None,
+            tab: None,
+            steps: Vec::new(),
         };
         assert_eq!(sent_label(&req(&["orders"]), 1, 1), "Schema · orders");
         assert_eq!(

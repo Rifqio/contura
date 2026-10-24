@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { PROVIDERS } from "../settings/ai/providers";
 import { keyringText, thisComputer } from "../platform";
-import { aiSettingsChanged, toolUsesChanged } from "./changes";
+import { aiSettingsChanged, connectionForgotten, toolUsesChanged } from "./changes";
 import type {
   DiagramAskRequest,
   ToolOutcome,
@@ -141,7 +141,9 @@ export const saveConnection = (input: ConnectionInput): Promise<ConnectionConfig
 export const setConnectionAiAccess = (id: ConnectionId, access: AiAccess): Promise<ConnectionConfig> =>
   invoke("set_connection_ai_access", { id, access });
 
-export const deleteConnection = (id: ConnectionId): Promise<void> => invoke("delete_connection", { id });
+/** Also drops the Connection's Recent steps in every place (`connectionForgotten`). */
+export const deleteConnection = (id: ConnectionId): Promise<void> =>
+  invoke<void>("delete_connection", { id }).then(() => connectionForgotten.emit(id));
 
 /** Resolves to the server version. */
 export const testConnection = (input: ConnectionInput): Promise<string> => invoke("test_connection", { input });
@@ -415,7 +417,9 @@ export const closeQuerySession = (session: QuerySessionId): Promise<void> =>
 export const queryHistory = (id: ConnectionId | null, filter: HistoryFilter): Promise<HistoryEntry[]> =>
   invoke("query_history", { id, filter });
 
-export const clearQueryHistory = (id: ConnectionId | null): Promise<void> => invoke("clear_query_history", { id });
+/** Also drops the Connection's Recent steps (every Connection's with null) in every place (`connectionForgotten`). */
+export const clearQueryHistory = (id: ConnectionId | null): Promise<void> =>
+  invoke<void>("clear_query_history", { id }).then(() => connectionForgotten.emit(id));
 
 /** A row from an older Core has no `kind`: it is SQL. */
 const savedRow = (q: SavedQuery): SavedQuery => ({ ...q, kind: q.kind ?? "sql", visualJson: q.visualJson ?? null });

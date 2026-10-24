@@ -1,0 +1,138 @@
+{
+ "_comment": "Shared by the Core's fences() (src/ai/rails/output.rs) and the UI's parseAnswer and stream parser (src/assistant/answerMarkdown.ts), so both number an answer's fences alike; sha256 checks the UI's hash of a block body against the Core's.",
+ "fences": [
+  {
+   "name": "a NEL before a fence line is no indent",
+   "answer": "Here:\n\u0085```sql\nSELECT 1\n```\nDROP TABLE orders\n```",
+   "fences": [
+    [
+     null,
+     "DROP TABLE orders",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "a BOM before a fence line is no indent",
+   "answer": "\ufeff```\nDROP TABLE orders\n```\nSELECT 1\n```",
+   "fences": [
+    [
+     null,
+     "SELECT 1",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "spaces and tabs indent a fence",
+   "answer": "  ```sql\n\tSELECT 1\n\t```",
+   "fences": [
+    [
+     "sql",
+     "\tSELECT 1",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "a no-break space before a closing fence does not close it",
+   "answer": "```sql\nSELECT 1\n\u00a0```\nDELETE FROM t\n```",
+   "fences": [
+    [
+     "sql",
+     "SELECT 1\n\u00a0```\nDELETE FROM t",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "a NEL after a closing fence does not close it",
+   "answer": "```sql\nSELECT 1\n```\u0085\nDROP TABLE t\n```",
+   "fences": [
+    [
+     "sql",
+     "SELECT 1\n```\u0085\nDROP TABLE t",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "a language word runs to a space or tab only",
+   "answer": "```sql\u0085x y\nSELECT 1\n```",
+   "fences": [
+    [
+     "sql\u0085x",
+     "SELECT 1",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "a U+2028 is no line end",
+   "answer": "x\u2028```sql\nSELECT 2\n```",
+   "fences": [
+    [
+     null,
+     "",
+     false
+    ]
+   ]
+  },
+  {
+   "name": "a lone CR is a line end",
+   "answer": "```sql\rSELECT 1\r```\r```sql\nSELECT 2\n```",
+   "fences": [
+    [
+     "sql",
+     "SELECT 1",
+     true
+    ],
+    [
+     "sql",
+     "SELECT 2",
+     true
+    ]
+   ]
+  },
+  {
+   "name": "an unclosed fence runs to the end",
+   "answer": "Try:\n```sql\nSELECT 1",
+   "fences": [
+    [
+     "sql",
+     "SELECT 1",
+     false
+    ]
+   ]
+  },
+  {
+   "name": "four backticks close only on four",
+   "answer": "````sql\nSELECT 1\n```\nSELECT 2\n````",
+   "fences": [
+    [
+     "sql",
+     "SELECT 1\n```\nSELECT 2",
+     true
+    ]
+   ]
+  }
+ ],
+ "sha256": [
+  [
+   "",
+   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  [
+   "SELECT 1",
+   "e004ebd5b5532a4b85984a62f8ad48a81aa3460c1ca07701f386135d72cdecf5"
+  ],
+  [
+   "DROP TABLE orders;\n-- \u00fc \u0085 \ufeff",
+   "f19d89ed53ee4e85db0accdd160f6662c83b0e90698a49aac99a9db9a4bd6719"
+  ],
+  [
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "c2a908d98f5df987ade41b5fce213067efbcc21ef2240212a41e54b5e7c28ae5"
+  ]
+ ]
+}

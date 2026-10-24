@@ -17,18 +17,23 @@ const ROW = defineRows({
 });
 export const KEYMAP_ROWS = Object.values(ROW);
 
-const GROUP_OPEN = COMMANDS.filter((c) => c.id.startsWith("group.open.")).map((c) => c.id);
-/** Where Open Group 1 to 9 sits in a group: one folded row until shown. */
-const FOLD = "group.open";
+/** The nine numbered commands sit in a group as one folded row until shown. */
+const FOLDS = {
+  "group.open": { title: "Open Group 1 to 9", hint: "In the order Groups have on Home", keys: "Ctrl+Alt+1…9" },
+  "tab.goto": { title: "Go to tab 1 to 9", hint: "Ctrl+9 goes to the last tab", keys: "Ctrl+1…9" },
+} as const;
+type Fold = keyof typeof FOLDS;
+const isFold = (id: string): id is Fold => Object.prototype.hasOwnProperty.call(FOLDS, id);
+const foldMembers = (fold: Fold) => COMMANDS.filter((c) => c.id.startsWith(`${fold}.`)).map((c) => c.id);
 
 /** The board's groups; every command of the registry is in one (a test holds that). */
-export const KEYMAP_GROUPS: { name: string; ids: (CommandId | typeof FOLD)[] }[] = [
+export const KEYMAP_GROUPS: { name: string; ids: (CommandId | Fold)[] }[] = [
   {
     name: "Queries and the editor",
     ids: ["query.run", "query.runAll", "query.explain", "query.format", "query.save", "editor.ask", "editor.quickFix", "editor.rename", "editor.definition", "editor.parameterHints"],
   },
-  { name: "Tabs and windows", ids: ["query.new", "tab.close", "tab.next", "tab.previous", "home.open", "settings.open", "history.toggle"] },
-  { name: "Connections and schema", ids: ["connection.new", "tree.filter", "tree.refresh", FOLD] },
+  { name: "Tabs and windows", ids: ["query.new", "tab.close", "tab.reopen", "tab.next", "tab.previous", "tab.goto", "pane.next", "pane.previous", "home.open", "settings.open", "history.toggle"] },
+  { name: "Connections and schema", ids: ["connection.new", "tree.filter", "tree.refresh", "group.open"] },
   { name: "AI assistant", ids: ["assistant.toggle", "assistant.newChat"] },
   {
     name: "Data, Visual Query and diagrams",
@@ -142,7 +147,7 @@ export default function KeymapSection({ title, desc }: { title: string; desc: st
   const [query, setQuery] = useState("");
   const [byKeys, setByKeys] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
-  const [unfolded, setUnfolded] = useState(false);
+  const [unfolded, setUnfolded] = useState<ReadonlySet<Fold>>(new Set());
   const [editing, setEditing] = useState<CommandId | null>(null);
   const [pressed, setPressed] = useState<Pressed | null>(null);
   /** A failed save, shown by the row it was for (null: Reset all, shown on top). */
@@ -179,10 +184,13 @@ export default function KeymapSection({ title, desc }: { title: string; desc: st
 
   const changed = COMMANDS.filter((c) => isChanged(c, keysFor(map, c.id)));
   const changedIds = new Set(changed.map((c) => c.id));
-  // A search result for one Open Group command shows all nine.
-  const flashGroup = flash !== null && flash.startsWith("group.open.");
-  const anyGroupChanged = GROUP_OPEN.some((id) => changedIds.has(id));
-  const folded = !unfolded && !flashGroup && !anyGroupChanged && filter === "all" && query === "";
+  // A search result for one numbered command shows all nine; so does a change to one of them.
+  const isFolded = (fold: Fold) =>
+    !unfolded.has(fold) &&
+    !(flash !== null && flash.startsWith(`${fold}.`)) &&
+    !foldMembers(fold).some((id) => changedIds.has(id)) &&
+    filter === "all" &&
+    query === "";
 
   /** Ends a capture or an ask; focus goes back to the row's change button. */
   function stopEditing(row: CommandId | null) {
@@ -255,11 +263,11 @@ export default function KeymapSection({ title, desc }: { title: string; desc: st
 
   const count = (f: Filter) => COMMANDS.filter((c) => (f === "all" ? true : f === "changed" ? changedIds.has(c.id) : c.scope === f)).length;
   const groups = KEYMAP_GROUPS.map((g) => {
-    const ids = g.ids.flatMap((id) => (id === FOLD ? (folded ? [FOLD] : GROUP_OPEN) : [id]));
-    const rows = ids.filter((id) => id === FOLD || shows(commandById(id)!));
+    const ids = g.ids.flatMap((id) => (isFold(id) ? (isFolded(id) ? [id] : foldMembers(id)) : [id]));
+    const rows = ids.filter((id) => isFold(id) || shows(commandById(id)!));
     return { name: g.name, rows };
   }).filter((g) => g.rows.length > 0);
-  order.current = groups.flatMap((g) => g.rows).filter((id): id is CommandId => id !== FOLD);
+  order.current = groups.flatMap((g) => g.rows).filter((id): id is CommandId => !isFold(id));
 
   function commandRow(c: Command) {
     const keys = keysFor(map, c.id);
@@ -415,20 +423,23 @@ export default function KeymapSection({ title, desc }: { title: string; desc: st
             <span className="srow-hint">{`${g.rows.length} ${g.rows.length === 1 ? "shortcut" : "shortcuts"}`}</span>
           </h2>
           {g.rows.map((id) =>
-            id === FOLD ? (
-              <div key={FOLD} className="krow">
+            isFold(id) ? (
+              <div key={id} className="krow">
                 <span className="krow-title">
-                  <span>Open Group 1 to 9</span>
-                  <span className="srow-hint">In the order Groups have on Home</span>
+                  <span>{FOLDS[id].title}</span>
+                  <span className="srow-hint">{FOLDS[id].hint}</span>
                 </span>
                 <span className="krow-scope">App</span>
                 <span className="krow-keys">
-                  <Kbd keys="Ctrl+1…9" />
+                  <Kbd keys={FOLDS[id].keys} />
                 </span>
                 <span className="krow-actions keep">
-                  <button type="button" className="button button-small" onClick={() => {
-                      setUnfolded(true);
-                      focusTo.current = { row: GROUP_OPEN[0], order: [] };
+                  <button
+                    type="button"
+                    className="button button-small"
+                    onClick={() => {
+                      setUnfolded((u) => new Set(u).add(id));
+                      focusTo.current = { row: foldMembers(id)[0], order: [] };
                     }}
                   >
                     Show 9

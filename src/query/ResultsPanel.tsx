@@ -1,5 +1,5 @@
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { DialectKind } from "../api/types";
+import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Cell, DialectKind, SortSpec } from "../api/types";
 import InlineAsk from "../assistant/InlineAsk";
 import { type AskContext, type AskSetup, tablesIn } from "../assistant/context";
 import { hintFor } from "../commands/keymap";
@@ -9,7 +9,9 @@ import Icon from "../components/Icon";
 import Kbd from "../components/Kbd";
 import { MenuList, type MenuItem } from "../components/Menu";
 import { durationText } from "../format/units";
-import ResultGrid from "../components/ResultGrid";
+import ResultGrid, { type GridHandle } from "../components/ResultGrid";
+import { FullValueDialog } from "../components/CellValue";
+import { altGraph, cellCount, isLetter, remapRows, rowsOf, type Selection, wholeRows } from "../grid/selection";
 import PlanView from "./PlanView";
 import QueryError from "./QueryError";
 import ResultTools, { cellText } from "./ResultTools";
@@ -82,8 +84,53 @@ function StateMark({ item }: { item: ResultItem }) {
   return null;
 }
 
+/**
+ * G7: the loaded rows sorted by one column, as AG Grid and DataGrip sort on the client: NULL (and empty) last both
+ * ways, numbers by value. The sort is stable, so equal values keep the order the server sent.
+ */
+export function sortLoaded(rows: Cell[][], ids: number[], column: number, descending: boolean): number[] {
+  const blank = (c: Cell | undefined) => !c || c.t === "null" || (c.t === "text" && c.value === "");
+  const dir = descending ? -1 : 1;
+  return [...ids]
+    .sort((ai, bi) => {
+      const x = rows[ai][column];
+      const y = rows[bi][column];
+      if (blank(x) || blank(y)) return blank(x) && blank(y) ? ai - bi : blank(x) ? 1 : -1;
+      let d: number;
+      if (x.t === "number" && y.t === "number") d = Number(x.value) - Number(y.value);
+      else d = cellText(x).localeCompare(cellText(y));
+      return d !== 0 && !Number.isNaN(d) ? d * dir : ai - bi;
+    });
+}
+
+/** G11's order on loaded rows: ascending, descending, then off. */
+function nextSort(current: SortSpec | null, column: string): SortSpec | null {
+  if (current?.column === column) return current.descending ? null : { column, descending: true };
+  return { column, descending: false };
+}
+
+const readOnlyNote = (what: string) => `Results are read-only: ${what} works in the table grid.`;
+
+/** The edit keys of the table grid, by what the note calls them; null for a key results act on or let pass. */
+function editKeyName(e: KeyboardEvent): string | null {
+  if (altGraph(e)) return "typing";
+  const mod = e.ctrlKey || e.metaKey;
+  const letter = (l: string) => isLetter(e, l);
+  if (mod && e.altKey && letter("n")) return "Set NULL";
+  if (mod && e.altKey && letter("d")) return "Set DEFAULT";
+  if (e.altKey && e.key === "Delete") return "deleting rows";
+  if ((e.altKey && e.key === "Insert") || (mod && !e.altKey && !e.shiftKey && letter("n"))) return "adding rows";
+  if (mod && !e.altKey && !e.shiftKey && letter("d")) return "duplicating rows";
+  if (mod && !e.altKey && letter("v")) return "pasting";
+  if (mod || e.altKey) return null;
+  if (e.key === "Delete" || e.key === "Backspace") return "Delete";
+  if (e.key === "Enter" || (e.key === "F2" && !e.shiftKey)) return "editing";
+  if (e.key.length === 1 && !(e.key === " " && e.shiftKey)) return "typing";
+  return null;
+}
+
 /** A result tab's right-click menu at a point, kept inside the window. */
-function TabMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+function TabMenu({ x, y, items, onClose, label = "Result" }: { x: number; y: number; items: MenuItem[]; onClose: () => void; label?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x, y });
   useLayoutEffect(() => {
@@ -100,7 +147,7 @@ function TabMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuIt
   }, [onClose]);
   return (
     <div ref={ref} className="tree-menu" style={{ left: at.x, top: at.y }}>
-      <MenuList items={items} label="Result" onClose={onClose} compact />
+      <MenuList items={items} label={label} onClose={onClose} compact />
     </div>
   );
 }
@@ -150,11 +197,22 @@ export default function ResultsPanel({
   const [filter, setFilter] = useState("");
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const [range, setRange] = useState<{ first: number; last: number } | null>(null);
+  /** G7: the result grid's selection, header sort, status line, cell menu and full value. */
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [sort, setSort] = useState<SortSpec | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [cellMenu, setCellMenu] = useState<{ row: number; column: number; x: number; y: number } | null>(null);
+  const [full, setFull] = useState<{ title: string; cell: Cell } | null>(null);
+  const gridRef = useRef<GridHandle | null>(null);
   useEffect(() => {
     setAskOpen(false);
     setFilter("");
     setHidden(new Set());
     setRange(null);
+    setSelection(null);
+    setSort(null);
+    setNote(null);
+    setCellMenu(null);
   }, [item?.id]);
   const rowsState = item?.state.s === "rows" ? item.state : null;
   const needle = filter.trim().toLowerCase();
@@ -162,6 +220,35 @@ export default function ResultsPanel({
     () => (rowsState && needle ? rowsState.rows.filter((r) => r.some((c) => cellText(c).toLowerCase().includes(needle))) : rowsState?.rows ?? []),
     [rowsState?.rows, needle],
   );
+  // The columns on screen and the rows as shown: filtered, then sorted; one array while they stay the same.
+  const keep = useMemo(
+    () => (rowsState ? rowsState.columns.map((c, i) => (hidden.has(c.name) ? -1 : i)).filter((i) => i >= 0) : []),
+    [rowsState?.columns, hidden],
+  );
+  /** I3: each row on screen by its place in load order, so a selection follows its rows. */
+  const shownIds = useMemo(() => {
+    const all = rowsState?.rows ?? [];
+    const ids = needle ? all.flatMap((r, i) => (r.some((c) => cellText(c).toLowerCase().includes(needle)) ? [i] : [])) : all.map((_, i) => i);
+    const at = sort && rowsState ? rowsState.columns.findIndex((c) => c.name === sort.column) : -1;
+    return at >= 0 ? sortLoaded(all, ids, at, !!sort?.descending) : ids;
+  }, [rowsState?.rows, needle, sort, rowsState?.columns]);
+  const shownRows = useMemo(() => {
+    const all = rowsState?.rows ?? [];
+    const project = rowsState && keep.length !== rowsState.columns.length;
+    return shownIds.map((i) => (project ? keep.map((k) => all[i][k]) : all[i]));
+  }, [shownIds, keep, rowsState?.rows, rowsState?.columns]);
+  // Another sort, filter or set of columns starts the selection over; more rows keep it on its rows.
+  const viewKey = `${item?.id}|${sort?.column}|${sort?.descending}|${needle}|${keep.join(",")}`;
+  const before = useRef<{ key: string; ids: number[]; count: number } | null>(null);
+  useEffect(() => {
+    const prev = before.current;
+    const count = rowsState?.rows.length ?? 0;
+    before.current = { key: viewKey, ids: shownIds, count };
+    if (!prev || prev.key !== viewKey) return setSelection(null);
+    if (prev.ids === shownIds) return;
+    setSelection((s) => remapRows(s, prev.ids, shownIds));
+    if (sort && count > prev.count) setNote(`Sorted the ${fmt(count)} loaded rows; ${fmt(count - prev.count)} more loaded.`);
+  }, [shownIds, viewKey]);
   const sectionRef = useRef<HTMLElement>(null);
   // The statement as it ran, its session's database, and every row this result holds.
   const resultOrigin = (): ExportOrigin | null =>
@@ -384,17 +471,65 @@ export default function ResultsPanel({
         );
         break;
       case "rows": {
-        const keep = st.columns.map((c, i) => (hidden.has(c.name) ? -1 : i)).filter((i) => i >= 0);
         const columns = keep.length === st.columns.length ? st.columns : keep.map((i) => st.columns[i]);
-        const gridRows = keep.length === st.columns.length ? filteredRows : filteredRows.map((r) => keep.map((i) => r[i]));
+        const gridKey = (e: KeyboardEvent<HTMLDivElement>) => {
+          if (e.key === "Escape" && cellMenu) return e.preventDefault(), setCellMenu(null);
+          if ((e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) && selection) {
+            e.preventDefault();
+            const td = e.currentTarget.querySelector(`tr[data-row="${selection.active.r}"] td[data-col="${selection.active.c}"]`);
+            const box = (td ?? e.currentTarget).getBoundingClientRect();
+            setCellMenu({ row: selection.active.r, column: selection.active.c, x: box.left, y: box.bottom });
+            return;
+          }
+          if (e.shiftKey && e.key === "F2" && !e.ctrlKey && !e.altKey) {
+            e.preventDefault();
+            if (selection) openFull(selection.active.r, selection.active.c);
+            return;
+          }
+          if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === "KeyF" || e.key.toLowerCase() === "f")) {
+            e.preventDefault();
+            setNote("Results have no filter bar: Filter rows above searches them, and Ctrl+F filters in the table grid.");
+            return;
+          }
+          const what = editKeyName(e);
+          if (what && shownRows.length > 0) {
+            e.preventDefault();
+            setNote(readOnlyNote(what));
+          }
+        };
+        const openFull = (r: number, c: number) => {
+          const cell = shownRows[r]?.[c];
+          if (cell) setFull({ title: `${columns[c].name}, row ${(r + 1).toLocaleString("en-US")}`, cell });
+        };
         body = (
           <ResultGrid
             columns={columns}
-            rows={gridRows}
+            rows={shownRows}
             resetKey={item.id}
             label={`Result ${item.id}`}
             onRange={(first, last) => setRange({ first, last })}
             onNearEnd={st.hasMore && st.open ? () => onFetchMore(item.id) : undefined}
+            sort={sort}
+            onSort={(column) => {
+              const next = nextSort(sort, column);
+              setSort(next);
+              // G7: the sort is of the loaded rows only, and says so.
+              setNote(next ? `Sorted the ${fmt(st.rows.length)} loaded rows.` : "Sort off: the rows are back in the order they came.");
+            }}
+            selection={selection}
+            onSelection={(next) => {
+              setSelection(next);
+              setCellMenu(null);
+            }}
+            onNote={setNote}
+            gridRef={gridRef}
+            onGridKey={gridKey}
+            onPaste={(e) => {
+              e.preventDefault();
+              setNote(readOnlyNote("pasting"));
+            }}
+            onOpen={() => setNote(readOnlyNote("editing"))}
+            onCellMenu={(row, column, x, y) => setCellMenu({ row, column, x, y })}
           >
             {st.rows.length === 0 && <p className="state-panel muted">The query returned no rows.</p>}
             {st.rows.length > 0 && filteredRows.length === 0 && <p className="state-panel muted">No loaded row matches the filter.</p>}
@@ -424,6 +559,11 @@ export default function ResultsPanel({
               ) : (
                 <span>Run it again to fetch more</span>
               ))}
+            {note && (
+              <span className="results-grid-note" role="status" title={note}>
+                {note}
+              </span>
+            )}
             <span className="spacer" />
             {(() => {
               const note = production
@@ -459,8 +599,39 @@ export default function ResultsPanel({
     if (id !== undefined) tabRefs.current.get(id)?.focus();
   };
   const menuItem = tabMenu ? state.items.find((r) => r.id === tabMenu.id) : undefined;
+  const focusResultGrid = () => sectionRef.current?.querySelector<HTMLElement>(".grid-scroll")?.focus();
+  const closeCellMenu = () => {
+    setCellMenu(null);
+    focusResultGrid();
+  };
+  /** G7: results' cell menu has only what reads (DataGrip, SSMS): Copy, Copy with headers, Open full value. */
+  const cellMenuItems = (m: { row: number; column: number }): MenuItem[] => {
+    const shownCols = keep.map((i) => rowsState!.columns[i]);
+    const count = cellCount(selection);
+    const heading =
+      count > 1
+        ? wholeRows(selection, shownCols.length)
+          ? `${fmt(rowsOf(selection).length)} rows`
+          : `${fmt(count)} cells`
+        : `${shownCols[m.column]?.name}, row ${fmt(m.row + 1)}`;
+    return [
+      { key: "head", label: heading, heading },
+      { key: "copy", label: "Copy", shortcut: "Ctrl+C", onSelect: () => gridRef.current?.copy(false) },
+      { key: "copyHeaders", label: "Copy with headers", shortcut: "Ctrl+Shift+C", onSelect: () => gridRef.current?.copy(true) },
+      {
+        key: "full",
+        label: "Open full value",
+        shortcut: "Shift+F2",
+        separatorBefore: true,
+        onSelect: () => {
+          const cell = shownRows[m.row]?.[m.column];
+          if (cell) setFull({ title: `${shownCols[m.column].name}, row ${fmt(m.row + 1)}`, cell });
+        },
+      },
+    ];
+  };
   return (
-    <section ref={sectionRef} className={production ? "results prod-wash" : "results"} aria-label="Results">
+    <section ref={sectionRef} className={production ? "results prod-wash" : "results"} aria-label="Results" data-pane>
       {item && (
         <div className="results-tabs">
           {/* PR28: Pin and Close live on the result tab: close on hover, Pin in its right-click menu. */}
@@ -548,6 +719,19 @@ export default function ResultsPanel({
         </div>
       )}
       {tabMenu && menuItem && <TabMenu x={tabMenu.x} y={tabMenu.y} items={menuItems(menuItem)} onClose={closeMenu} />}
+      {cellMenu && rowsState && (
+        <TabMenu x={cellMenu.x} y={cellMenu.y} items={cellMenuItems(cellMenu)} onClose={closeCellMenu} label="Cell" />
+      )}
+      {full && (
+        <FullValueDialog
+          title={full.title}
+          cell={full.cell}
+          onClose={() => {
+            setFull(null);
+            focusResultGrid();
+          }}
+        />
+      )}
       <div className="results-body">{body}</div>
       {/* Frame 2: a failed statement has no footer; the error already names it. */}
       {item && !(item.state.s === "error" && item.state.index !== undefined) && (

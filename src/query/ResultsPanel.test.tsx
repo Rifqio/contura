@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { setPlatformForTests } from "../platform";
 import type { Cell, ExecOutcome } from "../api/types";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { ToastProvider } from "../components/Toast";
@@ -395,4 +396,159 @@ test("the_result_origin_names_the_hidden_columns", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Export" }));
   await userEvent.click(screen.getByRole("menuitem", { name: /Export\.\.\./ }));
   expect(onExport.mock.calls[0][0]).toMatchObject({ kind: "result", hidden: ["name"] });
+});
+
+// G7 (UX step 3): query results select, copy and sort their loaded rows as the table grid does, and say why edit
+// keys do nothing.
+describe("G7: working with query results", () => {
+  const t = (value: string): Cell => ({ t: "text", value, truncated: false, totalBytes: value.length });
+  const n = (value: string): Cell => ({ t: "number", value });
+  const grouped = (): RunnerState => {
+    const s = started(["SELECT status, count(*) AS orders, sum(total) AS revenue FROM orders GROUP BY status"]);
+    return runnerReducer(s, {
+      type: "done",
+      id: s.items[0].id,
+      outcome: {
+        t: "rows",
+        columns: [
+          { name: "status", typeName: "text", numeric: false },
+          { name: "orders", typeName: "int8", numeric: true },
+          { name: "revenue", typeName: "numeric", numeric: true },
+        ],
+        rows: [
+          [t("paid"), n("3"), n("1422.00")],
+          [t("pending"), n("2"), { t: "null" }],
+          [t("delivered"), n("2"), n("196.25")],
+          [t("refunded"), n("1"), n("19.99")],
+        ],
+        hasMore: false,
+      },
+      ms: 4,
+    });
+  };
+  const grid = () => document.querySelector(".results .grid-scroll") as HTMLElement;
+  const td = (r: number, c: number) => document.querySelector(`tr[data-row="${r}"] td[data-col="${c}"]`) as HTMLElement;
+  const down = (el: HTMLElement, extra: object = {}) => fireEvent.mouseDown(el, { button: 0, ...extra });
+  const key = (k: string, extra: object = {}) => fireEvent.keyDown(grid(), { key: k, ...extra });
+  const note = () => document.querySelector(".results-grid-note")?.textContent ?? "";
+  const column = (c: number) => Array.from(document.querySelectorAll(`tbody td[data-col="${c}"]`)).map((x) => x.textContent);
+  let writeText: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    setPlatformForTests("linux");
+  });
+  afterEach(() => setPlatformForTests(null));
+
+  test("cells select and copy as in the table grid, NULL as an empty field", () => {
+    panel(grouped());
+    down(td(0, 0));
+    down(td(1, 2), { shiftKey: true });
+    expect(document.querySelectorAll('td[aria-selected="true"]')).toHaveLength(6);
+    key("c", { ctrlKey: true, code: "KeyC" });
+    expect(writeText).toHaveBeenLastCalledWith("paid\t3\t1422.00\npending\t2\t");
+    expect(note()).toBe("Copied 6 cells.");
+    key("C", { ctrlKey: true, shiftKey: true, code: "KeyC" });
+    expect(writeText).toHaveBeenLastCalledWith("status\torders\trevenue\npaid\t3\t1422.00\npending\t2\t");
+    key("a", { ctrlKey: true, code: "KeyA" });
+    expect(document.querySelectorAll('td[aria-selected="true"]')).toHaveLength(12);
+    key("End", { ctrlKey: true });
+    expect(td(3, 2).className).toContain("cell-selected");
+  });
+
+  test("I1: a copy never cuts short silently: cut-short and binary cells are named in the note", () => {
+    let s = started(["SELECT body, data FROM docs"]);
+    s = runnerReducer(s, {
+      type: "done",
+      id: s.items[0].id,
+      outcome: {
+        t: "rows",
+        columns: [
+          { name: "body", typeName: "text", numeric: false },
+          { name: "data", typeName: "bytea", numeric: false },
+        ],
+        rows: [
+          [{ t: "text", value: "long start", truncated: true, totalBytes: 5000 }, { t: "bytes", previewHex: "ff00", truncated: false, totalBytes: 2 }],
+          [t("short"), { t: "null" }],
+        ],
+        hasMore: false,
+      },
+      ms: 1,
+    });
+    panel(s);
+    down(td(0, 0));
+    down(td(1, 1), { shiftKey: true });
+    key("c", { ctrlKey: true, code: "KeyC" });
+    // Binary cells copy as an empty field.
+    expect(writeText).toHaveBeenLastCalledWith("long start\t\nshort\t");
+    expect(note()).toBe("Copied 4 cells; 2 were cut short at 1 KB. Open full value (Shift+F2) copies one in full.");
+  });
+
+  test("a header click sorts the loaded rows up, down and off, NULL last both ways", () => {
+    panel(grouped());
+    const sortBy = () => screen.getByRole("button", { name: "Sort by revenue" });
+    fireEvent.click(sortBy());
+    expect(column(2)).toEqual(["19.99", "196.25", "1422.00", "NULL"]);
+    fireEvent.click(sortBy());
+    expect(column(2)).toEqual(["1422.00", "196.25", "19.99", "NULL"]);
+    fireEvent.click(sortBy());
+    expect(column(0)).toEqual(["paid", "pending", "delivered", "refunded"]);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by status" }));
+    expect(column(0)).toEqual(["delivered", "paid", "pending", "refunded"]);
+  });
+
+  test("I3: in a sorted result the selection follows its rows when more rows load, and the note says what was sorted", () => {
+    const base = grouped();
+    const id = base.items[0].id;
+    const props = {
+      onSelect: vi.fn(), onPin: vi.fn(), onClose: vi.fn(), onCloseUnpinned: vi.fn(), onFetchMore: vi.fn(),
+      onCancel: vi.fn(), onRunAgain: vi.fn(), onGoTo: vi.fn(),
+    };
+    const { rerender } = render(<ResultsPanel state={base} timeoutSecs={null} lineAt={() => 2} {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by revenue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sort by revenue" }));
+    expect(note()).toBe("Sorted the 4 loaded rows.");
+    // Descending: paid 1422.00, delivered 196.25; select those two rows.
+    down(td(0, 0));
+    down(td(1, 2), { shiftKey: true });
+    const more = runnerReducer(base, { type: "more", id, rows: [[t("vip"), n("9"), n("9999.00")]], hasMore: false });
+    rerender(<ResultsPanel state={more} timeoutSecs={null} lineAt={() => 2} {...props} />);
+    expect(note()).toBe("Sorted the 5 loaded rows; 1 more loaded.");
+    expect(column(0)[0]).toBe("vip");
+    key("c", { ctrlKey: true, code: "KeyC" });
+    expect(writeText).toHaveBeenLastCalledWith("paid\t3\t1422.00\ndelivered\t2\t196.25");
+  });
+
+  test("edit keys do nothing and say why", () => {
+    panel(grouped());
+    down(td(1, 0));
+    key("Delete");
+    expect(note()).toBe("Results are read-only: Delete works in the table grid.");
+    key("Enter");
+    expect(note()).toBe("Results are read-only: editing works in the table grid.");
+    expect(key("n", { ctrlKey: true, altKey: true, code: "KeyN" })).toBe(false);
+    expect(note()).toBe("Results are read-only: Set NULL works in the table grid.");
+    key("x");
+    expect(note()).toBe("Results are read-only: typing works in the table grid.");
+    // AltGr+D (đ on some layouts) is typing, not Set DEFAULT.
+    key("đ", { ctrlKey: true, altKey: true, code: "KeyD" });
+    expect(note()).toBe("Results are read-only: typing works in the table grid.");
+    expect(td(1, 0).textContent).toBe("pending");
+  });
+
+  test("the cell menu holds only what reads: Copy, Copy with headers, Open full value", () => {
+    panel(grouped());
+    fireEvent.contextMenu(td(2, 0));
+    expect(document.querySelector(".tree-menu .menu-heading")!.textContent).toBe("status, row 3");
+    expect(Array.from(document.querySelectorAll(".tree-menu [role=menuitem]")).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Copy",
+      "Copy with headers",
+      "Open full value",
+    ]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy" }));
+    expect(writeText).toHaveBeenLastCalledWith("delivered");
+    fireEvent.contextMenu(td(2, 0));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open full value" }));
+    expect(screen.getByRole("dialog", { name: "status, row 3" }).textContent).toContain("delivered");
+  });
 });

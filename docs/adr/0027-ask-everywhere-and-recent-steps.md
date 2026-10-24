@@ -1,0 +1,74 @@
+# Ask follows the user across tabs: tab context, Asked in stamps and Recent steps
+
+The Ask panel works on every tab but a diagram. Each tab kind sends its own context under the Connection's AI access, and the thread carries where each question was asked and what the user did in between, so a later question on another tab knows the earlier work. It extends ADR 0024's thread memory and keeps ADR 0010's rule that the Core builds what is sent. ADR 0025's rails are unchanged; they gain two item kinds, This tab (`tab`) and Recent steps (`steps`). The example the user gave, a Visual Query "find orders over 1M", a run, then New table "make a pivot table for monthly totals per customer", is the end to end test (`tests/ai_everywhere.rs`, and the panel test `visual query to new table` in `src/App.test.tsx`).
+
+## Levels
+
+AI access has four levels: L0 Never (the question only), L1 Schema only (names), L2 Schema and query text (SQL, user-typed titles, counts), L3 Plus sample rows. Every part of the new items has a level, and the Core sends a part only when the Ask's access reaches it.
+
+## This tab
+
+The UI sends typed fields per tab kind (`AskTab`, a closed serde enum: an unknown kind refuses the Ask). The Core renders the This tab item: a where line (`Visual Query "Orders over 1M" in shop`), then the tab's facts. Object names need L1; titles the user typed and counts need L2; no row value goes at any level (no cell, filter value, default literal or import file row). An import file's header names are file content (a headerless file read with the header option on gives its first row), so they and the file side of the mapping go from L2; at L1 only the mapping's target column names go. Defaults are masked as table cards mask them. SQL a tab shows (a Visual Query's SQL, a grid filter, a sync script) goes as a query text item under the existing masking. The item is cut at 8 KB, whole lines from the end; the where line is never cut. At L0 with a Connection nothing about that Connection goes.
+
+A tab that spans two Connections sends the other one in `focus.also`: a Schema Compare's source database, or the Connection its Schema Model was made from, and a Data Transfer's other side. The Core gates every item at the lowest access among the Ask's Connection and each `also` Connection; a missing Connection counts as Never. The UI never cuts `focus.also`; the Core refuses an Ask with more than four other Connections. Before a compare result or a transfer plan exists, the item says `not compared yet` or `not planned yet` and claims no counts.
+
+### One AI provider per Ask
+
+ADR 0010 lets a Group override the AI provider, so the Group of the place an Ask is made in, and the Group of a Connection a window tab or a step names, can send to different providers. An Ask goes to its place's provider and never sends anything about a Connection whose Group's effective provider differs from it (another provider kind, key or base URL; the model does not count). The Core reads every such Connection as AI access Never for that Ask (`preview::SameProvider`, from `AiService::same_provider`, read with the provider): the Ask's own Connection (the Ask then goes with no context about it), each `also` Connection (which lowers the Ask to Never, as a missing one does), and each Recent step on it (left out whole, not sent and not stored). A replay reads through the same gate, so a stored step or a turn asked across such a Connection is not replayed once its Group sends elsewhere. Sends names each one: `prod-7 uses another Group's AI provider, so nothing about it goes.` Nothing is routed to the other Group's provider, and the thread stays in the current place, so a question about another Group's Connection carries none of its context (this also closes the final review's M3 for such Connections: nothing about them is stored). Re-routing can come later.
+
+On every tab but a query tab the system prompt says the user is not in a SQL editor. That line follows the tab kind even when This tab is switched off or sends nothing (L0); it carries no database data.
+
+## Asked in
+
+The turn stamp gains `asked_in`: the tab kind, a label (the where line as it went, else the kind words), a summary of the This tab item (400 bytes at most) and the Recent steps labels that went with it (1 KB). It is built from the items that actually went, after `off`, the gate, the rails and the 200 KB cut: a summary fact goes only when all of its lines went, cleaned as the rail cleaned them. The stamped kinds include the highest level its parts used (`names` for L1, `sql` for L2), so the unchanged history gate (`history_allowed`) holds a replay to the level the stamp was written at: lowering AI access holds the whole turn back, and Sends counts it ("2 earlier messages stay on this computer: AI access is lower now.").
+
+`asked_in` is stored on the question in the thread JSON (an optional field, no migration) and replayed framed as `asked_in` lines with the turn, through the same per-request boundary. `AskedIn.also` keeps the other Connections a tab spanned: at replay a question asked across them is gated at the lowest current access of the Ask's Connection and each of them, and a Topic or compaction summary over such a question is held with it. A Continue's stamp takes the continued question's `also` beside its own, so the extended answer is held whenever the first one is.
+
+The webview holds only the label, the tab kind and `also`. A failed append loses the summary and steps of that question, never `also`.
+
+## Recent steps
+
+The UI keeps, in memory only, the last 10 actions per place (8 places at most): open or switch a tab, run a query or Visual Query, add a canvas table, tick, join, filter on a column, sort, save Pending Edits, apply a design, compare, sync, transfer, import. Each is a typed value (`StepIn`: a verb, the tab kind, names, a count), never free text. The Core renders the labels (`(3 min ago) ran the Visual Query "Untitled 1", 1 row`) with no SQL and no row data, cuts each at 160 bytes and the item at 1 KB, and sends them as one Sends row the user can leave out of one Ask (`Recent steps · 3`, back on after every Ask). Steps reset when a turn is kept: the steps that Ask carried go, steps recorded while it streamed stay. Table names in steps on the Ask's own Connection and database join the AI Context's open-tab hints, so they rank like open tables and keep the Topic when the user moves from a Visual Query on `orders` to New table.
+
+Each step is gated by its own Connection:
+- A step on the Ask's Connection goes at the Ask's lowest access. A step on another Connection goes at that Connection's own access, never lowered by the Ask's (the trail is the part the user asked for). So the gate is not monotonic: an Ask at L1 sends its own L3 Connection's steps at L1 and another L3 Connection's steps at L3.
+- A step on a Connection at Never, a missing one or a deleted one is dropped whole, with the note `<n> steps stay on this computer: their Connection shares nothing with AI.`; steps held because the Ask itself is at Never have their own note. An Ask with no Connection (Home, Settings) still sends steps, each at its own Connection's access.
+- A step on another Connection keeps that Connection's database names where the verb names them (compare, sync, transfer, import) and says `on another Connection` where it would say `in <database>`.
+- A Compare or Transfer source on another Connection is named only at the lower of the two accesses (`sourceConnectionId`), and only in a step that is not kept with the turn; a kept step says `a source` or `a database`.
+- The rails clean the Steps item one line at a time, so a secret match never joins two steps; keeping steps for the turn relies on that.
+
+### Steps on other Connections are sent and stored
+
+The user ruled on 2026-10-23 that a step on another Connection is sent and stored with the Ask (`AskedIn.other_steps`: the label as it went, its Connection's id and the level the label needed). History is local and the user's. Two rules keep Never and Clear history honest:
+
+1. **Re-gated on every replay.** On each replay, history and Continue alike, a stored step goes only while its Connection exists and its current access reaches the level the label needed (the `also` gate: a deleted Connection is Never). One that fails is left out silently and the turn replays as before. Other steps do not raise the turn's stamped kinds (ruling R1): the turn's kinds gate replay at the Ask's own Connection, so raising them would hold an Ask on A back for a step on B, while the per-step gate already covers B.
+2. **Purged with that Connection's history.** Clear AI history of a place (Settings, and the panel's Clear all chats), a Connection's Clear history, Clear all of the Query History, and Delete Connection remove that Connection's steps from every stored Ask of every place, on disk, each thread rewritten in one transaction. The purge also removes their labels from every kept copy of sent text (an answer's exact text, with "Keep the exact text" on, and its outline and summary calls'): a label is tied to its Connection through the stored steps, and the labels removed from one block leave one line, `(steps from a removed Connection were cleared)`. The Ask's own step lines always stay.
+
+An Ask still running when a purge happens stores its turn without those steps and labels, whatever the webview sends back: the Core keeps a purge record per Connection (its newest purge, at most 256 Connections, the oldest dropped first) and the steps held for each running Ask (32 at most). A delete marks its purge as pending in the AI store before the delete, runs it off the async runtime after, and a purge that fails stays pending and runs on the next start. The pending list is read and written as one step, so overlapping deletes never lose an entry. A thread row that cannot be read is skipped and counted, so one bad row never blocks a purge or keeps it pending. The webview never holds other steps: the stamp it is sent and every thread view leave them out, and the Core puts them on the question when the turn is stored.
+
+Accepted edges:
+- A place's Clear AI history clears only that place's steps in the UI trail; the Core still purges the stored ones everywhere. Clearing or deleting a Connection drops its steps from the UI trail of every place.
+- Purge records and held steps live in memory only. A webview save of an old in-flight turn after a restart is not covered; a pending delete purge still is.
+- The Clear purges run inline in their synchronous commands; a failure returns an error and the user can clear again.
+- A step whose source is on a Connection other than the step's own (a third one, or the Ask's own Connection) is sent but not stored: neither the step's own gate nor its purge would cover the source's database names.
+- A label that cannot be tied to a single Connection (not stored, or the same text on several) is removed on any purge, even one about another Connection. That is the privacy-safe side.
+- Place membership is current membership: a Connection moved between Groups has its steps purged when its current place is cleared.
+- A Topic or compaction summary whose cross-Connection question was cut by the 200-message cap, while the summary survives, is gated by its own Connection only. A later fix would store `also` on the summary.
+
+## Sends
+
+Two new rows: `This tab · <kind words>` and `Recent steps · <n>`. Switched off for an Ask, each keeps its row with 0 bytes and nothing sent, so it can be switched back on. The row counts the lines that went after the rails and the 200 KB cut; with every step dropped there is no row. The Tab and Steps items join the 200 KB cut after History and before the cards (`Rows, Dbml, SavedQueries, History, Steps, Tab, Cards, Names, Error, Sql`). The This tab item is cut by whole lines from the end and its where line always stays. The AI log records counts only (`tab kind=visual bytes=1,204`, `steps n=4 dropped=1`), never labels.
+
+## Answers in tabs without an editor
+
+On every tab but a query tab an answer's SQL block offers `Open in new query tab` on the Ask's Connection and database, and no Insert; nothing runs until the user presses Run there, under `safety::classify`, Read-only and Production (ADR 0013). A write opens commented out (`Open in new query tab, commented out`), every line under every line end. The UI uses the Core's check of a block only when the block's own text hashes to the `bodySha256` the Core checked; otherwise the block is unchecked and opens only commented out. The Core and the UI read fences with the same line ends: CRLF and a lone CR end a line before the body is split and checked, so the text checked is the text the editor holds, and only space and tab count as white space on a fence line (Rust and JS disagree on NEL and BOM). On PostgreSQL a line comment ends at a CR. An answer to an Ask with no Connection is checked under every Dialect and keeps the worst reading, so a statement that writes on any of them opens commented out whichever Connection the new tab is given.
+
+## Considered and rejected
+
+- **The UI writing the context text.** Simpler, but it moves egress decisions out of the Core and lets any screen put free text in a request.
+- **Sending the grid's visible rows or the import file's rows at Plus sample rows.** The rows path reads 5 rows live with redaction; screen rows and file rows have no such checks and no consent.
+- **Re-rendering stored steps at replay from typed values.** More exact under an access change, but it keeps more per message and needs the old Connection's names; holding the whole turn back under the gate, and each other step under its own Connection's gate, is simpler and safe.
+- **Other Connections' steps sent but never stored** (the plan's first default). The user wants the trail to survive into later questions; re-gating and purging keep Never and Clear history honest instead.
+- **A trail that survives restarts.** It would write user actions to disk before anything is asked.
+- **Relaxing the history gate to the Connection.** A New table in another database of the same Connection breaks the Topic and holds earlier turns back, as before; relaxing it is a privacy change outside this decision.
+- **Proposal tools now** (filling the Table Designer grid, the Visual Query canvas, DBML edits, filters, Compare and Transfer suggestions). 1.1, each with its own board, review and security check.

@@ -6,7 +6,8 @@ import type { CompareResult, ConnectionConfig, JobEvent, SyncOutcome } from "../
 import { JobsProvider } from "../jobs/useJobs";
 import type { CompareSeed } from "../shell/tabs";
 import { callsTo, routeInvoke } from "../test/invoke";
-import CompareTab, { REPLAN_DEBOUNCE_MS } from "./CompareTab";
+import CompareTab, { REPLAN_DEBOUNCE_MS, compareStep, compareTabAsk } from "./CompareTab";
+import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 import { EMPTY_RESULT, ITEMS, RESULT, planFor } from "./fixtures";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -564,4 +565,84 @@ test("item_43_the_selected_table_shows_its_status_word_in_its_colour", async () 
   await userEvent.click(screen.getByRole("treeitem", { name: "invoices, changed, 4 changes inside" }));
   expect(statusWord().textContent).toBe("Changed, 4 changes");
   expect(statusWord().classList.contains("diff-changed")).toBe(true);
+});
+
+// ---- What the tab tells the Ask (spec 4.6) ----
+
+test("compareTabAsk sends typed items, never their detail or default values, with the source as the other Connection", () => {
+  const source = { connectionId: "c1", database: "billing", schema: "billing" };
+  const target = { connectionId: "c2", database: "billing_staging", schema: "billing" };
+  const fields = compareTabAsk({ source: { kind: "database", side: source }, target, items: ITEMS, notCompared: 2, ticked: 3, script: "ALTER TABLE x;" });
+  expect(fields.where).toEqual({ connectionId: "c2", database: "billing_staging", schema: "billing" });
+  expect(fields.also).toEqual(["c1"]);
+  expect(fields.sql).toBe("ALTER TABLE x;");
+  expect(fields.tab).toMatchObject({ kind: "compare", source: { kind: "database", database: "billing" }, targetDatabase: "billing_staging", notCompared: 2, ticked: 3 });
+  const t = fields.tab.kind === "compare" ? fields.tab : null;
+  expect(t!.items).toHaveLength(ITEMS.length);
+  expect(t!.items[0]).toEqual({ kind: "changed", object: "column", table: "invoices", name: "total", fromType: "numeric(10,2)", toType: "numeric(12,2)", losesData: false, losesRows: null });
+  // A default change goes as its names only.
+  const text = JSON.stringify(fields.tab);
+  expect(text).not.toContain("transfer");
+  expect(text).not.toContain("card");
+  expect(text).not.toContain("detail");
+  // An untied model source spans no other Connection; a model made from one spans it.
+  expect(compareTabAsk({ source: { kind: "model", file: "kestrel.dbml", connectionId: null }, target, items: [], notCompared: 0, ticked: 0, script: null }).also).toEqual([]);
+  expect(compareTabAsk({ source: { kind: "model", file: "kestrel.dbml", connectionId: "c1" }, target, items: [], notCompared: 0, ticked: 0, script: null }).also).toEqual(["c1"]);
+});
+
+test("compareTabAsk cuts the items at twice the Core's cap and the script at a line end", () => {
+  const many = Array.from({ length: 900 }, () => ITEMS[0]!);
+  const long = Array.from({ length: 2000 }, (_, i) => `ALTER TABLE t${i} ADD c int;`).join("\n");
+  const fields = compareTabAsk({ source: { kind: "database", side: null }, target: null, items: many, notCompared: 0, ticked: 0, script: long });
+  expect(fields.tab.kind === "compare" && fields.tab.items).toHaveLength(600);
+  expect(fields.sql!.length).toBeLessThanOrEqual(32 * 1024);
+  expect(fields.sql!.endsWith(";")).toBe(true);
+});
+
+test("compareTabAsk claims no counts before a result is in", () => {
+  const fields = compareTabAsk({ source: { kind: "database", side: null }, target: null, items: [], notCompared: 0, ticked: 0, script: null, compared: false });
+  expect(fields.tab).toMatchObject({ kind: "compare", compared: false, source: { kind: "database", database: "" }, targetDatabase: "" });
+});
+
+test("compareStep is on the target, with the source's Connection only when it is another", () => {
+  const source = { connectionId: "c1", database: "shop", schema: null };
+  const target = { connectionId: "c2", database: "shop_staging", schema: null };
+  expect(compareStep({ kind: "database", side: source }, target, "compared", 8)).toEqual({
+    verb: "compared",
+    tab: "compare",
+    title: null,
+    connectionId: "c2",
+    database: "shop_staging",
+    schema: null,
+    names: ["shop"],
+    count: 8,
+    sourceConnectionId: "c1",
+  });
+  const same = compareStep({ kind: "database", side: { ...source, connectionId: "c2" } }, target, "compared", 1);
+  expect(same.sourceConnectionId).toBeUndefined();
+  expect(compareStep({ kind: "model", file: "shop.dbml", connectionId: null }, target, "compared", 3)).toMatchObject({ names: ["shop.dbml"], connectionId: "c2" });
+  expect(compareStep({ kind: "model", file: "shop.dbml", connectionId: null }, target, "compared", 3).sourceConnectionId).toBeUndefined();
+  // A model made from another Connection names it as the source, so the Core gates the file name by it too.
+  expect(compareStep({ kind: "model", file: "shop.dbml", connectionId: "c1" }, target, "compared", 3).sourceConnectionId).toBe("c1");
+  expect(compareStep({ kind: "database", side: source }, target, "syncApplied", 6, true)).toMatchObject({ verb: "syncApplied", count: 6, failed: true, connectionId: "c2" });
+});
+
+test("a_result_and_an_apply_are_recent_steps_on_the_target", async () => {
+  clearAllSteps();
+  routes();
+  render(
+    <RecordStepContext.Provider value="ungrouped">
+      <JobsProvider>
+        <CompareTab seed={dbSeed("dev")} connections={CONNS} groups={[]} visible onMeta={() => {}} />
+      </JobsProvider>
+    </RecordStepContext.Provider>,
+  );
+  await ready();
+  expect(stepsOf("ungrouped")).toMatchObject([
+    { verb: "compared", tab: "compare", connectionId: "dev", database: "freight", names: ["freight"], count: RESULT.items.length, sourceConnectionId: "stg" },
+  ]);
+  fireEvent.keyDown(document.querySelector(".compare-tab") as HTMLElement, { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(stepsOf("ungrouped").map((x) => x.verb)).toContain("syncApplied"));
+  expect(stepsOf("ungrouped").find((x) => x.verb === "syncApplied")).toMatchObject({ connectionId: "dev", database: "freight" });
+  clearAllSteps();
 });

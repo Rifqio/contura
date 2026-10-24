@@ -265,6 +265,8 @@ fn ask_request(question: &str) -> AskRequest {
         off: Vec::new(),
         model: None,
         picks: None,
+        tab: None,
+        steps: Vec::new(),
     }
 }
 

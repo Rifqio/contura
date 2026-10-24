@@ -51,9 +51,9 @@ test("menu_lists_home_groups_with_numbers_new_group_and_settings", async () => {
   expect(itemNames()).toEqual(["Home", "Acme", "KFC", "Ungrouped", "New Group...", "Settings"]);
   expect(screen.getByRole("menu").querySelector(".menu-heading")?.textContent).toBe("Groups");
   expect(shortcutOf("Home")).toBe("Ctrl+Shift+H");
-  expect(shortcutOf("Acme")).toBe("Ctrl+1");
-  expect(shortcutOf("KFC")).toBe("Ctrl+2");
-  expect(shortcutOf("Ungrouped")).toBe("Ctrl+3");
+  expect(shortcutOf("Acme")).toBe("Ctrl+Alt+1");
+  expect(shortcutOf("KFC")).toBe("Ctrl+Alt+2");
+  expect(shortcutOf("Ungrouped")).toBe("Ctrl+Alt+3");
   expect(shortcutOf("New Group...")).toBeNull();
   expect(shortcutOf("Settings")).toBe("Ctrl+,");
   // Separators after Home and before New Group..., and none between New Group... and Settings.

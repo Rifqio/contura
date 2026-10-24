@@ -339,6 +339,10 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
   // One Dialog for every view, so focus goes back to the opener at the end (I3). A new view
   // moves focus to its own first control, since the old one is gone.
   const view = asking && path !== null ? "ask" : running && jobId ? "running" : "form";
+  // J2: a form with changes ignores a click outside and asks before Escape discards it.
+  const formState = JSON.stringify([scope, order, [...off], format, opts, name, folder]);
+  const firstFormState = useRef(formState);
+  const dirty = view === "form" && jobId === null && formState !== firstFormState.current;
   const keys = useRef<HTMLDivElement>(null);
   const shownView = useRef(view);
   useEffect(() => {
@@ -618,6 +622,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
       subtitle={subtitle}
       size={view === "ask" ? "confirm" : view === "running" ? "form" : "large"}
       className="export-dialog"
+      dirty={dirty}
       onClose={closeDialog}
     >
       <div ref={keys} className="export-keys" style={groupStyle(group?.color)} onKeyDown={onKeyDown}>

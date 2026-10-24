@@ -318,15 +318,6 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
       act?.joinFrom(table.id, column, e.currentTarget.getBoundingClientRect());
     }
   };
-  const onCardKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const t = e.target as HTMLElement;
-    // A portalled menu's keys bubble here through React: they are the menu's, not the card's.
-    if (e.key !== "Delete" || t.tagName === "INPUT" || !e.currentTarget.contains(t)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    act?.remove(table.id);
-  };
-
   const title = (
     <>
       <span className="table-card-name" title={table.name}>
@@ -472,7 +463,6 @@ export default function QueryCard({ id, data, selected }: NodeProps & { data: Qu
     <div
       ref={root}
       className="vq-card"
-      onKeyDown={onCardKey}
       onContextMenu={(e) => {
         // Item 26: right-click on a card opens its own menu, not the canvas's.
         e.preventDefault();

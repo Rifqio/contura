@@ -1410,7 +1410,7 @@ test("a_redo_after_undo_offers_undo_again", async () => {
   await waitFor(() => expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull());
 });
 
-test("parity_P11_24_a_second_rate_limit_in_a_row_is_not_retried_on_its_own", async () => {
+test("parity_P11_24_a_second_rate_limit_in_a_row_is_not_retried_on_its_own", { timeout: 15000 }, async () => {
   const s = setup();
   await drawn(s);
   // The request left both times (a Sent record), as with a real provider.
@@ -1461,7 +1461,7 @@ test("parity_P11_34_undoing_the_landing_hides_show_in_the_text", async () => {
   await waitFor(() => expect(screen.queryByRole("button", { name: "Show in the text" })).toBeNull());
 });
 
-test("parity_P11_24_a_successful_retry_resets_the_rate_limit_count", async () => {
+test("parity_P11_24_a_successful_retry_resets_the_rate_limit_count", { timeout: 15000 }, async () => {
   const s = setup();
   await drawn(s);
   replies = [

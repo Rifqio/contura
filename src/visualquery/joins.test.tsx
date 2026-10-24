@@ -561,3 +561,14 @@ test("closing_the_tab_with_a_focused_badge_lets_its_canvas_go", async () => {
   await act(() => new Promise((r) => setTimeout(r, 0)));
   expect(focusedBadgeNow()).toBeNull();
 });
+
+test("fix1_delete_on_the_canvas_with_a_join_popover_open_and_no_card_selected_removes_that_join", async () => {
+  render(<Harness initial={docWith({ ...ORDERS_STORES, joins: [FK_JOIN] })} />);
+  await ready();
+  await openBadge("j1");
+  const canvas = document.querySelector(".diagram-canvas") as HTMLElement;
+  canvas.focus();
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  await waitFor(() => expect(latest.joins).toEqual([]));
+  expect(latest.tables).toHaveLength(2);
+});

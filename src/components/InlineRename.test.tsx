@@ -97,6 +97,12 @@ function sidebar(group: Group | undefined, onRenamed = vi.fn()) {
 
 const heading = (name: string) => screen.getByRole("heading", { name });
 
+/** Home's card menu: Rename (S9: a click on the name opens the place, so renaming is F2 or this). */
+async function renameFromCardMenu(name: string) {
+  await userEvent.click(screen.getByRole("button", { name: `Group actions for ${name}` }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+}
+
 test("sidebar: double-click renames a Group, Enter saves it with its colour", async () => {
   prefsRoutes();
   const onRenamed = sidebar(groups[0]);
@@ -164,20 +170,17 @@ test("headers say how to rename and do not select their text", () => {
   cleanup();
   home();
   const open = screen.getByRole("button", { name: "Open KFC" });
-  expect(open.getAttribute("title")).toBe("Double-click or press F2 to rename");
+  expect(open.getAttribute("title")).toBe("Press F2 to rename");
   expect(open.getAttribute("aria-keyshortcuts")).toBe("F2");
   expect(open.classList.contains("rename-label")).toBe(true);
 });
 
-test("the second press of a double-click is kept from selecting text; a single press is not", () => {
+test("the sidebar's second press of a double-click is kept from selecting text; a single press is not", () => {
   prefsRoutes();
   sidebar(groups[0]);
   const h = heading("KFC");
   expect(fireEvent.mouseDown(h, { detail: 1 })).toBe(true);
   expect(fireEvent.mouseDown(h, { detail: 2 })).toBe(false);
-  cleanup();
-  home();
-  expect(fireEvent.mouseDown(screen.getByRole("button", { name: "Open KFC" }), { detail: 2 })).toBe(false);
 });
 
 test("a Group cannot take the name Ungrouped goes by", async () => {
@@ -205,17 +208,30 @@ test("the Core's refusal is shown inline too", async () => {
   expect(screen.getByRole("textbox", { name: "Rename KFC" })).toBeTruthy();
 });
 
-test("Home: double-click renames a Group card without opening it; Esc cancels", async () => {
+test("Home: the card menu's Rename renames a Group card; Esc cancels", async () => {
   prefsRoutes();
   const onChanged = home();
-  const card = () => screen.getByRole("region", { name: /KFC|Kentucky/ });
-  await userEvent.dblClick(within(card()).getByRole("button", { name: "Open KFC" }));
+  await renameFromCardMenu("KFC");
+  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Rename KFC" }));
   await userEvent.keyboard("Kentucky{Enter}");
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
   expect(callsTo("save_group")[0]).toEqual({ input: { id: "g1", name: "Kentucky", color: "indigo" } });
-  await userEvent.dblClick(within(card()).getByRole("button", { name: "Open KFC" }));
+  await renameFromCardMenu("KFC");
   await userEvent.keyboard("Other{Escape}");
   expect(callsTo("save_group")).toHaveLength(1);
+});
+
+test("Home: a double-click on a card name opens the place and does not rename it (S9)", async () => {
+  prefsRoutes();
+  const onOpenGroup = vi.fn();
+  render(
+    <Home groups={groups} connections={connections} openIds={new Set()} recent={[]} onOpenGroup={onOpenGroup}
+      onOpenConnection={vi.fn()} onOpenUngrouped={vi.fn()} onOpenRecent={vi.fn()} onChanged={vi.fn()} onShowAllHistory={vi.fn()} />,
+  );
+  await userEvent.dblClick(screen.getByRole("button", { name: "Open KFC" }));
+  expect(onOpenGroup).toHaveBeenCalledTimes(1);
+  expect(onOpenGroup).toHaveBeenCalledWith("g1");
+  expect(screen.queryByRole("textbox", { name: /^Rename/ })).toBeNull();
 });
 
 test("Home: F2 on a card name renames it, and a duplicate is refused inline", async () => {
@@ -226,7 +242,7 @@ test("Home: F2 on a card name renames it, and a duplicate is refused inline", as
   expect((await screen.findByRole("alert")).textContent).toBe("A Group is already named acme. Pick another name.");
 });
 
-test("Home: a single click still opens the place", async () => {
+test("Home: a single click opens the place at once", async () => {
   prefsRoutes();
   const onOpenGroup = vi.fn();
   render(
@@ -234,7 +250,8 @@ test("Home: a single click still opens the place", async () => {
       onOpenConnection={vi.fn()} onOpenUngrouped={vi.fn()} onOpenRecent={vi.fn()} onChanged={vi.fn()} onShowAllHistory={vi.fn()} />,
   );
   await userEvent.click(screen.getByRole("button", { name: "Open KFC" }));
-  await waitFor(() => expect(onOpenGroup).toHaveBeenCalledWith("g1"));
+  // At once: no wait for a second click.
+  expect(onOpenGroup).toHaveBeenCalledWith("g1");
 });
 
 test("Ungrouped label: renamed in the sidebar, it shows on Home, the switcher and the Connection form; Ungrouped restores it", async () => {
@@ -271,7 +288,7 @@ test("Ungrouped label: renamed in the sidebar, it shows on Home, the switcher an
   expect(within(screen.getByRole("dialog")).getByLabelText("Group").textContent).toContain("Loose ends");
   expect(screen.queryByText("Ungrouped")).toBeNull();
   // An empty name is refused; typing Ungrouped brings the default back, from the Home card this time.
-  await userEvent.dblClick(screen.getByRole("button", { name: "Open Loose ends" }));
+  await renameFromCardMenu("Loose ends");
   await userEvent.keyboard("{Backspace}{Enter}");
   expect((await screen.findByRole("alert")).textContent).toBe("Type a name. Ungrouped brings back the default.");
   await userEvent.keyboard("ungrouped{Enter}");
@@ -368,7 +385,7 @@ test("Home: Enter or Space on a card name opens the place at once", async () => 
   expect(onOpenUngrouped).toHaveBeenCalledTimes(1);
 });
 
-test("Home: a mouse click opens after the double-click time, and not at all once Home is gone", () => {
+test("Home: a mouse click opens at once, with nothing left pending once Home is gone", () => {
   prefsRoutes();
   vi.useFakeTimers();
   try {
@@ -379,11 +396,7 @@ test("Home: a mouse click opens after the double-click time, and not at all once
     );
     const name = screen.getByRole("button", { name: "Open KFC" });
     fireEvent.click(name, { detail: 1 });
-    vi.advanceTimersByTime(399);
-    expect(onOpenGroup).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
     expect(onOpenGroup).toHaveBeenCalledWith("g1");
-    fireEvent.click(name, { detail: 1 });
     view.unmount();
     vi.advanceTimersByTime(1000);
     expect(onOpenGroup).toHaveBeenCalledTimes(1);

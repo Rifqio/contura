@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import shared from "../../crates/contura-core/tests/fixtures/ai/answer_fences.json";
 import { type Block, createAnswerParser, parseAnswer, parseCost, plainText } from "./answerMarkdown";
 
 test("paragraphs_lists_bold_code", () => {
@@ -154,6 +155,8 @@ const STREAMED = [
   "\n\n\nlead blanks\n\n\n",
   "1. one\n2) not\n3. three\n- other\n",
   "``` sql extra\nbody\n```  \n```inline``` text\n",
+  // Lone CRs end lines too, and a CR at the end of a piece may turn into a CRLF.
+  "Run:\r```sql\rSELECT 1; -- note\rDROP TABLE t;\r\n```\rdone **x\ry**\r\r- a\r- b\r",
   "To combine:\n### Example – Get **every** order\n```sql\nSELECT 1\n```\n## Why ##\n- a\n# Top `x`\nafter\n#### deep\n#nospace\n#   \n   ## indented\n    # four",
 ];
 
@@ -196,4 +199,30 @@ test("a_64_kb_answer_streamed_in_657_deltas_reads_far_less_than_reparsing_it", (
   expect(last).toEqual(parseAnswer(answer));
   // Each delta reads about what it added: well under three times the answer, against 21.6 M before.
   expect(streamed).toBeLessThan(3 * 65536);
+});
+
+test("a lone CR is a line end, as in the editor and the Core's fences", () => {
+  // Matches the Core's `a_lone_cr_is_a_line_end_as_in_the_editor`: the same fences, the same bodies.
+  const code = parseAnswer("```sql\rSELECT 1\r```\r```sql\nSELECT 2\n```").filter((b) => b.kind === "code");
+  expect(code.map((b) => (b.kind === "code" ? [b.fence, b.text] : null))).toEqual([
+    [0, "SELECT 1"],
+    [1, "SELECT 2"],
+  ]);
+  const [block] = parseAnswer("```sql\nSELECT 1; -- note\rDROP TABLE orders;\r\n```").filter((b) => b.kind === "code");
+  expect(block.kind === "code" && block.text).toBe("SELECT 1; -- note\nDROP TABLE orders;");
+});
+
+test("fences match the Core's on the shared fixtures, parsed whole and streamed", () => {
+  // crates/contura-core/tests/fixtures/ai/answer_fences.json, read by the Core's `fences_match_the_shared_fixtures`.
+  for (const c of shared.fences) {
+    const want = c.fences.map(([lang, text, closed]) => [lang, text, closed]);
+    const got = (blocks: Block[]) => blocks.flatMap((b) => (b.kind === "code" ? [[b.lang, b.text, b.closed]] : []));
+    expect(got(parseAnswer(c.answer)), c.name).toEqual(want);
+    for (const size of [1, 3, 1000]) {
+      const p = createAnswerParser();
+      let last: Block[] = [];
+      for (let end = 0; end <= c.answer.length; end = end === c.answer.length ? end + 1 : Math.min(c.answer.length, end + size)) last = p.parse(c.answer.slice(0, end));
+      expect(got(last), `${c.name} in steps of ${size}`).toEqual(want);
+    }
+  }
 });

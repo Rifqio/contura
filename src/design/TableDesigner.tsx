@@ -13,6 +13,7 @@ import { DIALECT_LABEL, applyDesign, confirmDesign, errorText, planDesign, table
 import type {
   ConnectionConfig,
   DesignRequest,
+  DialectKind,
   DesignVerdict,
   Group,
   ObjectPath,
@@ -20,6 +21,8 @@ import type {
   RunVerdict,
   TableDesign,
 } from "../api/types";
+import { type TabAskFields, usePublishTabAsk } from "../assistant/tabAsk";
+import { useRecordStep } from "../assistant/recentSteps";
 import type { GridControl } from "../components/DataGrid";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
@@ -47,6 +50,7 @@ import {
   fromDesign,
   keysProblem,
   moveColumn,
+  refNames,
   removeColumn,
   removeForeignKey,
   removeIndex,
@@ -57,11 +61,51 @@ import {
 } from "./draft";
 import ForeignKeysTab, { foreignKeyNameEditable } from "./ForeignKeysTab";
 import IndexesTab, { indexNameEditable } from "./IndexesTab";
+import { typeSuggestions } from "./typeSuggestions";
 import { warningText } from "./warnings";
+
+/**
+ * What a Table Designer or New table tab tells the Ask (spec 4.4): the draft as names, types and keys, and the
+ * Dialect's type list. Defaults go as typed; the Core masks them as table cards do. Lists are cut at twice the
+ * Core's caps.
+ */
+export function designTabAsk(draft: Draft, create: boolean, dialect: DialectKind): TabAskFields {
+  const removed = new Set(draft.removed);
+  const primary = draft.indexes.find((i) => i.primary);
+  return {
+    tab: {
+      kind: "design",
+      create,
+      path: draft.path,
+      columns: draft.columns
+        .filter((c) => !removed.has(c.id))
+        .slice(0, 400)
+        .map((c) => ({ name: c.name, typeSql: c.typeSql, nullable: c.nullable, defaultSql: c.defaultSql, increment: c.increment, comment: c.comment })),
+      primary: primary ? refNames(draft, primary.columns) : [],
+      indexes: draft.indexes
+        .filter((i) => !i.primary)
+        .slice(0, 200)
+        .map((i) => ({ name: i.name, columns: refNames(draft, i.columns), unique: i.unique, primary: false })),
+      foreignKeys: draft.foreignKeys.slice(0, 200).map((k) => ({
+        name: k.name,
+        columns: refNames(draft, k.columns),
+        target: k.target,
+        targetColumns: refNames(draft, k.targetColumns),
+        onDelete: k.onDelete,
+        onUpdate: k.onUpdate,
+      })),
+      removed: draft.columns.filter((c) => removed.has(c.id)).slice(0, 400).map((c) => c.origin ?? c.name),
+      comment: draft.comment,
+      types: typeSuggestions(dialect).slice(0, 160),
+    },
+  };
+}
 
 interface Props {
   connection: ConnectionConfig;
   target: DesignTabTarget;
+  /** The tab's key: the designer publishes what the Ask may know of its draft (`tabAsk.ts`). */
+  askKey?: string | null;
   group: Group | null;
   /** The tab is on screen: its counts then show in the window status bar (D29). */
   visible: boolean;
@@ -178,6 +222,7 @@ export default function TableDesigner({
   onApplied,
   onDrop,
   lang,
+  askKey = null,
 }: Props) {
   const readOnly = connection.readOnly;
   const dialect = connection.dialect;
@@ -279,6 +324,9 @@ export default function TableDesigner({
 
   const changes = draft && !spent ? changeCount(draft) : 0;
   const dirty = changes > 0;
+  // Each cell edit makes a new draft; the Ask's copy waits for 150 ms of quiet, as the Schema Builder waits for a parse.
+  const recordStep = useRecordStep();
+  usePublishTabAsk(askKey, () => (draft ? designTabAsk(draft, target.kind === "create", dialect) : null), [draft, target.kind, dialect], 150);
   useEffect(() => {
     onDirtyChange(dirty);
     // Told on a change only.
@@ -351,6 +399,17 @@ export default function TableDesigner({
   function succeeded(request: DesignRequest, count: number) {
     setApplyError(null);
     const path = sentPath(request);
+    const created = request.target.kind === "create";
+    recordStep({
+      verb: "designApplied",
+      tab: created ? "newTable" : "design",
+      title: null,
+      connectionId: connection.id,
+      database: path.database,
+      schema: path.schema,
+      names: [path.name],
+      count: created ? null : count,
+    });
     if (request.target.kind === "create") {
       // The App turns this tab into the new table's design tab.
       showToast({ kind: "success", text: `Created ${path.name}.` });
@@ -686,7 +745,7 @@ export default function TableDesigner({
   }
 
   // D27: Ctrl+S works anywhere in the designer, so the window's Save skips it; it also works while a cell is being
-  // edited (Apply keeps the open edit first, as the grid's Save does). Ctrl+N is the window's New Connection everywhere.
+  // edited (Apply keeps the open edit first, as the grid's Save does). Ctrl+N adds a row in the grids (onGridKey, onRowKey) and is the window's New Connection elsewhere.
   function onKeyDown(e: KeyboardEvent<HTMLElement>) {
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
@@ -700,7 +759,11 @@ export default function TableDesigner({
   function onGridKey(e: KeyboardEvent<HTMLElement>) {
     if (editingRef.current) return;
     const mod = e.ctrlKey || e.metaKey;
-    if (e.key === "Delete" && selected) {
+    if (mod && !e.altKey && e.key.toLowerCase() === "n") {
+      // D3: as in the data grid, Ctrl+N in a grid adds a row; the window's New Connection keeps it elsewhere.
+      e.preventDefault();
+      add();
+    } else if (e.key === "Delete" && selected) {
       e.preventDefault();
       remove();
     } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -733,7 +796,10 @@ export default function TableDesigner({
   function onRowKey(e: KeyboardEvent<HTMLElement>) {
     if (editingRef.current || !rowTab || e.target !== e.currentTarget) return;
     const mod = e.ctrlKey || e.metaKey;
-    if (e.key === "Delete" && pickedRow) {
+    if (mod && !e.altKey && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      add();
+    } else if (e.key === "Delete" && pickedRow) {
       e.preventDefault();
       remove();
     } else if (!mod && !e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {

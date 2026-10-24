@@ -10,7 +10,7 @@ import Menu, { type MenuItem } from "./Menu";
 
 export type { Place } from "../shell/tabs";
 
-/** The places in menu order (PR7): Groups by name, then Ungrouped. Ctrl+1 to Ctrl+9 open them in this order. */
+/** The places in menu order (PR7): Groups by name, then Ungrouped. Ctrl+Alt+1 to Ctrl+Alt+9 open them in this order. */
 export function menuPlaces(groups: Group[]): Place[] {
   const byName = [...groups].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   return [...byName.map((g): Place => ({ kind: "group", groupId: g.id })), { kind: "ungrouped" }];

@@ -7,7 +7,7 @@ import Select from "../components/Select";
 import Switch from "../components/Switch";
 import { addFilter, addSort, editFilter, editSort, removeFilter, removeSort, setDistinct, setLimit } from "./model";
 
-type Change = (f: (q: VisualQuery) => VisualQuery) => void;
+type Change = (f: (q: VisualQuery) => VisualQuery, merge?: string) => void;
 
 export interface FilterPanelProps {
   model: VisualQuery;
@@ -188,7 +188,8 @@ export default function FilterPanel({ model, outputs, problems, tableColumns, on
                         n={n}
                         invalid={problem !== null && !noColumn}
                         describedBy={problem ? problemId : undefined}
-                        onValues={(values) => onChange((q) => editFilter(q, i, { values }))}
+                        // Typing in one value is one undo step.
+                        onValues={(values) => onChange((q) => editFilter(q, i, { values }), `filter-${i}`)}
                       />
                       <button type="button" className="icon-button" aria-label={`Remove filter ${n}`} title="Remove" onClick={() => onChange((q) => removeFilter(q, i))}>
                         <Icon name="close" size={14} />

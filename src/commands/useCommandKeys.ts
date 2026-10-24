@@ -15,7 +15,7 @@ import { keymap as loadKeymap, saveKeymap } from "../api/client";
 import type { KeymapOverrides } from "../api/types";
 import { keysFromEvent } from "./keys";
 import { type Keymap, knownOverrides, resolveKeymap } from "./keymap";
-import { COMMANDS, type CommandId } from "./registry";
+import { COMMANDS, type CommandId, REGION_SHARED_KEYS } from "./registry";
 
 export type CommandHandlers = Partial<Record<CommandId, () => void>>;
 
@@ -80,6 +80,12 @@ class CommandBus {
     return true;
   }
 
+  /** True when an owner of `id` draws a region that holds focus. */
+  private focusedIn(id: CommandId): boolean {
+    const focus = document.activeElement;
+    return !!focus && this.entries.some((e) => e.handlers.current[id] && e.region?.current?.contains(focus));
+  }
+
   register(entry: Entry): () => void {
     this.entries.push(entry);
     const release = this.retain();
@@ -106,7 +112,13 @@ class CommandBus {
     const ids = keys ? this.byKey.get(keys) : undefined;
     if (!ids) return;
     e.preventDefault();
-    for (const id of ids) if (this.run(id)) return;
+    // Two commands may share a key when one is scoped to a region (Ctrl+N: New chat in the Ask panel, else New Connection):
+    // the one whose region holds focus goes first.
+    // The region-scoped one of a shared pair never runs unless focus is in its region.
+    const scoped = new Set(REGION_SHARED_KEYS.filter((r) => r.keys === keys).map((r) => r.ids[1]));
+    const usable = ids.length > 1 ? ids.filter((id) => !scoped.has(id) || this.focusedIn(id)) : ids;
+    const ordered = usable.length > 1 ? [...usable].sort((a, b) => Number(this.focusedIn(b)) - Number(this.focusedIn(a))) : usable;
+    for (const id of ordered) if (this.run(id)) return;
   };
 }
 

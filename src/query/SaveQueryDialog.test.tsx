@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { ConnectionConfig } from "../api/types";
@@ -117,4 +117,16 @@ test("saving_sql_over_a_visual_querys_name_is_refused", async () => {
   expect(save.disabled).toBe(true);
   await userEvent.keyboard("{Enter}");
   expect(callsTo("save_saved_query")).toHaveLength(0);
+});
+
+test("J2: a typed name survives a click outside", async () => {
+  const onCancel = vi.fn();
+  render(<SaveQueryDialog sql="select 1" onSaved={() => {}} onCancel={onCancel} />);
+  const scrim = screen.getByRole("dialog").parentElement as HTMLElement;
+  await userEvent.type(screen.getByLabelText("Name"), "Weekly");
+  fireEvent.mouseDown(scrim);
+  expect(onCancel).not.toHaveBeenCalled();
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect(onCancel).toHaveBeenCalledTimes(1);
 });

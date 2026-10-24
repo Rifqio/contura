@@ -74,6 +74,21 @@ pub struct SqlBlock {
     pub fence: u32,
     pub label: String,
     pub statements: Vec<StatementCheck>,
+    /// SHA-256 (lowercase hex) of the fence body that was checked, after line ends were
+    /// made LF. The UI uses the check only for a block whose own text has this hash, so a
+    /// check can never land on another block; empty on records saved before it, which the
+    /// UI reads as unchecked.
+    #[serde(default)]
+    pub body_sha256: String,
+}
+
+/// SHA-256 of `text`'s UTF-8 bytes, as lowercase hex.
+pub fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// One fenced code block of an answer.
@@ -129,23 +144,31 @@ const READ_ACTIONS: [&str; 3] = ["explain", "optimize", "indexes"];
 /// The fenced code blocks of `answer`, in order. A fence opens on a line whose first
 /// non-space characters are three or more backticks, with an optional language word, and
 /// closes on a line of at least as many backticks; an unclosed fence runs to the end.
+/// CRLF and a lone CR are line ends, as in the editor (and the UI's `parseAnswer`), so the
+/// text checked is the text the editor will hold and the fence numbers match. Only space and
+/// tab count as white space on a fence line (indent, the language word's end, a closing
+/// line's tail), as in the UI's parser: Rust and JS disagree on NEL and BOM otherwise.
 pub fn fences(answer: &str) -> Vec<Fence> {
+    const BLANK: [char; 2] = [' ', '\t'];
+    let answer = answer.replace("\r\n", "\n").replace('\r', "\n");
     let mut out = Vec::new();
     let mut open: Option<(usize, Option<String>, Vec<&str>)> = None;
     for line in answer.split('\n') {
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        let lead = line.trim_start();
+        let lead = line.trim_start_matches(BLANK);
         let ticks = lead.bytes().take_while(|b| *b == b'`').count();
         let rest = &lead[ticks..];
         match &mut open {
             None => {
                 if ticks >= 3 && !rest.contains('`') {
-                    let lang = rest.split_whitespace().next().map(str::to_string);
+                    let lang = rest
+                        .split(BLANK)
+                        .find(|w| !w.is_empty())
+                        .map(str::to_string);
                     open = Some((ticks, lang, Vec::new()));
                 }
             }
             Some((need, _, body)) => {
-                if ticks >= *need && rest.trim().is_empty() {
+                if ticks >= *need && rest.trim_matches(BLANK).is_empty() {
                     if let Some((_, lang, body)) = open.take() {
                         out.push(Fence {
                             lang,
@@ -180,9 +203,12 @@ pub fn check_answer(
 }
 
 /// Blocks tagged `sql` (or a Dialect's name) and untagged blocks that start with a SQL
-/// statement word, each split as the editor splits it and checked with `dialect`
-/// (Postgres when unknown). An unclosed last fence is checked only when the answer
-/// `ended` normally; a capped or partial answer may have stopped mid-statement.
+/// statement word, each split as the editor splits it and checked with `dialect`. With no
+/// Dialect (an Ask with no Connection, whose SQL may then be opened on any), each block is
+/// read under every Dialect and keeps the worst reading (`worse`), so a statement that
+/// writes on any of them reads as a write; PostgreSQL's reading when none is worse. An
+/// unclosed last fence is checked only when the answer `ended` normally; a capped or
+/// partial answer may have stopped mid-statement.
 pub fn check_answer_with(
     answer: &str,
     dialect: Option<DialectKind>,
@@ -190,26 +216,78 @@ pub fn check_answer_with(
     read_only: bool,
     ended: bool,
 ) -> Vec<SqlBlock> {
-    let d = dialect.unwrap_or(DialectKind::Postgres);
+    let readings: &[DialectKind] = match &dialect {
+        Some(d) => std::slice::from_ref(d),
+        None => &[
+            DialectKind::Postgres,
+            DialectKind::MySql,
+            DialectKind::Sqlite,
+        ],
+    };
     let mut out = Vec::new();
     for (n, f) in fences(answer).iter().enumerate() {
-        if (!f.closed && !ended) || !is_sql(d, f) {
+        if !f.closed && !ended {
             continue;
         }
-        let statements: Vec<StatementCheck> = split_statements(d, &f.body)
-            .into_iter()
-            .map(|r| check_statement(d, &f.body[r], action, read_only))
-            .collect();
-        if statements.is_empty() {
-            continue;
+        let mut kept: Option<SqlBlock> = None;
+        for d in readings {
+            let Some(block) = check_block(*d, n, f, action, read_only) else {
+                continue;
+            };
+            if kept.as_ref().is_none_or(|k| worse(&block, k)) {
+                kept = Some(block);
+            }
         }
-        out.push(SqlBlock {
-            fence: u32::try_from(n).unwrap_or(u32::MAX),
-            label: label(d, &statements),
-            statements,
-        });
+        out.extend(kept);
     }
     out
+}
+
+/// One fence read as `d`; `None` when it is not SQL there or holds no statement.
+fn check_block(
+    d: DialectKind,
+    n: usize,
+    f: &Fence,
+    action: &str,
+    read_only: bool,
+) -> Option<SqlBlock> {
+    if !is_sql(d, f) {
+        return None;
+    }
+    let statements: Vec<StatementCheck> = split_statements(d, &f.body)
+        .into_iter()
+        .map(|r| check_statement(d, &f.body[r], action, read_only))
+        .collect();
+    if statements.is_empty() {
+        return None;
+    }
+    Some(SqlBlock {
+        fence: u32::try_from(n).unwrap_or(u32::MAX),
+        label: label(d, &statements),
+        statements,
+        body_sha256: sha256_hex(&f.body),
+    })
+}
+
+/// Whether reading `a` of a block is worse than reading `b`: it has a write and `b` has
+/// none, then more writes, then more flags that are not "functions are not checked" (a
+/// function built into another Dialect is not a reason to prefer its reading).
+fn worse(a: &SqlBlock, b: &SqlBlock) -> bool {
+    let key = |x: &SqlBlock| {
+        let writes = x
+            .statements
+            .iter()
+            .filter(|s| s.class == StatementClass::Write)
+            .count();
+        let flags = x
+            .statements
+            .iter()
+            .flat_map(|s| &s.flags)
+            .filter(|f| !matches!(f, Flag::UnknownFunction { .. }))
+            .count();
+        (writes > 0, writes, flags)
+    };
+    key(a) > key(b)
 }
 
 /// Why a flagged statement of an answer counts as a write on Production, read as
@@ -479,5 +557,142 @@ mod tests {
         );
         let s = check_summary(&[], None, 0);
         assert_eq!(s.step.value, "0 reads, 0 writes, no flags");
+    }
+
+    /// `tests/fixtures/ai/answer_fences.json`, shared with the UI's answer parser.
+    fn shared() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/ai/answer_fences.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn fences_match_the_shared_fixtures() {
+        // The UI pairs a block with its check by fence number: both readers must number
+        // alike, on NEL, BOM and no-break spaces too (only space and tab indent a fence).
+        for case in shared()["fences"].as_array().unwrap() {
+            let got: Vec<serde_json::Value> = fences(case["answer"].as_str().unwrap())
+                .into_iter()
+                .map(|f| serde_json::json!([f.lang, f.body, f.closed]))
+                .collect();
+            assert_eq!(
+                got,
+                case["fences"].as_array().unwrap().clone(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn each_block_carries_the_hash_of_the_body_it_checked() {
+        for pair in shared()["sha256"].as_array().unwrap() {
+            assert_eq!(
+                sha256_hex(pair[0].as_str().unwrap()),
+                pair[1].as_str().unwrap()
+            );
+        }
+        let blocks = check_answer("Run:\n```sql\nSELECT 1\n```", None, "ask", false);
+        assert_eq!(blocks[0].body_sha256, sha256_hex("SELECT 1"));
+        // Line ends are normalised first: the hash is of the text the editor will hold.
+        let blocks = check_answer("```sql\r\nSELECT 1;\rSELECT 2\r\n```", None, "ask", false);
+        assert_eq!(blocks[0].body_sha256, sha256_hex("SELECT 1;\nSELECT 2"));
+        // Records saved before the hash load with none, which the UI reads as unchecked.
+        let old: SqlBlock = serde_json::from_value(
+            serde_json::json!({ "fence": 0, "label": "x", "statements": [] }),
+        )
+        .unwrap();
+        assert_eq!(old.body_sha256, "");
+    }
+
+    #[test]
+    fn a_lone_cr_is_a_line_end_as_in_the_editor() {
+        // The editor turns a lone CR into a line break, so a write after a `--` comment and a
+        // CR must be checked as the editor will hold it, on every Dialect.
+        for dialect in [
+            DialectKind::MySql,
+            DialectKind::Sqlite,
+            DialectKind::Postgres,
+        ] {
+            for body in [
+                "SELECT 1; -- note\rDROP TABLE orders",
+                "SELECT 1; # note\rDROP TABLE orders",
+                "SELECT 1;\r\n-- note\rDROP TABLE orders",
+            ] {
+                if body.contains('#') && dialect != DialectKind::MySql {
+                    continue;
+                }
+                let blocks =
+                    check_answer(&format!("```sql\n{body}\n```"), Some(dialect), "ask", false);
+                assert_eq!(blocks.len(), 1, "{dialect:?}: {body:?}");
+                let writes: Vec<&str> = blocks[0]
+                    .statements
+                    .iter()
+                    .filter(|s| s.class == StatementClass::Write)
+                    .map(|s| s.text.as_str())
+                    .collect();
+                assert_eq!(writes.len(), 1, "{dialect:?}: {body:?}");
+                assert!(writes[0].ends_with("DROP TABLE orders"), "{writes:?}");
+                assert!(blocks[0].statements.iter().all(|s| !s.text.contains('\r')));
+            }
+        }
+        // Fences are numbered on the same lines the UI's parser sees: a lone CR ends a line.
+        let f = fences("```sql\rSELECT 1\r```\r```sql\nSELECT 2\n```");
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].body, "SELECT 1");
+        assert_eq!(f[1].body, "SELECT 2");
+    }
+    /// Task 4 review M9: an answer with no Dialect (an Ask with no Connection) is read under
+    /// every Dialect and keeps the worst reading, so a statement that writes on any of them
+    /// opens commented out whichever Connection the new query tab is then given.
+    #[test]
+    fn no_dialect_keeps_the_worst_reading() {
+        // On PostgreSQL `--1` starts a comment; on MySQL `--` needs a space after it.
+        let answer = "```sql\nSELECT 1 --1; DELETE FROM t\n```";
+        let pg = check_answer(answer, Some(DialectKind::Postgres), "ask", false);
+        assert!(
+            pg[0]
+                .statements
+                .iter()
+                .all(|s| s.class == StatementClass::Read),
+            "{pg:?}"
+        );
+        let mysql = check_answer(answer, Some(DialectKind::MySql), "ask", false);
+        let none = check_answer(answer, None, "ask", false);
+        assert_eq!(none, mysql);
+        assert!(
+            none[0]
+                .statements
+                .iter()
+                .any(|s| s.class == StatementClass::Write),
+            "{none:?}"
+        );
+        // A write on every Dialect and a read on every Dialect read as before.
+        for text in ["SELECT id FROM orders", "DELETE FROM orders WHERE id = 1"] {
+            let answer = format!("```sql\n{text}\n```");
+            assert_eq!(
+                check_answer(&answer, None, "ask", false),
+                check_answer(&answer, Some(DialectKind::Postgres), "ask", false),
+                "{text}"
+            );
+        }
+        // A function built into one Dialect is not "not checked" with no Dialect, when no
+        // reading is worse: the PostgreSQL reading stays.
+        let answer = "```sql\nSELECT ifnull(total, 0) FROM orders\n```";
+        assert_eq!(
+            check_answer(answer, None, "ask", false),
+            check_answer(answer, Some(DialectKind::Postgres), "ask", false)
+        );
+        // A risky function on one Dialect only is flagged.
+        let answer = "```sql\nSELECT load_file('/etc/hosts')\n```";
+        let none = check_answer(answer, None, "ask", false);
+        assert!(
+            none[0].statements[0]
+                .flags
+                .iter()
+                .any(|f| matches!(f, Flag::RiskyFunction { .. })),
+            "{none:?}"
+        );
     }
 }

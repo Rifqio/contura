@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ToastProvider } from "../components/Toast";
@@ -29,6 +29,16 @@ function setup(over: Record<string, (a: Record<string, unknown>) => unknown> = {
   const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
   return { dialog, name, calls };
 }
+
+test("J2: a typed name ignores a click outside; an untouched sheet closes", async () => {
+  const { dialog, name, calls } = setup();
+  fireEvent.mouseDown(dialog.parentElement as HTMLElement);
+  expect(calls.close).toHaveBeenCalledTimes(1);
+  calls.close.mockClear();
+  await userEvent.type(name, "checkout");
+  fireEvent.mouseDown(dialog.parentElement as HTMLElement);
+  expect(calls.close).not.toHaveBeenCalled();
+});
 
 test("every_kind_card_and_the_selected_one_has_the_outline_and_check", async () => {
   const { dialog } = setup();

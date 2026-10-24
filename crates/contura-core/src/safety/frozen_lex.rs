@@ -150,7 +150,8 @@ fn lex(dialect: DialectKind, sql: &str, flip: bool) -> (Vec<Piece>, bool) {
                     .get(i + 2)
                     .is_none_or(|c| c.is_whitespace() || c.is_control()));
         if dash_comment || mysql && c == '#' {
-            while i < chars.len() && chars[i] != '\n' {
+            // PostgreSQL ends a line comment at a lone CR too.
+            while i < chars.len() && chars[i] != '\n' && !(postgres && chars[i] == '\r') {
                 i += 1;
             }
             continue;

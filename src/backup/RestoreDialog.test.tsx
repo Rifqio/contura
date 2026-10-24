@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -480,7 +480,54 @@ test("Cancel and roll back cancels the job", async () => {
   expect(callsTo("start_restore")[0].pass).toBeNull();
   const run = await screen.findByRole("dialog", { name: /Restoring on freight-dev/ });
   await userEvent.click(within(run).getByRole("button", { name: /Cancel and roll back/ }));
+  // J1: Cancel asks first; nothing is cancelled until the answer.
+  expect(callsTo("cancel_job")).toHaveLength(0);
+  await userEvent.click(within(run).getByRole("button", { name: /Keep running/ }));
+  expect(callsTo("cancel_job")).toHaveLength(0);
+  await userEvent.click(within(run).getByRole("button", { name: /Cancel and roll back/ }));
+  await userEvent.click(within(run).getByRole("button", { name: "Yes, roll back" }));
   expect(callsTo("cancel_job")).toHaveLength(1);
+});
+
+async function runningRestore() {
+  const s = setup({ connection: plain, plan: { ...PLAN, verdict: { kind: "ok" } } });
+  const d = await checked({ ...CHECK, targetName: "freight-dev" });
+  await userEvent.click(within(d).getByRole("button", { name: /^Restore$/ }));
+  const confirm = await screen.findByRole("dialog", { name: /Restore on freight-dev/ });
+  await userEvent.click(within(confirm).getByRole("button", { name: "Restore" }));
+  await waitFor(() => expect(callsTo("start_restore")).toHaveLength(1));
+  const run = await screen.findByRole("dialog", { name: /Restoring on freight-dev/ });
+  return { ...s, run };
+}
+
+test("J1: Esc, a scrim mousedown and the close button leave a running Restore running", async () => {
+  const { onClose, run } = await runningRestore();
+  await userEvent.keyboard("{Escape}");
+  expect(onClose).toHaveBeenCalledTimes(1);
+  fireEvent.mouseDown(run.parentElement as HTMLElement);
+  await userEvent.click(within(run).getByRole("button", { name: "Close" }));
+  expect(onClose).toHaveBeenCalledTimes(3);
+  expect(callsTo("cancel_job")).toHaveLength(0);
+});
+
+test("J1: after Cancel and roll back, focus is on Keep running and Enter or a second click never rolls back", async () => {
+  const { run } = await runningRestore();
+  await userEvent.click(within(run).getByRole("button", { name: /Cancel and roll back/ }));
+  expect(document.activeElement).toBe(within(run).getByRole("button", { name: /Keep running/ }));
+  await userEvent.keyboard("{Enter}");
+  expect(callsTo("cancel_job")).toHaveLength(0);
+  expect(within(run).queryByRole("button", { name: "Yes, roll back" })).toBeNull();
+  // Back on the run, focus is on a safe button too.
+  expect(document.activeElement).toBe(within(run).getByRole("button", { name: /Run in the background/ }));
+});
+
+test("J1: Esc while the cancel question shows goes back to the run", async () => {
+  const { onClose, run } = await runningRestore();
+  await userEvent.click(within(run).getByRole("button", { name: /Cancel and roll back/ }));
+  await userEvent.keyboard("{Escape}");
+  expect(onClose).not.toHaveBeenCalled();
+  expect(callsTo("cancel_job")).toHaveLength(0);
+  expect(within(run).getByRole("button", { name: /Cancel and roll back/ })).toBeTruthy();
 });
 
 test("a file changed after confirming says nothing was restored", async () => {
@@ -664,6 +711,7 @@ test("a started Restore is handed to the App, and an attached one opens on its r
   );
   expect(await within(again).findByText("343 of 1,501")).toBeTruthy();
   await userEvent.click(within(again).getByRole("button", { name: /Cancel and roll back/ }));
+  await userEvent.click(within(again).getByRole("button", { name: "Yes, roll back" }));
   expect(callsTo("cancel_job").slice(-1)[0]).toEqual({ job: id });
 });
 

@@ -99,6 +99,8 @@ async fn sample_rows_end_to_end_sqlite() {
         off: Vec::new(),
         model: None,
         picks: None,
+        tab: None,
+        steps: Vec::new(),
     };
     let p = preview(&*svc, &settings, &model, &Secrets::default(), &req)
         .await

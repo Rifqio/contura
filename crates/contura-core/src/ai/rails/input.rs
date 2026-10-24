@@ -21,6 +21,10 @@ const QUESTION_CAP: usize = 16 * 1024;
 const ERROR_CAP: usize = 4 * 1024;
 const SQL_CAP: usize = 64 * 1024;
 const OUTLINE_CAP: usize = 32 * 1024;
+/// A DBML item's cap; it is cut at a line end, with a note.
+const DBML_CAP: usize = 64 * 1024;
+/// A Compare tab's sync script; it is cut at a statement end, with a note.
+const SYNC_CAP: usize = 16 * 1024;
 /// A diagram item's cap after cleaning. Never cut: the changes are written against the
 /// whole text, so an item over it stops the Ask with `TooLarge`.
 pub const DIAGRAM_CAP: usize = 160 * 1024;
@@ -30,19 +34,25 @@ const NO_LEVEL: u8 = u8::MAX;
 
 /// The level an item kind needs: 0 question, 1 schema, 2 query text, 3 rows. History
 /// needs none of its own: `select_history` gates each turn and summary by the kinds it
-/// carried (R1.7), and the memory stage sends none at Never. Diagram text is not database
+/// carried (R1.7), and the memory stage sends none at Never. This tab needs none either:
+/// `scene::tab_text` gates each of its parts and sends nothing at Never. Nor do Recent
+/// steps: `steps::render_steps` gates each step by its own Connection and the Ask's. Diagram text is not database
 /// data: no level lets it go, and only a diagram Ask opens it.
 fn need(kind: ItemKind) -> u8 {
     match kind {
         ItemKind::Diagram => NO_LEVEL,
-        ItemKind::Question | ItemKind::History | ItemKind::Summary => 0,
+        ItemKind::Question
+        | ItemKind::History
+        | ItemKind::Summary
+        | ItemKind::Tab
+        | ItemKind::Steps => 0,
         ItemKind::Names | ItemKind::Cards | ItemKind::Outline | ItemKind::Dbml => 1,
         ItemKind::Sql | ItemKind::Error | ItemKind::SavedQueries => 2,
         ItemKind::Values | ItemKind::Rows => 3,
     }
 }
 
-fn rank(access: AiAccess) -> u8 {
+pub(crate) fn rank(access: AiAccess) -> u8 {
     match access {
         AiAccess::Never => 0,
         AiAccess::Schema => 1,
@@ -286,6 +296,9 @@ fn cap_for(kind: ItemKind) -> Option<usize> {
         ItemKind::SavedQueries => Some(SQL_CAP),
         ItemKind::Outline => Some(OUTLINE_CAP),
         ItemKind::Rows => Some(crate::ai::rows::ROWS_ITEM_CAP),
+        ItemKind::Tab => Some(crate::ai::scene::TAB_CAP),
+        ItemKind::Steps => Some(crate::ai::steps::STEPS_CAP),
+        ItemKind::Dbml => Some(DBML_CAP),
         // Cards hold many tables; each card is capped where it is built.
         _ => None,
     }
@@ -305,6 +318,19 @@ fn mask(dialect: DialectKind, kind: ItemKind, text: &str) -> (String, usize, usi
     };
     let (numbers, strings) = literal_counts(dialect, &text);
     (mask_literals(dialect, &text), numbers, strings + hidden)
+}
+
+/// Cuts a sync script to the last statement end (`;` at a line end) within 16 KB, or to
+/// the last line end when no statement ends in it.
+fn cut_sync_script(text: &mut String) {
+    let head = cap_chars(text, SYNC_CAP);
+    let end = head
+        .match_indices(";\n")
+        .last()
+        .map(|(i, _)| i + 1)
+        .or_else(|| head.rfind('\n'))
+        .unwrap_or(0);
+    text.truncate(end);
 }
 
 /// One row of the Cleaning evidence: where, rule, sent as.
@@ -383,7 +409,22 @@ impl Rail for InputRail {
                     "removed",
                 );
             }
-            let (mut text, rules) = redact_secrets_by_rule(&text, &self.secrets);
+            let (mut text, rules) = if item.kind == ItemKind::Steps {
+                // One step per line, redacted alone: a match never joins two steps, so the
+                // lines stay the steps they were built from (`StepsOut::kept_for_turn`).
+                let mut rules = Vec::new();
+                let lines: Vec<String> = text
+                    .split('\n')
+                    .map(|line| {
+                        let (line, r) = redact_secrets_by_rule(line, &self.secrets);
+                        rules.extend(r);
+                        line
+                    })
+                    .collect();
+                (lines.join("\n"), rules)
+            } else {
+                redact_secrets_by_rule(&text, &self.secrets)
+            };
             secrets += rules.len();
             for rule in rules {
                 cleaned_row(&mut ask.cleaned, &item.label, rule, REDACTED);
@@ -403,11 +444,47 @@ impl Rail for InputRail {
                 // Never cut: a cut text would have the changes written against part of it.
                 return RailOutcome::Stop(crate::error::Error::Ai(crate::ai::AiError::TooLarge));
             }
+            if item.kind == ItemKind::Sql
+                && item.label == crate::ai::preview::SYNC_LABEL
+                && text.len() > SYNC_CAP
+            {
+                cut_sync_script(&mut text);
+                ask.notes.push("Sync script cut at 16 KB".into());
+                capped += 1;
+            }
+            if item.kind == ItemKind::Steps && text.len() > crate::ai::steps::STEPS_CAP {
+                // The oldest whole steps go first, as where the item is built.
+                while text.len() > crate::ai::steps::STEPS_CAP {
+                    match text.find('\n') {
+                        Some(at) => {
+                            text.drain(..=at);
+                        }
+                        None => text.clear(),
+                    }
+                }
+                ask.notes
+                    .push("Recent steps cut at 1 KB after cleaning".into());
+                capped += 1;
+            }
             if let Some(cap) = cap_for(item.kind) {
                 let cut = cap_chars(&text, cap).len();
                 if cut < text.len() {
                     let whole = text.as_bytes()[cut] == b'\n';
                     text.truncate(cut);
+                    if matches!(item.kind, ItemKind::Tab | ItemKind::Dbml) && !whole {
+                        // Whole lines only: a name is never sent half.
+                        let at = text.rfind('\n').unwrap_or(0);
+                        text.truncate(at);
+                    }
+                    if item.kind == ItemKind::Tab {
+                        ask.notes.push("This tab cut at 8 KB after cleaning".into());
+                    }
+                    if item.kind == ItemKind::Dbml {
+                        ask.notes.push(format!(
+                            "DBML cut at 64 KB: lines after {} left out",
+                            crate::common::grouped(text.lines().count() as u64)
+                        ));
+                    }
                     if item.kind == ItemKind::Rows {
                         // A rows item is cut at a line end, as `trim_to_cap` does: a
                         // broken row line is never sent or counted, and a header with no
@@ -1142,5 +1219,196 @@ LINE ?: select ?",
         let text = &a.items[0].text;
         assert!(text.len() <= 64 * 1024);
         assert!(sql.starts_with(text.as_str()));
+    }
+
+    #[test]
+    fn tab_item_is_cleaned_not_masked() {
+        let key = "sk-kestrelAAAABBBBCCCCDDDD1234";
+        let tab = format!(
+            "New table \"monthly\u{200B}_totals\" in shop\ncolumn total decimal(14,2) null default ?\ncolumn status varchar(16) not null default '…'\ncomment: key {key}"
+        );
+        for access in [AiAccess::Schema, AiAccess::SchemaQuery] {
+            let mut a = ask(access, vec![item(ItemKind::Tab, &tab)]);
+            rail().run(&mut a, &mut Log::new());
+            let got = &a.items[0].text;
+            assert!(a.items[0].on && a.items[0].locked.is_none());
+            assert!(!got.contains('\u{200B}') && !got.contains(key), "{got}");
+            assert!(got.contains("comment: key [redacted]"), "{got}");
+            // Not masked: the type's numbers and the shown default stay as written.
+            assert!(got.contains("decimal(14,2) null default ?"), "{got}");
+            assert!(got.contains("varchar(16) not null default '…'"), "{got}");
+        }
+        // Never needs a level of its own: the builder sent nothing at Never.
+        assert!(allowed(AiAccess::Never, ItemKind::Tab, Switches::default()));
+        assert_eq!(lock_reason(AiAccess::Never, ItemKind::Tab, "Shop"), None);
+
+        // Over 8 KB after cleaning: cut at a line end.
+        let line = "column c int null";
+        let big = std::iter::repeat_n(line, 600)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut a = ask(AiAccess::Schema, vec![item(ItemKind::Tab, &big)]);
+        rail().run(&mut a, &mut Log::new());
+        let got = &a.items[0].text;
+        assert!(got.len() <= 8 * 1024 && !got.is_empty());
+        assert!(got.lines().all(|l| l == line));
+        assert_eq!(
+            a.notes,
+            vec!["This tab cut at 8 KB after cleaning".to_string()]
+        );
+    }
+
+    #[test]
+    fn steps_item_is_cleaned_and_cut_oldest_first() {
+        let key = "sk-kestrelAAAABBBBCCCCDDDD1234";
+        let line = |i: usize| format!("({i} min ago) ticked orders.total, orders.id");
+        let mut lines: Vec<String> = (0..30).map(line).collect();
+        lines.push(format!(
+            "(just now) added {key}\u{200B} to the Visual Query"
+        ));
+        let text = lines.join("\n");
+        let mut a = ask(AiAccess::Never, vec![item(ItemKind::Steps, &text)]);
+        rail().run(&mut a, &mut Log::new());
+        let got = &a.items[0].text;
+        assert!(a.items[0].on && a.items[0].locked.is_none());
+        assert!(got.len() <= 1024 && !got.contains(key) && !got.contains('\u{200B}'));
+        // The newest line stays; the oldest whole lines went.
+        assert!(
+            got.ends_with("(just now) added [redacted] to the Visual Query"),
+            "{got}"
+        );
+        assert!(!got.contains("(0 min ago)"));
+        assert!(got.lines().all(|l| l.starts_with('(')));
+        assert_eq!(
+            a.notes,
+            vec!["Recent steps cut at 1 KB after cleaning".to_string()]
+        );
+    }
+
+    #[test]
+    fn steps_are_redacted_line_by_line() {
+        use crate::ai::steps::{StepIn, StepVerb, render_steps};
+        let now = 1_800_000_000_000;
+        let (a, b) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        let run = |conn, title: &str| StepIn {
+            at: now - 60_000,
+            verb: StepVerb::RunQuery,
+            tab: "query".into(),
+            title: Some(title.into()),
+            connection_id: Some(conn),
+            database: Some("shop".into()),
+            schema: None,
+            names: Vec::new(),
+            more: 0,
+            count: Some(3),
+            has_more: false,
+            failed: false,
+            descending: false,
+            source_connection_id: None,
+        };
+        // Another Connection's step, then two of the Ask's: the first titled so that a
+        // password pattern opens on it and could close on the next line's quote.
+        let steps = [
+            run(b, "theirs"),
+            run(a, "reset password"),
+            run(a, "next one"),
+        ];
+        let access_of = |id: uuid::Uuid| {
+            Some(if id == a {
+                AiAccess::SchemaQuery
+            } else {
+                AiAccess::Schema
+            })
+        };
+        let out = render_steps(
+            &steps,
+            now,
+            (Some(a), Some("shop")),
+            &access_of,
+            AiAccess::SchemaQuery,
+            &|t: &str| t.to_string(),
+        );
+        assert_eq!(out.lines(), 3);
+        // Redacted whole, the pattern would run across the line end.
+        let whole = redact_secrets_by_rule(&out.text, &Secrets::default()).0;
+        assert_ne!(whole.lines().count(), 3, "{whole}");
+        let mut a_ = ask(
+            AiAccess::SchemaQuery,
+            vec![item(ItemKind::Steps, &out.text)],
+        );
+        rail().run(&mut a_, &mut Log::new());
+        let sent = &a_.items[0].text;
+        // Cleaning never joins two steps.
+        assert_eq!(sent.lines().count(), 3, "{sent}");
+        let kept = out.kept_for_turn(sent);
+        assert_eq!(kept.len(), 2, "{kept:?}");
+        assert!(
+            kept.iter().all(|l| !l.contains("on another Connection")),
+            "{kept:?}"
+        );
+        assert!(
+            kept[1].starts_with("ran the query in \"next one\""),
+            "{kept:?}"
+        );
+        // A text with more lines than were built keeps nothing.
+        let joined = format!("{sent}\n(just now) ran the query");
+        assert!(out.kept_for_turn(&joined).is_empty());
+    }
+
+    #[test]
+    fn dbml_capped_at_64_kb() {
+        let line = "Table orders { id int [pk] note varchar }";
+        let mut dbml = String::new();
+        let mut n = 0;
+        while dbml.len() < 100 * 1024 {
+            n += 1;
+            dbml.push_str(&format!("{line} // {n}\n"));
+        }
+        let mut a = ask(AiAccess::Schema, vec![item(ItemKind::Dbml, &dbml)]);
+        let out = rail().run(&mut a, &mut Log::new());
+        assert!(matches!(out, RailOutcome::Changed(_)));
+        let got = &a.items[0].text;
+        assert!(
+            got.len() <= 64 * 1024 && got.len() > 63 * 1024,
+            "{}",
+            got.len()
+        );
+        assert!(dbml.starts_with(got.as_str()));
+        // Whole lines only.
+        assert_eq!(dbml.as_bytes()[got.len()], b'\n');
+        let kept = got.lines().count();
+        assert_eq!(
+            a.notes,
+            vec![format!(
+                "DBML cut at 64 KB: lines after {} left out",
+                crate::common::grouped(kept as u64)
+            )]
+        );
+        // Under the cap: no cut, no note.
+        let mut a = ask(AiAccess::Schema, vec![item(ItemKind::Dbml, line)]);
+        rail().run(&mut a, &mut Log::new());
+        assert_eq!(a.items[0].text, line);
+        assert!(a.notes.is_empty());
+    }
+
+    #[test]
+    fn sync_script_cut_at_a_statement_end() {
+        let stmt = "ALTER TABLE orders ADD COLUMN note_x text NULL;";
+        let script = std::iter::repeat_n(stmt, 600)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut sync = item(ItemKind::Sql, &script);
+        sync.label = crate::ai::preview::SYNC_LABEL.into();
+        let mut a = ask(AiAccess::SchemaQuery, vec![sync]);
+        rail().run(&mut a, &mut Log::new());
+        let got = &a.items[0].text;
+        assert!(
+            got.len() <= 16 * 1024 && got.len() > 15 * 1024,
+            "{}",
+            got.len()
+        );
+        assert!(got.ends_with(';'));
+        assert!(got.lines().all(|l| l == stmt));
+        assert_eq!(a.notes, vec!["Sync script cut at 16 KB".to_string()]);
     }
 }

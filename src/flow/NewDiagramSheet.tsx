@@ -347,7 +347,7 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
   const mermaidKey = hintFor(keys, "flow.fromMermaid");
 
   return (
-    <Dialog title="New diagram" subtitle="The kind is the first line of the file, so you can change it later." className="new-diagram" onClose={onClose}>
+    <Dialog title="New diagram" subtitle="The kind is the first line of the file, so you can change it later." className="new-diagram" dirty={name.trim() !== ""} onClose={onClose}>
       <div className="new-diagram-body">
         <div className="new-diagram-main">
           <div className="new-diagram-find">

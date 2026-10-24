@@ -75,6 +75,8 @@ export function normalizeKeys(s: string): string {
  */
 export function keysFromEvent(e: KeyboardEvent): string | null {
   if (e.metaKey) return null;
+  // AltGr arrives as Ctrl+Alt on Windows and types a character (AltGr+7 is "{" on a German layout): never a command.
+  if (e.getModifierState?.("AltGraph")) return null;
   if (["Control", "Shift", "Alt", "Meta", "AltGraph", "OS"].includes(e.key)) return null;
   const physical = /^Key([A-Z])$/.exec(e.code ?? "") ?? /^Digit(\d)$/.exec(e.code ?? "");
   const raw = physical ? physical[1] : e.key;

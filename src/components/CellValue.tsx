@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { errorText, fetchFullValue } from "../api/client";
 import type { Cell, ConnectionId, FullValue, KeyPart, ObjectPath } from "../api/types";
 import { NullMark } from "../prefs/gridDisplay";
@@ -40,6 +40,40 @@ function FullValueView({ value }: { value: FullValue }) {
       )}
       <pre className="full-value">{hexPairs(hex)}</pre>
     </>
+  );
+}
+
+/**
+ * Open full value on a cell (G9, Shift+F2) where it is not edited: the loaded value, or for a cut-short one the full
+ * value fetched by the row's key.
+ */
+export function FullValueDialog({ title, cell, source, onClose }: { title: string; cell: Cell; source?: CellSource; onClose(): void }) {
+  const cut = (cell.t === "text" || cell.t === "bytes") && cell.truncated && !!source;
+  const [state, setState] = useState<{ s: "loading" } | { s: "loaded"; value: FullValue } | { s: "failed"; message: string }>(() =>
+    cut ? { s: "loading" } : { s: "loaded", value: { t: "text", value: cell.t === "null" ? "NULL" : cell.t === "bytes" ? `0x${cell.previewHex}` : cell.value } },
+  );
+  useEffect(() => {
+    if (!cut || !source) return;
+    let live = true;
+    fetchFullValue(source.connectionId, { table: source.table, column: source.column, key: source.rowKey })
+      .then((value) => live && setState({ s: "loaded", value }))
+      .catch((e) => live && setState({ s: "failed", message: errorText(e) }));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return (
+    <Dialog title={title} onClose={onClose} wide>
+      <div className="dialog-body">
+        {state.s === "loading" && <p className="muted">Loading the full value…</p>}
+        {state.s === "failed" && (
+          <p className="error-text" role="alert">
+            {state.message}
+          </p>
+        )}
+        {state.s === "loaded" && <FullValueView value={state.value} />}
+      </div>
+    </Dialog>
   );
 }
 

@@ -489,6 +489,16 @@ enum PTok {
     Other,
 }
 
+/// Where a `--` or `#` comment starting at `from` ends: at the next LF, and on PostgreSQL at a
+/// lone CR too, as each server's own lexer reads it (PostgreSQL's `newline` is `[\n\r]`; MySQL
+/// and SQLite read to the LF).
+fn line_comment_end(b: &[u8], from: usize, postgres: bool) -> usize {
+    b[from..]
+        .iter()
+        .position(|x| *x == b'\n' || postgres && *x == b'\r')
+        .map_or(b.len(), |p| from + p)
+}
+
 /// Every token of `sql` at every depth, with strings and comments read the Dialect's
 /// default way, as `lex` reads them. A MySQL `/*! */` comment is read as code, since the
 /// server runs it. For the AI checks only; `classify` never uses it.
@@ -512,10 +522,7 @@ fn plain_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<PTok> {
             && next == Some('-')
             && (!mysql || char_at(sql, i + 2).is_none_or(|c| c.is_whitespace() || c.is_control()));
         if dash_comment || mysql && c == '#' {
-            i = b[i..]
-                .iter()
-                .position(|x| *x == b'\n')
-                .map_or(len, |p| i + p);
+            i = line_comment_end(b, i, postgres);
             continue;
         }
         if c == '/' && next == Some('*') {
@@ -1357,10 +1364,7 @@ fn scan(
             && (!mysql || char_at(sql, i + 2).is_none_or(|c| c.is_whitespace() || c.is_control()));
         if dash_comment || mysql && c == '#' {
             let body = i + if c == '#' { 1 } else { 2 };
-            i = b[i..]
-                .iter()
-                .position(|x| *x == b'\n')
-                .map_or(len, |p| i + p);
+            i = line_comment_end(b, i, postgres);
             if masking {
                 comment_literals(sql, body, i, &mut record);
             }
@@ -1795,6 +1799,13 @@ pub(crate) mod cases {
         (PG, "SELECT 'DELETE FROM x'", R),
         (PG, "/* drop */ SELECT 1", R),
         (PG, "-- delete\nSELECT 1", R),
+        // A lone CR ends a line comment, as in PostgreSQL's lexer.
+        (PG, "-- note\rDROP TABLE orders", W),
+        (PG, "SELECT 1; -- note\r\nDELETE FROM orders", W),
+        // MySQL and SQLite read a line comment to the LF, past a lone CR, as their servers do.
+        (MY, "-- note\rDROP TABLE orders", R),
+        (MY, "# note\rDROP TABLE orders", R),
+        (SL, "-- note\rDROP TABLE orders", R),
         (PG, "SELECT $$ DELETE $$", R),
         (PG, "SELECT $a$ ; DROP TABLE t; $a$", R),
         (
