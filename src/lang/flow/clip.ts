@@ -1,12 +1,11 @@
 // Copy and paste on the diagram canvas (diagram-ux-research F2, draw.io's Ctrl+C, Ctrl+V and Ctrl+D). The clipboard
-// holds plain .flow lines: the copied shapes' statements (an ER table with its columns, a class with its members),
+// holds plain .flow lines: the copied shapes' statements (a class with its members),
 // then the lines between copied shapes. A paste reads clipboard text only as .flow lines of the open diagram's kind,
 // refuses anything else, and writes the shapes with free names (`Step 2`) where new shapes go, their lines with the
 // others. It runs in the language worker against the cached parse, as the other canvas actions do.
 import type { TextEdit } from "../protocol";
 import { insertLine, lastLinkIn, lineBreak, nextLine, normalize } from "./edits";
 import {
-  columnFlagsText,
   DIAGRAM_KINDS,
   type DiagramKind,
   type FlowDoc,
@@ -18,26 +17,20 @@ import {
   MAX_FLOW_NODES,
   nodeStatement,
   overTextLimit,
-  STATE_END,
-  STATE_START,
-  sqlFreeName,
-  linkEndText,
+  isStateMarker,
 } from "./model";
 import { type FlowParse, parseFlow } from "./parse";
 
 /** Where a mind map paste goes: under a topic (its children), or after one (its siblings, as a duplicate). */
 export type PastePlace = { under: string } | { after: string };
 
-const isMarker = (name: string) => name === STATE_START || name === STATE_END;
+const isMarker = (name: string) => isStateMarker(name);
 
 /** A line end as written: a state diagram's start and end markers are both `[*]`. */
 const endText = (name: string) => (isMarker(name) ? "[*]" : flowName(name));
 
 function linkText(l: FlowLink, from: string, to: string): string {
-  // An ER relationship's columns go with its ends (ER build C).
-  const a = l.fromColumn === undefined ? endText(from) : linkEndText(from, l.fromColumn);
-  const b = l.toColumn === undefined ? endText(to) : linkEndText(to, l.toColumn);
-  return `${a} ${l.arrow} ${b}${l.label ? `: ${flowLabel(l.label)}` : ""}`;
+  return `${endText(from)} ${l.arrow} ${endText(to)}${l.label ? `: ${flowLabel(l.label)}` : ""}`;
 }
 
 /** A node's statement under `name`; a flowchart step leaves its kind unsaid, as it is usually written. */
@@ -49,11 +42,9 @@ function statementOf(kind: DiagramKind, n: FlowNode, name: string): string {
   return nodeStatement(kind, { ...n, name });
 }
 
-/** A node's own extra lines under `name`: an ER table's columns with their keys, a class's members. */
+/** A node's own extra lines under `name`: a class's members. */
 function rowsOf(kind: DiagramKind, n: FlowNode, name: string): string[] {
-  const rows = n.rows ?? [];
-  if (kind === "er") return rows.map((r, i) => `${name}.${r}${columnFlagsText(n.rowFlags?.[i] ?? [])}`);
-  if (kind === "class") return rows.map((r) => `${flowName(name)} : ${r}`);
+  if (kind === "class") return (n.rows ?? []).map((r) => `${flowName(name)} : ${r}`);
   return [];
 }
 
@@ -87,7 +78,9 @@ export function copyLines(doc: FlowDoc, names: readonly string[]): string {
     for (const n of nodes) out.push(statementOf(doc.kind, n, n.name), ...rowsOf(doc.kind, n, n.name));
   }
   if (out.length === 0) return "";
-  for (const l of doc.links) if (!l.tree && picked.has(l.from) && picked.has(l.to)) out.push(linkText(l, l.from, l.to));
+  // A line to a composite's own [*] stays out: pasted, its [*] would read as the diagram's (fix round 2, N9).
+  const own = (n: string) => doc.kind === "state" && isMarker(n) && n.includes(" in ");
+  for (const l of doc.links) if (!l.tree && picked.has(l.from) && picked.has(l.to) && !own(l.from) && !own(l.to)) out.push(linkText(l, l.from, l.to));
   return `${out.join("\n")}\n`;
 }
 
@@ -115,7 +108,6 @@ const KIND_WORD: Record<DiagramKind, string> = {
   dfd: "data flow",
   flow: "flowchart",
   cloud: "cloud",
-  er: "entity relationship",
   sequence: "sequence",
   state: "state",
   class: "class",
@@ -126,7 +118,6 @@ const KIND_A: Record<DiagramKind, string> = {
   dfd: "a data flow diagram",
   flow: "a flowchart",
   cloud: "a cloud diagram",
-  er: "an entity relationship diagram",
   sequence: "a sequence diagram",
   state: "a state diagram",
   class: "a class diagram",
@@ -269,8 +260,7 @@ export function pasteLines(text: string, parse: FlowParse, clip: string, place?:
       names[n.name] = `Note ${++noteNo}`;
       return n;
     }
-    // An ER table's copy stays a plain SQL name (orders_2), one rule with every other place that names one.
-    const name = kind === "er" ? sqlFreeName(n.name, taken) : freeName(n.name, taken);
+    const name = freeName(n.name, taken);
     taken.add(name);
     names[n.name] = name;
     const id = n.attrs.id;

@@ -36,6 +36,27 @@ function quotedEnd(text: string, i: number, q: string, backslash: boolean): numb
   return text.length;
 }
 
+/** Index after the block comment at `i`; PostgreSQL nests them, MySQL and SQLite end at the first close. */
+function blockCommentEnd(text: string, i: number, nests: boolean): number {
+  if (!nests) {
+    const end = text.indexOf("*/", i + 2);
+    return end === -1 ? text.length : end + 2;
+  }
+  let depth = 1;
+  let j = i + 2;
+  while (j < text.length) {
+    if (text[j] === "/" && text[j + 1] === "*") {
+      depth++;
+      j += 2;
+    } else if (text[j] === "*" && text[j + 1] === "/") {
+      depth--;
+      j += 2;
+      if (depth === 0) return j;
+    } else j++;
+  }
+  return text.length;
+}
+
 export function tokenize(text: string, dialect: DialectKind): Token[] {
   const out: Token[] = [];
   let i = 0;
@@ -46,15 +67,15 @@ export function tokenize(text: string, dialect: DialectKind): Token[] {
   while (i < text.length) {
     const c = text[i];
     const next = text[i + 1];
-    if (c === "-" && next === "-") {
+    if (c === "-" && next === "-" && (dialect !== "mysql" || i + 2 >= text.length || /\s/.test(text[i + 2]))) {
+      // MySQL reads `--` as a comment only before white space or the end: `1--1` is one minus another.
       const nl = text.indexOf("\n", i);
       push("comment", nl === -1 ? text.length : nl);
     } else if (c === "#" && dialect === "mysql") {
       const nl = text.indexOf("\n", i);
       push("comment", nl === -1 ? text.length : nl);
     } else if (c === "/" && next === "*") {
-      const end = text.indexOf("*/", i + 2);
-      push("comment", end === -1 ? text.length : end + 2);
+      push("comment", blockCommentEnd(text, i, dialect === "postgres"));
     } else if (c === "'") {
       // MySQL strings take backslash escapes; Postgres only in E'...' strings.
       const prev = text[i - 1];

@@ -103,7 +103,7 @@ export default function RecentColumn({
               if (row.kind === "diagram") {
                 const d = row.diagram;
                 const time = recentTime(d.modifiedMs, now);
-                const file = `${d.name}.flow`;
+                const file = d.name;
                 const word = DIAGRAM_KIND_WORD[d.kind];
                 const open = () => onOpenDiagram?.(d.name);
                 return (

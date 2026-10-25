@@ -63,7 +63,7 @@ function RenameDialog({ name, onClose, onRename }: { name: string; onClose(): vo
     else setMessage(failed);
   }
   return (
-    <Dialog title={`Rename ${name}.flow`} icon="flow" size="confirm" onClose={onClose}>
+    <Dialog title={`Rename ${name}`} icon="flow" size="confirm" onClose={onClose}>
       <div className="dialog-body diagram-rename">
         <label className="field">
           <span>Name</span>
@@ -103,7 +103,7 @@ function RenameDialog({ name, onClose, onRename }: { name: string; onClose(): vo
 
 function DeleteDialog({ name, onClose, onDelete }: { name: string; onClose(): void; onDelete(): void }) {
   return (
-    <Dialog title={`Move ${name}.flow to the Recycle Bin?`} icon="trash" size="confirm" onClose={onClose}>
+    <Dialog title={`Move ${name} to the Recycle Bin?`} icon="trash" size="confirm" onClose={onClose}>
       <p className="dialog-body">Its layout file goes with it. You can restore both from the Recycle Bin.</p>
       <footer className="dialog-footer">
         <span className="spacer" />
@@ -175,7 +175,7 @@ export function useDiagramFileActions(opts: Opts): DiagramFileActions {
       flowEntry(tab)?.discard?.();
       o.current.dropTab(tab);
     }
-    toast.show({ kind: "info", text: `Moved ${name}.flow to the Recycle Bin.` });
+    toast.show({ kind: "info", text: `Moved ${name} to the Recycle Bin.` });
     o.current.onChanged();
   }
 

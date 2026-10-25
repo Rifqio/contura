@@ -73,7 +73,8 @@ export interface RunnerState {
   items: ResultItem[];
   active: number;
   queue: Stmt[];
-  confirm: { stmt: Stmt; verb: "UPDATE" | "DELETE"; table: string } | null;
+  /** `text` is the piece the Core found without WHERE, when it is not the whole statement. */
+  confirm: { stmt: Stmt; verb: "UPDATE" | "DELETE"; table: string; text?: string } | null;
   /** The whole run waits here until the Production dialog is answered. */
   ask: RunAsk | null;
   /** The confirm pass every statement of the queue runs with, once confirmed. */
@@ -104,7 +105,7 @@ export type RunnerAction =
   | { type: "failed"; id: number; error: unknown; ms?: number }
   /** A run whose session went while it was going (a Visual Query): a stop, not a failure. */
   | { type: "stopped"; id: number; why: string; ms: number }
-  | { type: "confirmNeeded"; verb: "UPDATE" | "DELETE"; table: string }
+  | { type: "confirmNeeded"; verb: "UPDATE" | "DELETE"; table: string; text?: string }
   | { type: "confirmed" }
   | { type: "declined" }
   | { type: "more"; id: number; rows: Cell[][]; hasMore: boolean }
@@ -258,7 +259,7 @@ export function runnerReducer(state: RunnerState, action: RunnerAction): RunnerS
       return { ...update(state, action.id, (i) => ({ ...i, state: { s: "stopped", why: action.why, ms: action.ms } })), queue: [] };
     case "confirmNeeded": {
       const stmt = state.queue[0];
-      return stmt ? { ...state, confirm: { stmt, verb: action.verb, table: action.table } } : state;
+      return stmt ? { ...state, confirm: { stmt, verb: action.verb, table: action.table, ...(action.text !== undefined && { text: action.text }) } } : state;
     }
     case "confirmed":
       return { ...state, confirm: null };

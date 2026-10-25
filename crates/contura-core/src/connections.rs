@@ -689,6 +689,19 @@ impl ConnectionService {
         (!found.is_empty()).then_some(AssistantSql { flagged })
     }
 
+    /// The statements a run of `statements` on the session sends, as the Core splits them,
+    /// each with its missing-WHERE answer (UX step 9, round 4). The editor runs these, not
+    /// its own split, and asks before any that changes every row.
+    pub fn plan_run(
+        &self,
+        s: QuerySessionId,
+        statements: Vec<String>,
+    ) -> Result<Vec<crate::safety::PlannedRun>> {
+        let (conn, _, _) = self.query_slot(s)?;
+        let config = self.config(conn)?;
+        Ok(crate::safety::plan_run(config.dialect, &statements))
+    }
+
     /// What running these statements on the session needs: nothing, a block or a confirmation.
     /// A new run starts here, so the session's earlier passes end.
     pub fn prepare_run(&self, s: QuerySessionId, statements: Vec<String>) -> Result<RunVerdict> {

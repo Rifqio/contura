@@ -144,15 +144,15 @@ test("diagrams_sit_in_recent_by_day_with_their_kind_and_compact_time", async () 
   const today = screen.getByRole("region", { name: "Today" });
   // Newest first: the diagram saved 2h ago, then the table opened 12m ago comes before it.
   const rows = within(today).getAllByRole("button");
-  expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["public.orders, Table on kfc-prod, Production, 12m", "fulfilment.flow, Data flow, 2h"]);
-  const row = within(today).getByRole("button", { name: "fulfilment.flow, Data flow, 2h" });
-  expect(within(row).getByText("fulfilment.flow")).toBeTruthy();
+  expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["public.orders, Table on kfc-prod, Production, 12m", "fulfilment, Data flow, 2h"]);
+  const row = within(today).getByRole("button", { name: "fulfilment, Data flow, 2h" });
+  expect(within(row).getByText("fulfilment")).toBeTruthy();
   expect(within(row).getByText("Data flow")).toBeTruthy();
   expect(within(row).getByText("2h")).toBeTruthy();
   await userEvent.click(row);
   expect(onOpenDiagram).toHaveBeenCalledWith("fulfilment");
   const yesterday = screen.getByRole("region", { name: "Yesterday" });
-  expect(within(yesterday).getByRole("button", { name: "refund-policy.flow, Flowchart, 09:05" })).toBeTruthy();
+  expect(within(yesterday).getByRole("button", { name: "refund-policy, Flowchart, 09:05" })).toBeTruthy();
 });
 
 test("a_diagram_row_has_its_file_actions_on_right_click", async () => {
@@ -171,9 +171,9 @@ test("a_diagram_row_has_its_file_actions_on_right_click", async () => {
       onShowAllHistory={() => {}}
     />,
   );
-  const row = screen.getByRole("button", { name: "fulfilment.flow, Data flow, 2h" });
+  const row = screen.getByRole("button", { name: "fulfilment, Data flow, 2h" });
   fireEvent.contextMenu(row);
-  const menu = screen.getByRole("menu", { name: "fulfilment.flow" });
+  const menu = screen.getByRole("menu", { name: "fulfilment" });
   expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Open", "Rename...", "Save a copy as...", "Delete..."]);
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete..." }));
   expect(actions.remove).toHaveBeenCalledWith("fulfilment");

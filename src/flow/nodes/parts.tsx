@@ -3,7 +3,10 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useDetail } from "../../diagram/detail";
 import { motionMs } from "../../diagram/motion";
-import { type DrawnKind, NODE_TOKENS } from "../../diagram/types";
+import { type DrawnKind, NODE_TOKENS, PALETTE_TOKENS } from "../../diagram/types";
+
+/** Step 11: a palette colour a shape takes (`color: danger`). */
+export type ShapeColour = keyof typeof PALETTE_TOKENS;
 
 /** Modern is the pastel card (frame 6+.2); Classic draws the textbook Gane-Sarson shapes. Kept per diagram. */
 export type NodeLook = "modern" | "classic";
@@ -18,6 +21,8 @@ export interface NodeBaseProps {
   state?: NodeState;
   /** Item 21: the size it was resized to on the canvas. */
   sized?: { w: number; h: number };
+  /** Step 11: its `color:`, in place of its kind's colours. */
+  color?: ShapeColour;
 }
 
 /**
@@ -31,7 +36,12 @@ export type NodeState = "entering" | "leaving" | "suggested" | "removed" | "airi
 const STATE_NOTE: Partial<Record<NodeState, string>> = { suggested: ", suggested by AI", removed: ", suggested by AI", airing: ", added by AI" };
 
 /** The kind's token pair as the custom properties the stylesheet reads (ADR 0008: tokens only). */
-export function kindStyle(kind: DrawnKind): CSSProperties {
+function kindStyle(kind: DrawnKind, color?: ShapeColour): CSSProperties {
+  // Step 11: a palette colour draws its fill, border and words in place of the kind's pair (ADR 0019).
+  if (color) {
+    const c = PALETTE_TOKENS[color];
+    return { "--fnode-fill": `var(${c.fill})`, "--fnode-stroke": `var(${c.stroke})`, color: `var(${c.text})` } as CSSProperties;
+  }
   const t = NODE_TOKENS[kind];
   return { "--fnode-fill": `var(${t.fill})`, "--fnode-stroke": `var(${t.stroke})` } as CSSProperties;
 }
@@ -84,6 +94,8 @@ interface ShellProps {
   state?: NodeState;
   /** Resized on the canvas: drawn at this size (item 21). */
   sized?: { w: number; h: number };
+  /** Step 11: its palette colour. */
+  color?: ShapeColour;
   /** The full node; a function places the ports itself (a service puts them on its 48 px tile). */
   children: ReactNode | ((ports: ReactNode) => ReactNode);
 }
@@ -92,8 +104,13 @@ interface ShellProps {
  * The node's outer box, at the engine's levels of detail: the full node, a name box zoomed out and in fast
  * mode (over 300 nodes), and a plain block in the stroke colour further out. Fast mode has no ports or hover.
  */
-export function NodeShell({ kind, family, look, selected, label: plain, name, state, sized, children }: ShellProps) {
-  const { detail, fast } = useDetail();
+/** Shapes with no text (a state's start, end and fork): drawn as they are at every zoom, never as a name box. */
+const GLYPHS: ReadonlySet<string> = new Set(["stateStart", "stateEnd", "fork"]);
+
+export function NodeShell({ kind, family, look, selected, label: plain, name, state, sized, color, children }: ShellProps) {
+  const level = useDetail();
+  const fast = level.fast;
+  const detail = GLYPHS.has(kind) ? "full" : level.detail;
   const label = plain + ((state && STATE_NOTE[state]) ?? "");
   const badge = state === "suggested" ? (
     <span className="fnode-gtag" aria-hidden="true">
@@ -101,9 +118,9 @@ export function NodeShell({ kind, family, look, selected, label: plain, name, st
     </span>
   ) : null;
   const hover = useHoverPorts();
-  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "") + (sized ? " fnode-sized" : "");
+  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "") + (sized ? " fnode-sized" : "") + (color ? ` fnode-col fnode-col-${color}` : "");
   // The node itself takes the size, not React Flow's wrapper, which stays measured from it.
-  const box: CSSProperties = sized ? { ...kindStyle(kind), width: sized.w, height: sized.h } : kindStyle(kind);
+  const box: CSSProperties = sized ? { ...kindStyle(kind, color), width: sized.w, height: sized.h } : kindStyle(kind, color);
   // Zoomed out the node drops its family and look classes, so no shape rule (diamond, slant, pill) applies.
   const cls = detail === "full" ? `fnode fnode-${family} fnode-${kind} fnode-${look}${sel}` : `fnode fnode-${detail}${sel}`;
   if (detail === "block") {

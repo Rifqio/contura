@@ -21,7 +21,8 @@ import { useJobsGuard } from "./app/useJobsGuard";
 import { useDiagramFileActions } from "./flow/diagramFileActions";
 import { focusFlowText } from "./flow/focusFlowText";
 import MermaidImportDialog from "./flow/MermaidImportDialog";
-import NewDiagramSheet from "./flow/NewDiagramSheet";
+import NewDiagramSheet, { type SheetState } from "./flow/NewDiagramSheet";
+import type { MermaidInsert } from "./flow/FlowTab";
 import ExportDialog from "./jobs/ExportDialog";
 import { type ExportOrigin, originFromJob } from "./jobs/exportText";
 import ImportTab from "./jobs/ImportTab";
@@ -69,7 +70,7 @@ import TabStrip from "./components/TabStrip";
 import TitleBar from "./components/TitleBar";
 import WorkEmpty from "./components/WorkEmpty";
 import AssistantPanel from "./assistant/AssistantPanel";
-import type { InsertTarget } from "./assistant/InsertDiff";
+import type { InsertTarget } from "./assistant/insertPlan";
 import TableDesigner from "./design/TableDesigner";
 import { appLang } from "./lang/appLang";
 import { schemaKey } from "./lang/sql/schemaCache";
@@ -143,6 +144,17 @@ export default function App() {
 function Workspace() {
   const { label: ungroupedLabel } = useUngroupedLabel();
   const toast = useToast();
+  /** The tab an "Asked in" link just showed: it flashes once (A7, M6). */
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTab = (key: string) => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setFlashKey(key);
+    flashTimer.current = setTimeout(() => setFlashKey(null), 700);
+  };
+  useEffect(() => () => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+  }, []);
   const [groups, setGroups] = useState<Group[]>([]);
   const groupImages = useGroupImageCache(groups);
   const [connections, setConnections] = useState<ConnectionConfig[]>([]);
@@ -438,7 +450,13 @@ function Workspace() {
   } | null>(null);
   /** The origin each export job was started from, so the status bar can open its dialog again. */
   const exportOrigins = useRef(new Map<JobId, { connectionId: ConnectionId; origin: ExportOrigin }>());
-  const [mermaidOpen, setMermaidOpen] = useState(false);
+  /**
+   * The Mermaid dialog (step 10): from New diagram with what the sheet was left at, for its Back; from a diagram's
+   * canvas with that diagram to insert into; or on its own.
+   */
+  const [mermaidOpen, setMermaidOpen] = useState<false | { back?: SheetState; insert?: MermaidInsert }>(false);
+  /** New diagram as it was left, when Back from the Mermaid dialog opens it again. */
+  const [sheetBack, setSheetBack] = useState<SheetState | undefined>(undefined);
   /** The open Backup or Restore dialog (step 9), from the tree's menus. */
   const [backingUp, setBackingUp] = useState<{ connectionId: ConnectionId; database: string; schema: string | null } | null>(null);
   const [restoring, setRestoring] = useState<{ target: RestoreTarget; attach?: { id: JobId; run: RestoreRun }; seq: number } | null>(null);
@@ -1149,7 +1167,7 @@ function Workspace() {
     "connection.new": () => setForm({ kind: "connection" }),
     // Only the places that exist, so the palette lists those alone.
     ...Object.fromEntries(menuPlaces(groups).slice(0, 9).map((_, i) => [`group.open.${i + 1}`, () => openPlaceAt(i + 1)])),
-    "flow.fromMermaid": () => setMermaidOpen(true),
+    "flow.fromMermaid": () => setMermaidOpen({}),
     "flow.new": () => setNewDiagramOpen(true),
     ...(activeDiagram
       ? {
@@ -1438,6 +1456,7 @@ function Workspace() {
           connections={connections}
           active={activeKey}
           onSelect={setActiveKey}
+          flashKey={flashKey}
           onClose={(key) => void closeTab(key)}
           onReorder={(from, to) => {
             if (tabs.some((t) => tabKey(t) === from) && tabs.some((t) => tabKey(t) === to)) setTabs((all) => moveTab(all, from, to));
@@ -1604,7 +1623,12 @@ function Workspace() {
                   setReveal((r) => ({ connectionId, database: path.database, schema: path.schema, name: path.name, seq: (r?.seq ?? 0) + 1 }));
                 },
               }}
-              flow={{ onOpenSettings: () => openSettings("ai", "tools") }}
+              flow={{
+                onOpenSettings: () => openSettings("ai", "tools"),
+                onMermaid: (insert) => setMermaidOpen({ insert }),
+                // ADR 0030: an old ER diagram's DBML opens unsaved under its name, once its Dialect is chosen.
+                onOpenModel: (name, dbml) => setModelStart({ file: { path: null, name, dbml, layout: null } }),
+              }}
               compare={{
                 connections,
                 groups,
@@ -1648,6 +1672,7 @@ function Workspace() {
                     visible={t.key === activeKey}
                     connectionName={c?.name}
                     rowEstimate={s.kind === "table" ? tree.estimate(s.connectionId, s.path) : null}
+                    onExactCount={s.kind === "table" ? (rows) => tree.setExact(s.connectionId, s.path, rows) : undefined}
                     onOpenQuery={(sql) => newQuery(s.connectionId, sql, s.path.database)}
                     onDesign={s.kind === "table" ? () => openDesign(s.connectionId, s.path) : undefined}
                     onLineage={s.kind === "table" ? () => openLineage(s.connectionId, s.path) : undefined}
@@ -1887,6 +1912,13 @@ function Workspace() {
               insertTarget={answerTarget}
               onOpenInNewTab={(sql, c) => newQuery(c?.id ?? null, answerText(sql), c?.database ?? undefined)}
               openIds={openIds}
+              onShowTab={(key) => {
+                // "Asked in <tab>" (A7): shows that tab if it is still open; a closed one changes nothing.
+                if (!tabs.some((t) => tabKey(t) === key)) return false;
+                setActiveKey(key);
+                flashTab(key);
+                return true;
+              }}
             />
           )}
         </div>
@@ -1993,6 +2025,16 @@ function Workspace() {
           lang={lang.client}
           onClose={() => setMermaidOpen(false)}
           beforeReplace={diagramFiles.beforeReplace}
+          insert={mermaidOpen.insert}
+          onBack={
+            mermaidOpen.back
+              ? () => {
+                  setSheetBack(mermaidOpen.back);
+                  setMermaidOpen(false);
+                  setNewDiagramOpen(true);
+                }
+              : undefined
+          }
           onCreated={(name) => {
             setMermaidOpen(false);
             // The flow is saved in the diagrams folder by name: open it in its tab.
@@ -2003,20 +2045,27 @@ function Workspace() {
       )}
       {newDiagramOpen && (
         <NewDiagramSheet
-          onClose={() => setNewDiagramOpen(false)}
+          initial={sheetBack}
+          onClose={() => {
+            setNewDiagramOpen(false);
+            setSheetBack(undefined);
+          }}
           beforeReplace={diagramFiles.beforeReplace}
           onCreated={(name) => {
             setNewDiagramOpen(false);
+            setSheetBack(undefined);
             openFlowTab(name);
             focusFlowText(name);
             loadDiagrams();
           }}
-          onMermaid={() => {
+          onMermaid={(state) => {
             setNewDiagramOpen(false);
-            setMermaidOpen(true);
+            setSheetBack(undefined);
+            setMermaidOpen({ back: state });
           }}
           onOpenDiagram={(name) => {
             setNewDiagramOpen(false);
+            setSheetBack(undefined);
             openFlowTab(name);
           }}
         />

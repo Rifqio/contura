@@ -1,0 +1,393 @@
+[
+ {
+  "note": "C1 alias begin",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN SELECT ts AS begin FROM t; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT ts AS begin FROM t; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 variable begin",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN DECLARE begin INT; SET begin = 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN DECLARE begin INT; SET begin = 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 table begin",
+  "dialect": "mysql",
+  "sql": "CREATE TRIGGER x BEFORE UPDATE ON begin FOR EACH ROW SET NEW.a=1; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x BEFORE UPDATE ON begin FOR EACH ROW SET NEW.a=1",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 function begin",
+  "dialect": "mysql",
+  "sql": "CREATE FUNCTION begin() RETURNS INT RETURN 1; DELETE FROM t",
+  "pieces": [
+   "CREATE FUNCTION begin() RETURNS INT RETURN 1",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 procedure case",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE case() BEGIN SELECT 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE case() BEGIN SELECT 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 sqlite column begin",
+  "dialect": "sqlite",
+  "sql": "CREATE TRIGGER x AFTER UPDATE ON s BEGIN UPDATE s SET begin = 1 WHERE id = NEW.id; END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x AFTER UPDATE ON s BEGIN UPDATE s SET begin = 1 WHERE id = NEW.id; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 sqlite table begin",
+  "dialect": "sqlite",
+  "sql": "CREATE TRIGGER x AFTER INSERT ON begin BEGIN SELECT 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x AFTER INSERT ON begin BEGIN SELECT 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 pg column begin",
+  "dialect": "postgres",
+  "sql": "CREATE FUNCTION f() RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE s SET begin = 1 WHERE id = 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE FUNCTION f() RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE s SET begin = 1 WHERE id = 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 pg OF begin",
+  "dialect": "postgres",
+  "sql": "CREATE TRIGGER x BEFORE UPDATE OF begin ON s FOR EACH ROW EXECUTE FUNCTION f(); DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x BEFORE UPDATE OF begin ON s FOR EACH ROW EXECUTE FUNCTION f()",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "C1 pg trigger begin",
+  "dialect": "postgres",
+  "sql": "CREATE TRIGGER begin BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION f(); DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER begin BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION f()",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "fallback: unclosed body",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT 1",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "fallback after a whole routine",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN SELECT 1; END; CREATE PROCEDURE q() BEGIN SELECT 2; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT 1; END",
+   "CREATE PROCEDURE q() BEGIN SELECT 2",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "I1 column end",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN UPDATE t SET end = 1 WHERE id=1; DELETE FROM u WHERE id=2; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN UPDATE t SET end = 1 WHERE id=1; DELETE FROM u WHERE id=2; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "I1 alias end",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN SELECT 1 AS end; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT 1 AS end; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "I2 NEW.begin",
+  "dialect": "mysql",
+  "sql": "CREATE TRIGGER x BEFORE INSERT ON s FOR EACH ROW BEGIN SET NEW.begin = NOW(); END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x BEFORE INSERT ON s FOR EACH ROW BEGIN SET NEW.begin = NOW(); END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "I2 NEW.end",
+  "dialect": "mysql",
+  "sql": "CREATE TRIGGER x BEFORE INSERT ON s FOR EACH ROW BEGIN SET NEW.end = NOW(); END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x BEFORE INSERT ON s FOR EACH ROW BEGIN SET NEW.end = NOW(); END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "every kind of block",
+  "dialect": "mysql",
+  "sql": "CREATE DEFINER=`root`@`%` PROCEDURE p()\nBEGIN\n  IF x THEN SELECT 1; END IF;\n  CASE WHEN a THEN SELECT 2; END CASE;\n  l: LOOP LEAVE l; END LOOP;\n  WHILE y DO SET y = 0; END WHILE;\n  REPEAT SET z = 1; UNTIL z END REPEAT;\n  l2: BEGIN SELECT 3; END;\nEND;\nDELETE FROM t",
+  "pieces": [
+   "CREATE DEFINER=`root`@`%` PROCEDURE p()\nBEGIN\n  IF x THEN SELECT 1; END IF;\n  CASE WHEN a THEN SELECT 2; END CASE;\n  l: LOOP LEAVE l; END LOOP;\n  WHILE y DO SET y = 0; END WHILE;\n  REPEAT SET z = 1; UNTIL z END REPEAT;\n  l2: BEGIN SELECT 3; END;\nEND",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "CASE expression then alias end",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN SELECT CASE WHEN a THEN 1 ELSE 2 END AS end FROM t; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT CASE WHEN a THEN 1 ELSE 2 END AS end FROM t; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "sqlite CASE in a trigger",
+  "dialect": "sqlite",
+  "sql": "CREATE TRIGGER t1 AFTER INSERT ON a BEGIN UPDATE b SET n = CASE WHEN n > 0 THEN n + 1 ELSE 0 END WHERE id = 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER t1 AFTER INSERT ON a BEGIN UPDATE b SET n = CASE WHEN n > 0 THEN n + 1 ELSE 0 END WHERE id = 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "transaction",
+  "dialect": "mysql",
+  "sql": "BEGIN; DELETE FROM t WHERE id = 1; COMMIT; DELETE FROM t",
+  "pieces": [
+   "BEGIN",
+   "DELETE FROM t WHERE id = 1",
+   "COMMIT",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "N4",
+  "dialect": "mysql",
+  "sql": "CREATE TABLE shifts (begin time, event text); DELETE FROM t",
+  "pieces": [
+   "CREATE TABLE shifts (begin time, event text)",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "transaction",
+  "dialect": "postgres",
+  "sql": "BEGIN; DELETE FROM t WHERE id = 1; COMMIT; DELETE FROM t",
+  "pieces": [
+   "BEGIN",
+   "DELETE FROM t WHERE id = 1",
+   "COMMIT",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "N4",
+  "dialect": "postgres",
+  "sql": "CREATE TABLE shifts (begin time, event text); DELETE FROM t",
+  "pieces": [
+   "CREATE TABLE shifts (begin time, event text)",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "transaction",
+  "dialect": "sqlite",
+  "sql": "BEGIN; DELETE FROM t WHERE id = 1; COMMIT; DELETE FROM t",
+  "pieces": [
+   "BEGIN",
+   "DELETE FROM t WHERE id = 1",
+   "COMMIT",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "N4",
+  "dialect": "sqlite",
+  "sql": "CREATE TABLE shifts (begin time, event text); DELETE FROM t",
+  "pieces": [
+   "CREATE TABLE shifts (begin time, event text)",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "round 5 trigger",
+  "dialect": "mysql",
+  "sql": "SELECT 1;\nCREATE TRIGGER x BEFORE INSERT ON t FOR EACH ROW BEGIN UPDATE a SET x=1; DELETE FROM u WHERE id=1; END;\nDELETE FROM t",
+  "pieces": [
+   "SELECT 1",
+   "CREATE TRIGGER x BEFORE INSERT ON t FOR EACH ROW BEGIN UPDATE a SET x=1; DELETE FROM u WHERE id=1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "pg atomic",
+  "dialect": "postgres",
+  "sql": "CREATE OR REPLACE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT 2; END; DELETE FROM t",
+  "pieces": [
+   "CREATE OR REPLACE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT 2; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F1 END begin label",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN SELECT 1; END begin; DELETE FROM t; CREATE PROCEDURE q() BEGIN SELECT 1; END; DELETE FROM u",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT 1; END begin",
+   "DELETE FROM t",
+   "CREATE PROCEDURE q() BEGIN SELECT 1; END",
+   "DELETE FROM u"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F1 label named begin",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN begin: LOOP LEAVE begin; END LOOP begin; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN begin: LOOP LEAVE begin; END LOOP begin; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F1 ::begin",
+  "dialect": "postgres",
+  "sql": "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1::begin; END; DELETE FROM t",
+  "pieces": [
+   "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1::begin; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F1 FOLLOWS begin",
+  "dialect": "mysql",
+  "sql": "CREATE TRIGGER y BEFORE INSERT ON t FOR EACH ROW FOLLOWS begin BEGIN SET NEW.a = 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER y BEFORE INSERT ON t FOR EACH ROW FOLLOWS begin BEGIN SET NEW.a = 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F1 SETOF begin",
+  "dialect": "postgres",
+  "sql": "CREATE FUNCTION f() RETURNS SETOF begin LANGUAGE sql BEGIN ATOMIC SELECT 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE FUNCTION f() RETURNS SETOF begin LANGUAGE sql BEGIN ATOMIC SELECT 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F2 number before BEGIN",
+  "dialect": "sqlite",
+  "sql": "CREATE TRIGGER x AFTER INSERT ON t WHEN NEW.a > 5 BEGIN SELECT 1; DELETE FROM u WHERE a; END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x AFTER INSERT ON t WHEN NEW.a > 5 BEGIN SELECT 1; DELETE FROM u WHERE a; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F2 COST 100",
+  "dialect": "postgres",
+  "sql": "CREATE FUNCTION f() RETURNS int LANGUAGE sql COST 100 BEGIN ATOMIC SELECT 1; DELETE FROM u WHERE a; END; DELETE FROM t",
+  "pieces": [
+   "CREATE FUNCTION f() RETURNS int LANGUAGE sql COST 100 BEGIN ATOMIC SELECT 1; DELETE FROM u WHERE a; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F3 COMMENT string",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() COMMENT 'doc' BEGIN SELECT 1; DELETE FROM u WHERE a; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() COMMENT 'doc' BEGIN SELECT 1; DELETE FROM u WHERE a; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F3 WHEN string",
+  "dialect": "sqlite",
+  "sql": "CREATE TRIGGER x AFTER INSERT ON t WHEN NEW.a = 'x' BEGIN SELECT 1; DELETE FROM u WHERE a; END; DELETE FROM t",
+  "pieces": [
+   "CREATE TRIGGER x AFTER INSERT ON t WHEN NEW.a = 'x' BEGIN SELECT 1; DELETE FROM u WHERE a; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F4 handler block",
+  "dialect": "mysql",
+  "sql": "CREATE PROCEDURE p() BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; SELECT 1; END; DELETE FROM u WHERE a; END; DELETE FROM t",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; SELECT 1; END; DELETE FROM u WHERE a; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "F5 ON event",
+  "dialect": "sqlite",
+  "sql": "CREATE TABLE event (begin int); CREATE TRIGGER x AFTER INSERT ON event BEGIN SELECT 1; END; DELETE FROM t",
+  "pieces": [
+   "CREATE TABLE event (begin int)",
+   "CREATE TRIGGER x AFTER INSERT ON event BEGIN SELECT 1; END",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ }
+]

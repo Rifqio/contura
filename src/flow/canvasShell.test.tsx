@@ -107,22 +107,22 @@ test("F1 a clicked line is selected on the canvas and its right-click menu has D
   await waitFor(() => expect(s.edge(0)!.classList.contains("selected")).toBe(true));
   fireEvent.contextMenu(s.edge(0)!, { clientX: 300, clientY: 200 });
   const menu = await screen.findByRole("menu", { name: "Line actions" });
-  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Edit label", "Arrow", "Reverse", "Show in the text", "Delete"]);
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Edit label", "Arrow", "Colour", "Reverse", "Show in the text", "Delete"]);
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete" }));
   await waitFor(() => expect(s.text()).toBe(FLOW.replace("Request in > Check\n", "")));
   oneUndo(s, FLOW);
 });
 
-test("F1 every kind's line deletes through the canvas: a message, a relationship, a transition", async () => {
+test("F1 every kind's line deletes through the canvas: a message, a class line, a transition", async () => {
   const cases: [string, string, string, string][] = [
     [lines('diagram sequence "Pay"', "participant App", "participant Api", "App -> Api : charge", "Api --> App : ok"), "Participant App", "Api to App", "Api --> App : ok\n"],
-    [lines('diagram er "Billing"', "customers", "invoices", "customers 1--* invoices : bills"), "Entity customers", "customers to invoices", "customers 1--* invoices : bills\n"],
+    [lines('diagram class "Types"', "class Animal", "class Dog", "Animal <|-- Dog"), "Class Animal", "Animal to Dog", "Animal <|-- Dog\n"],
     [lines('diagram state "Invoice"', "Draft", "Sent", "[*] > Draft", "Draft > Sent : send"), "State Draft", "Draft to Sent", "Draft > Sent : send\n"],
   ];
   for (const [text, label, chip, gone] of cases) {
     const s = setup(text, `k-${label}`);
     await drawn(s, label);
-    const index = label === "Participant App" ? 1 : label === "Entity customers" ? 0 : 1;
+    const index = label === "Participant App" ? 1 : label === "Class Animal" ? 0 : 1;
     act(() => canvas.props!.onLineSelect!([`edge:${index}`]));
     await waitFor(() => expect(within(s.strip()).getByText(chip)).toBeTruthy());
     s.press("Delete");
@@ -182,17 +182,6 @@ test("F6 Enter on a selected shape edits its name in place", async () => {
   oneUndo(s, FLOW);
 });
 
-test("F6 Enter on a selected ER table edits its name in the card header", async () => {
-  const er = lines('diagram er "Billing"', "customers", "customers.id int [pk]");
-  const s = setup(er, "er-enter");
-  await drawn(s, "Entity customers");
-  act(() => canvas.props!.onSelect!(["customers"]));
-  await waitFor(() => expect(s.node("Entity customers")!.classList.contains("selected")).toBe(true));
-  s.press("Enter");
-  const box = (await screen.findByLabelText("Table name", { selector: "input" })) as HTMLInputElement;
-  expect(box.value).toBe("customers");
-});
-
 test("F24 the tool bar has no inert Select button", async () => {
   const s = setup();
   await drawn(s);
@@ -225,6 +214,8 @@ test("S5 a participant double-clicked between two lands between them in the text
   const x = (api.position.x + (api.initialWidth ?? 0) + bank.position.x) / 2;
   act(() => canvas.props!.onPaneDoubleClick!({ screen: { x: 500, y: 300 }, flow: { x, y: api.position.y } }));
   await userEvent.click(await screen.findByRole("menuitem", { name: /^Participant/ }));
+  // "Add here" (diagram step 6): the new participant's name is ready; Enter writes it in the gap.
+  await userEvent.type(await screen.findByRole("textbox", { name: "Name the new participant" }), "{Enter}");
   await waitFor(() =>
     expect(s.text()).toBe(lines('diagram sequence "Pay"', "participant App", "participant Api", "participant Participant", "participant Bank", "App -> Api : charge")),
   );

@@ -4,6 +4,7 @@ import { keyringText, thisComputer } from "../platform";
 import { aiSettingsChanged, connectionForgotten, toolUsesChanged } from "./changes";
 import type {
   DiagramAskRequest,
+  PlannedRun,
   ToolOutcome,
   AiAccess,
   AiSyncMode,
@@ -345,6 +346,10 @@ export const runVisualQuery = (
   types: ColumnTypes,
   pass: PassId | null,
 ): Promise<VqRun> => invoke("run_visual_query", { session, query, types, pass });
+
+/** The statements a run sends, split by the Core, with the missing-WHERE answer for each (UX step 9, round 4). */
+export const planRun = (session: QuerySessionId, statements: string[]): Promise<PlannedRun[]> =>
+  invoke("plan_run", { session, statements });
 
 export const prepareRun = (session: QuerySessionId, statements: string[]): Promise<RunVerdict> =>
   invoke("prepare_run", { session, statements });
@@ -710,7 +715,7 @@ function aiErrorText(e: AiError): string {
     case "nothingToContinue":
       return "Nothing to continue.";
     case "fileChanged":
-      return `${e.file}.flow changed while the assistant was working${e.line === null ? "" : `, from line ${e.line}`}. No change was made.`;
+      return `${e.file} changed while the assistant was working${e.line === null ? "" : `, from line ${e.line}`}. No change was made.`;
     case "toolRejected":
       return "The assistant asked for a tool Contura does not offer. Nothing was changed.";
     case "badToolInput":

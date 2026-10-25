@@ -1,7 +1,7 @@
 // Completion for .flow (spec section 2, "Editor"): kinds and attribute keys inside brackets, icon names after
 // `icon:` (provider prefix first), node names where a name goes, and the diagram kinds on the first line.
 import { rankIcons } from "./iconRank";
-import { ATTR_KEYS, COLUMN_FLAGS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS, NOTE_KINDS } from "./model";
+import { ATTR_DIAGRAMS, ATTR_KEYS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS, NOTE_KINDS, PALETTE } from "./model";
 import { parseFlow } from "./parse";
 
 export type FlowCompletion = {
@@ -9,6 +9,8 @@ export type FlowCompletion = {
   kind: "kind" | "attr" | "node" | "icon" | "keyword";
   /** The text that replaces `from..pos`. */
   apply: string;
+  /** Quiet words beside the label: what a key or colour is for, the words a shape shows (step 11). */
+  detail?: string;
 };
 
 /** Items to offer at `pos`, best first; `from` is where the word being completed starts. */
@@ -58,10 +60,25 @@ const LEADING_WORDS: Partial<Record<DiagramKind, string[]>> = {
 
 const startsWithCi = (label: string, typed: string) => label.toLowerCase().startsWith(typed.toLowerCase());
 
+/** Step 11: what each palette colour means (board DiagramColourLabels), shown beside it. */
+export const COLOUR_MEANING: Record<(typeof PALETTE)[number], string> = {
+  accent: "Accent: the main path",
+  info: "Info: a reference",
+  success: "Success: done or OK",
+  warning: "Warning: needs a look",
+  danger: "Danger: failure, error, data at risk",
+  muted: "Muted: out of scope, later, legacy",
+};
+
+const KEY_DETAIL: Partial<Record<string, string>> = {
+  label: "the words it shows, when another shape has the name",
+  color: "one of six palette colours",
+};
+
 /** What the line holds up to `pos`, read as the parser reads it. */
 type Context =
   | { at: "none" }
-  | { at: "bracket"; item: string; itemFrom: number; items: string[] }
+  | { at: "bracket"; item: string; itemFrom: number; items: string[]; line: boolean }
   | { at: "name"; typed: string; from: number };
 
 function context(line: string, lineFrom: number): Context {
@@ -72,6 +89,9 @@ function context(line: string, lineFrom: number): Context {
   const items: string[] = [];
   let nameFrom = 0;
   let closedSomething = false;
+  /** An arrow came before the bracket: a line's attributes. */
+  let arrowSeen = false;
+  let lineBracket = false;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     if (inQuote) {
@@ -97,17 +117,30 @@ function context(line: string, lineFrom: number): Context {
     }
     if (c === "[") {
       inBracket = true;
+      lineBracket = arrowSeen;
       itemFrom = i + 1;
       items.length = 0;
+    } else if (c === ":" && arrowSeen) {
+      // A line's label runs to the end of the line, but an open [ at its end is its attributes (step 11).
+      const open = line.lastIndexOf("[");
+      if (open > i && !line.includes("]", open)) {
+        const inner = line.slice(open + 1);
+        const parts = inner.split(",");
+        const item = parts.pop() ?? "";
+        return { at: "bracket", item, itemFrom: lineFrom + open + 1 + inner.length - item.length, items: parts.map((p) => p.trim()), line: true };
+      }
+      return { at: "none" };
     } else if (c === ":" || c === "{" || c === "}") {
       // A label runs to the end of the line; nothing is completed after a brace.
       return { at: "none" };
     } else if (c === ">") {
       nameFrom = i + 1;
       closedSomething = false;
+      arrowSeen = true;
     } else if (c === "-" && (i === 0 || /\s/.test(line[i - 1])) && (i + 1 >= line.length || /\s/.test(line[i + 1]))) {
       nameFrom = i + 1;
       closedSomething = false;
+      arrowSeen = true;
     } else if (/\s/.test(c)) {
       // After a step 12 arrow (--, 1--*, <|--, *--): the name after it is being typed.
       let t = i;
@@ -116,12 +149,13 @@ function context(line: string, lineFrom: number): Context {
       if (token && /^[-<>|.*1]+$/.test(token) && /[-]/.test(token) && token.length > 1) {
         nameFrom = i + 1;
         closedSomething = false;
+        arrowSeen = true;
       }
     }
   }
   if (inBracket) {
     if (inQuote) return { at: "none" };
-    return { at: "bracket", item: line.slice(itemFrom), itemFrom: lineFrom + itemFrom, items };
+    return { at: "bracket", item: line.slice(itemFrom), itemFrom: lineFrom + itemFrom, items, line: lineBracket };
   }
   if (closedSomething) return { at: "none" };
   let from = nameFrom;
@@ -140,6 +174,8 @@ export function completeFlow(
   pos: number,
   iconNames: readonly string[],
   defined?: ReadonlyMap<string, number>,
+  /** Step 11: each shape's `label:` by its name (the parse's `labels`), shown beside its name. */
+  labels?: ReadonlyMap<string, string>,
 ): FlowCompletionResult {
   const lineFrom = text.lastIndexOf("\n", pos - 1) + 1;
   const line = text.slice(lineFrom, pos);
@@ -157,28 +193,28 @@ export function completeFlow(
 
   if (ctx.at === "bracket") {
     const colon = ctx.item.indexOf(":");
+    const dk = diagramKind(text);
     if (colon >= 0) {
       const key = ctx.item.slice(0, colon).trim();
-      if (key !== "icon") return none;
       const typed = ctx.item.slice(colon + 1).trimStart();
+      if (key === "color") {
+        const colours = PALETTE.filter((c) => startsWithCi(c, typed)).map((c) => ({ label: c, kind: "keyword" as const, apply: c, detail: COLOUR_MEANING[c] }));
+        return { from: pos - typed.length, items: colours };
+      }
+      if (key !== "icon" || ctx.line) return none;
       return { from: pos - typed.length, items: rankIcons(iconNames, typed).map((i) => ({ label: i, kind: "icon" as const, apply: i })) };
     }
     const typed = ctx.item.trimStart();
     const used = new Set(ctx.items.map((i) => (i.includes(":") ? i.slice(0, i.indexOf(":")).trim() : i)));
-    const dk = diagramKind(text);
-    // An ER column line (`customers.id int [`) takes its flags (ER build A).
-    if (dk === "er" && /^\s*[^\s."[]+\.\S/.test(line.slice(0, line.lastIndexOf("[")))) {
-      const taken = new Set(ctx.items.map((i) => i.toLowerCase().split(/\s+/).join(" ")));
-      const flags = COLUMN_FLAGS.filter((f) => !taken.has(f) && startsWithCi(f, typed));
-      return { from: pos - typed.length, items: flags.map((f) => ({ label: f, kind: "keyword" as const, apply: f })) };
-    }
     const hasKind = ctx.items.some((i) => i !== "" && !i.includes(":"));
-    const kinds = dk === "cloud" || hasKind ? [] : dk ? KINDS[dk] : [...KINDS.dfd, ...KINDS.flow];
-    // A cloud node is drawn by its icon, so the icon key comes first there.
-    const keys = dk === "cloud" ? ["icon", ...ATTR_KEYS.filter((k) => k !== "icon")] : [...ATTR_KEYS];
+    const kinds = ctx.line || dk === "cloud" || hasKind ? [] : dk ? KINDS[dk] : [...KINDS.dfd, ...KINDS.flow];
+    // A cloud node is drawn by its icon, so the icon key comes first there. A line takes only a colour; the kinds
+    // written with a word or a date take no label or colour (step 11).
+    const all = dk === "cloud" ? ["icon", ...ATTR_KEYS.filter((k) => k !== "icon")] : [...ATTR_KEYS];
+    const keys = ctx.line ? (!dk || ATTR_DIAGRAMS.has(dk) ? ["color"] : []) : all.filter((k) => !dk || ATTR_DIAGRAMS.has(dk) || (k !== "label" && k !== "color"));
     const items: FlowCompletion[] = [
       ...kinds.map((k) => ({ label: k, kind: "kind" as const, apply: k })),
-      ...keys.filter((k) => !used.has(k)).map((k) => ({ label: k, kind: "attr" as const, apply: `${k}: ` })),
+      ...keys.filter((k) => !used.has(k)).map((k) => ({ label: k, kind: "attr" as const, apply: `${k}: `, ...(KEY_DETAIL[k] ? { detail: KEY_DETAIL[k] } : {}) })),
     ];
     return { from: pos - typed.length, items: items.filter((i) => startsWithCi(i.label, typed)) };
   }
@@ -191,12 +227,18 @@ export function completeFlow(
   const lead: FlowCompletion[] = words
     .filter((w) => startsWithCi(w, typed) && w !== typed)
     .map((w) => ({ label: w, kind: "keyword" as const, apply: w === "note" ? "note: " : `${w} ` }));
-  const names = defined ?? parseFlow(text).defined;
+  const parsed = defined ? null : parseFlow(text);
+  const names = defined ?? parsed!.defined;
+  const shows = labels ?? parsed?.labels;
   let lineNo = 1;
   for (let i = text.indexOf("\n"); i >= 0 && i < lineFrom; i = text.indexOf("\n", i + 1)) lineNo++;
   const items: FlowCompletion[] = [...lead];
   for (const [n, at] of names) {
-    if (at !== lineNo && startsWithCi(n, typed)) items.push({ label: n, kind: "node", apply: flowName(n) });
+    if (at === lineNo) continue;
+    const label = shows?.get(n);
+    if (startsWithCi(n, typed) || (label !== undefined && startsWithCi(label, typed))) {
+      items.push({ label: n, kind: "node", apply: flowName(n), ...(label !== undefined ? { detail: `shows "${label.replace(/\r?\n/g, " ")}" (label:)` } : {}) });
+    }
   }
   return { from: ctx.from, items };
 }

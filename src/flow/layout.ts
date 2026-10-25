@@ -17,6 +17,24 @@ export interface FlowLayout {
   direction: FlowDirection;
   /** Item 21: the sizes nodes were resized to on the canvas, by name; a node with none takes its kind's size. */
   sizes?: Record<string, { w: number; h: number }>;
+  /**
+   * Diagram step 6: the axis of a line added with a +, by `axisKey(from, to)`, so it keeps the side it was drawn on
+   * (board DiagramAddNext). Only lines that still exist are kept.
+   */
+  axes?: Record<string, "v" | "h">;
+}
+
+/** The key a line's axis is kept under: its two ends, as JSON, so any name is safe. */
+export const axisKey = (from: string, to: string) => JSON.stringify([from, to]);
+
+/** A key's two ends, or null for a key that is not one (a hand-edited file): such a key is ignored (round 2, N-C). */
+export function axisEnds(key: string): [string, string] | null {
+  try {
+    const v: unknown = JSON.parse(key);
+    return Array.isArray(v) && v.length === 2 && typeof v[0] === "string" && typeof v[1] === "string" ? [v[0], v[1]] : null;
+  } catch {
+    return null;
+  }
 }
 
 /** A flowchart runs top to bottom (answer 7A); a data flow and a cloud diagram read left to right, as their frames do. */
@@ -60,6 +78,11 @@ export function parseFlowLayout(json: string | null, kind: DiagramKind | null): 
     }
     if (Object.keys(sizes).length) out.sizes = sizes;
   }
+  if (typeof r.axes === "object" && r.axes !== null) {
+    const axes = Object.create(null) as Record<string, "v" | "h">;
+    for (const [k, v] of Object.entries(r.axes as Record<string, unknown>)) if ((v === "v" || v === "h") && axisEnds(k)) axes[k] = v;
+    if (Object.keys(axes).length) out.axes = axes;
+  }
   return out;
 }
 
@@ -75,6 +98,11 @@ export function serializeFlowLayout(l: FlowLayout): string {
     const sizes: Record<string, { w: number; h: number }> = {};
     for (const k of Object.keys(l.sizes).sort()) sizes[k] = { w: Math.round(l.sizes[k].w), h: Math.round(l.sizes[k].h) };
     out.sizes = sizes;
+  }
+  if (l.axes && Object.keys(l.axes).length) {
+    const axes: Record<string, "v" | "h"> = {};
+    for (const k of Object.keys(l.axes).sort()) axes[k] = l.axes[k];
+    out.axes = axes;
   }
   return `${JSON.stringify(out, null, 2)}\n`;
 }

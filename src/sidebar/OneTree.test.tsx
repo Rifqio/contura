@@ -9,6 +9,7 @@ import { iconElement } from "../components/Icon";
 import OneTree, { type OneTreeProps } from "./OneTree";
 import { type RevealRequest, useTreeData } from "./useTreeData";
 import { objectNames } from "../palette/nameIndex";
+import { treeName } from "../test/treeName";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 beforeEach(() => vi.clearAllMocks());
@@ -141,8 +142,10 @@ function routeMy(extra: Record<string, (a: Record<string, unknown>) => unknown> 
   routeInvoke({ list_databases: () => ["shop"], list_objects: () => OBJECTS, ...extra });
 }
 
-const item = (name: string | RegExp) => screen.getByRole("treeitem", { name });
-const findItem = (name: string | RegExp) => screen.findByRole("treeitem", { name });
+/** A tree row by its name; a table row's name may end with its row count (", about 18,402 rows"). */
+const named = treeName;
+const item = (name: string | RegExp) => screen.getByRole("treeitem", { name: named(name) });
+const findItem = (name: string | RegExp) => screen.findByRole("treeitem", { name: named(name) });
 const names = () => screen.getAllByRole("treeitem").map((r) => r.getAttribute("aria-label"));
 
 // ---------- Structure ----------
@@ -175,7 +178,7 @@ test("role_tree_with_levels_expanded_and_selected", async () => {
   expect(item("stores").tabIndex).toBe(-1);
   // Views start closed; Tables open the first time a scope loads.
   expect(item("Views").getAttribute("aria-expanded")).toBe("false");
-  expect(screen.queryByRole("treeitem", { name: "v_daily_sales" })).toBeNull();
+  expect(screen.queryByRole("treeitem", { name: named("v_daily_sales") })).toBeNull();
 });
 
 test("every_open_connection_is_expanded_at_once", async () => {
@@ -199,11 +202,11 @@ test("every_open_connection_is_expanded_at_once", async () => {
     "CRM, open",
     "crm",
     "Tables",
-    "leads",
+    "leads, about 3 rows",
     "Shop, open",
     "shop",
     "Tables",
-    "orders",
+    "orders, about 18,402 rows",
     "stores",
     "Views",
     "Procedures",
@@ -255,8 +258,8 @@ test("prod_chip_and_lock_sit_on_the_row", () => {
 test("connection_row_name_says_production_and_read_only", () => {
   routeInvoke({});
   render(<Harness connections={[conn("a", "kfc-prod", { production: true, readOnly: true }), conn("b", "kfc-ro", { readOnly: true })]} />);
-  expect(screen.getByRole("treeitem", { name: "kfc-prod, closed, Production, Read-only" })).toBeTruthy();
-  expect(screen.getByRole("treeitem", { name: "kfc-ro, closed, Read-only" })).toBeTruthy();
+  expect(screen.getByRole("treeitem", { name: named("kfc-prod, closed, Production, Read-only") })).toBeTruthy();
+  expect(screen.getByRole("treeitem", { name: named("kfc-ro, closed, Read-only") })).toBeTruthy();
   // R8: spoken "Production", never "PROD".
   expect(screen.queryByRole("treeitem", { name: /PROD/ })).toBeNull();
 });
@@ -367,14 +370,14 @@ test("a_connection_row_says_connecting_and_failed", () => {
     ["b", { s: "failed" as const, error: "Could not connect: refused." }],
   ]);
   render(<Harness connections={[conn("a", "Shop"), conn("b", "Stock"), conn("c", "Ledger")]} openStatus={status} />);
-  const shop = screen.getByRole("treeitem", { name: "Shop, connecting" });
+  const shop = screen.getByRole("treeitem", { name: named("Shop, connecting") });
   expect(shop.querySelector(".tree-conn-state")?.textContent).toBe("Connecting...");
-  const stock = screen.getByRole("treeitem", { name: "Stock, last connect failed" });
+  const stock = screen.getByRole("treeitem", { name: named("Stock, last connect failed") });
   const failed = stock.querySelector(".tree-conn-failed")!;
   expect(failed.textContent).toBe("Failed");
   expect(failed.getAttribute("title")).toBe("Could not connect: refused.");
   expect(failed.querySelector("svg")).not.toBeNull();
-  const ledger = screen.getByRole("treeitem", { name: "Ledger, closed" });
+  const ledger = screen.getByRole("treeitem", { name: named("Ledger, closed") });
   expect(ledger.querySelector(".tree-conn-state")).toBeNull();
 });
 
@@ -499,7 +502,7 @@ test("tables_folder_has_chevron_icon_and_count", async () => {
   // Folder rows draw the same guides as any row (S5): a stub from the database's column.
   expect(tables.querySelector(".tree-stub")).not.toBeNull();
   await userEvent.click(tables);
-  expect(screen.queryByRole("treeitem", { name: "orders" })).toBeNull();
+  expect(screen.queryByRole("treeitem", { name: named("orders") })).toBeNull();
   expect(item("Tables").getAttribute("aria-expanded")).toBe("false");
 });
 
@@ -508,10 +511,44 @@ test("table_rows_show_row_estimates", async () => {
   render(<Harness connections={[conn("a", "Shop")]} open={["a"]} />);
   const orders = await findItem("orders");
   const est = orders.querySelector(".tree-rows") as HTMLElement;
-  expect(est.textContent).toBe("18,402");
+  // The server's figure is an estimate (MySQL TABLE_ROWS, PostgreSQL reltuples), so it reads as one.
+  expect(est.textContent).toBe("~18,402");
+  expect(est.title).toBe("About 18,402 rows: the server's estimate. Open the table for the exact count.");
   expect(est.className).toContain("tree-count");
   // No estimate, no number.
   expect(item("stores").querySelector(".tree-rows")).toBeNull();
+});
+
+test("a_counted_table_shows_its_count_in_place_of_the_estimate", async () => {
+  routeMy();
+  const treeRef: { current: ReturnType<typeof useTreeData> | null } = { current: null };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} treeRef={treeRef} />);
+  const orders = await findItem("orders");
+  expect(orders.querySelector(".tree-rows")!.textContent).toBe("~18,402");
+  // A table tab counted 3 rows: the tree shows that count, with no ~.
+  act(() => treeRef.current!.setExact("a", { database: "shop", schema: null, name: "orders" }, 3));
+  const counted = item("orders").querySelector(".tree-rows") as HTMLElement;
+  expect(counted.textContent).toBe("3");
+  expect(counted.title).toBe("3 rows, counted when the table was opened");
+  // The tree row's name says it too.
+  expect(item("orders").getAttribute("aria-label")).toBe("orders, 3 rows");
+  // The server's estimate stays the estimate: a count is never handed on as one.
+  expect(treeRef.current!.estimate("a", { database: "shop", schema: null, name: "orders" })).toBe(18402);
+  // A later count over 1,000, slow or not made clears it.
+  act(() => treeRef.current!.setExact("a", { database: "shop", schema: null, name: "orders" }, null));
+  expect(item("orders").querySelector(".tree-rows")!.textContent).toBe("~18,402");
+  expect(item("orders").getAttribute("aria-label")).toBe("orders, about 18,402 rows");
+});
+
+test("a_tree_refresh_drops_the_count", async () => {
+  routeMy();
+  const treeRef: { current: ReturnType<typeof useTreeData> | null } = { current: null };
+  render(<Harness connections={[conn("a", "Shop")]} open={["a"]} treeRef={treeRef} />);
+  await findItem("orders");
+  act(() => treeRef.current!.setExact("a", { database: "shop", schema: null, name: "orders" }, 3));
+  expect(item("orders").querySelector(".tree-rows")!.textContent).toBe("3");
+  act(() => treeRef.current!.refresh("a"));
+  await waitFor(() => expect(item("orders").querySelector(".tree-rows")!.textContent).toBe("~18,402"));
 });
 
 test("estimate_reads_the_loaded_row_estimate", async () => {
@@ -568,7 +605,7 @@ test("show_system_schemas_is_in_the_database_menu", async () => {
   const h = handlers();
   render(<Harness connections={[pgConn]} open={["p"]} {...h} />);
   await findItem("public");
-  expect(screen.queryByRole("treeitem", { name: "pg_catalog" })).toBeNull();
+  expect(screen.queryByRole("treeitem", { name: named("pg_catalog") })).toBeNull();
   expect(screen.queryByRole("checkbox", { name: "Show system schemas" })).toBeNull();
   await userEvent.click(within(item("shop")).getByRole("button", { name: "More actions for shop" }));
   const menu = screen.getByRole("menu", { name: "shop" });
@@ -611,8 +648,8 @@ test("tables_with_one_name_in_two_schemas_are_distinct", async () => {
   );
   await findItem("orders");
   await userEvent.click(item("sales"));
-  await waitFor(() => expect(screen.getAllByRole("treeitem", { name: "orders" })).toHaveLength(2));
-  const [inPublic, inSales] = screen.getAllByRole("treeitem", { name: "orders" });
+  await waitFor(() => expect(screen.getAllByRole("treeitem", { name: named("orders") })).toHaveLength(2));
+  const [inPublic, inSales] = screen.getAllByRole("treeitem", { name: named("orders") });
   expect(inPublic.getAttribute("aria-selected")).toBe("false");
   expect(inSales.getAttribute("aria-selected")).toBe("true");
   await userEvent.click(inPublic);
@@ -685,7 +722,7 @@ test("reveal_clears_a_filter_that_hides_the_row", async () => {
   await findItem("orders");
   const field = screen.getByRole("searchbox", { name: "Filter objects" }) as HTMLInputElement;
   await userEvent.type(field, "sto");
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "orders" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: named("orders") })).toBeNull());
   rerender(
     <Harness connections={[conn("a", "Shop")]} open={["a"]} reveal={{ connectionId: "a", database: "shop", schema: null, name: "orders", seq: 1 }} />,
   );
@@ -701,7 +738,7 @@ test("reveal_keeps_a_filter_that_shows_the_row", async () => {
   await findItem("orders");
   const field = screen.getByRole("searchbox", { name: "Filter objects" }) as HTMLInputElement;
   await userEvent.type(field, "sto");
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "orders" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: named("orders") })).toBeNull());
   rerender(
     <Harness connections={[conn("a", "Shop")]} open={["a"]} reveal={{ connectionId: "a", database: "shop", schema: null, name: "stores", seq: 1 }} />,
   );
@@ -739,7 +776,7 @@ test("ctrl_shift_f_focuses_filter_objects_and_escape_clears", async () => {
   ctrlShiftF();
   expect(document.activeElement).toBe(field);
   await userEvent.type(field, "sto");
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "orders" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: named("orders") })).toBeNull());
   expect(item("stores")).toBeTruthy();
   expect(item("stores").querySelector("mark")?.textContent).toBe("sto");
   await userEvent.keyboard("{Escape}");
@@ -767,8 +804,8 @@ test("filter_finds_tables_and_saved_queries", async () => {
   render(<Harness connections={[conn("a", "Shop")]} open={["a"]} saved={SAVED} />);
   await findItem("orders");
   await userEvent.type(screen.getByRole("searchbox", { name: "Filter objects" }), "ord");
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "stores" })).toBeNull());
-  expect(names()).toEqual(["Shop, open", "shop", "Tables", "orders", "Saved Queries", "late orders"]);
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: named("stores") })).toBeNull());
+  expect(names()).toEqual(["Shop, open", "shop", "Tables", "orders, about 18,402 rows", "Saved Queries", "late orders"]);
   await userEvent.clear(screen.getByRole("searchbox", { name: "Filter objects" }));
   await userEvent.type(screen.getByRole("searchbox", { name: "Filter objects" }), "zzz");
   expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
@@ -953,7 +990,7 @@ test("the_tree_stays_tabbable_and_keeps_focus_when_its_row_scrolls_away", async 
   const scroller = screen.getByRole("tree");
   scroller.scrollTop = 28 * 400;
   fireEvent.scroll(scroller);
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "table_400" })).not.toBeNull());
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: named("table_400") })).not.toBeNull());
   // The focused row is still drawn (in its own place) and keeps the focus.
   expect(document.activeElement).toBe(item("table_002"));
   expect(h.onFocusBranch).toHaveBeenLastCalledWith("a");
@@ -976,7 +1013,7 @@ test("a_tree_scrolled_before_any_focus_still_has_one_tabbable_row", async () => 
   const scroller = screen.getByRole("tree");
   scroller.scrollTop = 28 * 500;
   fireEvent.scroll(scroller);
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "t_0" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: named("t_0") })).toBeNull());
   const tabbable = screen.getAllByRole("treeitem").filter((r) => r.tabIndex === 0);
   expect(tabbable.map((r) => r.getAttribute("aria-label"))).toEqual(["Shop, open"]);
 });
@@ -1101,10 +1138,10 @@ test("reopened_connection_starts_with_its_levels_closed_and_nothing_stuck_loadin
   await userEvent.click(item("other"));
   await waitFor(() => expect(item("other").getAttribute("aria-expanded")).toBe("true"));
   rerender(<Harness connections={[c]} open={[]} />);
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "other" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: named("other") })).toBeNull());
   rerender(<Harness connections={[c]} open={["a"]} />);
   await findItem("other");
-  await waitFor(() => expect(screen.getAllByRole("treeitem", { name: "orders" })).toHaveLength(1));
+  await waitFor(() => expect(screen.getAllByRole("treeitem", { name: named("orders") })).toHaveLength(1));
   expect(item("other").getAttribute("aria-expanded")).toBe("false");
   expect(screen.queryByText(/Loading/)).toBeNull();
 });
@@ -1209,7 +1246,7 @@ test("table_row_menu_shows_lineage", async () => {
   expect(menuLabels("orders")).toEqual(["Open", "Edit structure", "Show lineage"]);
   await userEvent.click(screen.getByRole("menuitem", { name: "Show lineage" }));
   expect(h.onShowLineage).toHaveBeenCalledWith({ connectionId: "a", kind: "table", path: { database: "shop", schema: null, name: "orders" } });
-  expect(within(item("orders")).getByText("18,402")).toBeTruthy();
+  expect(within(item("orders")).getByText("~18,402")).toBeTruthy();
 });
 
 test("table_row_menu_opens_from_the_keyboard", async () => {

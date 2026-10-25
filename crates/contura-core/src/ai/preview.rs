@@ -25,7 +25,7 @@ use crate::ai::memory::{
 use crate::ai::models::{ModelInfo, clamp};
 use crate::ai::prompt::outline_prompt;
 use crate::ai::provider::{ChatRole, max_tokens_on_wire, wire_thinking};
-use crate::ai::rails::input::rank;
+use crate::ai::rails::input::{needs_access, rank};
 use crate::ai::rails::retrieval::{ASKED_IN_SOURCE, framed_lines, outline_block};
 use crate::ai::rails::{
     Ask, InputRail, RetrievalRail, Secrets, allowed, cap_chars, framed_text, lock_reason,
@@ -2094,8 +2094,7 @@ pub struct Recall {
 
 /// The memory stage: the Topic this Ask belongs to and the history it may send. No
 /// `thread_id`, a thread that is not stored, or one of another place gives no history and
-/// Topic 1, `First`. At Never nothing of the thread goes, not even a question-only turn.
-/// Otherwise the open Topic's turns and matching summaries pass the gate on history with
+/// Topic 1, `First`. The open Topic's turns and matching summaries pass the gate on history with
 /// the access read from the stored Connection (R1.2, R1.7), cleaned by the input rail's
 /// cleaner (R2.1, R2.2); no masking, since the gate already holds values back. A store
 /// that cannot be read sends no history. `known` is the `others` an earlier recall of the
@@ -2130,7 +2129,9 @@ pub async fn recall(
     let picked = topic.clone();
     let mut pick = HistoryPick::default();
     let mut others = known;
-    if let Some(t) = thread.as_ref().filter(|_| g.access != AiAccess::Never) {
+    // At Never (and on Home, which has no Connection) the gate still runs: a turn that sent
+    // only the conversation goes, one that sent anything about a database stays held.
+    if let Some(t) = thread.as_ref() {
         if others.is_none() {
             others = Some(others_access(catalog, t, log).await);
         }
@@ -2249,6 +2250,18 @@ pub fn stamp_continued(req: &AskRequest, recall: &Recall, stamp: &mut TurnStamp)
     if req.action != "continue" {
         return;
     }
+    // The extended answer carries what the continued turn carried (I1), whether or not
+    // its history row made it through the cut.
+    if let Some(t) = recall.source.as_ref() {
+        let mut shown = t.messages.iter().filter(|m| m.role != AiRole::Notice);
+        for m in [shown.next_back(), shown.next_back()].into_iter().flatten() {
+            for k in &m.kinds {
+                if *k != ItemKind::History && !stamp.kinds.contains(k) {
+                    stamp.kinds.push(*k);
+                }
+            }
+        }
+    }
     let continued = recall.source.as_ref().and_then(|t| {
         t.messages
             .iter()
@@ -2352,6 +2365,8 @@ fn asked_in(req: &AskRequest, g: &Gathered, items: &[Item]) -> (Option<AskedIn>,
         steps,
         also: req.focus.also.clone(),
         other_steps,
+        // The webview adds the key of its tab when it saves the turn.
+        tab_key: None,
     };
     (Some(stamp.capped()), used)
 }
@@ -2631,6 +2646,15 @@ pub(crate) fn assemble_with(
         .into_iter()
         .filter(|k| *k != ItemKind::History)
         .collect();
+    // The answer may lean on the history that went: the turn carries what that history
+    // carried, so lowering access holds it with the turns it was built on (I1).
+    if history_on && (!turns.is_empty() || summaries > 0) {
+        for k in &history.kinds {
+            if *k != ItemKind::History && !kinds.contains(k) {
+                kinds.push(*k);
+            }
+        }
+    }
     // The highest level the This tab and Recent steps parts used, so the gate holds their
     // replay to it (spec 6.1): names at Schema only, titles and counts at query text.
     for (level, kind) in [(1, ItemKind::Names), (2, ItemKind::Sql)] {
@@ -2646,7 +2670,13 @@ pub(crate) fn assemble_with(
         connection_id: req.connection_id,
         database: req.database.clone(),
         action: req.action.clone(),
-        tables: g.tables.clone(),
+        // A turn that sent nothing about the database keeps no table names: a Topic summary
+        // made by rules from it would otherwise carry names that never went (C2).
+        tables: if kinds.iter().any(|k| needs_access(*k)) {
+            g.tables.clone()
+        } else {
+            Vec::new()
+        },
         kinds,
         asked_in,
     };

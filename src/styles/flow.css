@@ -102,14 +102,6 @@
   flex: none;
   color: var(--c-danger-text);
 }
-.mermaid-left-out {
-  position: absolute;
-  right: var(--spacing-sm);
-  bottom: var(--spacing-sm);
-  left: var(--spacing-sm);
-  z-index: 5;
-}
-
 /* Not carried over: the count chip and one warning line per note. */
 .mermaid-notes {
   display: flex;
@@ -316,8 +308,24 @@
   gap: var(--spacing-sm) 10px;
   align-items: center;
 }
-.new-diagram-name {
+.new-diagram-name,
+.new-diagram-start {
   display: contents;
+}
+/* Step 10 (F27): Start with Example or Blank, and what it writes. */
+.new-diagram-start-pick {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.new-diagram-start-hint {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .new-diagram-hint,
 .new-diagram-form .new-diagram-message {
@@ -451,4 +459,27 @@
 .new-diagram-at > div > .fnode {
   width: 100%;
   height: 100%;
+}
+.new-diagram-label {
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+/* Step 10 (F28): a line the converter could not read, marked where it is written; its reason is listed below. */
+.mermaid-dialog .cm-line.cm-mermaid-bad {
+  background: var(--c-danger-subtle);
+  box-shadow: inset 2px 0 0 var(--c-danger-solid);
+}
+/* The refused lines' rows only: nothing under them takes room. */
+.mermaid-problems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs, 4px);
+}
+/* Fix round 1, M8: a card's drawing of its kind's example, scaled to fit. */
+.new-diagram-drawing {
+  position: absolute;
+  inset: 8px;
+}
+.new-diagram-drawing svg {
+  display: block;
 }

@@ -34,11 +34,6 @@ export const ADD_TOOLS: Record<DiagramKind, AddTool[]> = {
     { label: "Group", key: "G", icon: "square", kind: "group", base: "Group" },
   ],
   // Step 12, item 19: the newer kinds' main shapes; the Shape picker lists them all.
-  er: [
-    // T, the table tool's key (erd-ux-research 5.8); nothing else takes T on the ER canvas.
-    { label: "Add entity", key: "T", icon: "table", kind: "entity", base: "table" },
-    { label: "Add weak entity", key: "W", icon: "layers", kind: "weak", base: "detail" },
-  ],
   sequence: [
     { label: "Add participant", key: "P", icon: "square", kind: "participant", base: "Participant" },
     { label: "Add actor", key: "A", icon: "user", kind: "actor", base: "Actor" },
@@ -114,16 +109,20 @@ interface Props {
   tidySelection?: boolean;
   /** A shape picked in the Shapes list (step 12): its tool, or its line written into the text. */
   onShape?(shape: Shape): void;
+  /** Why a Shapes item cannot be used now, or null (step 6). */
+  shapeDisabled?(shape: Shape): string | null;
+  /** Step 10: Mermaid... opens the Mermaid dialog to insert into this diagram (draw.io's Arrange > Insert > Mermaid). */
+  onMermaid?(): void;
 }
 
-export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySelection, onShape }: Props) {
+export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySelection, onShape, shapeDisabled, onMermaid }: Props) {
   return (
     <div className="flow-toolbar nodrag nopan" role="toolbar" aria-label="Diagram tools">
       {ADD_TOOLS[kind].map((t) => (
         // Group puts the selected services in a new group.
         <Tool key={t.label} label={t.label} icon={t.icon} shortcut={t.key} onClick={() => onAdd(t)} />
       ))}
-      {onShape && <ShapePicker kind={kind} onPick={onShape} />}
+      {onShape && <ShapePicker kind={kind} disabled={shapeDisabled} onPick={onShape} />}
       <span className="flow-toolbar-divider" aria-hidden="true" />
       {kind === "dfd" && (
         <span className="flow-twin" role="group" aria-label="Node look">
@@ -132,6 +131,7 @@ export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySel
         </span>
       )}
       {!FIXED_KINDS.has(kind) && <Tool label="Tidy" hint={tidySelection ? "Tidy selection" : "Tidy"} icon="tidy" onClick={onTidy} />}
+      {onMermaid && <Tool label="Mermaid..." hint="Insert from Mermaid" icon="flow" onClick={onMermaid} />}
     </div>
   );
 }

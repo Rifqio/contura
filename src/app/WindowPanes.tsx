@@ -1,7 +1,7 @@
 import type { ComponentProps, MutableRefObject } from "react";
 import type { ConnectionConfig, Group, GroupId, JobId } from "../api/types";
 import Home from "../components/Home";
-import FlowTab from "../flow/FlowTab";
+import FlowTab, { type MermaidInsert } from "../flow/FlowTab";
 import SchemaBuilder from "../schema/SchemaBuilder";
 import SettingsView from "../settings/SettingsView";
 import TransferTab from "../transfer/TransferTab";
@@ -43,6 +43,10 @@ interface Props {
   flow: {
     /** The AI settings at the tools table, from a diagram assistant's tool-off note. */
     onOpenSettings(): void;
+    /** Step 10: the canvas's Mermaid... button: the Mermaid dialog, with Insert into that diagram. */
+    onMermaid?(insert: MermaidInsert): void;
+    /** ADR 0030: an old ER diagram's Open as DBML: the converted DBML, unsaved, in the Schema Builder. */
+    onOpenModel?(name: string, dbml: string): void;
   };
   compare: {
     /** Every Connection and Group: a compare may span two Groups. */
@@ -89,7 +93,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
         if (t.kind === "flow") {
           return (
             <div key={key} className="work-pane schema-main" data-flow-name={t.name} hidden={key !== activeKey}>
-              <FlowTab name={t.name} active={key === activeKey} onOpenSettings={flow.onOpenSettings} />
+              <FlowTab name={t.name} active={key === activeKey} onOpenSettings={flow.onOpenSettings} onMermaid={flow.onMermaid} onOpenModel={flow.onOpenModel} />
             </div>
           );
         }

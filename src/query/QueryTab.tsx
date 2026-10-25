@@ -1,6 +1,6 @@
 import { useToast } from "../components/Toast";
 import type { ExportOrigin } from "../jobs/exportText";
-import { type MutableRefObject, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { type MutableRefObject, type ReactElement, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   cancelQuery,
@@ -20,6 +20,7 @@ import {
   openConnection,
   openQuerySession,
   opensInFlight,
+  planRun,
   prepareRun,
   saveSavedQuery,
 } from "../api/client";
@@ -28,12 +29,13 @@ import type {
   ConnectionId,
   DialectKind,
   Group,
+  NoWhere,
   ObjectPath,
   QuerySessionId,
   SavedQuery,
   StatementClass,
 } from "../api/types";
-import InlineAsk from "../assistant/InlineAsk";
+import InlineAsk, { type InlineSnapshot, reopens } from "../assistant/InlineAsk";
 import { type AskKit, type AskSetup, tablesIn } from "../assistant/context";
 import Icon from "../components/Icon";
 import SafetyTag from "../components/SafetyTag";
@@ -44,7 +46,6 @@ import ConfirmRun from "./ConfirmRun";
 import ClosedConnection, { type OpenFailure } from "./ClosedConnection";
 import EditorHeader from "./EditorHeader";
 import { formatSql } from "./format";
-import { writeWithoutWhere } from "./noWhere";
 import type { ConnectionOpenStatus } from "../sidebar/OneTree";
 import ResultsPanel from "./ResultsPanel";
 import { EMPTY_RUNNER, type Rerun, runnerReducer } from "./runner";
@@ -162,6 +163,8 @@ function openFailure(e: unknown, dialect: DialectKind): OpenFailure {
 }
 
 const READ_ONLY_TIP = "This Connection is Read-only";
+/** Run is off while an answer's suggestion waits in the editor (A2). */
+const SUGGESTION_TIP = "Keep or discard the suggestion first: Ctrl+Enter keeps, Esc discards.";
 
 /** On a Read-only or Production Connection: the current statement when it writes, and whether any statement does. */
 type Safety = { current: Stmt | null; anyWrite: boolean };
@@ -264,6 +267,10 @@ export default function QueryTab({
       action: onShowSaved ? { label: "Show", run: () => onShowSaved(q.id) } : undefined,
     });
   const [notice, setNotice] = useState<string | null>(null);
+  /** The Core's missing-WHERE answer for each statement it planned to run (round 4); null is "has a WHERE or is not one". */
+  const coreNoWhere = useRef(new WeakMap<Stmt, NoWhere | null>());
+  /** A short note in the status line, such as why Run found nothing; it goes when you move. */
+  const [hint, setHint] = useState<string | null>(null);
   // Opening the Connection from the result area, while it is closed (frame 10).
   const [opening, setOpening] = useState<{ s: "idle" } | { s: "connecting"; startedAt: number } | { s: "failed"; error: OpenFailure }>({ s: "idle" });
   const [openNow, setOpenNow] = useState(() => Date.now());
@@ -281,6 +288,54 @@ export default function QueryTab({
   useCommandKeys({ ...(lang ? { "diagram.toggle": toggleDiagram } : {}), "query.explain": () => explain() }, { region: root });
   const [share, setShare] = useState(loadShare);
   const [askSel, setAskSel] = useState<AskSelection | null>(null);
+  /** The last inline answer in this tab, and only that one: Ctrl+I on its statement brings it back (A4). */
+  const lastAsk = useRef<InlineSnapshot | null>(null);
+  const [reopen, setReopen] = useState<InlineSnapshot | null>(null);
+  /** Each Ctrl+I opens a new box. */
+  const [askNo, setAskNo] = useState(0);
+  /** The tracked range of the open box's statement. */
+  const boxTrack = useRef<number | null>(null);
+  /** Lets go of every tracked range but the open box's and the last answer's, so none piles up (memory). */
+  const issued = useRef(new Set<number>());
+  const sweepTracks = () => {
+    const ed = editorRef.current;
+    const keep = new Set<number>();
+    const last = lastAsk.current;
+    if (boxTrack.current !== null) keep.add(boxTrack.current);
+    if (last?.anchor?.track !== undefined) keep.add(last.anchor.track);
+    if (last?.keptTrack != null) keep.add(last.keptTrack);
+    for (const id of issued.current) {
+      if (keep.has(id)) continue;
+      ed?.untrack(id);
+      issued.current.delete(id);
+    }
+  };
+  /** Where the inline box is drawn: a block in the editor under its statement (I3). */
+  const [askHost, setAskHost] = useState<HTMLElement | null>(null);
+  const inZone = (box: ReactElement) => (askHost ? createPortal(box, askHost) : box);
+  const closeAsk = () => {
+    editorRef.current?.askZone(null);
+    setAskHost(null);
+    setAskSel(null);
+    boxTrack.current = null;
+    sweepTracks();
+    editorRef.current?.focus();
+  };
+  const openAsk = (sel: AskSelection) => {
+    const ed = editorRef.current;
+    const last = lastAsk.current;
+    const again = last && ed ? reopens(sel, last, (id) => ed.tracked(id)) : false;
+    setReopen(again ? last : null);
+    const id = again ? (last?.anchor?.track ?? null) : (ed?.track(sel.from, sel.to) ?? null);
+    boxTrack.current = id;
+    if (id !== null) issued.current.add(id);
+    sweepTracks();
+    setAskHost(ed?.askZone({ track: id, pos: sel.to }) ?? null);
+    setAskSel(sel);
+    setAskNo((n) => n + 1);
+  };
+  /** An answer's suggestion waits in the editor (A2). */
+  const [suggesting, setSuggesting] = useState(false);
   // Bumped to open the tab's session again after a dropped Connection was reopened.
   const [sessionEpoch, setSessionEpoch] = useState(0);
   /**
@@ -416,9 +471,15 @@ export default function QueryTab({
     const running = state.items.some((i) => i.state.s === "running");
     if (running || state.confirm || state.ask || state.queue.length === 0) return;
     const stmt = state.queue[0];
-    const missing = writeWithoutWhere(stmt.text);
+    // The Core's answer is the gate; a statement it did not plan never runs.
+    const missing = coreNoWhere.current.get(stmt);
+    if (missing === undefined) {
+      dispatch({ type: "declined" });
+      setNotice("This statement was not checked, so it did not run.");
+      return;
+    }
     if (missing && state.pass === null && confirmed.current !== stmt) {
-      dispatch({ type: "confirmNeeded", verb: missing.verb, table: missing.table });
+      dispatch({ type: "confirmNeeded", verb: missing.verb, table: missing.table, text: missing.text });
       return;
     }
     confirmed.current = null;
@@ -530,22 +591,57 @@ export default function QueryTab({
   const running = state.items.find((i) => i.state.s === "running");
   const canRun = !!session && !running;
 
-  function run(stmts: (Stmt | null)[]): boolean {
+  /** `at` is where the insertion point is, for a run of the current statement: the Core's statement there runs. */
+  function run(stmts: (Stmt | null)[], at?: number): boolean {
     const list = stmts.filter((s): s is Stmt => !!s && s.text.trim() !== "");
     if (!canRun || !session || list.length === 0) return false;
     setNotice(null);
-    void prepare(session, list);
+    void prepare(session, list, false, undefined, at);
     return true;
+  }
+
+  /**
+   * The statements that run, as the Core splits what the editor picked, each with the Core's missing-WHERE answer
+   * (UX step 9, round 4): the editor's split only points. For a run of the current statement (`at`), only the Core's
+   * statement under the insertion point runs.
+   */
+  async function planned(s: QuerySessionId, list: Stmt[], at?: number): Promise<Stmt[]> {
+    const plan = await planRun(
+      s,
+      list.map((x) => x.text),
+    );
+    let out = plan.map((p) => {
+      const src = list[p.piece];
+      // A statement from outside the editor (History) has no place in the text.
+      const placed = src.to > src.from;
+      const st: Stmt = { from: placed ? src.from + p.from : src.from, to: placed ? src.from + p.to : src.to, text: p.text };
+      coreNoWhere.current.set(st, p.noWhere);
+      return st;
+    });
+    if (at !== undefined && list.length === 1 && out.length > 1) {
+      const here = out.filter((x) => x.from <= at);
+      out = [here.length > 0 ? here[here.length - 1] : out[0]];
+    }
+    return out;
   }
 
   /**
    * Asks the Core whether the run may go ahead, needs the Production dialog, or is blocked.
    * `cont` carries on a run whose pass ran out, keeping the results it already has.
    */
-  async function prepare(s: QuerySessionId, list: Stmt[], cont = false, rerunOf?: Rerun) {
+  async function prepare(s: QuerySessionId, picked: Stmt[], cont = false, rerunOf?: Rerun, at?: number) {
     const token = ++prepared.current;
     const current = () => token === prepared.current && sessionNow.current === s;
+    let list = picked;
     try {
+      const outside = externalIn(picked);
+      list = await planned(s, picked, at);
+      if (outside) outside.stmts = list;
+      if (list.length === 0) {
+        if (outside) settleExternal({ ran: false });
+        if (current()) setHint("Nothing to run on this line.");
+        return;
+      }
       const verdict = await prepareRun(
         s,
         list.map((x) => x.text),
@@ -601,7 +697,7 @@ export default function QueryTab({
   const askNoWhere = (() => {
     if (!state.ask) return null;
     for (let i = 0; i < state.ask.stmts.length; i++) {
-      const missing = writeWithoutWhere(state.ask.stmts[i].text);
+      const missing = coreNoWhere.current.get(state.ask.stmts[i]);
       if (missing) return { index: i, ...missing };
     }
     return null;
@@ -721,18 +817,36 @@ export default function QueryTab({
     if (!repeat) show({ kind: "info", text: "Already running. Esc cancels it." });
     return true;
   }
-  const runCurrent = () => runAgain() || run([editorRef.current?.runTarget() ?? null]);
+  /** A suggestion waits in the editor: nothing runs until it is kept or discarded (A2). */
+  const waiting = () => editorRef.current?.suggesting() ?? false;
+  const runCurrent = () => {
+    if (waiting()) return false;
+    if (runAgain()) return true;
+    const target = editorRef.current?.runTarget() ?? null;
+    // On a blank or comment-only line nothing runs, and the status line says why (I1).
+    if (!target && editorRef.current && editorRef.current.text().trim() !== "") {
+      setHint("Nothing to run on this line.");
+      return false;
+    }
+    return run([target], editorRef.current?.selection().to);
+  };
   // Not in the editor, so it has no place in the text: Add WHERE and Go to find nothing to act on.
   // Split as Run all splits, so each statement gets its own no-WHERE check and result (an AI answer can hold several).
   if (runRef)
     runRef.current = (sql) =>
       new Promise<RunOutcome>((resolve) => {
         settleExternal({ ran: false });
+        // Nothing runs while a suggestion waits in the editor, from here either (M5).
+        if (waiting()) {
+          setHint("Keep or discard the suggestion first.");
+          resolve({ ran: false });
+          return;
+        }
         const stmts = splitStatements(sql, dialect).map((x) => ({ from: 0, to: 0, text: x.text }));
         external.current = { stmts, resolve, phase: "preparing" };
         if (!run(stmts)) settleExternal({ ran: false });
       });
-  const runAll = () => runAgain() || run(splitStatements(editorText(), dialect));
+  const runAll = () => !waiting() && (runAgain() || run(splitStatements(editorText(), dialect)));
 
   /** Adds WHERE after the statement, only if the editor still holds it where it was when the run was asked for. */
   function addWhere(stmt: Stmt) {
@@ -756,6 +870,11 @@ export default function QueryTab({
     }
     if (running) {
       cancel();
+      return true;
+    }
+    // Esc in the editor closes an open inline box with nothing waiting, as it does inside the box.
+    if (askSel) {
+      closeAsk();
       return true;
     }
     return false;
@@ -867,6 +986,7 @@ export default function QueryTab({
         <span>Not connected</span>
       )}
       {restarted && <span role="status">Language engine restarted. Typing works as plain text.</span>}
+      {hint && <span role="status">{hint}</span>}
       {notice && (
         <span className="error-text" role="alert">
           {notice}
@@ -893,8 +1013,8 @@ export default function QueryTab({
         running={!!running}
         writeHazard={!!writeHazard}
         canRun={canRun}
-        blockedTip={blocked ? READ_ONLY_TIP : closedTip}
-        runAllBlockedTip={runAllBlocked ? READ_ONLY_TIP : closedTip}
+        blockedTip={suggesting ? SUGGESTION_TIP : blocked ? READ_ONLY_TIP : closedTip}
+        runAllBlockedTip={suggesting ? SUGGESTION_TIP : runAllBlocked ? READ_ONLY_TIP : closedTip}
         stateWord={!connection || isOpen ? null : opening.s === "connecting" ? "connecting..." : opening.s === "failed" ? "failed" : "closed"}
         compact={assistantOpen}
         aiAccess={connection?.aiAccess ?? null}
@@ -929,14 +1049,23 @@ export default function QueryTab({
             onFormat={() => editorRef.current?.replaceAll(formatSql(editorText(), dialect))}
             onSave={() => void save()}
             onEscape={escape}
-            onPosition={(line, column) => setPosition({ line, column })}
+            onPosition={(line, column) => {
+              setPosition({ line, column });
+              setHint(null);
+            }}
             markRunning={running ? { from: running.from, to: running.to } : null}
             markError={errorMark}
             blocked={blocked}
             writeHazard={writeHazard}
             lang={editorLang || undefined}
-            onAsk={ask ? setAskSel : undefined}
+            onAsk={ask ? openAsk : undefined}
+            onAskNothing={() => setHint("No statement on this line to ask about.")}
             askButton={ask?.inlineAsk}
+            onSuggestion={setSuggesting}
+            onEscapeSuggestion={() => {
+              // Esc discarded the inline answer's suggestion: the box closes with it (M4).
+              if (askSel) closeAsk();
+            }}
             onShowInTree={(t) => {
               if (connection && schemaDb)
                 onShowInTree?.({
@@ -948,8 +1077,16 @@ export default function QueryTab({
                 });
             }}
           />
-          {ask && askSel && (
+          {ask && askSel && inZone(
             <InlineAsk
+              key={askNo}
+              anchor={{ from: askSel.from, to: askSel.to, sql: askSel.sql, ...(boxTrack.current !== null && { track: boxTrack.current }) }}
+              reopen={reopen}
+              onSnapshot={(snap) => {
+                lastAsk.current = snap;
+                if (snap.keptTrack !== null) issued.current.add(snap.keptTrack);
+                sweepTracks();
+              }}
               context={{
                 kind: "sql",
                 connection: askConnection,
@@ -965,8 +1102,7 @@ export default function QueryTab({
               insertTarget={{ editor: () => editorRef.current, name: tab.name }}
               onOpenInNewTab={ask.onOpenInNewTab}
               onClose={() => {
-                setAskSel(null);
-                editorRef.current?.focus();
+                closeAsk();
               }}
             />
           )}
@@ -979,6 +1115,8 @@ export default function QueryTab({
                 </strong>{" "}
                 Run it anyway?
               </p>
+              {/* The exact text that would run, as the Core split it (round 4). */}
+              <pre className="query-confirm-sql">{state.confirm.text || state.confirm.stmt.text}</pre>
               <button
                 type="button"
                 className="button button-small"

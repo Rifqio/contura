@@ -3,7 +3,9 @@
 import type { QuickFix } from "../protocol";
 import {
   ARROWS,
+  ATTR_DIAGRAMS,
   ATTR_KEYS,
+  COLOUR_WORDS,
   DIAGRAM_KINDS,
   type DiagramKind,
   type FlowArrow,
@@ -14,13 +16,15 @@ import {
   type FlowNodeKind,
   flowName,
   KINDS,
-  COLUMN_FLAGS,
-  type ColumnFlag,
   MAX_GROUP_DEPTH,
   NOTE_KINDS,
   nodeStatement,
+  isPaletteName,
+  isStateMarker,
+  PALETTE,
   STATE_END,
   STATE_START,
+  stateMarkerName,
 } from "./model";
 import { FIX_TITLES, type FlowProblem, MESSAGES, nearestNames, nearWord } from "./problems";
 
@@ -33,7 +37,10 @@ export type FlowRange = { from: number; to: number };
  * - `diagram`, `kind`, `title`: plain ranges.
  * - `node:<name>`: the statement; `name`, and when it has brackets `attrs`, `kind` and `values` (each attribute's value).
  * - `group:<name>`: through its `}`; `name`, `open` (`{`), `close` (`}`), `attrs`, `values`.
- * - `link:<i>`: from its first name to its second; `fromName`, `toName`, `arrow`, `label`, and `line` (the whole statement).
+ * - `link:<i>`: from its first name to its second; `fromName`, `toName`, `arrow`, `label`, `line` (the whole statement),
+ *   and `attrs` (its `[color: ..]`, step 11) on the last link of a statement that has one.
+ * - `frame:<i>`: a sequence frame by its index in the doc's frames, through its `}`; `name` (the label after the kind
+ *   word, empty when it has none), `open` and `close`.
  */
 export type FlowSpan = FlowRange & {
   name?: FlowRange;
@@ -72,25 +79,26 @@ export type FlowParse = {
   /** Names defined more than once (each is already a problem). */
   readonly definedTwice: ReadonlySet<string>;
   /**
-   * Step 12: the lines that belong to a node besides its own (an ER entity's column lines, a class's member
-   * lines), and in each the range of the node's name, so a delete takes them and a rename follows. An ER column
-   * with flags has the range of its `[...]` list too.
+   * Step 12: the lines that belong to a node besides its own (a class's member lines), and in each the range of
+   * the node's name, so a delete takes them and a rename follows.
    */
   rowsOf(name: string): readonly RowSpan[];
+  /** Step 11: each shape's `label:` (the words it shows), by its name. */
+  readonly labels: ReadonlyMap<string, string>;
 };
 
-/** A node's own extra line: the line's statement, the node's name in it, and an ER column's flag list. */
-export type RowSpan = { line: FlowRange; name: FlowRange; flags?: FlowRange };
+/** A node's own extra line: the line's statement and the node's name in it. */
+export type RowSpan = { line: FlowRange; name: FlowRange };
 
 // Packed spans: `[from, to, ...parts]`, each part a from/to pair, -1 where the element has no such part.
 const NODE_PARTS = ["name", "attrs", "kind"] as const;
 const GROUP_PARTS = ["name", "attrs", "open", "close"] as const;
-const LINK_PARTS = ["fromName", "toName", "arrow", "label", "line"] as const;
+const LINK_PARTS = ["fromName", "toName", "arrow", "label", "line", "attrs"] as const;
 type Part = (typeof NODE_PARTS)[number] | (typeof GROUP_PARTS)[number] | (typeof LINK_PARTS)[number];
 
 function partsOf(key: string): readonly Part[] {
   if (key.startsWith("node:")) return NODE_PARTS;
-  if (key.startsWith("group:")) return GROUP_PARTS;
+  if (key.startsWith("group:") || key.startsWith("frame:")) return GROUP_PARTS;
   if (key.startsWith("link:")) return LINK_PARTS;
   return [];
 }
@@ -137,12 +145,15 @@ type Attrs = {
   kind: Token | null;
   attrs: Record<string, string>;
   values: Record<string, FlowRange>;
+  /** Each attribute's whole item, from its key to its value's end, for a fix that removes it. */
+  items: Record<string, FlowRange>;
   keys: string[];
   empty: boolean;
 };
 type GroupBuild = {
   name: string;
   icon?: string;
+  color?: string;
   nodes: string[];
   groups: GroupBuild[];
   from: number;
@@ -189,10 +200,10 @@ class Parser {
   private nearCache = new Map<string, string[]>();
   private candidates: { name: string; lower: string; band: number }[] | null = null;
   // ----- step 12 kinds
-  /** Each node's own extra lines (ER columns, class members). */
+  /** Each node's own extra lines (class members). */
   private rows = new Map<string, RowSpan[]>();
   /** Sequence frames: the open ones, and those closed. */
-  private frameStack: { label: string; kind: string; from: number; depth: number; at: number; nameTo: number; line: number }[] = [];
+  private frameStack: { label: string; kind: string; from: number; depth: number; at: number; nameTo: number; line: number; labelFrom: number; labelTo: number }[] = [];
   private frames: NonNullable<FlowDoc["frames"]> = [];
   private openActs = new Map<string, number>();
   private activations: NonNullable<FlowDoc["activations"]> = [];
@@ -205,6 +216,9 @@ class Parser {
   private notes = 0;
   /** Where `[*]` was used: as a start, an end, or both. */
   private stateMarks = { start: false, end: false };
+  /** Step 11: each shape's `label:`, by its name, and the names that show each label (built when a line end needs it). */
+  private labels = new Map<string, string>();
+  private showing: Map<string, string[]> | null = null;
 
   constructor(text: string, opts: FlowParseOptions) {
     this.s = text;
@@ -271,6 +285,7 @@ class Parser {
       parentOf,
       definedTwice: this.twice,
       rowsOf: (name: string) => this.rows.get(name) ?? [],
+      labels: this.labels,
       // Built on first read: the worker answers line questions from `defs`, so most parses never build these.
       get lineOf() {
         if (!lines) {
@@ -401,33 +416,25 @@ class Parser {
       if (at(1) === 45 && at(2) === 62) return "-->";
       if (at(1) === 62) return "->";
       if (at(1) === 45) {
-        // --, and --* or --1 when a multiplicity follows (an ER line's far end).
-        if ((at(2) === 42 || at(2) === 49) && endsAt(3)) return null;
         return endsAt(2) ? "--" : null;
       }
       return endsAt(1) ? "-" : null;
     }
-    // 1--*, *--1, 1--1, *--* (ER) and *-- (composition): the near multiplicity was split off the name before it.
-    if ((c === 49 || c === 42) && at(1) === 45 && at(2) === 45) {
-      const far = at(3);
-      if ((far === 42 || far === 49) && endsAt(4)) return `${c === 49 ? "1" : "*"}--${far === 49 ? "1" : "*"}` as FlowArrow;
-      if (c === 42 && endsAt(3)) return "*--";
-      return null;
-    }
+    // *-- (composition): the * was split off the name before it.
+    if (c === 42 && at(1) === 45 && at(2) === 45) return endsAt(3) ? "*--" : null;
     if (c === 46) return q + 2 < e && s.charCodeAt(q + 1) === 46 && s.charCodeAt(q + 2) === 62 ? "..>" : null;
     return null;
   }
 
   /**
-   * An ER or class line writes its near multiplicity against the name before it (`customers 1--* invoices`), and
-   * the name lexer stops only at the `--`: the `1` or `*` is split back off the name here.
+   * A class composition writes its `*` against the name before it (`Order *-- Line`), and the name lexer stops
+   * only at the `--`: the `*` is split back off the name here.
    */
   private splitLead(t: Token, e: number): { token: Token; q: number } {
     const s = this.s;
     const q = this.ws(t.to, e);
-    if (!(this.kind === "er" || this.kind === "class") || s.charCodeAt(q) !== 45 || s.charCodeAt(q + 1) !== 45) return { token: t, q };
-    const last = s.charCodeAt(t.to - 1);
-    if (t.to - t.from < 3 || !(last === 49 || last === 42) || !isWs(s.charCodeAt(t.to - 2))) return { token: t, q };
+    if (this.kind !== "class" || s.charCodeAt(q) !== 45 || s.charCodeAt(q + 1) !== 45) return { token: t, q };
+    if (t.to - t.from < 3 || s.charCodeAt(t.to - 1) !== 42 || !isWs(s.charCodeAt(t.to - 2))) return { token: t, q };
     const to = this.trimBack(t.to - 1, t.from);
     return { token: { value: s.slice(t.from, to), from: t.from, to }, q: t.to - 1 };
   }
@@ -545,8 +552,9 @@ class Parser {
           this.error(p, this.lineEnd(p, e), MESSAGES.frameNeedsBrace);
           return true;
         }
-        const label = s.slice(after, this.trimBack(j, after)).trim();
-        this.frameStack.push({ label: label ? `${w.word} ${label}` : w.word, kind: w.word, from: this.links.length, depth: this.frameStack.length, at: p, nameTo: j, line: this.line });
+        const labelTo = this.trimBack(j, after);
+        const label = s.slice(after, labelTo).trim();
+        this.frameStack.push({ label: label ? `${w.word} ${label}` : w.word, kind: w.word, from: this.links.length, depth: this.frameStack.length, at: p, nameTo: j, line: this.line, labelFrom: after, labelTo });
         this.end(j + 1, e);
         return true;
       }
@@ -649,53 +657,14 @@ class Parser {
     this.packed.set(`node:${node.name}`, [span.from, span.to, name.from, name.to, -1, -1, -1, -1]);
   }
 
-  /** An extra line of a node (an ER column, a class member). */
-  private addRow(owner: string, text: string, line: FlowRange, name: FlowRange, flags?: { list: ColumnFlag[]; range: FlowRange }) {
+  /** An extra line of a node (a class member). */
+  private addRow(owner: string, text: string, line: FlowRange, name: FlowRange) {
     const n = this.byName.get(owner);
     if (!n) return;
-    const rows = (n.rows ??= []);
-    rows.push(text);
-    // Flags only once a column has some: the rows before it get none.
-    if (flags && flags.list.length > 0 && !n.rowFlags) n.rowFlags = rows.slice(0, -1).map(() => []);
-    if (n.rowFlags) n.rowFlags.push(flags?.list ?? []);
+    (n.rows ??= []).push(text);
     const list = this.rows.get(owner) ?? [];
-    list.push(flags ? { line, name, flags: flags.range } : { line, name });
+    list.push({ line, name });
     this.rows.set(owner, list);
-  }
-
-  /** An ER column's `[pk, not null, unique]` at `q`, in any case and spacing; unknown words are problems. */
-  private columnFlags(q: number, e: number): { list: ColumnFlag[]; range: FlowRange } {
-    const s = this.s;
-    const found = new Set<ColumnFlag>();
-    let j = q + 1;
-    for (;;) {
-      j = this.ws(j, e);
-      let k = j;
-      while (k < e && s.charCodeAt(k) !== 44 && s.charCodeAt(k) !== 93 && !this.isComment(k, e)) k++;
-      const to = this.trimBack(k, j);
-      const word = s.slice(j, to).toLowerCase().split(/\s+/).join(" ");
-      if (word !== "") {
-        if ((COLUMN_FLAGS as readonly string[]).includes(word)) found.add(word as ColumnFlag);
-        else {
-          const near = nearWord(word, COLUMN_FLAGS);
-          const at = j;
-          this.error(j, to, MESSAGES.unknownFlag(s.slice(j, to), near), () => (near ? [{ title: FIX_TITLES.use(near), edits: [{ from: at, to, insert: near }] }] : []));
-        }
-      }
-      if (k < e && s.charCodeAt(k) === 44) {
-        j = k + 1;
-        continue;
-      }
-      const list = COLUMN_FLAGS.filter((f) => found.has(f));
-      if (k < e && s.charCodeAt(k) === 93) {
-        this.end(k + 1, e);
-        return { list, range: { from: q, to: k + 1 } };
-      }
-      const end = this.trimBack(k, q);
-      this.error(q, end, MESSAGES.openList);
-      if (k < e) this.comment(k, e);
-      return { list, range: { from: q, to: end } };
-    }
   }
 
   private diagramLine(p: number, e: number): boolean {
@@ -769,6 +738,8 @@ class Parser {
   private close(p: number, e: number) {
     const f = this.kind === "sequence" ? this.frameStack.pop() : undefined;
     if (f) {
+      // GROUP_PARTS for `frame:<i>` (its index in the doc's frames): the label after the kind word, the `{`, the `}`.
+      this.packed.set(`frame:${this.frames.length}`, [f.at, p + 1, f.labelFrom, f.labelTo, -1, -1, f.nameTo, f.nameTo + 1, p, p + 1]);
       this.frames.push({ label: f.label, kind: f.kind, from: f.from, to: this.links.length - 1, depth: f.depth });
       this.end(p + 1, e);
       return;
@@ -810,24 +781,6 @@ class Parser {
       this.addRow(first.value, text?.value ?? "", { from: first.from, to: text?.to ?? q + 1 }, first);
       return;
     }
-    // An ER column: `customers.email text`.
-    // With flags, `customers.id int [pk]`, once customers is an entity (else `sales.orders [entity]` is a node).
-    if (this.kind === "er" && c !== 123) {
-      const dot = first.value.indexOf(".");
-      const owner = dot > 0 ? first.value.slice(0, dot) : "";
-      const n = dot > 0 && !this.defs.has(first.value) ? this.byName.get(owner) : undefined;
-      const entity = !!n && (n.kind === "entity" || n.kind === "weak");
-      if (dot > 0 && !this.defs.has(first.value) && (c !== 91 || entity)) {
-        if (!entity) {
-          this.error(first.from, first.from + dot, MESSAGES.noEntity(owner));
-          return;
-        }
-        const flags = c === 91 ? this.columnFlags(q, e) : undefined;
-        this.addRow(owner, first.value.slice(dot + 1).trim(), { from: first.from, to: first.to }, { from: first.from, to: first.from + dot }, flags);
-        if (!flags) this.end(q, e);
-        return;
-      }
-    }
     if (this.kind === "timeline") {
       this.error(p, this.lineEnd(p, e), MESSAGES.timelineLine);
       return;
@@ -847,7 +800,7 @@ class Parser {
 
   private attrs(q: number, e: number): Attrs {
     const s = this.s;
-    const out: Attrs = { from: q, to: q + 1, kind: null, attrs: {}, values: {}, keys: [], empty: true };
+    const out: Attrs = { from: q, to: q + 1, kind: null, attrs: {}, values: {}, items: {}, keys: [], empty: true };
     const unclosed = (at: number) => {
       out.to = this.trimBack(at, q);
       this.error(q, out.to, MESSAGES.openList);
@@ -904,6 +857,7 @@ class Parser {
           else {
             out.attrs[word] = value;
             out.values[word] = range;
+            out.items[word] = { from: j, to: range.to };
             out.keys.push(word);
           }
         } else {
@@ -972,7 +926,6 @@ class Parser {
         return "process";
       }
       if (dk === "cloud") return "service";
-      if (dk === "er") return "entity";
       if (dk === "state") return "state";
       if (dk === "sequence") return "participant";
       if (dk === "class") return "class";
@@ -1016,9 +969,32 @@ class Parser {
     );
   }
 
+  /** Step 11: a `color:` outside the palette is a hint with the palette name it most likely means. */
+  private checkColour(value: string | undefined, range: FlowRange | undefined) {
+    if (value === undefined || !range || isPaletteName(value)) return;
+    const word = value.trim().toLowerCase();
+    const use = isPaletteName(word) ? word : (COLOUR_WORDS[word] ?? null);
+    this.problem("hint", range.from, range.to, MESSAGES.notAColour(value, use), () =>
+      (use ? [use] : PALETTE).map((c) => ({ title: FIX_TITLES.use(c), edits: [{ from: range.from, to: range.to, insert: c }] })),
+    );
+  }
+
+  /** Step 11: `label:` and `color:` on a shape, where its kind takes them. */
+  private checkShapeAttrs(attrs: Attrs) {
+    const dk = this.kind;
+    for (const key of ["label", "color"]) {
+      const item = attrs.items[key];
+      if (!item) continue;
+      if (dk && !ATTR_DIAGRAMS.has(dk)) this.error(item.from, item.to, MESSAGES.noAttrHere(key, dk), () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(item)] }]);
+    }
+    this.checkColour(attrs.attrs.color, attrs.values.color);
+  }
+
   private node(t: Token, attrs: Attrs | null, to: number) {
     const kind = this.nodeKind(t, attrs);
+    if (attrs) this.checkShapeAttrs(attrs);
     if (!this.define(t)) return;
+    if (attrs?.attrs.label !== undefined) this.labels.set(t.value, attrs.attrs.label);
     const node: FlowNode = { name: t.value, kind, attrs: attrs ? attrs.attrs : {} };
     if (this.kind === "mindmap") this.mindTopic(node, t.from);
     const group = this.stack[this.stack.length - 1];
@@ -1048,13 +1024,16 @@ class Parser {
   }
 
   private openGroup(t: Token, attrs: Attrs | null, brace: number, e: number) {
-    if (attrs && (attrs.kind || attrs.keys.some((k) => k !== "icon"))) this.error(attrs.from, attrs.to, MESSAGES.groupAttrs);
+    // A group takes an icon and a colour (step 11); its name stays unique, so no label.
+    if (attrs && (attrs.kind || attrs.keys.some((k) => k !== "icon" && k !== "color"))) this.error(attrs.from, attrs.to, MESSAGES.groupAttrs);
+    if (attrs) this.checkColour(attrs.attrs.color, attrs.values.color);
     // Past the cap the group still pairs its braces, but stays out of the tree, so nothing after recurses deep.
     const tooDeep = this.stack.length >= MAX_GROUP_DEPTH;
     if (tooDeep) this.error(t.from, t.to, MESSAGES.tooDeep);
     const fresh = !tooDeep && this.define(t);
     const g: GroupBuild = { name: t.value, nodes: [], groups: [], from: t.from, nameTo: t.to, line: this.line, repeated: !fresh };
     if (attrs?.attrs.icon !== undefined) g.icon = attrs.attrs.icon;
+    if (attrs?.attrs.color !== undefined) g.color = attrs.attrs.color;
     if (fresh) {
       const parent = this.stack[this.stack.length - 1];
       (parent ? parent.groups : this.roots).push(g);
@@ -1092,6 +1071,13 @@ class Parser {
     let label: string | undefined;
     let labelRange: FlowRange | null = null;
     let stop = names[names.length - 1].to;
+    // Step 11: `[color: ..]` after the label, or after the last name when there is none (eraser.io).
+    let attrs: Attrs | null = null;
+    const bracket = (at: number) => {
+      attrs = this.attrs(at, e);
+      stop = attrs.to;
+      if (attrs.to > at && s.charCodeAt(attrs.to - 1) === 93) this.end(attrs.to, e);
+    };
     if (q < e && s.charCodeAt(q) === 58) {
       const r = this.ws(q + 1, e);
       if (r < e && s.charCodeAt(r) === 34) {
@@ -1103,24 +1089,37 @@ class Parser {
         label = ql.value;
         labelRange = { from: r, to: ql.end };
         stop = ql.end;
-        this.end(ql.end, e);
+        const a = this.ws(ql.end, e);
+        if (a < e && s.charCodeAt(a) === 91) bracket(a);
+        else this.end(ql.end, e);
       } else {
         let j = r;
         while (j < e && !this.isComment(j, e)) j++;
-        const to = this.trimBack(j, r);
+        let to = this.trimBack(j, r);
+        // A trailing [..] is attributes only when every key in it is one; otherwise it is the label's own text.
+        const b = this.trailingAttrs(r, to);
+        if (b >= 0) {
+          attrs = this.attrs(b, to);
+          stop = attrs.to;
+          to = this.trimBack(b, r);
+        }
         if (to > r) {
           label = s.slice(r, to);
           labelRange = { from: r, to };
-          stop = to;
+          if (b < 0) stop = to;
         }
         if (j < e) this.comment(j, e);
       }
+    } else if (q < e && s.charCodeAt(q) === 91) {
+      bracket(q);
     } else {
       this.end(q, e);
     }
+    const color = this.lineColour(attrs);
     const last = arrows.length - 1;
     const line = { from: first.from, to: stop };
     const dk = this.kind;
+    const lineAttrs = attrs as Attrs | null;
     if (dk === "timeline") {
       this.error(first.from, stop, MESSAGES.noLines);
       return;
@@ -1135,21 +1134,106 @@ class Parser {
       const from = names[k];
       const to = names[k + 1];
       // A state diagram's [*] is the start before the arrow and the end after it.
-      const fromName = from.value === "[*]" && dk === "state" ? STATE_START : from.value;
-      const toName = to.value === "[*]" && dk === "state" ? STATE_END : to.value;
-      if (fromName === STATE_START) this.stateMarks.start = true;
-      if (toName === STATE_END) this.stateMarks.end = true;
+      // Inside a composite's braces it is that composite's own (diag-910 fix round 1, I4).
+      const fromName = from.value === "[*]" && dk === "state" ? this.stateMark("start") : from.value;
+      const toName = to.value === "[*]" && dk === "state" ? this.stateMark("end") : to.value;
       const link: FlowLink = { from: fromName, to: toName, arrow: a.arrow };
       const labelled = k === last && label !== undefined;
       if (labelled) link.label = label;
-      if (k > 0 && !labelled) link.chained = true;
+      // The label and the colour are the last link's; such a link is written on its own, so it is not chained.
+      const coloured = k === last && color !== undefined;
+      if (coloured) link.color = color;
+      if (k > 0 && !labelled && !coloured) link.chained = true;
       const i = this.links.length;
       this.links.push(link);
       this.linkLines.push(this.line);
       const lab = labelled && labelRange ? labelRange : null;
-      // LINK_PARTS: fromName, toName, arrow, label, line. The undefined-name check reads the names from here.
-      this.linkPacked[i] = [from.from, to.to, from.from, from.to, to.from, to.to, a.from, a.to, lab ? lab.from : -1, lab ? lab.to : -1, line.from, line.to];
+      const own = k === last ? lineAttrs : null;
+      // LINK_PARTS: fromName, toName, arrow, label, line, attrs. The undefined-name check reads the names from here.
+      this.linkPacked[i] = [from.from, to.to, from.from, from.to, to.from, to.to, a.from, a.to, lab ? lab.from : -1, lab ? lab.to : -1, line.from, line.to, own ? own.from : -1, own ? own.to : -1];
     });
+  }
+
+  /**
+   * Where a `[..]` that ends `from..to` starts when every item in it is `key: value` with a known key, else -1: such
+   * a bracket after a line's label is its attributes, any other stays label text (step 11).
+   */
+  private trailingAttrs(from: number, to: number): number {
+    const s = this.s;
+    if (to <= from || s.charCodeAt(to - 1) !== 93) return -1;
+    for (let b = s.lastIndexOf("[", to - 1); b >= from; b = b > 0 ? s.lastIndexOf("[", b - 1) : -1) {
+      if (this.allKnown(b + 1, to - 1)) return b;
+    }
+    return -1;
+  }
+
+  /** True when `a..z` (inside brackets) is one or more `key: value` items, each key an attribute. */
+  private allKnown(a: number, z: number): boolean {
+    const s = this.s;
+    const stops = (c: number) => c === 44 || c === 91 || c === 93;
+    let j = a;
+    for (;;) {
+      j = this.ws(j, z);
+      let k = j;
+      while (k < z && s.charCodeAt(k) !== 58 && !stops(s.charCodeAt(k))) k++;
+      if (k >= z || s.charCodeAt(k) !== 58) return false;
+      if (!(ATTR_KEYS as readonly string[]).includes(s.slice(j, this.trimBack(k, j)))) return false;
+      let v = this.ws(k + 1, z);
+      if (v < z && s.charCodeAt(v) === 34) {
+        const q = this.quoted(v, z);
+        if (!q) return false;
+        v = this.ws(q.end, z);
+      } else {
+        const v0 = v;
+        while (v < z && !stops(s.charCodeAt(v))) v++;
+        if (this.trimBack(v, v0) === v0) return false;
+      }
+      if (v >= z) return true;
+      if (s.charCodeAt(v) !== 44) return false;
+      j = v + 1;
+    }
+  }
+
+  /** A line's colour from its brackets, with a problem for what a line does not take (step 11). */
+  private lineColour(attrs: Attrs | null): string | undefined {
+    if (!attrs) return undefined;
+    const dk = this.kind;
+    const s = this.s;
+    if (dk && !ATTR_DIAGRAMS.has(dk)) {
+      if (dk === "timeline") return undefined;
+      let from = attrs.from;
+      while (from > 0 && (s.charCodeAt(from - 1) === 32 || s.charCodeAt(from - 1) === 9)) from--;
+      this.error(attrs.from, attrs.to, MESSAGES.noLineColour(dk), () => [{ title: FIX_TITLES.remove, edits: [{ from, to: attrs.to, insert: "" }] }]);
+      return undefined;
+    }
+    if (attrs.kind) {
+      const k = attrs.kind;
+      this.error(k.from, k.to, MESSAGES.lineAttrs, () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(k)] }]);
+    }
+    for (const key of attrs.keys) {
+      if (key === "color") continue;
+      const item = attrs.items[key];
+      this.error(item.from, item.to, MESSAGES.lineAttrs, () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(item)] }]);
+    }
+    this.checkColour(attrs.attrs.color, attrs.values.color);
+    return attrs.attrs.color;
+  }
+
+  /** The `[*]` marker a link line names here: the open composite's own, else the diagram's (I4). */
+  private stateMark(end: "start" | "end"): string {
+    const g = this.stack[this.stack.length - 1];
+    if (!g || g.repeated) {
+      this.stateMarks[end] = true;
+      return end === "start" ? STATE_START : STATE_END;
+    }
+    const name = stateMarkerName(end, g.name);
+    if (!this.byName.has(name)) {
+      const node: FlowNode = { name, kind: end, attrs: {} } as FlowNode;
+      this.byName.set(name, node);
+      this.nodes.push({ node, grouped: true });
+      g.nodes.push(name);
+    }
+    return name;
   }
 
   // ----- after the last line
@@ -1184,14 +1268,20 @@ class Parser {
     if (this.kind === "mindmap" && this.nodes.length > 0 && !this.nodes.some((n) => n.node.kind === "root")) {
       this.problem("hint", 0, 0, MESSAGES.noRoot, () => [], 1);
     }
-    if (this.kind === "er") this.columnEnds();
     this.links.forEach((l, i) => {
       const p = this.linkPacked[i];
       const line = this.linkLines[i];
       for (const end of ["from", "to"] as const) {
         const name = end === "from" ? l.from : l.to;
-        if (this.defs.has(name) || name === STATE_START || name === STATE_END) continue;
+        if (this.defs.has(name) || (this.kind === "state" && isStateMarker(name))) continue;
         const u: Use = { name, from: p[end === "from" ? 2 : 4], to: p[end === "from" ? 3 : 5], line, end, other: end === "from" ? l.to : l.from };
+        // Step 11: an end that matches only a label means a shape by the words it shows; lines name it by its name.
+        const shows = this.namesShowing(name);
+        if (shows.length > 0) {
+          const fixes = () => shows.map((n) => ({ title: FIX_TITLES.use(n), edits: [{ from: u.from, to: u.to, insert: flowName(n) }] }));
+          this.error(u.from, u.to, shows.length === 1 ? MESSAGES.isLabel(name, flowName(shows[0])) : MESSAGES.sharedLabel(name), fixes, line);
+          continue;
+        }
         this.error(u.from, u.to, MESSAGES.notDefined(name), () => this.undefinedFixes(u), line);
       }
       if (this.kind === "flow" && l.label === undefined && this.byName.get(l.from)?.kind === "decision") {
@@ -1200,37 +1290,15 @@ class Parser {
     });
   }
 
-  /**
-   * ER build C: a line end `table.column` that names no node of its own is that table's column, once every column
-   * line is read (a line may come before them). The end becomes the table and the column goes beside it; a column
-   * the table does not have is a problem. A quoted end is a name, never a column.
-   */
-  private columnEnds() {
-    const s = this.s;
-    this.links.forEach((l, i) => {
-      const p = this.linkPacked[i];
-      for (const end of ["from", "to"] as const) {
-        const name = end === "from" ? l.from : l.to;
-        const at = p[end === "from" ? 2 : 4];
-        if (this.defs.has(name) || s.charCodeAt(at) === 34) continue;
-        const dot = name.indexOf(".");
-        if (dot <= 0) continue;
-        const table = name.slice(0, dot);
-        const node = this.byName.get(table);
-        if (!node || !(node.kind === "entity" || node.kind === "weak")) continue;
-        const column = name.slice(dot + 1);
-        if (!(node.rows ?? []).some((r) => columnName(r) === column)) {
-          this.error(at, p[end === "from" ? 3 : 5], MESSAGES.noColumn(table, column), () => [], this.linkLines[i]);
-        }
-        if (end === "from") {
-          l.from = table;
-          l.fromColumn = column;
-        } else {
-          l.to = table;
-          l.toColumn = column;
-        }
-      }
-    });
+  /** The names of the shapes whose `label:` is `label`, in the order they are defined. */
+  private namesShowing(label: string): string[] {
+    if (this.labels.size === 0) return [];
+    if (!this.showing) {
+      const m = new Map<string, string[]>();
+      for (const [name, l] of this.labels) m.set(l, [...(m.get(l) ?? []), name]);
+      this.showing = m;
+    }
+    return this.showing.get(label) ?? [];
   }
 
   private undefinedFixes(u: Use): QuickFix[] {
@@ -1263,7 +1331,6 @@ class Parser {
   /** The kind a missing name is added as: in a data flow, a store when a process sends to it, an entity when it sends. */
   private addKind(u: Use): FlowNodeKind {
     if (this.kind === "cloud") return "service";
-    if (this.kind === "er") return "entity";
     if (this.kind === "state") return "state";
     if (this.kind === "class") return "class";
     if (this.kind === "mindmap") return "topic";
@@ -1302,6 +1369,7 @@ class Parser {
       }
       const group: FlowGroup = { name: g.name, nodes: g.nodes, groups: [] };
       if (g.icon !== undefined) group.icon = g.icon;
+      if (g.color !== undefined) group.color = g.color;
       into.push(group);
       for (let i = g.groups.length - 1; i >= 0; i--) stack.push({ g: g.groups[i], into: group.groups });
     }
@@ -1317,13 +1385,6 @@ class Parser {
     if (kind === "timeline") doc.sections = this.sections;
     return doc;
   }
-}
-
-/** An ER row's column name: the row up to its first space ("customer_id int" is customer_id). */
-function columnName(row: string): string {
-  let j = 0;
-  while (j < row.length && !isWs(row.charCodeAt(j))) j++;
-  return row.slice(0, j);
 }
 
 /** Parses .flow text; never throws on odd text, and reports what is wrong as problems with fixes. */

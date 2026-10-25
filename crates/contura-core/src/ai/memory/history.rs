@@ -11,8 +11,12 @@ use crate::ai::request::{ItemKind, Switches};
 use crate::ai::{AiAccess, AiMessage, AiRole, AiThread};
 use crate::model::ConnectionId;
 
-/// The gate on history (R1.7): the same Connection and database as the Ask, and every kind
-/// still allowed by the Connection's current AI access. A missing stamp is not allowed.
+/// The gate on history (R1.7): the same place as the Ask (the same Connection and database,
+/// or no Connection for both, as on Home), and every kind still allowed by the Connection's
+/// current AI access. A turn that sent only the conversation (the question, earlier history,
+/// the tab's kind words, Recent steps: kinds that need no access) passes at Never too: it
+/// went to the provider once already and carries nothing about the database. A missing stamp
+/// is not allowed.
 pub fn history_allowed(
     connection_id: Option<ConnectionId>,
     database: Option<&str>,
@@ -23,6 +27,7 @@ pub fn history_allowed(
 ) -> bool {
     match (connection_id, ask.connection_id) {
         (Some(a), Some(b)) if a == b => {}
+        (None, None) => {}
         _ => return false,
     }
     database == ask.database && kinds.iter().all(|k| allowed(access, *k, switches))
@@ -78,8 +83,11 @@ pub fn access_now(id: ConnectionId, others: &[(ConnectionId, AiAccess)]) -> AiAc
         .map_or(AiAccess::Never, |(_, a)| *a)
 }
 
-/// The gate on one stored message: `history_allowed` at `message_access`, and never at
-/// Never.
+/// The gate on one stored message: `history_allowed` at `message_access`. A message asked
+/// across another Connection (`AskedIn::also`) that is now Never (or deleted) is held
+/// whatever it carried (ADR 0027); any other message at Never goes only when it sent nothing
+/// but the conversation. Steps on other Connections (`AskedIn::other_steps`) never hold the
+/// turn: each is re-gated by its own Connection when it replays (ADR 0027 rule 1).
 pub fn message_allowed(
     m: &AiMessage,
     ask: &AskFacts,
@@ -88,7 +96,8 @@ pub fn message_allowed(
     switches: Switches,
 ) -> bool {
     let access = message_access(m, access, others);
-    access != AiAccess::Never
+    let across = m.asked_in.as_ref().is_some_and(|a| !a.also.is_empty());
+    !(access == AiAccess::Never && across)
         && history_allowed(
             m.connection_id,
             m.database.as_deref(),
@@ -97,6 +106,34 @@ pub fn message_allowed(
             access,
             switches,
         )
+}
+
+/// Whether a stored question names another Connection: asked across one (`also`) or with
+/// steps on one (`other_steps`). A summary over such a question is held unless
+/// `summary_covers_ok` passes for it.
+pub fn spans_other(m: &AiMessage) -> bool {
+    m.asked_in
+        .as_ref()
+        .is_some_and(|a| !a.also.is_empty() || !a.other_steps.is_empty())
+}
+
+/// The gate a summary applies to each message it covers: `message_allowed`, and every step
+/// on another Connection still allowed by that Connection's current access. A turn replay
+/// leaves such a step out; a summary cannot, since its text may have folded the step in.
+pub fn summary_covers_ok(
+    m: &AiMessage,
+    ask: &AskFacts,
+    access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
+    switches: Switches,
+) -> bool {
+    message_allowed(m, ask, access, others, switches)
+        && m.asked_in.as_ref().is_none_or(|a| {
+            a.other_steps.iter().all(|s| {
+                let now = access_now(s.connection_id, others);
+                now != AiAccess::Never && rank(now) >= rank(s.level)
+            })
+        })
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -146,6 +183,10 @@ pub struct HistoryPick {
     /// Turns and summaries the share left out.
     pub dropped: u32,
     pub tokens: u32,
+    /// The kinds the picked turns and summaries were stamped with, each once: an Ask that
+    /// sends them relies on them, so its own stamp takes them (I1 of 25 Oct).
+    #[serde(skip)]
+    pub kinds: Vec<ItemKind>,
 }
 
 /// A boundary as long as a request's, to measure framed Asked in lines before the request
@@ -208,20 +249,27 @@ pub fn select_history(
         history_allowed(c, d, k, ask, access, switches)
     };
     let msg_ok = |m: &AiMessage| message_allowed(m, ask, access, others, switches);
-    // A summary covers its messages: one asked across a Connection now lower holds it.
-    let across = |m: &AiMessage| m.asked_in.as_ref().is_some_and(|a| !a.also.is_empty());
+    // A summary covers its messages: one asked across a Connection now lower, or with a
+    // step on a Connection that no longer allows it, holds it.
     let covered_ok = |covers: &dyn Fn(&AiMessage) -> bool| {
         thread.is_none_or(|t| {
             t.messages
                 .iter()
-                .filter(|m| across(m) && covers(m))
-                .all(msg_ok)
+                .filter(|m| spans_other(m) && covers(m))
+                .all(|m| summary_covers_ok(m, ask, access, others, switches))
         })
     };
-    // History of another place is not held back by AI access: Sends must not count it.
-    let here = |c: Option<ConnectionId>, d: Option<&str>| {
-        c.is_some() && c == ask.connection_id && d == ask.database
+    let mut kinds: Vec<ItemKind> = Vec::new();
+    let mut add_kinds = |ks: &[ItemKind]| {
+        for k in ks {
+            if !kinds.contains(k) {
+                kinds.push(*k);
+            }
+        }
     };
+    // History of another place is not held back by AI access: Sends must not count it.
+    let here =
+        |c: Option<ConnectionId>, d: Option<&str>| c == ask.connection_id && d == ask.database;
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
 
     // The open Topic's visible turns, newest first.
@@ -297,6 +345,8 @@ pub fn select_history(
         }
         left -= tokens;
         out.tokens += tokens;
+        add_kinds(&q.kinds);
+        add_kinds(&a.kinds);
         kept.push(Turn {
             question,
             answer,
@@ -329,6 +379,7 @@ pub fn select_history(
             } else {
                 left -= tokens;
                 out.tokens += tokens;
+                add_kinds(&c.kinds);
                 out.summaries.push(HistorySummary {
                     source: SummarySource::Compaction {
                         id: c.id,
@@ -385,6 +436,7 @@ pub fn select_history(
         }
         left -= tokens;
         out.tokens += tokens;
+        add_kinds(&t.kinds);
         sent += 1;
         out.summaries.push(HistorySummary {
             source: SummarySource::Topic {
@@ -396,6 +448,7 @@ pub fn select_history(
             tokens,
         });
     }
+    out.kinds = kinds;
     out
 }
 
@@ -561,6 +614,7 @@ mod tests {
             steps: vec!["ticked orders.id".into()],
             also: also.into_iter().collect(),
             other_steps: Vec::new(),
+            tab_key: None,
         });
     }
 
@@ -719,6 +773,56 @@ mod tests {
         assert_eq!(summaries(&[(other, AiAccess::Schema)], &pick(1), &c), 0);
     }
 
+    /// I2 of 25 Oct: a step on another Connection never holds its turn (it is left out of
+    /// the replay), but a summary over the turn is held while that Connection no longer
+    /// reaches the step's level, as for `also`. The pick names the kinds it sent.
+    #[test]
+    fn other_steps_hold_summaries_not_turns() {
+        let other = Uuid::from_u128(9);
+        let mut m = turn(1, 100, "what did I run?", "Late orders.");
+        asked(&mut m[0], "", None);
+        m[0].asked_in.as_mut().unwrap().other_steps = vec![crate::ai::memory::OtherStep {
+            connection_id: other,
+            text: "ran the Visual Query \"Late orders\" on another Connection".into(),
+            level: AiAccess::SchemaQuery,
+        }];
+        m.extend(turn(2, 300, "next", "ok"));
+        let th = thread(m);
+        let go = |others: &[(ConnectionId, AiAccess)], p: &TopicPick| {
+            select_history(
+                Some(&th),
+                &[topic(1, "Asked: what did I run?", &[])],
+                &[],
+                p,
+                &facts(&[]),
+                AiAccess::Never,
+                others,
+                Switches::default(),
+                &[1],
+                10_000,
+                &|s| s.to_string(),
+            )
+        };
+        // The turn replays at Never whatever B allows now.
+        for b in [AiAccess::SchemaQuery, AiAccess::Never] {
+            let r = go(&[(other, b)], &pick(1));
+            assert_eq!((r.turns.len(), r.blocked), (1, 0), "{b:?}");
+            assert_eq!(r.kinds, vec![ItemKind::Question]);
+        }
+        // Topic 1's summary goes while B still allows the step, and is held once it does not.
+        assert_eq!(
+            go(&[(other, AiAccess::SchemaQuery)], &pick(2))
+                .summaries
+                .len(),
+            1
+        );
+        assert_eq!(
+            go(&[(other, AiAccess::Schema)], &pick(2)).summaries.len(),
+            0
+        );
+        assert_eq!(go(&[], &pick(2)).summaries.len(), 0);
+    }
+
     /// I2: compactions chain within a Topic, so the newest one covers every question of
     /// the Topic up to its end, also those of the compaction it folded.
     #[test]
@@ -839,6 +943,76 @@ mod tests {
             100,
         );
         assert!(r.turns.is_empty());
+    }
+
+    /// Live check, 25 Oct: on Home (no Connection) "call me andrew" then "remember my name"
+    /// sent no earlier turn, and the model did not know the name. A place with no Connection
+    /// is the same place for its own turns, and a turn that sent only the conversation replays
+    /// at any access, Never included.
+    #[test]
+    fn plain_chat_is_remembered_with_no_connection_and_at_never() {
+        let home = |mut m: Vec<AiMessage>| {
+            for x in &mut m {
+                x.connection_id = None;
+                x.database = None;
+            }
+            m
+        };
+        let tables: [String; 0] = [];
+        let on_home = AskFacts {
+            connection_id: None,
+            database: None,
+            ..facts(&tables)
+        };
+        let th = thread(home(turn(1, 10, "call me andrew", "Hi Andrew")));
+        let r = run(
+            &th,
+            &[],
+            &[],
+            &pick(1),
+            &on_home,
+            AiAccess::Never,
+            &[],
+            1_000,
+        );
+        assert_eq!(r.turns.len(), 1, "the earlier turn goes on Home");
+        assert_eq!(r.turns[0].question, "call me andrew");
+        assert_eq!(r.blocked, 0);
+
+        // A Connection at Never: the plain turn goes, one that sent schema names is held and counted.
+        let mut m = turn(1, 10, "call me andrew", "Hi Andrew");
+        m.extend(vec![
+            msg(
+                AiRole::User,
+                "which tables?",
+                20,
+                1,
+                &[ItemKind::Question, ItemKind::Names],
+            ),
+            msg(
+                AiRole::Assistant,
+                "orders, customers",
+                21,
+                1,
+                &[ItemKind::Question, ItemKind::Names],
+            ),
+        ]);
+        let r = run(
+            &thread(m),
+            &[],
+            &[],
+            &pick(1),
+            &facts(&tables),
+            AiAccess::Never,
+            &[],
+            1_000,
+        );
+        assert_eq!(r.turns.len(), 1);
+        assert_eq!(r.turns[0].question, "call me andrew");
+        assert_eq!(
+            r.blocked, 2,
+            "the turn with names is held at Never, and Sends counts it"
+        );
     }
 
     #[test]

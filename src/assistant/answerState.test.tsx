@@ -490,7 +490,7 @@ test("bad_file_name_has_no_retry", () => {
 test("file_changed_card_texts", () => {
   document.body.innerHTML = "";
   render(answerState(ai({ kind: "fileChanged", file: "fulfilment", line: 9, nowReads: "Pack order" }), groq));
-  text("fulfilment.flow changed on disk while I worked");
+  text("fulfilment changed on disk while I worked");
   text("Another program changed the file after you asked (line 9 now reads Pack order, a git pull perhaps). These changes were made against the old text, so none of them were applied.");
   document.body.innerHTML = "";
   render(answerState(ai({ kind: "fileChanged", file: "fulfilment", line: null, nowReads: null }), groq));

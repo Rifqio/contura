@@ -4410,6 +4410,19 @@ button.chip[aria-pressed="true"] {
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
 }
+/* Round 4: the exact statement that would run, as the Core split it, on its own row. */
+.query-confirm-sql {
+  order: 10;
+  flex: 1 0 100%;
+  max-height: 72px;
+  margin: 0;
+  overflow: auto;
+  font: var(--font-mono-small);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* The Production confirmation before a run that writes (step 5a). */
 .confirm-title {
@@ -6407,91 +6420,22 @@ button.chip[aria-pressed="true"] {
   flex: none;
   margin-top: 1px;
 }
-/* The Insert diff (board AIInline, iDiff): head, the line diff in the code face, the flags, Cancel and Insert. */
-.insert-diff {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-.insert-diff-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--spacing-sm);
-}
-.insert-diff-head .t {
-  font: var(--font-body-strong);
-}
-.insert-diff-head .sub,
-.insert-diff-foot .count {
+/* Under an answer's SQL block: the lines Insert and Apply touch (A3). */
+.answer-sql-where {
+  margin: 0;
+  padding: 0 var(--spacing-xs) var(--spacing-xs);
   color: var(--c-text-subtle);
   font: var(--font-small);
   font-variant-numeric: tabular-nums;
+  background: var(--c-bg-panel);
+  border-radius: 0 0 var(--rounded-md) var(--rounded-md);
 }
-.insert-diff-note {
-  margin: 0;
-  color: var(--c-warning-text);
-  font: var(--font-small);
+.answer-sql-actions:has(+ .answer-sql-where) {
+  border-radius: 0;
 }
-.insert-diff-lines {
-  max-height: 148px;
-  overflow: auto;
-  padding: var(--spacing-2xs) 0;
-  border: var(--border-hairline) solid var(--c-border);
-  border-radius: var(--rounded-md);
-  background: var(--c-bg-surface);
-}
-.diff-line {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  font: var(--font-mono-small);
-  font-size: 12px;
-  font-variant-ligatures: contextual;
-  font-feature-settings: "calt" 1, "liga" 1;
-  line-height: 18px;
-  white-space: pre;
-}
-.diff-mark {
-  color: var(--c-text-subtle);
-  text-align: center;
-}
-.diff-line.add {
-  background: color-mix(in srgb, var(--c-success-solid) 13%, transparent);
-}
-.diff-line.add .diff-mark {
-  color: var(--c-success-text);
-}
-.diff-line.del {
-  background: color-mix(in srgb, var(--c-danger-solid) 12%, transparent);
-}
-.diff-line.del .diff-mark {
-  color: var(--c-danger-text);
-}
-.diff-line.del .diff-text {
-  text-decoration: line-through;
-  text-decoration-color: color-mix(in srgb, var(--c-danger-solid) 60%, transparent);
-}
-.insert-diff-flags {
-  display: grid;
-  gap: var(--spacing-2xs);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  color: var(--c-warning-text);
-  font: var(--font-small);
-}
-.insert-diff-flags li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.insert-diff-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.insert-diff-foot .spacer {
-  flex: 1;
+.answer-sql-actions .button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
 }
 /* A2: the Sends line above the input, 10 px 12 px 12 px, 8 px between. */
 /* A column where only the Sends list gives way: it scrolls, while the context line and the message box keep their
@@ -8154,6 +8098,40 @@ button.dbox:hover,
   gap: var(--spacing-sm);
   padding: var(--spacing-md);
 }
+/* UX step 9: the inline answer's SQL in the editor (A2), the follow-ups (A1) and a reopened answer (A4). */
+.pop-reopened,
+.pop-turns {
+  margin: 0;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.pop-sql {
+  display: grid;
+  gap: var(--spacing-xs);
+}
+.pop-where {
+  margin: 0;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}
+.pop-writes {
+  margin: 0;
+  color: var(--c-warning-text);
+  font: var(--font-small);
+}
+.pop-sql-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pop-sql-acts .spacer {
+  flex: 1;
+}
+.pop-sql-acts .kbd {
+  margin-left: 4px;
+}
 .pop-foot {
   display: flex;
   flex-wrap: wrap;
@@ -8261,6 +8239,27 @@ button.dbox:hover,
 }
 .ask-pop > [hidden] {
   display: none;
+}
+/*
+ * I3: in a query tab the box sits in the editor, a block right under the statement it is about (VS Code's inline
+ * chat), so it never covers the diff. It takes the UI face, not the editor's code face.
+ */
+.cm-ask-zone {
+  padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-sm);
+  font: var(--font-body);
+  white-space: normal;
+  caret-color: auto;
+  cursor: default;
+  user-select: text;
+}
+.query-editor .cm-ask-zone .ask-pop {
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  width: auto;
+  max-width: 640px;
+  max-height: 420px;
 }
 .pop-body:focus {
   outline: none;
@@ -10999,6 +10998,60 @@ button.dbox:hover,
   color: var(--c-text);
   box-shadow: inset 0 0 0 1px var(--c-accent);
 }
+/*
+ * UX step 9 (A2): an answer's suggestion as a diff in the editor's own lines. Removed lines are struck through on
+ * the line itself; added lines sit in a block after the line they follow. The text changes only on Keep.
+ */
+.sql-editor .cm-line.cm-suggest-del {
+  background: color-mix(in srgb, var(--c-danger-solid) 12%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--c-danger-solid) 60%, transparent);
+}
+.sql-editor .cm-suggest-block {
+  padding: 0;
+}
+.sql-editor .cm-suggest-add {
+  min-height: 1lh;
+  padding: 0 2px 0 6px;
+  background: color-mix(in srgb, var(--c-success-solid) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--c-success-solid);
+  white-space: pre;
+}
+.sql-editor .cm-suggest-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 6px;
+  padding: 4px 6px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-raised);
+  --c-bg-hover: var(--c-bg-raised-hover);
+  font: var(--font-label);
+  white-space: normal;
+}
+.sql-editor .cm-suggest-where {
+  flex: 1 1 200px;
+  min-width: 0;
+  color: var(--c-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.sql-editor .cm-suggest-bar .kbd {
+  margin-left: 4px;
+  font: var(--font-mono-small);
+  font-size: 11px;
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  opacity: 0.8;
+}
+/* A3: the lines an action would replace, and the line an Insert goes below, while the action is hovered or focused. */
+.sql-editor .cm-line.cm-ai-target {
+  background: var(--c-accent-subtle);
+}
+.sql-editor .cm-line.cm-ai-insert-at {
+  box-shadow: inset 0 -2px 0 var(--c-accent);
+}
 .sql-editor .cm-line.cm-diagram-band {
   background: var(--c-accent-subtle);
 }
@@ -12193,6 +12246,13 @@ button.dbox:hover,
   color: var(--c-text-muted);
   overflow-wrap: anywhere;
 }
+/* A7: the tab's name is a link that shows it; a closed one says so beside it. */
+.msg-asked-in .link-button {
+  font: inherit;
+}
+.msg-asked-closed {
+  color: var(--c-text-subtle);
+}
 /* The time of a question: small, quiet, right-aligned under the bubble. */
 .msg-user + .ts {
   justify-self: end;
@@ -13145,4 +13205,23 @@ button.dbox:hover,
 .key-picker,
 .export-chooser {
   --c-bg-hover: var(--c-bg-raised-hover);
+}
+/* A7: a tab shown from an Ask's "Asked in" link flashes once, so the eye finds it. */
+.work-tab.work-tab-flash {
+  animation: work-tab-flash 700ms ease-out;
+}
+@keyframes work-tab-flash {
+  0%,
+  40% {
+    box-shadow: inset 0 0 0 2px var(--c-accent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-tab.work-tab-flash {
+    animation: none;
+    box-shadow: inset 0 0 0 2px var(--c-accent);
+  }
 }

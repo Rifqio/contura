@@ -7,6 +7,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { mockEditorDom } from "../test/editor";
 import { patientFile } from "../test/load";
 import { objectNames } from "./nameIndex";
+import { treeName } from "../test/treeName";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class {} }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -99,13 +100,13 @@ async function openShop() {
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await screen.findByRole("treeitem", { name: "orders" });
+  await screen.findByRole("treeitem", { name: treeName("orders") });
 }
 
 test("ctrl_p_and_ctrl_k_open_quick_open_and_esc_puts_focus_back", async () => {
   routes();
   await openShop();
-  const row = screen.getByRole("treeitem", { name: "orders" });
+  const row = screen.getByRole("treeitem", { name: treeName("orders") });
   row.focus();
   await userEvent.keyboard("{Control>}p{/Control}");
   expect(screen.getByRole("dialog", { name: "Quick Open" })).toBeTruthy();
@@ -130,7 +131,7 @@ test("enter_opens_a_kept_tab_with_focus_in_it_and_makes_an_open_preview_kept", a
   routes();
   await openShop();
   // A single click previews (item 1).
-  await userEvent.click(screen.getByRole("treeitem", { name: "orders" }));
+  await userEvent.click(screen.getByRole("treeitem", { name: treeName("orders") }));
   await waitFor(() => expect(isPreview(/orders/)).toBe(true));
   await userEvent.keyboard("{Control>}p{/Control}");
   await userEvent.type(box(), "cust");
@@ -185,7 +186,7 @@ test("names_kept_from_a_schema_load_still_open_after_the_connection_closes", asy
   await openShop();
   await userEvent.click(screen.getByRole("button", { name: "More actions for KFC Shop" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Close Connection" }));
-  await waitFor(() => expect(screen.queryByRole("treeitem", { name: "orders" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: treeName("orders") })).toBeNull());
   await userEvent.keyboard("{Control>}p{/Control}");
   await userEvent.type(box(), "custo");
   const row = screen.getByRole("option", { name: /customers/ });
@@ -255,13 +256,13 @@ test("enter_on_the_tab_already_shown_puts_focus_in_it_and_leaves_nothing_behind"
   await userEvent.keyboard("{Enter}");
   await waitFor(() => expect(tab(/orders/).getAttribute("aria-selected")).toBe("true"));
   // From the tree, Quick Open on the tab already shown: focus goes into it (VS Code).
-  screen.getByRole("treeitem", { name: "customers" }).focus();
+  screen.getByRole("treeitem", { name: treeName("customers") }).focus();
   await userEvent.keyboard("{Control>}p{/Control}");
   await userEvent.type(box(), "orders");
   await userEvent.keyboard("{Enter}");
   await waitFor(() => expect(document.activeElement?.closest(".work-pane:not([hidden])")).toBeTruthy());
   // Nothing is left armed: a later tree click keeps focus in the tree.
-  const row = screen.getByRole("treeitem", { name: "customers" });
+  const row = screen.getByRole("treeitem", { name: treeName("customers") });
   await userEvent.click(row);
   await waitFor(() => expect(tab(/customers/).getAttribute("aria-selected")).toBe("true"));
   expect(document.activeElement?.closest('[role="tree"]')).toBeTruthy();

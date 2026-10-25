@@ -727,3 +727,27 @@ test("no_second_create_after_a_partial_create", async () => {
   await new Promise((r) => setTimeout(r, 50));
   expect(callsTo("apply_design")).toHaveLength(1);
 });
+
+test("an_apply_ends_the_undo_history_and_ctrl_z_does_nothing_while_the_table_reloads", async () => {
+  let loads = 0;
+  let land: (d: typeof ORDERS) => void = () => {};
+  setup({}, { table_design: () => (loads++ === 0 ? ORDERS : new Promise((r) => (land = r))) });
+  await changeType();
+  const undo = () => screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+  expect(undo().disabled).toBe(false);
+  await userEvent.click(applyButton());
+  await screen.findByText("Applied 1 change to orders.");
+  await waitFor(() => expect(callsTo("table_design")).toHaveLength(2));
+  // Spent: the applied change is on the server, so Ctrl+Z must not take it back in the draft.
+  const view = document.querySelector(".design-view") as HTMLElement;
+  expect(undo().disabled).toBe(true);
+  fireEvent.keyDown(view, { key: "z", ctrlKey: true });
+  await act(async () => land({ ...ORDERS, columns: ORDERS.columns.map((c) => (c.name === "total" ? { ...c, typeSql: "int" } : c)) }));
+  await screen.findByRole("tab", { name: "Columns 5" });
+  await waitFor(() => expect(cell("total", "type").textContent).toBe("int"));
+  // The reloaded design starts a new history.
+  expect(undo().disabled).toBe(true);
+  fireEvent.keyDown(grid(), { key: "z", ctrlKey: true });
+  expect(cell("total", "type").textContent).toBe("int");
+  expect(cell("total", "type").className).not.toContain("cell-edited");
+});

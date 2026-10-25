@@ -30,7 +30,8 @@ export type RowCount =
   | { state: "counting" }
   | { state: "done"; rows: number; more: boolean }
   | { state: "timeout" }
-  | { state: "skipped" };
+  /** Not run: the Connection is closed, a count of the same kind was slow a moment ago, the count failed, or the list closed. */
+  | { state: "skipped"; why?: "closed" | "slow" | "error" | "cancelled" };
 
 /** The endpoint is this table: the same name, and the same schema where both have one (MySQL and SQLite have none). */
 function isTable(e: SmEndpoint, t: ObjectPath): boolean {

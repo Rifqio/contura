@@ -163,6 +163,9 @@ interface Props {
   connectionName?: string;
   /** The server's row estimate of the table, when the tree has it: the footer reads "1 to 200 of 1,284" (PR29). */
   rowEstimate?: number | null;
+  /** The table's exact row count, once counted (up to 1,000): the tree shows it in place of the server's estimate. Null
+   * when the latest count is over 1,000, slow or not made, so the tree goes back to the estimate. */
+  onExactCount?(rows: number | null): void;
   /** Opens a new, unsaved query tab on this Connection with this SQL, without running it. */
   onOpenQuery?(sql: string): void;
   /** Opens the Export dialog on this table (the menu's Export..., and Ctrl+E inside the grid). */
@@ -251,6 +254,18 @@ export interface GridControl {
 type Ask = Extract<RunVerdict, { kind: "needsConfirmation" }>;
 
 const READ_ONLY_TIP = "Read-only Connection: cells can't be edited";
+/** Why the header shows the server's estimate: still counting, or the count was stopped or not run. */
+function estimateTitle(n: number, c: RowCount | null): string {
+  const about = `About ${n.toLocaleString("en-US")}: the server's estimate.`;
+  if (c?.state === "done") return `${about} The table has more than 1,000 rows, so Contura does not count them all.`;
+  if (c?.state === "timeout") return `${about} Counting took too long, so the server stopped it.`;
+  if (c?.state === "skipped" && c.why === "closed") return `${about} Contura counts once the Connection is open.`;
+  if (c?.state === "skipped" && c.why === "slow")
+    return `${about} A count of this table's rows took too long a moment ago, so Contura counts again in a minute.`;
+  if (c?.state === "skipped" && c.why === "error") return `${about} Contura could not count the rows.`;
+  return `${about} Counting the rows...`;
+}
+
 const NO_KEY = "This table has no primary key, so its rows can't be edited";
 const KEY_NOTE = "Key columns can't be changed here";
 const BINARY_NOTE = "Binary values can only be set to NULL here";
@@ -418,6 +433,7 @@ export default function DataGrid({
   visible = true,
   connectionName,
   rowEstimate = null,
+  onExactCount,
   onOpenQuery,
   onDesign,
   onLineage,
@@ -491,6 +507,31 @@ export default function DataGrid({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // The server's figure (MySQL TABLE_ROWS, PostgreSQL reltuples) is an estimate that can be far off on a small table,
+  // so a table tab counts its rows itself: when it is shown, on Reload, after a Save and after a design change (which
+  // reloads). A hidden tab counts nothing, so restored tabs queue no counts ahead of the ones the user asks for. The
+  // count is the Core's capped, read-only COUNT(*) on a read of its own, which the server stops after a few seconds.
+  const [exact, setExact] = useState<RowCount | null>(null);
+  const tableKey = `${table.database}\u0000${table.schema ?? ""}\u0000${table.name}`;
+  const latestExact = useRef(onExactCount);
+  latestExact.current = onExactCount;
+  useEffect(() => {
+    if (kind !== "table" || !visible) return;
+    const stop = { cancelled: false };
+    void countRows(connectionId, { table, where: null }, open, stop, "table").then((c) => {
+      if (stop.cancelled) return;
+      setExact(c);
+      // The tree shows a count only while it is the latest: over 1,000, slow or not made, it goes back to the estimate.
+      latestExact.current?.(c.state === "done" && !c.more ? c.rows : null);
+    });
+    return () => {
+      stop.cancelled = true;
+    };
+    // `table` is read through its key: a new path object for the same table is not a new count. A design change
+    // bumps `attempt`, so `version` is not needed here and one change makes one count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, tableKey, kind, open, attempt, visible]);
+  const counted = exact?.state === "done" && !exact.more ? exact.rows : null;
   /**
    * G5: counts the changes of what the grid shows (another page, sort, filter or design), not the reloads of it.
    * A page fetched in the same epoch as the one on screen keeps the scroll position, the selected cell and the widths.
@@ -1897,7 +1938,14 @@ export default function DataGrid({
   const rangeText =
     loadedRows > 0
       ? `${firstRow.toLocaleString("en-US")} to ${lastRow.toLocaleString("en-US")}${
-          rowEstimate !== null && rowEstimate >= lastRow ? ` of ${rowEstimate.toLocaleString("en-US")}` : ""
+          // With a filter on, the table's count is not the total of what is shown, so there is no "of".
+          filter
+            ? ""
+            : counted !== null
+            ? ` of ${counted.toLocaleString("en-US")}`
+            : rowEstimate !== null && rowEstimate >= lastRow
+              ? ` of about ${rowEstimate.toLocaleString("en-US")}`
+              : ""
         }`
       : "";
   const contextText =
@@ -2117,10 +2165,22 @@ export default function DataGrid({
         <h2 className="table-header-name" title={`${objectPrefix(table)}${table.name}`}>
           {shortName(table)}
         </h2>
-        {rowEstimate !== null && (
-          <span className="table-header-rows">
-            {rowEstimate.toLocaleString("en-US")} {rowEstimate === 1 ? "row" : "rows"}
+        {counted !== null ? (
+          <span className="table-header-rows" data-rows="exact">
+            {counted.toLocaleString("en-US")} {counted === 1 ? "row" : "rows"}
           </span>
+        ) : exact?.state === "done" && (rowEstimate === null || rowEstimate <= 1000) ? (
+          <span className="table-header-rows" data-rows="over" title="Counted up to 1,000 rows.">
+            1,000+ rows
+          </span>
+        ) : (
+          rowEstimate !== null && (
+            <span className="table-header-rows" data-rows="estimate" title={estimateTitle(rowEstimate, exact)}>
+              <span aria-hidden="true">~</span>
+              <span className="visually-hidden">about </span>
+              {rowEstimate.toLocaleString("en-US")} {rowEstimate === 1 ? "row" : "rows"}
+            </span>
+          )
         )}
         <span className="spacer" />
         <button

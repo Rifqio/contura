@@ -1,8 +1,11 @@
 import { expect, test } from "vitest";
 import type { DesignEdit, Position, TableDesign, TableForeignKey, TableIndex } from "../api/types";
-import { ORDERS } from "./fixtures";
+import { ORDERS, col } from "./fixtures";
 import {
   addColumn,
+  addNamedColumn,
+  copyColumn,
+  pasteColumn,
   addForeignKey,
   addIndex,
   backslashNote,
@@ -640,4 +643,72 @@ test("M1: on MySQL a typed default with a backslash says how Contura reads it; a
     "MySQL default status: Contura reads a backslash in quotes as an escape, whatever the server's sql_mode, so \\\\ is one backslash and \\t a tab.",
   );
   expect(backslashNote(typed, "postgres")).toBeNull();
+});
+
+test("paste_column_inserts_a_copy_below_with_a_free_name_and_no_key", () => {
+  const dr = fromDesign(ORDERS);
+  const def = copyColumn(dr, idOf(dr, "status"))!.column;
+  expect(def).toEqual({ name: "status", typeSql: "varchar(16)", nullable: false, defaultSql: "'new'", increment: false, comment: null });
+  const { draft: next, id } = pasteColumn(dr, def, idOf(dr, "status"));
+  expect(next.columns.map((c) => c.name)).toEqual(["id", "email", "status", "status_2", "total", "created_at"]);
+  const added = next.columns.find((c) => c.id === id)!;
+  expect(added).toMatchObject({ origin: null, name: "status_2", typeSql: "varchar(16)", nullable: false, defaultSql: "'new'" });
+  expect(primaryColumns(next).has(id)).toBe(false);
+  // A second paste takes the next free name, in any case.
+  const again = pasteColumn(next, { ...def, name: "STATUS" }, null);
+  expect(again.draft.columns[again.draft.columns.length - 1].name).toBe("STATUS_3");
+  // A free name is kept as it is.
+  expect(pasteColumn(dr, { ...def, name: "note" }, null).draft.columns.pop()!.name).toBe("note");
+});
+
+test("paste_column_counts_on_only_a_number_it_added", () => {
+  const dr = fromDesign(ORDERS);
+  const def = copyColumn(dr, idOf(dr, "status"))!.column;
+  const once = pasteColumn(dr, def, null).draft;
+  // status_2 is there because status is: its copy counts on.
+  expect(pasteColumn(once, { ...def, name: "status_2" }, null).draft.columns.pop()!.name).toBe("status_3");
+  // A year is part of the name: never log_2025.
+  const year = pasteColumn(dr, { ...def, name: "log_2024" }, null).draft;
+  expect(pasteColumn(year, { ...def, name: "log_2024" }, null).draft.columns.pop()!.name).toBe("log_2024_2");
+});
+
+test("paste_column_with_no_row_goes_at_the_end", () => {
+  const dr = fromDesign(ORDERS);
+  const { draft: next } = pasteColumn(dr, copyColumn(dr, idOf(dr, "email"))!.column, null);
+  expect(next.columns.map((c) => c.name)).toEqual(["id", "email", "status", "total", "created_at", "email_2"]);
+  expect(toEdits(next)).toContainEqual(expect.objectContaining({ op: "addColumn", position: { kind: "last" } }));
+});
+
+test("add_named_column_appends_one_column_with_the_typed_field", () => {
+  const dr = fromDesign(ORDERS);
+  const { draft: next, id } = addNamedColumn(dr, { name: "note" });
+  expect(next.columns).toHaveLength(6);
+  expect(next.columns[5]).toMatchObject({ id, origin: null, name: "note", typeSql: "", nullable: true, defaultSql: null });
+});
+
+test("paste_column_keeps_a_blank_name_blank", () => {
+  const dr = addColumn(fromDesign(ORDERS));
+  const blank = dr.columns[dr.columns.length - 1];
+  const { draft: next } = pasteColumn(dr, copyColumn(dr, blank.id)!.column, blank.id);
+  expect(next.columns.slice(-2).map((c) => c.name)).toEqual(["", ""]);
+});
+
+test("copy_column_leaves_auto_increment_behind_with_the_keys", () => {
+  const dr = fromDesign(ORDERS);
+  const copied = copyColumn(dr, idOf(dr, "id"))!;
+  expect(copied.column.increment).toBe(false);
+  expect(copied.dropped).toBe("increment");
+  expect(copyColumn(dr, idOf(dr, "email"))!.dropped).toBeNull();
+});
+
+test("copy_column_drops_a_serials_own_sequence_default", () => {
+  const serial = {
+    ...ORDERS,
+    path: { database: "shop", schema: "public", name: "orders" },
+    columns: [col("id", "integer", { nullable: false, increment: { kind: "serial" }, defaultSql: "nextval('orders_id_seq'::regclass)" }), ...ORDERS.columns.slice(1)],
+  };
+  const dr = fromDesign(serial);
+  const copied = copyColumn(dr, idOf(dr, "id"))!;
+  expect(copied.column).toMatchObject({ increment: false, defaultSql: null });
+  expect(copied.dropped).toBe("increment");
 });

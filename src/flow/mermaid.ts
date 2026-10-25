@@ -1,11 +1,20 @@
 // Mermaid flowchart to .flow: Contura's own small converter (spec, "Mermaid to .flow mapping"), run in the
 // language worker. One way: the Mermaid text is not kept. A line it cannot read is left out and named.
-import { MAX_FLOW_NODES, MAX_FLOW_TEXT } from "../lang/flow/model";
+import { type DiagramKind, MAX_FLOW_NODES, MAX_FLOW_TEXT } from "../lang/flow/model";
+import { parseFlow } from "../lang/flow/parse";
+import { ER_REFUSED, headOf, isMermaid, kindWord, MERMAID_KINDS } from "./mermaidHead";
+import { classToFlow, type KindContext, type KindOut, mindmapToFlow, sequenceToFlow, stateToFlow, timelineToFlow } from "./mermaidKinds";
 import { type FlowDoc, type FlowGroup, type FlowKind, type FlowLink, type FlowNode, needsQuotes, writeFlow } from "./flowModel";
+
+export { ER_REFUSED, isMermaid };
 
 export type MermaidNote = { line: number; text: string };
 
 export type MermaidResult = {
+  /** The Contura kind it became (step 10); "flow" for a flowchart, and for a refused text. */
+  kind: DiagramKind;
+  /** What came in, by kind: "Sequence: 3 participants, 5 messages". Empty when nothing did. */
+  count: string;
   flow: string;
   doc: FlowDoc;
   direction: "TB" | "LR";
@@ -356,10 +365,12 @@ const LEFT_OUT: Record<string, string> = {
 };
 
 /** Converts a Mermaid flowchart to .flow; `title` is used when the front matter has none. */
-export function mermaidToFlow(text: string, title: string): MermaidResult {
+function flowchartToFlow(text: string, title: string): MermaidResult {
   const notes: MermaidNote[] = [];
   const errors: MermaidNote[] = [];
   const refuse = (line: number, message: string): MermaidResult => ({
+    kind: "flow",
+    count: "",
     flow: "",
     doc: { kind: "flow", title, comments: [], nodes: [], links: [], groups: [] },
     direction: "TB",
@@ -541,17 +552,25 @@ export function mermaidToFlow(text: string, title: string): MermaidResult {
 
   if (nodes.size > MAX_FLOW_NODES) return refuse(0, NODE_LIMIT);
 
-  // Names: the label, else the id; a repeated name, or one a group has, gets " (2)".
+  // Names: the label, else the id. A repeated one, or one a group has, gets the next free name and shows the same
+  // words through `label:` (step 11: `Retry 2 [label: Retry]`, as Mermaid's id[label]).
   const names = new Map<string, string>();
-  const used = new Set<string>([...subgraphs.values()].map((g) => g.name));
+  const shows = new Map<string, string>();
+  const groupNames = new Set<string>([...subgraphs.values()].map((g) => g.name));
+  const used = new Set<string>(groupNames);
+  const seen = new Map<string, number>();
   for (const n of nodes.values()) {
     const base = n.label || n.id;
     let name = base;
-    for (let k = 2; used.has(name); k++) name = `${base} (${k})`;
+    for (let k = 2; used.has(name); k++) name = `${base} ${k}`;
     if (name !== base) {
-      const k = Number(/\((\d+)\)$/.exec(name)?.[1]);
-      note(n.line, k === 2 ? `two nodes are named ${base}. The second is ${name}.` : `more nodes are named ${base}. This one is ${name}.`);
-    }
+      shows.set(n.id, base);
+      const k = (seen.get(base) ?? 1) + 1;
+      seen.set(base, k);
+      const said = `${name} with label: ${base}`;
+      if (groupNames.has(base) && k === 2) note(n.line, `a group is named ${base}. The node comes in as ${said}, so it shows the same words.`);
+      else note(n.line, k === 2 ? `two nodes show ${base}. The second comes in as ${said}, so it shows the same words.` : `more nodes show ${base}. This one comes in as ${said}.`);
+    } else seen.set(base, 1);
     used.add(name);
     names.set(n.id, name);
   }
@@ -577,7 +596,8 @@ export function mermaidToFlow(text: string, title: string): MermaidResult {
     }
     if (n.unknownShape) note(n.line, `the shape ${n.unknownShape} is not a .flow shape. ${name} became a step.`);
     if (needsQuotes(name)) note(n.line, `${name} has characters .flow reserves, so it is written in quotes.`);
-    const node: FlowNode = { name, kind, attrs: icon ? { icon } : {} };
+    const label = shows.get(n.id);
+    const node: FlowNode = { name, kind, attrs: { ...(icon ? { icon } : {}), ...(label !== undefined ? { label } : {}) } };
     return node;
   });
 
@@ -592,5 +612,103 @@ export function mermaidToFlow(text: string, title: string): MermaidResult {
   const doc: FlowDoc = { kind: "flow", title, comments, nodes: flowNodes, links, groups: roots.map(toFlowGroup) };
   notes.sort((a, b) => a.line - b.line);
   errors.sort((a, b) => a.line - b.line);
-  return { flow: writeFlow(doc), doc, direction, notes, errors, nodes: flowNodes.length, links: links.length };
+  return { kind: "flow", count: "", flow: writeFlow(doc), doc, direction, notes, errors, nodes: flowNodes.length, links: links.length };
 }
+
+// ----- step 10 (F28): every Mermaid kind Contura has
+
+const COMES_IN = "The Mermaid diagrams that come in are flowchart, sequence, state, class, mindmap and timeline.";
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+
+/** What came in, said by kind (board DiagramStartWell). */
+function countOf(doc: FlowDoc): string {
+  const shapes = doc.nodes.filter((n) => n.kind !== "note" && n.kind !== "start" && n.kind !== "end");
+  const lines = doc.links.filter((l) => !l.tree).length;
+  switch (doc.kind) {
+    case "sequence":
+      return `Sequence: ${plural(shapes.length, "participant")}, ${plural(lines, "message")}`;
+    case "state":
+      return `State: ${plural(doc.nodes.filter((n) => n.kind !== "note" && !n.name.startsWith("[*]")).length, "state")}, ${plural(lines, "transition")}`;
+    case "class":
+      return `Class: ${plural(shapes.length, "class", "classes")}, ${plural(lines, "relationship")}`;
+    case "mindmap":
+      return `Mind map: ${plural(shapes.length, "topic")}`;
+    case "timeline":
+      return `Timeline: ${plural(shapes.length, "item")}`;
+    default:
+      return `Flowchart: ${plural(doc.nodes.length, "shape")}, ${plural(lines, "line")}`;
+  }
+}
+
+export interface MermaidOptions {
+  /**
+   * A paste translated in place (user decision, 25 Oct): each line that cannot be read is kept as a `//` comment
+   * with its reason, after the first line, so nothing is dropped silently.
+   */
+  keepUnread?: boolean;
+}
+
+/** Converts Mermaid of any kind Contura has to .flow; `title` is used when the Mermaid names none. */
+export function mermaidToFlow(text: string, title: string, opts: MermaidOptions = {}): MermaidResult {
+  const empty = (line: number, message: string): MermaidResult => ({
+    kind: "flow",
+    count: "",
+    flow: "",
+    doc: { kind: "flow", title, comments: [], nodes: [], links: [], groups: [] },
+    direction: "TB",
+    notes: [],
+    errors: [{ line, text: message }],
+    nodes: 0,
+    links: 0,
+  });
+  if (overSize(text)) return empty(0, "This Mermaid text is larger than 1 MB.");
+  const lines = text.split(/\r?\n/);
+  const { at, head, title: front } = headOf(lines);
+  const word = kindWord(head);
+  if (word === "erDiagram") return empty(at + 1, ER_REFUSED);
+  const kind = word ? MERMAID_KINDS[word] : null;
+  let result: MermaidResult;
+  if (kind === null || kind === "flow") {
+    const first = /^[A-Za-z][\w-]*/.exec(head)?.[0] ?? "";
+    // A word that is a Mermaid kind of its own (pie, gantt, ...) is refused by name.
+    if (kind === null && first && OTHER_DIAGRAM.test(first)) return empty(at + 1, `Line ${at + 1}: Contura has no ${first} kind. ${COMES_IN}`);
+    // A directive over several lines before the header is blanked, so the flowchart reader starts at the header; the
+    // line numbers stay (fix round 1, M2).
+    const lead = front === null ? lines.slice(0, at) : [];
+    const directive = lead.some((l) => l.trim().startsWith("%%{") && !l.includes("}%%"));
+    const read = directive ? [...lead.map(() => ""), ...lines.slice(at)].join("\n") : text;
+    result = flowchartToFlow(read, title);
+    if (directive) result.notes.unshift({ line: lead.findIndex((l) => l.trim().startsWith("%%{")) + 1, text: `Line ${lead.findIndex((l) => l.trim().startsWith("%%{")) + 1}: the %%{ }%% setting is left out.` });
+    result.count = result.nodes > 0 ? countOf(result.doc) : "";
+  } else {
+    const notes: MermaidNote[] = [];
+    const errors: MermaidNote[] = [];
+    const body = lines.slice(at + 1).map((raw, i) => ({ raw, t: raw.trim(), line: at + 2 + i }));
+    const c: KindContext = {
+      body,
+      headLine: at + 1,
+      note: (line, t) => notes.push({ line, text: `Line ${line}: ${t}` }),
+      error: (line, t) => errors.push({ line, text: `Line ${line}: ${t}` }),
+      title: front ?? title,
+    };
+    const out: KindOut =
+      kind === "sequence" ? sequenceToFlow(c) : kind === "state" ? stateToFlow(c) : kind === "class" ? classToFlow(c) : kind === "mindmap" ? mindmapToFlow(c, front !== null) : timelineToFlow(c);
+    const parsed = parseFlow(out.flow).doc ?? { kind, title: out.title, comments: [], nodes: [], links: [], groups: [] };
+    notes.sort((a, b) => a.line - b.line);
+    errors.sort((a, b) => a.line - b.line);
+    const shapes = parsed.nodes.filter((n) => n.kind !== "note").length;
+    result = { kind, count: shapes > 0 ? countOf(parsed) : "", flow: out.flow, doc: parsed, direction: "TB", notes, errors, nodes: shapes, links: parsed.links.filter((l) => !l.tree).length };
+  }
+  if (opts.keepUnread && result.errors.length > 0 && result.flow) {
+    const nl = result.flow.indexOf("\n");
+    // The line itself, then why it was not read (fix round 1, I3): nothing of the Mermaid is lost.
+    const kept = result.errors
+      .filter((e) => e.line > 0)
+      .map((e) => `// ${(lines[e.line - 1] ?? "").trim()}  // ${e.text.replace(/^Line \d+: /, "").replace(/[\r\n]+/g, " ")}`);
+    if (kept.length) result = { ...result, flow: `${result.flow.slice(0, nl + 1)}${kept.join("\n")}\n${result.flow.slice(nl + 1)}` };
+  }
+  return result;
+}
+
+const overSize = (text: string) => text.length > MAX_MERMAID_CHARS || (text.length * 3 > MAX_MERMAID_CHARS && new TextEncoder().encode(text).length > MAX_MERMAID_CHARS);

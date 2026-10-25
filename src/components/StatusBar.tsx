@@ -10,7 +10,8 @@ import { ThemeToggle } from "./ThemeSwitch";
 export type StatusScreen =
   | { kind: "home"; connections: number; open: number }
   | { kind: "settings"; dataFolder: string; version: string }
-  | { kind: "schema"; fileName: string; appliedTo: string | null }
+  /** `saved`: the model has a file; one not saved yet says so in place of the layout note. */
+  | { kind: "schema"; fileName: string; appliedTo: string | null; saved: boolean }
   | { kind: "flow"; name: string; fileName: string }
   | { kind: "workspace"; connection: ConnectionConfig | null; open: boolean; serverVersion: string | null };
 
@@ -59,7 +60,7 @@ function Left({ screen }: { screen: StatusScreen }) {
           <span>Schema Model</span>
           <span className="app-status-name">{screen.fileName}</span>
           <span>{screen.appliedTo ? `Applied to ${screen.appliedTo}` : "Not applied to a Connection"}</span>
-          <span>Layout saved beside the file</span>
+          <span>{screen.saved ? "Layout saved beside the file" : "Not saved yet"}</span>
         </>
       );
     case "flow":

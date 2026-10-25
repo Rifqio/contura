@@ -204,18 +204,18 @@ describe("deleteNode", () => {
     expect(after).toBe(lines('diagram dfd "A"', "Pay {", "  Refund [process]", "}"));
   });
 
-  test("the last node in a group removes the empty braces", () => {
+  // diag-910 fix round 2 (N7, board DiagramGroups): a group whose last shape goes keeps its braces and stays drawn.
+  test("the last node in a group leaves the group's braces", () => {
     const after = run(CHECKOUT, (t, p) => deleteNode(t, p, "Charge card"));
-    expect(after).not.toContain("Payments");
-    expect(after).not.toContain("{");
+    expect(after).toContain("Payments");
     const d = doc(after);
-    expect(d.groups).toEqual([]);
+    expect(d.groups.map((g) => [g.name, g.nodes])).toEqual([["Payments", []]]);
     expect(d.links.map((l) => `${l.from}>${l.to}`)).toEqual(["Customer>Checkout", "Checkout>Orders", "Orders>Checkout"]);
   });
 
-  test("empty braces go up the nesting, but a group with a comment or a link to it stays", () => {
+  test("nested braces, a comment and a line to the group all stay", () => {
     const text = lines('diagram flow "A"', "Outer {", "  Inner {", "    Only", "  }", "}", "Other");
-    expect(run(text, (t, p) => deleteNode(t, p, "Only"))).toBe(lines('diagram flow "A"', "Other"));
+    expect(run(text, (t, p) => deleteNode(t, p, "Only"))).toBe(lines('diagram flow "A"', "Outer {", "  Inner {", "  }", "}", "Other"));
     const commented = lines('diagram flow "A"', "G {", "  // keep me", "  Only", "}");
     expect(run(commented, (t, p) => deleteNode(t, p, "Only"))).toBe(lines('diagram flow "A"', "G {", "  // keep me", "}"));
     const linked = lines('diagram flow "A"', "G {", "  Only", "}", "Other > G");
@@ -259,11 +259,12 @@ describe("moveToGroup", () => {
     untouched(CHECKOUT, after, ["Orders [store, id: D1, table: shop.orders]"]);
   });
 
-  test("moving the last node out removes the empty braces and one blank line; its comment goes with it", () => {
+  // diag-910 fix round 1 (I5, board DiagramGroups): the group a node leaves keeps its braces and stays drawn.
+  test("moving the last node out keeps the group's braces; its comment goes with it", () => {
     const text = lines('diagram dfd "A"', "A [entity]", "", "Pay {", "  Charge [process] // note", "}", "", "A > Charge");
     const after = run(text, (t, p) => moveToGroup(t, p, "Charge", null));
-    expect(after).toBe(lines('diagram dfd "A"', "A [entity]", "Charge [process] // note", "", "A > Charge"));
-    expect(doc(after).groups).toEqual([]);
+    expect(after).toBe(lines('diagram dfd "A"', "A [entity]", "Charge [process] // note", "", "Pay {", "}", "", "A > Charge"));
+    expect(doc(after).groups).toEqual([{ name: "Pay", nodes: [], groups: [] }]);
   });
 
   test("moves between nested groups", () => {
@@ -292,10 +293,11 @@ describe("setAttr", () => {
     let t = CHECKOUT;
     t = run(t, (x, p) => setAttr(x, p, "Orders", "id", "D9"));
     expect(t).toContain("Orders [store, id: D9, table: shop.orders]");
+    // A new key goes in its place in the order id, icon, label, color, table (step 11).
     t = run(t, (x, p) => setAttr(x, p, "Orders", "color", "warning"));
-    expect(t).toContain("Orders [store, id: D9, table: shop.orders, color: warning]");
+    expect(t).toContain("Orders [store, id: D9, color: warning, table: shop.orders]");
     t = run(t, (x, p) => setAttr(x, p, "Orders", "id", null));
-    expect(t).toContain("Orders [store, table: shop.orders, color: warning]");
+    expect(t).toContain("Orders [store, color: warning, table: shop.orders]");
     t = run(t, (x, p) => setAttr(x, p, "Orders", "color", null));
     expect(t).toContain("Orders [store, table: shop.orders]\n");
     t = run(t, (x, p) => setAttr(x, p, "Card network", "id", "E1"));
@@ -418,13 +420,14 @@ describe("fix round 1", () => {
   test("moving a node into an ancestor group keeps the ancestor (I1)", () => {
     const text = lines('diagram cloud "A"', "G {", "  H {", "    b", "  }", "}");
     const after = run(text, (t, p) => moveToGroup(t, p, "b", "G"));
-    expect(after).toBe(lines('diagram cloud "A"', "G {", "  b", "}"));
-    expect(doc(after).groups).toEqual([{ name: "G", nodes: ["b"], groups: [] }]);
+    // The group it leaves stays (diag-910 fix round 1, I5).
+    expect(after).toBe(lines('diagram cloud "A"', "G {", "  H {", "  }", "  b", "}"));
+    expect(doc(after).groups).toEqual([{ name: "G", nodes: ["b"], groups: [{ name: "H", nodes: [], groups: [] }] }]);
     const deep = lines('diagram cloud "A"', "G {", "  H {", "    K {", "      b", "    }", "  }", "}");
     const top = run(deep, (t, p) => moveToGroup(t, p, "b", "G"));
-    expect(top).toBe(lines('diagram cloud "A"', "G {", "  b", "}"));
+    expect(top).toBe(lines('diagram cloud "A"', "G {", "  H {", "    K {", "    }", "  }", "  b", "}"));
     const mid = run(deep, (t, p) => moveToGroup(t, p, "b", "H"));
-    expect(mid).toBe(lines('diagram cloud "A"', "G {", "  H {", "    b", "  }", "}"));
+    expect(mid).toBe(lines('diagram cloud "A"', "G {", "  H {", "    K {", "    }", "    b", "  }", "}"));
   });
 
   test("setAttr takes only the grammar's keys", () => {
@@ -531,11 +534,7 @@ test("addNode with before writes the new line just before that node", () => {
   expect(apply(seq, r2.edits)).toBe(lines('diagram sequence "Pay"', "participant App", "  participant Api", "participant Bank", "App -> Api : charge"));
 });
 
-// Live check: an ER table added where its name is taken gets a SQL-friendly free name (table_2), not "table 2".
-test("an ER table's free name joins its number with _", () => {
-  const er = lines('diagram er "b"', "table", "table_2");
-  const r = applyFlowEdit(er, parseFlow(er), { op: "addNode", name: "table", kind: "entity", unique: true });
-  expect(r.name).toBe("table_3");
+test("a taken name gets the next free number after a space", () => {
   const flow = lines('diagram flow "f"', "Step");
   expect(applyFlowEdit(flow, parseFlow(flow), { op: "addNode", name: "Step", kind: null, unique: true }).name).toBe("Step 2");
 });

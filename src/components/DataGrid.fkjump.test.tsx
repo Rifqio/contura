@@ -263,17 +263,20 @@ test("counts_time_out_on_a_slow_connection_and_are_skipped_on_a_closed_one", asy
   await waitFor(() => expect(optionText()[1]).toBe("addressesby customer_idnot counted"));
 });
 
+/** The counts of rows that point here, which carry a filter; the tab's own count of its table has none. */
+const keyCounts = () => callsTo("count_rows").filter((c) => (c.request as { filter: string | null }).filter !== null);
+
 test("closing_the_list_drops_the_counts_still_waiting_their_turn", async () => {
   let answer: (p: Page) => void = () => {};
   await open("customers", { customers: customers(), orders: () => new Promise<Page>((r) => (answer = r)), addresses: shopPage("addresses", []) });
   down(td(0, 0));
   press("F7", { altKey: true });
   // One count at a time on a Connection: addresses waits for orders.
-  await waitFor(() => expect(callsTo("count_rows")).toHaveLength(1));
+  await waitFor(() => expect(keyCounts()).toHaveLength(1));
   fireEvent.keyDown(picker(), { key: "Escape" });
   answer(shopPage("orders", []));
   await new Promise((r) => setTimeout(r, 20));
-  expect(callsTo("count_rows")).toHaveLength(1);
+  expect(keyCounts()).toHaveLength(1);
 });
 
 test("a_closed_connection_lists_the_tables_without_counting", async () => {

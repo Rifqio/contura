@@ -114,7 +114,11 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
         }
         const open = sub?.key === item.key;
         const right = item.submenu ? (
-          <Icon name="chevronRight" size={14} className="menu-chevron" />
+          <>
+            {/* What the submenu has chosen (a colour's name), before its chevron. */}
+            {item.hint && <span className="menu-hint">{item.hint}</span>}
+            <Icon name="chevronRight" size={14} className="menu-chevron" />
+          </>
         ) : item.shortcut ? (
           <span className="menu-shortcut">{item.shortcut}</span>
         ) : item.hint ? (

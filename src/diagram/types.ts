@@ -18,8 +18,6 @@ export type DrawnKind =
   // Step 12, item 19: the newer diagram kinds' shapes.
   | "document"
   | "database"
-  | "erTable"
-  | "erWeak"
   | "participant"
   | "actor"
   | "state"
@@ -47,6 +45,20 @@ export interface Port {
 
 export type EdgeKind = "fk" | "join" | "joinPending" | "joinCross" | "lineage" | "condition" | "where";
 
+/**
+ * Diagram step 11 (ADR 0019): the six colours a drawn shape, group or line can take, by name, as theme token names:
+ * the fill, the border (also a line and a group title) and the words. The `-text` tokens are the borders because
+ * `-solid` fails contrast in places.
+ */
+export const PALETTE_TOKENS: Record<"accent" | "info" | "success" | "warning" | "danger" | "muted", { fill: string; stroke: string; text: string }> = {
+  accent: { fill: "--c-accent-subtle", stroke: "--c-accent-text", text: "--c-text" },
+  info: { fill: "--c-info-subtle", stroke: "--c-info-text", text: "--c-text" },
+  success: { fill: "--c-success-subtle", stroke: "--c-success-text", text: "--c-text" },
+  warning: { fill: "--c-warning-subtle", stroke: "--c-warning-text", text: "--c-text" },
+  danger: { fill: "--c-danger-subtle", stroke: "--c-danger-text", text: "--c-text" },
+  muted: { fill: "--c-bg-active", stroke: "--c-text-subtle", text: "--c-text-muted" },
+};
+
 /** The colour token names for each node kind (ADR 0008: tokens only); wrap in `var()` for CSS, or read them for export. */
 export const NODE_TOKENS: Record<NodeKind, { fill: string; stroke: string }> = {
   table: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
@@ -70,8 +82,6 @@ export const NODE_TOKENS: Record<NodeKind, { fill: string; stroke: string }> = {
   // the neutral pair for people, markers and forks, views for interfaces and the root, notes in the note pair.
   document: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
   database: { fill: "--c-node-datastore-fill", stroke: "--c-node-datastore-stroke" },
-  erTable: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
-  erWeak: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
   participant: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
   actor: { fill: "--c-node-external-fill", stroke: "--c-node-external-stroke" },
   state: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },

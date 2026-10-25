@@ -17,7 +17,7 @@ export function pendingWork(o: { tabs: readonly AnyTab[]; isDirty(key: string): 
       else if (t.kind === "transfer") lines.push(`${t.title}, set up but not run`);
     }
   }
-  for (const name of o.flows) lines.push(`${name}.flow, still saving`);
+  for (const name of o.flows) lines.push(`${name}, still saving`);
   if (o.jobsRunning) lines.push("A running job");
   return lines;
 }

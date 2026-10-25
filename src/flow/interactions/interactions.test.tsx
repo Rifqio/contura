@@ -231,23 +231,29 @@ test("drop_on_node_opens_label_box_enter_keeps_esc_unlabelled", async () => {
   await userEvent.type(box, "card details{Enter}");
   await waitFor(() => expect(s.text()).toContain("Customer > Orders: card details\n"));
   expect(screen.queryByRole("textbox", { name: "Flow label" })).toBeNull();
-  // Esc leaves the new flow unlabelled.
+  // Esc on the untouched field leaves the new flow unlabelled; Esc after typing keeps the label (25 Oct decision).
   act(() => canvas.props!.onConnectPorts!({ node: "Customer", port: "b" }, { node: "Charge card", port: "l" }, false));
   await waitFor(() => expect(s.text()).toContain("Customer > Charge card\n"));
   const second = await screen.findByRole("textbox", { name: "Flow label" });
-  await userEvent.type(second, "ignored");
   fireEvent.keyDown(second, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("textbox", { name: "Flow label" })).toBeNull());
   await new Promise((r) => setTimeout(r, 50));
   expect(s.text()).toContain("Customer > Charge card\n");
-  expect(s.text()).not.toContain("ignored");
+  await waitFor(() => expect(canvas.props!.edges.some((e) => e.source === "Customer" && e.target === "Charge card")).toBe(true));
+  act(() => canvas.props!.onEdgeDoubleClick!(canvas.props!.edges.find((e) => e.source === "Customer" && e.target === "Charge card")!.id));
+  const third = await screen.findByRole("textbox", { name: "Flow label" });
+  await userEvent.type(third, "kept");
+  fireEvent.keyDown(third, { key: "Escape" });
+  await waitFor(() => expect(s.text()).toContain("Customer > Charge card: kept\n"));
   // A release within 24 px of a node locks onto it: the flow goes there, no menu opens.
   const before = s.text();
   act(() => canvas.props!.onConnectRelease!({ node: "Checkout", port: "r" }, { x: 544 + 20, y: 48 - 20 }));
   await waitFor(() => expect(s.text()).not.toBe(before));
   expect(s.text()).toContain("Checkout > Orders\n");
   expect(screen.queryByRole("menu", { name: "Add and connect" })).toBeNull();
-  fireEvent.keyDown(await screen.findByRole("textbox", { name: "Flow label" }), { key: "Escape" });
+  const fourth = await screen.findByRole("textbox", { name: "Flow label" });
+  await waitFor(() => expect(document.activeElement).toBe(fourth));
+  fireEvent.keyDown(fourth, { key: "Escape" });
 });
 
 test("drop_on_empty_opens_add_and_connect", async () => {
@@ -263,16 +269,21 @@ test("drop_on_empty_opens_add_and_connect", async () => {
     const menu = await screen.findByRole("menu", { name: "Add and connect" });
     expect([...menu.querySelectorAll("[role=menuitem]")].map((b) => b.textContent)).toEqual(["ProcessP", "Data storeS", "Outside partyE"]);
     fireEvent.keyDown(menu, { key: c.key });
+    // The new shape opens with its name ready, centred where the line was let go; kept, it is written (fix round 1).
+    fireEvent.keyDown(await screen.findByRole("textbox", { name: /^Name the new/ }), { key: "Enter" });
     await waitFor(() => expect(s.text()).toContain(c.node));
     expect(s.text()).toContain(c.link);
     expect(screen.queryByRole("menu", { name: "Add and connect" })).toBeNull();
-    // The new node lands where the line was released, to the pixel; the new flow takes a label.
+    // The new node lands centred where the line was released; the new flow takes a label.
     const box = await screen.findByRole("textbox", { name: "Flow label" });
     fireEvent.keyDown(box, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Flow label" })).toBeNull());
   }
   await waitFor(() => expect(s.saves().length).toBeGreaterThan(0));
-  await waitFor(() => expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes["Data store"]).toEqual({ x: 203, y: 674 }));
+  // Centred where the line was let go (x 203, y 700).
+  const w = canvas.props!.nodes.find((n) => n.id === "Data store")!.initialWidth ?? 0;
+  const h = canvas.props!.nodes.find((n) => n.id === "Data store")!.initialHeight ?? 0;
+  await waitFor(() => expect(JSON.parse(s.saves()[s.saves().length - 1].layout).nodes["Data store"]).toEqual({ x: Math.round(203 - w / 2), y: Math.round(700 - h / 2) }));
 });
 
 test("esc_pulls_line_back", async () => {

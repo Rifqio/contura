@@ -1,5 +1,5 @@
 import type { AiAccess, AskRequest, AskTab, ConnectionConfig, DialectKind, ItemKind, ModelPicks, SqlSchema, StepIn, Switches } from "../api/types";
-import type { InsertTarget } from "./InsertDiff";
+import type { InsertTarget } from "./insertPlan";
 import type { AnyTab } from "../shell/tabs";
 import type { TabAskFields } from "./tabAsk";
 

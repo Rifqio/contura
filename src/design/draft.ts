@@ -248,6 +248,59 @@ export function addColumn(dr: Draft): Draft {
   return { ...dr, columns: [...dr.columns, blankColumn()] };
 }
 
+/** D2: a column typed into the empty last row: the Add column defaults with the typed field. */
+export function addNamedColumn(dr: Draft, patch: Partial<ColumnDraft>): { draft: Draft; id: string } {
+  const c = { ...blankColumn(), ...patch };
+  return { draft: { ...dr, columns: [...dr.columns, c] }, id: c.id };
+}
+
+/**
+ * D4: a column's definition as Copy carries it. Not its keys, which belong to the table, and so not auto-increment
+ * either, which needs a key (MySQL error 1075; SQLite's is the primary key itself), nor a PostgreSQL serial's
+ * default, which draws on the source column's own sequence. `dropped` says when auto-increment was left out.
+ */
+export function copyColumn(dr: Draft, id: string): { column: ColumnDraft; dropped: "increment" | null } | null {
+  const c = dr.columns.find((x) => x.id === id);
+  if (!c) return null;
+  const serial = c.origin !== null && dr.base?.columns.find((x) => x.name === c.origin)?.increment.kind === "serial";
+  const defaultSql = serial && c.defaultSql !== null && /^\s*nextval\(/i.test(c.defaultSql) ? null : c.defaultSql;
+  return {
+    column: { name: c.name, typeSql: c.typeSql, nullable: c.nullable, defaultSql, increment: false, comment: c.comment },
+    dropped: c.increment || defaultSql !== c.defaultSql ? "increment" : null,
+  };
+}
+
+/**
+ * A column's free name: `name` when no column has it in any case (SQL folds unquoted names), else `name_2`, `name_3`.
+ * Only a trailing `_N` the app itself added counts on: `total_2` exists because `total` does, so its copy is `total_3`;
+ * `log_2024` is a name of its own, so its copy is `log_2024_2`.
+ */
+function sqlFreeName(name: string, taken: Iterable<string>): string {
+  const lower = new Set<string>();
+  for (const t of taken) lower.add(t.toLowerCase());
+  if (!lower.has(name.toLowerCase())) return name;
+  let base = name;
+  let n = 2;
+  const m = /^(.+)_(\d+)$/.exec(name);
+  if (m && Number(m[2]) >= 2 && lower.has(m[1].toLowerCase())) {
+    base = m[1];
+    n = Number(m[2]) + 1;
+  }
+  for (; ; n++) if (!lower.has(`${base}_${n}`.toLowerCase())) return `${base}_${n}`;
+}
+
+/**
+ * D4: a copied column as a new one under the column `after` (at the end when null), named as copied when that name
+ * is free, else with the app's free name (`email_2`); a blank name stays blank.
+ */
+export function pasteColumn(dr: Draft, def: ColumnDraft, after: string | null): { draft: Draft; id: string } {
+  const c: DraftColumn = { ...blankColumn(), ...def, name: def.name === "" ? "" : sqlFreeName(def.name, dr.columns.map((x) => x.name)) };
+  const at = after === null ? -1 : dr.columns.findIndex((x) => x.id === after);
+  const columns = [...dr.columns];
+  columns.splice(at < 0 ? columns.length : at + 1, 0, c);
+  return { draft: { ...dr, columns }, id: c.id };
+}
+
 const isRef = (r: ColumnRef | undefined, id: string) => !!r && "id" in r && r.id === id;
 const hasRef = (refs: ColumnRef[], id: string) => refs.some((r) => isRef(r, id));
 

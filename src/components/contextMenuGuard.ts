@@ -5,7 +5,7 @@
  */
 
 /** A place where the WebView's Cut, Copy and Paste menu is wanted: a field you can type in, or a code editor. */
-function typable(target: EventTarget | null): boolean {
+export function typable(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   if (target.closest(".cm-content")) return true;
   const field = target.closest("input, textarea, [contenteditable]");

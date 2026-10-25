@@ -779,7 +779,7 @@ Four options were drawn (A data-source wash, B hazard where you write, C waterma
 - Sentence case for every label and title. Uppercase only for `PROD` and `PRODUCTION`.
 - Product name: **Contura**.
 - Capitalised domain terms: **Connection**, **Group**, **Ungrouped**, **Schema Model**, **Schema Builder**, **Saved Queries**, **Query History**, **Pending Edit(s)**, **Production**, **Read-only**, **Home**.
-- Buttons name their action: "New Connection", "Run on PROD", "Save on PROD", "Insert into the editor", "Apply to Connection...", "Show all history". Ellipsis (...) only when the action opens a dialog that asks for more.
+- Buttons name their action: "New Connection", "Run on PROD", "Save on PROD", "Insert", "Apply to statement", "Apply to Connection...", "Show all history". Ellipsis (...) only when the action opens a dialog that asks for more.
 - Errors name the problem and the fix ("Line 27: refunds is not defined. Add ... or send the flow to ...").
 - Numbers with units and tabular figures: "200 rows in 48 ms", "1 to 12 of 200", "1,728 x 976 px".
 - Sample data in docs and demos is made up (Kestrel Foods, Orbit Freight, Pinecone Labs) and says so.

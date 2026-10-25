@@ -140,7 +140,7 @@ export function StaleCard({ file, line, nowReads, inEditor = false, onDiscard, o
     <div className="ccard warnc2" role="alert">
       <div className="ehead">
         <Icon name="alert" size={14} />
-        <span>{inEditor ? `${file}.flow changed while I worked` : changedTitle(file)}</span>
+        <span>{inEditor ? `${file} changed while I worked` : changedTitle(file)}</span>
       </div>
       <div className="ebody">
         {b.before}
@@ -206,7 +206,7 @@ export function BrokenCard({ file, broke, onReview, onAskFix }: { file: string; 
       <div className="ebody">
         {`With these changes, line ${broke.line.toLocaleString("en-US")} would read `}
         <span className="mono">{broke.lineText}</span>
-        {`: ${stripStop(broke.message)}. Auto-apply never lands a change that leaves a problem, so ${file}.flow is as it was.`}
+        {`: ${stripStop(broke.message)}. Auto-apply never lands a change that leaves a problem, so ${file} is as it was.`}
       </div>
       <div className="efoot">
         <button type="button" className="btn pbtn2" onClick={onReview}>

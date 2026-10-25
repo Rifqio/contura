@@ -853,9 +853,11 @@ async fn lowered_access_hides_history() {
     assert_eq!(row(&p, ItemKind::History).unwrap().label, "Thread · 1 turn");
 }
 
+/// The user's report of 25 Oct: at Never a turn that sent only the conversation goes,
+/// through the same entry points the Ask uses; one that sent schema names stays held and
+/// counted.
 #[tokio::test]
-async fn never_sends_no_history() {
-    // A question-only turn needs no AI access, but at Never nothing of the thread goes.
+async fn never_sends_only_the_plain_conversation() {
     let cat = catalog(AiAccess::Never);
     let t = now() - 5 * MIN;
     let q = Stamp {
@@ -863,21 +865,222 @@ async fn never_sends_no_history() {
         tables: &[],
         ..stamp(1)
     };
+    let mut messages = turn("call me andrew", "Hi Andrew", t, &q);
+    messages.extend(turn(
+        "which tables?",
+        "orders, customers",
+        t + MIN,
+        &stamp(1),
+    ));
+    let id = save(&cat, PLACE, messages);
+    let req = ask("remember my name", Some(id));
+
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert_eq!(
+        roles(&chat),
+        [ChatRole::User, ChatRole::Assistant, ChatRole::User]
+    );
+    let all = all_text(&chat);
+    assert!(all.contains("call me andrew"), "{all}");
+    assert!(!all.contains("which tables?"), "{all}");
+    assert!(!all.contains("orders, customers"), "{all}");
+
+    let p = show(&cat, &req).await;
+    assert_eq!(row(&p, ItemKind::History).unwrap().label, "Thread · 1 turn");
+    let m = p.memory.clone().unwrap();
+    assert_eq!((m.turns, m.blocked), (1, 2));
+}
+
+fn home_ask(question: &str, thread: Option<Uuid>) -> AskRequest {
+    AskRequest {
+        connection_id: None,
+        database: None,
+        focus: Focus::default(),
+        tab: Some(AskTab::Home),
+        ..ask(question, thread)
+    }
+}
+
+fn home_turn(q: &str, a: &str, at: i64) -> Vec<AiMessage> {
+    let mut m = turn(
+        q,
+        a,
+        at,
+        &Stamp {
+            kinds: &[ItemKind::Question, ItemKind::Tab],
+            tables: &[],
+            ..stamp(1)
+        },
+    );
+    for x in &mut m {
+        x.connection_id = None;
+        x.database = None;
+    }
+    m
+}
+
+/// The user's report of 25 Oct: on Home "call me andrew", then "remember my name" sent no
+/// earlier turn. Through the Ask and its preview, turn 2 now carries turn 1.
+#[tokio::test]
+async fn home_remembers_the_conversation() {
+    let cat = catalog(AiAccess::Schema);
     let id = save(
         &cat,
         PLACE,
-        turn("hello there", "hi, how can I help", t, &q),
+        home_turn("call me andrew", "Hi Andrew", now() - 2 * MIN),
     );
-    let req = ask("what did I say?", Some(id));
+    let req = home_ask("remember my name", Some(id));
 
-    let (chat, _) = ask_once(&cat, &req).await;
-    assert_eq!(roles(&chat), [ChatRole::User]);
-    assert!(!all_text(&chat).contains("hello there"));
+    let (chat, events) = ask_once(&cat, &req).await;
+    assert_eq!(
+        roles(&chat),
+        [ChatRole::User, ChatRole::Assistant, ChatRole::User]
+    );
+    assert!(chat.messages[0].text.ends_with("call me andrew"));
+    assert_eq!(chat.messages[1].text, "Hi Andrew");
+    assert_eq!(memory_of(&events).topic, 1, "the same Topic");
 
     let p = show(&cat, &req).await;
-    assert!(row(&p, ItemKind::History).is_none());
-    let m = p.memory.clone().unwrap();
-    assert_eq!((m.turns, m.summaries), (0, 0));
+    assert_eq!(row(&p, ItemKind::History).unwrap().label, "Thread · 1 turn");
+    assert_eq!(p.memory.unwrap().blocked, 0);
+    assert_eq!(
+        same_boundary(&show(&cat, &req).await.exact),
+        same_boundary(&exact_of(&chat))
+    );
+}
+
+/// I2: a Home turn that carried Recent steps on a Connection keeps replaying; each step is
+/// re-gated by its own Connection (ADR 0027 rule 1) and Sends counts nothing as held.
+#[tokio::test]
+async fn home_turn_with_other_steps_replays_and_regates_them() {
+    use contura_core::ai::memory::OtherStep;
+    let b = Uuid::from_u128(43);
+    let mut cat = catalog(AiAccess::Schema);
+    cat.configs.push(ConnectionConfig {
+        id: b,
+        name: "Kestrel staging".into(),
+        ..shop_conn(AiAccess::SchemaQuery)
+    });
+    let mut m = home_turn("call me andrew", "Hi Andrew", now() - 2 * MIN);
+    m[0].asked_in = Some(AskedIn {
+        tab: "home".into(),
+        label: "Home".into(),
+        summary: String::new(),
+        steps: Vec::new(),
+        also: Vec::new(),
+        other_steps: vec![OtherStep {
+            connection_id: b,
+            text: "opened the table invoices on another Connection".into(),
+            level: AiAccess::Schema,
+        }],
+        tab_key: None,
+    });
+    let id = save(&cat, PLACE, m);
+    let req = home_ask("remember my name", Some(id));
+
+    let (chat, _) = ask_once(&cat, &req).await;
+    assert!(all_text(&chat).contains("call me andrew"));
+    assert!(other_steps_line(&chat).unwrap().contains("invoices"));
+
+    cat.configs[1].ai_access = AiAccess::Never;
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    assert!(all.contains("call me andrew"), "{all}");
+    assert!(!all.contains("invoices"), "{all}");
+    assert_eq!(show(&cat, &req).await.memory.unwrap().blocked, 0);
+}
+
+/// C2: at Never the tab's table names went nowhere, so the turn does not keep them: a
+/// Topic summary built by rules from it can never carry them at Never.
+#[tokio::test]
+async fn never_turn_keeps_no_table_names() {
+    let cat = catalog(AiAccess::Never);
+    let p = show(&cat, &ask("hello", None)).await;
+    assert!(p.stamp.tables.is_empty(), "{:?}", p.stamp.tables);
+    assert!(
+        p.stamp
+            .kinds
+            .iter()
+            .all(|k| matches!(k, ItemKind::Question | ItemKind::Tab | ItemKind::Steps)),
+        "{:?}",
+        p.stamp.kinds
+    );
+    // At Schema only the names went, and the turn keeps them.
+    let cat = catalog(AiAccess::Schema);
+    let p = show(&cat, &ask("hello", None)).await;
+    assert!(
+        p.stamp.tables.contains(&"orders".to_string()),
+        "{:?}",
+        p.stamp.tables
+    );
+}
+
+/// I1: a turn is stamped with the kinds of the history it replayed, so content built on an
+/// earlier turn's query text is held when access is lowered below it.
+#[tokio::test]
+async fn stamp_carries_the_replayed_history_kinds() {
+    let cat = catalog(AiAccess::SchemaQuery);
+    let sql = Stamp {
+        kinds: &[ItemKind::Question, ItemKind::Names, ItemKind::Sql],
+        ..stamp(1)
+    };
+    let id = save(
+        &cat,
+        PLACE,
+        turn(
+            "why is this slow?",
+            "Add an index on status.",
+            now() - 2 * MIN,
+            &sql,
+        ),
+    );
+    let mut req = ask("and the other one?", Some(id));
+    req.off = vec![ItemKind::Cards];
+    let p = show(&cat, &req).await;
+    assert!(row(&p, ItemKind::History).is_some());
+    assert!(
+        p.stamp.kinds.contains(&ItemKind::Sql),
+        "{:?}",
+        p.stamp.kinds
+    );
+
+    // With the Thread row off nothing of it went, and the stamp does not claim it.
+    req.off.push(ItemKind::History);
+    let p = show(&cat, &req).await;
+    assert!(
+        !p.stamp.kinds.contains(&ItemKind::Sql),
+        "{:?}",
+        p.stamp.kinds
+    );
+}
+
+/// I1: a Continue extends an answer built on sample rows: its stamp takes the continued
+/// turn's kinds, so it is held with that turn when access is lowered.
+#[tokio::test]
+async fn continue_stamp_takes_the_continued_kinds() {
+    let cat = catalog(AiAccess::SchemaQueryRows);
+    let rows = Stamp {
+        kinds: &[ItemKind::Question, ItemKind::Cards, ItemKind::Rows],
+        ..stamp(1)
+    };
+    let id = save(
+        &cat,
+        PLACE,
+        turn(
+            "show me some orders",
+            "Order 1 is zq-cell",
+            now() - 2 * MIN,
+            &rows,
+        ),
+    );
+    // Nothing of this Ask's own carries cards or rows: no open table, so no card and no row.
+    let mut req = continue_ask(Some(id));
+    req.focus = Focus::default();
+    req.switches.rows = true;
+    let (_, events) = ask_once(&cat, &req).await;
+    let kinds = memory_of(&events).kinds;
+    assert!(kinds.contains(&ItemKind::Rows), "{kinds:?}");
+    assert!(kinds.contains(&ItemKind::Cards), "{kinds:?}");
 }
 
 #[tokio::test]
@@ -1406,6 +1609,7 @@ fn visual_asked(also: Vec<ConnectionId>) -> AskedIn {
         steps: vec!["opened Visual Query in shop".into()],
         also,
         other_steps: Vec::new(),
+        tab_key: None,
     }
 }
 

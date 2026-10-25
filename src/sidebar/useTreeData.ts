@@ -36,8 +36,11 @@ export interface TreeData {
   /** Loads a failed level again, from its note row id. */
   retry(noteId: string): void;
   setShowSystem(connectionId: ConnectionId, database: string, on: boolean): void;
-  /** The server's row estimate of a loaded table, else null. */
+  /** The server's row estimate of a loaded table, else null; never a table tab's count. */
   estimate(connectionId: ConnectionId, path: ObjectPath): number | null;
+  /** A table tab counted the table: the tree shows that count instead of the estimate, until the level reloads or a
+   * later count is over 1,000, slow or not made (`null`). */
+  setExact(connectionId: ConnectionId, path: ObjectPath, rows: number | null): void;
   reveal(request: RevealRequest): void;
   /** A row to focus, set when a reveal found its object; `seq` changes per request. */
   focusRequest: { id: string; seq: number } | null;
@@ -295,6 +298,21 @@ export function useTreeData({ connections, openIds, onNotOpen, onRevealed }: Opt
     return load.value.find((o) => o.kind === "table" && o.name === path.name)?.rows ?? null;
   }
 
+  function setExact(connectionId: ConnectionId, path: ObjectPath, rows: number | null) {
+    const scope = scopeKey(path.database, path.schema);
+    setBranches((all) => {
+      const b = all[connectionId];
+      const load = b?.objects[scope];
+      if (!b || load?.s !== "loaded") return all;
+      const at = load.value.findIndex((o) => o.kind === "table" && o.name === path.name);
+      if (at < 0 || load.value[at].counted === (rows ?? undefined)) return all;
+      const value = load.value.slice();
+      const { counted: _drop, ...rest } = value[at];
+      value[at] = rows === null ? rest : { ...rest, counted: rows };
+      return { ...all, [connectionId]: { ...b, objects: { ...b.objects, [scope]: { s: "loaded", value } } } };
+    });
+  }
+
   function reveal({ connectionId, database, schema, name }: RevealRequest) {
     const c = byId.current.get(connectionId);
     const b = branchesRef.current[connectionId];
@@ -343,7 +361,7 @@ export function useTreeData({ connections, openIds, onNotOpen, onRevealed }: Opt
   }, [branches, pendingReveal, open]);
 
   return useMemo(
-    () => ({ branches, expanded, expand, collapse, refresh, retry, setShowSystem, estimate, reveal, focusRequest }),
+    () => ({ branches, expanded, expand, collapse, refresh, retry, setShowSystem, estimate, setExact, reveal, focusRequest }),
     // The functions read refs and setters only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [branches, expanded, focusRequest],

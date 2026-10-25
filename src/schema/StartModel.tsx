@@ -40,6 +40,8 @@ const HINT: Record<Way, string> = {
   blank: "You can change the Dialect later in the model.",
   file: "Opens the file. It is saved back to the same place.",
 };
+/** An ER diagram opened as DBML (ADR 0030): no file to pick, only its Dialect to ask (E1). */
+const CONVERTED_HINT = "The converted model opens unsaved. The first Save asks where to keep it.";
 
 const DIALECT_OPTIONS = DIALECTS.map((d) => ({
   value: d,
@@ -57,13 +59,18 @@ export function dialectFromHeader(dbml: string): DialectKind | null {
   return m ? (DIALECTS.find((d) => DIALECT_LABEL[d] === m[1]) ?? null) : null;
 }
 
+type ModelFile = { path: string | null; name?: string; dbml: string; layout: string | null };
+
 interface Props {
   connections: ConnectionConfig[];
   openIds: ReadonlySet<string>;
   /** Pre-selects "From a Connection", e.g. when started from the object tree. */
   initial?: { connectionId: string; database: string; schema: string | null };
-  /** A file already read that does not say its Dialect, such as one reopened from Recent; starts on the Dialect question. */
-  file?: { path: string; dbml: string; layout: string | null };
+  /**
+   * A file already read that does not say its Dialect, such as one reopened from Recent; starts on the Dialect question.
+   * With no path it is a model not saved yet, under `name` (an ER diagram opened as DBML, ADR 0030).
+   */
+  file?: ModelFile;
   onStart: (doc: ModelDoc) => void;
   onCancel: () => void;
 }
@@ -73,7 +80,7 @@ export default function StartModel({ connections, openIds, initial, file, onStar
   const [dialect, setDialect] = useState<DialectKind>("mysql");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [unknownDialect, setUnknownDialect] = useState<{ path: string; dbml: string; layout: string | null } | null>(file ?? null);
+  const [unknownDialect, setUnknownDialect] = useState<ModelFile | null>(file ?? null);
   const [fileDialect, setFileDialect] = useState<DialectKind>("mysql");
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const [now] = useState(() => new Date());
@@ -145,6 +152,12 @@ export default function StartModel({ connections, openIds, initial, file, onStar
 
   function startFile(path: string, dbml: string, layout: string | null, d: DialectKind) {
     onStart({ path, dbml, savedDbml: dbml, layout: layout ? parseLayout(layout) : EMPTY_LAYOUT, dialect: d, source: "file", connectionId: null });
+  }
+
+  /** The file asked about, or a model not saved yet: it opens unsaved, so the first Save asks where. */
+  function startAsked(f: ModelFile, d: DialectKind) {
+    if (f.path !== null) return startFile(f.path, f.dbml, f.layout, d);
+    onStart({ path: null, ...(f.name ? { name: f.name } : {}), dbml: f.dbml, savedDbml: "", layout: EMPTY_LAYOUT, dialect: d, source: "file", connectionId: null });
   }
 
   async function openPath(path: string) {
@@ -230,6 +243,42 @@ export default function StartModel({ connections, openIds, initial, file, onStar
       : way === "blank"
         ? { icon: "plus" as const, text: "Create blank model" }
         : { icon: "folder" as const, text: "Open..." };
+
+  // A converted ER diagram has no file yet: the dialog asks only its Dialect, and Continue opens it unsaved (E1).
+  if (file && file.path === null) {
+    const run = () => startAsked(file, fileDialect);
+    return (
+      <Dialog title="New Schema Model" icon="layers" size="model" onClose={onCancel}>
+        <div
+          className="dialog-body model-body"
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.defaultPrevented || (e.target as HTMLElement).closest("button")) return;
+            e.preventDefault();
+            run();
+          }}
+        >
+          <div className="model-fields">
+            <div className="start-model-ask">
+              <p>This model doesn't say which Dialect it targets. Choose one.</p>
+              <Segmented label="Dialect of the file" value={fileDialect} options={DIALECT_OPTIONS} onChange={setFileDialect} />
+            </div>
+          </div>
+        </div>
+        <footer className="dialog-footer">
+          <span className="model-hint">{CONVERTED_HINT}</span>
+          <span className="spacer" />
+          <button type="button" className="button" onClick={onCancel}>
+            Cancel
+            <Kbd keys="Esc" />
+          </button>
+          <button type="button" className="button button-primary" onClick={run}>
+            Continue
+            <Kbd keys="Enter" />
+          </button>
+        </footer>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog title="New Schema Model" icon="layers" size="model" dirty={connectionId !== (initial?.connectionId ?? "")} onClose={onCancel}>
@@ -335,13 +384,13 @@ export default function StartModel({ connections, openIds, initial, file, onStar
               </div>
               {unknownDialect && (
                 <div className="start-model-ask">
-                  <p>This file doesn't say which Dialect it targets. Choose one.</p>
+                  <p>{unknownDialect.path === null ? "This model" : "This file"} doesn't say which Dialect it targets. Choose one.</p>
                   <div className="model-ask-row">
                     <Segmented label="Dialect of the file" value={fileDialect} options={DIALECT_OPTIONS} onChange={setFileDialect} />
                     <button
                       type="button"
                       className="button"
-                      onClick={() => startFile(unknownDialect.path, unknownDialect.dbml, unknownDialect.layout, fileDialect)}
+                      onClick={() => startAsked(unknownDialect, fileDialect)}
                     >
                       Continue
                     </button>

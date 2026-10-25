@@ -68,7 +68,7 @@ import TopicFold, { TopicDivider } from "./TopicFold";
 import { groupByTopic } from "./topics";
 import { earlierLabel, SHOWN_TURNS, turnWindow } from "./turnWindow";
 import AnswerText from "./AnswerText";
-import type { InsertTarget } from "./InsertDiff";
+import type { InsertTarget } from "./insertPlan";
 import SlashCommands, { optionId } from "./SlashCommands";
 import { matchSlash, type SlashCommand, slashKey } from "./slash";
 import { useTabAsk } from "./tabAsk";
@@ -99,6 +99,8 @@ interface Props {
   onOpenInNewTab?(sql: string, connection: AskContext["connection"]): void;
   /** The open Connections: Re-sync reads a closed one's catalog only once it is open. All are taken as open when absent. */
   openIds?: ReadonlySet<string>;
+  /** Shows the tab with this key (A7); false when it is closed. */
+  onShowTab?(key: string): boolean;
 }
 
 /** The access chip in the header, in the words of the Connection's AI access setting. */
@@ -284,7 +286,10 @@ export default function AssistantPanel({
   insertTarget = null,
   onOpenInNewTab,
   openIds,
+  onShowTab,
 }: Props) {
+  /** The questions whose "Asked in" tab was found closed: the caption says so until it shows again (A7). */
+  const [closedAsked, setClosedAsked] = useState<ReadonlySet<number>>(() => new Set());
   // Only the active tab is listened to, and its getter is read once per change it publishes, never per draw.
   const published = useTabAsk(seed ? null : tabKey);
   const fields = useMemo(() => published?.get() ?? null, [published]);
@@ -302,6 +307,8 @@ export default function AssistantPanel({
   /** The place's chats as summaries; the open one is fetched in full. */
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  // A closed-tab note belongs to the thread it was said in.
+  useEffect(() => setClosedAsked((all) => (all.size === 0 ? all : new Set())), [currentId]);
   /** The open chat, as the Core last returned it (its records are trimmed). */
   const [current, setCurrent] = useState<AiThread | null>(null);
   /** The open chat's Topics, from the Core's view of it. */
@@ -721,6 +728,8 @@ export default function AssistantPanel({
     const forPlace = place;
     const base = current;
     const askedAt = Date.now();
+    // The tab it was asked in, as it is now: the user may move on while the answer streams.
+    const askedTab = tabKey;
     setFailure(null);
     setStoppedEarly(null);
     setConfirmStop(false);
@@ -755,7 +764,7 @@ export default function AssistantPanel({
       if (carriedUpTo > 0) takeSteps(forPlace, carriedUpTo);
       const record = buildRecord(end, end.live);
       record.millis ??= end.at - askedAt;
-      const at = await persist(forPlace, base, saved, q, included, askedAt, end.text, end.at, record, request.requestId, end.stamp ?? null, action);
+      const at = await persist(forPlace, base, saved, q, included, askedAt, end.text, end.at, record, request.requestId, end.stamp ?? null, action, askedTab);
       const used = end.live.context;
       if (used) setLiveContexts((all) => new Map(all).set(at, used));
       saved = true;
@@ -781,6 +790,7 @@ export default function AssistantPanel({
     requestId: string,
     stamp: TurnStamp | null,
     action?: string,
+    askedTab: string | null = null,
   ): Promise<number> {
     const at = Math.max(answeredAt, askedAt + 1);
     const stamped = (m: AiMessage): AiMessage =>
@@ -794,7 +804,8 @@ export default function AssistantPanel({
             tables: stamp.tables,
             action: stamp.action,
             // Where it was asked goes on the question only.
-            ...(m.role === "user" && stamp.askedIn && { askedIn: stamp.askedIn }),
+            // With the key of the tab it was asked in, so the caption can show that tab again (A7).
+            ...(m.role === "user" && stamp.askedIn && { askedIn: askedTab ? { ...stamp.askedIn, tabKey: askedTab } : stamp.askedIn }),
           }
         : m;
     // The Core's stamp carries the action; without one the Continue turn is still marked, so its bubble stays muted.
@@ -807,8 +818,8 @@ export default function AssistantPanel({
     // Connections' ids stay, so a later save of this copy (a failed append) keeps the gate on them.
     const shown = add.map((m) => {
       if (!m.askedIn) return m;
-      const { tab, label, also } = m.askedIn;
-      return { ...m, askedIn: { tab, label, summary: "", steps: [], ...(also && also.length > 0 && { also }) } };
+      const { tab, label, also, tabKey: key } = m.askedIn;
+      return { ...m, askedIn: { tab, label, summary: "", steps: [], ...(also && also.length > 0 && { also }), ...(key && { tabKey: key }) } };
     });
     const kept = base ? (replace ? base.messages.slice(0, -2) : base.messages) : [];
     const next: AiThread = base
@@ -1474,7 +1485,39 @@ export default function AssistantPanel({
                   <Fragment key={`${m.at}-u`}>
                     {(() => {
                       const caption = askedInCaption(current.messages, mi);
-                      return caption && <div className="msg-asked-in">{caption}</div>;
+                      const key = m.askedIn?.tabKey;
+                      if (!caption) return null;
+                      if (!key || !onShowTab) return <div className="msg-asked-in">{caption}</div>;
+                      const label = m.askedIn!.label;
+                      const closed = closedAsked.has(m.at);
+                      return (
+                        <div className="msg-asked-in">
+                          Asked in{" "}
+                          <button
+                            type="button"
+                            className="link-button"
+                            title={`Show ${label}`}
+                            onClick={() => {
+                              const shown = onShowTab(key);
+                              setClosedAsked((all) => {
+                                if (shown === !all.has(m.at)) return all;
+                                const next = new Set(all);
+                                if (shown) next.delete(m.at);
+                                else next.add(m.at);
+                                return next;
+                              });
+                            }}
+                          >
+                            {label}
+                          </button>
+                          {closed && (
+                            <span className="msg-asked-closed" role="status">
+                              {" "}
+                              {label} is closed.
+                            </span>
+                          )}
+                        </div>
+                      );
                     })()}
                     <div className={m.action === "continue" ? "msg-user msg-user-muted" : "msg-user"}>{m.text}</div>
                     <div className="ts">{dayClock(m.at, Date.now())}</div>

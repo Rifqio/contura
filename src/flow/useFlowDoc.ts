@@ -4,7 +4,7 @@
 // if the editor still holds the very document it was planned on. Every edit list is one CodeMirror transaction,
 // and a move is an entry of its own in the same history, so one undo covers text and canvas.
 import { history, invertedEffects, isolateHistory } from "@codemirror/commands";
-import { Compartment, EditorState, type Extension, StateEffect, type Text } from "@codemirror/state";
+import { Compartment, EditorState, type Extension, StateEffect, type Text, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorText, readDiagram, writeDiagram, writeDiagramLayout } from "../api/client";
@@ -14,7 +14,7 @@ import type { FlowRequestOp, FlowResult, TextEdit } from "../lang/protocol";
 import type { DiagramKind, FlowDoc } from "../lang/flow/model";
 import type { FlowSpan } from "../lang/flow/parse";
 import { type FlowHandle, type FlowHold, registerFlow, registerOrphanFailure } from "./flowRegistry";
-import { emptyPositions, withoutProposed, type FlowDirection, type FlowLayout, parseFlowLayout, serializeFlowLayout } from "./layout";
+import { axisKey, emptyPositions, withoutProposed, type FlowDirection, type FlowLayout, parseFlowLayout, serializeFlowLayout } from "./layout";
 import type { NodeLook } from "./nodes/parts";
 
 /** Saves wait this long after the last change (text or layout). */
@@ -26,6 +26,13 @@ const NEXT_PARSE_MS = 2000;
 
 /** Node positions before and after a move; undo applies the inverse. */
 export const moveEffect = StateEffect.define<{ before: Positions; after: Positions }>();
+
+/**
+ * Step 6 (follow-up N2): the axes of + lines (by `axisKey`) before and after a canvas action, null for none. It goes in
+ * the action's own transaction, so undo takes an axis back with its line and redo brings it again.
+ */
+export type AxisChange = Record<string, "v" | "h" | null>;
+export const axisEffect = StateEffect.define<{ before: AxisChange; after: AxisChange }>();
 
 /** One node's box in the layout: where it is, and its kept size (null: its own size). */
 export type KeptBox = { at?: { x: number; y: number }; size: { w: number; h: number } | null };
@@ -49,6 +56,8 @@ export interface RunOptions {
   version?: number;
   /** Node positions written in the same transaction as the edits. */
   move?: Positions;
+  /** The axes of + lines set (or, null, dropped) in the same transaction: one undo step with the edits. */
+  axes?: AxisChange;
   /** The worker refused the action and said why (a paste names the reason). */
   onRefused?(why: string): void;
 }
@@ -122,6 +131,11 @@ export interface FlowDocApi {
   settleProposed(names: ReadonlySet<string> | ReadonlyMap<string, unknown>): void;
   setStyle(style: NodeLook): void;
   setDirection(direction: FlowDirection): void;
+  /**
+   * Round 2, N-B: drops the axes of lines the text no longer has (typed away), outside the history, so a line drawn
+   * again between the same shapes starts with none.
+   */
+  dropAxes(keys: readonly string[]): void;
   /** Item 21: a node resized on the canvas: its new box (a left or top handle moves it too); kept in the layout file. */
   resize(name: string, box: { x: number; y: number; w: number; h: number }): void;
   /** A resized node goes back to its own size (Fit to content, a double-click on its edge). */
@@ -239,6 +253,12 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     if (cur?.result.doc) {
       nodes = emptyPositions();
       for (const n of cur.result.doc.nodes) if (Object.prototype.hasOwnProperty.call(l.nodes, n.name)) nodes[n.name] = l.nodes[n.name];
+      // An empty group keeps its place under its name (diag-910 fix round 1, I5).
+      const walk = [...cur.result.doc.groups];
+      for (let g = walk.pop(); g; g = walk.pop()) {
+        if (Object.prototype.hasOwnProperty.call(l.nodes, g.name)) nodes[g.name] = l.nodes[g.name];
+        walk.push(...g.groups);
+      }
     }
     // Sizes follow the same rule as positions.
     let sizes = l.sizes;
@@ -247,7 +267,15 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       for (const n of cur.result.doc.nodes) if (Object.prototype.hasOwnProperty.call(sizes, n.name)) kept[n.name] = sizes[n.name];
       sizes = kept;
     }
-    return { text, textEdited, layout: serializeFlowLayout({ ...l, nodes, sizes }), edited };
+    // So do the axes of + lines: only the lines in the text keep theirs (N2); memory keeps them for undo.
+    let axes = l.axes;
+    if (cur?.result.doc && axes) {
+      const live = new Set(cur.result.doc.links.map((k) => axisKey(k.from, k.to)));
+      const kept: Record<string, "v" | "h"> = {};
+      for (const [k, v] of Object.entries(axes)) if (live.has(k)) kept[k] = v;
+      axes = kept;
+    }
+    return { text, textEdited, layout: serializeFlowLayout({ ...l, nodes, sizes, axes }), edited };
   }, []);
 
   /** Writes the layout now, with the text when it was edited; true once it is on disk. */
@@ -341,6 +369,19 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       Object.assign(nodes, layoutRef.current.nodes);
       for (const k of Object.keys(after)) nodes[k] = after[k];
       setLayout({ ...layoutRef.current, nodes });
+      scheduleSave();
+    },
+    [setLayout, scheduleSave],
+  );
+
+  /** Sets or drops the axes of + lines (N2). */
+  const applyAxes = useCallback(
+    (change: AxisChange) => {
+      const l = layoutRef.current;
+      const axes = Object.create(null) as Record<string, "v" | "h">;
+      for (const [k, v] of Object.entries(l.axes ?? {})) if (!Object.prototype.hasOwnProperty.call(change, k)) axes[k] = v;
+      for (const [k, v] of Object.entries(change)) if (v) axes[k] = v;
+      setLayout({ ...l, axes });
       scheduleSave();
     },
     [setLayout, scheduleSave],
@@ -516,12 +557,14 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       invertedEffects.of((tr) => [
         ...tr.effects.filter((e) => e.is(moveEffect)).map((e) => moveEffect.of({ before: e.value.after, after: e.value.before })),
         ...tr.effects.filter((e) => e.is(sizeEffect)).map((e) => sizeEffect.of({ name: e.value.name, before: e.value.after, after: e.value.before })),
+        ...tr.effects.filter((e) => e.is(axisEffect)).map((e) => axisEffect.of({ before: e.value.after, after: e.value.before })),
       ]),
       EditorView.updateListener.of((u) => {
         for (const tr of u.transactions) {
           const undoing = tr.isUserEvent("undo");
           for (const e of tr.effects) {
             if (e.is(sizeEffect)) applyBox(e.value.name, e.value.after);
+            if (e.is(axisEffect)) applyAxes(e.value.after);
             if (!e.is(moveEffect)) continue;
             if (undoing || tr.isUserEvent("redo")) for (const fn of historyMoves.current) fn({ from: e.value.before, to: e.value.after, undo: undoing });
             applyPositions(e.value.after);
@@ -541,7 +584,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         }
       }),
     ],
-    [applyPositions, applyBox, parse, scheduleSave, name],
+    [applyPositions, applyBox, applyAxes, parse, scheduleSave, name],
   );
 
   const attach = useCallback(
@@ -566,8 +609,14 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   }, []);
 
   const dispatchEdits = useCallback(
-    (view: EditorView, edits: TextEdit[], move?: Positions) => {
-      const effects = move && Object.keys(move).length > 0 ? [moveEffect.of({ before: positionsOf(Object.keys(move)), after: move })] : [];
+    (view: EditorView, edits: TextEdit[], move?: Positions, axes?: AxisChange) => {
+      const effects: StateEffect<unknown>[] = move && Object.keys(move).length > 0 ? [moveEffect.of({ before: positionsOf(Object.keys(move)), after: move })] : [];
+      if (axes && Object.keys(axes).length > 0) {
+        const now = layoutRef.current.axes ?? {};
+        const before: AxisChange = {};
+        for (const k of Object.keys(axes)) before[k] = Object.prototype.hasOwnProperty.call(now, k) ? now[k] : null;
+        effects.push(axisEffect.of({ before, after: axes }));
+      }
       view.dispatch({
         changes: edits.map((e) => ({ from: e.from, to: e.to, insert: e.insert })),
         effects,
@@ -604,7 +653,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
           if (answer.note) opts.onRefused?.(answer.note);
           return null;
         }
-        dispatchEdits(view, answer.edits, opts.move);
+        dispatchEdits(view, answer.edits, opts.move, opts.axes);
         // The first written line: past the line breaks and indent the insert starts with.
         const first = answer.edits[0];
         const lead = first.insert.length - first.insert.replace(/^[\s]+/, "").length;
@@ -750,6 +799,21 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [setLayout, scheduleSave],
   );
 
+  const dropAxes = useCallback((keys: readonly string[]) => {
+    const view = viewRef.current;
+    if (!view || keys.length === 0) return;
+    const now = layoutRef.current.axes ?? {};
+    const before: AxisChange = {};
+    const after: AxisChange = {};
+    for (const k of keys) {
+      if (!Object.prototype.hasOwnProperty.call(now, k)) continue;
+      before[k] = now[k];
+      after[k] = null;
+    }
+    if (Object.keys(after).length === 0) return;
+    view.dispatch({ effects: axisEffect.of({ before, after }), annotations: Transaction.addToHistory.of(false) });
+  }, []);
+
   const linesOf = useCallback(
     async (names: string[]) => {
       const view = viewRef.current;
@@ -833,6 +897,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     resize,
     unsize,
     setDirection,
+    dropAxes,
     linesOf,
     reparse,
     flush,

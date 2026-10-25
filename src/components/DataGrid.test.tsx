@@ -11,6 +11,7 @@ import { fakeWorker } from "../test/langWorker";
 import tokensCss from "../styles/tokens.css?raw";
 import { useTabAsk } from "../assistant/tabAsk";
 import DataGrid from "./DataGrid";
+import { forgetSlowForTests } from "../grid/keyCounts";
 import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 import { ToastProvider } from "./Toast";
 
@@ -482,7 +483,9 @@ test("item_5_one_header_strip_names_the_table_and_holds_its_tools", async () => 
   expect(strip.getByText("PRODUCTION").className).toContain("production-label");
   const name = strip.getByRole("heading", { level: 2 });
   expect(name.textContent).toBe("public.orders");
-  expect(strip.getByText("90,412 rows")).toBeTruthy();
+  // No count answered (the route is not there), so the header keeps the server's estimate, marked as one.
+  // The ~ is drawn; a screen reader hears "about".
+  expect(header().querySelector('[data-rows="estimate"]')!.textContent).toBe("~about 90,412 rows");
   // No SQL in the header: the filters and sort are the strip under it.
   expect(header().querySelector(".cm-editor")).toBeNull();
   expect(screen.queryByRole("textbox", { name: "Order by" })).toBeNull();
@@ -516,12 +519,105 @@ test("item_2_the_sort_chip_reads_in_words_flips_and_clears", async () => {
   expect(sorts).toEqual([null, { column: "note", descending: false }, { column: "note", descending: true }, null, { column: "id", descending: true }]);
 });
 
+test("the_header_counts_the_rows_because_the_server_figure_is_an_estimate", async () => {
+  // MySQL said 0 rows (TABLE_ROWS is stale); the table holds 1.
+  routeInvoke({ fetch_page: () => page(false), count_rows: () => ({ kind: "counted", rows: 1 }) });
+  const onExactCount = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={0} onExactCount={onExactCount} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(header().querySelector('[data-rows="exact"]')!.textContent).toBe("1 row"));
+  expect(onExactCount).toHaveBeenCalledWith(1);
+  expect(footer().querySelector(".table-range")!.textContent).toBe("1 to 1 of 1");
+  const req = callsTo("count_rows")[0].request as { filter: string | null };
+  expect(req.filter).toBeNull();
+});
+
+test("an_empty_table_says_0_rows_whatever_the_estimate", async () => {
+  // MySQL said 49 rows; the table is empty.
+  routeInvoke({ fetch_page: () => ({ ...page(false), rows: [] }), count_rows: () => ({ kind: "counted", rows: 0 }) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={49} />);
+  await waitFor(() => expect(header().querySelector('[data-rows="exact"]')!.textContent).toBe("0 rows"));
+});
+
+test("a_large_table_keeps_the_estimate_marked_as_one", async () => {
+  // Over 1,000 rows the Core stops counting (1,001 means more), so the header keeps the server's figure.
+  routeInvoke({ fetch_page: () => page(true), count_rows: () => ({ kind: "counted", rows: 1001 }) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={90412} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(header().querySelector('[data-rows="estimate"]')!.getAttribute("title")).toContain("more than 1,000 rows"));
+  expect(header().querySelector('[data-rows="estimate"]')!.textContent).toBe("~about 90,412 rows");
+});
+
+test("with_a_filter_on_the_footer_gives_no_total_from_the_unfiltered_count", async () => {
+  routeInvoke({ fetch_page: () => page(false), count_rows: () => ({ kind: "counted", rows: 12 }) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} dialect="mysql" rowEstimate={10} />);
+  await screen.findByText("first");
+  await waitFor(() => expect(footer().querySelector(".table-range")!.textContent).toBe("1 to 1 of 12"));
+  await addFilter("id", "is more than", "5");
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await waitFor(() => expect(footer().querySelector(".table-range")!.textContent).toBe("1 to 1"));
+  // The header still counts the table, not the filter.
+  expect(header().querySelector('[data-rows="exact"]')!.textContent).toBe("12 rows");
+});
+
+test("a_hidden_tab_counts_nothing_until_it_is_shown", async () => {
+  routeInvoke({ fetch_page: () => page(false), count_rows: () => ({ kind: "counted", rows: 1 }) });
+  const { rerender } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} visible={false} />);
+  await screen.findByText("first");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(callsTo("count_rows")).toHaveLength(0);
+  rerender(<DataGrid connectionId="c1" table={table} onClose={() => {}} visible />);
+  await waitFor(() => expect(callsTo("count_rows")).toHaveLength(1));
+});
+
+test("a_design_change_counts_once", async () => {
+  routeInvoke({ fetch_page: () => page(false), count_rows: () => ({ kind: "counted", rows: 1 }) });
+  const { rerender } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} version={0} />);
+  await waitFor(() => expect(header().querySelector('[data-rows="exact"]')).toBeTruthy());
+  expect(callsTo("count_rows")).toHaveLength(1);
+  rerender(<DataGrid connectionId="c1" table={table} onClose={() => {}} version={1} />);
+  await waitFor(() => expect(callsTo("fetch_page")).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(callsTo("count_rows")).toHaveLength(2);
+});
+
+test("a_count_over_1000_or_not_made_clears_the_tree_count", async () => {
+  onTestFinished(() => forgetSlowForTests());
+  routeInvoke({ fetch_page: () => page(true), count_rows: () => ({ kind: "counted", rows: 1001 }) });
+  const onExactCount = vi.fn();
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={90412} onExactCount={onExactCount} />);
+  await waitFor(() => expect(onExactCount).toHaveBeenCalledWith(null));
+  expect(onExactCount).not.toHaveBeenCalledWith(expect.any(Number));
+});
+
+test("a_slow_count_says_so_and_does_not_claim_a_closed_connection", async () => {
+  onTestFinished(() => forgetSlowForTests());
+  routeInvoke({ fetch_page: () => page(false), count_rows: () => ({ kind: "timedOut" }) });
+  const onExactCount = vi.fn();
+  const { rerender } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={49} onExactCount={onExactCount} />);
+  await waitFor(() => expect(header().querySelector('[data-rows="estimate"]')!.getAttribute("title")).toContain("Counting took too long"));
+  expect(onExactCount).toHaveBeenCalledWith(null);
+  // Reload within the minute: the count is skipped because it was slow, and the tooltip says that.
+  rerender(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={49} onExactCount={onExactCount} version={1} />);
+  await waitFor(() => expect(header().querySelector('[data-rows="estimate"]')!.getAttribute("title")).toContain("took too long a moment ago"));
+  expect(header().querySelector('[data-rows="estimate"]')!.getAttribute("title")).not.toContain("once the Connection is open");
+});
+
+test("the_row_count_has_an_accessible_name", async () => {
+  routeInvoke({ fetch_page: () => page(false) });
+  render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={49} />);
+  await screen.findByText("first");
+  const est = header().querySelector('[data-rows="estimate"]') as HTMLElement;
+  expect(est.querySelector('[aria-hidden="true"]')!.textContent).toBe("~");
+  expect(est.querySelector(".visually-hidden")!.textContent).toBe("about ");
+});
+
 test("footer_shows_range_pager_and_context_line", async () => {
   routeInvoke({ fetch_page: () => page(true) });
   const { rerender } = render(<DataGrid connectionId="c1" table={table} onClose={() => {}} rowEstimate={1284} />);
   await screen.findByText("first");
   const foot = within(footer());
-  expect(footer().querySelector(".table-range")!.textContent).toBe("1 to 1 of 1,284");
+  expect(footer().querySelector(".table-range")!.textContent).toBe("1 to 1 of about 1,284");
   // The pager arrows sit after the range, on the left.
   const prev = foot.getByRole("button", { name: "Previous page" });
   const next = foot.getByRole("button", { name: "Next page" });

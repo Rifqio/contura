@@ -108,7 +108,7 @@ describe("nodes and kinds", () => {
   test("an unknown attribute is a problem", () => {
     const text = lines('diagram flow "F"', "A [step, colour: accent]");
     const [p] = errors(text);
-    expect(p.message).toBe('Unknown attribute "colour". Use id, icon, color or table.');
+    expect(p.message).toBe('Unknown attribute "colour". Use id, icon, label, color or table.');
     expect(at(text, p.from, p.to)).toBe("colour");
     expect(p.fixes.map((f) => f.title)).toEqual(["Use color"]);
     expect(ok(apply(text, p.fixes[0].edits)).nodes[0].attrs).toEqual({ color: "accent" });
@@ -219,9 +219,9 @@ describe("groups", () => {
     expect(doc.nodes.map((n) => n.name)).toEqual(["Users", "Bucket", "API", "Cache", "DB"]);
   });
 
-  test("a group takes only an icon", () => {
+  test("a group takes only an icon and a colour (step 11)", () => {
     const text = lines('diagram flow "F"', "Kitchen [process] {", "  A", "}");
-    expect(errors(text).map((p) => p.message)).toEqual(["A group takes only an icon, for example [icon: aws-vpc]."]);
+    expect(errors(text).map((p) => p.message)).toEqual(["A group takes only an icon and a colour, for example [icon: aws-vpc, color: muted]."]);
   });
 
   test("a group never closed is a problem with a fix", () => {

@@ -485,7 +485,7 @@ function DiagramAskView({
       )}
       <div className="dnopath dtool">
         <Icon name="edit" size={14} />
-        {`One tool: it can only suggest edits to ${file}.flow.`}
+        {`One tool: it can only suggest edits to ${file}.`}
       </div>
       {detail(chosen)}
     </div>

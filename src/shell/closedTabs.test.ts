@@ -84,7 +84,7 @@ test("with nothing left to reopen it opens nothing", async () => {
 test("a label names each closed tab", () => {
   expect(closedLabel(closedTabOf(table("orders"))!)).toBe("orders");
   expect(closedLabel(closedTabOf(query("a"))!)).toBe("Query a");
-  expect(closedLabel({ kind: "flow", name: "checkout" })).toBe("checkout.flow");
+  expect(closedLabel({ kind: "flow", name: "checkout" })).toBe("checkout");
 });
 
 const big = (id: string, chars: number) => query(id, "x".repeat(chars));

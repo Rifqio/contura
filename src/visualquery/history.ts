@@ -22,15 +22,25 @@ export function clearHistory<T>(h: History<T>): void {
   h.mergeKey = null;
 }
 
-/** Records `before`, the model as it was ahead of a change. */
-export function record<T>(h: History<T>, before: T, opts: { now: number; merge?: string }): void {
+/**
+ * Records `before`, the model as it was ahead of a change. `cap` overrides the step limit (the Table Designer keeps
+ * 200); `group: false` makes every record its own step even within one tick (a cell commit and the Add that came
+ * with it undo one at a time).
+ */
+export function record<T>(h: History<T>, before: T, opts: { now: number; merge?: string; cap?: number; group?: boolean }): void {
   const merged = opts.merge !== undefined && opts.merge === h.mergeKey && opts.now - h.mergeAt < MERGE_MS;
   h.mergeKey = opts.merge ?? null;
   h.mergeAt = opts.now;
-  if (merged || h.open) return;
+  if (merged) {
+    h.future = [];
+    return;
+  }
+  if (h.open) return;
   h.past.push(before);
-  if (h.past.length > HISTORY_CAP) h.past.shift();
+  const cap = opts.cap ?? HISTORY_CAP;
+  while (h.past.length > cap) h.past.shift();
   h.future = [];
+  if (opts.group === false) return;
   h.open = true;
   queueMicrotask(() => {
     h.open = false;

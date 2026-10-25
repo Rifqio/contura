@@ -68,16 +68,23 @@ describe("statusScreenFor", () => {
       kind: "schema",
       fileName: "shop.dbml",
       appliedTo: null,
+      saved: true,
     });
     expect(statusScreenFor(input({ activeWindow: schemaWindow(null) }))).toEqual({
       kind: "schema",
       fileName: "Untitled.dbml",
       appliedTo: null,
+      saved: false,
     });
   });
 
+  it("E2: an ER diagram opened as DBML is named after the diagram and not saved yet", () => {
+    const converted: WindowTab = { kind: "schema", id: "m2", doc: { ...(schemaWindow(null) as { doc: object }).doc, name: "uxcheck" } as never };
+    expect(statusScreenFor(input({ activeWindow: converted }))).toEqual({ kind: "schema", fileName: "uxcheck", appliedTo: null, saved: false });
+  });
+
   it("a_diagram_shows_its_file_name", () => {
-    expect(statusScreenFor(input({ activeWindow: { kind: "flow", name: "checkout" } }))).toEqual({ kind: "flow", name: "checkout", fileName: "checkout.flow" });
+    expect(statusScreenFor(input({ activeWindow: { kind: "flow", name: "checkout" } }))).toEqual({ kind: "flow", name: "checkout", fileName: "checkout" });
   });
 
   it("workspace_follows_the_tree_branch_while_the_tree_has_focus", () => {

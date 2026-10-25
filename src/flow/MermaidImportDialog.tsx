@@ -3,11 +3,12 @@
 // The Mermaid text is not kept.
 import { useUngroupedLabel } from "../prefs/usePrefs";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { EditorState, Prec, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { errorText, isCommandError, writeDiagram } from "../api/client";
+import { errorText, isCommandError, listDiagrams, writeDiagram } from "../api/client";
+import { freeDiagramName } from "./diagramKinds";
 import { readTextFile } from "../api/jobs";
 import type { Group, GroupId } from "../api/types";
 import Dialog from "../components/Dialog";
@@ -21,6 +22,8 @@ import type { LangClient } from "../lang/client";
 import { editorTheme } from "../lang/editorTheme";
 import { dbmlHighlight } from "../schema/dbmlLanguage";
 import FlowPreview from "./FlowPreview";
+import type { DiagramKind } from "../lang/flow/model";
+import { insertKindRefusal, KIND_SHORT } from "../lang/flow/insert";
 import type { MermaidResult } from "./mermaid";
 import { mermaidLang } from "./mermaidLang";
 
@@ -33,11 +36,37 @@ interface Props {
   onCreated(name: string): void;
   /** Runs before a Replace writes over diagram `name`: its open tab goes first (ruling P19). */
   beforeReplace?(name: string): void | Promise<void>;
+  /** Step 10: opened from New diagram, Back returns to it (VS Code's multi-step Back); there is no Insert then. */
+  onBack?(): void;
+  /**
+   * Step 10: opened from the canvas, Insert puts the converted text into the open diagram `file` of `kind` only
+   * (draw.io's Arrange > Insert > Mermaid). `run` answers why it was refused, or null once it is in.
+   */
+  insert?: { kind: DiagramKind; file: string; run(flow: string): Promise<string | null> };
 }
+
+/** The lines the converter could not read, marked where they are written (board DiagramStartWell). */
+const setBad = StateEffect.define<number[]>();
+const badLine = Decoration.line({ class: "cm-mermaid-bad" });
+const badField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    let next = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (!e.is(setBad)) continue;
+      const b = new RangeSetBuilder<Decoration>();
+      for (const n of [...new Set(e.value)].sort((x, y) => x - y)) if (n >= 1 && n <= tr.state.doc.lines) b.add(tr.state.doc.line(n).from, tr.state.doc.line(n).from, badLine);
+      next = b.finish();
+    }
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 /** The preview redraws this long after the last keystroke. */
 const REDRAW_MS = 150;
-const DEFAULT_NAME = "new-flow.flow";
+/** The name a new diagram starts with, as in New diagram (fix round 1, M8): free of every diagram there is. */
+const DEFAULT_NAME = "Untitled diagram";
 /** Notes drawn in the list; the rest are counted. */
 const NOTES_SHOWN = 200;
 
@@ -47,36 +76,49 @@ export function titleFromName(name: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : "Untitled flow";
 }
 
-/** The file name a title gives: "Order handover" is `order-handover.flow`. */
-export function nameFromTitle(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
-  return `${slug || "new-flow"}.flow`;
-}
-
 /** The layout file D1 writes beside the flow: only the direction and the Group, so the first layout matches the preview. */
 export function flowLayoutJson(direction: "TB" | "LR", group: GroupId | null): string {
   return `${JSON.stringify({ version: 1, direction, group, nodes: {} }, null, 2)}\n`;
 }
 
-const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`;
 
-/** "Line 5 is left out ...", or "Lines 5 and 8 are left out ..." */
-function leftOutLine(lines: number[]): string | null {
-  if (lines.length === 0) return null;
-  if (lines.length === 1) return `Line ${lines[0]} is left out until it can be read. The rest is drawn.`;
-  const list = `${lines.slice(0, -1).join(", ")} and ${lines[lines.length - 1]}`;
-  return `Lines ${list} are left out until they can be read. The rest is drawn.`;
+/** Why Create and Insert wait (board DiagramStartWell): a line to fix, or nothing to bring in yet. */
+function blockOf(text: string, result: MermaidResult | null): string | null {
+  if (!text.trim() || !result) return "Paste a Mermaid diagram first.";
+  const lines = [...new Set(result.errors.filter((e) => e.line > 0).map((e) => e.line))];
+  if (result.nodes === 0 && result.errors.length > 0 && !result.flow) return "This kind cannot come in.";
+  if (lines.length === 1) return `Fix or delete line ${lines[0]} to go on.`;
+  if (lines.length > 1) return `Fix or delete the ${lines.length} lines marked to go on.`;
+  if (result.errors.length > 0) return result.errors[0].text;
+  if (result.nodes === 0) return "Nothing to bring in yet.";
+  return null;
 }
 
-export default function MermaidImportDialog({ groups, defaultGroup, lang, onClose, onCreated, beforeReplace }: Props) {
+export default function MermaidImportDialog({ groups, defaultGroup, lang, onClose, onCreated, beforeReplace, onBack, insert }: Props) {
   const { label: ungroupedLabel } = useUngroupedLabel();
   const toast = useToast();
   const [text, setText] = useState("");
   const [name, setName] = useState(DEFAULT_NAME);
   const nameTouched = useRef(false);
+  /** Every diagram's name, so the name it suggests is free (VS Code's Untitled-N). */
+  const taken = useRef<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    // Asked once; a test with no Core answer leaves the default as it is.
+    Promise.resolve()
+      .then(() => listDiagrams())
+      .then(
+        (all) => {
+          if (!live || !Array.isArray(all)) return;
+          taken.current = all.map((d) => d.name);
+          if (!nameTouched.current) setName((n) => freeDiagramName(n.replace(/\.flow$/i, ""), taken.current));
+        },
+        () => {},
+      );
+    return () => {
+      live = false;
+    };
+  }, []);
   const [group, setGroup] = useState<string>(defaultGroup ?? "");
   const [tab, setTab] = useState<"diagram" | "text">("diagram");
   const [result, setResult] = useState<MermaidResult | null>(null);
@@ -84,6 +126,8 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   const [message, setMessage] = useState<string | null>(null);
   /** The file name being asked about: "<name>.flow already exists. Replace it?" */
   const [asking, setAsking] = useState<string | null>(null);
+  /** Back with Mermaid typed asks first, as Esc and Cancel do (fix round 1, M3). */
+  const [backAsk, setBackAsk] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
 
@@ -101,7 +145,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
           if (!live) return;
           setResult(r);
           // A front matter title names the file until the Name is edited.
-          if (!nameTouched.current && r.doc.title !== title) setName(nameFromTitle(r.doc.title));
+          if (!nameTouched.current && r.doc.title !== title) setName(freeDiagramName(r.doc.title, taken.current));
         },
         (e: unknown) => live && setMessage(errorText(e)),
       );
@@ -113,11 +157,21 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   }, [text, title, lang]);
 
   const errors = result?.errors ?? [];
-  const canCreate = !busy && !!result && errors.length === 0 && result.nodes > 0 && name.trim() !== "";
+  const block = blockOf(text, result);
+  const canCreate = !busy && block === null && name.trim() !== "";
+  /** Insert takes the open diagram's kind only (board DiagramStartWell). */
+  const insertWhy = !insert ? null : block ?? (result && result.kind !== insert.kind ? insertKindRefusal(insert.kind, result.kind) : null);
+  const canInsert = !!insert && !busy && insertWhy === null;
 
-  const actions = useRef({ create: () => {}, openFile: () => {} });
+  const actions = useRef({ create: () => {}, openFile: () => {}, insert: () => {} });
   actions.current.create = () => void createFlow();
   actions.current.openFile = () => void openFile();
+  actions.current.insert = () => void insertFlow();
+
+  // The lines it could not read are marked in the editor, where they are.
+  useEffect(() => {
+    view.current?.dispatch({ effects: setBad.of(errors.filter((e) => e.line > 0).map((e) => e.line)) });
+  }, [errors]);
 
   useEffect(() => {
     const v = new EditorView({
@@ -130,10 +184,12 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
           history(),
           mermaidLang,
           dbmlHighlight,
+          badField,
           // The dialog's keys win over the editor's own Ctrl+Enter (a new line).
           Prec.highest(
             keymap.of([
               { key: "Mod-Enter", run: () => (actions.current.create(), true) },
+              { key: "Mod-Shift-Enter", run: () => (actions.current.insert(), true) },
               { key: "Mod-o", run: () => (actions.current.openFile(), true) },
             ]),
           ),
@@ -147,6 +203,9 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
       }),
     });
     view.current = v;
+    // The dialog opens with focus in the Mermaid text, so Ctrl+V pastes there at once (fix round 2, L4). The dialog's own
+    // first-field focus runs before this editor exists, so the editor takes focus itself.
+    v.focus();
     return () => {
       v.destroy();
       view.current = null;
@@ -156,8 +215,10 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   // Ctrl+O and Ctrl+Enter anywhere in the dialog; the editor handles its own first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-      if (e.key.toLowerCase() === "o") actions.current.openFile();
+      if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.shiftKey && e.key === "Enter") actions.current.insert();
+      else if (e.shiftKey) return;
+      else if (e.key.toLowerCase() === "o") actions.current.openFile();
       else if (e.key === "Enter") actions.current.create();
       else return;
       e.preventDefault();
@@ -178,7 +239,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
       else setText(content);
       if (!nameTouched.current) {
         const base = picked.split(/[\\/]/).pop() ?? "";
-        setName(`${base.replace(/\.[^.]*$/, "") || "new-flow"}.flow`);
+        setName(freeDiagramName(base.replace(/\.[^.]*$/, "") || DEFAULT_NAME, taken.current));
       }
     } catch (e) {
       setMessage(errorText(e));
@@ -193,12 +254,12 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
     try {
       const fresh = await lang.mermaid(text, title);
       setResult(fresh);
-      if (fresh.errors.length > 0 || fresh.nodes === 0) return;
+      if (blockOf(text, fresh) !== null) return;
       // One Core call writes the .flow and its layout file together in the diagrams folder, by name; a taken
       // name is refused unless this is the Replace answer.
       if (replace) await beforeReplace?.(flowName);
       await writeDiagram(flowName, fresh.flow, flowLayoutJson(fresh.direction, group === "" ? null : group), replace);
-      toast.show({ kind: "success", text: `Created ${flowName}.flow` });
+      toast.show({ kind: "success", text: `Created ${flowName}` });
       onCreated(flowName);
     } catch (e) {
       if (isCommandError(e) && e.kind === "diagramExists") setAsking(`${e.message.name}.flow`);
@@ -216,12 +277,40 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
     [groups, ungroupedLabel],
   );
 
-  const count = result ? `${plural(result.nodes, "node")}, ${plural(result.links, "link")}${errors.length ? " read" : ""}` : "";
-  const leftOut = leftOutLine(errors.filter((e) => e.line > 0).map((e) => e.line));
+  const count = result?.count ? `${result.count}${errors.length ? " read" : ""}` : "";
+  const createWord = KIND_SHORT[result && result.nodes > 0 ? result.kind : "flow"];
+
+  /** Insert (step 10): the converted text into the open diagram, as one undo step; the dialog closes once it is in. */
+  async function insertFlow() {
+    if (!insert || !canInsert) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const fresh = await lang.mermaid(text, title);
+      setResult(fresh);
+      if (blockOf(text, fresh) !== null) return;
+      if (fresh.kind !== insert.kind) return setMessage(insertKindRefusal(insert.kind, fresh.kind));
+      const why = await insert.run(fresh.flow);
+      if (why) setMessage(why);
+      else onClose();
+    } catch (e) {
+      setMessage(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   const flowLines = (result?.flow ?? "").replace(/\n$/, "").split("\n");
 
   return (
-    <Dialog title="New flow from Mermaid" icon="flow" subtitle="Flowcharts only, one way" size="large" className="mermaid-dialog" dirty={text.trim() !== ""} onClose={onClose}>
+    <Dialog
+      title="Diagram from Mermaid"
+      icon="flow"
+      subtitle="Flowchart, sequence, state, class, mind map and timeline, one way"
+      size="large"
+      className="mermaid-dialog"
+      dirty={text.trim() !== ""}
+      onClose={onClose}
+    >
       <div className="dialog-body mermaid-body">
         <div className="mermaid-panes">
           <section className="mermaid-pane" aria-label="Mermaid">
@@ -252,12 +341,6 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
             {tab === "diagram" ? (
               <div className="mermaid-preview">
                 <FlowPreview result={result} lang={lang} />
-                {leftOut && (
-                  <div className="flow-banner flow-banner-danger mermaid-left-out">
-                    <Icon name="alert" size={14} />
-                    <span>{leftOut}</span>
-                  </div>
-                )}
               </div>
             ) : (
               <div className="sql-block flow-text" role="group" aria-label="The .flow text">
@@ -273,14 +356,18 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
             )}
           </section>
         </div>
-        {errors.length > 0
-          ? errors.map((e, i) => (
+        {errors.length > 0 ? (
+          // Only the rows: nothing under them, so no empty band (board fix).
+          <div className="mermaid-problems">
+            {errors.map((e, i) => (
               <div key={i} className="flow-banner flow-banner-danger" role="alert">
                 <Icon name="alert" size={14} />
                 <span>{e.text}</span>
               </div>
-            ))
-          : result &&
+            ))}
+          </div>
+        ) : (
+          result &&
             result.notes.length > 0 && (
               <div className="mermaid-notes">
                 <div className="mermaid-notes-head">
@@ -299,7 +386,8 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
                   <span className="mermaid-notes-more">And {(result.notes.length - NOTES_SHOWN).toLocaleString("en-US")} more.</span>
                 )}
               </div>
-            )}
+            )
+        )}
         <div className="mermaid-fields">
           <label className="field mermaid-name">
             <span>Name</span>
@@ -320,6 +408,18 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
           </div>
         </div>
       </div>
+      {backAsk && onBack && (
+        <div className="dialog-discard" role="alert" aria-label="Discard your changes?">
+          <span>Discard your changes?</span>
+          <span className="spacer" />
+          <button type="button" className="button" autoFocus onClick={() => setBackAsk(false)}>
+            Keep editing
+          </button>
+          <button type="button" className="button" onClick={onBack}>
+            Discard
+          </button>
+        </div>
+      )}
       {asking ? (
         <footer className="dialog-footer">
           <span className="mermaid-message" role="alert">{`${asking} already exists. Replace it?`}</span>
@@ -333,10 +433,20 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
         </footer>
       ) : (
         <footer className="dialog-footer">
+          {onBack && (
+            <button type="button" className="button" title="Back to New diagram" onClick={() => (text.trim() ? setBackAsk(true) : onBack())}>
+              <Icon name="chevronLeft" size={14} />
+              Back
+            </button>
+          )}
           {message ? (
             <span className="mermaid-message" role="alert">
               {message}
             </span>
+          ) : text.trim() && block !== null && errors.length > 0 ? (
+            <span className="mermaid-message">{block}</span>
+          ) : insertWhy && result && result.nodes > 0 ? (
+            <span className="mermaid-hint">{insertWhy}</span>
           ) : (
             <span className="mermaid-hint">Your Mermaid text is not kept. Edit the .flow text after.</span>
           )}
@@ -345,8 +455,20 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
             Cancel
             <Kbd keys="Esc" />
           </button>
+          {insert && (
+            <button
+              type="button"
+              className="button"
+              disabled={!canInsert}
+              title={insertWhy ?? "Adds it to the open diagram, selected, as one undo step (Ctrl+Shift+Enter)"}
+              onClick={() => void insertFlow()}
+            >
+              {`Insert into ${insert.file}`}
+              <Kbd keys="Ctrl+Shift+Enter" />
+            </button>
+          )}
           <button type="button" className="button button-primary" disabled={!canCreate} onClick={() => void createFlow()}>
-            Create flow
+            {`Create ${createWord}`}
             <Kbd keys="Ctrl+Enter" />
           </button>
         </footer>

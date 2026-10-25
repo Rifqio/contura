@@ -138,7 +138,7 @@ test("choice_is_remembered", async () => {
   await screen.findByRole("navigation", { name: "Side panel, hidden" });
   await userEvent.click(screen.getByRole("button", { name: "Show the side panel" }));
   expect(tab("Assistant").getAttribute("aria-selected")).toBe("true");
-  expect(screen.getByText("Ask for a change to orders.flow")).toBeTruthy();
+  expect(screen.getByText("Ask for a change to orders")).toBeTruthy();
   expect(screen.getByText("The assistant edits the text and the drawing together. While it works, the text is read-only.")).toBeTruthy();
 });
 

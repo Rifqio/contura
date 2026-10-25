@@ -26,6 +26,7 @@ import { useRecordStep } from "../assistant/recentSteps";
 import type { GridControl } from "../components/DataGrid";
 import Dialog from "../components/Dialog";
 import Icon from "../components/Icon";
+import { type MenuItem, PointMenu } from "../components/Menu";
 import SqlBlock from "../components/SqlBlock";
 import { useToast } from "../components/Toast";
 import { plural } from "../format/plural";
@@ -35,11 +36,13 @@ import type { SchemaCache } from "../lang/sql/schemaCache";
 import type { DesignTabTarget } from "../shell/tabs";
 import DesignBar from "./DesignBar";
 import DesignPreview, { modeLine } from "./DesignPreview";
-import ColumnsTab, { CELL_FIELD, type CellAt, TEXT_CELLS, cellEditable, columnCells } from "./ColumnsTab";
+import ColumnsTab, { CELL_FIELD, type CellAt, EMPTY_ROW, TEXT_CELLS, cellEditable, columnCells } from "./ColumnsTab";
 import {
   type Draft,
   addColumn,
+  addNamedColumn,
   backslashNote,
+  copyColumn,
   addForeignKey,
   addIndex,
   changeCount,
@@ -51,6 +54,7 @@ import {
   fromDesign,
   keysProblem,
   moveColumn,
+  pasteColumn,
   refNames,
   removeColumn,
   removeForeignKey,
@@ -63,6 +67,10 @@ import {
 import ForeignKeysTab, { foreignKeyNameEditable } from "./ForeignKeysTab";
 import IndexesTab, { indexNameEditable } from "./IndexesTab";
 import { typeSuggestions } from "./typeSuggestions";
+import { clearHistory, createHistory, record as recordUndo, redo as redoDraft, undo as undoDraft } from "../visualquery/history";
+import { typable } from "../components/contextMenuGuard";
+import { isLetter } from "../grid/selection";
+import { copiedColumn, setCopiedColumn } from "./columnClipboard";
 import { warningText } from "./warnings";
 
 /**
@@ -142,6 +150,26 @@ const CREATE_NEEDS = "Add a name and at least one column.";
 export const PREVIEW_CHANGED = "The preview changed. Check it and Apply again.";
 
 const sameStatements = (a: string[], b: string[] | null) => !!b && a.length === b.length && a.every((s, i) => s === b[i]);
+
+/** D1: the most undo steps a designer keeps; the oldest goes first. */
+export const DESIGN_HISTORY_CAP = 200;
+
+/** D2: the grid draws its empty row unless the last row is an added column still blank (that row plays its part). */
+function showsEmptyRow(dr: Draft): boolean {
+  const last = dr.columns[dr.columns.length - 1];
+  return !(last && last.origin === null && last.name === "" && last.typeSql === "");
+}
+
+/** The inner tabs whose part of the draft differs between two drafts, so an undo can show what it changed (M8). */
+function changedTabs(a: Draft, b: Draft): InnerTab[] {
+  const out: InnerTab[] = [];
+  if (a.columns !== b.columns || a.removed !== b.removed || a.moved !== b.moved || a.path !== b.path) out.push("columns");
+  // The Columns tab shows the primary key in its Key cells.
+  if (!out.includes("columns") && a.indexes.find((i) => i.primary) !== b.indexes.find((i) => i.primary)) out.push("columns");
+  if (a.indexes !== b.indexes) out.push("indexes");
+  if (a.foreignKeys !== b.foreignKeys) out.push("foreignKeys");
+  return out;
+}
 
 /** A new table needs its name and one column with a name and a type before Apply. */
 function createReady(dr: Draft): boolean {
@@ -236,6 +264,21 @@ export default function TableDesigner({
     draftRef.current = next;
     setDraftState(next);
   }, []);
+  /**
+   * D1: the draft's undo history (the Visual Query's, capped at 200, a step per change); cleared when the draft is
+   * loaded, applied or discarded.
+   */
+  const history = useRef(createHistory<Draft>());
+  const [steps, setSteps] = useState({ undo: false, redo: false });
+  const syncSteps = () => setSteps({ undo: history.current.past.length > 0, redo: history.current.future.length > 0 });
+  const resetHistory = () => {
+    clearHistory(history.current);
+    syncSteps();
+  };
+  /** A passing note after the counts in the status line, such as what a paste left out; the next change clears it. */
+  const [statusNote, setStatusNote] = useState<string | null>(null);
+  /** The row menu (D4): the cell it was opened on, and where. */
+  const [menu, setMenu] = useState<{ at: CellAt; x: number; y: number } | null>(null);
   const [tab, setTab] = useState<InnerTab>("columns");
   const [selected, setSelected] = useState<CellAt | null>(null);
   /** The selected row of the Indexes and Foreign keys tabs, by id. */
@@ -298,6 +341,8 @@ export default function TableDesigner({
         if (!live) return;
         setDesign(d);
         setDraft(fromDesign(d));
+        resetHistory();
+        setStatusNote(null);
         setSpent(false);
         setLoad({ s: "ready" });
       },
@@ -341,12 +386,24 @@ export default function TableDesigner({
     if (!at || !dr) return dr;
     setEditing(null);
     if (isRowEdit(at)) {
+      const list: { id: string; name: string }[] = at.row === "indexes" ? dr.indexes : dr.foreignKeys;
+      // A commit that changes nothing is no undo step.
+      if (list.find((r) => r.id === at.id)?.name === value) return dr;
       const next = at.row === "indexes" ? editIndex(dr, at.id, { name: value }) : editForeignKey(dr, at.id, { name: value });
       change(next);
       return next;
     }
     const field = CELL_FIELD[at.cell];
     if (!field) return dr;
+    if (at.id === EMPTY_ROW) {
+      // D2: text typed into the empty row makes it a column; nothing typed leaves no column.
+      if (value.trim() === "") return dr;
+      const next = addNamedColumn(dr, { [field]: value }).draft;
+      change(next);
+      return next;
+    }
+    const was = dr.columns.find((c) => c.id === at.id)?.[field];
+    if (was === value || (was === null && value === "")) return dr;
     const next = editColumn(dr, at.id, { [field]: value });
     change(next);
     return next;
@@ -354,10 +411,58 @@ export default function TableDesigner({
 
   const tableName = target.kind === "alter" ? target.path.name : (draft?.path.name ?? "");
 
-  /** A user edit: the draft moves on, so the last Apply's error no longer describes it. */
-  function change(next: Draft) {
+  /**
+   * A user edit: the draft moves on, so the last Apply's error no longer describes it. Each is one undo step (D1);
+   * steps with the same `merge` key in a row are one (typing the table's name).
+   */
+  function change(next: Draft, merge?: string) {
+    const dr = draftRef.current;
+    if (dr && next !== dr) {
+      recordUndo(history.current, dr, { now: Date.now(), merge, cap: DESIGN_HISTORY_CAP, group: false });
+      syncSteps();
+    }
+    setStatusNote(null);
     setApplyError(null);
     setDraft(next);
+  }
+
+  /** D1: Ctrl+Z and Ctrl+Y, and the toolbar's Undo and Redo. Never while Apply runs or after it applied the draft. */
+  function stepHistory(back: boolean) {
+    // An open ask (Reload, Apply's confirm) is about the draft as it stands.
+    // A designer tab not on show takes no keys (M8).
+    if (!visible || locked() || spentRef.current || askReload || confirm) return;
+    const dr = keepEditor();
+    if (!dr) return;
+    const next = back ? undoDraft(history.current, dr) : redoDraft(history.current, dr);
+    syncSteps();
+    if (!next) return;
+    setStatusNote(null);
+    setApplyError(null);
+    setDraft(next);
+    setMenu(null);
+    // M8: the step shows: when it changed nothing on this tab, the tab whose part it changed opens.
+    const parts = changedTabs(dr, next);
+    if (parts.length > 0 && !parts.includes(tab)) {
+      // The grid on show unmounts with its tab; the new tab's grid takes focus once it is there (N2).
+      refocusRef.current = true;
+      setTab(parts[0]);
+    }
+    // A selection on a row the step took away goes. On the empty row, when the step hides it (I2), it moves to the
+    // last column, so a typed character opens an editor that is on screen.
+    if (selected?.id === EMPTY_ROW && !showsEmptyRow(next)) {
+      const last = next.columns[next.columns.length - 1];
+      setSelected(last ? { id: last.id, cell: selected.cell } : null);
+    } else if (selected && selected.id !== EMPTY_ROW && !next.columns.some((c) => c.id === selected.id)) setSelected(null);
+    setPicked((p) => ({
+      indexes: next.indexes.some((i) => i.id === p.indexes) ? p.indexes : null,
+      foreignKeys: next.foreignKeys.some((k) => k.id === p.foreignKeys) ? p.foreignKeys : null,
+    }));
+  }
+
+  /** The toolbar's Undo and Redo: focus goes back to the grid, so the keys keep reaching the designer (M2). */
+  function stepFromToolbar(back: boolean) {
+    stepHistory(back);
+    focusGrid();
   }
 
   /** The request for a draft: Alter carries the design as loaded (D1). */
@@ -375,7 +480,7 @@ export default function TableDesigner({
   function rename(name: string) {
     const dr = draftRef.current;
     if (!dr || locked()) return;
-    change(renameTable(dr, name));
+    change(renameTable(dr, name), "tableName");
   }
 
   function readOnlyToast() {
@@ -561,7 +666,10 @@ export default function TableDesigner({
     setApplyError(null);
     setEditing(null);
     setSelected(null);
+    setMenu(null);
     setDraft(startDraft(target, design));
+    resetHistory();
+    setStatusNote(null);
     return true;
   }
 
@@ -595,6 +703,10 @@ export default function TableDesigner({
   const rowAt = selected ? columns.findIndex((c) => c.id === selected.id) : -1;
   const pgAlter = dialect === "postgres" && target.kind === "alter";
   const canEdit = !readOnly && !busy && load.s === "ready" && !!draft;
+  // D2: one empty row under the columns, unless the last row is an added one still blank (it plays that part).
+  const emptyRow = !readOnly && !!draft && showsEmptyRow(draft);
+  /** The rows the arrows walk: the columns, then the empty row. */
+  const rowIds = emptyRow ? [...columns.map((c) => c.id), EMPTY_ROW] : columns.map((c) => c.id);
   const canMove = canEdit && !pgAlter && tab === "columns" && rowAt >= 0;
   const rowTab: RowTab | null = tab === "columns" ? null : tab;
   const rows: { id: string; primary?: boolean }[] = !draft || !rowTab ? [] : rowTab === "indexes" ? draft.indexes : draft.foreignKeys;
@@ -615,6 +727,13 @@ export default function TableDesigner({
   function focusGrid() {
     tableRef.current?.focus();
   }
+
+  const refocusRef = useRef(false);
+  useEffect(() => {
+    if (!refocusRef.current) return;
+    refocusRef.current = false;
+    focusGrid();
+  }, [tab]);
 
   function pick(t: RowTab, id: string | null) {
     setPicked((p) => ({ ...p, [t]: id }));
@@ -689,6 +808,13 @@ export default function TableDesigner({
 
   function open(at: CellAt, typed?: string) {
     const dr = draftRef.current;
+    if (at.id === EMPTY_ROW) {
+      if (!dr || !TEXT_CELLS.includes(at.cell) || locked() || readOnly || !showsEmptyRow(dr)) return;
+      editValue.current = typed ?? "";
+      setSelected(at);
+      setEditing({ ...at, initial: typed ?? "" });
+      return;
+    }
     const c = dr?.columns.find((x) => x.id === at.id);
     if (!dr || !c || !TEXT_CELLS.includes(at.cell) || !cellEditable(dr, c, at.cell, locked())) return;
     const field = CELL_FIELD[at.cell]!;
@@ -709,13 +835,17 @@ export default function TableDesigner({
   }
 
   function step(rows: number, cols: number) {
+    // The rows as the draft is now: a commit just before may have named the blank last row, which brings the empty
+    // row back for Enter to move onto (D2).
+    const dr = draftRef.current;
+    const rowIds = dr ? [...dr.columns.map((c) => c.id), ...(!readOnly && showsEmptyRow(dr) ? [EMPTY_ROW] : [])] : [];
     if (!selected) {
-      if (columns[0]) setSelected({ id: columns[0].id, cell: cells[0] });
+      if (rowIds[0]) setSelected({ id: rowIds[0], cell: cells[0] });
       return;
     }
-    const r = Math.max(0, Math.min(columns.length - 1, rowAt + rows));
+    const r = Math.max(0, Math.min(rowIds.length - 1, rowIds.indexOf(selected.id) + rows));
     const c = Math.max(0, Math.min(cells.length - 1, cells.indexOf(selected.cell) + cols));
-    if (columns[r]) setSelected({ id: columns[r].id, cell: cells[c] });
+    if (rowIds[r]) setSelected({ id: rowIds[r], cell: cells[c] });
   }
 
   /** Opens the Name editor of an index or key; `typed` starts it with that text instead. */
@@ -735,9 +865,19 @@ export default function TableDesigner({
 
   function commit(value: string, move: "down" | "right" | "none", blurred?: boolean) {
     const at = editingRef.current;
-    keepEditor(value);
+    const before = draftRef.current;
+    const after = keepEditor(value);
     if (isRowEdit(at)) {
       if (!blurred) focusGrid();
+      return;
+    }
+    if (at?.id === EMPTY_ROW && !blurred) {
+      // D2: Enter leaves a new empty row selected under the new column; Tab goes on along the new column.
+      const added = after && after !== before ? after.columns[after.columns.length - 1].id : null;
+      const right = cells[Math.min(cells.length - 1, cells.indexOf(at.cell) + 1)];
+      if (move === "down") setSelected({ id: EMPTY_ROW, cell: at.cell });
+      else setSelected({ id: added ?? EMPTY_ROW, cell: move === "right" ? right : at.cell });
+      focusGrid();
       return;
     }
     if (at && move === "down") step(1, 0);
@@ -750,10 +890,87 @@ export default function TableDesigner({
   function onKeyDown(e: KeyboardEvent<HTMLElement>) {
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
+    const undoKey = mod && isLetter(e, "z");
+    const redoKey = mod && isLetter(e, "y") && !e.shiftKey;
     if (mod && key === "s") {
       e.preventDefault();
       void apply();
+    } else if (!e.altKey && (undoKey || redoKey) && !typable(e.target)) {
+      // D1: Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z, anywhere in the designer but a text field, which undoes its own text.
+      // By key code too, as in the data grid, so they work on any keyboard layout.
+      e.preventDefault();
+      stepHistory(undoKey && !e.shiftKey);
     }
+  }
+
+  /** D4: Copy carries the column's definition; Paste puts it under `after`, or at the end where order is fixed. */
+  function copy(id: string) {
+    const dr = draftRef.current;
+    const copied = dr && id !== EMPTY_ROW ? copyColumn(dr, id) : null;
+    if (copied) setCopiedColumn({ ...copied, dialect });
+  }
+
+  /** A copy from another Dialect does not paste: its type and default are that Dialect's (M5). */
+  function paste(after: string | null, from = copiedColumn(dialect)) {
+    const dr = keepEditor() ?? draftRef.current;
+    if (!from || !dr || !canEdit || locked()) return;
+    const { draft: next, id } = pasteColumn(dr, from.column, pgAlter || after === EMPTY_ROW ? null : after);
+    change(next);
+    setSelected({ id, cell: "name" });
+    // I1: not silent. Auto-increment stays behind with the keys, and the status line says so.
+    if (from.dropped === "increment") setStatusNote("auto-increment not copied");
+  }
+
+  function duplicate(id: string) {
+    const dr = draftRef.current;
+    const copied = dr && id !== EMPTY_ROW ? copyColumn(dr, id) : null;
+    if (copied) paste(id, { ...copied, dialect });
+  }
+
+  function openMenu(at: CellAt, x: number, y: number) {
+    const was = editingRef.current;
+    if (was) keepEditor();
+    setSelected(at);
+    setMenu({ at, x, y });
+  }
+
+  /** Shift+F10 or the Menu key: the row menu under the selected cell. */
+  function openMenuAtSelected() {
+    // With nothing selected, the menu opens on the first row, which it selects (M7).
+    const at = selected ?? (rowIds[0] ? { id: rowIds[0], cell: cells[0] } : null);
+    if (!at) return;
+    const td = tableRef.current?.querySelector(`tr[data-id="${at.id}"] td[data-field="${at.cell}"]`);
+    const box = (td ?? tableRef.current)?.getBoundingClientRect();
+    openMenu(at, box?.left ?? 0, box?.bottom ?? 0);
+  }
+
+  /**
+   * D4, after MySQL Workbench's Columns tab menu (Move Up, Move Down, Copy, Paste, Delete) with Duplicate from the data
+   * grid. The keys are the designer's own (Alt+Up and Alt+Down as on its toolbar) and the data grid's (Ctrl+D).
+   */
+  function menuItems(at: CellAt): MenuItem[] {
+    const empty = at.id === EMPTY_ROW;
+    const index = columns.findIndex((c) => c.id === at.id);
+    const removedRow = !!draft?.removed.includes(at.id);
+    const moveOff = !canEdit || pgAlter || index < 0;
+    const moveTitle = pgAlter ? PG_MOVE : undefined;
+    return [
+      { key: "up", label: "Move up", icon: <Icon name="arrowUp" size={14} />, shortcut: "Alt+Up", disabled: moveOff || index === 0, title: moveTitle, onSelect: () => move(-1) },
+      { key: "down", label: "Move down", icon: <Icon name="arrowDown" size={14} />, shortcut: "Alt+Down", disabled: moveOff || index === columns.length - 1, title: moveTitle, onSelect: () => move(1) },
+      { key: "copy", label: "Copy", icon: <Icon name="copy" size={14} />, shortcut: "Ctrl+C", separatorBefore: true, disabled: empty, onSelect: () => copy(at.id) },
+      { key: "paste", label: "Paste", shortcut: "Ctrl+V", disabled: !canEdit || !copiedColumn(dialect), onSelect: () => paste(at.id) },
+      { key: "duplicate", label: "Duplicate", icon: <Icon name="duplicate" size={14} />, shortcut: "Ctrl+D", disabled: !canEdit || empty, onSelect: () => duplicate(at.id) },
+      {
+        key: "delete",
+        label: removedRow ? "Restore" : "Delete",
+        icon: <Icon name={removedRow ? "undo" : "trash"} size={14} />,
+        shortcut: "Delete",
+        separatorBefore: true,
+        danger: !removedRow,
+        disabled: !canEdit || empty,
+        onSelect: remove,
+      },
+    ];
   }
 
   // The cell keys belong to the grid alone, as in the data grid, so the toolbar and tabs keep theirs.
@@ -768,6 +985,14 @@ export default function TableDesigner({
       // D3: as in the data grid, Ctrl+N in a grid adds a row; the window's New Connection keeps it elsewhere.
       e.preventDefault();
       add();
+    } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+      e.preventDefault();
+      openMenuAtSelected();
+    } else if (mod && !e.altKey && !e.shiftKey && selected && (isLetter(e, "c") || isLetter(e, "v") || isLetter(e, "d"))) {
+      e.preventDefault();
+      if (isLetter(e, "c")) copy(selected.id);
+      else if (isLetter(e, "v")) paste(selected.id);
+      else duplicate(selected.id);
     } else if (e.key === "Delete" && selected) {
       e.preventDefault();
       remove();
@@ -953,6 +1178,27 @@ export default function TableDesigner({
         >
           <Icon name="arrowDown" size={14} />
         </button>
+        <span className="editor-header-divider" aria-hidden="true" />
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Undo"
+          title="Undo (Ctrl+Z)"
+          disabled={!canEdit || spent || !steps.undo}
+          onClick={() => stepFromToolbar(true)}
+        >
+          <Icon name="undo" size={14} />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Redo"
+          title="Redo (Ctrl+Y)"
+          disabled={!canEdit || spent || !steps.redo}
+          onClick={() => stepFromToolbar(false)}
+        >
+          <Icon name="redo" size={14} />
+        </button>
       </div>
 
       {load.s === "loading" && <p className="state-panel muted">Loading the design...</p>}
@@ -991,6 +1237,8 @@ export default function TableDesigner({
                   keepEditor(v);
                   void apply();
                 }}
+                emptyRow={emptyRow}
+                onRowMenu={openMenu}
               />
               {addRow}
             </div>
@@ -1080,6 +1328,20 @@ export default function TableDesigner({
         />
       )}
 
+      {menu && tab === "columns" && (
+        <PointMenu
+          x={menu.x}
+          y={menu.y}
+          label="Column"
+          items={menuItems(menu.at)}
+          onClose={() => {
+            setMenu(null);
+            focusGrid();
+          }}
+          onDismiss={() => setMenu(null)}
+        />
+      )}
+
       {confirm && (
         <ConfirmRun
           verb="Apply"
@@ -1120,6 +1382,7 @@ export default function TableDesigner({
             <span>
               {plural(shownColumns, "column", "columns")}
               {dirty && !readOnly ? `, ${plural(changes, "change", "changes")}` : ""}
+              {statusNote ? `, ${statusNote}` : ""}
             </span>
           </div>,
           statusSlot,

@@ -1,6 +1,9 @@
 // A diagram as plain data for export: every client (Schema Builder, query diagram, the drawn diagrams and
 // lineage) builds one, and svg.ts draws it, so exports look the same whichever screen made them.
-import type { EdgeKind, NodeKind } from "../types";
+import type { EdgeKind, NodeKind, PALETTE_TOKENS } from "../types";
+
+/** Step 11: one of the six palette colours a drawn shape, group or line takes (`color: danger`). */
+export type SceneColour = keyof typeof PALETTE_TOKENS;
 
 export interface Box {
   x: number;
@@ -13,8 +16,6 @@ export interface SceneRow {
   left: string;
   right?: string;
   mark?: "pk" | "fk";
-  /** An ER column that is never null (a key, or `not null`): the canvas's filled diamond. */
-  notNull?: boolean;
 }
 
 export interface SceneNode {
@@ -51,6 +52,39 @@ export interface SceneNode {
   iconName?: string;
   /** The light plate behind a general or brand icon; provider icons draw without one. */
   plate?: boolean;
+  /** A mind map topic's level: 1 a branch topic (a pill), 2 and deeper plain words on a line. */
+  depth?: number;
+  /** A sequence participant's activation bars, measured from the node's top. */
+  bars?: { top: number; height: number }[];
+  /** Step 11: its palette colour, in place of its kind's. */
+  color?: SceneColour;
+}
+
+/** A sequence frame (`loop`, `alt`, `opt`, `par`, `critical`): a box over its message rows, its label in a tab. */
+export interface SceneFrame {
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  depth: number;
+}
+
+/** A timeline section: a quiet dashed band behind its items, named at the top. */
+export interface SceneSection {
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A timeline's line at `y` from `x` for `w`, with a tick where each item meets it. */
+export interface SceneAxis {
+  x: number;
+  y: number;
+  w: number;
+  ticks: { x: number; milestone: boolean }[];
 }
 
 /** A group in a drawn diagram: a tinted area behind its nodes, named at the top left. */
@@ -64,10 +98,18 @@ export interface SceneArea {
   depth: number;
   /** The group's icon as a `data:image/` URL, drawn small before its name. */
   icon?: string;
+  /** Step 11: its palette colour: its border, tint and title. */
+  color?: SceneColour;
 }
 
-/** `flow` is a drawn diagram's or lineage's line: square with 8 px corners, 6 px arrowheads, a label chip. */
-export type SceneEdgeKind = EdgeKind | "flow";
+/**
+ * `flow` is a drawn diagram's or lineage's line: square with 8 px corners, 6 px arrowheads, a label chip. `message` is a
+ * sequence message, straight along its row (a message to itself loops out right); `branch` a mind map's curved tree line.
+ */
+export type SceneEdgeKind = EdgeKind | "flow" | "message" | "branch";
+
+/** A line end as the canvas marks it: a filled head, an open head, a hollow triangle (a parent) or a filled diamond (a whole). */
+export type SceneMark = "arrow" | "open" | "triangle" | "diamond";
 
 export interface SceneEdge {
   id: string;
@@ -79,6 +121,10 @@ export interface SceneEdge {
   line?: "dashed" | "dotted";
   /** Arrowheads on a `flow` line: at the end (the default), at both ends, at the start, or none. */
   heads?: "end" | "both" | "start" | "none";
+  /** The marks at each end of a class line or a message; when set they replace `heads`. */
+  marks?: { start?: SceneMark; end?: SceneMark };
+  /** Step 11: its palette colour, its arrowheads too. */
+  color?: SceneColour;
 }
 
 export interface Scene {
@@ -86,13 +132,18 @@ export interface Scene {
   edges: SceneEdge[];
   /** Group areas, outermost first; drawn behind the lines and nodes. */
   areas?: SceneArea[];
+  /** A sequence's frames, outermost first: the boxes behind the participants, their tabs over them. */
+  frames?: SceneFrame[];
+  /** A timeline's sections, behind everything, and its axis, behind the items. */
+  sections?: SceneSection[];
+  axis?: SceneAxis;
 }
 
 /** Every edge a crop can snap to: the left and right of each node and area, and their tops and bottoms. */
 export function sceneEdges(scene: Scene): { xs: number[]; ys: number[] } {
   const xs: number[] = [];
   const ys: number[] = [];
-  for (const b of [...scene.nodes, ...(scene.areas ?? [])]) {
+  for (const b of [...scene.nodes, ...(scene.areas ?? []), ...(scene.frames ?? []), ...(scene.sections ?? [])]) {
     xs.push(b.x, b.x + b.w);
     ys.push(b.y, b.y + b.h);
   }
@@ -119,9 +170,13 @@ export function sceneBounds(scene: Scene, ids?: string[]): Box {
   }
   if (!pick) {
     for (const e of scene.edges) for (const p of e.points) take(p.x, p.y);
-    for (const a of scene.areas ?? []) {
+    for (const a of [...(scene.areas ?? []), ...(scene.frames ?? []), ...(scene.sections ?? [])]) {
       take(a.x, a.y);
       take(a.x + a.w, a.y + a.h);
+    }
+    if (scene.axis) {
+      take(scene.axis.x, scene.axis.y - 7);
+      take(scene.axis.x + scene.axis.w, scene.axis.y + 7);
     }
   }
   if (minX === Infinity) return { x: 0, y: 0, w: 0, h: 0 };

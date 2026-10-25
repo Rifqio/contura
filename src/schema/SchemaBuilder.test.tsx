@@ -59,6 +59,18 @@ test("save_without_path_asks_where", async () => {
   expect(await screen.findByText("Saved new.dbml")).toBeTruthy();
 });
 
+test("an unsaved model with a name suggests name.dbml on its first save (ADR 0030)", async () => {
+  const dialog = await import("@tauri-apps/plugin-dialog");
+  vi.mocked(dialog.save).mockResolvedValue("C:\\m\\billing.dbml");
+  routeInvoke({ write_model_files: () => null });
+  setup(doc({ path: null, name: "billing", savedDbml: "", source: "file" }));
+  expect(screen.getByRole("region", { name: "Schema Model billing" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "DBML options" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Save" }));
+  await waitFor(() => expect(callsTo("write_model_files")).toHaveLength(1));
+  expect(vi.mocked(dialog.save).mock.calls[vi.mocked(dialog.save).mock.calls.length - 1][0]).toMatchObject({ defaultPath: "billing.dbml" });
+});
+
 test("ctrl_s_saves_and_clears_changed_lines", async () => {
   routeInvoke({ write_model_files: () => null });
   const { container, view } = setup(doc({ savedDbml: "" }));
@@ -241,6 +253,7 @@ test("svg_export_has_no_literal_colours", () => {
     group: "#0a0a0a",
     groupTint: "#0a0a0a",
     strongBorder: "#0a0a0a",
+    panel: "#0a0a0a",
   };
   const svg = exportSvg(
     KFC_MODEL,

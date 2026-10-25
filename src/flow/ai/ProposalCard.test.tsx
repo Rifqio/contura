@@ -148,7 +148,7 @@ test("stale_and_broken_cards", () => {
   const onDiscard = vi.fn();
   const onAskAgain = vi.fn();
   render(<StaleCard file="fulfilment" line={9} nowReads="Pack order" onDiscard={onDiscard} onAskAgain={onAskAgain} />);
-  screen.getByText("fulfilment.flow changed on disk while I worked");
+  screen.getByText("fulfilment changed on disk while I worked");
   expect(document.querySelector(".ebody")!.textContent).toBe(
     "Another program changed the file after you asked (line 9 now reads Pack order, a git pull perhaps). These changes were made against the old text, so none of them were applied.",
   );
@@ -163,7 +163,7 @@ test("stale_and_broken_cards", () => {
   render(<BrokenCard file="fulfilment" broke={{ line: 14, lineText: "Customs check > Warehouse :", message: "an arrow needs a label after the colon" }} onReview={onReview} onAskFix={onFix} />);
   screen.getByText("Not applied: the text would have a problem");
   expect(document.querySelector(".ebody")!.textContent).toBe(
-    "With these changes, line 14 would read Customs check > Warehouse :: an arrow needs a label after the colon. Auto-apply never lands a change that leaves a problem, so fulfilment.flow is as it was.",
+    "With these changes, line 14 would read Customs check > Warehouse :: an arrow needs a label after the colon. Auto-apply never lands a change that leaves a problem, so fulfilment is as it was.",
   );
   fireEvent.click(screen.getByRole("button", { name: "Review the changes" }));
   fireEvent.click(screen.getByRole("button", { name: "Ask to fix it" }));

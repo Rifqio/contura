@@ -8,6 +8,8 @@ import { resetIcons } from "../../flow/icons";
 import { parseFlow } from "../../lang/flow/parse";
 import type { FlowDoc } from "../../lang/flow/model";
 import { lineageScene } from "../../lineage/scene";
+import { exampleSvg } from "../../flow/previewScene";
+import { SEQ_HEAD } from "../../flow/kindLayout";
 import { callsTo, routeInvoke } from "../../test/invoke";
 import { NODE_TOKENS } from "../types";
 import type { ExportPalette } from "./palette";
@@ -30,6 +32,7 @@ const PALETTE: ExportPalette = {
   group: "#111111",
   groupTint: "#121212",
   strongBorder: "#131313",
+  panel: "#141414",
 };
 const opts = { padding: 32, background: "theme" as const, mark: false };
 
@@ -274,7 +277,7 @@ const LINEAGE: Lineage = {
 };
 
 test("lineage_export_draws_the_cards_keys_and_diagram_cards", () => {
-  const refs = [{ kind: "flow" as const, title: "Checkout writes orders", file: "checkout.flow", access: "writes" as const }];
+  const refs = [{ kind: "flow" as const, title: "Checkout writes orders", file: "checkout", access: "writes" as const }];
   const ids = ['t:["kestrel","shop","orders"]', 't:["kestrel","shop","customers"]', 't:["kestrel","shop","order_items"]', "ref:0"];
   const at = { [ids[0]]: { x: 0, y: 0 }, [ids[1]]: { x: -304, y: 0 }, [ids[2]]: { x: 304, y: 0 }, [ids[3]]: { x: 0, y: 200 } };
   const scene = lineageScene(LINEAGE, refs, at);
@@ -301,7 +304,7 @@ test("lineage_export_draws_the_cards_keys_and_diagram_cards", () => {
   const svg = sceneToSvg(scene, PALETTE, opts);
   plainSvg(svg);
   onlyTokenColours(svg);
-  for (const t of ["orders", "customers", "order_items", "customer_id", "int ?", "4 more columns", "Checkout writes orders", "checkout.flow"]) {
+  for (const t of ["orders", "customers", "order_items", "customer_id", "int ?", "4 more columns", "Checkout writes orders", "checkout"]) {
     expect(svg).toContain(`>${t}<`);
   }
   expect(svg).toMatch(/data-node="ref:0"><rect [^>]*stroke-dasharray/);
@@ -325,4 +328,349 @@ test("crop_snaps_to_node_and_group_edges", () => {
   expect(snapCrop(far, "e", scene, 8)).toEqual(far);
   const moved = snapCrop({ ...crop, x: crop.x + 2 }, "move", scene, 8);
   expect(moved).toEqual(crop);
+});
+
+// ----- diag-910 fix round 3, P1: a state diagram in Publish (and so in the New diagram cards and the Mermaid preview,
+// which share sceneToSvg) is drawn as the canvas draws it.
+
+const STATES = doc(
+  [
+    'diagram state "Invoice"',
+    "Draft",
+    "Check [choice]",
+    "Split [fork]",
+    "Review {",
+    "  Checking",
+    "  [*] > Checking",
+    "  Checking > [*]",
+    "}",
+    "[*] > Draft",
+    "Draft > Check",
+    "Check > Split",
+    "Split > Review",
+    "Review > [*]",
+  ].join("\n"),
+);
+
+test("state_export_draws_the_start_dot_the_end_ring_pills_the_choice_diamond_and_the_fork_bar", () => {
+  const at = Object.fromEntries(STATES.nodes.map((n, i) => [n.name, { x: (i % 3) * 200, y: Math.floor(i / 3) * 160 }]));
+  const scene = flowScene(STATES, at, "modern", new Map());
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  onlyTokenColours(svg);
+  // The markers are drawn, never named: no "[*] start" text anywhere.
+  expect(svg).not.toMatch(/>\[\*\][^<]*</);
+  for (const name of ["[*] start", "[*] start in Review"]) expect(svg).toMatch(new RegExp(`data-node="${name.replace(/[[\]*]/g, "\\$&")}"><rect data-part="dot"`));
+  for (const name of ["[*] end", "[*] end in Review"]) {
+    const g = new RegExp(`data-node="${name.replace(/[[\]*]/g, "\\$&")}">((?:(?!</g>).)*)</g>`).exec(svg)![1];
+    expect(g).toContain('data-part="ring"');
+    expect(g).toContain('data-part="dot"');
+  }
+  // A state is a pill: its corners are half its height.
+  const draft = scene.nodes.find((n) => n.id === "Draft")!;
+  expect(svg).toMatch(new RegExp(`data-node="Draft"><rect data-part="pill" [^>]*rx="${draft.h / 2}"`));
+  expect(svg).toMatch(/data-node="Check"><path data-part="diamond"/);
+  expect(svg).toMatch(/data-node="Split"><rect data-part="bar"/);
+  expect(svg).toContain(">Check<");
+  expect(svg).not.toContain(">Split<");
+});
+
+// ----- publish-parity: sequence, class, mind map, timeline and notes in Publish (and so in the New diagram cards, which
+// share flowScene and sceneToSvg) are drawn as the canvas draws them, not as plain boxes with labels.
+
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** The inside of the `<g>` with `attr="name"` (these groups never nest). */
+function part(svg: string, attr: string, name: string): string {
+  const m = new RegExp(`<g ${attr}="${escRe(name)}">((?:(?!</g>).)*)</g>`).exec(svg);
+  expect(m, `${attr}="${name}"`).not.toBeNull();
+  return m![1];
+}
+const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
+
+const SEQUENCE_TEXT = [
+  'diagram sequence "Pay"',
+  "actor Customer",
+  "participant Shop",
+  "participant Payments",
+  "Customer -> Shop: place order",
+  "activate Shop",
+  "loop retry 3 times {",
+  "  Shop -> Payments: charge card",
+  "  Payments --> Shop: approved",
+  "}",
+  "deactivate Shop",
+  "Shop -> Shop: log",
+  "Shop --> Customer: receipt",
+  "note: Cards are charged once",
+].join("\n");
+
+test("sequence_export_draws_heads_dashed_lifelines_ordered_messages_replies_activations_and_frames", () => {
+  const scene = flowScene(doc(SEQUENCE_TEXT), {}, "modern", new Map());
+  expect(scene.nodes.map((n) => [n.id, n.kind])).toEqual([
+    ["Customer", "actor"],
+    ["Shop", "participant"],
+    ["Payments", "participant"],
+    ["Note 1", "note"],
+  ]);
+  // Messages run along their rows in the order written, from lifeline to lifeline; a message to itself loops out right.
+  const msgs = scene.edges;
+  expect(msgs.map((e) => e.kind)).toEqual(["message", "message", "message", "message", "message"]);
+  const ys = msgs.map((e) => e.points[0].y);
+  expect([...ys].sort((a, b) => a - b)).toEqual(ys);
+  expect(new Set(ys).size).toBe(5);
+  const centre = (id: string) => {
+    const n = scene.nodes.find((x) => x.id === id)!;
+    return n.x + n.w / 2;
+  };
+  expect(msgs[0].points.map((p) => p.x)).toEqual([centre("Customer"), centre("Shop")]);
+  expect(msgs[0].points.every((p) => p.y === ys[0])).toBe(true);
+  expect(msgs[3].points).toHaveLength(4);
+  expect(Math.max(...msgs[3].points.map((p) => p.x))).toBe(centre("Shop") + 40);
+  expect(msgs.map((e) => e.line ?? "solid")).toEqual(["solid", "solid", "dashed", "solid", "dashed"]);
+  expect(scene.frames).toEqual([expect.objectContaining({ label: "loop retry 3 times", depth: 0 })]);
+
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  onlyTokenColours(svg);
+  for (const name of ["Customer", "Shop", "Payments"]) {
+    const g = part(svg, "data-node", name);
+    // The participant's head is its box at the top, not a box the lifeline's height.
+    expect(g).toMatch(new RegExp(`<rect data-part="lifehead" [^>]*height="${SEQ_HEAD}"`));
+    expect(g).toMatch(/data-part="lifeline"[^>]*stroke-dasharray/);
+    expect(g).toContain(`>${name}<`);
+  }
+  // The actor is a person.
+  expect(part(svg, "data-node", "Customer")).toContain('data-part="person"');
+  expect(part(svg, "data-node", "Shop")).not.toContain('data-part="person"');
+  // One activation bar on Shop, over the messages it covers.
+  expect(count(part(svg, "data-node", "Shop"), /data-part="activation"/g)).toBe(1);
+  expect(count(part(svg, "data-node", "Payments"), /data-part="activation"/g)).toBe(0);
+  // A call ends in a filled head, a reply is dashed with an open head.
+  const call = part(svg, "data-edge", "edge:0");
+  expect(call).toMatch(/data-part="message"(?![^>]*stroke-dasharray)/);
+  expect(call).toContain('data-marker="arrow"');
+  const reply = part(svg, "data-edge", "edge:2");
+  expect(reply).toMatch(/data-part="message"[^>]*stroke-dasharray/);
+  expect(reply).toMatch(/data-marker="open"[^>]*fill="none"/);
+  for (const t of ["place order", "charge card", "approved", "log", "receipt"]) expect(svg).toContain(`>${t}<`);
+  // The frame is a box over its rows, with its label in a tab drawn over the participants.
+  const frame = part(svg, "data-frame", "0");
+  expect(frame).toContain("<rect");
+  const tab = part(svg, "data-frame-tab", "0");
+  expect(tab).toContain('data-part="tab"');
+  expect(tab).toContain(">loop retry 3 times<");
+  expect(svg.indexOf('data-frame="0"')).toBeLessThan(svg.indexOf('data-node="Customer"'));
+  expect(svg.indexOf('data-frame-tab="0"')).toBeGreaterThan(svg.indexOf('data-node="Payments"'));
+  // The note is a note.
+  expect(part(svg, "data-node", "Note 1")).toMatch(new RegExp(`<rect data-part="note" [^>]*fill="${PALETTE.nodes.note.fill}"`));
+});
+
+test("the_sequence_card_is_drawn_by_the_publish_path", () => {
+  const svg = exampleSvg(SEQUENCE_TEXT, PALETTE);
+  expect(svg).toContain('data-node="Customer"');
+  expect(svg).toContain('data-part="lifeline"');
+  expect(svg).toContain('data-frame-tab="0"');
+  expect(svg).toContain('width="100%"');
+});
+
+const CLASSES = doc(
+  [
+    'diagram class "Billing"',
+    "interface Payable",
+    "Payable : pay(amount)",
+    "class Invoice",
+    "Invoice : + id: int",
+    "Invoice : + total: numeric",
+    "Invoice : + send()",
+    "enum InvoiceStatus",
+    "InvoiceStatus : DRAFT",
+    "InvoiceStatus : PAID",
+    "class LineItem",
+    "LineItem : + qty: int",
+    "class Mailer",
+    "note: Totals include tax",
+    "Payable <|-- Invoice",
+    "Invoice *-- LineItem: lines",
+    "Invoice --> InvoiceStatus",
+    "Invoice ..> Mailer",
+    "LineItem -- Mailer",
+  ].join("\n"),
+);
+
+test("class_export_draws_name_bands_stereotypes_member_rows_and_the_line_ends", () => {
+  const at = Object.fromEntries(CLASSES.nodes.map((n, i) => [n.name, { x: (i % 3) * 400, y: Math.floor(i / 3) * 300 }]));
+  const scene = flowScene(CLASSES, at, "modern", new Map());
+  expect(scene.nodes.map((n) => [n.id, n.kind])).toEqual([
+    ["Payable", "interface"],
+    ["Invoice", "class"],
+    ["InvoiceStatus", "enum"],
+    ["LineItem", "class"],
+    ["Mailer", "class"],
+    ["Note 1", "note"],
+  ]);
+  expect(scene.edges.map((e) => [e.marks ?? null, e.line ?? "solid"])).toEqual([
+    [{ start: "triangle" }, "solid"],
+    [{ start: "diamond" }, "solid"],
+    [{ end: "arrow" }, "dashed"],
+    [{ end: "open" }, "dotted"],
+    [null, "solid"],
+  ]);
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  onlyTokenColours(svg);
+  // A class: its name in the band, then fields, a rule, then methods, in the code font.
+  const invoice = part(svg, "data-node", "Invoice");
+  expect(invoice).toMatch(new RegExp(`data-part="band"[^>]*fill="${PALETTE.nodes.class.fill}"`));
+  expect(invoice).toContain(">Invoice<");
+  expect(invoice).toContain('data-part="divider"');
+  expect(invoice).not.toContain("«");
+  for (const r of ["+ id: int", "+ total: numeric", "+ send()"]) expect(invoice).toMatch(new RegExp(`<text [^>]*font-family="[^"]*monospace[^"]*"[^>]*>${escRe(r)}<`));
+  expect(invoice.indexOf(">+ total: numeric<")).toBeLessThan(invoice.indexOf('data-part="divider"'));
+  expect(invoice.indexOf('data-part="divider"')).toBeLessThan(invoice.indexOf(">+ send()<"));
+  // An interface is dashed and says so; an enum lists its values with no methods part.
+  const payable = part(svg, "data-node", "Payable");
+  expect(payable).toContain(">«interface»<");
+  expect(payable).toMatch(/data-part="outline"[^>]*stroke-dasharray/);
+  const status = part(svg, "data-node", "InvoiceStatus");
+  expect(status).toContain(">«enum»<");
+  expect(status).not.toContain('data-part="divider"');
+  expect(status).toContain(">PAID<");
+  // The line ends: a hollow triangle at the parent, a filled diamond at the whole, a filled head, an open head.
+  const inherit = scene.edges[0].points[0];
+  expect(part(svg, "data-edge", "edge:0")).toMatch(new RegExp(`data-marker="triangle" d="M${inherit.x} ${inherit.y} [^"]*"[^>]*fill="${PALETTE.canvas}"[^>]*stroke="${PALETTE.subtle}"`));
+  expect(part(svg, "data-edge", "edge:1")).toMatch(new RegExp(`data-marker="diamond"[^>]*fill="${PALETTE.subtle}"`));
+  expect(part(svg, "data-edge", "edge:1")).toContain(">lines<");
+  expect(part(svg, "data-edge", "edge:2")).toMatch(/stroke-dasharray="5 4"/);
+  expect(part(svg, "data-edge", "edge:2")).toContain('data-marker="arrow"');
+  expect(part(svg, "data-edge", "edge:3")).toMatch(/stroke-dasharray="1 4"/);
+  expect(part(svg, "data-edge", "edge:3")).toMatch(/data-marker="open"[^>]*fill="none"/);
+  expect(part(svg, "data-edge", "edge:4")).not.toContain("data-marker");
+  expect(part(svg, "data-node", "Note 1")).toContain('data-part="note"');
+});
+
+const MIND = doc(['diagram mindmap "Plan"', "root Q4 plan", "  Diagrams", "    New kinds", "  Redis", "  Release", "note: Dates are rough"].join("\n"));
+
+test("mind_map_export_draws_the_root_pill_branch_topics_plain_subtopics_and_curved_tree_lines", () => {
+  const scene = flowScene(MIND, {}, "modern", new Map());
+  const box = (id: string) => scene.nodes.find((n) => n.id === id)!;
+  expect(scene.nodes.map((n) => [n.id, n.kind, n.depth ?? 0])).toEqual([
+    ["Q4 plan", "root", 0],
+    ["Diagrams", "topic", 1],
+    ["New kinds", "topic", 2],
+    ["Redis", "topic", 1],
+    ["Release", "topic", 1],
+    ["Note 1", "note", 0],
+  ]);
+  expect(scene.edges.map((e) => e.kind)).toEqual(["branch", "branch", "branch", "branch"]);
+  // A branch leaves the side of its parent that faces the child: Release sits on the left.
+  const root = box("Q4 plan");
+  const release = scene.edges.find((e) => e.id === "edge:3")!;
+  expect(release.points[0]).toEqual({ x: root.x, y: root.y + root.h / 2 });
+  expect(release.points[release.points.length - 1].x).toBe(box("Release").x + box("Release").w);
+
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  onlyTokenColours(svg);
+  expect(part(svg, "data-node", "Q4 plan")).toMatch(new RegExp(`<rect data-part="pill" [^>]*rx="${root.h / 2}"[^>]*fill="${PALETTE.nodes.root.fill}"[^>]*stroke-width="2"`));
+  expect(part(svg, "data-node", "Q4 plan")).toMatch(/font-size="15"[^>]*>Q4 plan</);
+  expect(part(svg, "data-node", "Diagrams")).toMatch(new RegExp(`<rect data-part="pill" [^>]*fill="${PALETTE.nodes.topic.fill}"`));
+  // A subtopic is plain words on a line.
+  const sub = part(svg, "data-node", "New kinds");
+  expect(sub).not.toContain("<rect");
+  expect(sub).toContain('data-part="underline"');
+  for (const id of ["edge:0", "edge:1", "edge:2", "edge:3"]) {
+    const g = part(svg, "data-edge", id);
+    expect(g).toMatch(/d="M[^"]* C /);
+    expect(g).not.toContain("data-marker");
+  }
+  expect(part(svg, "data-node", "Note 1")).toContain('data-part="note"');
+});
+
+test("a_folded_topic_publishes_folded_as_the_canvas_shows_it", () => {
+  const scene = flowScene(MIND, {}, "modern", new Map(), undefined, new Set(["Diagrams"]));
+  expect(scene.nodes.map((n) => n.id)).not.toContain("New kinds");
+  expect(scene.edges).toHaveLength(3);
+});
+
+const TIMELINE = doc(
+  [
+    'diagram timeline "Release"',
+    "section Making",
+    "2026-09-01 to 2026-10-15: Build",
+    "2026-10-19: Beta",
+    "section Shipping",
+    "2026-11-09: Release candidate",
+    "milestone Launch",
+  ].join("\n"),
+);
+
+test("timeline_export_draws_the_axis_ticks_dated_events_period_bars_milestones_and_sections", () => {
+  const scene = flowScene(TIMELINE, {}, "modern", new Map());
+  expect(scene.nodes.map((n) => [n.id, n.kind])).toEqual([
+    ["Build", "period"],
+    ["Beta", "event"],
+    ["Release candidate", "event"],
+    ["Launch", "milestone"],
+  ]);
+  expect(scene.axis?.ticks.map((t) => t.milestone)).toEqual([false, false, false, true]);
+  expect(scene.sections?.map((s) => s.name)).toEqual(["Making", "Shipping"]);
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  onlyTokenColours(svg);
+  const axis = part(svg, "data-axis", "time");
+  expect(axis).toMatch(new RegExp(`data-part="axis"[^>]*fill="${PALETTE.strongBorder}"`));
+  expect(count(axis, /data-part="tick"/g)).toBe(3);
+  expect(count(axis, /data-part="tick-milestone"/g)).toBe(1);
+  // The ticks sit where each item meets the axis.
+  const beta = scene.nodes.find((n) => n.id === "Beta")!;
+  expect(scene.axis!.ticks[1].x).toBe(beta.x + beta.w / 2);
+  for (const name of ["Making", "Shipping"]) {
+    const sec = part(svg, "data-section", name);
+    expect(sec).toMatch(/<rect [^>]*stroke-dasharray/);
+    expect(sec).toContain(`>${name}<`);
+  }
+  expect(svg.indexOf('data-section="Making"')).toBeLessThan(svg.indexOf('data-node="Build"'));
+  // A period is a pill with its two dates; an event its date; a milestone a heavier edge.
+  const build = scene.nodes.find((n) => n.id === "Build")!;
+  expect(part(svg, "data-node", "Build")).toMatch(new RegExp(`<rect [^>]*rx="${build.h / 2}"[^>]*fill="${PALETTE.nodes.period.fill}"`));
+  expect(part(svg, "data-node", "Build")).toContain(">2026-09-01 to 2026-10-15<");
+  expect(part(svg, "data-node", "Beta")).toContain(">2026-10-19<");
+  expect(part(svg, "data-node", "Launch")).toMatch(/<rect [^>]*stroke-width="2"/);
+  expect(part(svg, "data-node", "Launch")).toContain(">Milestone<");
+});
+
+test("a_note_is_the_sticky_note_shape_in_every_kind_that_has_notes", () => {
+  const long = "Stock is checked against the warehouse feed every hour";
+  const texts: Record<string, string> = {
+    flow: 'diagram flow "n"\nA\n',
+    state: 'diagram state "n"\nA\n',
+    class: 'diagram class "n"\nclass A\n',
+    sequence: 'diagram sequence "n"\nparticipant A\n',
+    mindmap: 'diagram mindmap "n"\nroot A\n',
+  };
+  for (const [kind, head] of Object.entries(texts)) {
+    const d = doc(`${head}note: ${long}\n`);
+    const at = Object.fromEntries(d.nodes.map((n, i) => [n.name, { x: 0, y: i * 200 }]));
+    const scene = flowScene(d, at, "modern", new Map());
+    const note = scene.nodes.find((n) => n.id === "Note 1")!;
+    expect(note.kind, kind).toBe("note");
+    const svg = sceneToSvg(scene, PALETTE, opts);
+    plainSvg(svg);
+    const g = part(svg, "data-node", "Note 1");
+    expect(g, kind).toMatch(new RegExp(`<rect data-part="note" [^>]*rx="2"[^>]*fill="${PALETTE.nodes.note.fill}"[^>]*stroke="${PALETTE.nodes.note.stroke}"`));
+    // Wrapped to the note's width, as many lines as its height holds, starting at the left.
+    expect(count(g, /<text /g), kind).toBe((note.h - 20) / 18);
+    expect(g.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).toBe(long);
+    expect(g).not.toContain('text-anchor="middle"');
+  }
+});
+
+test("flowchart_document_and_database_have_their_curved_foot_and_cylinder", () => {
+  const d = doc('diagram flow "n"\nReport [document]\nLedger [database]\n');
+  const scene = flowScene(d, { Report: { x: 0, y: 0 }, Ledger: { x: 300, y: 0 } }, "modern", new Map());
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  onlyTokenColours(svg);
+  expect(part(svg, "data-node", "Report")).toMatch(/data-part="document"[^>]* d="[^"]*[QC]/);
+  expect(part(svg, "data-node", "Ledger")).toMatch(/<rect data-part="cylinder" [^>]*ry="10"/);
 });

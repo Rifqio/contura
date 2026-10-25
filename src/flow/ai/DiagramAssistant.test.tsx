@@ -289,7 +289,7 @@ test("text_is_read_only_while_working", async () => {
   await waitFor(() => expect(s.view().state.readOnly).toBe(true));
   // The editor says so, with Stop; the composer gives way to the working line; the canvas takes no edits.
   expect(screen.getByText("The assistant is editing. The text is read-only until it finishes.")).toBeTruthy();
-  expect(screen.getByText("Working on checkout.flow. Stop it to type.")).toBeTruthy();
+  expect(screen.getByText("Working on checkout. Stop it to type.")).toBeTruthy();
   expect(screen.queryByRole("textbox", { name: "Describe a change" })).toBeNull();
   expect(screen.getByText("AI is editing Checkout")).toBeTruthy();
   expect(canvas.props!.readOnly).toBe(true);
@@ -299,7 +299,7 @@ test("text_is_read_only_while_working", async () => {
   expect(s.text()).toBe(DFD);
 
   // Esc stops it: the Core is told by the diagram's place, and the text is editable again.
-  fireEvent.keyDown(screen.getByText("Working on checkout.flow. Stop it to type."), { key: "Escape" });
+  fireEvent.keyDown(screen.getByText("Working on checkout. Stop it to type."), { key: "Escape" });
   await waitFor(() => expect(callsTo("ai_cancel_place")).toEqual([{ place: "diagram:checkout" }]));
   await waitFor(() => expect(s.view().state.readOnly).toBe(false));
   expect(screen.queryByText("The assistant is editing. The text is read-only until it finishes.")).toBeNull();
@@ -329,7 +329,7 @@ test("F20 Esc stops the Ask only from the Assistant pane, not from the canvas or
   expect(callsTo("ai_cancel_place")).toEqual([]);
   expect(s.view().state.readOnly).toBe(true);
   // From the Assistant pane it stops.
-  fireEvent.keyDown(screen.getByText("Working on checkout.flow. Stop it to type."), { key: "Escape" });
+  fireEvent.keyDown(screen.getByText("Working on checkout. Stop it to type."), { key: "Escape" });
   await waitFor(() => expect(callsTo("ai_cancel_place")).toEqual([{ place: "diagram:checkout" }]));
 });
 
@@ -745,7 +745,7 @@ test("auto_apply_that_cannot_land_keeps_its_note", async () => {
   act(() => answer(FRAUD).forEach((e) => sinks[0].onmessage(e)));
   // The text is no longer the one the changes were made against: the changed card, not a note. It changed in the
   // app, not on disk, so the card does not blame another program.
-  expect(await screen.findByText("checkout.flow changed while I worked")).toBeTruthy();
+  expect(await screen.findByText("checkout changed while I worked")).toBeTruthy();
   expect(screen.getByText("The text changed in the editor after the assistant answered, so none of these changes were applied.")).toBeTruthy();
   expect(screen.queryByText(/Another program changed the file/)).toBeNull();
   expect(screen.queryByText(/changed on disk/)).toBeNull();
@@ -812,7 +812,7 @@ test("file_changed_card_and_actions", async () => {
   await drawn(s);
   replies = [[failed({ kind: "fileChanged", file: "checkout", line: 5, nowReads: "Checkout [process, id: 9.9]" })]];
   await send(Q);
-  expect(await screen.findByText("checkout.flow changed on disk while I worked")).toBeTruthy();
+  expect(await screen.findByText("checkout changed on disk while I worked")).toBeTruthy();
   expect(document.querySelector(".ccard.warnc2 .ebody")!.textContent).toBe(
     "Another program changed the file after you asked (line 5 now reads Checkout [process, id: 9.9], a git pull perhaps). These changes were made against the old text, so none of them were applied.",
   );
@@ -830,7 +830,7 @@ test("file_changed_card_and_actions", async () => {
   expect(asks()[1].question).toBe(Q);
   expect(asks()[1].text).toBe(disk);
   expect(s.text()).toBe(disk);
-  expect(screen.queryByText("checkout.flow changed on disk while I worked")).toBeNull();
+  expect(screen.queryByText("checkout changed on disk while I worked")).toBeNull();
   cleanup();
 
   // Discard drops the card and the kept question; nothing is sent.
@@ -840,9 +840,9 @@ test("file_changed_card_and_actions", async () => {
   replies = [[failed({ kind: "fileChanged", file: "checkout", line: null, nowReads: null })]];
   await send(Q);
   await screen.findByRole("button", { name: "Discard" });
-  expect((box() as HTMLTextAreaElement).value).toBe(Q);
+  await waitFor(() => expect((box() as HTMLTextAreaElement).value).toBe(Q));
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
-  expect(screen.queryByText("checkout.flow changed on disk while I worked")).toBeNull();
+  expect(screen.queryByText("checkout changed on disk while I worked")).toBeNull();
   expect((box() as HTMLTextAreaElement).value).toBe("");
   expect(asks()).toHaveLength(3);
 });
@@ -865,7 +865,7 @@ test("stale_version_at_landing_shows_changed_card", async () => {
   act(() => answer(FRAUD).forEach((e) => sinks[0].onmessage(e)));
   await reviewing();
   fireEvent.click(within(card()).getByRole("button", { name: /^Accept all/ }));
-  expect(await screen.findByText("checkout.flow changed while I worked")).toBeTruthy();
+  expect(await screen.findByText("checkout changed while I worked")).toBeTruthy();
   expect(screen.getByText("The text changed in the editor after the assistant answered, so none of these changes were applied.")).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Changes to review" })).toBeNull();
   expect(s.text()).toBe(before);
@@ -998,7 +998,7 @@ test("would_break_card_and_review", async () => {
   expect(await screen.findByText("Not applied: the text would have a problem")).toBeTruthy();
   const body = document.querySelector(".ccard.warnc2 .ebody")!.textContent!;
   expect(body).not.toContain("..");
-  expect(body).toMatch(/^With these changes, line \d+ would read Fraud check \[bogus, id: 1\.1\]: .+\. Auto-apply never lands a change that leaves a problem, so checkout\.flow is as it was\.$/);
+  expect(body).toMatch(/^With these changes, line \d+ would read Fraud check \[bogus, id: 1\.1\]: .+\. Auto-apply never lands a change that leaves a problem, so checkout is as it was\.$/);
   expect(s.text()).toBe(DFD);
   expect([...document.querySelectorAll(".ccard.warnc2 .efoot button")].map((b) => b.textContent)).toEqual(["Review the changes", "Ask to fix it"]);
   expect(panelTitles(s)).toEqual([]);
@@ -1104,7 +1104,7 @@ test("older_failed_turns_have_no_stale_actions", async () => {
   await screen.findByRole("button", { name: "Discard" });
   fireEvent.click(screen.getByRole("button", { name: "Ask again on the current text" }));
   await waitFor(() => expect(asks()).toHaveLength(2));
-  await waitFor(() => expect(screen.getAllByText("checkout.flow changed on disk while I worked").length).toBe(2));
+  await waitFor(() => expect(screen.getAllByText("checkout changed on disk while I worked").length).toBe(2));
   expect(screen.getAllByRole("button", { name: "Discard" })).toHaveLength(1);
   expect(screen.getAllByRole("button", { name: "Ask again on the current text" })).toHaveLength(1);
   cleanup();
@@ -1128,7 +1128,7 @@ test("older_failed_turns_have_no_stale_actions", async () => {
   const t = setup();
   await drawn(t);
   fireEvent.click(assistantTab());
-  expect(await screen.findByText("checkout.flow changed on disk while I worked")).toBeTruthy();
+  expect(await screen.findByText("checkout changed on disk while I worked")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Ask again on the current text" })).toBeNull();
   expect(asks()).toHaveLength(2);
@@ -1496,4 +1496,17 @@ test("parity_P11_24_a_successful_retry_resets_the_rate_limit_count", { timeout: 
   await waitFor(() => expect(asks()).toHaveLength(3));
   expect(await screen.findByText(/^Retrying in 1s\./)).toBeTruthy();
   await waitFor(() => expect(asks()).toHaveLength(4), { timeout: 3000 });
+});
+
+test("diag-910 fix round 1, I2: Mermaid pasted on the canvas while the assistant works is not pasted, and the strip says why", async () => {
+  const s = setup();
+  await drawn(s);
+  holdAsk = true;
+  await send("Add a fraud check after Checkout");
+  await waitFor(() => expect(s.view().state.readOnly).toBe(true));
+  fireEvent.paste(s.container.querySelector(".flow-canvas")!, { clipboardData: { getData: () => "flowchart LR\n    A --> B\n" } });
+  await waitFor(() =>
+    expect(s.container.querySelector(".flow-pane-draw .flow-strip")?.textContent).toContain("The Assistant is working on the text, so nothing was pasted. Paste again once it finishes."),
+  );
+  expect(s.text()).toBe(DFD);
 });

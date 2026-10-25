@@ -1,3 +1,4 @@
+import { fakeSqlEditor } from "../test/fakeSqlEditor";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -7,8 +8,6 @@ import { assistantContextFor, assistantTargetFor } from "../app/assistantContext
 import { type AnyTab, tabKey } from "../shell/tabs";
 import { type TabAskFields, usePublishTabAsk } from "./tabAsk";
 import { sha256Hex } from "./sha256";
-import type { SqlEditorApi } from "../query/SqlEditor";
-import { splitStatements, statementAt } from "../query/statements";
 import { iconElement, type IconName } from "../components/Icon";
 import { fakePreview } from "../test/aiPreview";
 import { aiStream, delta, done, failed, line, memory, sent, sentRecord, step } from "../test/aiStream";
@@ -1129,22 +1128,7 @@ test("a_settings_change_opens_an_open_panels_sends", async () => {
 const FENCED = "Join them:\n```sql\nSELECT id FROM orders\n```\nThat is all.";
 
 /** A query tab's editor holding `doc`, typing at its start. */
-function fakeEditor(doc = "") {
-  let text = doc;
-  const api: SqlEditorApi = {
-    text: () => text,
-    runTarget: () => statementAt(splitStatements(text, "postgres"), 0),
-    select: vi.fn(),
-    insert: vi.fn(),
-    replaceAll: vi.fn(),
-    replaceRange: vi.fn((from: number, to: number, insert: string) => {
-      text = text.slice(0, from) + insert + text.slice(to);
-    }),
-    focus: vi.fn(),
-    band: vi.fn(),
-  };
-  return { api, now: () => text };
-}
+const fakeEditor = (doc = "") => fakeSqlEditor(doc, 0);
 
 const answerThread = (): AiThread => ({
   id: "t",
@@ -1179,11 +1163,11 @@ test("answer_sql_renders_with_insert_open_and_copy", async () => {
   expect(screen.getByText("Join them:")).toBeTruthy();
   expect(screen.getByText("That is all.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("Replaces line 1 of Query 1");
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await user.click(screen.getByRole("button", { name: "Apply to statement" }));
+  expect(ed.pending()?.where).toBe("Apply replaces line 1 of Query 1");
+  act(() => void ed.api.keepSuggestion());
   expect(ed.now()).toBe("SELECT id FROM orders;\n");
-  expect(screen.getByText("Inserted into the editor")).toBeTruthy();
+  expect(screen.getByText("Kept in the editor")).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "Copy the SQL" }));
   expect(writeText).toHaveBeenCalledWith("SELECT id FROM orders");
   await user.click(screen.getByRole("button", { name: "Open in new tab" }));
@@ -1203,10 +1187,10 @@ test("a_saved_answer_without_its_record_inserts_only_commented_out", async () =>
   threads = [answerThread()];
   renderPanel({ insertTarget: { editor: () => ed.api, name: "Query 1" } });
   await screen.findByRole("group", { name: "SQL answer" });
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Insert commented out" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  act(() => void ed.api.keepSuggestion());
   expect(ed.now()).toBe("-- SELECT id FROM orders;\n");
 });
 
@@ -1217,7 +1201,7 @@ test("a_stopped_answer_inserts_only_commented_out", async () => {
   stream.emit(delta("Clean up:\n```sql\nDELETE FROM orders\n```\nThen"));
   await user.click(screen.getByRole("button", { name: "Stop" }));
   await screen.findByText("Stopped.");
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.getByRole("button", { name: "Insert commented out" })).toBeTruthy();
 });
 
@@ -1660,7 +1644,7 @@ test("a_saved_answer_gets_its_sql_actions_back_from_the_record", async () => {
   renderPanel({ insertTarget: { editor: () => ed.api, name: "Query 1" } });
   expect(await screen.findByText("1 statement: 1 read")).toBeTruthy();
   expect(screen.getByText("A stored note.")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Insert" })).toBeTruthy();
 });
 
 test("pre_send_failure_not_saved", async () => {
@@ -1721,8 +1705,8 @@ test("insert_and_open_are_kept_with_the_answer", async () => {
   await waitFor(() => expect(saves()).toHaveLength(1));
   const saved = lastSaved();
   const answer = saved.messages[1];
-  await user.click(await screen.findByRole("button", { name: "Insert into the editor" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  await user.click(await screen.findByRole("button", { name: "Insert" }));
+  act(() => void ed.api.keepSuggestion());
   await waitFor(() => expect(callsTo("ai_record_action")).toHaveLength(1));
   expect(callsTo("ai_record_action")[0]).toEqual({ threadId: saved.id, messageAt: answer.at, kind: "inserted" });
   await user.click(screen.getByRole("button", { name: "Open in new tab" }));
@@ -3116,7 +3100,7 @@ test("answers on a tab with no editor open in a new query tab", async () => {
   await askHeld(user, "list orders", { context: assistantContextFor(target, null, null), tabKey: "home", connections: [a], insertTarget: null, onOpenInNewTab });
   stream.emit(delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] }));
   const open = await screen.findByRole("button", { name: "Open in new query tab" });
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   await user.click(open);
   expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT id FROM orders", null);
   expect(callsTo("run_query")).toHaveLength(0);
@@ -3132,7 +3116,7 @@ test("a tab that has published nothing yet still has no editor: answers open in 
   await askHeld(user, "add a column", { context: assistantContextFor(target, null, null), tabKey: "d1", connections: [a], insertTarget: null, onOpenInNewTab });
   stream.emit(delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] }));
   expect(await screen.findByRole("button", { name: "Open in new query tab" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
 });
 
@@ -3293,4 +3277,59 @@ test("Asked in caption", async () => {
   renderPanel();
   await screen.findByText("Second answer.");
   expect(screen.queryByText(/^Asked in/)).toBeNull();
+});
+
+// ---- UX step 9 (A7): "Asked in <tab>" shows that tab ----
+
+const queryTwo = { tab: "query", label: "Query 2", tabKey: "query:d2" };
+
+test("a7_asked_in_is_a_link_that_shows_its_tab", async () => {
+  const user = userEvent.setup();
+  const onShowTab = vi.fn(() => true);
+  threads = [askedThread({ tab: "visual", label: 'Visual Query "Orders" in shop' }, queryTwo)];
+  renderPanel({ onShowTab });
+  await screen.findByText("Second answer.");
+  const link = screen.getByRole("button", { name: "Query 2" });
+  expect(link.closest(".msg-asked-in")!.textContent).toBe("Asked in Query 2");
+  await user.click(link);
+  expect(onShowTab).toHaveBeenCalledWith("query:d2");
+  expect(screen.queryByText("Query 2 is closed.")).toBeNull();
+});
+
+test("a7_a_closed_tab_says_so_and_nothing_else_changes", async () => {
+  const user = userEvent.setup();
+  let open = false;
+  const onShowTab = vi.fn(() => open);
+  threads = [askedThread({ tab: "visual", label: 'Visual Query "Orders" in shop' }, queryTwo)];
+  renderPanel({ onShowTab });
+  await screen.findByText("Second answer.");
+  await user.click(screen.getByRole("button", { name: "Query 2" }));
+  expect(screen.getByText("Query 2 is closed.")).toBeTruthy();
+  expect(screen.getByText("Second answer.")).toBeTruthy();
+  // Open again, the link shows it and the note goes.
+  open = true;
+  await user.click(screen.getByRole("button", { name: "Query 2" }));
+  expect(screen.queryByText("Query 2 is closed.")).toBeNull();
+});
+
+test("a7_an_asked_in_saved_before_tab_keys_stays_plain_text", async () => {
+  threads = [askedThread({ tab: "visual", label: 'Visual Query "Orders" in shop' }, { tab: "query", label: "Query 2" })];
+  renderPanel({ onShowTab: vi.fn(() => true) });
+  await screen.findByText("Second answer.");
+  expect(screen.getByText("Asked in Query 2")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Query 2" })).toBeNull();
+});
+
+test("a7_the_tab_key_goes_with_the_question_when_it_is_saved", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  const askedIn = { tab: "query", label: "Query 2", summary: "current statement", steps: [] };
+  reply = () => [memory({ topic: 2, kinds: ["question", "tab"], askedIn }), delta("Use an index."), done()];
+  renderPanel({ tabKey: "query:d2" });
+  await user.type(await screen.findByRole("textbox", { name: "Message" }), "why slow{Enter}");
+  await screen.findByText("Use an index.");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(1));
+  const turn = callsTo("ai_append_turn")[0].turn as AppendTurn;
+  expect(turn.messages[0].askedIn).toEqual({ ...askedIn, tabKey: "query:d2" });
 });

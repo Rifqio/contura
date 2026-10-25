@@ -20,6 +20,11 @@ export interface RouteOptions {
   toPoint?: boolean;
   /** The side the line must leave `a` from (the port that was pressed while drawing a flow, item 18). */
   from?: "r" | "l" | "t" | "b";
+  /**
+   * Diagram step 6: the axis a line was added on with a + (board DiagramAddNext): "v" leaves from the top or bottom,
+   * "h" from a side, whatever the boxes' offset, so the kept line looks like the one drawn with the new shape.
+   */
+  axis?: "v" | "h";
 }
 
 export interface Route {
@@ -119,6 +124,12 @@ export function routeOrthogonal(a: Rect, b: Rect, opts: RouteOptions = {}): Rout
   let pts: Point[];
   if (opts.toPoint && opts.from) {
     pts = fromSide(a, opts.from, { x: b.x, y: b.y });
+  } else if (opts.axis === "v") {
+    const bcy = b.y + b.h / 2;
+    pts = bcy >= acy ? vhv({ x: acx, y: a.y + a.h }, { x: b.x + b.w / 2, y: b.y }) : vhv({ x: acx, y: a.y }, { x: b.x + b.w / 2, y: b.y + b.h });
+  } else if (opts.axis === "h") {
+    const bcx = b.x + b.w / 2;
+    pts = bcx >= acx ? hvh({ x: a.x + a.w, y: acy }, { x: b.x, y: b.y + b.h / 2 }) : hvh({ x: a.x, y: acy }, { x: b.x + b.w, y: b.y + b.h / 2 });
   } else if (opts.toPoint) {
     const e = { x: b.x, y: b.y };
     pts = hvh(e.x < a.x ? { x: a.x, y: acy } : { x: a.x + a.w, y: acy }, e);
@@ -133,36 +144,6 @@ export function routeOrthogonal(a: Rect, b: Rect, opts: RouteOptions = {}): Rout
   }
   return {
     d: rounded(pts, opts.radius ?? 8),
-    mid: { x: (pts[1].x + pts[2].x) / 2, y: (pts[1].y + pts[2].y) / 2 },
-    end: pts[3],
-    points: simplify(pts),
-  };
-}
-
-/**
- * ER build C (erd-ux-research 5.4): a relationship between columns leaves and enters at each row's y (`ay`, `by`)
- * on the side that faces the other card, as draw.io's ERD tables and MySQL Workbench draw a foreign key. Cards
- * that overlap across are both left on the right, around the further edge; a relationship between two columns of
- * one card (`self`) loops out on its right.
- */
-export function routeRows(a: Rect, ay: number, b: Rect, by: number, self = false): Route {
-  let pts: Point[];
-  if (self) {
-    const x = a.x + a.w;
-    const out = x + SIDE_GAP;
-    pts = [{ x, y: ay }, { x: out, y: ay }, { x: out, y: by }, { x, y: by }];
-  } else if (b.x >= a.x + a.w + SIDE_GAP) {
-    pts = hvh({ x: a.x + a.w, y: ay }, { x: b.x, y: by });
-  } else if (b.x + b.w <= a.x - SIDE_GAP) {
-    pts = hvh({ x: a.x, y: ay }, { x: b.x + b.w, y: by });
-  } else {
-    const sx = a.x + a.w;
-    const ex = b.x + b.w;
-    const out = Math.max(sx, ex) + SIDE_GAP;
-    pts = [{ x: sx, y: ay }, { x: out, y: ay }, { x: out, y: by }, { x: ex, y: by }];
-  }
-  return {
-    d: rounded(pts, 8),
     mid: { x: (pts[1].x + pts[2].x) / 2, y: (pts[1].y + pts[2].y) / 2 },
     end: pts[3],
     points: simplify(pts),

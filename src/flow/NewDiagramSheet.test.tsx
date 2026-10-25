@@ -27,6 +27,8 @@ function setup(over: Record<string, (a: Record<string, unknown>) => unknown> = {
   );
   const dialog = screen.getByRole("dialog", { name: "New diagram" });
   const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+  // These tests are about the first line: Start with Blank (step 10 starts from the kind's example).
+  fireEvent.click(within(within(dialog).getByRole("radiogroup", { name: "Start with" })).getByRole("radio", { name: "Blank" }));
   return { dialog, name, calls };
 }
 
@@ -35,6 +37,7 @@ test("J2: a typed name ignores a click outside; an untouched sheet closes", asyn
   fireEvent.mouseDown(dialog.parentElement as HTMLElement);
   expect(calls.close).toHaveBeenCalledTimes(1);
   calls.close.mockClear();
+  await userEvent.clear(name);
   await userEvent.type(name, "checkout");
   fireEvent.mouseDown(dialog.parentElement as HTMLElement);
   expect(calls.close).not.toHaveBeenCalled();
@@ -48,7 +51,6 @@ test("every_kind_card_and_the_selected_one_has_the_outline_and_check", async () 
     "Data flow",
     "Flowchart",
     "Cloud architecture",
-    "Entity relationship",
     "Sequence",
     "State",
     "Class",
@@ -74,6 +76,7 @@ test("every_kind_card_and_the_selected_one_has_the_outline_and_check", async () 
 
 test("the_hint_names_the_file_in_the_diagrams_folder", async () => {
   const { dialog, name } = setup();
+  await userEvent.clear(name);
   await userEvent.type(name, "checkout");
   expect(
     within(dialog).getByText("Saved as checkout.flow in Contura's diagrams folder. Publish or Save a copy as puts it anywhere else."),
@@ -82,6 +85,7 @@ test("the_hint_names_the_file_in_the_diagrams_folder", async () => {
 
 test("enter_creates_the_diagram_with_its_first_line_and_opens_it", async () => {
   const { name, calls } = setup();
+  await userEvent.clear(name);
   await userEvent.type(name, "checkout{Enter}");
   await waitFor(() => expect(calls.created).toHaveBeenCalledWith("checkout"));
   expect(callsTo("write_diagram")).toEqual([{ name: "checkout", text: 'diagram dfd "checkout"\n', layout: LAYOUT_LR, overwrite: false }]);
@@ -90,6 +94,7 @@ test("enter_creates_the_diagram_with_its_first_line_and_opens_it", async () => {
 test("the_picked_kind_is_the_first_line", async () => {
   const { dialog, name, calls } = setup();
   await userEvent.click(within(dialog).getByRole("radio", { name: "Flowchart" }));
+  await userEvent.clear(name);
   await userEvent.type(name, "refunds");
   await userEvent.click(within(dialog).getByRole("button", { name: /^Create/ }));
   await waitFor(() => expect(calls.created).toHaveBeenCalledWith("refunds"));
@@ -103,6 +108,7 @@ test("an_existing_name_asks_before_replacing_it", async () => {
       return undefined;
     },
   });
+  await userEvent.clear(name);
   await userEvent.type(name, "checkout{Enter}");
   expect(await within(dialog).findByText("checkout.flow already exists. Replace it?")).toBeTruthy();
   expect(calls.created).not.toHaveBeenCalled();
@@ -123,6 +129,7 @@ test("a_name_the_rule_refuses_shows_the_rule", async () => {
       throw { kind: "invalidInput", message: rule };
     },
   });
+  await userEvent.clear(name);
   await userEvent.type(name, "a:b{Enter}");
   expect((await within(dialog).findByRole("alert")).textContent).toBe(rule);
   expect(calls.created).not.toHaveBeenCalled();
@@ -131,9 +138,13 @@ test("a_name_the_rule_refuses_shows_the_rule", async () => {
 test("create_is_off_until_there_is_a_name", async () => {
   const { dialog, name } = setup();
   const create = within(dialog).getByRole("button", { name: /^Create/ }) as HTMLButtonElement;
+  // Step 10: a free default name is ready, so Create is on until the name is cleared.
+  expect(create.disabled).toBe(false);
+  await userEvent.clear(name);
   expect(create.disabled).toBe(true);
   await userEvent.type(name, "  ");
   expect(create.disabled).toBe(true);
+  await userEvent.clear(name);
   await userEvent.type(name, "x");
   expect(create.disabled).toBe(false);
 });
@@ -144,9 +155,9 @@ test("recent_diagrams_list_with_their_kind_and_compact_time", async () => {
   await waitFor(() => expect(within(recent).getAllByRole("button")).toHaveLength(3));
   const rows = within(recent).getAllByRole("button");
   expect(rows.map((r) => r.textContent)).toEqual([
-    "fulfilment.flowData flow, 2h ago",
-    "refund-policy.flowFlowchart, 1d ago",
-    "platform.flowCloud, 3d ago",
+    "fulfilmentData flow, 2h ago",
+    "refund-policyFlowchart, 1d ago",
+    "platformCloud, 3d ago",
   ]);
   await userEvent.click(rows[1]);
   expect(calls.open).toHaveBeenCalledWith("refund-policy");
@@ -155,12 +166,13 @@ test("recent_diagrams_list_with_their_kind_and_compact_time", async () => {
 test("flow_from_mermaid_opens_the_mermaid_dialog", async () => {
   const { dialog, calls } = setup();
   expect(within(dialog).getByText("Have a Mermaid diagram already?")).toBeTruthy();
-  await userEvent.click(within(dialog).getByRole("button", { name: "Flow from Mermaid..." }));
+  await userEvent.click(within(dialog).getByRole("button", { name: "From Mermaid..." }));
   expect(calls.mermaid).toHaveBeenCalledTimes(1);
 });
 
 test("a_typed_dot_flow_is_dropped_once", async () => {
   const { dialog, name, calls } = setup();
+  await userEvent.clear(name);
   await userEvent.type(name, "checkout.FLOW");
   expect(
     within(dialog).getByText("Saved as checkout.flow in Contura's diagrams folder. Publish or Save a copy as puts it anywhere else."),
@@ -196,6 +208,7 @@ test("replace_runs_before_replace_first", async () => {
     </ToastProvider>,
   );
   const dialog = screen.getByRole("dialog", { name: "New diagram" });
+  await userEvent.clear(within(dialog).getByRole("textbox", { name: "Name" }));
   await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "checkout{Enter}");
   await userEvent.click(await within(dialog).findByRole("button", { name: "Replace" }));
   await waitFor(() => expect(created).toHaveBeenCalledWith("checkout"));
@@ -215,6 +228,7 @@ test("item_19_find_a_kind_by_a_word_or_a_group_and_create_names_the_kind", async
   expect(within(dialog).getByText("No kind matches. Try another word.")).toBeTruthy();
   await userEvent.clear(within(dialog).getByRole("searchbox", { name: "Find a kind" }));
   await userEvent.click(within(dialog).getByRole("radio", { name: "Sequence" }));
+  await userEvent.clear(name);
   await userEvent.type(name, "pay");
   await userEvent.click(within(dialog).getByRole("button", { name: /^Create sequence/ }));
   await waitFor(() => expect(callsTo("write_diagram")).toHaveLength(1));

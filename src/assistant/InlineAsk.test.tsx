@@ -14,10 +14,11 @@ import { aiStream, delta, done, failed, line, sent, step } from "../test/aiStrea
 import { callsTo, routeInvoke } from "../test/invoke";
 import { mockReactFlowDom } from "../test/reactFlow";
 import { type AskContext, type AskKit, type AskSetup, tablesIn } from "./context";
-import InlineAsk from "./InlineAsk";
+import InlineAsk, { reopens } from "./InlineAsk";
 import appCss from "../styles/app.css?raw";
 import { queueOffline } from "./offlineQueue";
 import { sha256Hex } from "./sha256";
+import { fakeSqlEditor } from "../test/fakeSqlEditor";
 
 vi.mock("./offlineQueue", async (original) => {
   const actual = await original<typeof import("./offlineQueue")>();
@@ -532,125 +533,234 @@ test("inline_send_the_saved_key_twice_asks_once", async () => {
   expect(callsTo("ai_ask_stream")).toHaveLength(2);
 });
 
-test("inline_answer_inserts_into_its_own_tab_through_the_diff", async () => {
-  const stream = aiStream();
-  stream.hold();
-  streaming(stream);
-  const user = userEvent.setup();
-  let text = "SELECT 1;";
-  const replaceRange = vi.fn((from: number, to: number, insert: string) => {
-    text = text.slice(0, from) + insert + text.slice(to);
-  });
-  const editor = { text: () => text, runTarget: () => ({ from: 0, to: 8, text: "SELECT 1" }), replaceRange } as unknown as SqlEditorApi;
-  const onOpenInNewTab = vi.fn();
-  render(
-    <InlineAsk
-      context={{ kind: "sql", connection: conn(), sql: "SELECT 1", lines: [1, 1], tables: [], label: "Query 1" }}
-      schema={null}
-      groupId={null}
-      onOpenSettings={vi.fn()}
-      onClose={vi.fn()}
-      insertTarget={{ editor: () => editor, name: "Query 1" }}
-      onOpenInNewTab={onOpenInNewTab}
-    />,
-  );
-  await user.click(screen.getByRole("button", { name: "Optimize" }));
-  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
-  stream.emit(delta("Use this:\n```sql\nSELECT 2\n```"));
-  stream.emit(
-    done({ sqlBlocks: [{ fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read", flags: [] }], bodySha256: sha256Hex("SELECT 2") }] }),
-  );
-  expect(await screen.findByText("1 statement: 1 read")).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  expect(replaceRange).not.toHaveBeenCalled();
-  expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("Replaces line 1 of Query 1");
-  await user.click(screen.getByRole("button", { name: "Insert" }));
-  expect(text).toBe("SELECT 2;");
-  await user.click(screen.getByRole("button", { name: "Show answer" }));
-  await user.click(screen.getByRole("button", { name: "Open in new tab" }));
-  expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT 2", conn());
-});
+const READ_2 = { fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read" as const, flags: [] }], bodySha256: sha256Hex("SELECT 2") };
+const READ_3 = { fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 3", class: "read" as const, flags: [] }], bodySha256: sha256Hex("SELECT 3") };
 
-/** An answer with one checked SQL block, in a box that inserts into a stand-in editor. */
-async function answeredWithInsert(onClose = vi.fn()) {
+/**
+ * The box asked about `SELECT 1` (line 1 of "SELECT 1;\nSELECT 9;") in a stand-in editor; the provider answers with
+ * `SELECT 2` once `answer` is called.
+ */
+function inlineOnEditor(over: Partial<React.ComponentProps<typeof InlineAsk>> = {}, doc = "SELECT 1;\nSELECT 9;") {
   const stream = aiStream();
   stream.hold();
   streaming(stream);
   const user = userEvent.setup();
-  let text = "SELECT 1;";
-  const replaceRange = vi.fn((from: number, to: number, insert: string) => {
-    text = text.slice(0, from) + insert + text.slice(to);
-  });
-  const editor = { text: () => text, runTarget: () => ({ from: 0, to: 8, text: "SELECT 1" }), replaceRange } as unknown as SqlEditorApi;
-  render(
+  const ed = fakeSqlEditor(doc, 3);
+  const onClose = vi.fn();
+  const onOpenInNewTab = vi.fn();
+  const onSnapshot = vi.fn();
+  const utils = render(
     <InlineAsk
       context={{ kind: "sql", connection: conn(), sql: "SELECT 1", lines: [1, 1], tables: [], label: "Query 1" }}
       schema={null}
       groupId={null}
       onOpenSettings={vi.fn()}
       onClose={onClose}
-      insertTarget={{ editor: () => editor, name: "Query 1" }}
+      insertTarget={{ editor: () => ed.api, name: "Query 1" }}
+      anchor={{ from: 0, to: 8, sql: "SELECT 1" }}
+      onOpenInNewTab={onOpenInNewTab}
+      onSnapshot={onSnapshot}
+      {...over}
     />,
   );
-  await user.click(screen.getByRole("button", { name: "Optimize" }));
-  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
-  stream.emit(delta("Use this:\n```sql\nSELECT 2\n```\nIt reads less."));
-  stream.emit(
-    done({ sqlBlocks: [{ fence: 0, label: "1 statement: 1 read", statements: [{ text: "SELECT 2", class: "read", flags: [] }], bodySha256: sha256Hex("SELECT 2") }] }),
-  );
-  expect(await screen.findByText("1 statement: 1 read")).toBeTruthy();
-  return { user, onClose };
+  const answer = async (sql = "SELECT 2", check = READ_2, n = 1) => {
+    await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(n));
+    stream.emit(delta(`Use this:\n\`\`\`sql\n${sql}\n\`\`\`\nIt reads less.`), done({ sqlBlocks: [check] }));
+    await screen.findByText("It reads less.");
+  await screen.findByRole("textbox", { name: "Follow-up" });
+  await act(async () => {});
+  };
+  return { ...utils, stream, user, ed, onClose, onOpenInNewTab, onSnapshot, answer };
 }
 
-test("inline_insert_folds_the_box_to_one_line", async () => {
-  const { user } = await answeredWithInsert();
+test("a2_an_inline_answer_shows_in_the_editor_as_a_diff_and_nothing_changes_until_keep", async () => {
+  const { user, ed, answer } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  expect(ed.now()).toBe("SELECT 1;\nSELECT 9;");
+  expect(ed.pending()).toMatchObject({ from: 0, to: 9, text: "SELECT 2;", bar: false });
   const box = screen.getByRole("dialog", { name: "Ask AI" });
-  expect(box.classList.contains("ask-pop-folded")).toBe(false);
-  // The live region is there, empty, before the insert, so its text is announced when it comes.
-  const status = within(box).getByRole("status");
-  expect(status.textContent).toBe("");
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
-  // One line: what happened, Show answer and Close; the answer, the head and the actions are hidden, not dropped.
-  expect(box.classList.contains("ask-pop-folded")).toBe(true);
-  expect(box.querySelector(".pop-done-text")?.textContent).toBe("Inserted into the editor");
-  expect(within(box).getByRole("status")).toBe(status);
-  expect(status.textContent).toBe("Inserted into the editor");
-  expect(within(box).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["Show answer", "Close"]);
-  expect(box.querySelector(".pop-body[hidden]")?.textContent).toContain("It reads less.");
-  expect(box.querySelector(".pop-head")?.hasAttribute("hidden")).toBe(true);
-  // Focus stays in the box, so Esc still reaches it; the button is described by what happened.
-  const show = within(box).getByRole("button", { name: "Show answer" });
-  expect(document.activeElement).toBe(show);
-  expect(show.getAttribute("aria-describedby")).toBe(box.querySelector(".pop-done-text")?.id);
+  expect(box.querySelector(".pop-where")!.textContent).toBe("Replaces line 1 of Query 1. Nothing runs: you press Run when ready.");
+  // No diff and no Insert in the card: the editor holds the diff, the box Keep and Discard.
+  expect(within(box).queryByRole("button", { name: /^Insert/ })).toBeNull();
+  expect(within(box).getByRole("button", { name: /^Keep/ }).textContent).toContain("Ctrl+Enter");
+  expect(within(box).getByRole("button", { name: /^Discard/ }).textContent).toContain("Esc");
+  // A1: the follow-up field stays, with the keyboard in it.
+  expect(document.activeElement).toBe(within(box).getByRole("textbox", { name: "Follow-up" }));
+});
 
-  await user.click(within(box).getByRole("button", { name: "Show answer" }));
-  expect(box.classList.contains("ask-pop-folded")).toBe(false);
+test("a2_ctrl_enter_in_the_box_keeps_and_the_box_folds", async () => {
+  const { user, ed, answer, onSnapshot } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Follow-up" }), { key: "Enter", ctrlKey: true });
+  expect(ed.now()).toBe("SELECT 2;\nSELECT 9;");
+  const box = screen.getByRole("dialog", { name: "Ask AI" });
+  expect(box.classList.contains("ask-pop-folded")).toBe(true);
+  expect(box.querySelector(".pop-done-text")?.textContent).toBe("Kept in the editor. Ctrl+Z takes it back.");
+  expect(within(box).getByRole("status").textContent).toBe("Kept in the editor. Ctrl+Z takes it back.");
+  expect(within(box).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["Show answer", "Close"]);
+  expect(onSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ state: "kept", keptText: "SELECT 2;" }));
+});
+
+test("a2_esc_in_the_box_discards_the_waiting_suggestion_and_closes", async () => {
+  const { user, ed, answer, onClose, onSnapshot } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Follow-up" }), { key: "Escape" });
+  expect(ed.pending()).toBeNull();
+  expect(ed.now()).toBe("SELECT 1;\nSELECT 9;");
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ state: "discarded" }));
+});
+
+test("a2_closing_the_box_discards_what_waits_and_unmounting_too", async () => {
+  const { user, ed, answer, unmount } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  unmount();
+  // A box that goes leaves no suggestion behind it.
+  expect(ed.pending()).toBeNull();
+});
+
+test("a2_esc_in_the_editor_discards_and_the_box_offers_apply_again", async () => {
+  const { user, ed, answer } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  act(() => void ed.api.discardSuggestion());
+  const box = screen.getByRole("dialog", { name: "Ask AI" });
+  expect(box.querySelector(".pop-where")!.textContent).toBe("Not in the editor.");
+  await user.click(within(box).getByRole("button", { name: "Apply to the statement" }));
+  expect(ed.pending()).toMatchObject({ from: 0, to: 9, text: "SELECT 2;" });
+});
+
+test("a1_a_follow_up_refines_the_same_suggestion_in_place", async () => {
+  const { user, ed, answer, stream } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  const first = ed.pending();
+  await user.type(screen.getByRole("textbox", { name: "Follow-up" }), "only active ones{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
+  const req = stream.requests()[1];
+  expect(req.question).toBe("Optimize\nThen: only active ones");
+  // The follow-up refines the SQL asked about, not the answer.
+  expect(req.focus.sql).toBe("SELECT 1");
+  stream.emit(delta("Now:\n```sql\nSELECT 3\n```\nIt reads less."), done({ sqlBlocks: [READ_3] }));
+  await waitFor(() => expect(ed.pending()?.text).toBe("SELECT 3;"));
+  expect(ed.pending()).not.toBe(first);
+  expect(ed.pending()).toMatchObject({ from: 0, to: 9 });
+  const box = screen.getByRole("dialog", { name: "Ask AI" });
+  expect(box.querySelector(".pop-head span")!.textContent).toBe("Optimize");
+  expect(box.querySelector(".pop-turns")!.textContent).toBe("Then: only active ones");
+  // Still one suggestion, the box still open.
+  expect(screen.getAllByRole("dialog", { name: "Ask AI" })).toHaveLength(1);
+  await user.type(screen.getByRole("textbox", { name: "Follow-up" }), "top 20{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(3));
+  expect(stream.requests()[2].question).toBe("Optimize\nThen: only active ones\nThen: top 20");
+});
+
+test("a2_a_write_goes_below_commented_out_and_removes_nothing", async () => {
+  const { user, ed, stream } = inlineOnEditor();
+  await user.type(screen.getByRole("textbox", { name: "Question" }), "mark them late{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  const write = { fence: 0, label: "1 statement: 1 write (UPDATE)", statements: [{ text: "UPDATE t SET late = true WHERE id = 1", class: "write" as const, flags: [] }], bodySha256: sha256Hex("UPDATE t SET late = true WHERE id = 1") };
+  stream.emit(delta("```sql\nUPDATE t SET late = true WHERE id = 1\n```\nIt reads less."), done({ sqlBlocks: [write] }));
+  await screen.findByText("It reads less.");
+  await screen.findByRole("textbox", { name: "Follow-up" });
+  await act(async () => {});
+  expect(ed.pending()).toMatchObject({ from: 9, to: 9, text: "\n\n-- UPDATE t SET late = true WHERE id = 1;\n", keepLabel: "Keep, commented out" });
+  const box = screen.getByRole("dialog", { name: "Ask AI" });
+  expect(within(box).getByRole("button", { name: /^Keep, commented out/ })).toBeTruthy();
+  expect(box.querySelector(".pop-writes")!.textContent).toContain("Answer writes.");
+  await user.click(within(box).getByRole("button", { name: /^Keep, commented out/ }));
+  expect(ed.now()).toBe("SELECT 1;\n\n-- UPDATE t SET late = true WHERE id = 1;\n\nSELECT 9;");
+  expect(box.querySelector(".pop-done-text")?.textContent).toBe("Kept, commented out. Ctrl+Z takes it back.");
+});
+
+test("a2_an_answer_without_a_check_goes_in_only_commented_out", async () => {
+  const { user, ed, stream } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  // The Core's check was made on another body: the block counts as unchecked.
+  stream.emit(delta("```sql\nSELECT 2\n```\nIt reads less."), done({ sqlBlocks: [{ ...READ_2, bodySha256: sha256Hex("SELECT 7") }] }));
+  await screen.findByText("It reads less.");
+  await screen.findByRole("textbox", { name: "Follow-up" });
+  await act(async () => {});
+  expect(ed.pending()?.text).toBe("\n\n-- SELECT 2;\n");
+});
+
+test("a2_a_text_answer_shows_no_diff_and_keeps_the_follow_up", async () => {
+  const { user, ed, stream } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Explain" }));
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  stream.emit(delta("It counts each customer."), done());
+  await screen.findByText("It counts each customer.");
+  await screen.findByRole("textbox", { name: "Follow-up" });
+  await act(async () => {});
+  expect(ed.pending()).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Keep/ })).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Follow-up" })).toBeTruthy();
+});
+
+test("a4_a_reopened_answer_comes_back_with_its_question_and_no_suggestion", async () => {
+  const { user, answer, onSnapshot, unmount, onClose } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Follow-up" }), { key: "Escape" });
+  expect(onClose).toHaveBeenCalled();
+  const snap = onSnapshot.mock.calls[onSnapshot.mock.calls.length - 1][0];
+  unmount();
+  const again = inlineOnEditor({ reopen: snap });
+  const box = screen.getByRole("dialog", { name: "Ask AI" });
+  expect(within(box).getByText("Reopened with Ctrl+I: the last answer on this statement.")).toBeTruthy();
+  expect(box.querySelector(".pop-head span")!.textContent).toBe("Optimize");
   expect(within(box).getByText("It reads less.")).toBeTruthy();
-  // The answer keeps its own Inserted line, and focus goes to the answer, where the arrow keys scroll it.
-  expect(within(box).getByText("Inserted into the editor")).toBeTruthy();
-  expect(document.activeElement).toBe(box.querySelector(".pop-body"));
+  expect(box.querySelector(".pop-where")!.textContent).toBe("Not in the editor.");
+  expect(again.ed.pending()).toBeNull();
+  // Nothing was asked again.
+  expect(callsTo("ai_ask_stream")).toHaveLength(1);
+  await user.click(within(box).getByRole("button", { name: "Apply to the statement" }));
+  expect(again.ed.pending()).toMatchObject({ text: "SELECT 2;" });
+  await user.click(within(box).getByRole("button", { name: "New question" }));
+  expect(again.ed.pending()).toBeNull();
+  expect(within(box).getByRole("textbox", { name: "Question" })).toBeTruthy();
 });
 
 test("inline_folded_box_closes_with_esc_and_close", async () => {
-  const { user, onClose } = await answeredWithInsert();
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  const { user, answer, onClose } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  await user.click(screen.getByRole("button", { name: /^Keep/ }));
   await user.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalledTimes(1);
   await user.click(within(screen.getByRole("dialog", { name: "Ask AI" })).getByRole("button", { name: "Close" }));
   expect(onClose).toHaveBeenCalledTimes(2);
 });
 
-test("inline_ask_again_after_insert_unfolds", async () => {
-  const { user } = await answeredWithInsert();
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
-  await user.click(screen.getByRole("button", { name: "Show answer" }));
-  await user.click(screen.getByRole("button", { name: "Ask again" }));
+test("inline_show_answer_after_keep_unfolds_and_new_question_goes_back", async () => {
+  const { user, answer, onOpenInNewTab } = inlineOnEditor();
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  await user.click(screen.getByRole("button", { name: /^Keep/ }));
   const box = screen.getByRole("dialog", { name: "Ask AI" });
+  const show = within(box).getByRole("button", { name: "Show answer" });
+  expect(document.activeElement).toBe(show);
+  await user.click(show);
   expect(box.classList.contains("ask-pop-folded")).toBe(false);
+  expect(document.activeElement).toBe(box.querySelector(".pop-body"));
+  expect(box.querySelector(".pop-where")!.textContent).toBe("Kept in the editor.");
+  await user.click(within(box).getByRole("button", { name: "Open in new query tab" }));
+  expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT 2", conn());
+  await user.click(within(box).getByRole("button", { name: "New question" }));
   expect(within(box).getByRole("textbox", { name: "Question" })).toBeTruthy();
+});
+
+test("without_an_anchor_the_block_keeps_its_own_actions", async () => {
+  const { user, answer, ed } = inlineOnEditor({ anchor: null });
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  expect(ed.pending()).toBeNull();
+  expect(screen.getByRole("button", { name: "Insert" })).toBeTruthy();
 });
 
 /** The body of the app.css rule whose selector is exactly `selector`. */
@@ -706,7 +816,7 @@ test("rows_switch_off_after_send", async () => {
   await user.click(screen.getByRole("button", { name: "Explain" }));
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
   expect((callsTo("ai_ask_stream")[0].request as AskRequest).switches.rows).toBe(true);
-  await user.click(await screen.findByRole("button", { name: "Ask again" }));
+  await user.click(await screen.findByRole("button", { name: "New question" }));
   await waitFor(() => expect(lastPreview().switches.rows).toBe(false));
   expect((await rows()).getAttribute("aria-pressed")).toBe("false");
   expect(screen.getByText("No sample rows are sent")).toBeTruthy();
@@ -749,4 +859,80 @@ test("inline_no_table_line_only_for_the_core_no_named_table_label", async () => 
   inline();
   await user.click(await screen.findByRole("button", { name: /^Sample rows/ }));
   expect(await screen.findByText("No sample rows are sent: no table is named")).toBeTruthy();
+});
+
+// ---- Fix round 1 (I2): a follow-up after Keep refines what was kept, never another statement ----
+
+test("i2_a_follow_up_after_keep_refines_the_kept_statement_wherever_the_insertion_point_went", async () => {
+  const { user, ed, answer, stream } = inlineOnEditor({}, "SELECT 1;\nSELECT 9;");
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Follow-up" }), { key: "Enter", ctrlKey: true });
+  expect(ed.now()).toBe("SELECT 2;\nSELECT 9;");
+  // The user clicks into the other statement, then asks to refine.
+  ed.moveTo(14);
+  await user.click(screen.getByRole("button", { name: "Show answer" }));
+  await user.type(screen.getByRole("textbox", { name: "Follow-up" }), "only active{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
+  stream.emit(delta("```sql\nSELECT 3\n```\nIt reads less."), done({ sqlBlocks: [READ_3] }));
+  await waitFor(() => expect(ed.pending()?.text).toBe("SELECT 3;"));
+  expect(ed.pending()).toMatchObject({ from: 0, to: 9 });
+});
+
+test("i2_a_commented_follow_up_after_keep_replaces_the_kept_block_not_adds_one", async () => {
+  const { user, ed, stream } = inlineOnEditor();
+  const write = (body: string) => ({ fence: 0, label: "1 statement: 1 write (UPDATE)", statements: [{ text: body, class: "write" as const, flags: [] }], bodySha256: sha256Hex(body) });
+  await user.type(screen.getByRole("textbox", { name: "Question" }), "mark them late{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  stream.emit(delta("```sql\nUPDATE t SET late = true\n```\nIt reads less."), done({ sqlBlocks: [write("UPDATE t SET late = true")] }));
+  await screen.findByRole("textbox", { name: "Follow-up" });
+  await act(async () => {});
+  await user.click(screen.getByRole("button", { name: /^Keep, commented out/ }));
+  expect(ed.now()).toBe("SELECT 1;\n\n-- UPDATE t SET late = true;\n\nSELECT 9;");
+  ed.moveTo(ed.now().length - 2);
+  await user.click(screen.getByRole("button", { name: "Show answer" }));
+  await user.type(screen.getByRole("textbox", { name: "Follow-up" }), "only id 1{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
+  stream.emit(delta("```sql\nUPDATE t SET late = true WHERE id = 1\n```\nIt reads less."), done({ sqlBlocks: [write("UPDATE t SET late = true WHERE id = 1")] }));
+  await waitFor(() => expect(ed.pending()).not.toBeNull());
+  act(() => void ed.api.keepSuggestion());
+  expect(ed.now()).toBe("SELECT 1;\n\n-- UPDATE t SET late = true WHERE id = 1;\n\nSELECT 9;");
+});
+
+test("m7_esc_while_asking_stops_and_keeps_the_question_in_the_field", async () => {
+  const { user } = inlineOnEditor();
+  await user.type(screen.getByRole("textbox", { name: "Question" }), "only the unpaid ones{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Ask AI" }), { key: "Escape" });
+  const field = await screen.findByRole("textbox", { name: "Question" });
+  expect((field as HTMLInputElement).value).toBe("only the unpaid ones");
+  await waitFor(() => expect(callsTo("ai_cancel")).toHaveLength(1));
+});
+
+// ---- Round 2 (N4): a range that collapsed is gone; it never points at a neighbour ----
+
+test("n4_a_follow_up_after_the_kept_text_was_deleted_never_lands_on_a_neighbour", async () => {
+  const { user, ed, answer, stream } = inlineOnEditor({}, "SELECT 1;\n\nSELECT 9;");
+  await user.click(screen.getByRole("button", { name: "Optimize" }));
+  await answer();
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Follow-up" }), { key: "Enter", ctrlKey: true });
+  expect(ed.now()).toBe("SELECT 2;\n\nSELECT 9;");
+  // The kept statement goes; the insertion point sits on a blank line after the neighbour.
+  ed.edit(0, 11, "");
+  ed.edit(9, 9, "\n\n");
+  ed.moveTo(11);
+  await user.click(screen.getByRole("button", { name: "Show answer" }));
+  await user.type(screen.getByRole("textbox", { name: "Follow-up" }), "only active{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
+  stream.emit(delta("```sql\nSELECT 3\n```\nIt reads less."), done({ sqlBlocks: [READ_3] }));
+  await screen.findAllByText("It reads less.");
+  await act(async () => {});
+  expect(ed.pending()).toBeNull();
+  expect(ed.now()).toBe("SELECT 9;\n\n");
+});
+
+test("n4_reopen_never_matches_a_collapsed_range", () => {
+  const snap = { anchor: { from: 0, to: 8, sql: "SELECT 1", track: 1 }, keptTrack: 2 } as unknown as Parameters<typeof reopens>[1];
+  expect(reopens({ from: 0, to: 8, sql: "SELECT 9" }, snap, () => ({ from: 0, to: 0 }))).toBe(false);
+  expect(reopens({ from: 0, to: 8, sql: "SELECT 9" }, snap, (id) => (id === 2 ? { from: 0, to: 9 } : null))).toBe(true);
 });

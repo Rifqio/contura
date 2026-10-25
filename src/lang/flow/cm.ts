@@ -232,7 +232,7 @@ const TYPE: Record<FlowCompletion["kind"], string> = {
 /** The worker's items as CodeMirror options, in the worker's order (it has ranked them, so no second filter). */
 export function toCmCompletions(r: FlowCompletionResult): (CompletionResult & { filter: false }) | null {
   if (r.items.length === 0) return null;
-  const options: Completion[] = r.items.map((i) => ({ label: i.label, apply: i.apply, type: TYPE[i.kind] }));
+  const options: Completion[] = r.items.map((i) => ({ label: i.label, apply: i.apply, type: TYPE[i.kind], ...(i.detail ? { detail: i.detail } : {}) }));
   return { from: r.from, options, filter: false };
 }
 

@@ -198,8 +198,8 @@ mod tests {
             );
         }
         assert_eq!(
-            diagram_prompt(Some("er-diagram"), &[]).lines().nth(1),
-            Some("The diagram kind is er-diagram.")
+            diagram_prompt(Some("state-machine"), &[]).lines().nth(1),
+            Some("The diagram kind is state-machine.")
         );
     }
 

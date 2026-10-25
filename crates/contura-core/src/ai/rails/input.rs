@@ -52,6 +52,12 @@ fn need(kind: ItemKind) -> u8 {
     }
 }
 
+/// Whether an item of `kind` says anything about a database: it needs an AI access level
+/// above Never (diagram text, which no level lets go, counts too).
+pub(crate) fn needs_access(kind: ItemKind) -> bool {
+    need(kind) > 0
+}
+
 pub(crate) fn rank(access: AiAccess) -> u8 {
     match access {
         AiAccess::Never => 0,

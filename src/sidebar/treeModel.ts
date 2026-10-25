@@ -35,6 +35,8 @@ export type TreeNode =
       path: ObjectPath;
       objectKind: ObjectKind;
       rows: number | null;
+      /** `rows` is a count, not the server's estimate. */
+      exact?: boolean;
     }
   | {
       kind: "note";
@@ -274,7 +276,8 @@ export function flattenTree(d: TreeData): TreeRow[] {
             connectionId: c.id,
             path,
             objectKind: o.kind,
-            rows: o.rows,
+            rows: o.counted ?? o.rows,
+            exact: o.counted !== undefined,
           },
           level + 1,
           false,

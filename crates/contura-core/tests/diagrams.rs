@@ -415,7 +415,6 @@ fn read_refuses_a_file_over_the_cap() {
 #[test]
 fn head_reads_the_step_12_kinds() {
     for (word, kind) in [
-        ("er", DiagramKind::Er),
         ("sequence", DiagramKind::Sequence),
         ("state", DiagramKind::State),
         ("class", DiagramKind::Class),
@@ -430,5 +429,10 @@ fn head_reads_the_step_12_kinds() {
     assert_eq!(
         diagram_head(&b"diagram gantt \"x\"\n"[..]).0,
         DiagramKind::Unknown
+    );
+    // ADR 0030: the ER kind left the language; an old ER file lists as an unknown diagram, under its name.
+    assert_eq!(
+        diagram_head(&b"diagram er \"Billing\"\n"[..]),
+        (DiagramKind::Unknown, None)
     );
 }

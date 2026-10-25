@@ -1,6 +1,5 @@
 // Diagram build 1, step 2: the .flow lines a copy puts on the clipboard, and the lines a paste writes into the
 // text with free names (diagram-ux-research F2), for every diagram kind.
-import { sqlFreeName } from "./model";
 import { expect, test } from "vitest";
 import { copyLines, pasteLines } from "./clip";
 import { parseFlow } from "./parse";
@@ -76,40 +75,6 @@ test("data flow: a pasted process and store take the next free ids", () => {
       "Customer 2 > Checkout 2: order",
     ),
   );
-});
-
-test("ER: a table comes with its columns and keys, and the relationship between copied tables", () => {
-  const er = lines('diagram er "Billing"', "customers", "customers.id int [pk]", "customers.email text [not null]", "invoices", "invoices.id int [pk]", "", "customers 1--* invoices : bills");
-  const clip = copyLines(docOf(er), ["customers", "invoices"]);
-  expect(clip).toBe(lines("customers", "customers.id int [pk]", "customers.email text [not null]", "invoices", "invoices.id int [pk]", "customers 1--* invoices: bills"));
-  const r = paste(er, clip)!;
-  expect(r.text).toBe(
-    lines(
-      'diagram er "Billing"',
-      "customers",
-      "customers.id int [pk]",
-      "customers.email text [not null]",
-      "invoices",
-      "invoices.id int [pk]",
-      "customers_2",
-      "customers_2.id int [pk]",
-      "customers_2.email text [not null]",
-      "invoices_2",
-      "invoices_2.id int [pk]",
-      "",
-      "customers 1--* invoices : bills",
-      "customers_2 1--* invoices_2: bills",
-    ),
-  );
-  expect(r.names).toEqual({ customers: "customers_2", invoices: "invoices_2" });
-});
-
-test("ER: a copy's free name is SQL-friendly: orders_2, then orders_3, and on from orders_2", () => {
-  const er = lines('diagram er "Shop"', "orders", "orders.id int [pk]", "orders_2", "orders_2.id int");
-  const r = paste(er, lines("orders", "orders.id int [pk]"))!;
-  expect(r.names).toEqual({ orders: "orders_3" });
-  expect(r.text).toContain("orders_3\norders_3.id int [pk]\n");
-  expect(paste(er, lines("orders_2", "orders_2.id int"))!.names).toEqual({ orders_2: "orders_3" });
 });
 
 test("class: a type comes with its members", () => {
@@ -258,18 +223,3 @@ test("O3 more than 2,000 non-empty lines are refused before any parse", () => {
   expect(paste(text, Array.from({ length: 1999 }, (_, i) => `S${i}`).join("\n\n"))).not.toBeNull();
 });
 
-// Fix round 1 (I4, M7): one rule for an ER table's free name, wherever it is made.
-test("ER free names: _2, _3 on the original name, a number the app did not add is kept, and SQL's case-insensitive names collide", () => {
-  expect(sqlFreeName("orders", ["orders"])).toBe("orders_2");
-  expect(sqlFreeName("orders", ["orders", "orders_2"])).toBe("orders_3");
-  // orders_2 exists because orders does: its copy counts on.
-  expect(sqlFreeName("orders_2", ["orders", "orders_2"])).toBe("orders_3");
-  // A year is part of the name: never log_2025.
-  expect(sqlFreeName("log_2024", ["log_2024"])).toBe("log_2024_2");
-  // Orders_2 and orders_2 are one name in SQL.
-  expect(sqlFreeName("orders", ["orders", "Orders_2"])).toBe("orders_3");
-  expect(sqlFreeName("Orders", ["orders"])).toBe("Orders_2");
-  expect(sqlFreeName("fresh", ["orders"])).toBe("fresh");
-  const er = lines('diagram er "Shop"', "log_2024", "log_2024.id int [pk]");
-  expect(paste(er, lines("log_2024", "log_2024.id int [pk]"))!.names).toEqual({ log_2024: "log_2024_2" });
-});

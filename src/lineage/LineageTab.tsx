@@ -206,7 +206,7 @@ export default function LineageTab({ connection, path, onOpenTable, onAddForeign
               kind: "flow" as const,
               key: `r:flow:${JSON.stringify([file, process])}`,
               title: process === null ? flowSentence(file, access, path) : processSentence(process, access, path),
-              file: `${file}.flow`,
+              file,
               access,
               open: onOpenDiagram && (() => onOpenDiagram(file)),
             })),

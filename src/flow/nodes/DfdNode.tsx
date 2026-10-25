@@ -80,9 +80,9 @@ function Classic({ kind, name, id, table }: DfdNodeProps) {
 }
 
 export default function DfdNode(props: DfdNodeProps) {
-  const { kind, name, style, selected, state, sized } = props;
+  const { kind, name, style, selected, state, sized, color } = props;
   return (
-    <NodeShell kind={kind} family="dfd" look={style} selected={selected} name={name} state={state} sized={sized} label={`${WORDS[kind]} ${name}`}>
+    <NodeShell kind={kind} family="dfd" look={style} selected={selected} name={name} state={state} sized={sized} color={color} label={`${WORDS[kind]} ${name}`}>
       {style === "classic" ? <Classic {...props} /> : <Modern {...props} />}
     </NodeShell>
   );

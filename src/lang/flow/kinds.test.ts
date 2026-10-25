@@ -1,6 +1,6 @@
 // Step 12, item 19: the six newer diagram kinds, read as DiagramElements.dc.html writes them.
 import { describe, expect, test } from "vitest";
-import { nodeStatement, STATE_END, STATE_START } from "./model";
+import { DIAGRAM_KINDS, nodeStatement, STATE_END, STATE_START } from "./model";
 import { parseFlow } from "./parse";
 import { MESSAGES } from "./problems";
 
@@ -12,44 +12,19 @@ const ok = (text: string) => {
 };
 
 describe("entity relationship", () => {
-  test("entities, weak entities, columns and relationships with their ends", () => {
-    const doc = ok(
-      lines(
-        'diagram er "Billing schema"',
-        "customers [entity]",
-        "customers.id int",
-        "customers.email text",
-        "invoices",
-        "invoice_lines [weak]",
-        "plans",
-        "customers 1--* invoices : bills",
-        "plans *--* customers",
-        "customers -- invoices : has",
-      ),
-    );
-    expect(doc.kind).toBe("er");
-    expect(doc.nodes.map((n) => [n.name, n.kind, n.rows ?? []])).toEqual([
-      ["customers", "entity", ["id int", "email text"]],
-      ["invoices", "entity", []],
-      ["invoice_lines", "weak", []],
-      ["plans", "entity", []],
-    ]);
-    expect(doc.links).toEqual([
-      { from: "customers", to: "invoices", arrow: "1--*", label: "bills" },
-      { from: "plans", to: "customers", arrow: "*--*" },
-      { from: "customers", to: "invoices", arrow: "--", label: "has" },
-    ]);
-  });
-
-  test("a column of an unknown entity says so", () => {
-    const r = parseFlow(lines('diagram er "x"', "orders.id int"));
-    expect(r.problems[0].message).toBe(MESSAGES.noEntity("orders"));
-  });
-
-  test("a data flow line is not an ER line", () => {
-    const r = parseFlow(lines('diagram er "x"', "a", "b", "a > b"));
-    expect(r.problems[0].message).toBe(MESSAGES.arrowKind(">", "er", "--"));
-    expect(r.problems[0].fixes[0].title).toBe("Use --");
+  // ADR 0030: DBML is the only ERD. `diagram er` is no kind of the flow language, and no fix offers it.
+  test("diagram er is refused like any unknown kind, and no fix or kind list names it", () => {
+    expect(DIAGRAM_KINDS).not.toContain("er");
+    const r = parseFlow(lines('diagram er "Billing"', "customers", "customers.id int [pk]"));
+    expect(r.doc).toBeNull();
+    expect(r.problems[0].message).toBe(MESSAGES.firstLine);
+    const titles = r.problems[0].fixes.map((f) => f.title);
+    expect(titles).toContain("Make it diagram flow");
+    expect(titles.some((t) => /\ber\b/.test(t))).toBe(false);
+    // A file with no first line offers each kind, never er.
+    const none = parseFlow("customers\n").problems[0].fixes.map((f) => f.title);
+    expect(none).toContain("Add diagram dfd");
+    expect(none).not.toContain("Add diagram er");
   });
 });
 
@@ -218,7 +193,6 @@ describe("shared", () => {
       ["timeline", { name: "Ship", kind: "event", attrs: {}, date: "2026-10-19" }, "2026-10-19: Ship"],
       ["timeline", { name: "Run", kind: "period", attrs: {}, date: "2026-09", until: "2026-10" }, "2026-09 to 2026-10: Run"],
       ["state", { name: "Draft", kind: "state", attrs: {} }, "Draft"],
-      ["er", { name: "lines", kind: "weak", attrs: {} }, "lines [weak]"],
       ["flow", { name: "Note 1", kind: "note", attrs: {}, text: "Mind the gap" }, "note: Mind the gap"],
     ];
     for (const [kind, node, line] of cases) expect(nodeStatement(kind, node)).toBe(line);
@@ -232,7 +206,6 @@ describe("completion", () => {
     const at = (text: string) => completeFlow(text, text.length, []).items.map((i) => i.label);
     expect(at('diagram sequence "x"\npa')).toEqual(["participant"]);
     expect(at('diagram class "x"\nclass Invoice\nclass Payable\nPayable <|-- In')).toEqual(["Invoice"]);
-    expect(at('diagram er "x"\ncustomers\ninvoices\ncustomers 1--* in')).toEqual(["invoices"]);
     expect(at('diagram flow "x"\nno')).toEqual(["note"]);
   });
 });
@@ -251,7 +224,5 @@ describe("canvas edits", () => {
     const cls = lines('diagram class "x"', "class Invoice", "Invoice : + send()", "class Line", "Invoice *-- Line");
     expect(apply(cls, { op: "deleteNode", name: "Invoice" })).toBe(lines('diagram class "x"', "class Line"));
     expect(apply(cls, { op: "renameNode", old: "Invoice", next: "Bill" })).toBe(lines('diagram class "x"', "class Bill", "Bill : + send()", "class Line", "Bill *-- Line"));
-    const er = lines('diagram er "x"', "customers", "customers.id int");
-    expect(apply(er, { op: "renameNode", old: "customers", next: "clients" })).toBe(lines('diagram er "x"', "clients", "clients.id int"));
   });
 });

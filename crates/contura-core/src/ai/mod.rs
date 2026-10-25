@@ -2309,6 +2309,7 @@ mod tests {
             ],
             also: Vec::new(),
             other_steps: Vec::new(),
+            tab_key: None,
         }
     }
 
@@ -2338,6 +2339,29 @@ mod tests {
             ],
             replace_from: None,
         }
+    }
+
+    #[test]
+    fn append_turn_keeps_the_tab_key_for_the_asked_in_link() {
+        let (_dir, svc) = service();
+        let id = uuid::Uuid::new_v4();
+        let mut turn = asked_turn(id);
+        if let Some(a) = turn.messages[0].asked_in.as_mut() {
+            a.tab_key = Some("query:d1".into());
+        }
+        let view = svc.append_turn(turn, None).unwrap();
+        let shown = view.messages[0].asked_in.as_ref().unwrap();
+        assert_eq!(shown.tab_key.as_deref(), Some("query:d1"));
+        let back = svc.thread_view(id).unwrap().unwrap();
+        assert_eq!(
+            back.thread.messages[0]
+                .asked_in
+                .as_ref()
+                .unwrap()
+                .tab_key
+                .as_deref(),
+            Some("query:d1")
+        );
     }
 
     #[test]

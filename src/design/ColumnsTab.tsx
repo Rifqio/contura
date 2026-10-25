@@ -1,6 +1,7 @@
-import { useId } from "react";
+import { type MouseEvent, useId } from "react";
 import type { DialectKind } from "../api/types";
 import CellEditor from "../components/CellEditor";
+import { typable } from "../components/contextMenuGuard";
 import Icon from "../components/Icon";
 import {
   type ColumnField,
@@ -49,6 +50,9 @@ export function columnCells(dialect: DialectKind): ColumnCell[] {
 const SERIAL_TIP = "Serial column: change its default instead.";
 const FK_TIP = "In a Foreign Key. Change it on the Foreign keys tab.";
 
+/** The id of the empty row under the columns (D2): typing there adds a column. */
+export const EMPTY_ROW = "empty-row";
+
 export interface CellAt {
   id: string;
   cell: ColumnCell;
@@ -68,6 +72,10 @@ interface Props {
   onCancel(): void;
   onInput(value: string): void;
   onSave(value: string): void;
+  /** Draws the empty row under the columns (D2). */
+  emptyRow?: boolean;
+  /** A right-click on a row (D4), with the cell it landed on. */
+  onRowMenu?(at: CellAt, x: number, y: number): void;
 }
 
 /** Whether a cell of this column can change: not on a removed row; an advanced column only takes a new name. */
@@ -94,6 +102,8 @@ export default function ColumnsTab({
   onCancel,
   onInput,
   onSave,
+  emptyRow = false,
+  onRowMenu,
 }: Props) {
   const listId = `${useId()}-types`;
   const cells = columnCells(dialect);
@@ -149,6 +159,30 @@ export default function ColumnsTab({
     );
   }
 
+  function editor(cell: ColumnCell) {
+    if (!editing) return null;
+    return (
+      <CellEditor
+        initial={editing.initial}
+        multiline={false}
+        onCommit={onCommit}
+        onCancel={onCancel}
+        onInput={onInput}
+        onSave={onSave}
+        suggestions={cell === "type" ? { id: listId, values: typeSuggestions(dialect) } : undefined}
+      />
+    );
+  }
+
+  /** The row menu opens on the cell under the pointer, which it selects (D4). */
+  function rowMenu(id: string, e: MouseEvent) {
+    // A right-click in an open cell's field keeps the field's own Cut, Copy and Paste menu.
+    if (!onRowMenu || typable(e.target)) return;
+    const field = (e.target as Element).closest("td[data-field]")?.getAttribute("data-field") as ColumnCell | null;
+    e.preventDefault();
+    onRowMenu({ id, cell: field && cells.includes(field) ? field : "name" }, e.clientX, e.clientY);
+  }
+
   return (
     <table className="grid design-grid design-columns" role="grid" aria-label={`Columns of ${draft.path.name || "the new table"}`}>
       <thead>
@@ -166,7 +200,13 @@ export default function ColumnsTab({
           const mark = columnMark(draft, c.id);
           const edited = new Set(editedFields(draft, c.id));
           return (
-            <tr key={c.id} className={mark === "cell-edited" ? undefined : (mark ?? undefined)} aria-selected={selected?.id === c.id}>
+            <tr
+              key={c.id}
+              data-id={c.id}
+              className={mark === "cell-edited" ? undefined : (mark ?? undefined)}
+              aria-selected={selected?.id === c.id}
+              onContextMenu={(e) => rowMenu(c.id, e)}
+            >
               <td className="row-number">{c.origin === null ? "+" : i + 1}</td>
               {cells.map((cell) => {
                 const field = CELL_FIELD[cell];
@@ -189,15 +229,7 @@ export default function ColumnsTab({
                     onDoubleClick={() => TEXT_CELLS.includes(cell) && onOpen({ id: c.id, cell })}
                   >
                     {isEditing && editing ? (
-                      <CellEditor
-                        initial={editing.initial}
-                        multiline={false}
-                        onCommit={onCommit}
-                        onCancel={onCancel}
-                        onInput={onInput}
-                        onSave={onSave}
-                        suggestions={cell === "type" ? { id: listId, values: typeSuggestions(dialect) } : undefined}
-                      />
+                      editor(cell)
                     ) : TEXT_CELLS.includes(cell) ? (
                       text(c, cell)
                     ) : (
@@ -210,6 +242,32 @@ export default function ColumnsTab({
           );
         })}
       </tbody>
+      {emptyRow && (
+        // D2 (MySQL Workbench): the empty row is not a column until something is typed into it.
+        <tfoot>
+          <tr className="design-empty-row" data-id={EMPTY_ROW} aria-selected={selected?.id === EMPTY_ROW} onContextMenu={(e) => rowMenu(EMPTY_ROW, e)}>
+            <td className="row-number" aria-hidden="true" />
+            {cells.map((cell) => {
+              const isEditing = editing?.id === EMPTY_ROW && editing.cell === cell;
+              const isSelected = selected?.id === EMPTY_ROW && selected.cell === cell;
+              const text = TEXT_CELLS.includes(cell);
+              const className = [isSelected && "cell-selected", !text && "design-center", cell === "comment" && "design-ui"].filter(Boolean).join(" ");
+              return (
+                <td
+                  key={cell}
+                  data-field={cell}
+                  className={className || undefined}
+                  aria-label={cell === "name" && !isEditing ? "New column name" : undefined}
+                  onMouseDown={() => onSelect({ id: EMPTY_ROW, cell })}
+                  onDoubleClick={() => text && onOpen({ id: EMPTY_ROW, cell })}
+                >
+                  {isEditing ? editor(cell) : null}
+                </td>
+              );
+            })}
+          </tr>
+        </tfoot>
+      )}
     </table>
   );
 }

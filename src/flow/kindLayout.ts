@@ -9,47 +9,47 @@ import type { FlowDoc, FlowNode } from "../lang/flow/model";
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 /** About 7 px a character of the body font, 7.2 of Code small. */
 const textW = (s: string) => s.length * 7;
+
+/**
+ * diag-910 fix round 2 (L2): a state's name as it is drawn, in the canvas's bold 13 px UI font, so the pill is as wide as
+ * its name. Measured once per name with a canvas where there is one (the app); a guess of 8.2 px a letter elsewhere.
+ * Tests set their own.
+ */
+let labelMeasure: ((s: string) => number) | null | undefined;
+const measured = new Map<string, number>();
+export function setLabelMeasure(fn: ((s: string) => number) | null) {
+  labelMeasure = fn;
+  measured.clear();
+}
+function labelW(s: string): number {
+  if (labelMeasure === undefined) {
+    labelMeasure = null;
+    try {
+      const ctx = typeof document !== "undefined" ? document.createElement("canvas").getContext("2d") : null;
+      if (ctx) {
+        const family = getComputedStyle(document.documentElement).getPropertyValue("--font-family-ui").trim() || "sans-serif";
+        ctx.font = `600 13px ${family}`;
+        labelMeasure = (t) => ctx.measureText(t).width;
+      }
+    } catch {
+      labelMeasure = null;
+    }
+  }
+  if (!labelMeasure) return Math.ceil(s.length * 8.2);
+  let w = measured.get(s);
+  if (w === undefined) {
+    // Bounded: names come and go as they are typed.
+    if (measured.size > 4000) measured.clear();
+    w = Math.ceil(labelMeasure(s));
+    measured.set(s, w);
+  }
+  return w;
+}
 const CODE_CHAR = 7.2;
 const codeW = (s: string) => s.length * CODE_CHAR;
 
-/** A card row (an ER column, a class member). */
+/** A card row (a class member). */
 export const KIND_ROW = 22;
-/** An ER card shows at most this many rows; the rest scroll inside it. */
-export const ER_MAX_ROWS = 20;
-/** An ER card's height without its rows: 2 px of border, the 32 px header and 3 px above and below the rows. */
-export const ER_CARD_CHROME = 40;
-/**
- * ER build C: where a relationship meets row `row` of an ER card `top` px down a card `h` tall, its rows scrolled by
- * `scroll`: the middle of the row (1 px of border, the 32 px header, 3 px above the rows). A row scrolled out of
- * view puts the end on the card's top or bottom edge, whichever the row is past (fix round 1, DataGrip and
- * dbdiagram). Row -1 is the header, where a line to the whole table meets it.
- */
-export function erRowY(top: number, h: number, row: number, scroll = 0): number {
-  if (row < 0) return top + 17;
-  const y = 47 + row * KIND_ROW - scroll;
-  if (y < 36) return top;
-  if (y > h - 4) return top + h;
-  return top + y;
-}
-/** ER build C: the row of `column` among an ER table's rows ("customer_id int"), or -1 (the header) when absent. */
-export function erColumnRow(rows: readonly string[], column: string | undefined): number {
-  if (column === undefined) return -1;
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r];
-    const next = row.charCodeAt(column.length);
-    if (row.startsWith(column) && (row.length === column.length || next === 32 || next === 9)) return r;
-  }
-  return -1;
-}
-/** An ER card's width bounds (board ER interactions); a longer name ends in an ellipsis with its tip. */
-const ER_MIN_W = 184;
-const ER_MAX_W = 300;
-/** A column row's own width: its name and type in Code small, then the gutter, gaps, type padding and not-null mark. */
-const erRowWidth = (row: string) => {
-  const at = row.search(/\s/);
-  const chars = at < 0 ? row.length : at + row.slice(at + 1).trim().length;
-  return Math.ceil(chars * CODE_CHAR + 92);
-};
 /** A sequence message row, and the participant header above the lifelines. */
 export const SEQ_ROW = 44;
 export const SEQ_HEAD = 40;
@@ -73,14 +73,6 @@ export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "t
     case "document":
     case "database":
       return { w: 150, h: 52 };
-    case "erTable":
-    case "erWeak":
-      // As wide as its longest row (name, type, key gutter and not-null mark) within 184 to 300 px, and as tall as
-      // its rows; past 20 columns the card stops growing and its rows scroll inside it (board ER interactions).
-      return {
-        w: clamp(Math.max(textW(n.name) + 48, ...rows.map(erRowWidth)), ER_MIN_W, ER_MAX_W),
-        h: ER_CARD_CHROME + Math.min(Math.max(rows.length, 1), ER_MAX_ROWS) * KIND_ROW,
-      };
     case "class":
     case "interface":
     case "enum": {
@@ -91,7 +83,8 @@ export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "t
       return { w: clamp(Math.max(textW(n.name) + 40, ...rows.map((r) => codeW(r) + 28)), 160, 340), h: 32 + stereotype + parts };
     }
     case "state":
-      return { w: clamp(textW(n.name) + 40, 96, 280), h: 40 };
+      // The pill's 16 px padding each side, its border, and a little air (fix round 2, L2).
+      return { w: clamp(labelW(n.name) + 44, 100, 280), h: 40 };
     case "choice":
       return { w: 64, h: 64 };
     case "fork":
@@ -194,13 +187,17 @@ function sequenceLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: num
   return { positions, sizes, lifeline, frames, rows };
 }
 
-/** The root in the middle; its topics alternate right and left, each subtree stacked under the one before. */
-function mindLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }): FixedLayout {
+/**
+ * The root in the middle; the first half of its topics on the right, the rest on the left, each side top to bottom
+ * (step 7, board DiagramMindMap), so a topic added beside another lands beside it and at most one topic changes side.
+ * Each subtree is stacked under the one before; a folded topic's subtopics are not placed.
+ */
+function mindLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, folded?: ReadonlySet<string>): FixedLayout {
   const positions = pos();
   const sizes = new Map<string, { w: number; h: number }>();
   const children = new Map<string, string[]>();
   for (const l of doc.links) {
-    if (!l.tree) continue;
+    if (!l.tree || folded?.has(l.from)) continue;
     const list = children.get(l.from) ?? [];
     list.push(l.to);
     children.set(l.from, list);
@@ -229,8 +226,9 @@ function mindLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number 
   for (const r of roots) {
     const s = sizes.get(r.name)!;
     const kids = children.get(r.name) ?? [];
-    const right = kids.filter((_, i) => i % 2 === 0);
-    const left = kids.filter((_, i) => i % 2 === 1);
+    const half = Math.ceil(kids.length / 2);
+    const right = kids.slice(0, half);
+    const left = kids.slice(half);
     const hr = right.reduce((t, k) => t + height(k), 0);
     const hl = left.reduce((t, k) => t + height(k), 0);
     const total = Math.max(hr, hl, s.h);
@@ -247,10 +245,28 @@ function mindLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number 
     }
     rootTop += total + 80;
   }
+  // Topics under a folded one are not drawn.
+  const hidden = new Set<string>();
+  if (folded?.size) {
+    const under = new Map<string, string[]>();
+    for (const l of doc.links) {
+      if (!l.tree) continue;
+      const list = under.get(l.from);
+      if (list) list.push(l.to);
+      else under.set(l.from, [l.to]);
+    }
+    const walk = (n: string) => {
+      for (const k of under.get(n) ?? []) {
+        hidden.add(k);
+        walk(k);
+      }
+    };
+    for (const f of folded) walk(f);
+  }
   // Topics with no root above them (written before any root) go in a column below.
   let loose = rootTop;
   for (const n of doc.nodes) {
-    if (positions[n.name] || !byName.has(n.name)) continue;
+    if (positions[n.name] || !byName.has(n.name) || hidden.has(n.name)) continue;
     positions[n.name] = { x: 0, y: loose };
     loose += (sizes.get(n.name)?.h ?? 30) + 16;
   }
@@ -293,9 +309,9 @@ function timelineLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: num
 }
 
 /** The layout of a sequence, mind map or timeline; null for the kinds that are dragged into place. */
-export function fixedLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }): FixedLayout | null {
+export function fixedLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, opts: { folded?: ReadonlySet<string> } = {}): FixedLayout | null {
   if (doc.kind === "sequence") return sequenceLayout(doc, size);
-  if (doc.kind === "mindmap") return mindLayout(doc, size);
+  if (doc.kind === "mindmap") return mindLayout(doc, size, opts.folded);
   if (doc.kind === "timeline") return timelineLayout(doc, size);
   return null;
 }

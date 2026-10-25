@@ -21,9 +21,9 @@ export interface FlowchartNodeProps extends NodeBaseProps {
   table?: string;
 }
 
-export default function FlowchartNode({ kind, name, id, table, style, selected, state, sized }: FlowchartNodeProps) {
+export default function FlowchartNode({ kind, name, id, table, style, selected, state, sized, color }: FlowchartNodeProps) {
   return (
-    <NodeShell kind={kind} family="flowchart" look={style} selected={selected} name={name} state={state} sized={sized} label={`${WORDS[kind]} ${name}`}>
+    <NodeShell kind={kind} family="flowchart" look={style} selected={selected} name={name} state={state} sized={sized} color={color} label={`${WORDS[kind]} ${name}`}>
       <span className="fnode-text">
         {kind === "io" && table && <Icon name="link" size={14} className="fnode-link" />}
         <span className="fnode-name">{name}</span>

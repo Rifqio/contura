@@ -15,18 +15,18 @@ const DFD = 'diagram dfd "Checkout"\nCustomer [entity]\nCharge card [process, id
 
 describe("completeFlow", () => {
   test("after [ it lists the kinds for the diagram kind, then the attribute keys", () => {
-    expect(at(`${DFD}Refunds [|`).labels).toEqual(["entity", "process", "store", "id", "icon", "color", "table"]);
-    expect(at('diagram flow "A"\nCook [|').labels).toEqual(["start", "end", "step", "decision", "io", "subprocess", "document", "database", "id", "icon", "color", "table"]);
+    expect(at(`${DFD}Refunds [|`).labels).toEqual(["entity", "process", "store", "id", "icon", "label", "color", "table"]);
+    expect(at('diagram flow "A"\nCook [|').labels).toEqual(["start", "end", "step", "decision", "io", "subprocess", "document", "database", "id", "icon", "label", "color", "table"]);
     // A cloud node takes an icon, not a kind.
-    expect(at('diagram cloud "A"\nQueue [|').labels).toEqual(["icon", "id", "color", "table"]);
+    expect(at('diagram cloud "A"\nQueue [|').labels).toEqual(["icon", "id", "label", "color", "table"]);
   });
 
   test("filters by what is typed and leaves out what the brackets have", () => {
     const r = at(`${DFD}Refunds [st|`);
     expect(r.labels).toEqual(["store"]);
     expect(r.from).toBe(r.pos - 2);
-    expect(at(`${DFD}Refunds [store, |`).labels).toEqual(["id", "icon", "color", "table"]);
-    expect(at(`${DFD}Refunds [store, id: D2, |`).labels).toEqual(["icon", "color", "table"]);
+    expect(at(`${DFD}Refunds [store, |`).labels).toEqual(["id", "icon", "label", "color", "table"]);
+    expect(at(`${DFD}Refunds [store, id: D2, |`).labels).toEqual(["icon", "label", "color", "table"]);
     expect(at(`${DFD}Refunds [store, id: D2, i|`).labels).toEqual(["icon"]);
   });
 
@@ -76,7 +76,9 @@ describe("completeFlow", () => {
   });
 
   test("the first line offers the diagram kinds", () => {
-    expect(at("diagram |").labels).toEqual(["dfd", "flow", "cloud", "er", "sequence", "state", "class", "mindmap", "timeline"]);
+    // ADR 0030: no er; DBML is the only ERD.
+    expect(at("diagram |").labels).toEqual(["dfd", "flow", "cloud", "sequence", "state", "class", "mindmap", "timeline"]);
+    expect(at("diagram e|").labels).toEqual([]);
     expect(at("// notes\ndiagram cl|").labels).toEqual(["cloud", "class"]);
   });
 
@@ -110,13 +112,37 @@ test("a typed provider prefix puts the provider icons first", () => {
   expect(s.items.map((i) => i.label)).toEqual(["s3-general", "storage", "aws-s3", "azure-sql", "gcp-artifacts"]);
 });
 
-test("inside an ER column's brackets the column flags are offered, not node kinds (ER build A)", () => {
-  const text = 'diagram er "x"\ncustomers\ncustomers.id int [pk, ';
-  const r = completeFlow(text, text.length, []);
-  expect(r.items.map((i) => i.label)).toEqual(["not null", "unique"]);
-  const typed = 'diagram er "x"\ncustomers\ncustomers.email text [no';
-  expect(completeFlow(typed, typed.length, []).items.map((i) => i.apply)).toEqual(["not null"]);
-  // A table's own brackets still offer its kinds.
-  const table = 'diagram er "x"\nlines [';
-  expect(completeFlow(table, table.length, []).items.map((i) => i.label)).toContain("weak");
+describe("step 11: labels and colours", () => {
+  test("the label and colour keys say what they are for", () => {
+    const r = at('diagram flow "A"\nCook [|');
+    expect(r.items.find((i) => i.label === "label")?.detail).toBe("the words it shows, when another shape has the name");
+    expect(r.items.find((i) => i.label === "color")?.detail).toBe("one of six palette colours");
+  });
+
+  test("after color: the six palette names, with what each means", () => {
+    const r = at('diagram flow "A"\nCook [color: |');
+    expect(r.labels).toEqual(["accent", "info", "success", "warning", "danger", "muted"]);
+    expect(r.items[4]).toMatchObject({ label: "danger", apply: "danger", detail: "Danger: failure, error, data at risk" });
+    expect(at('diagram flow "A"\nCook [step, color: wa|').labels).toEqual(["warning"]);
+  });
+
+  test("a line's brackets offer only color, after a label too", () => {
+    const text = 'diagram flow "A"\nPaid?\nRetry\n';
+    expect(at(`${text}Paid? > Retry [|`).labels).toEqual(["color"]);
+    expect(at(`${text}Paid? > Retry: no [|`).labels).toEqual(["color"]);
+    expect(at(`${text}Paid? > Retry: no [color: d|`).labels).toEqual(["danger"]);
+  });
+
+  test("sequence, class and timeline shapes are offered no label or colour", () => {
+    expect(at('diagram class "C"\nInvoice [|').labels).not.toContain("color");
+    expect(at('diagram class "C"\nInvoice [|').labels).not.toContain("label");
+  });
+
+  test("each shape is listed by its name with the words it shows", () => {
+    const text = 'diagram flow "A"\nRetry\nRetry 2 [label: Retry]\nCharge\nCharge > Re|';
+    const r = at(text);
+    expect(r.labels).toEqual(["Retry", "Retry 2"]);
+    expect(r.items[1]).toMatchObject({ apply: "Retry 2", detail: 'shows "Retry" (label:)' });
+    expect(r.items[0].detail).toBeUndefined();
+  });
 });

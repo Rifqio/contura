@@ -195,6 +195,8 @@ test("window_tabs_show_their_icon_and_name", () => {
     { kind: "settings", section: "ai" },
     { kind: "schema", id: "m1", doc: model },
     { kind: "schema", id: "m2", doc: { ...model, path: null } },
+    // An ER diagram opened as DBML (ADR 0030): unsaved, titled by its name.
+    { kind: "schema", id: "m3", doc: { ...model, path: null, name: "billing" } },
   ];
   render(<TabStrip tabs={tabs} active="home" onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
   expect(featuresIn(screen.getByRole("tab", { name: "Home", selected: true }))).toEqual(["home"]);
@@ -203,6 +205,7 @@ test("window_tabs_show_their_icon_and_name", () => {
   expect(featuresIn(screen.getByRole("tab", { name: "Settings" }))).toEqual([]);
   expect(featuresIn(screen.getByRole("tab", { name: "shop.dbml" }))).toEqual(["model"]);
   expect(screen.getByRole("tab", { name: "untitled.dbml" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "billing" })).toBeTruthy();
   // C1: "+" is there with no place tab at all, and Home closes like any tab.
   expect(screen.getByRole("button", { name: "New query" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Close Home" })).toBeTruthy();
@@ -490,12 +493,12 @@ test("a_diagram_tab_marks_a_save_still_to_come_or_failed", () => {
   const off = registerFlow("strip-demo", { save: "saved", line: null, col: null, errors: 0, flush: async () => true });
   try {
     render(<TabStrip tabs={[{ kind: "flow", name: "strip-demo" }]} active="flow:strip-demo" connections={[]} onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
-    expect(screen.getByRole("tab", { name: "strip-demo.flow" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "strip-demo" })).toBeTruthy();
     act(() => updateFlow("strip-demo", { save: "waiting" }));
-    const tab = screen.getByRole("tab", { name: "strip-demo.flow, unsaved changes" });
+    const tab = screen.getByRole("tab", { name: "strip-demo, unsaved changes" });
     expect(within(tab).getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
     act(() => updateFlow("strip-demo", { save: "failed", message: "disk full" }));
-    expect(screen.getByRole("tab", { name: "strip-demo.flow, unsaved changes" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "strip-demo, unsaved changes" })).toBeTruthy();
   } finally {
     off();
   }
@@ -517,8 +520,8 @@ test("a_diagram_tab_has_its_file_actions_on_right_click", async () => {
   render(
     <TabStrip tabs={[{ kind: "flow", name: "checkout" }]} active="flow:checkout" onSelect={() => {}} onClose={() => {}} onNew={() => {}} diagramActions={actions} />,
   );
-  fireEvent.contextMenu(screen.getByRole("tab", { name: "checkout.flow" }));
-  const menu = screen.getByRole("menu", { name: "checkout.flow" });
+  fireEvent.contextMenu(screen.getByRole("tab", { name: "checkout" }));
+  const menu = screen.getByRole("menu", { name: "checkout" });
   // S3: the tab menu first, then the diagram's file actions.
   expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
     "Close",
@@ -532,7 +535,7 @@ test("a_diagram_tab_has_its_file_actions_on_right_click", async () => {
   ]);
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Save a copy as..." }));
   expect(actions.saveCopy).toHaveBeenCalledWith("checkout");
-  expect(screen.queryByRole("menu", { name: "checkout.flow" })).toBeNull();
+  expect(screen.queryByRole("menu", { name: "checkout" })).toBeNull();
 });
 
 const menuTabs: AnyTab[] = [{ kind: "home" }, q("a", "Query 1"), q("b", "Query 2"), q("c", "Query 3")];
@@ -802,4 +805,12 @@ test("item_48_one_observer_on_the_strip_sets_the_widths_and_goes_on_unmount", ()
   } finally {
     globalThis.ResizeObserver = original;
   }
+});
+
+test("m6_a_tab_shown_by_an_asked_in_link_flashes", () => {
+  const { rerender } = render(<TabStrip tabs={[q("a", "Query 1"), q("b", "Query 2")]} active="query:b" flashKey="query:b" onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
+  expect(document.querySelector('[data-key="query:b"]')!.classList.contains("work-tab-flash")).toBe(true);
+  expect(document.querySelector('[data-key="query:a"]')!.classList.contains("work-tab-flash")).toBe(false);
+  rerender(<TabStrip tabs={[q("a", "Query 1"), q("b", "Query 2")]} active="query:b" flashKey={null} onSelect={() => {}} onClose={() => {}} onNew={() => {}} />);
+  expect(document.querySelector(".work-tab-flash")).toBeNull();
 });

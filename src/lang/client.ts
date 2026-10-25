@@ -143,9 +143,12 @@ export class LangClient {
     return this.ask((id) => ({ type: "layout", id, request }));
   }
 
-  /** Converts a Mermaid flowchart to .flow; `title` is used when the front matter has none. */
-  mermaid(text: string, title: string): Promise<MermaidResult> {
-    return this.ask((id) => ({ type: "mermaid", id, text, title }));
+  /**
+   * Converts Mermaid of any kind Contura has to .flow; `title` is used when the Mermaid names none. `keepUnread` keeps
+   * each line it cannot read as a `//` comment with its reason (a paste translated in place, step 10).
+   */
+  mermaid(text: string, title: string, opts: { keepUnread?: boolean } = {}): Promise<MermaidResult> {
+    return this.ask((id) => ({ type: "mermaid", id, text, title, ...(opts.keepUnread ? { keepUnread: true } : {}) }));
   }
 
   /** Parses .flow text; earlier calls for the same document resolve with the newest result. */

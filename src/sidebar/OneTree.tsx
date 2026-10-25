@@ -168,7 +168,10 @@ function labelOf(node: TreeNode): string {
     case "folder":
       return node.label;
     case "object":
-      return node.path.name;
+      // A table's row count is part of its name, so a screen reader hears it and whether it is an estimate.
+      return node.objectKind === "table" && node.rows != null
+        ? `${node.path.name}, ${node.exact ? "" : "about "}${node.rows.toLocaleString("en-US")} ${node.rows === 1 ? "row" : "rows"}`
+        : node.path.name;
     case "note":
       return node.text;
     case "savedRoot":
@@ -928,7 +931,15 @@ export default function OneTree(props: OneTreeProps) {
             {chevron(row)}
             <Icon name={KIND_ICON[n.objectKind]} size={14} />
             <Name text={n.path.name} match={row.match} />
-            {n.objectKind === "table" && n.rows != null && <span className="tree-count tree-rows">{n.rows.toLocaleString("en-US")}</span>}
+            {n.objectKind === "table" && n.rows != null && (
+              <span
+                className="tree-count tree-rows"
+                title={n.exact ? `${n.rows.toLocaleString("en-US")} ${n.rows === 1 ? "row" : "rows"}, counted when the table was opened` : `About ${n.rows.toLocaleString("en-US")} rows: the server's estimate. Open the table for the exact count.`}
+              >
+                {n.exact ? "" : "~"}
+                {n.rows.toLocaleString("en-US")}
+              </span>
+            )}
           </>
         );
       case "note":

@@ -1,6 +1,6 @@
 // Export colours are read from the tokens at export time, never written as literals (ADR 0008),
 // so an image follows the theme the user picks in the Publish dialog, whatever the window shows.
-import { ICON_TILE_TOKEN, NODE_TOKENS, type NodeKind } from "../types";
+import { ICON_TILE_TOKEN, NODE_TOKENS, type NodeKind, PALETTE_TOKENS } from "../types";
 
 export type ExportTheme = "light" | "dark";
 
@@ -18,8 +18,12 @@ export interface ExportPalette {
   /** A drawn diagram's group area: its edge and its tint. */
   group: string;
   groupTint: string;
-  /** The dashed tile of an icon the pack does not have. */
+  /** The dashed tile of an icon the pack does not have; a timeline's axis and a sequence frame's edge. */
   strongBorder: string;
+  /** The tint of a sequence frame and a timeline section. */
+  panel: string;
+  /** Step 11: the six palette colours (fill, border, words) a shape, group or line may take; uncoloured without them. */
+  colours?: Record<keyof typeof PALETTE_TOKENS, { fill: string; stroke: string; text: string }>;
 }
 
 /** Reads the tokens from a hidden `.theme-light` or `.theme-dark` element, so a dark window can still export Alucard colours. */
@@ -47,6 +51,10 @@ export function exportPalette(theme: ExportTheme = "light"): ExportPalette {
       group: read("--c-group-teal"),
       groupTint: read("--c-group-teal-tint"),
       strongBorder: read("--c-border-strong"),
+      panel: read("--c-bg-panel"),
+      colours: Object.fromEntries(
+        (Object.keys(PALETTE_TOKENS) as (keyof typeof PALETTE_TOKENS)[]).map((c) => [c, { fill: read(PALETTE_TOKENS[c].fill), stroke: read(PALETTE_TOKENS[c].stroke), text: read(PALETTE_TOKENS[c].text) }]),
+      ) as NonNullable<ExportPalette["colours"]>,
     };
   } finally {
     probe.remove();

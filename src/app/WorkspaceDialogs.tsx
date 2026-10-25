@@ -13,8 +13,8 @@ export type Form =
 
 /** New Schema Model: from Home or the tree, or a Recent file that does not say its Dialect. */
 export type ModelStart = {
-  /** A file opened from Recent that does not say its Dialect; StartModel asks for one. */
-  file?: { path: string; dbml: string; layout: string | null };
+  /** A file opened from Recent that does not say its Dialect, or an ER diagram opened as DBML (no path); StartModel asks for one. */
+  file?: { path: string | null; name?: string; dbml: string; layout: string | null };
   initial?: {
     connectionId: ConnectionId;
     database: string;

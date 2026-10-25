@@ -591,6 +591,108 @@
   color: var(--c-text-muted);
   font: var(--font-small);
   font-weight: 600;
+  /* Step 9 (F9): the title is the group's handle: a click selects it, a drag moves it, a double-click renames it. */
+  pointer-events: auto;
+  cursor: grab;
+}
+.flow-area-name:active {
+  cursor: grabbing;
+}
+/* A group selected by its title: an accent ring on its area (Miro and Figma frames). */
+.flow-area.is-selected {
+  /* Drawn outside the border, so the area and its title do not move (fix round 1, M9). */
+  box-shadow: 0 0 0 2px var(--c-accent);
+}
+.flow-area.is-selected .flow-area-name {
+  color: var(--c-accent);
+}
+/*
+  Step 11 (board DiagramColourLabels, ADR 0019): a group, a line or a menu swatch in one of the six palette colours.
+  The element carries --col-fill, --col-edge and --col-words from the palette's tokens (palette.ts): the border and
+  title take the -text token, the tint the -subtle one.
+*/
+.flow-area.is-col {
+  border-color: var(--col-edge);
+  background: color-mix(in srgb, var(--col-fill) 55%, transparent);
+}
+.flow-area.is-col .flow-area-name {
+  color: var(--col-edge);
+}
+.flow-area.is-col .flow-area-swatch {
+  background: var(--col-edge);
+}
+/* A coloured line keeps its colour selected (its stroke is inline) and grows as other lines do. */
+.flow-canvas .react-flow__edge.is-col.selected .react-flow__edge-path {
+  stroke-width: 2.5;
+}
+.flow-swatch {
+  display: block;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--col-edge);
+  border-radius: 3px;
+  background: var(--col-fill);
+}
+.flow-swatch.is-none {
+  border: 1px dashed var(--c-border-strong);
+  background: transparent;
+}
+
+/* Delete's question on a group, under its title (F9): three answers, each with what it touches. */
+.flow-group-ask {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 300px;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg-surface);
+  box-shadow: var(--shadow-1);
+}
+.flow-group-ask-title {
+  padding: 4px 8px 6px;
+  color: var(--c-text);
+  font: var(--font-body-strong);
+}
+.flow-group-ask-row {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.flow-group-ask-row:hover,
+.flow-group-ask-row:focus-visible {
+  background: var(--c-bg-hover);
+}
+.flow-group-ask-row:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: -2px;
+}
+.flow-group-ask-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.flow-group-ask-label {
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.flow-group-ask-row.is-danger .flow-group-ask-label {
+  color: var(--c-danger-text);
+}
+.flow-group-ask-sub {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
 }
 .flow-area-icon {
   width: 16px;
@@ -646,34 +748,6 @@
   border: 0;
   background: transparent;
   opacity: 0;
-}
-
-/*
-  ER build C: a column's side ports (draw.io's connection points on a table row), on a hovered or selected table.
-  They sit just inside the card's edge, as the card's body clips what leaves it, in the row's 10 px side padding, so
-  they clear the key gutter and the not-null mark by 2 px; a drag from one draws a relationship.
-*/
-.react-flow__handle.fkind-port {
-  z-index: 3;
-  width: 8px;
-  height: 8px;
-  min-width: 0;
-  min-height: 0;
-  border: 1.5px solid var(--c-accent);
-  border-radius: 50%;
-  background: var(--c-bg-surface);
-  transform: translate(0, -50%);
-  cursor: crosshair;
-}
-.react-flow__handle.fkind-port[data-side="l"] {
-  left: 0;
-}
-.react-flow__handle.fkind-port[data-side="r"] {
-  right: 0;
-  left: auto;
-}
-.react-flow__handle.fkind-port:hover {
-  background: var(--c-accent);
 }
 
 /* A hovered fix, shown in grey where it would go (frame 6+.3). */
@@ -768,26 +842,6 @@
 /* Pulling back into its port, the line leaves on the exit curve. */
 .flow-pending.is-pulling {
   opacity: 0.6;
-}
-
-/* The label box on a new flow (frame 6+.3): Enter keeps, Esc leaves it unlabelled. */
-.flow-label-box {
-  position: absolute;
-  z-index: 8;
-  box-sizing: border-box;
-  width: 170px;
-  height: 24px;
-  padding: 0 var(--spacing-sm);
-  border: var(--border-hairline) solid var(--c-accent);
-  border-radius: 6px;
-  outline: none;
-  background: var(--c-bg-surface);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 25%, transparent);
-  color: var(--c-text);
-  font: var(--font-small);
-  pointer-events: auto;
-  transform: translate(-50%, -50%);
-  animation: flow-fade-in var(--motion-base) var(--ease-enter);
 }
 
 /* A line to a node being deleted fades out with it. */
@@ -1656,4 +1710,259 @@
 .flow-tooloff .ehead svg {
   flex: none;
   margin-top: 2px;
+}
+
+/*
+  Diagram step 6 (board DiagramAddNext): a + on each side of a hovered or selected shape (draw.io's hover arrows,
+  Miro's +); the new shape drawn as a ghost until its name is kept; "Add here", the kind's shapes in a grid at a
+  double-click on the blank canvas; a Shapes item that cannot be used now says why in its place.
+*/
+.flow-plus {
+  all: unset;
+  position: absolute;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border: 1px solid var(--c-accent);
+  border-radius: 50%;
+  background: var(--c-bg-surface);
+  color: var(--c-accent);
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+}
+.flow-plus:hover,
+.flow-plus:focus-visible {
+  background: var(--c-accent);
+  color: var(--c-bg-surface);
+}
+.flow-ghost {
+  position: absolute;
+  z-index: 7;
+  box-sizing: border-box;
+  border: 1px dashed var(--c-accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c-accent) 8%, var(--c-bg-surface));
+  pointer-events: none;
+}
+.flow-add-here {
+  position: fixed;
+  z-index: 200;
+}
+.flow-add-grid {
+  display: grid;
+  gap: 4px;
+  padding: 4px;
+}
+.flow-add-cell {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 56px;
+  padding: 4px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  color: var(--c-text);
+  font: var(--font-small);
+  text-align: center;
+  cursor: pointer;
+}
+.flow-add-cell:hover,
+.flow-add-cell:focus-visible {
+  background: var(--c-bg-hover);
+  outline: 1px solid var(--c-accent);
+}
+.flow-add-cell[aria-disabled="true"],
+.flow-shape.is-disabled {
+  color: var(--c-text-faint);
+  cursor: default;
+}
+.flow-add-here > .menu {
+  position: relative;
+  top: 0;
+  left: 0;
+  min-width: 0;
+}
+/* The alignment guide while a + ghost lines up with its source (board DiagramAddNext). */
+.flow-ghost-guide {
+  stroke: var(--c-accent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+/* N3: over a group's title the cursor says a double-click renames it (draw.io's text cursor on a label). */
+.flow-canvas.is-on-group-title .react-flow__pane {
+  cursor: text;
+}
+/* The + tip, beside the + and away from its shape (live check: a native title covered the shape). */
+.flow-plus-tip {
+  position: absolute;
+  z-index: 9;
+  width: max-content;
+  max-width: 260px;
+  padding: 4px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-small);
+  pointer-events: none;
+}
+/* Step 7 (board DiagramMindMap): a new topic's place in the map until its name is kept; its field sits on it. */
+.flow-ghost-topic {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--c-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c-accent) 8%, var(--c-bg-surface));
+  pointer-events: none;
+}
+/* M4: the branch being dragged is drawn faded; the topic it would go under is outlined, its own subtopics refuse it. */
+.react-flow__node.is-drag-source,
+.react-flow__edge.is-drag-source {
+  opacity: 0.4;
+}
+.flow-drop-target {
+  position: absolute;
+  z-index: 7;
+  box-sizing: border-box;
+  border: 2px solid var(--c-accent);
+  border-radius: 10px;
+  pointer-events: none;
+}
+.flow-drop-target.is-refused,
+.flow-drop-line.is-refused {
+  border-color: var(--c-danger-solid);
+  background: var(--c-danger-solid);
+}
+.flow-drop-target.is-refused {
+  background: color-mix(in srgb, var(--c-danger-solid) 10%, transparent);
+}
+.flow-drop-line {
+  position: absolute;
+  z-index: 7;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--c-accent);
+  pointer-events: none;
+}
+.flow-canvas.is-drop-refused,
+.flow-canvas.is-drop-refused * {
+  cursor: not-allowed !important;
+}
+.flow-drag-follow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  pointer-events: none;
+}
+.flow-drag-chip,
+.flow-drop-tag {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font: var(--font-small);
+  white-space: nowrap;
+}
+.flow-drag-chip {
+  border: 1px solid var(--c-accent);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  box-shadow: var(--shadow-1);
+}
+.flow-drop-tag {
+  background: var(--c-accent);
+  color: var(--on-accent);
+}
+.flow-drop-tag.is-refused {
+  background: var(--c-danger-solid);
+}
+/* M3: the branch dot, on a topic's outer side; folded, it shows how many subtopics it hides. */
+.flow-fold-dot {
+  all: unset;
+  position: absolute;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 7px;
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+  font: 600 10px/1 var(--font-family-ui);
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+}
+.flow-fold-dot.is-folded {
+  min-width: 18px;
+  height: 18px;
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+.flow-fold-dot:hover,
+.flow-fold-dot:focus-visible {
+  border-color: var(--c-accent);
+  color: var(--c-text);
+}
+/* Step 8 (board DiagramSequence): the insertion line a participant drag shows, the message being drawn, the height
+   a new message lands at, and a selected loop. */
+.flow-drop-line.is-vertical {
+  width: 2px;
+  height: auto;
+}
+.flow-msg-preview {
+  fill: none;
+  stroke: var(--c-text-muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.flow-msg-preview.is-on {
+  stroke: var(--c-accent);
+  stroke-dasharray: none;
+}
+.flow-slot-guide {
+  position: absolute;
+  z-index: 6;
+  height: 0;
+  border-top: 1px dashed var(--c-accent);
+  pointer-events: none;
+}
+.flow-loop-selected {
+  position: absolute;
+  z-index: 6;
+  box-sizing: border-box;
+  border: 2px solid var(--c-accent);
+  border-radius: 8px;
+  pointer-events: none;
+}
+/* Round 2 (live check): on a map, sequence or timeline nothing moves with a box selection's frame, so it takes no
+   presses and a topic, message or lifeline under it keeps its own gestures. */
+.flow-canvas.is-fixed .react-flow__nodesselection-rect {
+  pointer-events: none;
+}
+/*
+ * diag-910 fix round 3, L9: line labels sit above every node, group areas included, so a label where its line crosses a
+ * group's tinted box stays readable (draw.io draws labels over containers).
+ */
+.flow-canvas .react-flow__edgelabel-renderer {
+  z-index: 5;
+}
+/* ADR 0030: an old ER diagram, read-only, with Open as DBML. */
+.flow-er-moved {
+  flex: 1;
 }

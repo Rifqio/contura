@@ -137,7 +137,7 @@ test("item_51_a_box_bigger_than_the_caps_never_snaps_down_when_its_own_size_is_t
   // Review fix 1: limits from the start box, as the diagram nodes and cards take them.
   const { nodeLimitsFor } = await import("../flow/flowNodes");
   const big: Box = { x: 0, y: 0, w: 340, h: 259 };
-  const lim = nodeLimitsFor("erTable", big);
+  const lim = nodeLimitsFor("class", big);
   // Its own 259 px is its limit: a 1 px move down keeps it, nothing snaps to 200.
   expect(resizeBox(big, "s", 0, 1, lim)).toEqual({ x: 0, y: 0, w: 340, h: 259 });
   expect(resizeBox(big, "e", 1, 0, lim).w).toBe(340);

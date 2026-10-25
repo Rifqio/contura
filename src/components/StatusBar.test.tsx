@@ -56,22 +56,29 @@ test("settings_shows_the_data_folder_and_version", () => {
 });
 
 test("schema_shows_model_file_applied_and_layout_note", () => {
-  const { bar } = renderBar({ kind: "schema", fileName: "kestrel_orders.dbml", appliedTo: null });
+  const { bar } = renderBar({ kind: "schema", fileName: "kestrel_orders.dbml", appliedTo: null, saved: true });
   for (const t of ["Schema Model", "kestrel_orders.dbml", "Not applied to a Connection", "Layout saved beside the file"]) {
     expect(bar.textContent).toContain(t);
   }
 });
 
+test("E2: a model not saved yet says so, never that its layout is saved beside a file", () => {
+  const { bar } = renderBar({ kind: "schema", fileName: "uxcheck", appliedTo: null, saved: false });
+  expect(bar.textContent).toContain("uxcheck");
+  expect(bar.textContent).toContain("Not saved yet");
+  expect(bar.textContent).not.toContain("Layout saved beside the file");
+});
+
 test("a_diagram_shows_its_file_name", () => {
-  const { bar } = renderBar({ kind: "flow", name: "checkout", fileName: "checkout.flow" });
-  expect(bar.textContent).toContain("checkout.flow");
+  const { bar } = renderBar({ kind: "flow", name: "checkout", fileName: "checkout" });
+  expect(bar.textContent).toContain("checkout");
 });
 
 test("a_diagram_shows_where_you_are_typing_and_its_problems_as_the_frame", () => {
   const off = registerFlow("status-demo", { save: "saved", line: 4, col: 9, errors: 1, flush: async () => true });
   try {
-    const { bar } = renderBar({ kind: "flow", name: "status-demo", fileName: "status-demo.flow" });
-    for (const t of ["status-demo.flow", "Ln 4, Col 9", "1 problem"]) expect(bar.textContent).toContain(t);
+    const { bar } = renderBar({ kind: "flow", name: "status-demo", fileName: "status-demo" });
+    for (const t of ["status-demo", "Ln 4, Col 9", "1 problem"]) expect(bar.textContent).toContain(t);
     act(() => updateFlow("status-demo", { errors: 0 }));
     expect(bar.textContent).not.toContain("problem");
   } finally {
@@ -80,7 +87,7 @@ test("a_diagram_shows_where_you_are_typing_and_its_problems_as_the_frame", () =>
 });
 
 test("schema_names_the_connection_it_was_applied_to", () => {
-  const { bar } = renderBar({ kind: "schema", fileName: "kestrel_orders.dbml", appliedTo: "kestrel prod" });
+  const { bar } = renderBar({ kind: "schema", fileName: "kestrel_orders.dbml", appliedTo: "kestrel prod", saved: true });
   expect(bar.textContent).toContain("Applied to kestrel prod");
   expect(bar.textContent).not.toContain("Not applied");
 });

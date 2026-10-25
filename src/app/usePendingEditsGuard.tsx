@@ -254,7 +254,7 @@ export function usePendingEditsGuard(opts: {
         </span>
       );
       return new Promise<boolean>((resolve) =>
-        setLeaveAsk({ key: `flow:${name}`, title: `Save changes to ${name}.flow?`, body, production: false, verb: "Save", flow: name, busy: false, resolve }),
+        setLeaveAsk({ key: `flow:${name}`, title: `Save changes to ${name}?`, body, production: false, verb: "Save", flow: name, busy: false, resolve }),
       );
     });
     leaveQueue.current = run.then(
@@ -339,7 +339,7 @@ export function usePendingEditsGuard(opts: {
             }
             if (!ok) {
               const entry = flowEntry(ask.flow);
-              opts.onError(entry?.isHeld?.() ? FLOW_HELD : (entry?.message ?? `${ask.flow}.flow could not be saved.`));
+              opts.onError(entry?.isHeld?.() ? FLOW_HELD : (entry?.message ?? `${ask.flow} could not be saved.`));
             }
           } else if (ask.visual) {
             try {

@@ -186,6 +186,7 @@ test("the shape menu has Cut, Copy and Duplicate; the canvas menu pastes where i
   expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
     "Edit text",
     "Details...",
+    "Colour",
     "Duplicate",
     "Cut",
     "Copy",
@@ -202,31 +203,6 @@ test("the shape menu has Cut, Copy and Duplicate; the canvas menu pastes where i
   expect(within(canvasMenu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Add here", "Paste", "Select all", "Tidy", "Zoom to fit", "Publish image..."]);
   await userEvent.click(within(canvasMenu).getByRole("menuitem", { name: "Paste" }));
   await waitFor(() => expect(s.text()).toBe(FLOW.replace("Done [end]\n", "Done [end]\nCheck 2 [decision]\n")));
-});
-
-test("ER: a table is copied with its columns and keys, and the relationship between copied tables comes along", async () => {
-  const er = lines('diagram er "Billing"', "customers", "customers.id int [pk]", "invoices", "invoices.id int [pk]", "", "customers 1--* invoices : bills");
-  const s = setup(er, "er-clip");
-  await drawn(s, "Entity customers");
-  s.pick("customers", "invoices");
-  s.press("d", { ctrlKey: true });
-  const after = lines(
-    'diagram er "Billing"',
-    "customers",
-    "customers.id int [pk]",
-    "invoices",
-    "invoices.id int [pk]",
-    "customers_2",
-    "customers_2.id int [pk]",
-    "invoices_2",
-    "invoices_2.id int [pk]",
-    "",
-    "customers 1--* invoices : bills",
-    "customers_2 1--* invoices_2: bills",
-  );
-  await waitFor(() => expect(s.text()).toBe(after));
-  await waitFor(() => expect(s.node("Entity customers_2")).not.toBeNull());
-  oneUndo(s, er);
 });
 
 test("data flow: a duplicated process takes the next free id", async () => {

@@ -230,6 +230,37 @@ test("open_file_without_dialect_asks", async () => {
   expect(onStart.mock.calls[0][0]).toMatchObject({ dialect: "sqlite", path: "C:\\m\\plain.dbml" });
 });
 
+test("an ER diagram opened as DBML asks its Dialect and starts unsaved, under its name (ADR 0030)", async () => {
+  noRecent();
+  const onStart = vi.fn<(d: ModelDoc) => void>();
+  const dbml = "Table a {\n  id int\n}\n";
+  render(<StartModel connections={[kfc]} openIds={new Set()} file={{ path: null, name: "billing", dbml, layout: null }} onStart={onStart} onCancel={() => {}} />);
+  expect(await screen.findByText("This model doesn't say which Dialect it targets. Choose one.")).toBeTruthy();
+  await userEvent.click(within(screen.getByRole("radiogroup", { name: "Dialect of the file" })).getByRole("radio", { name: /PostgreSQL/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Continue/ }));
+  expect(onStart.mock.calls[0][0]).toMatchObject({ path: null, name: "billing", dbml, savedDbml: "", dialect: "postgres" });
+});
+
+test("E1: Open as DBML shows only the Dialect question and says the model opens unsaved, never the .dbml file picker", async () => {
+  noRecent();
+  const onStart = vi.fn<(d: ModelDoc) => void>();
+  render(<StartModel connections={[kfc]} openIds={new Set()} file={{ path: null, name: "billing", dbml: "Table a {\n  id int\n}\n", layout: null }} onStart={onStart} onCancel={() => {}} />);
+  const dialog = await screen.findByRole("dialog");
+  expect(await within(dialog).findByText("This model doesn't say which Dialect it targets. Choose one.")).toBeTruthy();
+  // Nothing of the "Open a .dbml file" way: no drop box, no Browse, no file footer, no ways to start.
+  expect(within(dialog).queryByText("Drop a .dbml file here")).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: /Browse/ })).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: /Open\.\.\./ })).toBeNull();
+  expect(dialog.textContent).not.toContain("Opens the file. It is saved back to the same place.");
+  expect(within(dialog).queryByRole("radiogroup", { name: "Start from" })).toBeNull();
+  expect(within(dialog).queryByText("Recent models")).toBeNull();
+  expect(dialog.textContent).toContain("The converted model opens unsaved. The first Save asks where to keep it.");
+  // One Continue, and Enter takes it too.
+  expect(within(dialog).getAllByRole("button", { name: /Continue/ })).toHaveLength(1);
+  fireEvent.keyDown(within(dialog).getByRole("radiogroup", { name: "Dialect of the file" }), { key: "Enter" });
+  expect(onStart.mock.calls[0][0]).toMatchObject({ path: null, name: "billing", dialect: "mysql" });
+});
+
 const REVERSE = {
   recent_items: () => [],
   list_databases: () => ["shop"],

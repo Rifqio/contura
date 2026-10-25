@@ -491,7 +491,7 @@ describe("diagram saves on close (P16 I3)", () => {
         result = g.confirmCloseFlow("checkout");
       });
       // The close tries the save again first; it fails, so it asks.
-      await screen.findByText("Save changes to checkout.flow?");
+      await screen.findByText("Save changes to checkout?");
       expect(flush).toHaveBeenCalledTimes(1);
       await userEvent.click(button("Save"));
       expect(await result!).toBe(true);
@@ -510,14 +510,14 @@ describe("diagram saves on close (P16 I3)", () => {
       act(() => {
         kept = g.confirmCloseFlow("checkout");
       });
-      await screen.findByText("Save changes to checkout.flow?");
+      await screen.findByText("Save changes to checkout?");
       await userEvent.click(button("Cancel"));
       expect(await kept!).toBe(false);
       let gone: Promise<boolean>;
       act(() => {
         gone = g.confirmCloseFlow("checkout");
       });
-      await screen.findByText("Save changes to checkout.flow?");
+      await screen.findByText("Save changes to checkout?");
       await userEvent.click(button("Discard"));
       expect(await gone!).toBe(true);
     } finally {
@@ -535,7 +535,7 @@ describe("diagram saves on close (P16 I3)", () => {
       act(() => {
         result = g.confirmCloseFlow("checkout");
       });
-      await screen.findByText("Save changes to checkout.flow?");
+      await screen.findByText("Save changes to checkout?");
       expect(screen.getByText(/Contura is still moving or deleting this file\. Try again in a moment\./)).toBeTruthy();
       expect(screen.queryByText(/could not be saved/)).toBeNull();
       await userEvent.click(button("Cancel"));

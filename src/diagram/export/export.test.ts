@@ -27,6 +27,7 @@ const PALETTE: ExportPalette = {
   group: "#111111",
   groupTint: "#121212",
   strongBorder: "#131313",
+  panel: "#141414",
 };
 
 const SCENE: Scene = {

@@ -120,6 +120,11 @@ function select(s: Setup, label: string) {
 
 const banded = (c: HTMLElement) => [...c.querySelectorAll(".cm-line.cm-flow-band")].map((e) => e.textContent);
 
+/** Keeps a new shape's name as it opened: a key or a tool opens the name, written once kept (diagram step 6). */
+async function keepNew() {
+  fireEvent.keyDown(await screen.findByRole("textbox", { name: /^(Name the new|Note text)/ }), { key: "Enter" });
+}
+
 test("opening_renders_text_and_canvas", async () => {
   const s = setup();
   await drawn(s);
@@ -190,6 +195,7 @@ test("add_connect_rename_and_delete_from_the_canvas_each_rewrite_the_text", asyn
   await drawn(s);
   // Add: P adds a process with the next free id.
   s.press("p");
+  await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
   expect(s.text().split("\n").slice(0, 6)).toEqual(['diagram dfd "Checkout"', "", "Customer [entity]", "Checkout [process, id: 1.0]", "Orders [store, id: D1, table: shop.orders]", "Process [process, id: 3.0]"]);
   // Connect: a flow drawn from Customer to Orders.
@@ -220,6 +226,7 @@ test("undo_after_a_canvas_add_removes_the_line", async () => {
   const s = setup();
   await drawn(s);
   await userEvent.click(screen.getByRole("button", { name: "Add data store" }));
+  await keepNew();
   await waitFor(() => expect(s.text()).toContain("Data store [store, id: D2]\n"));
   act(() => void undo(s.view()));
   expect(s.text()).toBe(DFD);
@@ -230,6 +237,7 @@ test("canvas_edits_while_text_has_error", async () => {
   const s = setup({ text: BROKEN, layout: null });
   await waitFor(() => expect(screen.getByText("Refunds is not defined.")).toBeTruthy());
   s.press("e");
+  await keepNew();
   await waitFor(() => expect(s.text()).toContain("Outside party [entity]\n"));
   expect(s.text()).toContain("Checkout > Refunds: reversal\n");
   cleanup();
@@ -241,6 +249,7 @@ test("canvas_edits_while_text_has_error", async () => {
   await waitFor(() => expect(fresh.container.querySelector(".flow-canvas.is-stale")).not.toBeNull());
   // Add: a new line, while the error stays.
   fresh.press("p");
+  await keepNew();
   await waitFor(() => expect(fresh.text()).toContain("Process [process, id: 3.0]\n"));
   expect(fresh.text()).toContain("Checkout > Refunds: reversal\n");
   // Connect two nodes of the faded drawing.
@@ -330,6 +339,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
   expect(screen.getByText("Press P, S or E, or click here")).toBeTruthy();
   expect(empty.container.querySelector(".flow-first-node-line")?.textContent).toBe("Or type Customer [entity] on line 2");
   await userEvent.click(screen.getByRole("button", { name: /Add the first node/ }));
+  await keepNew();
   await waitFor(() => expect(empty.text()).toBe('diagram dfd "New"\nProcess [process, id: 1.0]\n'));
   cleanup();
 
@@ -360,7 +370,8 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
   expect(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByText("Cloud")).toBeTruthy();
   expect(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByText("2 services")).toBeTruthy();
   cloud.press("n");
-  await waitFor(() => expect(cloud.text()).toContain("Service\n"));
+  await keepNew();
+  await waitFor(() => expect(cloud.text()).toContain("Service [icon: aws-lambda]\n"));
 });
 
 test("classic_toggles_and_is_kept_in_the_layout", async () => {
@@ -461,6 +472,7 @@ test("an_edit_to_a_crlf_file_saves_crlf", async () => {
   const s = setup({ text: crlf(DFD), layout: null });
   await drawn(s);
   s.press("p");
+  await keepNew();
   await waitFor(() => expect(s.lastSave()?.text).toContain("Process [process, id: 3.0]\r\n"));
   expect(s.lastSave().text).toBe(crlf(s.text()));
   expect(/(^|[^\r])\n/.test(s.lastSave().text!)).toBe(false);
@@ -480,6 +492,7 @@ test("after_a_worker_restart_the_tab_still_updates_and_takes_actions", async () 
   s.type("Refunds: reversal", at, at + "Charge card: amount".length);
   await waitFor(() => expect(screen.getByText("Refunds is not defined.")).toBeTruthy());
   s.press("p");
+  await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
 });
 
@@ -510,6 +523,7 @@ test("a_new_or_renamed_node_is_selected_on_the_canvas_and_in_the_strip", async (
   select(s, "Process Checkout");
   await waitFor(() => expect(s.node("Process Checkout")!.classList.contains("selected")).toBe(true));
   s.press("p");
+  await keepNew();
   await waitFor(() => expect(s.node("Process Process")?.classList.contains("selected")).toBe(true));
   expect(s.node("Process Checkout")!.classList.contains("selected")).toBe(false);
   expect(within(strip()).getByText("Process")).toBeTruthy();
@@ -549,6 +563,7 @@ test("ctrl_z_and_ctrl_y_on_the_canvas_run_the_one_history", async () => {
   const s = setup();
   await drawn(s);
   s.press("p");
+  await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
   s.press("z", { ctrlKey: true });
   expect(s.text()).toBe(DFD);
@@ -585,7 +600,7 @@ test("connecting_from_the_faded_drawing_refuses_a_name_the_text_lacks", async ()
   expect(s.text()).toBe(before);
 });
 
-test("renaming_to_a_taken_name_says_so", async () => {
+test("renaming_to_a_taken_name_keeps_the_words_as_a_label_and_says_so (step 11)", async () => {
   const s = setup();
   await drawn(s);
   select(s, "Outside party Customer");
@@ -594,8 +609,9 @@ test("renaming_to_a_taken_name_says_so", async () => {
   await userEvent.clear(box);
   await userEvent.type(box, "Checkout{Enter}");
   const strip = s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
-  expect(await within(strip).findByText("Checkout is already used.")).toBeTruthy();
-  expect(s.text()).toBe(DFD);
+  await waitFor(() => expect(strip.textContent).toContain("Checkout is already a shape's name, so this one is written Checkout 2 [label: Checkout]"));
+  expect(s.text()).toContain("Checkout 2 [entity, label: Checkout]");
+  expect(s.text()).not.toMatch(/\bCustomer\b/);
 });
 
 test("hints_are_not_counted_as_problems", async () => {
@@ -656,7 +672,7 @@ test("discard_after_a_failed_save_writes_nothing_more", async () => {
     closing = guard.g!.confirmCloseFlow("checkout");
   });
   // The close tries once more, fails, and asks.
-  await screen.findByText("Save changes to checkout.flow?");
+  await screen.findByText("Save changes to checkout?");
   const writes = allSaves().length;
   expect(writes).toBeGreaterThan(0);
   await userEvent.click(screen.getByRole("button", { name: /^Discard/ }));
@@ -697,6 +713,7 @@ test("a_node_that_is_not_drawn_keeps_no_selection", async () => {
   await waitFor(() => expect(s.container.querySelector(".flow-canvas.is-stale")).not.toBeNull());
   // An add on the broken text writes its line, but the faded drawing cannot show it: nothing stays selected.
   s.press("p");
+  await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
   const strip = s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   await waitFor(() => expect(within(strip).getByText("Nothing selected")).toBeTruthy());
@@ -744,6 +761,7 @@ test("the_text_is_written_only_after_a_text_edit", async () => {
   const s = setup();
   await drawn(s);
   s.press("p");
+  await keepNew();
   await waitFor(() => expect(s.lastSave()?.cmd).toBe("write_diagram"));
   expect(s.lastSave().text).toBe(s.text());
   const texts = callsTo("write_diagram").length;
@@ -780,6 +798,7 @@ test("item_20_right_click_on_the_canvas_and_on_a_node_opens_contura_menus", asyn
   expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Add here", "Paste", "Select all", "Tidy", "Zoom to fit", "Publish image..."]);
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Add here" }));
   await userEvent.click(within(await screen.findByRole("menu", { name: "Add here" })).getByRole("menuitem", { name: "Data store" }));
+  await keepNew();
   await waitFor(() => expect(s.text()).toContain("Data store [store, id: D2]\n"));
   expect(screen.queryByRole("menu", { name: "Canvas actions" })).toBeNull();
   // Escape closes it.
@@ -790,7 +809,7 @@ test("item_20_right_click_on_the_canvas_and_on_a_node_opens_contura_menus", asyn
   // A node: its own actions; Delete takes it out of the text.
   fireEvent.contextMenu(s.node("Data store Orders")!, { clientX: 320, clientY: 220 });
   const nodeMenu = await screen.findByRole("menu", { name: "Orders actions" });
-  expect(within(nodeMenu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Edit text", "Details...", "Duplicate", "Cut", "Copy", "Add connected", "Fit to content", "Show in the text", "Delete"]);
+  expect(within(nodeMenu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Edit text", "Details...", "Colour", "Duplicate", "Cut", "Copy", "Add connected", "Fit to content", "Show in the text", "Delete"]);
   await userEvent.click(within(nodeMenu).getByRole("menuitem", { name: "Delete" }));
   await waitFor(() => expect(s.text()).not.toContain("Orders ["));
 });
@@ -798,7 +817,6 @@ test("item_20_right_click_on_the_canvas_and_on_a_node_opens_contura_menus", asyn
 // ---- Step 12, item 19: the newer kinds draw ----
 
 const KIND_TEXTS: Record<string, string> = {
-  er: ['diagram er "Billing"', "customers", "customers.id int", "customers.email text", "invoices", "customers 1--* invoices : bills"].join("\n"),
   sequence: ['diagram sequence "Pay"', "actor Customer", "participant App", "Customer -> App : Pay invoice", "loop retry {", "  App -> App : check", "}", "App --> Customer : done"].join("\n"),
   state: ['diagram state "Invoice"', "Draft", "Sent", "Paid in full? [choice]", "[*] > Draft", "Draft > Sent : send", "Sent > [*]"].join("\n"),
   class: ['diagram class "Types"', "interface Payable", "Payable : pay(amount)", "class Invoice", "Invoice : + total: numeric", "Payable <|-- Invoice"].join("\n"),
@@ -808,7 +826,6 @@ const KIND_TEXTS: Record<string, string> = {
 
 test("item_19_each_newer_kind_draws_its_shapes", async () => {
   const expected: Record<string, string[]> = {
-    er: ["Entity customers", "Entity invoices"],
     sequence: ["Actor Customer", "Participant App"],
     state: ["Start", "End", "State Draft", "Choice Paid in full?"],
     class: ["Interface Payable", "Class Invoice"],
@@ -823,9 +840,9 @@ test("item_19_each_newer_kind_draws_its_shapes", async () => {
 });
 
 test("item_19_cards_show_their_rows_and_fixed_kinds_are_laid_out_without_a_layout_file", async () => {
-  const s = setup({ text: `${KIND_TEXTS.er}\n`, layout: null }, "k-er-rows");
-  await waitFor(() => expect(s.node("Entity customers")).not.toBeNull(), { timeout: 4000 });
-  expect([...s.node("Entity customers")!.querySelectorAll(".fkind-col")].map((e) => e.textContent)).toEqual(["id", "email"]);
+  const s = setup({ text: `${KIND_TEXTS.class}\n`, layout: null }, "k-class-rows");
+  await waitFor(() => expect(s.node("Class Invoice")).not.toBeNull(), { timeout: 4000 });
+  expect([...s.node("Class Invoice")!.querySelectorAll(".fkind-col")].map((e) => e.textContent)).toEqual(["+ total: numeric"]);
   cleanup();
   const seq = setup({ text: `${KIND_TEXTS.sequence}\n`, layout: null }, "k-seq");
   await waitFor(() => expect(seq.node("Participant App")).not.toBeNull(), { timeout: 4000 });
@@ -837,7 +854,7 @@ test("item_19_cards_show_their_rows_and_fixed_kinds_are_laid_out_without_a_layou
   expect(seq.saves()).toEqual([]);
 });
 
-test("item_19_the_shapes_list_names_the_open_kinds_shapes_and_writes_a_line", async () => {
+test("item_19_the_shapes_list_names_the_open_kinds_shapes_and_every_item_adds_on_the_canvas", async () => {
   const s = setup({ text: `${KIND_TEXTS.state}\n`, layout: null }, "k-shapes");
   await waitFor(() => expect(s.node("State Draft")).not.toBeNull(), { timeout: 4000 });
   await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
@@ -852,14 +869,14 @@ test("item_19_the_shapes_list_names_the_open_kinds_shapes_and_writes_a_line", as
     "Transition",
     "Note",
   ]);
-  // A line shape is written at the end of the text, selected.
+  // A line item waits for the two shapes it joins (diagram step 6, F18): nothing is written into the text.
+  const before = s.text();
   await userEvent.click(within(list).getByRole("menuitem", { name: "Transition" }));
-  expect(s.text().endsWith("A > B: event\n")).toBe(true);
-  const sel = s.view().state.selection.main;
-  expect(s.text().slice(sel.from, sel.to)).toBe("A > B: event");
-  // A shape with a tool adds the node.
+  expect(s.text()).toBe(before);
+  // A shape is added on the canvas with its name ready, written once it is kept.
   await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
   await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "State" }));
+  await userEvent.type(await screen.findByRole("textbox", { name: "Name the new state" }), "{Enter}");
   await waitFor(() => expect(s.text()).toMatch(/^State$/m));
 });
 
@@ -904,9 +921,9 @@ test("item_21_51_a_selected_node_resizes_live_from_its_zones_and_a_kept_size_dra
 });
 
 test("item_51_a_node_laid_out_past_the_caps_keeps_its_size_on_a_1px_drag", async () => {
-  // An ER table with ten columns is 40 + 10 x 22 = 260 px tall, past the 200 px cap.
-  const rows = Array.from({ length: 10 }, (_, i) => `ledger.column_${i} int`);
-  const text = ['diagram er "Big"', "ledger", ...rows, ""].join("\n");
+  // A class with ten fields is 32 + 10 x 22 + 11 (its empty methods part) + 16 = 279 px tall, past the 200 px cap.
+  const rows = Array.from({ length: 10 }, (_, i) => `ledger : + column_${i}: int`);
+  const text = ['diagram class "Big"', "class ledger", ...rows, ""].join("\n");
   // jsdom has no layout: each box measures at the size its style gives it, as a browser would here.
   const protoH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
   const protoW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
@@ -918,14 +935,14 @@ test("item_51_a_node_laid_out_past_the_caps_keeps_its_size_on_a_1px_drag", async
     if (protoH) Object.defineProperty(HTMLElement.prototype, "offsetHeight", protoH);
     if (protoW) Object.defineProperty(HTMLElement.prototype, "offsetWidth", protoW);
   });
-  const s = setup({ text, layout: null }, "big-er");
-  await drawn(s, "Entity ledger");
-  const wrap = s.node("Entity ledger")!;
+  const s = setup({ text, layout: null }, "big-class");
+  await drawn(s, "Class ledger");
+  const wrap = s.node("Class ledger")!;
   const laid = { w: parseFloat(wrap.style.width), h: parseFloat(wrap.style.height) };
-  expect(laid.h).toBe(260);
-  select(s, "Entity ledger");
+  expect(laid.h).toBe(279);
+  select(s, "Class ledger");
   const zone = await waitFor(() => {
-    const z = s.node("Entity ledger")!.querySelector('.rz-zone[data-dir="s"]') as HTMLElement;
+    const z = s.node("Class ledger")!.querySelector('.rz-zone[data-dir="s"]') as HTMLElement;
     expect(z).toBeTruthy();
     return z;
   });
@@ -943,13 +960,20 @@ test("item_51_a_node_laid_out_past_the_caps_keeps_its_size_on_a_1px_drag", async
     expect(kept.w).toBe(laid.w);
     expect(kept.h).toBeGreaterThanOrEqual(laid.h);
   }
-  expect(parseFloat(s.node("Entity ledger")!.style.height)).toBeGreaterThanOrEqual(laid.h);
+  expect(parseFloat(s.node("Class ledger")!.style.height)).toBeGreaterThanOrEqual(laid.h);
 });
 
-test("item_22_double_click_a_node_to_edit_its_name_and_details", async () => {
+/** The name and details panel, from the shape's menu (a double-click edits the name on the shape, diagram step 3). */
+async function details(node: HTMLElement) {
+  fireEvent.contextMenu(node, { clientX: 300, clientY: 200 });
+  const menu = await screen.findByRole("menu");
+  await userEvent.click(within(menu).getByRole("menuitem", { name: "Details..." }));
+}
+
+test("item_22_details_from_the_menu_edit_a_nodes_name_and_details", async () => {
   const s = setup();
   await drawn(s);
-  fireEvent.doubleClick(s.node("Data store Orders")!);
+  await details(s.node("Data store Orders")!);
   const panel = await screen.findByRole("dialog", { name: "Edit Orders" });
   const name = within(panel).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
   expect(name.value).toBe("Orders");
@@ -965,7 +989,7 @@ test("item_22_double_click_a_node_to_edit_its_name_and_details", async () => {
   expect(screen.queryByRole("dialog", { name: "Edit Orders" })).toBeNull();
   // Escape leaves a node as it was.
   await waitFor(() => expect(s.node("Process Checkout")).not.toBeNull());
-  fireEvent.doubleClick(s.node("Process Checkout")!);
+  await details(s.node("Process Checkout")!);
   const again = await screen.findByRole("dialog", { name: "Edit Checkout" });
   await userEvent.type(within(again).getByRole("textbox", { name: "Name" }), "x");
   fireEvent.keyDown(document.body, { key: "Escape" });
@@ -991,9 +1015,11 @@ test("item_23_canvas_keys_and_a_double_click_on_empty_canvas", async () => {
     const now = JSON.parse(s.lastSave()?.layout ?? "{}").nodes?.Checkout;
     expect(now?.x).toBe((before?.x ?? now.x - 1) + 1);
   });
-  // A double-click on empty canvas offers the kind's shapes there.
-  fireEvent.doubleClick(s.container.querySelector(".react-flow__pane") as HTMLElement, { clientX: 400, clientY: 300 });
+  // A double-click on empty canvas offers the kind's shapes there ("Add here"), the pick's name ready.
+  // Clear of every shape and group title (a double-click on a title renames the group).
+  fireEvent.doubleClick(s.container.querySelector(".react-flow__pane") as HTMLElement, { clientX: 1200, clientY: 760 });
   await userEvent.click(await screen.findByRole("menuitem", { name: /Data store/ }));
+  await userEvent.type(await screen.findByRole("textbox", { name: "Name the new data store" }), "{Enter}");
   await waitFor(() => expect(s.text()).toContain("Data store [store, id: D2]\n"));
 });
 

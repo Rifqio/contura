@@ -14,7 +14,8 @@ use crate::model::ConnectionId;
 
 pub use history::{
     HistoryPick, HistorySummary, SummarySource, Turn, access_now, also_of, closing_topic,
-    history_allowed, message_access, message_allowed, select_history,
+    history_allowed, message_access, message_allowed, select_history, spans_other,
+    summary_covers_ok,
 };
 pub use rules::{
     AskFacts, BreakReason, EARLIER_TOPICS, IDLE_MS, RECENT_TURNS, SUMMARY_CHARS, TITLE_CHARS,
@@ -38,6 +39,8 @@ const STEPS_LEAD: &str = "steps before it: ";
 pub(crate) const OTHER_STEPS_LEAD: &str = "steps on other Connections before it: ";
 /// A tab kind id is a short word.
 const TAB_ID_CHARS: usize = 32;
+/// The longest tab key kept (`query:<uuid>` is 42).
+pub const TAB_KEY_CHARS: usize = 128;
 
 /// Where a question was asked (spec 6): the tab kind, the where line, a summary of the
 /// This tab item and the Recent steps labels, each as they went, so it never holds more
@@ -71,6 +74,11 @@ pub struct AskedIn {
     /// holds them: `label_only` drops them and the stamp it is sent leaves them out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub other_steps: Vec<OtherStep>,
+    /// The webview's key of the tab the question was asked in (`query:<id>`), so "Asked
+    /// in" can show that tab again (UX step 9, A7). Set by the webview when it saves the
+    /// turn; it names a tab, never what the tab holds, and is never replayed or sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_key: Option<String>,
 }
 
 /// A Recent step on a Connection other than the Ask's, kept with the Ask (the user's
@@ -109,6 +117,7 @@ impl AskedIn {
             tab: self.tab.clone(),
             label: self.label.clone(),
             also: self.also.clone(),
+            tab_key: self.tab_key.clone(),
             ..AskedIn::default()
         }
     }
@@ -178,6 +187,10 @@ impl AskedIn {
                 also.push(*id);
             }
         }
+        let tab_key = self
+            .tab_key
+            .as_deref()
+            .map(|k| one_line(k).chars().take(TAB_KEY_CHARS).collect());
         AskedIn {
             tab,
             label,
@@ -185,6 +198,7 @@ impl AskedIn {
             steps,
             also,
             other_steps,
+            tab_key,
         }
     }
 
@@ -458,6 +472,33 @@ pub trait ThreadStore: Send + Sync {
 mod tests {
     use super::*;
 
+    /// A7: the key of the tab a question was asked in goes back to the webview with the
+    /// label, so "Asked in" can show that tab; it is held to one line and its cap, and it
+    /// is never part of a replayed turn.
+    #[test]
+    fn the_tab_key_stays_with_the_label_and_is_never_replayed() {
+        let a = AskedIn {
+            tab: "query".into(),
+            label: "Query 2".into(),
+            summary: "current statement".into(),
+            tab_key: Some(format!("query:{}", "k".repeat(300))),
+            ..AskedIn::default()
+        };
+        assert_eq!(a.label_only().tab_key, a.tab_key);
+        assert_eq!(a.capped().tab_key.unwrap().chars().count(), TAB_KEY_CHARS);
+        let line = AskedIn {
+            tab_key: Some("query:a\nb".into()),
+            ..AskedIn::default()
+        };
+        assert_eq!(line.capped().tab_key.as_deref(), Some("query:a b"));
+        let replayed = a.replay_lines(&[]).join("\n");
+        assert!(!replayed.contains("query:"), "{replayed}");
+        // An Asked in saved before the key has none, and one without it writes none.
+        let old: AskedIn = serde_json::from_str(r#"{"tab":"query","label":"Query 2"}"#).unwrap();
+        assert_eq!(old.tab_key, None);
+        assert!(!serde_json::to_string(&old).unwrap().contains("tabKey"));
+    }
+
     #[test]
     fn asked_in_caps() {
         // A 2 KB summary is cut at the last `; ` that fits 400 bytes.
@@ -474,6 +515,7 @@ mod tests {
                 .collect(),
             also: Vec::new(),
             other_steps: Vec::new(),
+            tab_key: None,
         }
         .capped();
         assert!(a.summary.len() <= ASKED_IN_SUMMARY_BYTES);
@@ -513,6 +555,7 @@ mod tests {
             steps: vec!["ran\rit".into()],
             also: Vec::new(),
             other_steps: Vec::new(),
+            tab_key: None,
         }
         .replay_lines(&[]);
         assert_eq!(
@@ -536,6 +579,7 @@ mod tests {
             ],
             also: Vec::new(),
             other_steps: Vec::new(),
+            tab_key: None,
         };
         assert_eq!(
             a.replay_lines(&[]),

@@ -64,3 +64,30 @@ test("history is capped so memory stays bounded", async () => {
   expect(h.past.length).toBe(HISTORY_CAP);
   expect(h.past[0]).toBe(50);
 });
+
+test("a_history_can_take_its_own_cap", async () => {
+  const h = createHistory<number>();
+  for (let i = 0; i < 250; i++) {
+    record(h, i, { now: 0, cap: 200 });
+    await tick();
+  }
+  expect(h.past.length).toBe(200);
+  expect(h.past[0]).toBe(50);
+});
+
+test("without_grouping_each_record_in_one_tick_is_its_own_step", () => {
+  // The Table Designer: a cell commit and the Add it came with are two steps, Ctrl+Z takes back one at a time.
+  const h = createHistory<number>();
+  record(h, 1, { now: 0, group: false });
+  record(h, 2, { now: 0, group: false });
+  expect(undo(h, 3)).toBe(2);
+  expect(undo(h, 2)).toBe(1);
+});
+
+test("a_merge_without_grouping_still_ends_after_the_pause", () => {
+  const h = createHistory<string>();
+  record(h, "", { now: 0, merge: "name", group: false });
+  record(h, "o", { now: 300, merge: "name", group: false });
+  record(h, "or", { now: 5000, merge: "name", group: false });
+  expect(h.past).toEqual(["", "or"]);
+});

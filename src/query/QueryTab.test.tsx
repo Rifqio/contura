@@ -16,6 +16,7 @@ import { mockReactFlowDom } from "../test/reactFlow";
 import { ToastProvider } from "../components/Toast";
 import appCss from "../styles/app.css?raw";
 import QueryTab, { type QueryTabDoc } from "./QueryTab";
+import { fakePlan } from "../test/fakeCore";
 import { clearAllSteps, RecordStepContext, stepsOf } from "../assistant/recentSteps";
 import type { SqlEditorApi } from "./SqlEditor";
 
@@ -1555,4 +1556,335 @@ test("a_failed_run_records_a_failed_step", async () => {
   await sessionOpen();
   key(view(), "Enter", { ctrlKey: true });
   await waitFor(() => expect(stepsOf("ungrouped")).toMatchObject([{ verb: "runQuery", failed: true, count: null }]));
+});
+
+// ---- UX step 9 (A2): a suggestion waiting in the editor turns Run off ----
+
+test("a2_run_is_off_while_a_suggestion_waits_and_ctrl_enter_only_keeps_it", async () => {
+  routes();
+  const editorRef = { current: null as SqlEditorApi | null };
+  const { view } = setup(doc("SELECT 1;"), true, { editorRef });
+  await sessionOpen();
+  const runButton = () => screen.getByRole("button", { name: /^Run Ctrl\+Enter/ });
+  act(() => editorRef.current!.suggest({ from: 0, to: 9, text: "SELECT 2;", where: "Replaces line 1 of Query 1" }));
+  await waitFor(() => expect(runButton().hasAttribute("disabled")).toBe(true));
+  expect(runButton().getAttribute("title")).toBe("Keep or discard the suggestion first: Ctrl+Enter keeps, Esc discards.");
+  expect((screen.getByRole("button", { name: /^Run all/ }) as HTMLButtonElement).disabled).toBe(true);
+  key(view(), "Enter", { ctrlKey: true });
+  expect(view().state.doc.toString()).toBe("SELECT 2;");
+  await waitFor(() => expect(runButton().hasAttribute("disabled")).toBe(false));
+  // Keeping ran nothing; the next Ctrl+Enter runs.
+  expect(callsTo("prepare_run")).toHaveLength(0);
+  expect(callsTo("execute_sql")).toHaveLength(0);
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+});
+
+test("a2_run_button_does_nothing_while_a_suggestion_waits", async () => {
+  routes();
+  const editorRef = { current: null as SqlEditorApi | null };
+  setup(doc("SELECT 1;"), true, { editorRef });
+  await sessionOpen();
+  act(() => editorRef.current!.suggest({ from: 0, to: 9, text: "SELECT 2;", where: "w" }));
+  act(() => editorRef.current!.discardSuggestion());
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Run Ctrl\+Enter/ }).hasAttribute("disabled")).toBe(false));
+  expect(editorRef.current!.text()).toBe("SELECT 1;");
+});
+
+// ---- UX step 9 fix round 1 (I1): a comment-only or blank line is outside any statement (DataGrip) ----
+
+const KEPT_COMMENT = "SELECT * FROM orders;\n\n-- DELETE FROM orders WHERE id = 3;\nUPDATE accounts SET flag = 1 WHERE id = 7;";
+
+test("i1_run_on_a_kept_commented_answer_runs_nothing_and_says_so", async () => {
+  routes();
+  const { view } = setup(doc(KEPT_COMMENT));
+  await sessionOpen();
+  act(() => view().dispatch({ selection: { anchor: KEPT_COMMENT.indexOf("-- DELETE") + 5 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  expect(await screen.findByText("Nothing to run on this line.")).toBeTruthy();
+  await act(async () => {});
+  expect(callsTo("prepare_run")).toHaveLength(0);
+  expect(callsTo("execute_sql")).toHaveLength(0);
+  // The Run button too.
+  fireEvent.click(screen.getByRole("button", { name: /^Run Ctrl\+Enter/ }));
+  await act(async () => {});
+  expect(callsTo("execute_sql")).toHaveLength(0);
+});
+
+test("i1_run_on_a_blank_line_between_statements_runs_nothing", async () => {
+  routes();
+  const { view } = setup(doc("SELECT 1;\n\nSELECT 2;"));
+  await sessionOpen();
+  act(() => view().dispatch({ selection: { anchor: 10 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  expect(await screen.findByText("Nothing to run on this line.")).toBeTruthy();
+  expect(callsTo("execute_sql")).toHaveLength(0);
+  // On the statement's own lines it runs, and the note goes.
+  act(() => view().dispatch({ selection: { anchor: 13 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+  expect(callsTo("execute_sql")[0].sql).toBe("SELECT 2");
+  expect(screen.queryByText("Nothing to run on this line.")).toBeNull();
+});
+
+test("i1_on_the_update_below_the_comment_it_still_runs_the_update", async () => {
+  routes();
+  const { view } = setup(doc(KEPT_COMMENT));
+  await sessionOpen();
+  act(() => view().dispatch({ selection: { anchor: KEPT_COMMENT.indexOf("UPDATE") + 3 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+  expect(callsTo("execute_sql")[0].sql as string).toContain("UPDATE accounts");
+});
+
+test("m5_a_run_from_outside_waits_while_a_suggestion_waits", async () => {
+  routes();
+  const editorRef = { current: null as SqlEditorApi | null };
+  const runRef = { current: null as ((sql: string) => Promise<{ ran: boolean }>) | null };
+  setup(doc("SELECT 1;"), true, { editorRef, runRef });
+  await sessionOpen();
+  act(() => editorRef.current!.suggest({ from: 0, to: 9, text: "SELECT 2;", where: "w" }));
+  expect(await runRef.current?.("SELECT 5")).toEqual({ ran: false });
+  expect(callsTo("execute_sql")).toHaveLength(0);
+  expect(await screen.findByText("Keep or discard the suggestion first.")).toBeTruthy();
+});
+
+// ---- Round 2 (N1, N2, N3): Run acts on the statement the insertion point is in, by the dialect's own comments ----
+
+const mysqlConn = { ...conn, id: "c1", dialect: "mysql" as const };
+
+/**
+ * `plan_run` answering as the Core does for these inputs on `dialect` (each is a case in `safety::no_where_tests`):
+ * its split and its missing-WHERE answer.
+ */
+const planOn = (dialect: "mysql" | "postgres" | "sqlite", noWhere?: { verb: "UPDATE" | "DELETE"; table: string }) => ({
+  plan_run: ({ statements }: Record<string, unknown>) =>
+    fakePlan(statements as string[], dialect, (sql) => (noWhere ? { ...noWhere, text: sql.trim() } : null)),
+});
+
+/** Runs by Ctrl+Enter or by the Run button. */
+async function runBy(how: "key" | "button", view: () => EditorView) {
+  if (how === "key") key(view(), "Enter", { ctrlKey: true });
+  else fireEvent.click(screen.getByRole("button", { name: /^Run Ctrl\+Enter/ }));
+  await act(async () => {});
+}
+
+for (const how of ["key", "button"] as const) {
+  test(`n1_${how}_two_statements_on_a_line_run_the_one_the_insertion_point_is_in`, async () => {
+    routes();
+    const text = "DELETE FROM t WHERE id=1; SELECT 1";
+    const { view } = setup(doc(text));
+    await sessionOpen();
+    act(() => view().dispatch({ selection: { anchor: text.length } }));
+    await runBy(how, view);
+    await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+    expect(callsTo("execute_sql")[0].sql).toBe("SELECT 1");
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Run Ctrl\+Enter/ }).hasAttribute("disabled")).toBe(false));
+    act(() => view().dispatch({ selection: { anchor: 3 } }));
+    await runBy(how, view);
+    await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(2));
+    expect(callsTo("execute_sql")[1].sql).toBe("DELETE FROM t WHERE id=1");
+  });
+
+  test(`n2_${how}_a_mysql_hash_comment_line_runs_nothing`, async () => {
+    routes();
+    const text = "# DELETE FROM orders;\nUPDATE a SET f=1 WHERE id=7;";
+    const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+    await sessionOpen();
+    act(() => view().dispatch({ selection: { anchor: 4 } }));
+    await runBy(how, view);
+    expect(await screen.findByText("Nothing to run on this line.")).toBeTruthy();
+    expect(callsTo("prepare_run")).toHaveLength(0);
+    expect(callsTo("execute_sql")).toHaveLength(0);
+  });
+
+  test(`n2_${how}_a_nested_postgres_comment_line_runs_nothing`, async () => {
+    routes();
+    const text = "/* a /* b */ c */\nUPDATE a SET f=1 WHERE id=7;";
+    const { view } = setup(doc(text));
+    await sessionOpen();
+    act(() => view().dispatch({ selection: { anchor: 2 } }));
+    await runBy(how, view);
+    expect(await screen.findByText("Nothing to run on this line.")).toBeTruthy();
+    expect(callsTo("execute_sql")).toHaveLength(0);
+  });
+
+  test(`n3_${how}_a_mysql_executable_comment_runs`, async () => {
+    routes(planOn("mysql"));
+    const text = "/*!40101 SET NAMES utf8 */;\nSELECT 1;";
+    const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+    await sessionOpen();
+    act(() => view().dispatch({ selection: { anchor: 4 } }));
+    await runBy(how, view);
+    await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+    expect(callsTo("execute_sql")[0].sql).toBe("/*!40101 SET NAMES utf8 */");
+  });
+}
+
+// ---- Round 3 (R2-1, R2-2): the missing-WHERE check reads code as the dialect does, by every way of running ----
+
+const runWays = ["key", "button", "all"] as const;
+async function runWay(how: (typeof runWays)[number], view: () => EditorView) {
+  if (how === "key") key(view(), "Enter", { ctrlKey: true });
+  else if (how === "button") fireEvent.click(screen.getByRole("button", { name: /^Run Ctrl\+Enter/ }));
+  else key(view(), "Enter", { ctrlKey: true, shiftKey: true });
+  await act(async () => {});
+}
+
+// The Core's answers, from `safety::no_where_tests` (round_2_*).
+const noWhereCases: [string, string, ConnectionConfig, RegExp, "UPDATE" | "DELETE"][] = [
+  ["mysql_executable_delete", "/*! DELETE FROM t */", { ...conn, dialect: "mysql" }, /DELETE without WHERE/, "DELETE"],
+  ["mysql_versioned_update", "/*!40101 UPDATE t SET a=1 */", { ...conn, dialect: "mysql" }, /UPDATE without WHERE/, "UPDATE"],
+  ["postgres_where_in_a_nested_comment", "DELETE FROM t /* a /* b */ WHERE id=1 */", conn, /DELETE without WHERE/, "DELETE"],
+  ["postgres_delete_after_a_nested_comment", "/* a /* b */ c */ DELETE FROM t", conn, /DELETE without WHERE/, "DELETE"],
+];
+
+for (const [name, text, c, ask, verb] of noWhereCases)
+  for (const how of runWays)
+    test(`r3_${name}_asks_first_by_${how}`, async () => {
+      routes(planOn(c.dialect, { verb, table: "t" }));
+      const { view } = setup(doc(text), true, { connections: [c] });
+      await sessionOpen();
+      act(() => view().dispatch({ selection: { anchor: text.length } }));
+      await runWay(how, view);
+      expect(await screen.findByText(ask)).toBeTruthy();
+      expect(callsTo("execute_sql")).toHaveLength(0);
+    });
+
+// ---- Round 4: the Core decides what runs and whether it asks (C1-C3); the editor only points ----
+
+type CorePlan = { text: string; piece: number; from: number; to: number; noWhere: { verb: string; table: string } | null };
+
+/** The Core's answer for one input, as `safety::plan_run` gives it (see its Rust tests). */
+const coreCases: [string, string, ConnectionConfig, CorePlan[], string][] = [
+  [
+    "c1_mysql_semicolon_in_an_executable_comment",
+    "/*! SELECT 1; DELETE FROM t */",
+    { ...conn, dialect: "mysql" },
+    [{ text: "/*! SELECT 1; DELETE FROM t */", piece: 0, from: 0, to: 30, noWhere: { verb: "DELETE", table: "t" } }],
+    "/*! SELECT 1; DELETE FROM t */",
+  ],
+  [
+    "c2_sqlite_bracket_name",
+    "SELECT [--]; DELETE FROM t",
+    { ...conn, dialect: "sqlite", file: "/tmp/x.db" },
+    [
+      { text: "SELECT [--]", piece: 0, from: 0, to: 11, noWhere: null },
+      { text: "DELETE FROM t", piece: 0, from: 13, to: 26, noWhere: { verb: "DELETE", table: "t" } },
+    ],
+    "DELETE FROM t",
+  ],
+  [
+    "c3_postgres_word_ending_in_e",
+    "SELECT DATE'\\'; DELETE FROM t; SELECT '",
+    conn,
+    [
+      { text: "SELECT DATE'\\'", piece: 0, from: 0, to: 14, noWhere: null },
+      { text: "DELETE FROM t", piece: 0, from: 16, to: 29, noWhere: { verb: "DELETE", table: "t" } },
+      { text: "SELECT '", piece: 0, from: 31, to: 39, noWhere: null },
+    ],
+    "DELETE FROM t",
+  ],
+];
+
+for (const [name, text, c, plan, asked] of coreCases)
+  for (const how of runWays)
+    test(`r4_${name}_asks_first_by_${how}`, async () => {
+      routes({
+        // The Core splits whatever the editor picked; each call here gets the plan of the whole text, cut to the piece.
+        plan_run: ({ statements }) => {
+          const list = statements as string[];
+          return list.flatMap((s, piece) =>
+            plan.filter((p) => s.includes(p.text)).map((p) => ({ ...p, piece, from: s.indexOf(p.text), to: s.indexOf(p.text) + p.text.length })),
+          );
+        },
+      });
+      const { view } = setup(doc(text), true, { connections: [c] });
+      await sessionOpen();
+      // In the statement that changes every row, as the Core reads it.
+      act(() => view().dispatch({ selection: { anchor: text.indexOf("DELETE") + 2 } }));
+      await runWay(how, view);
+      const ask = await screen.findByRole("alertdialog", { name: "Confirm DELETE without WHERE" });
+      // The ask shows the exact text that would run.
+      expect(ask.textContent).toContain(asked);
+      expect(callsTo("execute_sql").map((x) => x.sql)).not.toContain(asked);
+      expect(callsTo("plan_run").length).toBeGreaterThan(0);
+    });
+
+test("r4_ctrl_enter_runs_the_core_statement_under_the_insertion_point_not_the_editor_pick", async () => {
+  const text = "SELECT [--]; DELETE FROM t";
+  routes({
+    plan_run: () => [
+      { text: "SELECT [--]", piece: 0, from: 0, to: 11, noWhere: null },
+      { text: "DELETE FROM t", piece: 0, from: 13, to: 26, noWhere: { verb: "DELETE", table: "t" } },
+    ],
+  });
+  const { view } = setup(doc(text), true, { connections: [{ ...conn, dialect: "sqlite", file: "/tmp/x.db" }] });
+  await sessionOpen();
+  act(() => view().dispatch({ selection: { anchor: 3 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+  expect(callsTo("execute_sql")[0].sql).toBe("SELECT [--]");
+  await act(async () => {});
+  expect(screen.queryByRole("alertdialog", { name: /without WHERE/ })).toBeNull();
+  expect(callsTo("execute_sql")).toHaveLength(1);
+});
+
+test("r4_when_the_core_cannot_plan_nothing_runs", async () => {
+  routes({
+    plan_run: () => {
+      throw { kind: "query", message: "session gone" };
+    },
+  });
+  const { view } = setup(doc("DELETE FROM t"));
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true });
+  await act(async () => {});
+  await act(async () => {});
+  expect(callsTo("prepare_run")).toHaveLength(0);
+  expect(callsTo("execute_sql")).toHaveLength(0);
+});
+
+// ---- Round 5 (N1): a routine or trigger runs whole, wherever the insertion point is in it ----
+
+const TRIGGER = "CREATE TRIGGER x BEFORE INSERT ON t FOR EACH ROW BEGIN UPDATE a SET x=1; DELETE FROM u WHERE id=1; END";
+
+for (const how of ["key", "button"] as const)
+  test(`r5_${how}_inside_a_trigger_body_runs_the_whole_create`, async () => {
+    // The Core keeps the body whole (`n1_compound_bodies_stay_whole`).
+    routes({ plan_run: ({ statements }) => [{ text: (statements as string[])[0], piece: 0, from: 0, to: (statements as string[])[0].length, noWhere: null }] });
+    const text = `SELECT 1;\n${TRIGGER};\nSELECT 2;`;
+    const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+    await sessionOpen();
+    act(() => view().dispatch({ selection: { anchor: text.indexOf("DELETE FROM u") + 3 } }));
+    await runBy(how, view);
+    await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+    expect(callsTo("execute_sql")[0].sql).toBe(TRIGGER);
+    expect(callsTo("plan_run")[0].statements).toEqual([TRIGGER]);
+  });
+
+test("r5_run_all_sends_a_script_with_a_trigger_as_whole_statements", async () => {
+  routes(planOn("mysql"));
+  const text = `SELECT 1;\n${TRIGGER};\nSELECT 2;`;
+  const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(3));
+  expect(callsTo("execute_sql").map((c) => c.sql)).toEqual(["SELECT 1", TRIGGER, "SELECT 2"]);
+});
+
+// ---- Round 8: the ask names the plain piece the Core's net found ----
+
+test("r8_the_ask_shows_the_piece_without_where", async () => {
+  const text = "CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM u; END";
+  routes({
+    plan_run: () => [{ text, piece: 0, from: 0, to: text.length, noWhere: { verb: "DELETE", table: "u", text: "DELETE FROM u" } }],
+  });
+  const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+  await sessionOpen();
+  act(() => view().dispatch({ selection: { anchor: 3 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  const ask = await screen.findByRole("alertdialog", { name: "Confirm DELETE without WHERE" });
+  expect(ask.querySelector(".query-confirm-sql")!.textContent).toBe("DELETE FROM u");
+  expect(callsTo("execute_sql")).toHaveLength(0);
 });

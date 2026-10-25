@@ -109,7 +109,8 @@ export interface DiagramCanvasProps {
   overlay?: ReactNode;
   onEdgeDoubleClick?(id: string): void;
   /** Item 22: a node double-clicked (its editor opens). */
-  onNodeDoubleClick?(id: string): void;
+  /** The part double-clicked (`target`) lets a card tell its rows and title apart (diagram step 3). */
+  onNodeDoubleClick?(id: string, target?: EventTarget | null): void;
   /** Item 23: the empty canvas double-clicked, at a flow position (a shape is added there); the view does not zoom. */
   onPaneDoubleClick?(at: { screen: { x: number; y: number }; flow: { x: number; y: number } }): void;
   /** A click on the minimap moves the view there in one smooth step (zoom to fit's duration). */
@@ -782,7 +783,9 @@ function Flow(props: DiagramCanvasProps) {
       onDoubleClick={
         onPaneDoubleClick &&
         ((e) => {
-          if (!(e.target as Element).closest?.(".react-flow__pane")) return;
+          const t = e.target as Element;
+          // The pane holds the viewport, so a double-click on a card, a line or a field over them is not the pane's.
+          if (!t.closest?.(".react-flow__pane") || t.closest(".react-flow__node, .react-flow__edge, .react-flow__edgelabel-renderer, .inline-edit-wrap, .flow-hot")) return;
           onPaneDoubleClick({ screen: { x: e.clientX, y: e.clientY }, flow: screenToFlowPosition({ x: e.clientX, y: e.clientY }) });
         })
       }
@@ -817,7 +820,7 @@ function Flow(props: DiagramCanvasProps) {
             onlyRenderVisibleElements
             connectionLineComponent={connectionLineComponent}
             onEdgeDoubleClick={onEdgeDoubleClick && ((_, edge) => onEdgeDoubleClick(edge.id))}
-            onNodeDoubleClick={onNodeDoubleClick && ((_, node) => onNodeDoubleClick(node.id))}
+            onNodeDoubleClick={onNodeDoubleClick && ((e, node) => onNodeDoubleClick(node.id, e.target))}
             zoomOnDoubleClick={!onPaneDoubleClick && !boxSelect}
             onPaneContextMenu={onContextMenu && ((e) => menuAt(e, null))}
             onNodeContextMenu={onContextMenu && ((e, node) => menuAt(e, node.id))}

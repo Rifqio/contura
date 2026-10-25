@@ -71,7 +71,7 @@ export type ToWorker =
   /** Places the diagram nodes the request has no position for (ruling D14). */
   | { type: "layout"; id: number; request: LayoutRequest }
   /** Converts a Mermaid flowchart to .flow (Task 12); the dialog waits 150 ms after the last keystroke. */
-  | { type: "mermaid"; id: number; text: string; title: string }
+  | { type: "mermaid"; id: number; text: string; title: string; keepUnread?: boolean }
   /** Parses .flow text, debounced as the DBML path is. */
   | { type: "flowParse"; id: number; docId: string; text: string }
   /** The flow tab closed: forget its text, ranges and last good doc, and drop parses that arrive later. */

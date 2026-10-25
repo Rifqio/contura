@@ -1251,7 +1251,7 @@ test("open_shows_the_log_with_the_input", async () => {
   const question = [...dialog.querySelectorAll(".dbox")].find((b) => b.querySelector(".dlab")?.textContent === "Your question")!;
   expect(question.textContent).toBe("Your question");
   expect(within(dialog).queryByText(/0 chars/)).toBeNull();
-  expect(within(dialog).getByText("One tool: it can only suggest edits to fulfilment.flow.")).toBeTruthy();
+  expect(within(dialog).getByText("One tool: it can only suggest edits to fulfilment.")).toBeTruthy();
 });
 
 test("empty_recent_text", async () => {

@@ -1,12 +1,12 @@
 // A scene as plain SVG: rect, text, path and (for cloud icons) image elements only, no foreignObject and no web
-// fonts, so other tools open it cleanly. Every colour comes from the palette, read from the tokens. A cloud icon
+// fonts, so other tools open it cleanly. Each kind is drawn as the canvas draws it (flow-canvas.css, kindNodes.tsx). Every colour comes from the palette, read from the tokens. A cloud icon
 // is an <image> of the pack's own bytes as a data: URL, never inline markup (ruling P9).
 import { iconPath, type IconName } from "../../components/Icon";
 import { CARD_HEADER, CARD_ROW } from "../metrics";
 import { roundedPath } from "../route";
 import type { EdgeKind } from "../types";
 import type { ExportPalette } from "./palette";
-import { type Box, type Scene, type SceneArea, type SceneEdge, type SceneNode, sceneBounds } from "./scene";
+import { type Box, type Scene, type SceneArea, type SceneAxis, type SceneEdge, type SceneFrame, type SceneMark, type SceneNode, type SceneSection, sceneBounds } from "./scene";
 
 export interface SvgOptions {
   /** The part of the scene to draw, in scene units; the whole scene when absent. */
@@ -157,24 +157,209 @@ function serviceSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
   if (n.tag) parts.push(text(tx + 54, y + 12, n.tag, ` font-size="11" fill="${palette.subtle}"`));
 }
 
-/** A data flow node, flowchart node or cloud service, as frames 6+.2, 6+.4 and 6+.5 draw them. */
-function drawnSvg(n: SceneNode, palette: ExportPalette): string {
+/**
+ * A state diagram's shapes as the canvas draws them (diag-910 fix round 3, P1): the start a filled dot, the end a ring
+ * round a dot, a state a pill, a choice a small diamond with its name under it, and a fork a bar. Markers carry no name.
+ */
+function stateSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
+  const { fill, stroke } = palette.nodes[n.kind];
+  const { x, y, w, h } = n;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  if (n.kind === "stateStart") {
+    const r = Math.min(w, h) / 2;
+    parts.push(`<rect data-part="dot" x="${num(cx - r)}" y="${num(cy - r)}" width="${num(2 * r)}" height="${num(2 * r)}" rx="${num(r)}" fill="${stroke}"/>`);
+  } else if (n.kind === "stateEnd") {
+    const r = Math.min(w, h) / 2 - 1;
+    const d = r - 5;
+    parts.push(
+      `<rect data-part="ring" x="${num(cx - r)}" y="${num(cy - r)}" width="${num(2 * r)}" height="${num(2 * r)}" rx="${num(r)}" fill="${palette.surface}" stroke="${stroke}" stroke-width="2"/>`,
+      `<rect data-part="dot" x="${num(cx - d)}" y="${num(cy - d)}" width="${num(2 * d)}" height="${num(2 * d)}" rx="${num(d)}" fill="${stroke}"/>`,
+    );
+  } else if (n.kind === "fork") {
+    parts.push(`<rect data-part="bar" x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="${stroke}"/>`);
+  } else if (n.kind === "choice") {
+    // The square inset 9 px and turned 45 degrees, its name under it, as the canvas draws it.
+    const r = (Math.min(w, h) - 18) / Math.SQRT2;
+    parts.push(`<path data-part="diamond" d="M${num(cx)} ${num(cy - r)} L${num(cx + r)} ${num(cy)} L${num(cx)} ${num(cy + r)} L${num(cx - r)} ${num(cy)} Z" fill="${fill}" stroke="${stroke}"/>`);
+    parts.push(text(cx, y + h + 14, n.title, ` text-anchor="middle" font-size="12"`));
+  } else {
+    parts.push(`<rect data-part="pill" x="${x}" y="${y}" width="${w}" height="${h}" rx="${num(h / 2)}" fill="${fill}" stroke="${stroke}"/>`);
+    parts.push(text(cx, cy + 5, n.title, ` text-anchor="middle" font-weight="600"`));
+  }
+}
+
+const STATE_KINDS: ReadonlySet<string> = new Set(["state", "choice", "fork", "stateStart", "stateEnd"]);
+
+/** Code small, as the canvas draws class members and dates; a system font, never a web font. */
+const MONO = ` font-family="Cascadia Mono, Consolas, Menlo, monospace"`;
+/** A rounded box's top band down to `depth`, as a path, for a name band in the kind's fill. */
+const band = (x: number, y: number, w: number, depth: number, r: number) =>
+  `M${num(x)} ${num(y + depth)} V${num(y + r)} Q${num(x)} ${num(y)} ${num(x + r)} ${num(y)} H${num(x + w - r)} Q${num(x + w)} ${num(y)} ${num(x + w)} ${num(y + r)} V${num(y + depth)} Z`;
+
+/** `s` in lines of at most `max` characters, broken between words; a word longer than a line is cut. */
+export function wrapWords(s: string, max: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of s.split(/\s+/).filter(Boolean)) {
+    let w = word;
+    while (w.length > max) {
+      if (line) lines.push(line);
+      line = "";
+      lines.push(w.slice(0, max));
+      w = w.slice(max);
+    }
+    if (!line) line = w;
+    else if (line.length + 1 + w.length <= max) line += ` ${w}`;
+    else {
+      lines.push(line);
+      line = w;
+    }
+  }
+  if (line || lines.length === 0) lines.push(line);
+  return lines;
+}
+
+/** A note: the sticky note in the note pair, with square corners, its words wrapped from the top left. */
+function noteSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
+  const { fill, stroke } = palette.nodes.note;
+  const { x, y, w, h } = n;
+  parts.push(`<rect data-part="note" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="2" fill="${fill}" stroke="${stroke}"/>`);
+  wrapWords(n.title, 26).forEach((line, i) => parts.push(text(x + 10, y + 22 + i * 18, line, ` font-size="12"`)));
+}
+
+/**
+ * A class card: the name band in the kind's fill (an interface or enum says so above its name), then the fields and,
+ * ruled off, the methods (members with brackets) in Code small; an enum lists its values. An interface is dashed.
+ */
+function classSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
+  const { fill, stroke } = palette.nodes[n.kind];
+  const { x, y, w, h } = n;
+  const head = n.kind === "class" ? 32 : 46;
+  const cx = x + w / 2;
+  parts.push(
+    `<rect x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="6" fill="${palette.surface}"/>`,
+    `<path data-part="band" d="${band(x, y, w, head, 6)}" fill="${fill}"/>`,
+    `<path d="M${num(x)} ${num(y + head)} H${num(x + w)}" fill="none" stroke="${stroke}"/>`,
+  );
+  if (n.kind !== "class") {
+    parts.push(text(cx, y + 18, `«${n.kind}»`, ` text-anchor="middle" font-size="12" fill="${palette.subtle}"`));
+    parts.push(text(cx, y + 36, n.title, ` text-anchor="middle" font-weight="600"`));
+  } else parts.push(text(cx, y + 21, n.title, ` text-anchor="middle" font-weight="600"`));
+  const rows = n.rows.map((r) => r.left);
+  const method = (r: string) => r.includes("(");
+  const lists = n.kind === "enum" ? [rows] : [rows.filter((r) => !method(r)), rows.filter(method)];
+  let top = y + head;
+  lists.forEach((list, i) => {
+    if (i > 0) parts.push(`<path data-part="divider" d="M${num(x)} ${num(top)} H${num(x + w)}" fill="none" stroke="${stroke}"/>`);
+    top += 3;
+    for (const r of list) {
+      parts.push(text(x + 10, top + 15, r, `${MONO} font-size="12"`));
+      top += 22;
+    }
+    top += 3;
+  });
+  const dash = n.kind === "interface" ? ` stroke-dasharray="5 4"` : "";
+  parts.push(`<rect data-part="outline" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="6" fill="none" stroke="${stroke}"${dash}/>`);
+}
+
+/** A sequence participant: its head box on top (an actor with a person before its name), the dashed lifeline down the node, its activation bars. */
+function participantSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
+  const { fill, stroke } = palette.nodes[n.kind];
+  const { x, y, w, h } = n;
+  const cx = x + w / 2;
+  parts.push(`<path data-part="lifeline" d="M${num(cx)} ${num(y + 40)} V${num(y + h)}" fill="none" stroke="${palette.strongBorder}" stroke-dasharray="4 3"/>`);
+  for (const b of n.bars ?? []) {
+    parts.push(`<rect data-part="activation" x="${num(cx - 5)}" y="${num(y + b.top)}" width="10" height="${num(b.height)}" rx="2" fill="${fill}" stroke="${stroke}"/>`);
+  }
+  parts.push(`<rect data-part="lifehead" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="40" rx="6" fill="${fill}" stroke="${stroke}"/>`);
+  if (n.kind === "actor") {
+    const left = cx - (20 + textWidth(n.title)) / 2;
+    parts.push(glyph("user", left, y + 13, 14, stroke, "person"), text(left + 20, y + 25, n.title, ` font-weight="600"`));
+  } else parts.push(text(cx, y + 25, n.title, ` text-anchor="middle" font-weight="600"`));
+}
+
+/** A mind map's central idea, a stronger pill; a branch topic, a pill; a deeper topic, plain words on a line. */
+function mindSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
+  const { fill, stroke } = palette.nodes[n.kind];
+  const { x, y, w, h } = n;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  if (n.kind === "root") {
+    parts.push(`<rect data-part="pill" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="${num(h / 2)}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`);
+    parts.push(text(cx, cy + 5, n.title, ` text-anchor="middle" font-size="15" font-weight="600"`));
+  } else if ((n.depth ?? 1) <= 1) {
+    parts.push(`<rect data-part="pill" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="${num(h / 2)}" fill="${fill}" stroke="${stroke}"/>`);
+    parts.push(text(cx, cy + 5, n.title, ` text-anchor="middle" font-weight="600"`));
+  } else {
+    parts.push(`<path data-part="underline" d="M${num(x)} ${num(y + h)} H${num(x + w)}" fill="none" stroke="${stroke}"/>`);
+    parts.push(text(cx, cy + 5, n.title, ` text-anchor="middle"`));
+  }
+}
+
+/** A timeline item: an event card, a period pill or a milestone with a heavier edge; its date over its name. */
+function timeSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
+  const { fill, stroke } = palette.nodes[n.kind];
+  const { x, y, w, h } = n;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const rx = n.kind === "period" ? h / 2 : 6;
+  const heavy = n.kind === "milestone" ? ` stroke-width="2"` : "";
+  parts.push(`<rect x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="${num(rx)}" fill="${fill}" stroke="${stroke}"${heavy}/>`);
+  if (n.sub) parts.push(text(cx, cy - 3, n.sub, ` text-anchor="middle"${MONO} font-size="10" fill="${palette.subtle}"`));
+  parts.push(text(cx, n.sub ? cy + 13 : cy + 5, n.title, ` text-anchor="middle" font-weight="600"`));
+}
+
+/** A flowchart document with its curved foot, or a database as a rounded cylinder, each with its glyph before the name. */
+function documentSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
+  const { fill, stroke } = palette.nodes[n.kind];
+  const { x, y, w, h } = n;
+  if (n.kind === "database") {
+    parts.push(`<rect data-part="cylinder" x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="${num(w / 2)}" ry="10" fill="${fill}" stroke="${stroke}"/>`);
+  } else {
+    // The canvas's corners: 6 px on top, 40 percent by 12 px bottom right, 10 percent by 6 px bottom left.
+    const d = `M${num(x + 6)} ${num(y)} H${num(x + w - 6)} Q${num(x + w)} ${num(y)} ${num(x + w)} ${num(y + 6)} V${num(y + h - 12)} Q${num(x + w)} ${num(y + h)} ${num(x + w * 0.6)} ${num(y + h)} H${num(x + w * 0.1)} Q${num(x)} ${num(y + h)} ${num(x)} ${num(y + h - 6)} V${num(y + 6)} Q${num(x)} ${num(y)} ${num(x + 6)} ${num(y)} Z`;
+    parts.push(`<path data-part="document" d="${d}" fill="${fill}" stroke="${stroke}"/>`);
+  }
+  const left = x + w / 2 - (20 + textWidth(n.title)) / 2;
+  const cy = y + h / 2;
+  parts.push(glyph(n.kind === "database" ? "database" : "fileQuery", left, cy - 7, 14, stroke), text(left + 20, cy + 5, n.title, ` font-weight="600"`));
+}
+
+const CLASS_KINDS: ReadonlySet<string> = new Set(["class", "interface", "enum"]);
+const MIND_KINDS: ReadonlySet<string> = new Set(["root", "topic"]);
+const TIME_KINDS: ReadonlySet<string> = new Set(["event", "period", "milestone"]);
+
+/** A drawn node: data flow, flowchart, cloud (frames 6+.2, 6+.4, 6+.5), state and the step 12 kinds, as the canvas draws them. */
+function drawnSvg(n: SceneNode, given: ExportPalette): string {
   const parts: string[] = [];
+  // Step 11: a coloured shape draws its palette colour's fill and border in place of its kind's, and its words.
+  const c = n.color ? given.colours?.[n.color] : undefined;
+  const palette = c ? { ...given, nodes: { ...given.nodes, [n.kind]: { fill: c.fill, stroke: c.stroke } } } : given;
   if (n.kind === "process" || n.kind === "store" || n.kind === "external") dfdSvg(n, palette, parts);
   else if (n.kind === "service") serviceSvg(n, palette, parts);
+  else if (STATE_KINDS.has(n.kind)) stateSvg(n, palette, parts);
+  else if (n.kind === "note") noteSvg(n, palette, parts);
+  else if (CLASS_KINDS.has(n.kind)) classSvg(n, palette, parts);
+  else if (n.kind === "participant" || n.kind === "actor") participantSvg(n, palette, parts);
+  else if (MIND_KINDS.has(n.kind)) mindSvg(n, palette, parts);
+  else if (TIME_KINDS.has(n.kind)) timeSvg(n, palette, parts);
+  else if (n.kind === "document" || n.kind === "database") documentSvg(n, palette, parts);
   else flowchartSvg(n, palette, parts);
-  return `<g data-node="${esc(n.id)}">${parts.join("")}</g>`;
+  return `<g data-node="${esc(n.id)}"${c ? ` fill="${c.text}"` : ""}>${parts.join("")}</g>`;
 }
 
 /** A group: a tinted area with its name at the top left; groups inside groups have a solid edge. */
 function areaSvg(a: SceneArea, palette: ExportPalette): string {
   const dash = a.depth === 0 ? ` stroke-dasharray="5 4"` : "";
-  const parts = [
-    `<rect x="${num(a.x)}" y="${num(a.y)}" width="${num(a.w)}" height="${num(a.h)}" rx="10" fill="${palette.groupTint}" fill-opacity="0.7" stroke="${palette.group}"${dash}/>`,
-  ];
+  // Step 11: a coloured group takes its colour on its border, tint and title, as the canvas draws it.
+  const c = a.color ? palette.colours?.[a.color] : undefined;
+  const edge = c ? c.stroke : palette.group;
+  const tint = c ? `fill="${c.fill}" fill-opacity="0.55"` : `fill="${palette.groupTint}" fill-opacity="0.7"`;
+  const parts = [`<rect x="${num(a.x)}" y="${num(a.y)}" width="${num(a.w)}" height="${num(a.h)}" rx="10" ${tint} stroke="${edge}"${dash}/>`];
   const icon = a.icon ? imageSvg(a.icon, a.x + 12, a.y + 8, 16) : "";
-  parts.push(icon || `<rect x="${num(a.x + 12)}" y="${num(a.y + 8)}" width="16" height="16" rx="3" fill="${palette.group}"/>`);
-  parts.push(text(a.x + 34, a.y + 21, a.name, ` font-size="12" font-weight="600"`));
+  parts.push(icon || `<rect x="${num(a.x + 12)}" y="${num(a.y + 8)}" width="16" height="16" rx="3" fill="${edge}"/>`);
+  parts.push(text(a.x + 34, a.y + 21, a.name, ` font-size="12" font-weight="600"${c ? ` fill="${c.stroke}"` : ""}`));
   return `<g data-area="${esc(a.name)}">${parts.join("")}</g>`;
 }
 
@@ -188,15 +373,39 @@ function head(from: { x: number; y: number }, tip: { x: number; y: number }, fil
   return `<path data-marker="head" d="M${num(tip.x)} ${num(tip.y)} L${num(bx - uy * 3)} ${num(by + ux * 3)} L${num(bx + uy * 3)} ${num(by - ux * 3)} Z" fill="${fill}"/>`;
 }
 
+/**
+ * A line end as the canvas's markers draw it (diagram/edges.tsx), its tip at `tip`, pointing away from `from`: the 6 px
+ * filled head, the 10 px open head, the 12 px hollow triangle on the canvas colour and the 14 px filled diamond.
+ */
+function markSvg(mark: SceneMark, from: { x: number; y: number }, tip: { x: number; y: number }, palette: ExportPalette, tag = ""): string {
+  if (mark === "arrow") return head(from, tip, palette.subtle).replace("<path ", `<path${tag} `).replace('data-marker="head"', 'data-marker="arrow"');
+  const len = Math.hypot(tip.x - from.x, tip.y - from.y);
+  const ux = len === 0 ? 1 : (tip.x - from.x) / len;
+  const uy = len === 0 ? 0 : (tip.y - from.y) / len;
+  const at = (back: number, side: number) => `${num(tip.x - ux * back - uy * side)} ${num(tip.y - uy * back + ux * side)}`;
+  const stroke = palette.subtle;
+  if (mark === "open") return `<path${tag} data-marker="open" d="M${at(9, -4)} L${at(0, 0)} L${at(9, 4)}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>`;
+  if (mark === "triangle") return `<path${tag} data-marker="triangle" d="M${at(0, 0)} L${at(11, 5)} L${at(11, -5)} Z" fill="${palette.canvas}" stroke="${stroke}" stroke-width="1.5"/>`;
+  return `<path${tag} data-marker="diamond" d="M${at(0, 0)} L${at(7, 5)} L${at(14, 0)} L${at(7, -5)} Z" fill="${stroke}"/>`;
+}
+
 /** A drawn diagram's or lineage's line: square with 8 px corners, 6 px heads, the label on a 6 px-radius chip. */
-function flowEdgeSvg(e: SceneEdge, palette: ExportPalette): string {
+function flowEdgeSvg(e: SceneEdge, given: ExportPalette): string {
   const pts = e.points;
+  // Step 11: a coloured line keeps its colour and its arrowheads; its label chip stays plain.
+  const c = e.color ? given.colours?.[e.color] : undefined;
+  const palette = c ? { ...given, subtle: c.stroke } : given;
   const stroke = palette.subtle;
   const dash = e.line === "dashed" ? ` stroke-dasharray="5 4"` : e.line === "dotted" ? ` stroke-dasharray="1 4" stroke-linecap="round"` : "";
   const parts = [`<path d="${roundedPath(pts)}" fill="none" stroke="${stroke}" stroke-width="1.5"${dash}/>`];
-  const heads = e.heads ?? "end";
-  if (heads === "end" || heads === "both") parts.push(head(pts[pts.length - 2], pts[pts.length - 1], stroke));
-  if (heads === "start" || heads === "both") parts.push(head(pts[1], pts[0], stroke));
+  if (e.marks) {
+    if (e.marks.end) parts.push(markSvg(e.marks.end, pts[pts.length - 2], pts[pts.length - 1], palette));
+    if (e.marks.start) parts.push(markSvg(e.marks.start, pts[1], pts[0], palette));
+  } else {
+    const heads = e.heads ?? "end";
+    if (heads === "end" || heads === "both") parts.push(head(pts[pts.length - 2], pts[pts.length - 1], stroke));
+    if (heads === "start" || heads === "both") parts.push(head(pts[1], pts[0], stroke));
+  }
   if (e.label) {
     const i = Math.floor((pts.length - 1) / 2);
     const cx = (pts[i].x + pts[i + 1].x) / 2;
@@ -204,10 +413,70 @@ function flowEdgeSvg(e: SceneEdge, palette: ExportPalette): string {
     const w = Math.ceil(e.label.length * 6.5 + 12);
     parts.push(
       `<rect data-part="chip" x="${num(cx - w / 2)}" y="${num(cy - 10)}" width="${w}" height="20" rx="6" fill="${palette.surface}" stroke="${palette.border}"/>`,
-      text(cx, cy + 4, e.label, ` text-anchor="middle" font-size="11" fill="${palette.subtle}"`),
+      text(cx, cy + 4, e.label, ` text-anchor="middle" font-size="11" fill="${given.subtle}"`),
     );
   }
   return `<g data-edge="${esc(e.id)}">${parts.join("")}</g>`;
+}
+
+/**
+ * A sequence message as SeqEdge draws it: straight along its row from lifeline to lifeline (a message to itself loops
+ * out right), dashed for a reply, its head at the target, its words above the line on the canvas colour.
+ */
+function messageSvg(e: SceneEdge, palette: ExportPalette): string {
+  const pts = e.points;
+  const stroke = palette.subtle;
+  const dash = e.line === "dashed" ? ` stroke-dasharray="5 4"` : "";
+  const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${num(p.x)} ${num(p.y)}`).join(" ");
+  const parts = [`<path data-part="message" d="${d}" fill="none" stroke="${stroke}" stroke-width="1.5"${dash}/>`];
+  parts.push(markSvg(e.marks?.end ?? "arrow", pts[pts.length - 2], pts[pts.length - 1], palette, ` data-part="head"`));
+  if (e.label) {
+    const self = pts.length > 2;
+    const w = textWidth(e.label) * 0.93 + 8;
+    const left = self ? pts[0].x + 48 : (pts[0].x + pts[1].x) / 2 - w / 2;
+    const bottom = self ? pts[0].y : pts[0].y - 10;
+    parts.push(
+      `<rect x="${num(left)}" y="${num(bottom - 16)}" width="${num(w)}" height="16" rx="3" fill="${palette.canvas}"/>`,
+      text(left + 4, bottom - 4, e.label, ` font-size="12" fill="${palette.subtle}"`),
+    );
+  }
+  return `<g data-edge="${esc(e.id)}">${parts.join("")}</g>`;
+}
+
+/** A mind map branch as MindEdge draws it: a curve from the parent's side to the child's, with no head. */
+function branchSvg(e: SceneEdge, palette: ExportPalette): string {
+  const a = e.points[0];
+  const b = e.points[e.points.length - 1];
+  const mx = (a.x + b.x) / 2;
+  return `<g data-edge="${esc(e.id)}"><path d="M${num(a.x)} ${num(a.y)} C ${num(mx)} ${num(a.y)}, ${num(mx)} ${num(b.y)}, ${num(b.x)} ${num(b.y)}" fill="none" stroke="${palette.subtle}" stroke-width="1.5"/></g>`;
+}
+
+/** A sequence frame's box over its rows, on a light tint of the panel. */
+const frameSvg = (f: SceneFrame, i: number, palette: ExportPalette) =>
+  `<g data-frame="${i}"><rect x="${num(f.x)}" y="${num(f.y)}" width="${num(f.w)}" height="${num(f.h)}" rx="6" fill="${palette.panel}" fill-opacity="0.4" stroke="${palette.strongBorder}"/></g>`;
+
+/** A frame's label in its tab at the frame's top left, drawn over the participants as the canvas draws it. */
+function frameTabSvg(f: SceneFrame, i: number, palette: ExportPalette): string {
+  const w = f.label.length * 7 + 18;
+  const { x, y } = f;
+  const d = `M${num(x)} ${num(y + 21)} V${num(y + 6)} Q${num(x)} ${num(y)} ${num(x + 6)} ${num(y)} H${num(x + w)} V${num(y + 15)} Q${num(x + w)} ${num(y + 21)} ${num(x + w - 6)} ${num(y + 21)} Z`;
+  return `<g data-frame-tab="${i}"><path data-part="tab" d="${d}" fill="${palette.surface}" stroke="${palette.strongBorder}"/>${text(x + 8, y + 15, f.label, ` font-size="12" font-weight="600" fill="${palette.subtle}"`)}</g>`;
+}
+
+/** A timeline section: a quiet dashed band, named at the top. */
+const sectionSvg = (sec: SceneSection, palette: ExportPalette) =>
+  `<g data-section="${esc(sec.name)}"><rect x="${num(sec.x)}" y="${num(sec.y)}" width="${num(sec.w)}" height="${num(sec.h)}" rx="10" fill="${palette.panel}" fill-opacity="0.5" stroke="${palette.border}" stroke-dasharray="4 3"/>${text(sec.x + 12, sec.y + 21, sec.name, ` font-size="12" font-weight="600" fill="${palette.subtle}"`)}</g>`;
+
+/** A timeline's line with a ring where each item meets it, and a diamond for a milestone. */
+function axisSvg(a: SceneAxis, palette: ExportPalette): string {
+  const parts = [`<rect data-part="axis" x="${num(a.x)}" y="${num(a.y - 1)}" width="${num(a.w)}" height="2" rx="1" fill="${palette.strongBorder}"/>`];
+  for (const t of a.ticks) {
+    if (t.milestone) {
+      const r = 8;
+      parts.push(`<path data-part="tick-milestone" d="M${num(t.x)} ${num(a.y - r)} L${num(t.x + r)} ${num(a.y)} L${num(t.x)} ${num(a.y + r)} L${num(t.x - r)} ${num(a.y)} Z" fill="${palette.canvas}" stroke="${palette.nodes.milestone.stroke}" stroke-width="2" stroke-linejoin="round"/>`);
+    } else parts.push(`<rect data-part="tick" x="${num(t.x - 6)}" y="${num(a.y - 6)}" width="12" height="12" rx="6" fill="${palette.canvas}" stroke="${palette.nodes.event.stroke}" stroke-width="2"/>`);
+  }
+  return `<g data-axis="time">${parts.join("")}</g>`;
 }
 
 function nodeSvg(n: SceneNode, palette: ExportPalette): string {
@@ -225,24 +494,12 @@ function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   if (n.subtitle) parts.push(`<text x="${x + w - 10}" y="${y + 21}" text-anchor="end" font-size="12" fill="${palette.subtle}">${esc(n.subtitle)}</text>`);
   const marked = n.rows.some((row) => row.mark);
   const nameX = x + (marked ? 32 : 10);
-  // An ER card's not-null marks, as the canvas draws them: a filled diamond, an outline for a nullable column (M11).
-  const nulls = n.rows.some((row) => row.notNull);
-  const typeX = x + w - (nulls ? 24 : 10);
+  const typeX = x + w - 10;
   n.rows.forEach((row, i) => {
     const ty = y + CARD_HEADER + CARD_ROW * i + 16;
     if (row.mark) parts.push(`<text x="${x + 10}" y="${ty}" font-size="9" font-weight="600" fill="${palette.subtle}">${row.mark.toUpperCase()}</text>`);
     parts.push(`<text x="${nameX}" y="${ty}">${esc(row.left)}</text>`);
     if (row.right) parts.push(`<text x="${typeX}" y="${ty}" text-anchor="end" fill="${palette.type}">${esc(row.right)}</text>`);
-    if (nulls) {
-      const cx = x + w - 14;
-      const cy = ty - 4;
-      const d = `M${cx} ${cy - 4} L${cx + 4} ${cy} L${cx} ${cy + 4} L${cx - 4} ${cy} Z`;
-      parts.push(
-        row.notNull
-          ? `<path data-marker="not-null" d="${d}" fill="${palette.subtle}"/>`
-          : `<path data-marker="nullable" d="${d}" fill="none" stroke="${palette.subtle}" stroke-width="1.5"/>`,
-      );
-    }
   });
   const footer = n.footer ?? [];
   if (footer.length > 0) {
@@ -265,6 +522,8 @@ function edgeSvg(e: SceneEdge, palette: ExportPalette): string {
   const pts = e.points;
   if (pts.length < 2) return "";
   if (e.kind === "flow") return flowEdgeSvg(e, palette);
+  if (e.kind === "message") return messageSvg(e, palette);
+  if (e.kind === "branch") return branchSvg(e, palette);
   const stroke = palette.subtle;
   const width = e.kind === "lineage" ? 1 : 1.5;
   const dash = DASH[e.kind] ? ` stroke-dasharray="${DASH[e.kind]}"` : "";
@@ -319,8 +578,14 @@ export function sceneToSvg(scene: Scene, palette: ExportPalette, opts: SvgOption
   const mark = opts.mark
     ? `<text x="${f.x + f.w - 8}" y="${f.y + f.h - 8}" text-anchor="end" font-size="11" fill="${palette.subtle}">${MARK_TEXT}</text>`
     : "";
+  const sections = (scene.sections ?? []).map((sec) => sectionSvg(sec, palette)).join("");
   const areas = (scene.areas ?? []).map((a) => areaSvg(a, palette)).join("");
-  const edges = scene.edges.map((e) => edgeSvg(e, palette)).join("");
+  const frames = (scene.frames ?? []).map((fr, i) => frameSvg(fr, i, palette)).join("");
+  const axis = scene.axis ? axisSvg(scene.axis, palette) : "";
+  // Messages go over the lifelines and activation bars, and a frame's tab over everything, as on the canvas.
+  const edges = scene.edges.filter((e) => e.kind !== "message").map((e) => edgeSvg(e, palette)).join("");
   const nodes = scene.nodes.map((n) => nodeSvg(n, palette)).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="${palette.text}">${background}${areas}${edges}${nodes}${mark}</svg>\n`;
+  const messages = scene.edges.filter((e) => e.kind === "message").map((e) => edgeSvg(e, palette)).join("");
+  const tabs = (scene.frames ?? []).map((fr, i) => frameTabSvg(fr, i, palette)).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="${palette.text}">${background}${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}${mark}</svg>\n`;
 }

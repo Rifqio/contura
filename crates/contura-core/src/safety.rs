@@ -37,24 +37,27 @@ pub fn classify(dialect: DialectKind, sql: &str) -> StatementClass {
     StatementClass::Read
 }
 
-/// How many non-empty top-level pieces `sql` holds. When a backslash makes the quoting
-/// ambiguous, the reading with more pieces counts.
+/// How many non-empty top-level pieces `sql` holds, a routine or trigger body counting as
+/// one with its CREATE. When a backslash makes the quoting ambiguous, the reading with more
+/// pieces counts.
 pub fn statement_count(dialect: DialectKind, sql: &str) -> usize {
-    let mut count = lex(dialect, sql, false).pieces.len();
+    let mut count = whole_routines(dialect, sql, lex(dialect, sql, false).ranges).len();
     if sql.contains('\\') {
         let other = lex(dialect, sql, true);
-        let n = other.pieces.len();
-        count = count.max(n - usize::from(!other.clean && n > 0));
+        let clean = other.clean;
+        let n = whole_routines(dialect, sql, other.ranges).len();
+        count = count.max(n - usize::from(!clean && n > 0));
     }
     count
 }
 
 /// The byte ranges of the top-level pieces of `sql`, each running from just after the
 /// previous `;` to the next, trimmed of whitespace; pieces with only comments are dropped.
-/// Leading comments stay with the statement they precede, as the editor splits it.
+/// Leading comments stay with the statement they precede, as the editor splits it, and a
+/// CREATE TRIGGER, PROCEDURE, FUNCTION or EVENT keeps its `BEGIN ... END` body whole, `;`s
+/// inside it included (round 5, N1).
 pub fn split_statements(dialect: DialectKind, sql: &str) -> Vec<std::ops::Range<usize>> {
-    lex(dialect, sql, false)
-        .ranges
+    whole_routines(dialect, sql, lex(dialect, sql, false).ranges)
         .into_iter()
         .map(|r| {
             let piece = &sql[r.clone()];
@@ -62,6 +65,416 @@ pub fn split_statements(dialect: DialectKind, sql: &str) -> Vec<std::ops::Range<
             start..start + piece.trim().len()
         })
         .collect()
+}
+
+/// Kinds of CREATE whose body is a `BEGIN ... END` block with `;`s inside it.
+const ROUTINE: &[&str] = &["TRIGGER", "PROCEDURE", "FUNCTION", "EVENT"];
+/// `END IF` and the like close a control structure, not a BEGIN or CASE.
+const END_OF_CONTROL: &[&str] = &["IF", "LOOP", "WHILE", "REPEAT", "FOR"];
+
+/// Follows CREATE TRIGGER, PROCEDURE, FUNCTION or EVENT bodies across `;`-separated parts,
+/// as the editor's splitter does (round 7). A BEGIN opens a block only where a block can
+/// start: in the routine's head where it is not a name, or at the start of a statement in
+/// the body (after `;`, BEGIN, THEN, ELSE, DO, LOOP, REPEAT, END or a label's `:`). A CASE
+/// opens unless it is a name. An END closes a BEGIN only at the start of a statement, and
+/// closes a CASE anywhere; `END IF` and the like close a control structure, not a block.
+#[derive(Default)]
+struct RoutineDepth {
+    open: bool,
+    /// The routine's body has begun.
+    body: bool,
+    stack: Vec<Block>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Block {
+    Begin,
+    Case,
+}
+
+/// Words that may come between CREATE and the kind of object it makes.
+const CREATE_MODIFIERS: &[&str] = &[
+    "OR",
+    "REPLACE",
+    "TEMP",
+    "TEMPORARY",
+    "AGGREGATE",
+    "CONSTRAINT",
+];
+/// Kinds of object a CREATE makes that end a `DEFINER = ...` clause without being a routine.
+const OTHER_OBJECTS: &[&str] = &[
+    "TABLE",
+    "VIEW",
+    "INDEX",
+    "UNIQUE",
+    "DATABASE",
+    "SCHEMA",
+    "USER",
+    "ROLE",
+    "SEQUENCE",
+    "TYPE",
+    "EXTENSION",
+    "SERVER",
+    "TABLESPACE",
+];
+
+/// Whether a part's top-level words (`None` for a token that is not a bare word) begin a
+/// routine: `CREATE [OR REPLACE] [DEFINER = ...] [TEMP|TEMPORARY] [AGGREGATE] [CONSTRAINT]`
+/// right before TRIGGER, PROCEDURE, FUNCTION or EVENT (round 6, N4).
+fn opens_routine(top: &[Option<String>]) -> bool {
+    let mut words = top.iter();
+    if words.next().and_then(Option::as_deref) != Some("CREATE") {
+        return false;
+    }
+    let mut definer = false;
+    for w in words {
+        let Some(w) = w.as_deref() else {
+            // `=`, a quoted user or `@` in a DEFINER clause; anything else ends the head.
+            if definer {
+                continue;
+            }
+            return false;
+        };
+        if ROUTINE.contains(&w) {
+            return true;
+        }
+        if OTHER_OBJECTS.contains(&w) {
+            return false;
+        }
+        if w == "DEFINER" {
+            definer = true;
+            continue;
+        }
+        if definer || CREATE_MODIFIERS.contains(&w) {
+            continue;
+        }
+        return false;
+    }
+    false
+}
+
+/// One top-level token of a part, outside parentheses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Top {
+    Word(String),
+    /// A quoted name: always a name, never a keyword.
+    Name,
+    /// A number or a string.
+    Value,
+    Colon,
+    Comma,
+    /// A parenthesized group, ended.
+    Group,
+    /// An operator or other punctuation.
+    Other,
+}
+
+/// Keywords a name follows: after one of them a BEGIN or CASE is a column, table, variable,
+/// alias or routine name, unless the keyword is itself used as a name (`ON event BEGIN`).
+const NAME_AFTER: &[&str] = &[
+    "AS",
+    "SET",
+    "DECLARE",
+    "ON",
+    "OF",
+    "FROM",
+    "JOIN",
+    "INTO",
+    "UPDATE",
+    "TABLE",
+    "TRIGGER",
+    "PROCEDURE",
+    "FUNCTION",
+    "EVENT",
+    "SELECT",
+    "WHERE",
+    "AND",
+    "OR",
+    "BY",
+    "NEW",
+    "OLD",
+    "IS",
+    "NOT",
+    "IN",
+    "DEFINER",
+    "CALL",
+    "USING",
+    "RETURN",
+    "RETURNS",
+    "VALUES",
+    "LIKE",
+    "WHEN",
+    "FOLLOWS",
+    "PRECEDES",
+    "SETOF",
+    "IF",
+    "ELSEIF",
+    "WHILE",
+    "UNTIL",
+    "HAVING",
+    "LIMIT",
+    "LEAVE",
+    "ITERATE",
+    "RETURNING",
+];
+/// Keywords after which a CASE is a name rather than an expression or statement.
+const CASE_NAME_AFTER: &[&str] = &[
+    "AS",
+    "SET",
+    "DECLARE",
+    "ON",
+    "OF",
+    "FROM",
+    "JOIN",
+    "INTO",
+    "UPDATE",
+    "TABLE",
+    "TRIGGER",
+    "PROCEDURE",
+    "FUNCTION",
+    "EVENT",
+    "DEFINER",
+    "CALL",
+    "FOLLOWS",
+    "PRECEDES",
+    "SETOF",
+    "LEAVE",
+    "ITERATE",
+];
+/// Words after which a statement starts inside a body (END is not one: `END begin` is a label).
+const STATEMENT_START: &[&str] = &["BEGIN", "THEN", "ELSE", "DO", "LOOP", "REPEAT"];
+/// Words after which a `DECLARE ... HANDLER FOR` condition ends and its block may start.
+const HANDLER_CONDITIONS: &[&str] = &["SQLEXCEPTION", "SQLWARNING", "FOUND"];
+
+/// Reads one part's top-level tokens for `RoutineDepth`.
+struct Part<'a>(&'a [Top]);
+
+impl Part<'_> {
+    fn word(&self, k: usize) -> Option<&str> {
+        match self.0.get(k) {
+            Some(Top::Word(w)) => Some(w.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Token `k` is a `:` of a `::` cast.
+    fn cast(&self, k: usize) -> bool {
+        self.0.get(k) == Some(&Top::Colon)
+            && (k.checked_sub(1).and_then(|p| self.0.get(p)) == Some(&Top::Colon)
+                || self.0.get(k + 1) == Some(&Top::Colon))
+    }
+
+    /// Word `k` is used as a name: it follows a keyword that takes a name, and that keyword
+    /// is not itself a name.
+    fn is_name(&self, k: usize) -> bool {
+        let Some(p) = k.checked_sub(1) else {
+            return false;
+        };
+        match self.0.get(p) {
+            Some(Top::Word(w)) if NAME_AFTER.contains(&w.as_str()) => !self.is_name(p),
+            Some(Top::Colon) => self.cast(p),
+            _ => false,
+        }
+    }
+
+    /// Token `k` is where a body statement starts.
+    fn statement_start(&self, k: usize) -> bool {
+        let Some(p) = k.checked_sub(1) else {
+            return true;
+        };
+        match &self.0[p] {
+            Top::Colon => !self.cast(p),
+            Top::Word(w) => STATEMENT_START.contains(&w.as_str()) && !self.is_name(p),
+            _ => false,
+        }
+    }
+
+    /// Word `k` is a label, as in `begin: LOOP`.
+    fn label(&self, k: usize) -> bool {
+        self.0.get(k + 1) == Some(&Top::Colon) && !self.cast(k + 1)
+    }
+}
+
+impl RoutineDepth {
+    /// Feeds one `;`-separated part's tokens; true while the part is a routine's CREATE or
+    /// inside its body, so the parts belong together. Strings, comments and quoted names are
+    /// never words, and a dotted name is one word.
+    fn feed<'a>(&mut self, toks: impl IntoIterator<Item = &'a PTok>) -> bool {
+        let top = top_tokens(toks);
+        if !self.open {
+            let heads: Vec<Option<String>> = top
+                .iter()
+                .map(|t| match t {
+                    Top::Word(w) => Some(w.clone()),
+                    _ => None,
+                })
+                .collect();
+            if !opens_routine(&heads) {
+                return false;
+            }
+            self.open = true;
+            self.body = false;
+            self.stack.clear();
+        }
+        let part = Part(&top);
+        let handler = |k: usize| (0..k).any(|i| part.word(i) == Some("HANDLER"));
+        let mut k = 0;
+        while k < top.len() {
+            match part.word(k) {
+                Some("BEGIN") if !part.is_name(k) && !part.label(k) => {
+                    let prev = k.checked_sub(1).map(|p| &top[p]);
+                    let opens = if !self.body && self.stack.is_empty() {
+                        // In the head: after anything but a comma, an operator or a `::`.
+                        !matches!(prev, Some(Top::Comma | Top::Other))
+                            && !(prev == Some(&Top::Colon) && part.cast(k - 1))
+                    } else {
+                        part.statement_start(k)
+                            || (handler(k)
+                                && (matches!(prev, Some(Top::Value))
+                                    || k.checked_sub(1)
+                                        .and_then(|p| part.word(p))
+                                        .is_some_and(|w| HANDLER_CONDITIONS.contains(&w))))
+                    };
+                    if opens {
+                        self.stack.push(Block::Begin);
+                        self.body = true;
+                    }
+                }
+                Some("CASE")
+                    if !part.label(k)
+                        && !(k
+                            .checked_sub(1)
+                            .and_then(|p| part.word(p))
+                            .is_some_and(|w| {
+                                CASE_NAME_AFTER.contains(&w) && !part.is_name(k - 1)
+                            })) =>
+                {
+                    self.stack.push(Block::Case);
+                }
+                Some("END") if !part.is_name(k) && !part.label(k) => {
+                    let next = part.word(k + 1);
+                    let closes_control = next.is_some_and(|n| END_OF_CONTROL.contains(&n));
+                    if closes_control {
+                        // `END IF`, `END LOOP` and the like.
+                        k += 1;
+                    } else if self.stack.last() == Some(&Block::Case) {
+                        self.stack.pop();
+                        if next == Some("CASE") {
+                            k += 1;
+                        }
+                    } else if self.stack.last() == Some(&Block::Begin) && part.statement_start(k) {
+                        self.stack.pop();
+                    }
+                    // `END lbl` or `END LOOP lbl`: the last word of the part is a label.
+                    if (closes_control || part.statement_start(k))
+                        && k + 2 == top.len()
+                        && part.word(k + 1).is_some()
+                    {
+                        k += 1;
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        if self.stack.is_empty() {
+            self.open = false;
+        }
+        true
+    }
+
+    /// Still inside a body after the last part fed.
+    fn inside(&self) -> bool {
+        self.open && !self.stack.is_empty()
+    }
+}
+
+/// A part's tokens outside parentheses, each group of parentheses as one `Group`.
+fn top_tokens<'a>(toks: impl IntoIterator<Item = &'a PTok>) -> Vec<Top> {
+    let mut paren = 0usize;
+    let mut top = Vec::new();
+    for t in toks {
+        match t {
+            PTok::Open => paren += 1,
+            PTok::Close => {
+                paren = paren.saturating_sub(1);
+                if paren == 0 {
+                    top.push(Top::Group);
+                }
+            }
+            _ if paren > 0 => {}
+            PTok::Word(w) if w.starts_with(|c: char| c.is_ascii_digit()) => top.push(Top::Value),
+            PTok::Word(w) => top.push(Top::Word(w.to_uppercase())),
+            PTok::Str => top.push(Top::Value),
+            PTok::Quoted(_) => top.push(Top::Name),
+            PTok::Colon => top.push(Top::Colon),
+            PTok::Comma => top.push(Top::Comma),
+            _ => top.push(Top::Other),
+        }
+    }
+    top
+}
+
+/// For each `;`-separated part, whether it belongs to a real routine (its CREATE or its body).
+/// A routine whose body is still open at the end of the text is not one: its parts, and all
+/// after them, are plain statements (round 7, C1).
+fn routine_parts<'a, I>(parts: impl IntoIterator<Item = I>) -> Vec<bool>
+where
+    I: IntoIterator<Item = &'a PTok>,
+{
+    let mut routine = RoutineDepth::default();
+    let mut member = Vec::new();
+    let mut open_from: Option<usize> = None;
+    for part in parts {
+        let k = member.len();
+        let was_open = routine.open;
+        let mine = routine.feed(part);
+        if mine && !was_open {
+            open_from = Some(k);
+        }
+        member.push(mine);
+        if !routine.inside() {
+            open_from = None;
+        }
+    }
+    if let Some(from) = open_from.filter(|_| routine.inside()) {
+        for m in &mut member[from..] {
+            *m = false;
+        }
+    }
+    member
+}
+
+/// `ranges` with each routine's parts joined into one range.
+fn whole_routines(
+    dialect: DialectKind,
+    sql: &str,
+    ranges: Vec<std::ops::Range<usize>>,
+) -> Vec<std::ops::Range<usize>> {
+    let toks: Vec<Vec<PTok>> = ranges
+        .iter()
+        .map(|r| plain_tokens(dialect, &sql[r.clone()], false))
+        .collect();
+    let member = routine_parts(toks.iter());
+    // Join a routine's parts: one closes when its body does, so re-follow the depth.
+    let mut out: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    let mut routine = RoutineDepth::default();
+    let mut joining: Option<usize> = None;
+    for (k, r) in ranges.into_iter().enumerate() {
+        if !member[k] {
+            out.push(r);
+            continue;
+        }
+        let start = joining.unwrap_or(r.start);
+        routine.feed(&toks[k]);
+        if routine.inside() {
+            joining = Some(start);
+            continue;
+        }
+        joining = None;
+        out.push(start..r.end);
+    }
+    out
 }
 
 /// The functions `sql` calls: each word followed by `(` (whitespace and comments between
@@ -485,7 +898,9 @@ enum PTok {
     Semi,
     /// `:`, so a Postgres `::` cast is seen.
     Colon,
-    /// A string, a dollar-quoted body, any other punctuation.
+    /// A string or a dollar-quoted body.
+    Str,
+    /// Any other punctuation.
     Other,
 }
 
@@ -503,6 +918,16 @@ fn line_comment_end(b: &[u8], from: usize, postgres: bool) -> usize {
 /// default way, as `lex` reads them. A MySQL `/*! */` comment is read as code, since the
 /// server runs it. For the AI checks only; `classify` never uses it.
 fn plain_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<PTok> {
+    gated_tokens(dialect, sql, flip)
+        .into_iter()
+        .map(|(t, _)| t)
+        .collect()
+}
+
+/// `plain_tokens`, each with whether it sits in a MySQL executable comment the server may
+/// skip: one with a version (`/*!99999 */` runs only from that version on) or MariaDB's
+/// `/*M! */`, which MySQL reads as a plain comment.
+fn gated_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<(PTok, bool)> {
     let mysql = dialect == DialectKind::MySql;
     let postgres = dialect == DialectKind::Postgres;
     let sqlite = dialect == DialectKind::Sqlite;
@@ -512,11 +937,17 @@ fn plain_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<PTok> {
     let mut i = 0;
     // Where a lone word `E` ended: Postgres `E'..'` reads backslashes.
     let mut e_end = None;
+    // Inside a MySQL executable comment: whether it is version-gated.
+    let mut exec: Option<bool> = None;
     while let Some(c) = char_at(sql, i) {
         let next = char_at(sql, i + c.len_utf8());
         if c.is_whitespace() {
             i += c.len_utf8();
             continue;
+        }
+        let gated = exec == Some(true);
+        if exec.is_some() && c == '*' && next == Some('/') {
+            exec = None;
         }
         let dash_comment = c == '-'
             && next == Some('-')
@@ -533,9 +964,11 @@ fn plain_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<PTok> {
             };
             if let Some(skip) = opener.filter(|_| mysql) {
                 i += skip;
+                let version = i;
                 while b.get(i).is_some_and(u8::is_ascii_digit) {
                     i += 1;
                 }
+                exec = Some(skip == 4 || i > version);
                 continue;
             }
             let mut level = 1;
@@ -574,10 +1007,10 @@ fn plain_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<PTok> {
                 flip || postgres && e_end == Some(i)
             };
             i = skip_quoted(sql, i, '\'', escapes).0;
-            PTok::Other
+            PTok::Str
         } else if c == '"' && mysql {
             i = skip_quoted(sql, i, '"', !flip).0;
-            PTok::Other
+            PTok::Str
         } else if quoted_name {
             let (end, closed) = if c == '[' {
                 b[i + 1..]
@@ -595,7 +1028,7 @@ fn plain_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<PTok> {
             let opener = &sql[i..i + tag];
             i += tag;
             i = sql[i..].find(opener).map_or(len, |p| i + p + tag);
-            PTok::Other
+            PTok::Str
         } else if is_word_char(c) {
             while let Some(w) = char_at(sql, i).filter(|w| is_word_char(*w)) {
                 i += w.len_utf8();
@@ -606,7 +1039,219 @@ fn plain_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<PTok> {
             PTok::Other
         };
         e_end = matches!(&tok, PTok::Word(w) if w.eq_ignore_ascii_case("e")).then_some(i);
-        out.push(tok);
+        out.push((tok, gated));
+    }
+    out
+}
+
+/// An UPDATE or DELETE that changes every row: no top-level `WHERE`.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoWhere {
+    /// `"UPDATE"` or `"DELETE"`.
+    pub verb: String,
+    /// The table as written, without quotes; empty when it cannot be told.
+    pub table: String,
+    /// The piece of a plain `;` split that asks, trimmed: the text the ask shows.
+    pub text: String,
+}
+
+/// The first UPDATE or DELETE in `sql` with no top-level `WHERE`, read by the Dialect's own
+/// lexer (UX step 9, round 4: the gate for the missing-WHERE ask). Every `;`-separated part
+/// counts, also inside a MySQL executable comment, and a `WITH` before the verb is looked
+/// through. A `WHERE` only inside a version-gated executable comment does not count, unless
+/// the verb is gated too. When a backslash makes the quoting ambiguous, either reading asks.
+pub fn no_where(dialect: DialectKind, sql: &str) -> Option<NoWhere> {
+    let found = no_where_reading(dialect, sql, false);
+    if found.is_some() || !sql.contains('\\') {
+        return found;
+    }
+    no_where_reading(dialect, sql, true)
+}
+
+fn no_where_reading(dialect: DialectKind, sql: &str, flip: bool) -> Option<NoWhere> {
+    // The safety net (round 8): every piece of a plain `;` split is read, a routine's body
+    // included, so no grouping of statements can hide an UPDATE or DELETE without WHERE.
+    for r in lex(dialect, sql, flip).ranges {
+        let piece = sql[r].trim();
+        if let Some((verb, table)) = no_where_piece(dialect, piece, flip) {
+            return Some(NoWhere {
+                verb,
+                table,
+                text: piece.to_string(),
+            });
+        }
+    }
+    None
+}
+
+/// The first UPDATE or DELETE without WHERE in one piece, reading every `;`-part of it (a
+/// MySQL executable comment can hold `;`s the lexer does not split on).
+fn no_where_piece(dialect: DialectKind, sql: &str, flip: bool) -> Option<(String, String)> {
+    let toks = gated_tokens(dialect, sql, flip);
+    for part in toks.split(|(t, _)| *t == PTok::Semi) {
+        // Each token with its parenthesis depth; `(` and `)` sit at the depth outside them.
+        let mut depth = 0usize;
+        let mut items: Vec<(usize, &PTok, bool)> = Vec::with_capacity(part.len());
+        for (t, gated) in part.iter() {
+            match t {
+                PTok::Open => {
+                    items.push((depth, t, *gated));
+                    depth += 1;
+                }
+                PTok::Close => {
+                    depth = depth.saturating_sub(1);
+                    items.push((depth, t, *gated));
+                }
+                _ => items.push((depth, t, *gated)),
+            }
+        }
+        let word = |i: usize| match items[i].1 {
+            PTok::Word(w) => w.to_uppercase(),
+            _ => String::new(),
+        };
+        let top: Vec<usize> = (0..items.len()).filter(|&i| items[i].0 == 0).collect();
+        let mut start = 0;
+        // EXPLAIN ANALYZE runs what it explains; plain EXPLAIN does not (N3).
+        if top.first().is_some_and(|&i| word(i) == "EXPLAIN") {
+            let body = top.iter().copied().skip(1).find(|&i| {
+                matches!(
+                    word(i).as_str(),
+                    "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "WITH" | "MERGE" | "VALUES"
+                )
+            });
+            let Some(body) = body else { continue };
+            let analyze = (1..body).any(|i| matches!(word(i).as_str(), "ANALYZE" | "ANALYSE"));
+            if !analyze {
+                continue;
+            }
+            start = top.iter().position(|&i| i == body).unwrap_or(0);
+        }
+        let top = &top[start..];
+        let top_words: Vec<String> = top.iter().map(|&i| word(i)).collect();
+        // The writes to check: the statement's own verb, and in a WITH every UPDATE or
+        // DELETE that opens a parenthesis group, at any depth (N2).
+        let mut writes: Vec<usize> = Vec::new();
+        if let Some(at) = verb_at_in(&top_words) {
+            writes.push(top[at]);
+        }
+        // A routine's first body statement shares its piece with the CREATE: an UPDATE or
+        // DELETE right after a block start is read too (an event such as AFTER DELETE is not).
+        if top_words
+            .iter()
+            .find(|w| !w.is_empty())
+            .is_some_and(|w| w == "CREATE")
+        {
+            for w in 1..top_words.len() {
+                if matches!(top_words[w].as_str(), "UPDATE" | "DELETE")
+                    && matches!(
+                        top_words[w - 1].as_str(),
+                        "BEGIN" | "ATOMIC" | "THEN" | "ELSE" | "DO" | "LOOP" | "REPEAT"
+                    )
+                {
+                    writes.push(top[w]);
+                }
+            }
+        }
+        if top_words
+            .iter()
+            .find(|w| !w.is_empty())
+            .is_some_and(|w| w == "WITH")
+        {
+            let from = top.first().copied().unwrap_or(0);
+            writes.extend((from + 1..items.len()).filter(|&i| {
+                items[i].0 > 0
+                    && matches!(word(i).as_str(), "UPDATE" | "DELETE")
+                    && matches!(items[i - 1].1, PTok::Open)
+            }));
+        }
+        for k in writes {
+            let verb = word(k);
+            if verb != "UPDATE" && verb != "DELETE" {
+                continue;
+            }
+            let (d, _, verb_gated) = items[k];
+            let scope: Vec<usize> = (k + 1..items.len())
+                .take_while(|&j| items[j].0 >= d)
+                .collect();
+            let has_where = scope
+                .iter()
+                .any(|&j| items[j].0 == d && word(j) == "WHERE" && (!items[j].2 || verb_gated));
+            if has_where {
+                continue;
+            }
+            const MODIFIERS: &[&str] = &["LOW_PRIORITY", "IGNORE", "QUICK", "ONLY", "FROM"];
+            let table = scope
+                .iter()
+                .copied()
+                .filter(|&j| items[j].0 == d)
+                .find(|&j| {
+                    !(matches!(items[j].1, PTok::Word(_)) && MODIFIERS.contains(&word(j).as_str()))
+                })
+                .and_then(|j| match items[j].1 {
+                    PTok::Word(w) | PTok::Quoted(w) => Some(w.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            return Some((verb, table));
+        }
+    }
+    None
+}
+
+/// `verb_at` over words where a non-word is an empty string.
+fn verb_at_in(words: &[String]) -> Option<usize> {
+    let first = words.iter().position(|w| !w.is_empty())?;
+    match words[first].as_str() {
+        "WITH" => words.iter().position(|w| {
+            matches!(
+                w.as_str(),
+                "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+            )
+        }),
+        _ => Some(first),
+    }
+}
+
+/// One statement a run will send, as the Core splits it (UX step 9, round 4).
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedRun {
+    /// The exact text sent.
+    pub text: String,
+    /// Which of the given statements it came from.
+    pub piece: usize,
+    /// Where it sits in that statement, in UTF-16 units, as the editor counts.
+    pub from: usize,
+    pub to: usize,
+    /// It changes every row: the missing-WHERE ask comes before it runs.
+    pub no_where: Option<NoWhere>,
+}
+
+/// The statements a run of `statements` sends, split by the Core's lexer, each with its
+/// missing-WHERE answer. A piece with only comments sends nothing.
+pub fn plan_run(dialect: DialectKind, statements: &[String]) -> Vec<PlannedRun> {
+    let utf16 = |s: &str| s.encode_utf16().count();
+    let mut out = Vec::new();
+    for (piece, sql) in statements.iter().enumerate() {
+        // A running count, so a long script is read once (the ranges come in order).
+        let (mut at, mut units) = (0, 0);
+        for r in split_statements(dialect, sql) {
+            let text = &sql[r.clone()];
+            if text.is_empty() {
+                continue;
+            }
+            units += utf16(&sql[at..r.start]);
+            at = r.start;
+            let from = units;
+            out.push(PlannedRun {
+                text: text.to_string(),
+                piece,
+                from,
+                to: from + utf16(text),
+                no_where: no_where(dialect, text),
+            });
+        }
     }
     out
 }
@@ -2846,5 +3491,797 @@ mod verdict_tests {
         };
         assert!(statements[0].by_assistant);
         assert_eq!(statements[0].class, R);
+    }
+}
+
+/// UX step 9, round 4: the missing-WHERE ask and the statements that run come from the
+/// Core's lexer, for every input the round 2 and round 3 reviews found.
+#[cfg(test)]
+mod no_where_tests {
+    use super::*;
+
+    const PG: DialectKind = DialectKind::Postgres;
+    const MY: DialectKind = DialectKind::MySql;
+    const SL: DialectKind = DialectKind::Sqlite;
+    const ALL: [DialectKind; 3] = [PG, MY, SL];
+
+    fn verb(d: DialectKind, sql: &str) -> Option<String> {
+        no_where(d, sql).map(|n| n.verb)
+    }
+
+    #[test]
+    fn plain_updates_and_deletes() {
+        for d in ALL {
+            assert_eq!(verb(d, "DELETE FROM t"), Some("DELETE".into()), "{d:?}");
+            assert_eq!(
+                verb(d, "update t set a = 1"),
+                Some("UPDATE".into()),
+                "{d:?}"
+            );
+            assert_eq!(verb(d, "UPDATE t SET a = 1 WHERE id = 2"), None, "{d:?}");
+            assert_eq!(
+                verb(d, "UPDATE t SET a = (SELECT b FROM u WHERE u.id = 1)"),
+                Some("UPDATE".into()),
+                "{d:?}"
+            );
+            assert_eq!(
+                verb(d, "-- WHERE\nDELETE FROM t"),
+                Some("DELETE".into()),
+                "{d:?}"
+            );
+            assert_eq!(verb(d, "SELECT 1"), None, "{d:?}");
+            assert_eq!(
+                no_where(d, "DELETE FROM sales.orders").unwrap().table,
+                "sales.orders"
+            );
+        }
+        assert_eq!(
+            no_where(MY, "DELETE LOW_PRIORITY QUICK FROM `t`")
+                .unwrap()
+                .table,
+            "t"
+        );
+    }
+
+    #[test]
+    fn a_cte_write_is_checked() {
+        for d in ALL {
+            assert_eq!(
+                verb(d, "WITH x AS (SELECT 1) DELETE FROM t"),
+                Some("DELETE".into()),
+                "{d:?}"
+            );
+            assert_eq!(
+                verb(d, "WITH x AS (SELECT 1) UPDATE t SET a = 1"),
+                Some("UPDATE".into()),
+                "{d:?}"
+            );
+            assert_eq!(
+                verb(d, "WITH x AS (SELECT 1 WHERE true) DELETE FROM t"),
+                Some("DELETE".into()),
+                "{d:?}"
+            );
+            assert_eq!(
+                verb(
+                    d,
+                    "WITH x AS (SELECT 1) DELETE FROM t WHERE id IN (SELECT * FROM x)"
+                ),
+                None,
+                "{d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn round_2_mysql_executable_comments_and_dashes() {
+        assert_eq!(verb(MY, "/*! DELETE FROM t */"), Some("DELETE".into()));
+        assert_eq!(
+            verb(MY, "/*!40101 UPDATE t SET a=1 */"),
+            Some("UPDATE".into())
+        );
+        assert_eq!(verb(MY, "UPDATE t SET a=1 /*! WHERE id = 1 */"), None);
+        assert_eq!(verb(PG, "/*! DELETE FROM t */"), None);
+        // `--` needs white space on MySQL: `1--1` is code, and the DELETE is its own statement.
+        let plan = plan_run(MY, &["SELECT 1--1; DELETE FROM t".into()]);
+        assert_eq!(
+            plan.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(),
+            ["SELECT 1--1", "DELETE FROM t"]
+        );
+        assert_eq!(
+            plan[1].no_where.as_ref().map(|n| n.verb.as_str()),
+            Some("DELETE")
+        );
+        assert_eq!(verb(MY, "DELETE FROM t WHERE a = 1--1"), None);
+    }
+
+    #[test]
+    fn round_2_postgres_comments_nest() {
+        assert_eq!(
+            verb(PG, "DELETE FROM t /* a /* b */ WHERE id=1 */"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(PG, "/* a /* b */ c */ DELETE FROM t"),
+            Some("DELETE".into())
+        );
+        assert_eq!(verb(MY, "DELETE FROM t /* a /* b */ WHERE id=1"), None);
+    }
+
+    #[test]
+    fn c1_a_semicolon_inside_an_executable_comment_still_asks() {
+        assert_eq!(
+            verb(MY, "/*! SELECT 1; DELETE FROM t */"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(MY, "SELECT 1 /*! ; DELETE FROM t */"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(MY, "SELECT 1 /*! ; DELETE FROM t WHERE id = 1 */"),
+            None
+        );
+    }
+
+    #[test]
+    fn c2_sqlite_bracket_names() {
+        let texts = |sql: &str| {
+            plan_run(SL, &[sql.into()])
+                .into_iter()
+                .map(|p| p.text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            texts("SELECT [--]; DELETE FROM t"),
+            ["SELECT [--]", "DELETE FROM t"]
+        );
+        assert_eq!(
+            plan_run(SL, &["SELECT [--]; DELETE FROM t".into()])[1]
+                .no_where
+                .as_ref()
+                .unwrap()
+                .verb,
+            "DELETE"
+        );
+        assert_eq!(texts("SELECT [a;b] FROM t"), ["SELECT [a;b] FROM t"]);
+        assert_eq!(
+            texts("SELECT [x;DELETE FROM t;y]"),
+            ["SELECT [x;DELETE FROM t;y]"]
+        );
+        assert_eq!(verb(SL, "SELECT [x;DELETE FROM t;y]"), None);
+    }
+
+    #[test]
+    fn c3_a_postgres_word_ending_in_e_is_not_an_escape_string() {
+        let plan = plan_run(PG, &["SELECT DATE'\\'; DELETE FROM t; SELECT '".into()]);
+        assert_eq!(plan.len(), 3, "{plan:?}");
+        assert_eq!(plan[1].text, "DELETE FROM t");
+        assert_eq!(plan[1].no_where.as_ref().unwrap().verb, "DELETE");
+        for w in ["TIME", "NAME"] {
+            let plan = plan_run(PG, &[format!("SELECT {w}'\\'; DELETE FROM t")]);
+            assert_eq!(plan.len(), 2, "{w}");
+        }
+    }
+
+    #[test]
+    fn c4_a_where_only_in_a_version_gated_comment_does_not_count() {
+        assert_eq!(
+            verb(MY, "DELETE FROM t /*!99999 WHERE id=1 */"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(MY, "DELETE FROM t /*M!100100 WHERE id=1 */"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(MY, "DELETE FROM t /*M! WHERE id=1 */"),
+            Some("DELETE".into())
+        );
+        // In the same gated comment as the verb, it runs or not with it.
+        assert_eq!(verb(MY, "/*!50000 DELETE FROM t WHERE id=1 */"), None);
+    }
+
+    #[test]
+    fn c5_mysql_dash_dash_then_a_control_character_is_a_comment() {
+        assert_eq!(
+            verb(MY, "DELETE FROM t --\u{1}WHERE id=1\n"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(MY, "DELETE FROM t --\tWHERE id=1\n"),
+            Some("DELETE".into())
+        );
+    }
+
+    fn texts(d: DialectKind, sql: &str) -> Vec<String> {
+        plan_run(d, &[sql.to_string()])
+            .into_iter()
+            .map(|p| p.text)
+            .collect()
+    }
+
+    /// Round 5, N1: a routine or trigger body is one statement, as the editor splits it.
+    #[test]
+    fn n1_compound_bodies_stay_whole() {
+        let trigger = "CREATE TRIGGER x BEFORE INSERT ON t FOR EACH ROW BEGIN UPDATE a SET x=1; DELETE FROM u WHERE id=1; END";
+        assert_eq!(texts(MY, trigger), [trigger]);
+        let proc = "CREATE DEFINER=`root`@`%` PROCEDURE p()\nBEGIN\n  IF x THEN SELECT 1; END IF;\n  CASE WHEN a THEN SELECT 2; END CASE;\n  l: LOOP LEAVE l; END LOOP;\n  WHILE y DO SET y = 0; END WHILE;\n  REPEAT SET z = 1; UNTIL z END REPEAT;\n  BEGIN SELECT 3; END;\nEND";
+        assert_eq!(
+            texts(MY, &format!("{proc};\nSELECT 9;")),
+            [proc, "SELECT 9"]
+        );
+        let event =
+            "CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO BEGIN DELETE FROM log WHERE old; END";
+        assert_eq!(texts(MY, event), [event]);
+        let func = "CREATE FUNCTION f() RETURNS INT DETERMINISTIC BEGIN DECLARE n INT; SET n = 1; RETURN n; END";
+        assert_eq!(texts(MY, func), [func]);
+        let sqlite = "CREATE TRIGGER t1 AFTER INSERT ON a BEGIN UPDATE b SET n = n + 1; INSERT INTO c VALUES (1); END";
+        assert_eq!(
+            texts(SL, &format!("{sqlite};\nSELECT 1;")),
+            [sqlite, "SELECT 1"]
+        );
+        let atomic =
+            "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT 2; END";
+        assert_eq!(
+            texts(PG, &format!("{atomic};\nSELECT 3")),
+            [atomic, "SELECT 3"]
+        );
+        let dollar =
+            "CREATE FUNCTION g() RETURNS void AS $$ BEGIN DELETE FROM t; END $$ LANGUAGE plpgsql";
+        assert_eq!(texts(PG, dollar), [dollar]);
+        // A transaction's BEGIN is a statement of its own.
+        assert_eq!(
+            texts(MY, "BEGIN; DELETE FROM t WHERE id = 1; COMMIT"),
+            ["BEGIN", "DELETE FROM t WHERE id = 1", "COMMIT"]
+        );
+        assert_eq!(
+            texts(PG, "BEGIN; SELECT 1; END"),
+            ["BEGIN", "SELECT 1", "END"]
+        );
+        // Round 8: a WHERE-less write in the body asks, its first statement included.
+        assert!(plan_run(MY, &[trigger.into()])[0].no_where.is_some());
+    }
+
+    /// Run all on a script with a trigger plans the trigger as one statement.
+    #[test]
+    fn n1_run_all_plans_a_trigger_as_one_statement() {
+        let script = "SELECT 1;\nCREATE TRIGGER x BEFORE INSERT ON t FOR EACH ROW BEGIN UPDATE a SET x=1; DELETE FROM u; END;\nDELETE FROM v;";
+        let plan = plan_run(MY, &[script.into()]);
+        assert_eq!(plan.len(), 3, "{plan:?}");
+        assert!(plan[1].text.starts_with("CREATE TRIGGER") && plan[1].text.ends_with("END"));
+        // Round 8's net reads the body too: its first WHERE-less write asks, the UPDATE that
+        // shares its piece with the CREATE.
+        assert_eq!(
+            plan[1].no_where.as_ref().map(|n| n.verb.as_str()),
+            Some("UPDATE")
+        );
+        assert_eq!(
+            plan[2].no_where.as_ref().map(|n| n.verb.as_str()),
+            Some("DELETE")
+        );
+        assert_eq!(statement_count(MY, script), 3);
+    }
+
+    /// Round 6, N4: only a real routine's CREATE opens a body; a plain CREATE with columns
+    /// called begin, case, end, event, function, trigger or procedure never swallows what follows.
+    #[test]
+    fn n4_a_plain_create_with_routine_words_never_swallows_the_next_statement() {
+        for d in ALL {
+            let plan = plan_run(
+                d,
+                &["CREATE TABLE shifts (begin time, event text); DELETE FROM t".into()],
+            );
+            assert_eq!(plan.len(), 2, "{d:?} {plan:?}");
+            assert_eq!(
+                plan[1].no_where.as_ref().map(|n| n.verb.as_str()),
+                Some("DELETE"),
+                "{d:?}"
+            );
+            let plan = plan_run(
+                d,
+                &["CREATE TABLE t (begin int, function int); UPDATE u SET a=1".into()],
+            );
+            assert_eq!(plan.len(), 2, "{d:?} {plan:?}");
+            assert_eq!(
+                plan[1].no_where.as_ref().map(|n| n.verb.as_str()),
+                Some("UPDATE"),
+                "{d:?}"
+            );
+        }
+    }
+
+    /// Property: outside a real routine body the Core never joins `;`-separated statements.
+    #[test]
+    fn n4_statements_never_merge_outside_a_routine() {
+        const NAMES: &[&str] = &[
+            "begin",
+            "case",
+            "end",
+            "event",
+            "function",
+            "trigger",
+            "procedure",
+            "atomic",
+        ];
+        for d in ALL {
+            for a in NAMES {
+                for b in NAMES {
+                    let inputs = [
+                        format!("CREATE TABLE {a} ({b} int, x int); DELETE FROM t"),
+                        format!("CREATE TABLE t ({a} int, {b} text); DELETE FROM t"),
+                        format!("CREATE TABLE IF NOT EXISTS t ({a} int, {b} int); DELETE FROM t"),
+                        format!("CREATE INDEX {a} ON t ({b}); DELETE FROM t"),
+                        format!("CREATE VIEW v AS SELECT {a}, {b} FROM t; DELETE FROM t"),
+                        format!("CREATE TABLE t AS SELECT 1 AS {a}, 2 AS {b}; DELETE FROM t"),
+                        format!("ALTER TABLE {a} ADD {b} int; DELETE FROM t"),
+                        format!("INSERT INTO {a} ({b}) VALUES (1); DELETE FROM t"),
+                        format!("SELECT {a}, {b} FROM t; DELETE FROM t"),
+                        format!(
+                            "CREATE TABLE t (x int CHECK (CASE WHEN x > 0 THEN true END), {a} int); DELETE FROM t"
+                        ),
+                    ];
+                    for sql in inputs {
+                        let naive = lex(d, &sql, false).ranges.len();
+                        let plan = plan_run(d, std::slice::from_ref(&sql));
+                        assert_eq!(plan.len(), naive, "{d:?}: {sql}");
+                        assert_eq!(statement_count(d, &sql), naive, "{d:?}: {sql}");
+                        assert_eq!(
+                            plan.last()
+                                .and_then(|p| p.no_where.as_ref())
+                                .map(|n| n.verb.as_str()),
+                            Some("DELETE"),
+                            "{d:?}: {sql}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The real routine forms still open a body, with their modifiers.
+    #[test]
+    fn n4_real_routines_with_modifiers_still_stay_whole() {
+        let body = "BEGIN UPDATE a SET x = 1; DELETE FROM u; END";
+        for head in [
+            "CREATE OR REPLACE PROCEDURE p()",
+            "CREATE DEFINER = `root`@`%` TRIGGER x BEFORE INSERT ON t FOR EACH ROW",
+            "CREATE DEFINER=CURRENT_USER EVENT e ON SCHEDULE EVERY 1 DAY DO",
+            "CREATE DEFINER = root@localhost FUNCTION f() RETURNS INT",
+            "CREATE AGGREGATE FUNCTION f() RETURNS INT",
+            "CREATE TRIGGER IF NOT EXISTS x AFTER INSERT ON t FOR EACH ROW",
+        ] {
+            let sql = format!("{head} {body}; SELECT 1");
+            assert_eq!(plan_run(MY, std::slice::from_ref(&sql)).len(), 2, "{sql}");
+        }
+        for head in [
+            "CREATE TEMP TRIGGER x AFTER INSERT ON t",
+            "CREATE TEMPORARY TRIGGER IF NOT EXISTS x AFTER INSERT ON t",
+        ] {
+            let sql = format!("{head} {body}; SELECT 1");
+            assert_eq!(plan_run(SL, std::slice::from_ref(&sql)).len(), 2, "{sql}");
+        }
+        let pg = "CREATE OR REPLACE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT 2; END; SELECT 3";
+        assert_eq!(plan_run(PG, &[pg.into()]).len(), 2);
+        // A BEGIN inside parentheses (a default, a column) is not the body's.
+        let paren = "CREATE PROCEDURE p(begin int) BEGIN SELECT 1; END; DELETE FROM t";
+        let plan = plan_run(MY, &[paren.into()]);
+        assert_eq!(plan.len(), 2, "{plan:?}");
+        assert_eq!(
+            plan[1].no_where.as_ref().map(|n| n.verb.as_str()),
+            Some("DELETE")
+        );
+    }
+
+    /// Round 7 (C1, I1, I2): the shared cases in `src/query/fixtures/splitCases.json`, which
+    /// the editor's splitter is tested on too, so both give the same statements.
+    #[test]
+    fn r7_shared_split_cases() {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Case {
+            note: String,
+            dialect: String,
+            sql: String,
+            pieces: Vec<String>,
+            last_asks: Option<String>,
+        }
+        let cases: Vec<Case> =
+            serde_json::from_str(include_str!("../../../src/query/fixtures/splitCases.json"))
+                .unwrap();
+        assert!(cases.len() > 20);
+        for c in cases {
+            let d = match c.dialect.as_str() {
+                "mysql" => MY,
+                "postgres" => PG,
+                _ => SL,
+            };
+            let plan = plan_run(d, std::slice::from_ref(&c.sql));
+            let got: Vec<&str> = plan.iter().map(|p| p.text.as_str()).collect();
+            assert_eq!(got, c.pieces, "{}: {}", c.note, c.sql);
+            assert_eq!(statement_count(d, &c.sql), c.pieces.len(), "{}", c.note);
+            let asks = plan
+                .last()
+                .and_then(|p| p.no_where.as_ref())
+                .map(|n| n.verb.clone());
+            assert_eq!(asks, c.last_asks, "{}: {}", c.note, c.sql);
+            // The whole text's own answer sees the DELETE too.
+            if c.last_asks.is_some() {
+                assert!(no_where(d, &c.sql).is_some(), "{}: {}", c.note, c.sql);
+            }
+        }
+    }
+
+    /// Round 8: whatever the routine tracker decides, a plain `;` piece that is an UPDATE or
+    /// DELETE without WHERE asks, and the ask names that piece.
+    fn asks_for(d: DialectKind, sql: &str, piece: &str) -> bool {
+        let planned = plan_run(d, &[sql.to_string()]);
+        let whole = no_where(d, sql).is_some();
+        whole
+            && planned
+                .iter()
+                .any(|p| p.no_where.as_ref().is_some_and(|n| n.text == piece))
+    }
+
+    #[test]
+    fn r8_every_critical_reproduction_asks() {
+        let cases: &[(DialectKind, &str)] = &[
+            (
+                MY,
+                "CREATE TABLE shifts (begin time, event text); DELETE FROM t",
+            ),
+            (
+                PG,
+                "CREATE TABLE shifts (begin time, event text); DELETE FROM t",
+            ),
+            (
+                SL,
+                "CREATE TABLE shifts (begin time, event text); DELETE FROM t",
+            ),
+            (
+                MY,
+                "CREATE PROCEDURE p() BEGIN SELECT ts AS begin FROM t; END; DELETE FROM t",
+            ),
+            (
+                MY,
+                "CREATE PROCEDURE p() BEGIN DECLARE begin INT; SET begin = 1; END; DELETE FROM t",
+            ),
+            (
+                MY,
+                "CREATE TRIGGER x BEFORE UPDATE ON begin FOR EACH ROW SET NEW.a=1; DELETE FROM t",
+            ),
+            (
+                MY,
+                "CREATE FUNCTION begin() RETURNS INT RETURN 1; DELETE FROM t",
+            ),
+            (
+                MY,
+                "CREATE PROCEDURE case() BEGIN SELECT 1; END; DELETE FROM t",
+            ),
+            (
+                SL,
+                "CREATE TRIGGER x AFTER UPDATE ON s BEGIN UPDATE s SET begin = 1 WHERE id = NEW.id; END; DELETE FROM t",
+            ),
+            (
+                SL,
+                "CREATE TRIGGER x AFTER INSERT ON begin BEGIN SELECT 1; END; DELETE FROM t",
+            ),
+            (
+                PG,
+                "CREATE FUNCTION f() RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE s SET begin = 1 WHERE id = 1; END; DELETE FROM t",
+            ),
+            (
+                PG,
+                "CREATE TRIGGER x BEFORE UPDATE OF begin ON s FOR EACH ROW EXECUTE FUNCTION f(); DELETE FROM t",
+            ),
+            (
+                PG,
+                "CREATE TRIGGER begin BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION f(); DELETE FROM t",
+            ),
+            (
+                MY,
+                "CREATE PROCEDURE p() BEGIN SELECT 1; END begin; DELETE FROM t; CREATE PROCEDURE q() BEGIN SELECT 1; END; DELETE FROM u",
+            ),
+            (
+                MY,
+                "CREATE PROCEDURE p() BEGIN begin: LOOP LEAVE begin; END LOOP begin; END; DELETE FROM t",
+            ),
+            (
+                PG,
+                "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1::begin; END; DELETE FROM t",
+            ),
+            (
+                MY,
+                "CREATE TRIGGER y BEFORE INSERT ON t FOR EACH ROW FOLLOWS begin BEGIN SET NEW.a = 1; END; DELETE FROM t",
+            ),
+            (
+                PG,
+                "CREATE FUNCTION f() RETURNS SETOF begin LANGUAGE sql BEGIN ATOMIC SELECT 1; END; DELETE FROM t",
+            ),
+        ];
+        for (d, sql) in cases {
+            assert!(asks_for(*d, sql, "DELETE FROM t"), "{d:?}: {sql}");
+        }
+    }
+
+    /// Found in the round-8 live check: a body's first statement shares its piece with the
+    /// CREATE, and a WHERE-less write there asks as one later in the body does.
+    #[test]
+    fn r8_a_write_first_in_a_body_asks() {
+        let asks: &[(DialectKind, &str)] = &[
+            (
+                SL,
+                "CREATE TEMP TRIGGER y AFTER INSERT ON orders BEGIN DELETE FROM u; END",
+            ),
+            (MY, "CREATE PROCEDURE p() BEGIN UPDATE t SET a = 1; END"),
+            (
+                MY,
+                "CREATE PROCEDURE p() BEGIN IF x THEN DELETE FROM t; END IF; END",
+            ),
+            (
+                PG,
+                "CREATE FUNCTION f() RETURNS void LANGUAGE sql BEGIN ATOMIC DELETE FROM t; END",
+            ),
+        ];
+        for (d, sql) in asks {
+            assert!(no_where(*d, sql).is_some(), "{d:?}: {sql}");
+        }
+        let quiet: &[(DialectKind, &str)] = &[
+            (
+                SL,
+                "CREATE TRIGGER y AFTER DELETE ON orders BEGIN SELECT 1; END",
+            ),
+            (
+                MY,
+                "CREATE TRIGGER y BEFORE UPDATE ON t FOR EACH ROW BEGIN SET NEW.a = 1; END",
+            ),
+            (
+                SL,
+                "CREATE TRIGGER y AFTER INSERT ON orders BEGIN DELETE FROM u WHERE id = NEW.id; END",
+            ),
+            (
+                PG,
+                "CREATE TABLE a (b int REFERENCES c ON DELETE CASCADE ON UPDATE CASCADE)",
+            ),
+        ];
+        for (d, sql) in quiet {
+            assert!(no_where(*d, sql).is_none(), "{d:?}: {sql}");
+        }
+    }
+
+    /// The net reads every plain piece, a routine's body included: asking more is safe.
+    #[test]
+    fn r8_a_routine_body_without_where_asks_and_names_its_piece() {
+        let sql = "CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM u; END";
+        let n = no_where(MY, sql).unwrap();
+        assert_eq!(
+            (n.verb.as_str(), n.text.as_str()),
+            ("DELETE", "DELETE FROM u")
+        );
+        let plan = plan_run(MY, &[sql.into()]);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].no_where.as_ref().unwrap().text, "DELETE FROM u");
+        // A body whose writes all have a WHERE does not ask.
+        assert!(
+            no_where(
+                MY,
+                "CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM u WHERE a; END"
+            )
+            .is_none()
+        );
+    }
+
+    /// Property: scripts made of routine heads, name words and `;`, in any order. Any piece of
+    /// a plain `;` split that is `DELETE FROM t` makes the run ask, naming that piece.
+    #[test]
+    fn r8_a_plain_delete_piece_always_asks() {
+        const BITS: &[&str] = &[
+            "CREATE PROCEDURE p() BEGIN",
+            "CREATE TRIGGER x AFTER INSERT ON t FOR EACH ROW BEGIN",
+            "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC",
+            "CREATE TRIGGER y AFTER INSERT ON s BEGIN",
+            "begin",
+            "end",
+            "case",
+            "event",
+            "trigger",
+            "function",
+            "procedure",
+            "atomic",
+            "END",
+            "END IF",
+            "END CASE",
+            "BEGIN",
+            "CASE WHEN 1 THEN 2",
+            "SELECT 1",
+            "SET begin = 1",
+            "AS begin",
+            "x:",
+            "l: LOOP",
+            "COMMENT 'doc'",
+            "5",
+            "::begin",
+            "FOLLOWS",
+            "SETOF",
+            "DECLARE EXIT HANDLER FOR SQLEXCEPTION",
+            ";",
+            ";",
+            ";",
+            ";",
+            "DELETE FROM t",
+            "DELETE FROM t",
+        ];
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let mut checked = 0;
+        for _ in 0..20000 {
+            let len = 3 + next(14);
+            let script: Vec<&str> = (0..len).map(|_| BITS[next(BITS.len())]).collect();
+            let sql = script.join(" ");
+            for d in [MY, PG, SL] {
+                let plain: Vec<&str> = lex(d, &sql, false)
+                    .ranges
+                    .into_iter()
+                    .map(|r| sql[r].trim())
+                    .collect();
+                if !plain.contains(&"DELETE FROM t") {
+                    continue;
+                }
+                checked += 1;
+                assert!(asks_for(d, &sql, "DELETE FROM t"), "{d:?}: {sql}");
+            }
+        }
+        assert!(checked > 1000, "{checked}");
+    }
+
+    /// Round 7 (I3): code the lexer cannot see into counts as a write, so Production asks
+    /// and Read-only refuses.
+    #[test]
+    fn r7_code_that_runs_code_is_a_write() {
+        for (d, sql) in [
+            (PG, "DO $$ BEGIN DELETE FROM t; END $$"),
+            (PG, "DO LANGUAGE plpgsql $$ BEGIN NULL; END $$"),
+            (PG, "CALL p()"),
+            (MY, "CALL p()"),
+            (PG, "EXECUTE p"),
+            (MY, "EXECUTE s"),
+            (MY, "EXECUTE s USING @a"),
+            (PG, "PREPARE p AS DELETE FROM t"),
+            (MY, "PREPARE s FROM 'DELETE FROM t'"),
+        ] {
+            assert_eq!(classify(d, sql), StatementClass::Write, "{d:?}: {sql}");
+        }
+    }
+
+    /// N2: a write inside a CTE is checked with its own WHERE, at any depth.
+    #[test]
+    fn n2_writes_inside_ctes() {
+        assert_eq!(
+            verb(PG, "WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(
+                PG,
+                "WITH x AS (UPDATE t SET a = 1 RETURNING *) SELECT * FROM x"
+            ),
+            Some("UPDATE".into())
+        );
+        assert_eq!(
+            verb(
+                PG,
+                "WITH x AS (DELETE FROM t WHERE id = 1 RETURNING *) SELECT * FROM x"
+            ),
+            None
+        );
+        assert_eq!(
+            verb(
+                PG,
+                "WITH a AS (SELECT 1), b AS (WITH c AS (DELETE FROM t RETURNING id) SELECT * FROM c) SELECT * FROM b WHERE true"
+            ),
+            Some("DELETE".into())
+        );
+        // The outer WHERE is not the inner write's.
+        assert_eq!(
+            verb(
+                PG,
+                "WITH x AS (DELETE FROM t RETURNING id) SELECT * FROM x WHERE id = 1"
+            ),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            no_where(PG, "WITH x AS (UPDATE s.t SET a = 1 RETURNING *) SELECT 1")
+                .unwrap()
+                .table,
+            "s.t"
+        );
+        // SELECT ... FOR UPDATE is a lock, not a write.
+        assert_eq!(
+            verb(PG, "WITH x AS (SELECT * FROM t FOR UPDATE) SELECT * FROM x"),
+            None
+        );
+    }
+
+    /// N3: EXPLAIN ANALYZE runs the statement it explains.
+    #[test]
+    fn n3_explain_analyze_runs_the_write() {
+        assert_eq!(
+            verb(PG, "EXPLAIN ANALYZE DELETE FROM t"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(PG, "EXPLAIN ANALYSE VERBOSE UPDATE t SET a = 1"),
+            Some("UPDATE".into())
+        );
+        assert_eq!(
+            verb(PG, "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM t"),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(
+                PG,
+                "EXPLAIN (ANALYZE true) WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x"
+            ),
+            Some("DELETE".into())
+        );
+        assert_eq!(
+            verb(MY, "EXPLAIN ANALYZE DELETE FROM t"),
+            Some("DELETE".into())
+        );
+        assert_eq!(verb(PG, "EXPLAIN ANALYZE DELETE FROM t WHERE id = 1"), None);
+        // Without ANALYZE nothing runs.
+        assert_eq!(verb(PG, "EXPLAIN DELETE FROM t"), None);
+        assert_eq!(verb(MY, "EXPLAIN DELETE FROM t"), None);
+        for d in [PG, MY] {
+            assert_eq!(
+                classify(d, "EXPLAIN ANALYZE DELETE FROM t"),
+                StatementClass::Write,
+                "{d:?}"
+            );
+            assert_eq!(
+                classify(d, "EXPLAIN DELETE FROM t"),
+                StatementClass::Read,
+                "{d:?}"
+            );
+            assert_eq!(
+                classify(d, "EXPLAIN SELECT 1"),
+                StatementClass::Read,
+                "{d:?}"
+            );
+        }
+        assert_eq!(
+            classify(PG, "EXPLAIN (ANALYZE) DELETE FROM t"),
+            StatementClass::Write
+        );
+    }
+
+    #[test]
+    fn plan_run_splits_each_statement_and_keeps_its_place() {
+        let plan = plan_run(
+            PG,
+            &[
+                "SELECT 1; DELETE FROM t".into(),
+                "-- only a note".into(),
+                "SELECT 'é'; UPDATE u SET a = 1 WHERE b".into(),
+            ],
+        );
+        let got: Vec<_> = plan
+            .iter()
+            .map(|p| (p.piece, p.from, p.to, p.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (0, 0, 8, "SELECT 1"),
+                (0, 10, 23, "DELETE FROM t"),
+                (2, 0, 10, "SELECT 'é'"),
+                (2, 12, 38, "UPDATE u SET a = 1 WHERE b"),
+            ]
+        );
+        assert!(plan[1].no_where.is_some() && plan[3].no_where.is_none());
     }
 }

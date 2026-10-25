@@ -36,9 +36,9 @@ describe("changeEditOp", () => {
   });
 
   test("the_line_arrow_follows_the_diagram", () => {
-    const er = parseFlow('diagram er "x"\nA\nB\n');
-    expect(changeEditOp(ok(0, { add_flow: { from: "A", to: "B" } }), er, "er")).toMatchObject({ arrow: "--" });
-    expect(changeLine(ok(0, { add_flow: { from: "A", to: "B" } }), "er")).toBe("A -- B");
+    const cls = parseFlow('diagram class "x"\nclass A\nclass B\n');
+    expect(changeEditOp(ok(0, { add_flow: { from: "A", to: "B" } }), cls, "class")).toMatchObject({ arrow: "-->" });
+    expect(changeLine(ok(0, { add_flow: { from: "A", to: "B" } }), "class")).toBe("A --> B");
   });
 });
 

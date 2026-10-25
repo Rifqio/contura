@@ -1,4 +1,6 @@
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { answerText, commentedOut } from "../app/queryTabRefs";
+import Kbd from "../components/Kbd";
 import { rowsLine, rowsState, rowsStateLine } from "./payload";
 import { aiConfirmKeyHost, aiKnownModels, aiSettings, setAiModelPrefs } from "../api/client";
 import type { AiSettingsView, AnswerActionKind, ItemKind, ModelList, ModelPicks, SqlSchema } from "../api/types";
@@ -9,9 +11,9 @@ import answerState, { aiErrorOf, answerEnd, endMark, modelToUse } from "./answer
 import AnswerLog from "./AnswerLog";
 import { buildRecord, onlyOutlineLeft, sentLine, streamRecord } from "./answerRecord";
 import { type StreamEnd, stopText, useAnswerStream, useStreamText } from "./answerStream";
-import AnswerText from "./AnswerText";
+import AnswerText, { firstSql } from "./AnswerText";
 import { actionsFor, type AskContext, toAskRequest } from "./context";
-import type { InsertTarget } from "./InsertDiff";
+import { type InsertTarget, planApply, planInsert } from "./insertPlan";
 import { queueOffline } from "./offlineQueue";
 import Sends from "./Sends";
 import { sampleReads } from "./StepsView";
@@ -29,6 +31,56 @@ interface Props {
   /** The query tab the box sits in: Insert works on its editor, through the diff. */
   insertTarget?: InsertTarget | null;
   onOpenInNewTab?(sql: string, connection: AskContext["connection"]): void;
+  /**
+   * Where the question was asked in the editor (the selection or the statement): an answer's SQL shows there as a
+   * diff, kept with Ctrl+Enter and discarded with Esc (A2). Without it, each SQL block keeps its own actions.
+   */
+  anchor?: InlineAnchor | null;
+  /** The last answer on this statement, shown again by Ctrl+I (A4); nothing is asked. */
+  reopen?: InlineSnapshot | null;
+  /** Hears the answer each time it settles or its suggestion is kept or dropped, so Ctrl+I can bring it back. */
+  onSnapshot?(s: InlineSnapshot): void;
+}
+
+/** The text an Ask was about, where it was in the editor when asked. */
+export interface InlineAnchor {
+  from: number;
+  to: number;
+  sql: string;
+  /** The editor's tracked range for the statement, which follows edits above and in it (`SqlEditorApi.track`). */
+  track?: number;
+}
+
+type Range = { from: number; to: number };
+
+/**
+ * Whether Ctrl+I on `sel` reopens `last` (A4): the insertion point is still in the statement it was about, or in what
+ * its answer kept. `at` reads a tracked range, so edits above the statement do not matter (M2). Anywhere else Ctrl+I
+ * asks afresh.
+ */
+export function reopens(sel: Range & { sql: string }, last: InlineSnapshot, at: (id: number) => Range | null): boolean {
+  const a = last.anchor;
+  if (!a) return false;
+  // A range that collapsed (its text went) is gone: it never matches the statement next to where it was (N4).
+  const within = (r: Range | null) => r !== null && r.from < r.to && r.from <= sel.to && sel.from <= r.to;
+  if (a.track !== undefined) return within(at(a.track)) || (last.keptTrack !== null && within(at(last.keptTrack)));
+  return sel.from === a.from && sel.sql === a.sql;
+}
+
+/** A finished inline answer, kept per query tab so Ctrl+I on the same statement reopens it (A4). */
+export interface InlineSnapshot {
+  q: string;
+  action?: string;
+  follow: string[];
+  end: StreamEnd;
+  startedAt?: number;
+  /** What became of its SQL: kept in the editor, not in it, or there was none. */
+  state: "kept" | "discarded" | "none";
+  /** The text Keep wrote, so the statement it became still counts as the same one. */
+  keptText: string | null;
+  anchor: InlineAnchor | null;
+  /** The editor's tracked range for what Keep wrote, so a follow-up refines it and Ctrl+I finds it (I2). */
+  keptTrack: number | null;
 }
 
 const PLACEHOLDER: Record<AskContext["kind"], string> = {
@@ -51,7 +103,16 @@ function hostOf(url: string): string {
 /** The model a "Use <model>" action asks with. */
 type Use = { id: string; picks: ModelPicks };
 
-type Outcome = { q: string; action?: string; end: StreamEnd | null; tries: number; startedAt?: number };
+/** `follow` holds the follow-ups after the first question, each refining the same suggestion (A1). */
+type Sug = "waiting" | "kept" | "discarded" | "none";
+
+type Outcome = { q: string; action?: string; follow: string[]; end: StreamEnd | null; tries: number; startedAt?: number };
+
+/** The question an Ask sends: the first one, then each follow-up on its own line. */
+const asked = (q: string, follow: readonly string[]) => [q, ...follow.map((f) => `Then: ${f}`)].join("\n");
+
+/** What the box says once an answer's SQL went in. */
+const KEPT_TEXT = { inserted: "Kept in the editor. Ctrl+Z takes it back.", insertedCommented: "Kept, commented out. Ctrl+Z takes it back." };
 
 /** The small Ask popover: a question or an action, what it would send, and the answer state. */
 export default function InlineAsk({
@@ -62,13 +123,41 @@ export default function InlineAsk({
   onClose,
   insertTarget = null,
   onOpenInNewTab,
+  anchor = null,
+  reopen = null,
+  onSnapshot,
 }: Props) {
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   const [text, setText] = useState("");
   const [off, setOff] = useState<ItemKind[]>([]);
   const [values, setValues] = useState(false);
   const [rows, setRows] = useState(false);
-  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [outcome, setOutcome] = useState<Outcome | null>(() =>
+    reopen ? { q: reopen.q, action: reopen.action, follow: reopen.follow, end: reopen.end, tries: 1, startedAt: reopen.startedAt } : null,
+  );
+  /** Brought back by Ctrl+I: says so until the next question. */
+  const [reopened, setReopened] = useState(reopen !== null);
+  /** The follow-up being typed (A1). */
+  const [followText, setFollowText] = useState("");
+  /** The answer's SQL in the editor: waiting as a diff, kept, or not there. */
+  const [sug, setSugState] = useState<Sug>(
+    reopen ? (reopen.state === "kept" ? "kept" : reopen.state === "none" ? "none" : "discarded") : "none",
+  );
+  const [where, setWhere] = useState("");
+  const [keptText, setKeptText] = useState<string | null>(reopen?.keptText ?? null);
+  const [keptTrack, setKeptTrack] = useState<number | null>(reopen?.keptTrack ?? null);
+  /** The suggestion of ours the editor holds; an end heard for an older one is not ours to act on. */
+  const sugToken = useRef(0);
+  // Read by the key handlers and the unmount, which may come before the next draw.
+  const sugRef = useRef(sug);
+  const setSug = (next: Sug) => {
+    sugRef.current = next;
+    setSugState(next);
+  };
+  /** What Keep wrote last was commented out: a commented follow-up replaces it. */
+  const keptCommented = useRef(reopen?.keptText?.trimStart().startsWith("--") ?? false);
+  /** The answer whose SQL was shown already, so a reopened answer is not shown again by itself. */
+  const shownFor = useRef<StreamEnd | null>(reopen?.end ?? null);
   const [models, setModels] = useState<ModelList | null>(null);
   /** Show log is open in place of the answer. */
   const [showLog, setShowLog] = useState(false);
@@ -87,11 +176,19 @@ export default function InlineAsk({
   const input = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
 
+  const followInput = useRef<HTMLInputElement>(null);
+  const targetRef = useRef(insertTarget);
+  targetRef.current = insertTarget;
+
   useEffect(() => {
     alive.current = true;
-    input.current?.focus();
+    // A reopened answer puts the caret in Refine, as Cursor's Ctrl+K does: typing goes to the box, not the SQL.
+    if (reopen) (followInput.current ?? body.current)?.focus();
+    else input.current?.focus();
     return () => {
       alive.current = false;
+      // A box that goes takes its waiting suggestion with it: nothing stays in the editor unasked.
+      if (sugRef.current === "waiting") targetRef.current?.editor()?.discardSuggestion();
     };
   }, []);
 
@@ -144,26 +241,59 @@ export default function InlineAsk({
     setOff((o) => (o.includes(kind) ? o.filter((k) => k !== kind) : [...o, kind]));
   };
 
-  async function ask(question: string, action?: string, before?: Outcome, use?: Use) {
+  async function ask(question: string, action?: string, before?: Outcome, use?: Use, follow: string[] = before?.follow ?? []) {
     const q = question.trim();
     if (!q || stream.running) return;
     const startedAt = Date.now();
     setShowLog(false);
     setInserted(null);
     setRows(false);
-    setOutcome({ q, action, end: null, tries: 0, startedAt });
-    const end = await stream.start(request(q, action, use));
+    setReopened(false);
+    setOutcome({ q, action, follow, end: null, tries: 0, startedAt });
+    const seq = ++askSeq.current;
+    const end = await stream.start(request(asked(q, follow), action, use));
+    // Esc before anything came put the question back in the field: this Ask is over.
+    if (seq !== askSeq.current) return;
     const same = before?.end?.error != null && aiErrorOf(before.end.error)?.kind === aiErrorOf(end.error)?.kind;
-    if (alive.current) setOutcome({ q, action, end, tries: same ? before.tries + 1 : 1, startedAt });
+    if (alive.current) setOutcome({ q, action, follow, end, tries: same ? before.tries + 1 : 1, startedAt });
   }
 
-  // Esc stops an answer being written; once nothing is running it closes the box.
+  /** Counts the Asks, so one given up (Esc before any text) does not come back when it ends. */
+  const askSeq = useRef(0);
+
+  /** Drops our suggestion from the editor if it still waits there. */
+  const dropOurs = () => {
+    if (sugRef.current !== "waiting") return;
+    sugToken.current++;
+    insertTarget?.editor()?.discardSuggestion();
+    setSug("discarded");
+  };
+  const close = () => {
+    dropOurs();
+    onClose();
+  };
+  const keepOurs = () => {
+    if (sugRef.current !== "waiting") return false;
+    return insertTarget?.editor()?.keepSuggestion() ?? false;
+  };
+
+  // Esc stops an answer being written; else it discards a waiting suggestion and closes, or closes (A2, A4).
+  // Ctrl+Enter keeps a waiting suggestion, wherever the keyboard is in the box.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      if (stream.running) stream.stop();
-      else onClose();
+      if (stream.running && !stream.text && outcome && outcome.follow.length === 0) {
+        // Esc while asking: stop, and the question goes back in the field to change and send again (board, M7).
+        askSeq.current++;
+        stream.stop();
+        askAgain(outcome.action ? "" : outcome.q);
+      } else if (stream.running) stream.stop();
+      else close();
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && sugRef.current === "waiting") {
+      e.preventDefault();
+      e.stopPropagation();
+      keepOurs();
     }
   };
 
@@ -190,9 +320,14 @@ export default function InlineAsk({
 
   /** Back to the question box with `q` in it. */
   const askAgain = (q: string) => {
+    dropOurs();
     stream.reset();
     setOutcome(null);
     setInserted(null);
+    setReopened(false);
+    setSug("none");
+    setKeptText(null);
+    setKeptTrack(null);
     setText(q);
     input.current?.focus();
   };
@@ -255,11 +390,110 @@ export default function InlineAsk({
 
   const question = outcome?.q ?? text.trim();
 
+  // ---- The answer's SQL in the editor (A2) ----
+  const finished = end && !stream.running && end.error == null && !end.stopped && end.done ? end : null;
+  const first = useMemo(() => (finished ? firstSql(finished.text, finished.done?.sqlBlocks) : null), [finished]);
+  const inEditor = anchor !== null && insertTarget !== null && first !== null;
+  const writes = !!first?.check?.statements.some((x) => x.class === "write" || x.flags.some((f) => f.kind === "writeInReadAnswer"));
+  const commented = !!first && (first.unchecked || writes);
+
+  /** Shows the answer's SQL in the editor as a diff over what was asked about; a write goes below it, commented out. */
+  const showInEditor = () => {
+    const ed = insertTarget?.editor();
+    if (!ed || !insertTarget || !first) return;
+    const sql = commented ? commentedOut(answerText(first.sql)) : answerText(first.sql);
+    const doc = ed.text();
+    const stmts = ed.statements();
+    // After Keep, a follow-up refines what was kept, wherever the insertion point has gone since (I2).
+    // A range whose text went (it collapsed) is gone, never a pointer at the statement beside it (N4).
+    const live = (r: Range | null) => (r && r.from < r.to ? r : null);
+    const kept = sugRef.current === "kept" && keptTrack !== null ? live(ed.tracked(keptTrack)) : null;
+    // Else the statement asked about, followed through edits; without a tracked range, the text if it is still there.
+    const tracked = anchor?.track !== undefined ? live(ed.tracked(anchor.track)) : null;
+    const at = kept ?? tracked ?? (anchor && doc.slice(anchor.from, anchor.to) === anchor.sql ? { from: anchor.from, to: anchor.to } : ed.selection());
+    // A commented block replaces the one kept before it, never adds a second; any other write goes below.
+    const plan =
+      commented && !(kept && keptCommented.current)
+        ? planInsert(doc, { from: at.to, to: at.to }, stmts, insertTarget.name, sql, ed.dialect())
+        : planApply(doc, at, stmts, insertTarget.name, sql, ed.dialect());
+    if (!plan) {
+      setSug("discarded");
+      return;
+    }
+    const token = ++sugToken.current;
+    const kind = commented ? "insertedCommented" : "inserted";
+    setWhere(plan.where);
+    setSug("waiting");
+    ed.suggest({
+      from: plan.from,
+      to: plan.to,
+      text: plan.text,
+      where: plan.where,
+      keepLabel: commented ? "Keep, commented out" : "Keep",
+      bar: false,
+      focus: false,
+      onEnd: (how, range) => {
+        if (!alive.current || token !== sugToken.current) return;
+        if (how === "kept") {
+          if (range) {
+            if (keptTrack !== null && ed.tracked(keptTrack)) ed.retrack(keptTrack, range.from, range.to);
+            else setKeptTrack(ed.track(range.from, range.to));
+          }
+          keptCommented.current = commented;
+          setSug("kept");
+          setKeptText(plan.text);
+          setInserted(kind);
+        } else setSug("discarded");
+      },
+    });
+  };
+  const showRef = useRef(showInEditor);
+  showRef.current = showInEditor;
+  // A new answer with SQL shows in the editor by itself, in place of the one before (A1: the diff updates in place).
+  useEffect(() => {
+    if (!finished || shownFor.current === finished) return;
+    shownFor.current = finished;
+    if (inEditor) showRef.current();
+    else setSug("none");
+    followInput.current?.focus();
+  }, [finished, inEditor]);
+
+  // The answer as it settles, and what became of its SQL, for Ctrl+I to bring back (A4).
+  const snapRef = useRef(onSnapshot);
+  snapRef.current = onSnapshot;
+  useEffect(() => {
+    if (!outcome?.end || stream.running) return;
+    snapRef.current?.({
+      q: outcome.q,
+      action: outcome.action,
+      follow: outcome.follow,
+      end: outcome.end,
+      startedAt: outcome.startedAt,
+      state: sug === "kept" ? "kept" : sug === "none" ? "none" : "discarded",
+      keptText,
+      anchor,
+      keptTrack,
+    });
+  }, [outcome, sug, keptText, keptTrack, stream.running]);
+
+  const followUp = () => {
+    const t = followText.trim();
+    if (!t || !outcome || stream.running) return;
+    setFollowText("");
+    void ask(outcome.q, undefined, undefined, undefined, [...outcome.follow, t]);
+  };
+  const canFollow = !showLog && !!outcome && !stream.running && !!end && end.error == null;
+  const shown = streamText || (stream.running ? "" : (end?.text ?? ""));
+
   const doneId = useId();
-  const insertedText = inserted === "inserted" ? "Inserted into the editor" : inserted ? "Inserted commented out" : "";
+  const insertedText = inserted ? KEPT_TEXT[inserted] : "";
   const onAction = (kind: AnswerActionKind) => {
     if (kind === "openedInNewTab") return;
     setInserted(kind);
+  };
+  const openNew = () => {
+    if (!onOpenInNewTab || !first) return;
+    onOpenInNewTab(commented ? commentedOut(answerText(first.sql)) : first.sql, context.connection);
   };
   // The Insert button is gone with the diff; focus stays in the card so Esc still closes it.
   useEffect(() => {
@@ -294,7 +528,7 @@ export default function InlineAsk({
           >
             Show answer
           </button>
-          <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+          <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={close}>
             <Icon name="close" />
           </button>
         </div>
@@ -302,15 +536,17 @@ export default function InlineAsk({
       <div className="pop-head" hidden={inserted !== null}>
         <span>{outcome ? outcome.q : "Ask about the selection"}</span>
         <span className="prov">{provider ? `${providerName} · ${settings?.settings.model}` : "No provider"}</span>
-        <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+        <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={close}>
           <Icon name="close" />
         </button>
       </div>
       <div ref={body} className="pop-body" tabIndex={-1} hidden={inserted !== null}>
+        {reopened && <p className="pop-reopened">Reopened with Ctrl+I: the last answer on this statement.</p>}
+        {outcome && outcome.follow.length > 0 && <p className="pop-turns">{outcome.follow.map((f) => `Then: ${f}`).join(" · ")}</p>}
         {outcome && showLog && (
           <AnswerLog
             question={outcome.q}
-            answer={streamText}
+            answer={shown}
             record={record}
             live={stream.running}
             connection={context.connection?.name ?? null}
@@ -356,10 +592,10 @@ export default function InlineAsk({
           </>
         )}
         {!showLog && outcome && !streamText && stream.running && <p className="muted">{stream.status ?? "Asking…"}</p>}
-        {!showLog && outcome && streamText && (
+        {!showLog && outcome && shown && (
           <div className="answer-body">
             <AnswerText
-              text={streamText}
+              text={shown}
               streaming={stream.running}
               blocks={end?.done?.sqlBlocks}
               notes={end?.done?.notes}
@@ -368,7 +604,44 @@ export default function InlineAsk({
               onOpenInNewTab={onOpenInNewTab && ((sql) => onOpenInNewTab(sql, context.connection))}
               onCopy={(sql) => void navigator.clipboard?.writeText(sql).catch(() => {})}
               onAction={onAction}
+              bareFence={inEditor ? (first?.fence ?? null) : null}
             />
+          </div>
+        )}
+        {!showLog && inEditor && !stream.running && (
+          <div className="pop-sql">
+            {commented && (
+              <p className="pop-writes" role="note">
+                <strong>{writes ? "Answer writes." : "Not checked."}</strong> It goes in below the statement, commented out, so
+                Run cannot pick it up by accident.
+              </p>
+            )}
+            <p className="pop-where">
+              {sug === "waiting" ? `${where}. Nothing runs: you press Run when ready.` : sug === "kept" ? "Kept in the editor." : "Not in the editor."}
+            </p>
+            <div className="pop-sql-acts">
+              {sug === "waiting" && (
+                <>
+                  <button type="button" className="button button-small button-primary" onClick={keepOurs}>
+                    {commented ? "Keep, commented out" : "Keep"} <Kbd keys="Ctrl+Enter" />
+                  </button>
+                  <button type="button" className="button button-small" onClick={dropOurs}>
+                    Discard <Kbd keys="Esc" />
+                  </button>
+                </>
+              )}
+              {(sug === "discarded" || sug === "none") && (
+                <button type="button" className="button button-small button-primary" onClick={showInEditor}>
+                  {commented ? "Insert below, commented out" : "Apply to the statement"}
+                </button>
+              )}
+              <span className="spacer" />
+              {onOpenInNewTab && (
+                <button type="button" className="button button-small button-ghost" onClick={openNew}>
+                  {commented ? "Open in new query tab, commented out" : "Open in new query tab"}
+                </button>
+              )}
+            </div>
           </div>
         )}
         {!showLog && endKind && mark && <span className="cutm">{mark}</span>}
@@ -392,6 +665,23 @@ export default function InlineAsk({
         )}
         {!showLog && sent && end && (endKind || end.error != null) && <p className="msg-notice">{sent}</p>}
         {!showLog && outcome && end?.error != null && failureCard(outcome, end)}
+        {canFollow && (
+          <input
+            ref={followInput}
+            className="ask-input pop-follow"
+            type="text"
+            aria-label="Follow-up"
+            placeholder="Refine it: only active customers, top 20…"
+            value={followText}
+            onChange={(e) => setFollowText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                followUp();
+              }
+            }}
+          />
+        )}
       </div>
       <div className="pop-foot" hidden={inserted !== null}>
         {stream.running && (
@@ -400,16 +690,8 @@ export default function InlineAsk({
           </button>
         )}
         {outcome && !stream.running && (
-          <button
-            type="button"
-            className="button button-small"
-            onClick={() => {
-              stream.reset();
-              setOutcome(null);
-              setInserted(null);
-            }}
-          >
-            Ask again
+          <button type="button" className="button button-small" onClick={() => askAgain("")}>
+            New question
           </button>
         )}
         {onOpenInChat && (

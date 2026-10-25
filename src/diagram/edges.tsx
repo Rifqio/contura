@@ -1,6 +1,7 @@
 // The engine's edges: the markers, the orthogonal edge (8 px corners) with its badge slot, and the straight edge of fast mode.
 import { BaseEdge, EdgeLabelRenderer, type EdgeProps, getSmoothStepPath, getStraightPath } from "@xyflow/react";
 import type { ReactNode } from "react";
+import { PALETTE_TOKENS } from "./types";
 
 /** Many side of a Foreign Key: a crow's foot with a bar (Schema Builder). */
 export const MANY_MARKER = "crow-many";
@@ -12,6 +13,8 @@ export const ARROW_MARKER = "arrow";
 export const TRIANGLE_MARKER = "hollow-triangle";
 export const DIAMOND_MARKER = "filled-diamond";
 export const OPEN_ARROW_MARKER = "open-arrow";
+/** Step 11: the arrowhead of a line in one of the six palette colours keeps that colour. */
+export const colourArrow = (colour: keyof typeof PALETTE_TOKENS) => `${ARROW_MARKER}-${colour}`;
 
 /** Corner radius of an orthogonal edge (DESIGN-NEXT 10.6). */
 export const EDGE_RADIUS = 8;
@@ -63,6 +66,11 @@ export function EdgeMarkers() {
         >
           <path className="edge-marker-fill" d="M0 0L6 3L0 6Z" />
         </marker>
+        {(Object.keys(PALETTE_TOKENS) as (keyof typeof PALETTE_TOKENS)[]).map((c) => (
+          <marker key={c} id={colourArrow(c)} viewBox="0 0 6 6" refX="6" refY="3" markerWidth="6" markerHeight="6" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+            <path className="edge-marker-fill" style={{ fill: `var(${PALETTE_TOKENS[c].stroke})` }} d="M0 0L6 3L0 6Z" />
+          </marker>
+        ))}
         <marker id={TRIANGLE_MARKER} viewBox="0 0 12 12" refX="12" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
           <path className="edge-marker edge-marker-hollow" d="M1 1L12 6L1 11Z" />
         </marker>

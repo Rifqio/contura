@@ -2,30 +2,41 @@
 // previews, found by a word or by group (Data, Software, Planning), name it, create. The file goes in Contura's
 // diagrams folder by name, so there is no folder to choose; Mermaid has its own way in, and the recent diagrams
 // sit beside it.
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { errorText, isCommandError, listDiagrams, writeDiagram } from "../api/client";
 import type { DiagramEntry } from "../api/types";
 import { hintFor } from "../commands/keymap";
 import { useKeymap } from "../commands/useCommandKeys";
 import Dialog from "../components/Dialog";
-import Icon, { type IconName } from "../components/Icon";
+import Icon from "../components/Icon";
+import { exportPalette } from "../diagram/export/palette";
+import { exampleSvg } from "./previewScene";
 import Kbd from "../components/Kbd";
 import { agoText } from "../format/units";
-import { type DiagramKind, quote } from "../lang/flow/model";
-import { DIAGRAM_KIND_WORD, typedDiagramName } from "./diagramKinds";
+import { type DiagramKind, flowName, quote } from "../lang/flow/model";
+import { DIAGRAM_KIND_WORD, freeDiagramName, typedDiagramName } from "./diagramKinds";
+
+export { freeDiagramName };
 import { parseFlowLayout, serializeFlowLayout } from "./layout";
-import DfdNode from "./nodes/DfdNode";
-import FlowchartNode from "./nodes/FlowchartNode";
-import { kindStyle } from "./nodes/parts";
 import Segmented from "../components/Segmented";
-import { KindNode, type KindNodeData } from "./kindNodes";
+
+/** What the sheet was left at, so Back from the Mermaid dialog opens it the same (step 10, VS Code's multi-step Back). */
+export interface SheetState {
+  kind: DiagramKind;
+  name: string;
+  start: "example" | "blank";
+  query: string;
+  group: "all" | "data" | "software" | "planning";
+}
 
 interface Props {
   onClose(): void;
   /** The diagram was written: open its tab and put focus in its text. */
   onCreated(name: string): void;
-  /** Flow from Mermaid... : the step 7 dialog takes over. */
-  onMermaid(): void;
+  /** From Mermaid... : the Mermaid dialog takes over, with what the sheet was left at for its Back. */
+  onMermaid(state: SheetState): void;
+  /** Back from the Mermaid dialog: the sheet as it was left. */
+  initial?: SheetState;
   /** Runs before a Replace writes over diagram `name`: its open tab goes first (ruling P19). */
   beforeReplace?(name: string): void | Promise<void>;
   /** A Recent diagram was picked. */
@@ -44,7 +55,6 @@ export const KINDS: { kind: DiagramKind; title: string; text: string; group: Kin
   { kind: "dfd", title: "Data flow", text: "Processes, data stores and outside parties. Stores can link to tables.", group: "data" },
   { kind: "flow", title: "Flowchart", text: "Steps, decisions, input and output, start and end.", group: "data" },
   { kind: "cloud", title: "Cloud architecture", text: "Services as provider icons, grouped by network or layer.", group: "software" },
-  { kind: "er", title: "Entity relationship", text: "Tables, keys and how rows relate.", group: "data" },
   { kind: "sequence", title: "Sequence", text: "Who calls whom, in order: requests, replies and waits.", group: "software" },
   { kind: "state", title: "State", text: "States and the events that move between them.", group: "software" },
   { kind: "class", title: "Class", text: "Types with their fields and methods, and how they extend each other.", group: "software" },
@@ -70,226 +80,136 @@ export function newDiagramText(kind: DiagramKind, name: string): string {
   return `diagram ${kind} ${quote(name)}\n`;
 }
 
-/** A node placed in a preview, in the preview's unscaled space. */
-function At({ x, y, children }: { x: number; y: number; children: ReactNode }) {
-  return (
-    <div className="new-diagram-at" style={{ left: x, top: y }}>
-      {children}
-    </div>
-  );
+/** A blank start (draw.io's Blank Diagram): the first line; a mind map keeps its central idea, the diagram's name. */
+export function blankText(kind: DiagramKind, name: string): string {
+  return kind === "mindmap" ? `${newDiagramText(kind, name)}root ${flowName(name)}\n` : newDiagramText(kind, name);
 }
 
-/** A cloud service tile in a preview: the kind's colours with a general icon. */
-function Service({ name, icon }: { name?: string; icon: IconName }) {
-  return (
-    <div className="fnode fnode-service fnode-modern" style={kindStyle("service")}>
-      <span className="fnode-tile">
-        <Icon name={icon} size={20} />
-      </span>
-      {name && <span className="fnode-name">{name}</span>}
-    </div>
-  );
+/** Each kind's example (board DiagramStartWell; draw.io's templates, Mermaid Live's samples), after the first line. */
+const EXAMPLES: Partial<Record<DiagramKind, string[]>> = {
+  dfd: [
+    "Customer [entity, id: E1]",
+    "Take order [process, id: 1.0]",
+    "Orders [store, id: D1]",
+    "Bill customer [process, id: 2.0]",
+    "",
+    "Customer > Take order: order details",
+    "Take order > Orders: new order",
+    "Orders > Bill customer: order",
+    "Bill customer > Customer: invoice",
+  ],
+  flow: [
+    "Order in [start]",
+    "Check stock",
+    "In stock? [decision]",
+    "Ship order",
+    "Back-order",
+    "note: Stock is checked against the warehouse feed",
+    "",
+    "Order in > Check stock",
+    "Check stock > In stock?",
+    "In stock? > Ship order: yes",
+    "In stock? > Back-order: no",
+  ],
+  cloud: [
+    "Users [icon: users]",
+    "AWS [icon: aws-cloud] {",
+    "  Gateway [icon: aws-api-gateway]",
+    "  Orders API [icon: aws-lambda]",
+    "  Orders table [icon: aws-dynamodb]",
+    "  Receipts [icon: aws-s3]",
+    "}",
+    "",
+    "Users > Gateway: HTTPS",
+    "Gateway > Orders API",
+    "Orders API <> Orders table",
+    "Orders API > Receipts",
+  ],
+  sequence: [
+    "actor Customer",
+    "participant Shop",
+    "participant Payments",
+    "Customer -> Shop: place order",
+    "Shop -> Payments: charge card",
+    "Payments --> Shop: approved",
+    "Shop --> Customer: receipt",
+  ],
+  state: ["Draft", "Sent", "Paid", "Overdue", "", "[*] > Draft", "Draft > Sent: send", "Sent > Paid: payment", "Sent > Overdue: due date passes", "Overdue > Paid: payment", "Paid > [*]"],
+  class: [
+    "interface Payable",
+    "Payable : pay(amount)",
+    "class Invoice",
+    "Invoice : + id: int",
+    "Invoice : + total: numeric",
+    "Invoice : + send()",
+    "enum InvoiceStatus",
+    "InvoiceStatus : DRAFT",
+    "InvoiceStatus : SENT",
+    "InvoiceStatus : PAID",
+    "class LineItem",
+    "LineItem : + qty: int",
+    "LineItem : + price: numeric",
+    "",
+    "Payable <|-- Invoice",
+    "Invoice *-- LineItem: lines",
+    "Invoice --> InvoiceStatus",
+  ],
+  mindmap: ["root Q4 plan", "  Diagrams", "    New kinds", "    Inline editing", "  Redis", "  Release", "    Docs"],
+  timeline: ["2026-09-01 to 2026-10-15: Build", "2026-10-19: Beta", "2026-11-09: Release candidate", "milestone Launch"],
+};
+
+/** The kind's example under the diagram's name: shapes, lines and text to change or delete. */
+export function exampleText(kind: DiagramKind, name: string): string {
+  const body = EXAMPLES[kind];
+  return body ? `${newDiagramText(kind, name)}${body.join("\n")}\n` : blankText(kind, name);
 }
 
-/** A step 12 shape in a preview, drawn by the canvas's own node. */
-function Shape({ d }: { d: Omit<KindNodeData, "look"> }) {
-  return <KindNode d={{ ...d, look: "modern" }} selected={false} />;
+const DEFAULT_NAME = "Untitled diagram";
+
+/**
+ * The drawn preview of each kind: its real example, drawn as Publish draws it (fix round 1, M8; board DiagramStartWell).
+ * Made once per theme for all cards, and kept: eight small SVG strings.
+ */
+const drawings = new Map<string, Map<DiagramKind, string>>();
+function drawingsFor(theme: "light" | "dark"): Map<DiagramKind, string> {
+  let m = drawings.get(theme);
+  if (!m) {
+    const palette = exportPalette(theme);
+    m = new Map(KINDS.map((k) => [k.kind, exampleSvg(exampleText(k.kind, k.title), palette)] as const));
+    drawings.set(theme, m);
+  }
+  return m;
 }
 
-/** The drawn preview of each kind, with the real nodes. */
-function Preview({ kind }: { kind: DiagramKind }) {
+/** The theme the window shows now: its `data-theme`, else Windows' own. */
+function shownTheme(): "light" | "dark" {
+  const attr = document.documentElement.getAttribute("data-theme");
+  if (attr === "light" || attr === "dark") return attr;
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function Preview({ kind, theme }: { kind: DiagramKind; theme: "light" | "dark" }) {
+  const svg = drawingsFor(theme).get(kind) ?? "";
   return (
     <div className="new-diagram-preview" aria-hidden="true">
-      <div className="new-diagram-scene">
-        {kind === "dfd" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 100 76 V 126 H 196" />
-              <path d="M 280 152 V 214 H 186" />
-            </svg>
-            <At x={16} y={24}>
-              <DfdNode kind="external" name="Customer" style="modern" selected={false} />
-            </At>
-            <At x={196} y={100}>
-              <DfdNode kind="process" name="Checkout" id="1.0" style="modern" selected={false} />
-            </At>
-            <At x={16} y={188}>
-              <DfdNode kind="store" name="Orders" id="D1" style="modern" selected={false} />
-            </At>
-          </>
-        )}
-        {kind === "flow" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 120 58 H 196" />
-              <path d="M 256 130 V 184" />
-            </svg>
-            <At x={24} y={38}>
-              <FlowchartNode kind="start" name="Start" style="modern" selected={false} />
-            </At>
-            <At x={196} y={10}>
-              <FlowchartNode kind="decision" name="Paid?" style="modern" selected={false} />
-            </At>
-            <At x={176} y={184}>
-              <FlowchartNode kind="step" name="Ship order" style="modern" selected={false} />
-            </At>
-          </>
-        )}
-        {kind === "cloud" && (
-          <>
-            <div className="new-diagram-area">
-              <span>Production</span>
-            </div>
-            <svg className="new-diagram-edges">
-              <path d="M 72 124 H 150" />
-              <path d="M 214 124 H 262" />
-            </svg>
-            <At x={16} y={100}>
-              <Service icon="user" />
-            </At>
-            <At x={140} y={100}>
-              <Service name="API" icon="plug" />
-            </At>
-            <At x={252} y={100}>
-              <Service name="Orders" icon="database" />
-            </At>
-          </>
-        )}
-        {kind === "er" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 176 84 H 220" />
-            </svg>
-            <At x={8} y={30}>
-              <div style={{ width: 168, height: 105 }}>
-                <Shape d={{ name: "customers", kind: "erTable", rows: ["id int", "email text"] }} />
-              </div>
-            </At>
-            <At x={220} y={30}>
-              <div style={{ width: 168, height: 105 }}>
-                <Shape d={{ name: "invoices", kind: "erTable", rows: ["id int", "total numeric"] }} />
-              </div>
-            </At>
-          </>
-        )}
-        {kind === "sequence" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 70 92 H 196" />
-              <path d="M 256 136 H 330" strokeDasharray="5 4" />
-            </svg>
-            {[
-              ["App", 10],
-              ["API", 136],
-              ["DB", 270],
-            ].map(([n, x]) => (
-              <At key={n as string} x={x as number} y={20}>
-                <div style={{ width: 120, height: 220, position: "relative" }}>
-                  <Shape d={{ name: n as string, kind: "participant" }} />
-                </div>
-              </At>
-            ))}
-          </>
-        )}
-        {kind === "state" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 40 120 H 76" />
-              <path d="M 196 120 H 236" />
-            </svg>
-            <At x={18} y={109}>
-              <div style={{ width: 22, height: 22 }}>
-                <Shape d={{ name: "", kind: "stateStart" }} />
-              </div>
-            </At>
-            <At x={76} y={100}>
-              <div style={{ width: 120, height: 40 }}>
-                <Shape d={{ name: "Draft", kind: "state" }} />
-              </div>
-            </At>
-            <At x={236} y={100}>
-              <div style={{ width: 120, height: 40 }}>
-                <Shape d={{ name: "Sent", kind: "state" }} />
-              </div>
-            </At>
-          </>
-        )}
-        {kind === "class" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 190 112 V 150 H 80 V 170 M 190 150 H 300 V 170" />
-            </svg>
-            <At x={110} y={12}>
-              <div style={{ width: 160, height: 100 }}>
-                <Shape d={{ name: "Invoice", kind: "class", rows: ["+ total: numeric", "+ send()"] }} />
-              </div>
-            </At>
-            <At x={10} y={170}>
-              <div style={{ width: 140, height: 70 }}>
-                <Shape d={{ name: "Paid", kind: "class", rows: [] }} />
-              </div>
-            </At>
-            <At x={230} y={170}>
-              <div style={{ width: 140, height: 70 }}>
-                <Shape d={{ name: "Overdue", kind: "class", rows: [] }} />
-              </div>
-            </At>
-          </>
-        )}
-        {kind === "mindmap" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 140 130 C 110 130, 110 60, 80 60 M 140 130 C 110 130, 110 200, 80 200 M 260 130 C 290 130, 290 60, 310 60 M 260 130 C 290 130, 290 200, 310 200" />
-            </svg>
-            <At x={140} y={108}>
-              <div style={{ width: 120, height: 44 }}>
-                <Shape d={{ name: "Plan", kind: "root" }} />
-              </div>
-            </At>
-            {[
-              ["Ideas", -6, 43],
-              ["Risks", -6, 183],
-              ["Ship", 310, 43],
-              ["Docs", 310, 183],
-            ].map(([n, x, y]) => (
-              <At key={n as string} x={x as number} y={y as number}>
-                <div style={{ width: 86, height: 34 }}>
-                  <Shape d={{ name: n as string, kind: "topic", depth: 1 }} />
-                </div>
-              </At>
-            ))}
-          </>
-        )}
-        {kind === "timeline" && (
-          <>
-            <svg className="new-diagram-edges">
-              <path d="M 0 136 H 380" />
-            </svg>
-            {[
-              ["Q1", "2026-01", 10, 60, "event"],
-              ["Q2", "2026-04", 130, 160, "event"],
-              ["v1.0", "", 250, 60, "milestone"],
-            ].map(([n, date, x, y, k]) => (
-              <At key={n as string} x={x as number} y={y as number}>
-                <div style={{ width: 120, height: 52 }}>
-                  <Shape d={{ name: n as string, kind: k as KindNodeData["kind"], date: date as string }} />
-                </div>
-              </At>
-            ))}
-          </>
-        )}
-      </div>
+      <div className="new-diagram-drawing" dangerouslySetInnerHTML={{ __html: svg }} />
     </div>
   );
 }
 
-export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeReplace, onOpenDiagram, now = new Date() }: Props) {
+export default function NewDiagramSheet({ onClose, onCreated, onMermaid, initial, beforeReplace, onOpenDiagram, now = new Date() }: Props) {
   const keys = useKeymap().map;
-  const [kind, setKind] = useState<DiagramKind>("dfd");
-  const [query, setQuery] = useState("");
-  const [group, setGroup] = useState<"all" | KindGroup>("all");
+  const [theme] = useState(shownTheme);
+  const [kind, setKind] = useState<DiagramKind>(initial?.kind ?? "dfd");
+  const [query, setQuery] = useState(initial?.query ?? "");
+  const [group, setGroup] = useState<"all" | KindGroup>(initial?.group ?? "all");
   const shown = findKinds(query, group);
-  const [name, setName] = useState("");
+  /** F27: the selected kind follows the search and the group: a card you cannot see is never what Create makes. */
+  const chosen: DiagramKind | null = shown.some((k) => k.kind === kind) ? kind : (shown[0]?.kind ?? null);
+  const [start, setStart] = useState<"example" | "blank">(initial?.start ?? "example");
+  /** The default name, free of every diagram there is; typing over it is the sheet's only change. */
+  const [def, setDef] = useState(initial?.name ?? DEFAULT_NAME);
+  const [name, setName] = useState(initial?.name ?? DEFAULT_NAME);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   /** The file asked about: "checkout.flow already exists. Replace it?" */
@@ -300,7 +220,15 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
   useEffect(() => {
     let live = true;
     listDiagrams().then(
-      (all) => live && setRecent(all.slice(0, RECENT_SHOWN)),
+      (all) => {
+        if (!live) return;
+        setRecent(all.slice(0, RECENT_SHOWN));
+        if (initial) return;
+        // The default name moves to the next free one while it is untouched.
+        const free = freeDiagramName(DEFAULT_NAME, all.map((d) => d.name));
+        setDef(free);
+        setName((n) => (n === DEFAULT_NAME ? free : n));
+      },
       () => live && setRecent([]),
     );
     return () => {
@@ -309,17 +237,17 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
   }, []);
 
   const typed = typedDiagramName(name);
-  const canCreate = !busy && typed !== "";
+  const canCreate = !busy && typed !== "" && chosen !== null;
 
-  async function create(replace = false) {
-    if (!canCreate) return;
+  async function create(replace = false, picked: DiagramKind | null = chosen) {
+    if (busy || typed === "" || picked === null) return;
     setBusy(true);
     setMessage(null);
     setAsking(null);
     try {
-      const layout = serializeFlowLayout(parseFlowLayout(null, kind));
+      const layout = serializeFlowLayout(parseFlowLayout(null, picked));
       if (replace) await beforeReplace?.(typed);
-      await writeDiagram(typed, newDiagramText(kind, typed), layout, replace);
+      await writeDiagram(typed, start === "example" ? exampleText(picked, typed) : blankText(picked, typed), layout, replace);
       onCreated(typed);
     } catch (e) {
       if (isCommandError(e) && e.kind === "diagramExists") setAsking(`${e.message.name}.flow`);
@@ -331,7 +259,7 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
 
   function onKinds(e: KeyboardEvent) {
     if (shown.length === 0) return;
-    const at = shown.findIndex((k) => k.kind === kind);
+    const at = shown.findIndex((k) => k.kind === chosen);
     // A 3-column grid: left and right move one, up and down a row.
     const by = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : e.key === "ArrowDown" ? 3 : e.key === "ArrowUp" ? -3 : 0;
     if (by === 0) return;
@@ -341,13 +269,13 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
     cards.current[next]?.focus();
   }
 
-  const title = (KINDS.find((k) => k.kind === kind) ?? KINDS[0]).title;
+  const title = chosen ? (KINDS.find((k) => k.kind === chosen) ?? KINDS[0]).title : "diagram";
 
   const createKey = "Enter";
   const mermaidKey = hintFor(keys, "flow.fromMermaid");
 
   return (
-    <Dialog title="New diagram" subtitle="The kind is the first line of the file, so you can change it later." className="new-diagram" dirty={name.trim() !== ""} onClose={onClose}>
+    <Dialog title="New diagram" subtitle="The kind is the first line of the file, so you can change it later." className="new-diagram" dirty={name.trim() !== def} onClose={onClose}>
       <div className="new-diagram-body">
         <div className="new-diagram-main">
           <div className="new-diagram-find">
@@ -361,6 +289,12 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
                 value={query}
                 spellCheck={false}
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // The name is ready, so Enter creates at once (F27).
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  void create();
+                }}
               />
             </label>
             <Segmented label="Kind group" value={group} options={GROUPS} onChange={setGroup} />
@@ -368,7 +302,7 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
           {shown.length === 0 && <p className="new-diagram-none">No kind matches. Try another word.</p>}
           <div className="new-diagram-kinds" role="radiogroup" aria-label="Kind" onKeyDown={onKinds}>
             {shown.map((k, i) => {
-              const on = k.kind === kind;
+              const on = k.kind === chosen;
               return (
                 <button
                   key={k.kind}
@@ -379,16 +313,21 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
                   role="radio"
                   aria-checked={on}
                   aria-label={k.title}
-                  tabIndex={on || (i === 0 && !shown.some((x) => x.kind === kind)) ? 0 : -1}
+                  tabIndex={on ? 0 : -1}
                   className={on ? "new-diagram-kind is-on" : "new-diagram-kind"}
                   onClick={() => setKind(k.kind)}
+                  // A double-click on a card creates it at once (draw.io).
+                  onDoubleClick={() => {
+                    setKind(k.kind);
+                    void create(false, k.kind);
+                  }}
                 >
                   {on && (
                     <span className="new-diagram-check">
                       <Icon name="check" size={14} />
                     </span>
                   )}
-                  <Preview kind={k.kind} />
+                  <Preview kind={k.kind} theme={theme} />
                   <span className="new-diagram-kind-text">
                     <span className="new-diagram-kind-title">
                       {k.title} <span className="new-diagram-kind-word">{k.kind}</span>
@@ -400,6 +339,23 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
             })}
           </div>
           <div className="new-diagram-form">
+            <div className="new-diagram-start">
+              <span className="new-diagram-label">Start with</span>
+              <span className="new-diagram-start-pick">
+                <Segmented
+                  label="Start with"
+                  value={start}
+                  options={[
+                    { value: "example", label: "Example" },
+                    { value: "blank", label: "Blank" },
+                  ]}
+                  onChange={setStart}
+                />
+                <span className="new-diagram-start-hint">
+                  {start === "example" ? "The card's example comes with it." : `Only the first line, diagram ${chosen ?? kind} "${typed || "name"}".`}
+                </span>
+              </span>
+            </div>
             <label className="new-diagram-name">
               <span>Name</span>
               <input
@@ -431,8 +387,13 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
           <div className="new-diagram-alt">
             <Icon name="flow" size={14} />
             <span>Have a Mermaid diagram already?</span>
-            <button type="button" className="button" title={mermaidKey ? `Flow from Mermaid (${mermaidKey})` : undefined} onClick={onMermaid}>
-              Flow from Mermaid...
+            <button
+              type="button"
+              className="button"
+              title={mermaidKey ? `From Mermaid (${mermaidKey})` : undefined}
+              onClick={() => onMermaid({ kind: chosen ?? kind, name, start, query, group })}
+            >
+              From Mermaid...
             </button>
             <span className="spacer" />
             {asking ? (
@@ -451,7 +412,7 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
                   Cancel
                 </button>
                 <button type="button" className="button button-primary" disabled={!canCreate} onClick={() => void create()}>
-                  {`Create ${title.toLowerCase()}`}
+                  {`Create ${chosen === "mindmap" ? "mind map" : title.toLowerCase()}`}
                   <Kbd keys={createKey} />
                 </button>
               </>
@@ -466,10 +427,10 @@ export default function NewDiagramSheet({ onClose, onCreated, onMermaid, beforeR
             <ul className="new-diagram-recent" aria-label="Recent diagrams">
               {(recent ?? []).map((d) => (
                 <li key={d.name}>
-                  <button type="button" className="new-diagram-recent-row" title={`Open ${d.name}.flow`} onClick={() => onOpenDiagram(d.name)}>
+                  <button type="button" className="new-diagram-recent-row" title={`Open ${d.name}`} onClick={() => onOpenDiagram(d.name)}>
                     <Icon name="flow" />
                     <span className="new-diagram-recent-text">
-                      <span className="new-diagram-recent-name">{d.name}.flow</span>
+                      <span className="new-diagram-recent-name">{d.name}</span>
                       <span className="new-diagram-recent-meta">
                         {DIAGRAM_KIND_WORD[d.kind]}, {agoText(now.getTime() - d.modifiedMs)}
                       </span>

@@ -211,22 +211,26 @@ test("add_a_service_opens_the_picker_for_it", async () => {
   const s = setup();
   await drawn(s);
   s.press("n");
-  await waitFor(() => expect(s.text()).toContain("Service\n"));
+  // The name opens first (diagram step 6); kept, the service has the board's default icon and its picker opens.
+  fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new service" }), { key: "Enter" });
+  await waitFor(() => expect(s.text()).toContain("Service [icon: aws-lambda]\n"));
   const picker = await screen.findByRole("dialog", { name: "Choose an icon" });
   await userEvent.type(within(picker).getByRole("searchbox", { name: "Search icons" }), "database");
   await userEvent.keyboard("{Enter}");
   await waitFor(() => expect(s.text()).toContain("Service [icon: database]\n"));
   // Esc on the picker leaves the new service as it is.
   s.press("n");
-  await waitFor(() => expect(s.text()).toContain("Service 2\n"));
+  fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new service" }), { key: "Enter" });
+  await waitFor(() => expect(s.text()).toContain("Service 2 [icon: aws-lambda]\n"));
   const again = await screen.findByRole("dialog", { name: "Choose an icon" });
   fireEvent.keyDown(within(again).getByRole("searchbox", { name: "Search icons" }), { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose an icon" })).toBeNull());
-  expect(s.text()).toContain("Service 2\n");
+  expect(s.text()).toContain("Service 2 [icon: aws-lambda]\n");
   // Focus is back on the canvas, so its keys work at once.
   expect(document.activeElement).toBe(s.container.querySelector(".flow-canvas"));
   fireEvent.keyDown(document.activeElement!, { key: "n" });
-  await waitFor(() => expect(s.text()).toContain("Service 3\n"));
+  fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new service" }), { key: "Enter" });
+  await waitFor(() => expect(s.text()).toContain("Service 3 [icon: aws-lambda]\n"));
 });
 
 test("typing_icon_colon_in_the_text_opens_the_grid_picker", async () => {
@@ -274,7 +278,9 @@ test("group_puts_the_selected_services_in_a_new_group_as_one_undo", async () => 
   fireEvent.keyDown(s.node("Service Gateway")!, { key: "Enter" });
   await waitFor(() => expect(within(s.strip()).getByText("Gateway")).toBeTruthy());
   await userEvent.click(screen.getByRole("button", { name: "Group" }));
-  await waitFor(() => expect(s.text()).toContain("Group {\n  Gateway [icon: aws-api-gateway]\n}\n"));
+  // C1: the new group's name opens in edit; Enter keeps it (diagram step 3).
+  await userEvent.type(await screen.findByRole("textbox", { name: "Group name" }), "{Enter}");
+  await waitFor(() => expect(s.text()).toContain("Group [icon: aws-vpc] {\n  Gateway [icon: aws-api-gateway]\n}\n"));
   await waitFor(() => expect(s.container.querySelector('.flow-area[aria-label="Group Group"]')).not.toBeNull());
   // One undo takes the whole change back.
   const { undo } = await import("@codemirror/commands");

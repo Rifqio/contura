@@ -108,7 +108,7 @@ const RETRYABLE: ReadonlySet<string> = new Set(["network", "timeout", "badRespon
 type FileChanged = Extract<AiError, { kind: "fileChanged" }>;
 
 /** The title of the card for a diagram file that changed on disk while the model worked (board 11.5, e-stale). */
-export const changedTitle = (file: string): string => `${file}.flow changed on disk while I worked`;
+export const changedTitle = (file: string): string => `${file} changed on disk while I worked`;
 
 /** What that card says; `reads` is the text the line now holds (shown bold), null when the Core could not quote it. */
 export function changedBody(e: Pick<FileChanged, "line" | "nowReads">): { before: string; reads: string | null; after: string } {

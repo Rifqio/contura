@@ -18,14 +18,14 @@ function Panned({ children }: { children: ReactNode }) {
   return ready ? <svg>{children}</svg> : null;
 }
 
-const node = { id: "invoices", type: "kind", position: { x: 0, y: 0 }, data: {}, measured: { width: 200, height: 100 }, internals: { positionAbsolute: { x: 0, y: 0 }, z: 0, userNode: {} } } as unknown as InternalNode;
+const node = { id: "Checkout", type: "kind", position: { x: 0, y: 0 }, data: {}, measured: { width: 200, height: 100 }, internals: { positionAbsolute: { x: 0, y: 0 }, z: 0, userNode: {} } } as unknown as InternalNode;
 
 function draw(handle: string) {
   const onDraw = vi.fn<(d: DrawState) => void>();
   const Line = makeConnectionLine(onDraw);
   const props = {
     fromNode: node,
-    fromHandle: { id: handle, nodeId: "invoices", type: "source", position: Position.Right, x: 0, y: 0, width: 8, height: 8 },
+    fromHandle: { id: handle, nodeId: "Checkout", type: "source", position: Position.Right, x: 0, y: 0, width: 8, height: 8 },
     fromX: 200,
     fromY: 69,
     toX: 0,
@@ -49,14 +49,7 @@ function draw(handle: string) {
   return { onDraw, d: container.querySelector(".flow-drawing-line")!.getAttribute("d")! };
 }
 
-test("a column's drag line ends at the pointer in flow coordinates", () => {
-  const { onDraw, d } = draw("col:customer_id:r");
-  expect(onDraw).toHaveBeenLastCalledWith(expect.objectContaining({ end: { x: 450, y: 200 } }));
-  expect(d.startsWith("M 200 69")).toBe(true);
-  expect(d.endsWith("L 450 200")).toBe(true);
-});
-
-test("a table's drag line ends at the pointer in flow coordinates too", () => {
+test("a shape's drag line ends at the pointer in flow coordinates", () => {
   const { onDraw, d } = draw("r");
   expect(onDraw).toHaveBeenLastCalledWith(expect.objectContaining({ end: { x: 450, y: 200 } }));
   expect(d.endsWith("L 450 200")).toBe(true);

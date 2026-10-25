@@ -27,8 +27,8 @@ pub enum DiagramKind {
     Dfd,
     Flow,
     Cloud,
-    /// Step 12, item 19: the kinds the New diagram dialog added.
-    Er,
+    /// Step 12, item 19: the kinds the New diagram dialog added. An old `diagram er` file
+    /// (ADR 0030: DBML is the only ERD) lists as `Unknown`.
     Sequence,
     State,
     Class,
@@ -134,7 +134,6 @@ pub fn diagram_head(reader: impl Read) -> (DiagramKind, Option<String>) {
         "dfd" => DiagramKind::Dfd,
         "flow" => DiagramKind::Flow,
         "cloud" => DiagramKind::Cloud,
-        "er" => DiagramKind::Er,
         "sequence" => DiagramKind::Sequence,
         "state" => DiagramKind::State,
         "class" => DiagramKind::Class,

@@ -802,7 +802,7 @@ test("diagram_tab_one_tool_no_database", async () => {
   expect(screen.getByText("checkout.flow, 2,418 B")).toBeTruthy();
   expect(screen.getByText("2,911 B leave your computer")).toBeTruthy();
   expect(document.querySelectorAll(".zone")[1].querySelectorAll(".dmodel")).toHaveLength(2);
-  expect(screen.getByText("One tool: it can only suggest edits to checkout.flow.")).toBeTruthy();
+  expect(screen.getByText("One tool: it can only suggest edits to checkout.")).toBeTruthy();
   // No database box and no "No tools" line.
   expect(document.querySelector(".dstore, .dbox.store")).toBeNull();
   expect(screen.queryByText(/No tools/)).toBeNull();

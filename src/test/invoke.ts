@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { vi } from "vitest";
+import { fakePlan } from "./fakeCore";
 
 type Handler = (args: Record<string, unknown>) => unknown;
 
@@ -11,11 +12,19 @@ type Handler = (args: Record<string, unknown>) => unknown;
 export function routeInvoke(handlers: Record<string, Handler>) {
   const mock = vi.mocked(invoke);
   mock.mockImplementation(async (cmd: string, args?: unknown) => {
-    const handler = handlers[cmd];
+    const handler = handlers[cmd] ?? (cmd === "plan_run" ? fakePlanRun : undefined);
     if (!handler) throw new Error(`unexpected command ${cmd}`);
     return handler((args ?? {}) as Record<string, unknown>);
   });
   return mock;
+}
+
+/**
+ * A stand-in for the Core's `plan_run` where a test does not route one: the editor's own split and check. Tests about
+ * what the Core decides route `plan_run` with the Core's answer (see `safety::plan_run`'s Rust tests).
+ */
+function fakePlanRun(args: Record<string, unknown>) {
+  return fakePlan(args.statements as string[]);
 }
 
 /** The argument objects of every call to `cmd`, in order. */

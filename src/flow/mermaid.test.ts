@@ -234,8 +234,9 @@ describe("headers", () => {
   });
 
   test("another_diagram_type_is_refused", () => {
-    const r = mermaidToFlow("sequenceDiagram\n  Alice->>Bob: hi", "T");
-    expect(r.errors.map((e) => e.text)).toEqual(["Only Mermaid flowcharts can be imported. This is a sequenceDiagram."]);
+    // Step 10 reads the other Contura kinds; a kind Contura has none of is refused by name.
+    const r = mermaidToFlow("gantt\n  title A plan", "T");
+    expect(r.errors.map((e) => e.text)).toEqual(["Line 1: Contura has no gantt kind. The Mermaid diagrams that come in are flowchart, sequence, state, class, mindmap and timeline."]);
     expect(r.doc.nodes).toEqual([]);
     expect(r.nodes).toBe(0);
   });
@@ -281,11 +282,13 @@ describe("left out", () => {
 });
 
 describe("names", () => {
-  test("a_duplicate_label_gets_a_number_and_a_note", () => {
+  test("a_duplicate_label_gets_a_free_name_that_shows_the_same_words (step 11)", () => {
     const r = conv("A[Check] --> B[Check]");
-    expect(r.doc.nodes.map((n) => n.name)).toEqual(["Check", "Check (2)"]);
-    expect(r.doc.links).toEqual([{ from: "Check", to: "Check (2)", arrow: ">" }]);
-    expect(notes(r)).toEqual(["Line 2: two nodes are named Check. The second is Check (2)."]);
+    expect(r.doc.nodes.map((n) => n.name)).toEqual(["Check", "Check 2"]);
+    expect(r.doc.nodes[1].attrs).toEqual({ label: "Check" });
+    expect(r.doc.links).toEqual([{ from: "Check", to: "Check 2", arrow: ">" }]);
+    expect(r.flow).toContain("Check 2 [step, label: Check]");
+    expect(notes(r)).toEqual(["Line 2: two nodes show Check. The second comes in as Check 2 with label: Check, so it shows the same words."]);
   });
 
   test("br_becomes_a_space_and_markdown_loses_its_markup", () => {
@@ -413,14 +416,19 @@ describe("minor cases", () => {
 
   test("a_node_named_like_a_group_gets_a_number", () => {
     const r = conv("subgraph Kitchen\n  A\nend\nB[Kitchen] --> A");
-    expect(r.doc.nodes.map((n) => n.name)).toEqual(["A", "Kitchen (2)"]);
-    expect(notes(r)).toEqual(["Line 5: two nodes are named Kitchen. The second is Kitchen (2)."]);
+    expect(r.doc.nodes.map((n) => n.name)).toEqual(["A", "Kitchen 2"]);
+    expect(r.doc.nodes[1].attrs).toEqual({ label: "Kitchen" });
+    expect(notes(r)).toEqual(["Line 5: a group is named Kitchen. The node comes in as Kitchen 2 with label: Kitchen, so it shows the same words."]);
   });
 
   test("a_third_duplicate_has_its_own_note", () => {
     const r = conv("A[X]\nB[X]\nC[X]");
-    expect(r.doc.nodes.map((n) => n.name)).toEqual(["X", "X (2)", "X (3)"]);
-    expect(notes(r)).toEqual(["Line 3: two nodes are named X. The second is X (2).", "Line 4: more nodes are named X. This one is X (3)."]);
+    expect(r.doc.nodes.map((n) => n.name)).toEqual(["X", "X 2", "X 3"]);
+    expect(r.doc.nodes.map((n) => n.attrs.label)).toEqual([undefined, "X", "X"]);
+    expect(notes(r)).toEqual([
+      "Line 3: two nodes show X. The second comes in as X 2 with label: X, so it shows the same words.",
+      "Line 4: more nodes show X. This one comes in as X 3 with label: X.",
+    ]);
   });
 
   test("init_lines_and_accdescr_blocks_are_left_out", () => {

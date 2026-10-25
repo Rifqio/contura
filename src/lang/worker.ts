@@ -158,7 +158,7 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         return;
       case "mermaid":
         try {
-          post({ type: "mermaid", ids: [m.id], result: mermaidToFlow(m.text, m.title) });
+          post({ type: "mermaid", ids: [m.id], result: mermaidToFlow(m.text, m.title, { keepUnread: m.keepUnread }) });
         } catch (e) {
           fail([m.id], e);
         }

@@ -14,7 +14,7 @@ use crate::ai::context::cards::cleaner;
 use crate::ai::log::{Level, Log, LogLine, ProcessStep, StepKind, error_kind};
 use crate::ai::memory::{
     AskFacts, Compaction, CompactionId, SummaryBy, Turn, history_allowed, message_allowed,
-    rule_summary,
+    rule_summary, spans_other, summary_covers_ok,
 };
 use crate::ai::models::{ModelInfo, ModelPicks, ThinkingLevel, clamp};
 use crate::ai::preview::{
@@ -368,8 +368,8 @@ struct Span<'a> {
     last_at: i64,
     /// The visible turns kept.
     kept: Vec<(&'a AiMessage, &'a AiMessage)>,
-    /// Every question of the Topic asked across another Connection, hidden ones too: an
-    /// earlier compaction's summary folded in covers those up to its end.
+    /// Every question of the Topic asked across another Connection or with steps on one,
+    /// hidden ones too: an earlier compaction's summary folded in covers those up to its end.
     across: Vec<&'a AiMessage>,
 }
 
@@ -395,7 +395,7 @@ fn fold_span<'a>(thread: &'a AiThread, compactions: &[Compaction], seq: u32) -> 
     let across = thread
         .messages
         .iter()
-        .filter(|m| m.topic == Some(seq) && m.asked_in.as_ref().is_some_and(|a| !a.also.is_empty()))
+        .filter(|m| m.topic == Some(seq) && spans_other(m))
         .collect();
     Some(Span {
         turns,
@@ -731,7 +731,10 @@ fn compact_plan(
                 .across
                 .iter()
                 .filter(|m| m.at <= c.last_at)
-                .all(|m| pass(m))
+                .all(|m| {
+                    access != AiAccess::Never
+                        && summary_covers_ok(m, facts, access, others, switches)
+                })
     });
     // Whole turns: an answer goes only with its question, so a held question's answer
     // never feeds the rules summary.

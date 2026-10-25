@@ -1,6 +1,7 @@
 // The language worker's .flow state (ruling P5). Source ranges stay here: a parse sends only the doc, its problems
 // and the last good doc, which keeps the posted result small. Span and edit requests are answered against the
 // cached parse of one text version, and a request planned on an older version is refused.
+import { insertFlow } from "./insert";
 import { completeFlow, type FlowCompletionResult } from "./complete";
 import type { TextEdit } from "../protocol";
 import { pasteLines } from "./clip";
@@ -42,8 +43,14 @@ export type FlowBatchOp = { op: "batch"; ops: FlowEditOp[] };
  */
 export type FlowPasteOp = { op: "paste"; text: string; under?: string; after?: string };
 
+/**
+ * Step 10 (F28): converted Mermaid (a whole .flow file of the same kind) written into the text, at the end or at `at`,
+ * taken names made free, as one edit list and one undo entry.
+ */
+export type FlowInsertOp = { op: "insert"; text: string; at?: number };
+
 /** What a canvas action asks the worker for. */
-export type FlowRequestOp = FlowEditOp | FlowBatchOp | FlowPasteOp;
+export type FlowRequestOp = FlowEditOp | FlowBatchOp | FlowPasteOp | FlowInsertOp;
 
 /** Applies sorted, non-overlapping edits to `text`. */
 export function applyEdits(text: string, edits: readonly TextEdit[]): string {
@@ -167,6 +174,7 @@ export function createFlowService() {
       const c = current(docId, version);
       if (!c) return { stale: true };
       if (edit.op === "batch") return { stale: false, ...applyFlowBatch(c.text, c.parse, edit.ops) };
+      if (edit.op === "insert") return { stale: false, ...insertFlow(c.text, c.parse, edit.text, edit.at) };
       if (edit.op === "paste") {
         const place = edit.under !== undefined ? { under: edit.under } : edit.after !== undefined ? { after: edit.after } : undefined;
         return { stale: false, ...pasteLines(c.text, c.parse, edit.text, place) };
@@ -184,7 +192,7 @@ export function createFlowService() {
     /** Completion at `pos`; the cached names are used when they are for this same text. */
     complete(docId: string, text: string, pos: number): FlowCompletionResult {
       const c = docs.get(docId);
-      return completeFlow(text, pos, icons, c && c.text === text ? c.parse.defined : undefined);
+      return c && c.text === text ? completeFlow(text, pos, icons, c.parse.defined, c.parse.labels) : completeFlow(text, pos, icons);
     },
   };
 }

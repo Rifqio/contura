@@ -22,9 +22,9 @@ export function tabName(t: AnyTab): string {
     case "settings":
       return "Settings";
     case "schema":
-      return t.doc.path ? basename(t.doc.path) : "untitled.dbml";
+      return t.doc.path ? basename(t.doc.path) : (t.doc.name ?? "untitled.dbml");
     case "flow":
-      return `${t.name}.flow`;
+      return t.name;
     case "transfer":
     case "compare":
       return t.title;
@@ -171,6 +171,8 @@ interface Props {
   onNewModel?(): void;
   /** Where New query opens, for its line in the new tab menu ("On kestrel-main, shop"). */
   newQueryWhere?: string | null;
+  /** A tab just shown from elsewhere (an Ask's "Asked in" link): it flashes once (A7). */
+  flashKey?: string | null;
 }
 
 /** Starts a drag after this many pixels, so a click never moves a tab. */
@@ -353,6 +355,7 @@ export default function TabStrip({
   dirtyKeys,
   onNewModel,
   newQueryWhere = null,
+  flashKey = null,
   onKeep,
   onCloseMany,
   onReopen,
@@ -479,6 +482,7 @@ export default function TabStrip({
                 t.kind === "object" && t.preview && "work-tab-preview",
                 drag.state?.key === key && "work-tab-dragging",
                 drag.settling && "work-tab-settling",
+                flashKey === key && "work-tab-flash",
               ]
                 .filter(Boolean)
                 .join(" ")}

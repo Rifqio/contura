@@ -45,7 +45,26 @@ import { insertColumnsTemplate, SQL_TEMPLATES, type SqlTemplate } from "../lang/
 // The same Theme-token syntax colours as the DBML editor.
 import { dbmlHighlight as themeHighlight } from "../schema/dbmlLanguage";
 import { functionCallMarks } from "./functionCalls";
-import { type Stmt, splitStatements, statementAt } from "./statements";
+import { type Stmt, splitStatements, statementOnLine } from "./statements";
+import {
+  closeZone,
+  discardSuggestion,
+  endOnDestroy,
+  openZone,
+  keepSuggestion,
+  retrack,
+  track,
+  tracked,
+  untrack,
+  type LineMark,
+  markLines,
+  pendingSuggestion,
+  showSuggestion,
+  type Suggestion,
+  suggestions,
+} from "./suggestion";
+
+export type { LineMark, Suggestion, SuggestionEnd } from "./suggestion";
 
 const SQL_DIALECT = { mysql: MySQL, postgres: PostgreSQL, sqlite: SQLite } as const;
 
@@ -68,6 +87,26 @@ export interface SqlEditorApi {
   focus(): void;
   /** Bands every line the ranges touch in --c-accent-subtle (the query diagram's selected card); empty clears. */
   band(ranges: Range[]): void;
+  /** The main selection; `from === to` when nothing is selected. */
+  selection(): Range;
+  /** The statements of the text now, in the editor's dialect. */
+  statements(): Stmt[];
+  dialect(): DialectKind;
+  /** Shows an answer's SQL as a diff in the editor, in place of any suggestion waiting (A2). */
+  suggest(s: Suggestion): void;
+  /** Writes the waiting suggestion in as one undo step; false when none waits. */
+  keepSuggestion(): boolean;
+  discardSuggestion(): boolean;
+  suggesting(): boolean;
+  /** Marks the lines an action would touch, while it is hovered or focused (A3); null clears. */
+  markLines(m: LineMark | null): void;
+  /** A range that follows the text through edits, such as the statement an Ask is about; `untrack` lets it go. */
+  track(from: number, to: number): number;
+  tracked(id: number): Range | null;
+  retrack(id: number, from: number, to: number): void;
+  untrack(id: number): void;
+  /** A place for the inline Ask box under the statement (tracked, or at `pos`); null takes it away (I3). */
+  askZone(at: { track: number | null; pos: number } | null): HTMLElement | null;
 }
 
 /** The language service for this editor: which document, and which schema applies. */
@@ -112,6 +151,12 @@ interface Props {
   askButton?: boolean;
   /** The command keys and how to run app commands; the app's keymap when absent. */
   commands?: EditorCommands;
+  /** Hears when an answer's suggestion starts or stops waiting in the editor: Run is off meanwhile. */
+  onSuggestion?(pending: boolean): void;
+  /** Esc in the editor discarded a waiting suggestion. */
+  onEscapeSuggestion?(): void;
+  /** Ctrl+I found nothing to ask about: no selection and no statement on the line. */
+  onAskNothing?(): void;
 }
 
 /** What Ask AI is about: the SQL, where it sits in the editor and its first and last line. */
@@ -187,7 +232,7 @@ function currentStatement(dialect: () => DialectKind) {
   /** The first character of each line the statement covers. */
   const linesOf = (state: EditorState): number[] => {
     const doc = state.doc;
-    const st = statementAt(splitStatements(doc.toString(), dialect()), state.selection.main.head);
+    const st = statementOnLine(doc.toString(), state.selection.main.head, splitStatements(doc.toString(), dialect()), dialect())?.code ?? null;
     if (!st || st.from >= st.to) return [];
     const lines: number[] = [];
     for (let n = doc.lineAt(st.from).number; n <= doc.lineAt(st.to).number; n++) lines.push(doc.line(n).from);
@@ -468,6 +513,9 @@ export default function SqlEditor({
   onAsk,
   askButton,
   commands,
+  onSuggestion,
+  onEscapeSuggestion,
+  onAskNothing,
 }: Props) {
   const appKeys = useKeymap();
   const cmds = commands ?? appKeys;
@@ -477,8 +525,8 @@ export default function SqlEditor({
   const runCommand = useRef<(id: CommandId) => boolean>(() => false);
   const viewRef = useRef<EditorView | null>(null);
   const reanalyze = useRef<(() => void) | null>(null);
-  const latest = useRef({ onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask") });
-  latest.current = { onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask") };
+  const latest = useRef({ onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask"), onSuggestion, onEscapeSuggestion, onAskNothing });
+  latest.current = { onChange, onRun, onFormat, onSave, onEscape, dialect, onPosition, lang, onShowInTree, onAsk, askButton, cmds, askKey: hintFor(appKeys.map, "editor.ask"), onSuggestion, onEscapeSuggestion, onAskNothing };
   // The Command Palette runs this editor's commands (S1); keys reach them through the editor's own keymap.
   useCommandKeys(
     oneLine || !paletteCommands ? {} : Object.fromEntries(PALETTE_IDS.filter((id) => id !== "editor.ask" || !!onAsk).map((id) => [id, () => void runCommand.current(id)])),
@@ -505,6 +553,11 @@ export default function SqlEditor({
       return true;
     };
     const run = (kind: "current" | "all") => (view: EditorView) => {
+      // While a suggestion waits, Ctrl+Enter only keeps it and nothing runs (A2).
+      if (pendingSuggestion(view.state)) {
+        if (kind === "current") keepSuggestion(view);
+        return true;
+      }
       endRename(view);
       latest.current.onRun(kind);
       return true;
@@ -698,7 +751,9 @@ export default function SqlEditor({
       let range: { from: number; to: number } | null = from !== to ? { from, to } : null;
       if (!range && oneLine) range = doc.length > 0 ? { from: 0, to: doc.length } : null;
       if (!range) {
-        const st = statementAt(splitStatements(doc.toString(), latest.current.dialect), from);
+        // A blank or comment-only line is outside any statement, as for Run (round 2).
+        const text = doc.toString();
+        const st = statementOnLine(text, from, splitStatements(text, latest.current.dialect), latest.current.dialect)?.stmt ?? null;
         range = st ? { from: st.from, to: st.to } : null;
       }
       if (!range) return null;
@@ -710,6 +765,7 @@ export default function SqlEditor({
       if (!latest.current.onAsk) return false;
       const target = askTarget(view);
       if (target) latest.current.onAsk(target);
+      else latest.current.onAskNothing?.();
       return true;
     };
     /** The small Ask button at the end of a non-empty selection. */
@@ -743,6 +799,10 @@ export default function SqlEditor({
     });
 
     const escape = (view: EditorView) => {
+      if (discardSuggestion(view)) {
+        latest.current.onEscapeSuggestion?.();
+        return true;
+      }
       if (searchPanelOpen(view.state)) return closeSearchPanel(view);
       if (view.state.field(paramsField)) {
         view.dispatch({ effects: setParams.of(null) });
@@ -806,6 +866,7 @@ export default function SqlEditor({
           noticeField,
           paramsField,
           askTip,
+          suggestions((pending) => latest.current.onSuggestion?.(pending)),
           EditorState.allowMultipleSelections.of(true),
           autocompletion({ override: [completionSource] }),
           Prec.highest(keymap.of([{ key: "Tab", run: leaveInsField }])),
@@ -845,6 +906,7 @@ export default function SqlEditor({
     });
     viewRef.current = view;
     reanalyze.current = () => analyze(view);
+    let split: { doc: typeof view.state.doc | null; dialect: DialectKind; stmts: Stmt[] } = { doc: null, dialect: latest.current.dialect, stmts: [] };
     editorRef.current = {
       text() {
         return view.state.doc.toString();
@@ -858,7 +920,8 @@ export default function SqlEditor({
           const body = raw.trim().replace(/;$/, "").trimEnd();
           return body ? { from: from + lead, to: from + lead + body.length, text: body } : null;
         }
-        return statementAt(splitStatements(text, latest.current.dialect), from);
+        // A blank line, or a comment between statements, is outside any statement: Run finds nothing (DataGrip).
+        return statementOnLine(text, from, splitStatements(text, latest.current.dialect), latest.current.dialect)?.stmt ?? null;
       },
       select(from, to) {
         const len = view.state.doc.length;
@@ -889,10 +952,61 @@ export default function SqlEditor({
       band(ranges) {
         view.dispatch({ effects: setBand.of(ranges) });
       },
+      selection() {
+        const { from, to } = view.state.selection.main;
+        return { from, to };
+      },
+      dialect() {
+        return latest.current.dialect;
+      },
+      statements() {
+        // Each answer block names its lines from these on every draw: split once per text and dialect.
+        const doc = view.state.doc;
+        if (split.doc !== doc || split.dialect !== latest.current.dialect)
+          split = { doc, dialect: latest.current.dialect, stmts: splitStatements(doc.toString(), latest.current.dialect) };
+        return split.stmts;
+      },
+      suggest(s) {
+        if (viewRef.current === view) showSuggestion(view, s);
+      },
+      keepSuggestion() {
+        return viewRef.current === view && keepSuggestion(view);
+      },
+      discardSuggestion() {
+        return viewRef.current === view && discardSuggestion(view);
+      },
+      suggesting() {
+        return viewRef.current === view && pendingSuggestion(view.state);
+      },
+      markLines(m) {
+        // A block may clear its marks after the tab closed.
+        if (viewRef.current === view) markLines(view, m);
+      },
+      track(from, to) {
+        return track(view, from, to);
+      },
+      tracked(id) {
+        return viewRef.current === view ? tracked(view.state, id) : null;
+      },
+      retrack(id, from, to) {
+        if (viewRef.current === view) retrack(view, id, from, to);
+      },
+      untrack(id) {
+        if (viewRef.current === view) untrack(view, id);
+      },
+      askZone(at) {
+        if (viewRef.current !== view) return null;
+        if (!at) {
+          closeZone(view);
+          return null;
+        }
+        return openZone(view, at);
+      },
     };
     analyze(view);
     return () => {
       if (typingTimer) clearTimeout(typingTimer);
+      endOnDestroy(view);
       editorRef.current = null;
       viewRef.current = null;
       reanalyze.current = null;

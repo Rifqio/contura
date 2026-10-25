@@ -172,7 +172,7 @@ A design of tables, columns, indexes, enums and Foreign Keys for one Dialect, wr
 _Avoid_: ER diagram, design, draft, model file
 
 **Schema Builder**:
-Where a Schema Model is edited, either as DBML text or on a canvas, with each kept in step with the other.
+Where a Schema Model is edited, either as DBML text or on a canvas, with each kept in step with the other. It is where ER diagrams live: DBML is Contura's only ERD (ADR 0030), and an old `diagram er` file converts to a Schema Model with Open as DBML.
 _Avoid_: ER designer, modeler, diagram editor
 
 **Layout**:

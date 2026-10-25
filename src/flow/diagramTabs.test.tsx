@@ -155,6 +155,9 @@ test("replace_over_an_open_tab_drops_its_edits_and_opens_the_new_text", async ()
   const s = setup(["checkout"], true);
   await ready(s, "checkout");
   const sheet = screen.getByRole("dialog", { name: "New diagram" });
+  // Step 10: the name starts filled and the sheet starts from the example; this is about the first line.
+  await userEvent.click(within(within(sheet).getByRole("radiogroup", { name: "Start with" })).getByRole("radio", { name: "Blank" }));
+  await userEvent.clear(within(sheet).getByRole("textbox", { name: "Name" }));
   await userEvent.type(within(sheet).getByRole("textbox", { name: "Name" }), "Checkout{Enter}");
   const replace = await within(sheet).findByRole("button", { name: "Replace" });
   // An edit in the old tab, still waiting to be saved, when the user says Replace.
@@ -198,7 +201,7 @@ async function saveDueDuringDelete(s: ReturnType<typeof setup>) {
   const save = holdTimers(SAVE_DELAY_MS);
   s.typeIn("checkout", "Refunds [process]\n");
   act(() => ws.files!.remove("checkout"));
-  const ask = await screen.findByRole("dialog", { name: "Move checkout.flow to the Recycle Bin?" });
+  const ask = await screen.findByRole("dialog", { name: "Move checkout to the Recycle Bin?" });
   await userEvent.click(within(ask).getByRole("button", { name: "Move to Recycle Bin" }));
   await waitFor(() => expect(callsTo("delete_diagram")).toHaveLength(1));
   expect(save.count()).toBeGreaterThan(0);
@@ -248,7 +251,7 @@ test("rename_of_an_open_tab_saves_under_the_old_name_first_and_keeps_its_place",
   await ready(s, "checkout");
   s.typeIn("checkout", "Refunds [process]\n");
   act(() => ws.files!.rename("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Rename checkout.flow" });
+  const dialog = await screen.findByRole("dialog", { name: "Rename checkout" });
   const name = within(dialog).getByRole("textbox", { name: "Name" });
   await userEvent.clear(name);
   // A typed .flow is dropped once.
@@ -291,12 +294,12 @@ test("rename_after_discard_that_fails_shows_the_file_from_disk", async () => {
   s.typeIn("checkout", "Refunds [process]\n");
   await waitFor(() => expect(s.container.querySelector(".flow-save-failed")).not.toBeNull(), { timeout: 4000 });
   act(() => ws.files!.rename("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Rename checkout.flow" });
+  const dialog = await screen.findByRole("dialog", { name: "Rename checkout" });
   const name = within(dialog).getByRole("textbox", { name: "Name" });
   await userEvent.clear(name);
   await userEvent.type(name, "payments{Enter}");
   // The guard cannot save and asks; Discard drops the edits.
-  await screen.findByText("Save changes to checkout.flow?");
+  await screen.findByText("Save changes to checkout?");
   await userEvent.click(screen.getByRole("button", { name: /^Discard/ }));
   expect(await screen.findByText("payments.flow already exists.")).toBeTruthy();
   // The tab shows the file as it is on disk, and writes again.
@@ -339,7 +342,7 @@ test("delete_waits_for_a_write_already_on_its_way", async () => {
   s.typeIn("checkout", "Refunds [process]\n");
   await waitFor(() => expect(order).toEqual(["write starts"]), { timeout: 4000 });
   act(() => ws.files!.remove("checkout"));
-  const ask = await screen.findByRole("dialog", { name: "Move checkout.flow to the Recycle Bin?" });
+  const ask = await screen.findByRole("dialog", { name: "Move checkout to the Recycle Bin?" });
   await userEvent.click(within(ask).getByRole("button", { name: "Move to Recycle Bin" }));
   await later(50);
   expect(order).toEqual(["write starts"]);
@@ -354,7 +357,7 @@ test("the_text_is_read_only_while_a_rename_runs", async () => {
   const s = setup();
   await ready(s, "checkout");
   act(() => ws.files!.rename("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Rename checkout.flow" });
+  const dialog = await screen.findByRole("dialog", { name: "Rename checkout" });
   const name = within(dialog).getByRole("textbox", { name: "Name" });
   await userEvent.clear(name);
   await userEvent.type(name, "payments{Enter}");
@@ -386,6 +389,9 @@ test("replace_waits_for_a_write_already_on_its_way", async () => {
   const s = setup(["checkout"], true);
   await ready(s, "checkout");
   const sheet = screen.getByRole("dialog", { name: "New diagram" });
+  // Step 10: the name starts filled and the sheet starts from the example; this is about the first line.
+  await userEvent.click(within(within(sheet).getByRole("radiogroup", { name: "Start with" })).getByRole("radio", { name: "Blank" }));
+  await userEvent.clear(within(sheet).getByRole("textbox", { name: "Name" }));
   await userEvent.type(within(sheet).getByRole("textbox", { name: "Name" }), "checkout{Enter}");
   const replace = await within(sheet).findByRole("button", { name: "Replace" });
   s.typeIn("checkout", "Refunds [process]\n");
@@ -427,7 +433,7 @@ test("rename_waits_for_a_write_already_on_its_way", async () => {
   s.typeIn("checkout", "Refunds [process]\n");
   await waitFor(() => expect(order).toEqual(["write starts"]), { timeout: 4000 });
   act(() => ws.files!.rename("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Rename checkout.flow" });
+  const dialog = await screen.findByRole("dialog", { name: "Rename checkout" });
   const name = within(dialog).getByRole("textbox", { name: "Name" });
   await userEvent.clear(name);
   await userEvent.type(name, "payments{Enter}");

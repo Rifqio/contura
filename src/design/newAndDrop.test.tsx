@@ -8,6 +8,7 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { patientFile } from "../test/load";
 import { clearAllSteps, stepsOf } from "../assistant/recentSteps";
 import { mockReactFlowDom } from "../test/reactFlow";
+import { treeName } from "../test/treeName";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -106,8 +107,8 @@ async function openNewTable() {
   const strip = await screen.findByRole("tablist", { name: "Open tabs" });
   await userEvent.click(await within(strip).findByRole("button", { name: "Close Home" }));
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await screen.findByRole("treeitem", { name: "customers" });
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  await screen.findByRole("treeitem", { name: treeName("customers") });
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("shop") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
   expect(await screen.findByRole("tab", { name: "New table", selected: true })).toBeTruthy();
 }

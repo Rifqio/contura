@@ -4,7 +4,7 @@ import Icon from "../components/Icon";
 import AnswerSql from "./AnswerSql";
 import { sha256Hex } from "./sha256";
 import { type AnswerParser, type Block, createAnswerParser, type Inline, looksLikeSql, parseAnswer } from "./answerMarkdown";
-import type { InsertTarget } from "./InsertDiff";
+import type { InsertTarget } from "./insertPlan";
 
 interface Props {
   text: string;
@@ -23,6 +23,8 @@ interface Props {
   onAction?(kind: AnswerActionKind): void;
   /** False shows every code block as plain code, never as SQL with its actions (a diagram answer). */
   sqlBlocks?: boolean;
+  /** The fence the inline box shows in the editor itself: that block shows no actions of its own. */
+  bareFence?: number | null;
 }
 
 /** The longest text node a paragraph gets, so a long answer is laid out and updated in bounded pieces. */
@@ -76,10 +78,11 @@ interface BlockProps {
   onCopy(sql: string): void;
   onAction?(kind: AnswerActionKind): void;
   sqlBlocks: boolean;
+  bare: boolean;
 }
 
 /** One block; a finished block of a streaming answer keeps its object, so a new delta does not draw it again. */
-const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dialect, target, noEditor, onOpenInNewTab, onCopy, onAction, sqlBlocks }: BlockProps) {
+const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dialect, target, noEditor, onOpenInNewTab, onCopy, onAction, sqlBlocks, bare }: BlockProps) {
   switch (b.kind) {
     case "para":
       return (
@@ -123,6 +126,7 @@ const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dial
             onOpenInNewTab={onOpenInNewTab}
             onCopy={onCopy}
             onAction={onAction}
+            bare={bare}
           />
         );
       return (
@@ -133,6 +137,29 @@ const AnswerBlock = memo(function AnswerBlock({ block: b, known, streaming, dial
     }
   }
 });
+
+/** The first SQL block of a finished answer as its block would show it, with the Core's check when it fits. */
+export interface FirstSql {
+  fence: number;
+  sql: string;
+  check: SqlBlock | null;
+  /** Without its check, or holding a CR: it goes in only commented out. */
+  unchecked: boolean;
+}
+
+/** The answer's first closed SQL block, read as `AnswerBlock` reads it; null when it has none. */
+export function firstSql(text: string, blocks: SqlBlock[] | null | undefined): FirstSql | null {
+  const known = blocks ?? null;
+  for (const b of parseAnswer(text)) {
+    if (b.kind !== "code" || !b.closed || !b.text.trim()) continue;
+    const numbered = known?.find((c) => c.fence === b.fence) ?? null;
+    if (!(known ? numbered !== null : looksLikeSql(b))) continue;
+    const check = numbered && numbered.bodySha256 === sha256Hex(b.text) ? numbered : null;
+    const sql = b.text.trim();
+    return { fence: b.fence, sql, check, unchecked: check === null || /\r/.test(sql) };
+  }
+  return null;
+}
 
 /** An answer in the strict subset (R5.1): text is only ever text, never HTML or links; SQL blocks get their label and actions. */
 export default function AnswerText({
@@ -147,6 +174,7 @@ export default function AnswerText({
   onCopy,
   onAction,
   sqlBlocks = true,
+  bareFence = null,
 }: Props) {
   // A streaming answer is read as it grows: finished blocks are parsed once and kept (see `createAnswerParser`).
   const parser = useRef<AnswerParser | null>(null);
@@ -177,6 +205,7 @@ export default function AnswerText({
           onCopy={onCopy}
           onAction={onAction}
           sqlBlocks={sqlBlocks}
+          bare={b.kind === "code" && b.fence === bareFence}
         />
       ))}
     </>

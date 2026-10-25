@@ -1,4 +1,4 @@
-// Diagram step 4 (F8, CL2) and ER step 2.4: a line's arrow, its direction and its ends change on the canvas. Each is
+// Diagram step 4 (F8, CL2): a line's arrow, its direction and its ends change on the canvas. Each is
 // one exact text edit; the rest of the text stays byte for byte, and a chain is split only when one of its links changes.
 import { describe, expect, test } from "vitest";
 import type { TextEdit } from "../protocol";
@@ -24,14 +24,12 @@ describe("setLinkArrow", () => {
   });
 
   test("an arrow the kind does not draw, the same arrow, or no such line changes nothing", () => {
-    expect(setLinkArrow(FLOW, parseFlow(FLOW), 0, "1--*")).toEqual([]);
+    expect(setLinkArrow(FLOW, parseFlow(FLOW), 0, "<|--")).toEqual([]);
     expect(setLinkArrow(FLOW, parseFlow(FLOW), 0, ">")).toEqual([]);
     expect(setLinkArrow(FLOW, parseFlow(FLOW), 9, "<>")).toEqual([]);
   });
 
-  test("an ER relationship's cardinality and a class line's kind", () => {
-    const er = lines('diagram er "b"', "customers", "invoices", "customers 1--* invoices : bills");
-    expect(run(er, (t, p) => setLinkArrow(t, p, 0, "1--1"))).toBe(er.replace("1--*", "1--1"));
+  test("a class line's kind", () => {
     const cls = lines('diagram class "c"', "class Animal", "class Dog", "Animal <|-- Dog");
     expect(run(cls, (t, p) => setLinkArrow(t, p, 0, "*--"))).toBe(cls.replace("<|--", "*--"));
   });
@@ -41,13 +39,6 @@ describe("reverseLink", () => {
   test("swaps the two names as written, label kept", () => {
     const t = lines('diagram flow "x"', "A", '"Step two"', 'A > "Step two": go');
     expect(run(t, (x, p) => reverseLink(x, p, 0))).toBe(lines('diagram flow "x"', "A", '"Step two"', '"Step two" > A: go'));
-  });
-
-  test("an ER relationship swaps its ends and keeps each table's end (board ER interactions)", () => {
-    const er = lines('diagram er "b"', "customers", "invoices", "customers 1--* invoices : bills");
-    const out = run(er, (t, p) => reverseLink(t, p, 0));
-    expect(out).toBe(er.replace("customers 1--* invoices", "invoices *--1 customers"));
-    clean(out);
   });
 
   test("a link in a chain splits the chain into one line per link, in order, with the same indent", () => {

@@ -9,6 +9,7 @@ import { NODE_TOKENS, type NodeKind } from "../../diagram/types";
 import DfdNode, { type DfdNodeKind } from "./DfdNode";
 import FlowchartNode, { type FlowchartNodeKind } from "./FlowchartNode";
 import ServiceNode from "./ServiceNode";
+import { KindNode, type KindNodeData } from "../kindNodes";
 import type { NodeLook } from "./parts";
 
 const DFD: DfdNodeKind[] = ["process", "store", "external"];
@@ -323,6 +324,24 @@ describe("ports", () => {
     expect(root.classList.contains("fnode-block")).toBe(true);
     expect(root.getAttribute("aria-label")).toBe("Process Checkout");
     expect(root.textContent).toBe("");
+  });
+
+  test("a_state_marker_stays_a_marker_zoomed_out_and_never_shows_its_inner_name", () => {
+    // Live check, 25 Oct: the Mermaid preview at 27% drew "[*] start" and "[*] end in Review" as name boxes.
+    for (const zoom of [0.3, 0.1]) {
+      for (const kind of ["stateStart", "stateEnd", "fork"] as const) {
+        const { container, unmount } = render(
+          <DetailContext.Provider value={detailFor(zoom, 10)}>
+            <KindNode d={{ kind, name: kind === "fork" ? "Split" : "[*] start in Review", look: "modern" } as KindNodeData} selected={false} />
+          </DetailContext.Provider>,
+        );
+        const root = container.querySelector(".fnode") as HTMLElement;
+        expect(root.classList.contains(`fnode-${kind}`), `${kind} at ${zoom}`).toBe(true);
+        expect(root.classList.contains("fnode-box") || root.classList.contains("fnode-block")).toBe(false);
+        expect(root.textContent).not.toContain("[*]");
+        unmount();
+      }
+    }
   });
 });
 

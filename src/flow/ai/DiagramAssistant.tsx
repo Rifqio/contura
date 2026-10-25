@@ -542,7 +542,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
       <div ref={chat} className="flow-chat" role="log" aria-label="Assistant conversation">
         {empty && (
           <div className="flow-side-empty">
-            <span className="flow-side-empty-title">Ask for a change to {name}.flow</span>
+            <span className="flow-side-empty-title">Ask for a change to {name}</span>
             <span>The assistant edits the text and the drawing together. While it works, the text is read-only.</span>
           </div>
         )}
@@ -618,7 +618,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, mode, onMod
         <div className="flow-composer">
           {working ? (
             <div className="flow-working">
-              <span>{`Working on ${name}.flow. Stop it to type.`}</span>
+              <span>{`Working on ${name}. Stop it to type.`}</span>
               <button type="button" className="btn pbtn2" onClick={ai.stop}>
                 Stop
                 <Kbd keys="Esc" />

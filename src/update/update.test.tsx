@@ -223,7 +223,7 @@ test("pendingWork lists what a restart would lose", () => {
     "Pending Edits in orders",
     "Monthly totals, not saved",
     "pos_live to analytics, set up but not run",
-    "sales.flow, still saving",
+    "sales, still saving",
     "A running job",
   ]);
   expect(pendingWork({ tabs: [object], isDirty: () => false, flows: [], jobsRunning: false })).toEqual([]);

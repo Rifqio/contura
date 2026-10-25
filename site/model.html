@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Contura Model</title>
-<meta name="description" content="The schema is text and the diagram comes free: a DBML Schema Builder, Schema Compare with a Sync Script you tick line by line, and nine kinds of diagram typed as .flow text.">
+<meta name="description" content="The schema is text and the diagram comes free: a DBML Schema Builder, Schema Compare with a Sync Script you tick line by line, and eight kinds of diagram typed as .flow text.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
@@ -46,13 +46,13 @@
         <p class="eyebrow"><i aria-hidden="true">~</i>Model · Schema Builder, Schema Compare, Diagrams</p>
         <h1 class="display" id="h-hero">The schema is text. <span class="tail">The diagram comes free.</span></h1>
         <div class="hero-row">
-          <p class="lede">Write the model as DBML and Contura draws it. Compare two databases and tick the Sync Script line by line. Type any of nine kinds of diagram as a .flow file, and the canvas follows.</p>
+          <p class="lede">Write the model as DBML and Contura draws it. Compare two databases and tick the Sync Script line by line. Type any of eight kinds of diagram as a .flow file, and the canvas follows.</p>
           <p class="hero-act meta">The demos below run in this page, on the same billing sample as the Query page. Nothing here talks to a server.</p>
         </div>
         <ol class="cells four jump">
           <li data-reveal><a href="#builder"><span class="no">01</span><b>Schema Builder</b><span>DBML in, the model drawn, and every Ref a line you can follow.</span></a></li>
           <li data-reveal style="--d:60ms"><a href="#compare"><span class="no">02</span><b>Schema Compare</b><span>Two databases, one Sync Script you tick line by line.</span></a></li>
-          <li data-reveal style="--d:120ms"><a href="#diagrams"><span class="no">03</span><b>Diagrams</b><span>Nine kinds of diagram, each one a .flow text file.</span></a></li>
+          <li data-reveal style="--d:120ms"><a href="#diagrams"><span class="no">03</span><b>Diagrams</b><span>Eight kinds of diagram, each one a .flow text file.</span></a></li>
           <li data-reveal style="--d:180ms"><a href="#mermaid"><span class="no">04</span><b>Mermaid and Publish</b><span>Paste a Mermaid flowchart in. Publish a PNG or SVG out.</span></a></li>
         </ol>
       </div>
@@ -124,15 +124,15 @@
         <div class="split-head">
           <div class="sh-a" data-reveal>
             <p class="eyebrow"><i aria-hidden="true">~</i>03 · Diagrams</p>
-            <h2 class="headline" id="h-diagrams">Nine kinds of diagram, typed as text.</h2>
+            <h2 class="headline" id="h-diagrams">Eight kinds of diagram, typed as text.</h2>
           </div>
           <div class="sh-b copy" data-reveal style="--d:120ms">
-            <p>The first line of a .flow file picks the kind: flow, dfd, sequence, er, state, class, mindmap, timeline or cloud. The canvas redraws as you type, and a name that does not match shows as a problem under it.</p>
+            <p>The first line of a .flow file picks the kind: flow, dfd, sequence, state, class, mindmap, timeline or cloud. The canvas redraws as you type, and a name that does not match shows as a problem under it. Entity relationship diagrams live in the DBML Schema Builder above.</p>
             <p>Where each node sits lives in a .flow.layout.json beside the text, so moving a node leaves the text alone. A diagram stays one file you can read, diff and keep in git.</p>
           </div>
         </div>
         <figure class="win-wrap" data-reveal id="fig-diagrams">
-          <div class="md-gal" data-md-diagrams data-src="model-diagrams.js" role="region" aria-label="Diagram gallery: nine kinds of .flow diagram, editable"><p class="md-gal-wait">The diagram gallery loads as you come near.</p></div>
+          <div class="md-gal" data-md-diagrams data-src="model-diagrams.js" role="region" aria-label="Diagram gallery: eight kinds of .flow diagram, editable"><p class="md-gal-wait">The diagram gallery loads as you come near.</p></div>
           <figcaption>Pick a kind, then edit its file: add a line, rename a node, or break a name to see the problem. The Assistant tab shows how an Ask proposes changes you review first; its answers are pre-written for this page.</figcaption>
           <p class="md-credits">Diagram icons: AWS Architecture Icons, used as AWS allows for architecture diagrams; Google Cloud icons, offered by Google for architecture diagrams; Lucide (ISC). Amazon, AWS, Google Cloud and the service icons are trademarks of their owners and name services in the sample diagram only.</p>
         </figure>

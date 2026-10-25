@@ -6,7 +6,7 @@
    2. Schema Compare [data-md-compare]: a new app window in a shadow root (ConturaKit APP_CSS and PG_CSS): the
       differences tree, the Sync Script with one tick per change, dependants that untick together, a data-loss item
       that starts unticked, a freight-stg / freight-prod switch and the Production confirm listing the exact statements.
-   3. Diagrams [data-md-diagrams]: the nine-kind .flow gallery, loaded from model-diagrams.js when the section is about
+   3. Diagrams [data-md-diagrams]: the eight-kind .flow gallery, loaded from model-diagrams.js when the section is about
       one screen away.
    Playback for each through window.ConturaPlay, driven by the same functions the controls call. */
 (function () {
@@ -751,7 +751,6 @@
     const broken = (t) => t.replace('Under 100? > Pay back : yes', 'Under 100? > Pay bak : yes');
     play(fig, [
       { caption: 'Flowchart: refund-approval.flow. The text on the left is the whole diagram; the first line picks the kind.', ms: 2600, run: async () => { const a = await load(); a.setPane('editor'); a.showKind('flow'); } },
-      { caption: 'Switch to Entity relationship: tables, keys and how rows relate, from the same kind of file.', ms: 2600, run: async () => { (await load()).showKind('er'); } },
       { caption: 'Switch to Sequence: who calls whom, in order, laid out from the text.', ms: 2600, run: async () => { (await load()).showKind('sequence'); } },
       { caption: 'Back on the Flowchart, misspell a name in a link. The problem banner names the line, and the canvas keeps the last good drawing.', ms: 3400, run: async (c) => {
         const a = await load(); a.showKind('flow'); await c.wait(500);

@@ -111,7 +111,7 @@ export function closedLabel(c: ClosedTab): string {
     case "visual":
       return c.doc.name;
     case "flow":
-      return `${c.name}.flow`;
+      return c.name;
     case "design":
       return `${c.path.name} design`;
     case "lineage":

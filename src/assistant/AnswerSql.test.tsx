@@ -1,33 +1,15 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { SqlBlock } from "../api/types";
-import type { SqlEditorApi } from "../query/SqlEditor";
-import { type Stmt, splitStatements, statementAt } from "../query/statements";
+import { splitStatements, statementAt } from "../query/statements";
+import { fakeSqlEditor } from "../test/fakeSqlEditor";
 import AnswerSql from "./AnswerSql";
 import AnswerText from "./AnswerText";
 import { sha256Hex } from "./sha256";
 
-/** An editor holding `doc`, typing at `at`, with an optional selection. */
-function fakeEditor(doc: string, at: number, selection?: [number, number]) {
-  let text = doc;
-  const api: SqlEditorApi = {
-    text: () => text,
-    runTarget: (): Stmt | null => {
-      if (selection) return { from: selection[0], to: selection[1], text: text.slice(selection[0], selection[1]) };
-      return statementAt(splitStatements(text, "postgres"), at);
-    },
-    select: vi.fn(),
-    insert: vi.fn(),
-    replaceAll: vi.fn(),
-    replaceRange: vi.fn((from: number, to: number, insert: string) => {
-      text = text.slice(0, from) + insert + text.slice(to);
-    }),
-    focus: vi.fn(),
-    band: vi.fn(),
-  };
-  return { api, now: () => text };
-}
+/** The last mark the block asked the editor for. */
+const lastMark = (ed: ReturnType<typeof fakeSqlEditor>) => ed.marks[ed.marks.length - 1];
 
 const READ: SqlBlock = {
   fence: 0,
@@ -45,7 +27,7 @@ const NO_WHERE: SqlBlock = {
 const DOC = "-- report\nSELECT id\nFROM orders\nLIMIT 5;\n\nSELECT 2;\n";
 
 function renderSql(over: Partial<React.ComponentProps<typeof AnswerSql>> = {}) {
-  const ed = fakeEditor(DOC, 15);
+  const ed = fakeSqlEditor(DOC, 15);
   const onCopy = vi.fn();
   const onOpenInNewTab = vi.fn();
   render(
@@ -80,88 +62,127 @@ test("a_block_with_flags_or_writes_has_a_warning_head", () => {
 test("while_streaming_a_block_has_no_label_and_no_actions", () => {
   renderSql({ check: null, streaming: true });
   expect(document.querySelector(".answer-sql-head")!.textContent).toBe("");
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
 });
 
 test("no_run_button", () => {
   renderSql();
   expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Insert" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Apply to statement" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Open in new tab" })).toBeTruthy();
 });
 
-test("insert_shows_diff_then_replaces", async () => {
+test("a3_insert_and_apply_name_the_lines_they_touch", () => {
+  renderSql();
+  // The cursor is in the statement on lines 2 to 4: Insert goes below it, Apply replaces it.
+  const where = document.querySelector(".answer-sql-where")!.textContent;
+  expect(where).toContain("Insert adds line 6 of Query 2, below the current statement.");
+  expect(where).toContain("Apply replaces lines 2 to 4 of Query 2.");
+  const first = document.querySelector(".answer-sql-actions button")!;
+  expect(first.textContent).toBe("Insert");
+  expect(first.classList.contains("button-primary")).toBe(true);
+});
+
+test("a3_insert_shows_a_diff_in_the_editor_first_and_never_splits_the_statement", async () => {
   const user = userEvent.setup();
   const { ed } = renderSql();
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  expect(ed.api.replaceRange).not.toHaveBeenCalled();
-  const diff = screen.getByRole("region", { name: "Insert into the editor" });
-  expect(diff.textContent).toContain("Replaces lines 1 to 4 of Query 2");
-  const rows = Array.from(diff.querySelectorAll(".diff-line")).map((r) => [r.className.split(" ")[1] ?? "", r.querySelector(".diff-text")!.textContent]);
-  expect(rows).toEqual([
-    ["del", "-- report"],
-    ["del", "SELECT id"],
-    ["del", "FROM orders"],
-    ["del", "LIMIT 5;"],
-    ["add", "SELECT id FROM invoices;"],
-  ]);
   await user.click(screen.getByRole("button", { name: "Insert" }));
-  expect(ed.api.replaceRange).toHaveBeenCalledTimes(1);
-  expect(ed.now()).toBe("SELECT id FROM invoices;\n\nSELECT 2;\n");
-  expect(screen.queryByRole("region", { name: "Insert into the editor" })).toBeNull();
-  expect(screen.getByText("Inserted into the editor")).toBeTruthy();
+  // Nothing is written until it is kept.
+  expect(ed.now()).toBe(DOC);
+  expect(ed.pending()).toMatchObject({ text: "\n\nSELECT id FROM invoices;", bar: true, focus: true, keepLabel: "Keep" });
+  expect(screen.getByRole("status").textContent).toContain("Ctrl+Enter keeps, Esc discards");
+  act(() => void ed.api.keepSuggestion());
+  expect(ed.now()).toBe("-- report\nSELECT id\nFROM orders\nLIMIT 5;\n\nSELECT id FROM invoices;\n\nSELECT 2;\n");
+  expect(screen.getByRole("status").textContent).toBe("Kept in the editor");
 });
 
-test("insert_replaces_the_selection_when_there_is_one", async () => {
+test("a3_apply_replaces_the_current_statement_through_the_diff", async () => {
   const user = userEvent.setup();
-  const ed = fakeEditor(DOC, 0, [10, 30]);
+  const { ed } = renderSql();
+  await user.click(screen.getByRole("button", { name: "Apply to statement" }));
+  expect(ed.now()).toBe(DOC);
+  expect(ed.pending()?.where).toBe("Apply replaces lines 2 to 4 of Query 2");
+  act(() => void ed.api.keepSuggestion());
+  expect(ed.now()).toBe("-- report\nSELECT id FROM invoices;\n\nSELECT 2;\n");
+});
+
+test("a3_apply_names_and_replaces_only_the_selection", async () => {
+  const user = userEvent.setup();
+  const ed = fakeSqlEditor(DOC, 0, [10, 30]);
   renderSql({ target: { editor: () => ed.api, name: "Query 2" } });
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("Replaces lines 2 to 3 of Query 2");
+  await user.click(screen.getByRole("button", { name: "Apply to selection" }));
+  expect(ed.pending()?.where).toBe("Apply replaces lines 2 to 3 of Query 2");
 });
 
-test("insert_into_an_empty_editor_adds", async () => {
+test("a3_on_a_blank_line_apply_is_off_and_insert_adds_at_the_cursor", async () => {
   const user = userEvent.setup();
-  const ed = fakeEditor("", 0);
+  const ed = fakeSqlEditor(DOC, DOC.indexOf("\n\n") + 1);
+  renderSql({ target: { editor: () => ed.api, name: "Query 2" } });
+  const apply = screen.getByRole("button", { name: "Apply to statement" });
+  expect(apply.getAttribute("aria-disabled")).toBe("true");
+  expect(document.querySelector(".answer-sql-where")!.textContent).toContain("Apply needs a selection, or a statement where you are typing.");
+  expect(document.querySelector(".answer-sql-where")!.textContent).toContain("Insert adds line 5 of Query 2 where you are typing.");
+  await user.click(apply);
+  expect(ed.pending()).toBeNull();
+});
+
+test("a3_hover_and_keyboard_focus_mark_the_lines_and_leaving_clears_them", async () => {
+  const user = userEvent.setup();
+  const { ed } = renderSql();
+  const insert = screen.getByRole("button", { name: "Insert" });
+  const apply = screen.getByRole("button", { name: "Apply to statement" });
+  fireEvent.pointerEnter(insert);
+  expect(lastMark(ed)).toEqual({ after: DOC.indexOf("LIMIT 5;") + 8 });
+  fireEvent.pointerLeave(insert);
+  expect(lastMark(ed)).toBeNull();
+  fireEvent.pointerEnter(apply);
+  expect(lastMark(ed)).toEqual({ from: DOC.indexOf("SELECT id"), to: DOC.indexOf("LIMIT 5;") + 8 });
+  fireEvent.pointerLeave(apply);
+  // Keyboard focus marks too, and Tab away clears.
+  await user.tab();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Copy the SQL" }));
+  await user.tab();
+  expect(document.activeElement).toBe(insert);
+  expect(lastMark(ed)).toEqual({ after: DOC.indexOf("LIMIT 5;") + 8 });
+  await user.tab();
+  expect(lastMark(ed)).toEqual({ from: DOC.indexOf("SELECT id"), to: DOC.indexOf("LIMIT 5;") + 8 });
+  await user.tab();
+  expect(lastMark(ed)).toBeNull();
+});
+
+test("a3_unmounting_while_marked_clears_the_marks", () => {
+  const { ed } = renderSql();
+  fireEvent.pointerEnter(screen.getByRole("button", { name: "Insert" }));
+  cleanup();
+  expect(lastMark(ed)).toBeNull();
+});
+
+test("insert_into_an_empty_editor_adds_line_1", async () => {
+  const user = userEvent.setup();
+  const ed = fakeSqlEditor("", 0);
   renderSql({ target: { editor: () => ed.api, name: "Query 3" } });
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("Adds at line 1 of Query 3");
   await user.click(screen.getByRole("button", { name: "Insert" }));
+  expect(ed.pending()?.where).toBe("Insert adds line 1 of Query 3 where you are typing");
+  act(() => void ed.api.keepSuggestion());
   expect(ed.now()).toBe("SELECT id FROM invoices;\n");
 });
 
-test("the_diff_repeats_the_flags", async () => {
+test("discard_keeps_the_editor_and_says_nothing_went_in", async () => {
   const user = userEvent.setup();
-  renderSql({ sql: "UPDATE t SET a = 1", check: NO_WHERE });
-  await user.click(screen.getByRole("button", { name: "Insert commented out" }));
-  expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("UPDATE without WHERE.");
-});
-
-test("cancel_keeps_editor", async () => {
-  const user = userEvent.setup();
-  const { ed } = renderSql();
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  await user.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(ed.api.replaceRange).not.toHaveBeenCalled();
-  expect(ed.now()).toBe(DOC);
-  expect(screen.queryByRole("region", { name: "Insert into the editor" })).toBeNull();
-  expect(screen.queryByText("Inserted into the editor")).toBeNull();
-});
-
-test("an_editor_changed_under_the_diff_is_diffed_again_not_overwritten", async () => {
-  const user = userEvent.setup();
-  const { ed } = renderSql();
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  ed.api.replaceRange(0, 0, "-- typed\n");
-  (ed.api.replaceRange as ReturnType<typeof vi.fn>).mockClear();
+  const onAction = vi.fn();
+  const { ed } = renderSql({ onAction });
   await user.click(screen.getByRole("button", { name: "Insert" }));
-  expect(ed.api.replaceRange).not.toHaveBeenCalled();
-  expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("The editor changed");
+  act(() => void ed.api.discardSuggestion());
+  expect(ed.now()).toBe(DOC);
+  expect(screen.getByRole("status").textContent).toBe("");
+  expect(onAction).not.toHaveBeenCalled();
 });
 
-test("without_a_query_tab_insert_is_disabled", () => {
+test("without_a_query_tab_insert_and_apply_are_disabled", () => {
   renderSql({ target: null });
-  expect((screen.getByRole("button", { name: "Insert into the editor" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Insert" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Apply to statement" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("insert_commented_out_for_write_in_explain", async () => {
@@ -171,7 +192,7 @@ test("insert_commented_out_for_write_in_explain", async () => {
     label: "1 statement: 1 write (DELETE). This answer contains a write.",
     statements: [{ text: "DELETE FROM invoices WHERE id = 3", class: "write", flags: [{ kind: "writeInReadAnswer" }] }],
   };
-  const ed = fakeEditor("", 0);
+  const ed = fakeSqlEditor("", 0);
   const onCopy = vi.fn();
   renderSql({ sql: "DELETE FROM invoices WHERE id = 3", check, target: { editor: () => ed.api, name: "Query 2" }, onCopy });
   const card = screen.getByRole("alert");
@@ -179,14 +200,13 @@ test("insert_commented_out_for_write_in_explain", async () => {
   expect(card.textContent).toContain(
     "The SQL check found a write. Insert puts it in the editor commented out, so Run cannot pick it up by accident.",
   );
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Apply/ })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Copy" }));
   expect(onCopy).toHaveBeenCalledWith("DELETE FROM invoices WHERE id = 3");
   await user.click(screen.getByRole("button", { name: "Insert commented out" }));
-  const diff = screen.getByRole("region", { name: "Insert into the editor" });
-  expect(diff.textContent).toContain("-- DELETE FROM invoices WHERE id = 3;");
-  expect(diff.textContent).toContain("This answer contains a write.");
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  expect(ed.pending()?.keepLabel).toBe("Keep, commented out");
+  act(() => void ed.api.keepSuggestion());
   expect(ed.now()).toBe("-- DELETE FROM invoices WHERE id = 3;\n");
 });
 
@@ -197,19 +217,26 @@ test("parity_P11_30_an_answer_that_writes_inserts_commented_out", async () => {
     label: "1 statement: 1 write (UPDATE)",
     statements: [{ text: "UPDATE shipments SET carrier = 'DHL' WHERE id = 7", class: "write", flags: [] }],
   };
-  const ed = fakeEditor("", 0);
+  const ed = fakeSqlEditor("", 0);
   renderSql({ sql: "UPDATE shipments SET carrier = 'DHL' WHERE id = 7", check, target: { editor: () => ed.api, name: "Query 3" } });
   // Board 11.6, "Answer writes": the note, and Insert only commented out.
   const card = screen.getByRole("alert");
   expect(card.textContent).toContain("This answer writes to the database: 1 update.");
   expect(card.textContent).toContain("The SQL check found a write. Insert puts it in the editor commented out, so Run cannot pick it up by accident.");
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Insert commented out" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  act(() => void ed.api.keepSuggestion());
   expect(ed.now()).toBe("-- UPDATE shipments SET carrier = 'DHL' WHERE id = 7;\n");
   // Run finds no statement in it until the user uncomments it.
   expect(splitStatements(ed.now(), "postgres")).toEqual([]);
   expect(statementAt(splitStatements(ed.now(), "postgres"), 0)).toBeNull();
+});
+
+test("a_commented_write_goes_below_the_statement_and_removes_nothing", async () => {
+  const user = userEvent.setup();
+  const { ed } = renderSql({ sql: "UPDATE t SET a = 1", check: NO_WHERE });
+  await user.click(screen.getByRole("button", { name: "Insert commented out" }));
+  expect(ed.pending()).toMatchObject({ from: DOC.indexOf("LIMIT 5;") + 8, to: DOC.indexOf("LIMIT 5;") + 8, text: "\n\n-- UPDATE t SET a = 1;" });
 });
 
 test("write_counts_name_each_verb", () => {
@@ -242,7 +269,7 @@ test("copy_copies_the_sql", async () => {
 });
 
 function renderAnswer(text: string, blocks?: SqlBlock[] | null) {
-  const ed = fakeEditor("", 0);
+  const ed = fakeSqlEditor("", 0);
   const onOpenInNewTab = vi.fn();
   render(
     <AnswerText
@@ -263,17 +290,17 @@ const actions = () =>
 test("a_reloaded_answer_without_its_check_inserts_only_commented_out", async () => {
   const user = userEvent.setup();
   const { ed } = renderAnswer("Clean up:\n\n```sql\nDELETE FROM invoices\n```");
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
   expect(actions()).toEqual(["Insert commented out", "Copy"]);
   await user.click(screen.getByRole("button", { name: "Insert commented out" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  act(() => void ed.api.keepSuggestion());
   expect(ed.now()).toBe("-- DELETE FROM invoices;\n");
 });
 
 test("an_answer_with_its_check_has_the_real_actions", () => {
   renderAnswer("```sql\nSELECT id FROM invoices\n```", [READ]);
-  expect(actions()).toEqual(["Insert into the editor", "Open in new tab"]);
+  expect(actions()).toEqual(["Insert", "Apply to statement", "Open in new tab"]);
 });
 
 test("an_unclosed_fence_without_a_check_has_copy_only", () => {
@@ -281,36 +308,10 @@ test("an_unclosed_fence_without_a_check_has_copy_only", () => {
   expect(actions()).toEqual(["Copy"]);
 });
 
-test("insert_writes_only_into_the_tab_the_diff_was_made_for", async () => {
-  const user = userEvent.setup();
-  const one = fakeEditor("", 0);
-  const two = fakeEditor("", 0);
-  let current = one;
-  render(
-    <AnswerSql
-      sql="SELECT id FROM invoices"
-      dialect="postgres"
-      check={READ}
-      target={{ editor: () => current.api, get name() { return current === one ? "Query 1" : "Query 2"; } }}
-      onCopy={vi.fn()}
-    />,
-  );
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  current = two;
-  await user.click(screen.getByRole("button", { name: "Insert" }));
-  expect(one.api.replaceRange).not.toHaveBeenCalled();
-  expect(two.api.replaceRange).not.toHaveBeenCalled();
-  const diff = screen.getByRole("region", { name: "Insert into the editor" });
-  expect(diff.textContent).toContain("The editor changed");
-  expect(diff.textContent).toContain("of Query 2");
-});
-
-test("line_numbers_in_the_diff_have_grouping_commas", async () => {
-  const user = userEvent.setup();
-  const ed = fakeEditor("\n".repeat(1204), 0);
+test("line_numbers_have_grouping_commas", () => {
+  const ed = fakeSqlEditor("\n".repeat(1204), 1204);
   renderSql({ target: { editor: () => ed.api, name: "Query 3" } });
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  expect(screen.getByRole("region", { name: "Insert into the editor" }).textContent).toContain("Adds at line 1,205 of Query 3");
+  expect(document.querySelector(".answer-sql-where")!.textContent).toContain("Insert adds line 1,205 of Query 3 where you are typing.");
 });
 
 // ---- Final fix wave: the Diagram's "You:" box ----
@@ -318,10 +319,10 @@ test("line_numbers_in_the_diff_have_grouping_commas", async () => {
 test("each_action_is_reported_once_it_happens", async () => {
   const user = userEvent.setup();
   const onAction = vi.fn();
-  renderSql({ onAction });
-  await user.click(screen.getByRole("button", { name: "Insert into the editor" }));
-  expect(onAction).not.toHaveBeenCalled();
+  const { ed } = renderSql({ onAction });
   await user.click(screen.getByRole("button", { name: "Insert" }));
+  expect(onAction).not.toHaveBeenCalled();
+  act(() => void ed.api.keepSuggestion());
   expect(onAction).toHaveBeenLastCalledWith("inserted");
   await user.click(screen.getByRole("button", { name: "Open in new tab" }));
   expect(onAction).toHaveBeenLastCalledWith("openedInNewTab");
@@ -330,16 +331,16 @@ test("each_action_is_reported_once_it_happens", async () => {
 test("a_commented_insert_is_reported_as_such", async () => {
   const user = userEvent.setup();
   const onAction = vi.fn();
-  renderSql({ onAction, check: null, unchecked: true });
+  const { ed } = renderSql({ onAction, check: null, unchecked: true });
   await user.click(screen.getByRole("button", { name: "Insert commented out" }));
-  await user.click(screen.getByRole("button", { name: "Insert" }));
+  act(() => void ed.api.keepSuggestion());
   expect(onAction).toHaveBeenCalledWith("insertedCommented");
 });
 
 test("non-query tab offers Open in new query tab", async () => {
   const onAction = vi.fn();
   const { ed, onOpenInNewTab } = renderSql({ target: null, noEditor: true, onAction });
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.queryByRole("button", { name: /^Insert/ })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Open in new query tab" }));
   expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT id FROM invoices");
@@ -366,7 +367,7 @@ test("non-query tab: an unchecked block opens commented out too", async () => {
 
 test("a query tab keeps Insert and Open in new tab", () => {
   renderSql();
-  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Insert" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Open in new tab" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Open in new query tab" })).toBeNull();
 });
@@ -424,7 +425,7 @@ test("a lone CR in an answer opens as the Core checked it: the write after it on
 test("a block that still holds a CR is never opened or inserted live", () => {
   // Defence in depth: the parser removes every CR, but a block that has one is treated as unchecked.
   renderSql({ sql: "SELECT 1; -- note\rDROP TABLE orders" });
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
   expect(screen.getByRole("button", { name: "Insert commented out" })).toBeTruthy();
   cleanup();
@@ -445,7 +446,7 @@ const readCheck = (body: string, fence = 0): SqlBlock => ({
 test("a check whose body is another block's gives no plain Open and no Insert", () => {
   // The Core checked `SELECT 1` as fence 0; the UI's fence 0 holds a DROP: the check is not used.
   renderAnswer("```sql\nDROP TABLE orders\n```", [readCheck("SELECT 1")]);
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
   expect(screen.getByRole("button", { name: "Insert commented out" })).toBeTruthy();
   expect(screen.queryByText("1 statement: 1 read")).toBeNull();
@@ -454,27 +455,27 @@ test("a check whose body is another block's gives no plain Open and no Insert", 
 test("a check with no body hash (saved before it) is not used either", () => {
   const { bodySha256: _, ...old } = readCheck("SELECT 1");
   renderAnswer("```sql\nSELECT 1\n```", [old]);
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.getByRole("button", { name: "Insert commented out" })).toBeTruthy();
 });
 
 test("a check on its own block is used, and so on a non-query tab", () => {
   renderAnswer("Run:\n```sql\nSELECT 1\n```", [readCheck("SELECT 1")]);
   expect(screen.getByText("1 statement: 1 read")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Insert" })).toBeTruthy();
 });
 
 test("an answer that ends mid-fence binds its check to that block", () => {
   // The Core checks an unclosed last fence when the answer ended normally; its body is the text to the end.
   renderAnswer("Try:\n```sql\nSELECT 1", [readCheck("SELECT 1")]);
   expect(screen.getByText("1 statement: 1 read")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Insert into the editor" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Insert" })).toBeTruthy();
 });
 
 test("the NEL answer from the review: the read check never lands on the DROP", () => {
   // The Core numbers this answer's one fence as the DROP block (only space and tab indent a fence), so a read check
   // made on `SELECT 1` elsewhere cannot be used for it.
   renderAnswer("Here:\n\u0085```sql\nSELECT 1\n```\nDROP TABLE orders\n```", [readCheck("SELECT 1")]);
-  expect(screen.queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Insert" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Open in new tab" })).toBeNull();
 });

@@ -135,10 +135,12 @@ test("panel_says_what_each_link_does", async () => {
   const diagrams = group("Diagrams");
   expect(within(diagrams).getByText("2")).toBeTruthy();
   const checkout = within(diagrams).getByText("Checkout writes orders").closest("li")!;
-  expect(within(checkout).getByText("checkout.flow")).toBeTruthy();
+  // No .flow on a label (user rule): the row, its Open button and its card name the diagram.
+  expect(within(checkout).getByText("checkout")).toBeTruthy();
+  expect(within(diagrams).queryByText(/\.flow/)).toBeNull();
   expect(within(diagrams).getByText("Fulfilment reads orders")).toBeTruthy();
   expect(within(diagrams).queryByText(/crm/i)).toBeNull();
-  fireEvent.click(within(checkout).getByRole("button", { name: "Open checkout.flow" }));
+  fireEvent.click(within(checkout).getByRole("button", { name: "Open checkout" }));
   expect(calls.openDiagram).toHaveBeenCalledWith("checkout");
 
   // The canvas: every table as a card, with a ? after a type that can be empty.
@@ -587,11 +589,11 @@ test("diagram_rows_name_the_process_that_touches_the_table", async () => {
   // The header counts diagrams, not rows.
   expect(within(diagrams).getByText("2")).toBeTruthy();
   const ship = within(diagrams).getByText("Ship order reads orders").closest("li")!;
-  expect(within(ship).getByText("fulfilment.flow")).toBeTruthy();
+  expect(within(ship).getByText("fulfilment")).toBeTruthy();
   expect(within(diagrams).getByText("Restock writes orders")).toBeTruthy();
   // A table node no process touches still reads by its diagram.
   expect(within(diagrams).getByText("Checkout writes orders")).toBeTruthy();
-  fireEvent.click(within(ship).getByRole("button", { name: "Open fulfilment.flow" }));
+  fireEvent.click(within(ship).getByRole("button", { name: "Open fulfilment" }));
   expect(calls.openDiagram).toHaveBeenCalledWith("fulfilment");
 });
 
@@ -748,7 +750,7 @@ test("views_in_another_mysql_database_name_their_database", async () => {
 test("publish_opens_the_publish_image_dialog_with_the_lineage", async () => {
   setup({ read_lineage_layout: () => null, list_objects: () => [], view_dependencies: () => ({ catalog: false, views: [], capped: false }) });
   const bar = screen.getByRole("toolbar", { name: "Lineage" });
-  await waitFor(() => expect(screen.getByRole("group", { name: "Diagram checkout.flow" })).toBeTruthy());
+  await waitFor(() => expect(screen.getByRole("group", { name: "Diagram checkout" })).toBeTruthy());
   fireEvent.click(within(bar).getByRole("button", { name: "Publish" }));
   const dialog = await screen.findByRole("dialog", { name: "Publish image" });
   expect(within(dialog).getByText("orders lineage")).toBeTruthy();

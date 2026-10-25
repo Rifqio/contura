@@ -1,6 +1,6 @@
 // A 2,000-node diagram stays responsive in the flow tab (spec 6+ section 9, the existing large.test.tsx pattern):
 // only what is visible is drawn, in fast mode, and canvas actions still answer quickly.
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import type { DiagramCanvasProps } from "../diagram/DiagramCanvas";
@@ -102,6 +102,7 @@ test("two_thousand_node_flow_tab_draws_only_what_is_visible_and_stays_responsive
   await waitFor(() => expect(canvas.props!.nodes.find((n) => n.id === "Node 7")?.position).toEqual({ x: 4000, y: 4000 }), { timeout: 15000 });
   expect(view.state.doc.toString()).toBe(text);
   fireEvent.keyDown(container.querySelector(".flow-canvas") as HTMLElement, { key: "p" });
+  fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new process" }, { timeout: 15000 }), { key: "Enter" });
   await waitFor(() => expect(view.state.doc.toString()).toContain("Process [process, id: 2001.0]\n"), { timeout: 15000 });
   await waitFor(() => expect(callsTo("write_diagram").length).toBeGreaterThan(0), { timeout: 15000 });
   // Still only the visible part is in the page.

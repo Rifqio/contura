@@ -630,6 +630,15 @@ pub async fn run_visual_query(
 }
 
 #[tauri::command]
+pub fn plan_run(
+    service: Service<'_>,
+    session: QuerySessionId,
+    statements: Vec<String>,
+) -> Result<Vec<safety::PlannedRun>, Error> {
+    service.plan_run(session, statements)
+}
+
+#[tauri::command]
 pub fn prepare_run(
     service: Service<'_>,
     session: QuerySessionId,

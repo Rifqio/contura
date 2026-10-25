@@ -36,11 +36,11 @@ afterEach(() => {
   canvas.props = null;
 });
 
-const ER = 'diagram er "B"\ncustomers\ncustomers.id int [pk]\ninvoices\n';
+const FLOW = 'diagram flow "B"\ncustomers\ninvoices\n';
 const LAYOUT = JSON.stringify({ version: 1, nodes: { customers: { x: 100, y: 100 }, invoices: { x: 400, y: 100 } } });
 
 function setup() {
-  routeInvoke({ read_diagram: () => ({ text: ER, layout: LAYOUT }), write_diagram: () => null, write_diagram_layout: () => null });
+  routeInvoke({ read_diagram: () => ({ text: FLOW, layout: LAYOUT }), write_diagram: () => null, write_diagram_layout: () => null });
   const client = new LangClient(() => fakeWorker());
   const utils = render(
     <div style={{ width: 1280, height: 800 }}>

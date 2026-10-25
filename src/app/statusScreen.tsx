@@ -32,12 +32,14 @@ export function statusScreenFor(s: StatusInput): StatusScreen {
     : activeWindow?.kind === "settings"
       ? { kind: "settings", dataFolder, version }
       : activeWindow?.kind === "flow"
-        ? { kind: "flow", name: activeWindow.name, fileName: `${activeWindow.name}.flow` }
+        ? { kind: "flow", name: activeWindow.name, fileName: activeWindow.name }
         : activeWindow?.kind === "schema"
           ? {
               kind: "schema",
-              fileName: activeWindow.doc.path ? fileName(activeWindow.doc.path) : "Untitled.dbml",
+              // E2: a model with no file yet (a converted ER diagram keeps its name) says it is not saved.
+              fileName: activeWindow.doc.path ? fileName(activeWindow.doc.path) : (activeWindow.doc.name ?? "Untitled.dbml"),
               appliedTo: null,
+              saved: activeWindow.doc.path !== null,
             }
           : {
               kind: "workspace",

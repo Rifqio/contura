@@ -16,11 +16,11 @@ export interface ServiceNodeProps extends NodeBaseProps {
 
 const SAFE_SRC = /^(?:data:image\/|blob:)/;
 
-export default function ServiceNode({ name, id, icon, unknownIcon, plate = true, style, selected, state }: ServiceNodeProps) {
+export default function ServiceNode({ name, id, icon, unknownIcon, plate = true, style, selected, state, color }: ServiceNodeProps) {
   const src = !unknownIcon && icon && SAFE_SRC.test(icon) ? icon : null;
   const tile = unknownIcon ? "fnode-tile fnode-tile-unknown" : plate ? "fnode-tile" : "fnode-tile fnode-tile-bare";
   return (
-    <NodeShell kind="service" family="service" look={style} selected={selected} name={name} state={state} label={`Service ${name}`}>
+    <NodeShell kind="service" family="service" look={style} selected={selected} name={name} state={state} color={color} label={`Service ${name}`}>
       {(ports) => (
         <>
           <span className={tile}>

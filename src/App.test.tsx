@@ -17,6 +17,7 @@ import App from "./App";
 import { appLang } from "./lang/appLang";
 import appCssRaw from "./styles/app.css?raw";
 import guideCssRaw from "./styles/guide.css?raw";
+import { treeName } from "./test/treeName";
 
 /** A stylesheet's top-level rules (comments dropped), enough to read one rule's body. */
 function appCssRules(css: string = appCssRaw): { selector: string; body: string }[] {
@@ -214,7 +215,7 @@ test("ctrl_shift_t_reopens_a_table_tab_and_loads_its_rows_again", async () => {
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   await waitFor(() => expect(document.querySelector('tr[data-row="0"]')).not.toBeNull());
   const pages = callsTo("fetch_page").length;
   await userEvent.click(tabClose());
@@ -231,7 +232,7 @@ test("ctrl_shift_t_skips_a_table_that_is_gone_with_a_short_note", async () => {
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   await waitFor(() => expect(document.querySelector('tr[data-row="0"]')).not.toBeNull());
   await userEvent.click(tabClose());
   await waitFor(() => expect(screen.queryByRole("tab", { name: /orders/ })).toBeNull());
@@ -289,7 +290,7 @@ test("a_failed_open_from_the_tree_marks_the_row_not_the_sidebar", async () => {
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Postgres" }));
-  const row = await screen.findByRole("treeitem", { name: "KFC Postgres, last connect failed" });
+  const row = await screen.findByRole("treeitem", { name: treeName("KFC Postgres, last connect failed") });
   const failed = row.querySelector(".tree-conn-failed")!;
   expect(failed.textContent).toBe("Failed");
   expect(failed.getAttribute("title")).toMatch(/^Could not connect: refused/);
@@ -444,7 +445,7 @@ async function openOrdersWithAnEdit(over: Record<string, (a: Record<string, unkn
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
   // The default database opens with its Tables when the Connection opens.
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   const cell = await waitFor(() => {
     const el = document.querySelector('tr[data-row="0"] td[data-col="1"]');
     if (!el) throw new Error("grid not shown");
@@ -595,7 +596,7 @@ test("delete_still_asks_about_pending_edits_first", async () => {
   await userEvent.click(inAsk("Cancel"));
   expect(callsTo("delete_connection")).toHaveLength(0);
   expect(screen.getByRole("tab", { name: /orders/ })).toBeTruthy();
-  expect(screen.getByRole("treeitem", { name: "KFC Shop, open" })).toBeTruthy();
+  expect(screen.getByRole("treeitem", { name: treeName("KFC Shop, open") })).toBeTruthy();
 });
 
 test("edit_connection_from_the_tree_with_pending_edits_asks_first", async () => {
@@ -641,7 +642,7 @@ test("status_follows_the_selected_branch_while_the_tree_has_focus", async () => 
   const bar = document.querySelector("footer.app-status") as HTMLElement;
   await waitFor(() => expect(bar.textContent).toContain("KFC Postgres"));
   // Focus in the tree: the status bar follows the focused branch.
-  const reports = await screen.findByRole("treeitem", { name: "reports" });
+  const reports = await screen.findByRole("treeitem", { name: treeName("reports") });
   reports.focus();
   await waitFor(() => expect(bar.textContent).toContain("KFC Reporting"));
   expect(bar.textContent).toContain("PostgreSQL 15.2");
@@ -668,7 +669,7 @@ test("a_group_change_while_the_tree_has_focus_drops_the_tree_branch_from_the_sta
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Reporting" }));
   const bar = document.querySelector("footer.app-status") as HTMLElement;
-  const reports = await screen.findByRole("treeitem", { name: "reports" });
+  const reports = await screen.findByRole("treeitem", { name: treeName("reports") });
   reports.focus();
   await waitFor(() => expect(bar.textContent).toContain("KFC Reporting"));
   await userEvent.keyboard("{Control>}{Alt>}1{/Alt}{/Control}");
@@ -683,7 +684,7 @@ test("back_in_the_place_the_focused_branch_leads_the_status_bar_again", async ()
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Reporting" }));
   const bar = document.querySelector("footer.app-status") as HTMLElement;
-  (await screen.findByRole("treeitem", { name: "reports" })).focus();
+  (await screen.findByRole("treeitem", { name: treeName("reports") })).focus();
   await waitFor(() => expect(bar.textContent).toContain("KFC Reporting"));
   await userEvent.keyboard("{Control>}{Alt>}1{/Alt}{/Control}");
   await waitFor(() => expect(bar.textContent).not.toContain("KFC Reporting"));
@@ -693,7 +694,7 @@ test("back_in_the_place_the_focused_branch_leads_the_status_bar_again", async ()
   await userEvent.click(screen.getByRole("menuitem", { name: "New query" }));
   expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
   await waitFor(() => expect(bar.textContent).toContain("KFC Postgres"));
-  (await screen.findByRole("treeitem", { name: "reports" })).focus();
+  (await screen.findByRole("treeitem", { name: treeName("reports") })).focus();
   await waitFor(() => expect(bar.textContent).toContain("KFC Reporting"));
 });
 
@@ -793,7 +794,7 @@ test("item_12_opening_a_table_adds_nothing_to_recent", async () => {
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
   // The default database opens with its Tables when the Connection opens.
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   await waitFor(() => expect(document.querySelector('tr[data-row="0"]')).not.toBeNull());
   // Browsing is not history: only saving data or applying a design lists the table (item 12).
   expect(callsTo("record_recent")).toEqual([]);
@@ -1193,15 +1194,15 @@ test("selecting_a_routine_or_trigger_shows_its_definition", async () => {
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open kfc-prod" }));
   // No default database: open it, then its Procedures folder.
-  await userEvent.click(await screen.findByRole("treeitem", { name: "shop" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "Procedures" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "close_day" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("shop") }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("Procedures") }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("close_day") }));
   expect(await screen.findByText("CREATE PROCEDURE close_day() BEGIN END")).toBeTruthy();
   expect(callsTo("object_definition")).toEqual([
     { id: "c2", kind: "procedure", path: { database: "shop", schema: null, name: "close_day" } },
   ]);
-  await userEvent.click(screen.getByRole("treeitem", { name: "Triggers" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders_audit" }));
+  await userEvent.click(screen.getByRole("treeitem", { name: treeName("Triggers") }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders_audit") }));
   expect(await screen.findByText("CREATE TRIGGER orders_audit AFTER INSERT")).toBeTruthy();
   expect(callsTo("fetch_page")).toHaveLength(0);
 });
@@ -1230,14 +1231,14 @@ test("app_titles_postgres_objects_with_their_schema", async () => {
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open kfc-orders" }));
   // public opens with the database; its orders is the only one shown yet.
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   const grid = await screen.findByRole("region", { name: "Data of orders" });
   expect(within(grid).getByRole("heading", { level: 2 }).textContent).toBe("public.orders");
 
   // The same name in another schema is another object: a fresh grid with its own request.
-  await userEvent.click(screen.getByRole("treeitem", { name: "sales" }));
-  await waitFor(() => expect(screen.getAllByRole("treeitem", { name: "orders" })).toHaveLength(2));
-  await userEvent.click(screen.getAllByRole("treeitem", { name: "orders" })[1]);
+  await userEvent.click(screen.getByRole("treeitem", { name: treeName("sales") }));
+  await waitFor(() => expect(screen.getAllByRole("treeitem", { name: treeName("orders") })).toHaveLength(2));
+  await userEvent.click(screen.getAllByRole("treeitem", { name: treeName("orders") })[1]);
   await waitFor(() =>
     expect(
       within(screen.getByRole("region", { name: "Data of orders" })).getByRole("heading", { level: 2 }).textContent,
@@ -1359,7 +1360,7 @@ test("sidebar_header_shows_the_group_letter_square_without_an_image", async () =
   expect(badge?.nextElementSibling?.textContent).toBe("KFC");
 });
 
-test("an_answer_goes_into_the_editor_through_the_diff_and_runs_nothing", async () => {
+test("an_answer_goes_into_the_editor_through_the_diff_in_the_editor_and_runs_nothing", async () => {
   const draft = [
     { id: "d1", name: "Late deliveries", text: "SELECT 1", connectionId: "c1", database: "kfc_shop", savedId: null, savedText: null },
   ];
@@ -1407,10 +1408,20 @@ test("an_answer_goes_into_the_editor_through_the_diff_and_runs_nothing", async (
   // A saved answer without the Core's SQL check goes in only commented out, and has no Open in new tab.
   await userEvent.click(await within(panel).findByRole("button", { name: "Insert commented out" }));
   expect(within(panel).queryByRole("button", { name: "Open in new tab" })).toBeNull();
-  const diff = within(panel).getByRole("region", { name: "Insert into the editor" });
-  expect(diff.textContent).toContain("Replaces line 1 of Late deliveries");
-  await userEvent.click(within(diff).getByRole("button", { name: "Insert" }));
-  expect(await within(panel).findByText("Inserted into the editor")).toBeTruthy();
+  // The diff is in the editor itself, with a Keep and Discard bar; the write goes below, commented out (A2, A3).
+  const bar = await waitFor(() => {
+    const b = document.querySelector<HTMLElement>(".cm-suggest-bar");
+    expect(b).toBeTruthy();
+    return b!;
+  });
+  expect(bar.textContent).toContain("Insert adds line 3 of Late deliveries, below the current statement");
+  // The added lines show apart from the text, which is unchanged until Keep.
+  expect(Array.from(document.querySelectorAll(".cm-suggest-add")).map((l) => l.textContent)).toEqual(["", "-- UPDATE orders SET status = 'x';"]);
+  expect(Array.from(document.querySelectorAll(".cm-line")).map((l) => l.textContent)).toEqual(["SELECT 1"]);
+  expect(document.querySelector<HTMLButtonElement>(".editor-header-run")?.disabled).toBe(true);
+  await userEvent.click(within(bar).getByRole("button", { name: /^Keep, commented out/ }));
+  expect(await within(panel).findByText("Kept in the editor")).toBeTruthy();
+  expect(document.querySelector(".cm-suggest-bar")).toBeNull();
   await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("-- UPDATE orders SET status = 'x';"));
   expect(callsTo("prepare_run")).toHaveLength(0);
   expect(callsTo("execute_sql")).toHaveLength(0);
@@ -1614,7 +1625,7 @@ async function openOrders(over: Record<string, (a: Record<string, unknown>) => u
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   await screen.findByRole("tab", { name: "orders", selected: true });
 }
 const designButton = () =>
@@ -1706,7 +1717,7 @@ const ordersRoutes = (c: typeof shopMy) => ({
   sql_schema: () => ({ tables: [], functions: [] }),
 });
 const dropFromTree = async () => {
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Drop table..." }));
 };
 
@@ -1784,7 +1795,7 @@ test("production_drop_opens_confirm_run_and_applies_with_the_pass", async () => 
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open freight-prod" }));
-  await screen.findByRole("treeitem", { name: "orders" });
+  await screen.findByRole("treeitem", { name: treeName("orders") });
   await dropFromTree();
   const dialog = await screen.findByRole("dialog", { name: "Drop on freight-prod · shop" });
   expect(within(dialog).getByText("Dropping orders deletes its 1,204 rows.")).toBeTruthy();
@@ -1801,12 +1812,12 @@ test("read_only_shows_neither_new_table_nor_drop_table", async () => {
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open shop-ro" }));
-  await screen.findByRole("treeitem", { name: "orders" });
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  await screen.findByRole("treeitem", { name: treeName("orders") });
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("shop") }));
   const dbMenu = screen.getByRole("menu", { name: "shop" });
   expect(within(dbMenu).queryByRole("menuitem", { name: "New table..." })).toBeNull();
   await userEvent.keyboard("{Escape}");
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   const menu = screen.getByRole("menu", { name: "orders" });
   expect(within(menu).getByRole("menuitem", { name: "Edit structure" })).toBeTruthy();
   expect(within(menu).queryByRole("menuitem", { name: "Drop table..." })).toBeNull();
@@ -1920,7 +1931,7 @@ test("after_apply_the_tree_reloads_the_applied_connection_only_while_another_bra
   });
   await changeStatusInDesign();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Archive" }));
-  const archiveRow = await screen.findByRole("treeitem", { name: "archive" });
+  const archiveRow = await screen.findByRole("treeitem", { name: treeName("archive") });
   await waitFor(() => expect(callsTo("list_objects").some((a) => a.id === "c4")).toBe(true));
   archiveRow.focus();
   const lists = callsTo("list_objects").length;
@@ -1940,7 +1951,7 @@ test("a_created_table_is_revealed_in_the_tree", async () => {
     },
     list_objects: () => [{ kind: "table", name: "orders" }, ...(created ? [{ kind: "table", name: "invoices" }] : [])],
   });
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("shop") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
   await screen.findByRole("tab", { name: "Columns 1" });
   fireEvent.doubleClick(designCell("", "name"));
@@ -1956,7 +1967,7 @@ test("a_created_table_is_revealed_in_the_tree", async () => {
   // Apply runs what the preview shows (S13 I2).
   await within(designPane()).findByLabelText("SQL Apply runs");
   await userEvent.click(designApply());
-  const row = await screen.findByRole("treeitem", { name: "invoices" });
+  const row = await screen.findByRole("treeitem", { name: treeName("invoices") });
   await waitFor(() => expect(document.activeElement).toBe(row));
   expect(await screen.findByRole("tab", { name: /^invoices design/ })).toBeTruthy();
 });
@@ -2277,12 +2288,12 @@ async function openShopTree(over: Record<string, (a: Record<string, unknown>) =>
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await screen.findByRole("treeitem", { name: "orders" });
+  await screen.findByRole("treeitem", { name: treeName("orders") });
 }
 
 test("export_from_the_tree_opens_the_export_dialog_on_the_table", async () => {
   await openShopTree();
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Export..." }));
   const dialog = await screen.findByRole("dialog", { name: /Export orders/ });
   // The columns come from the table's design; the count from the tree's estimate.
@@ -2292,11 +2303,11 @@ test("export_from_the_tree_opens_the_export_dialog_on_the_table", async () => {
 
 test("import_from_the_tree_opens_an_import_tab_and_closes_without_asking_when_nothing_runs", async () => {
   await openShopTree();
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
   expect(await screen.findByRole("tab", { name: "Import into orders", selected: true })).toBeTruthy();
   // The same table again shows the open tab.
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
   expect(screen.getAllByRole("tab", { name: "Import into orders" })).toHaveLength(1);
   await userEvent.click(screen.getByRole("button", { name: "Close Import into orders" }));
@@ -2306,7 +2317,7 @@ test("import_from_the_tree_opens_an_import_tab_and_closes_without_asking_when_no
 
 test("export_in_the_background_shows_the_status_item_and_a_click_reopens_the_dialog", async () => {
   await openShopTree();
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Export..." }));
   const dialog = await screen.findByRole("dialog", { name: /Export orders/ });
   await waitFor(() => expect(callsTo("preview_export").length).toBeGreaterThan(0));
@@ -2331,8 +2342,8 @@ test("new_diagram_opens_from_home_and_with_ctrl_alt_n_and_leads_to_mermaid", asy
   await userEvent.keyboard("{Control>}{Alt>}n{/Alt}{/Control}");
   const again = await screen.findByRole("dialog", { name: "New diagram" });
   // The sheet's Mermaid way in swaps it for the step 7 dialog.
-  await userEvent.click(within(again).getByRole("button", { name: "Flow from Mermaid..." }));
-  expect(await screen.findByRole("dialog", { name: /New flow from Mermaid/ })).toBeTruthy();
+  await userEvent.click(within(again).getByRole("button", { name: "From Mermaid..." }));
+  expect(await screen.findByRole("dialog", { name: /Diagram from Mermaid/ })).toBeTruthy();
   expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull();
 });
 
@@ -2344,7 +2355,7 @@ test("a_restart_drops_import_tabs", async () => {
       return null;
     },
   });
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
   await screen.findByRole("tab", { name: "Import into orders" });
   await userEvent.keyboard("{Control>}t{/Control}");
@@ -2394,7 +2405,7 @@ const importRoutes = {
 /** Opens an Import tab into orders and starts a run that keeps running. */
 async function startRunningImport(over: Record<string, (a: Record<string, unknown>) => unknown> = {}) {
   await openShopTree({ ...importRoutes, ...over });
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "orders" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
   await screen.findByRole("tab", { name: "Import into orders", selected: true });
   const pane = () => document.querySelector(".work-pane:not([hidden]) .import-tab") as HTMLElement;
@@ -2437,7 +2448,7 @@ test("a_retargeted_import_tab_takes_the_new_key_and_a_second_one_there_folds_int
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open shop-ro" }));
   const importFromTree = async () => {
-    fireEvent.contextMenu(await screen.findByRole("treeitem", { name: "orders" }));
+    fireEvent.contextMenu(await screen.findByRole("treeitem", { name: treeName("orders") }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Import..." }));
   };
   const retarget = async () => {
@@ -2479,7 +2490,7 @@ test("item_8_a_new_query_opens_on_the_database_used_last", async () => {
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "hc_backend" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("hc_backend") }));
   await userEvent.click(stripNew());
   await waitFor(() => {
     const saved = callsTo("save_query_tabs").map((a) => JSON.parse(a.json as string) as { tabs: { database: string | null }[] });
@@ -2623,7 +2634,7 @@ test("the Ask panel shows on Home and Settings, not on a diagram, where the togg
   expect(askPanel()).toBeTruthy();
 
   await userEvent.click(screen.getByRole("tab", { name: "Home" }));
-  await userEvent.click(await screen.findByRole("button", { name: /^checkout\.flow/ }));
+  await userEvent.click(await screen.findByRole("button", { name: /^checkout, / }));
   await waitFor(() => expect(screen.getByRole("tab", { name: /checkout/, selected: true })).toBeTruthy());
   expect(askPanel()).toBeNull();
   expect(document.querySelector(".body")!.className).toBe("body body-home");
@@ -2644,11 +2655,11 @@ test("the Ask panel shows on New table and Schema Compare", async () => {
   });
   await toggleAsk();
   expect(await screen.findByRole("complementary", { name: "Ask" })).toBeTruthy();
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("shop") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
   await screen.findByRole("tab", { name: "Columns 1" });
   expect(askPanel()).toBeTruthy();
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("shop") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Schema Compare" }));
   await waitFor(() => expect(document.querySelector(".compare-main:not([hidden])")).toBeTruthy());
   expect(askPanel()).toBeTruthy();
@@ -2775,7 +2786,7 @@ test("visual query to new table", async () => {
   expect(await screen.findByText(/^1 row in/)).toBeTruthy();
 
   // 4. New table on shop, from the tree.
-  fireEvent.contextMenu(screen.getByRole("treeitem", { name: "shop" }));
+  fireEvent.contextMenu(screen.getByRole("treeitem", { name: treeName("shop") }));
   await userEvent.click(screen.getByRole("menuitem", { name: "New table..." }));
   await screen.findByRole("tab", { name: "Columns 1" });
 
@@ -2800,7 +2811,7 @@ test("visual query to new table", async () => {
   expect(await within(panel).findByRole("button", { name: "Open in new query tab, commented out" })).toBeTruthy();
   expect(within(panel).queryByRole("button", { name: "Open in new query tab" })).toBeNull();
   expect(within(panel).queryByRole("button", { name: "Run" })).toBeNull();
-  expect(within(panel).queryByRole("button", { name: "Insert into the editor" })).toBeNull();
+  expect(within(panel).queryByRole("button", { name: "Insert" })).toBeNull();
 }, LOAD_TIMEOUT);
 
 test("clearing_recent_shows_the_cleared_toast_with_undo", async () => {
@@ -2838,12 +2849,12 @@ test("G15: single-click orders, sort by status, single-click customers, single-c
   render(<App />);
   await closeHome();
   await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   await userEvent.click(await screen.findByRole("button", { name: "Sort by status" }));
   await waitFor(() => expect(callsTo("fetch_page").some((a) => (a.request as { sort: unknown }).sort)).toBe(true));
-  await userEvent.click(await screen.findByRole("treeitem", { name: "customers" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("customers") }));
   expect(await screen.findByRole("tab", { name: /customers/ })).toBeTruthy();
-  await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
+  await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
   expect(screen.getByRole("tab", { name: /orders/ })).toBeTruthy();
   expect(screen.getByRole("tab", { name: /customers/ })).toBeTruthy();
   // The worked-in tab is a kept tab; the later single click made customers the preview.
@@ -2885,8 +2896,8 @@ describe("S13: a single click on a table right after switching tables is not ign
     render(<App />);
     await closeHome();
     await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
-    await userEvent.click(await screen.findByRole("treeitem", { name: "orders" }));
-    await userEvent.click(await screen.findByRole("treeitem", { name: "customers" }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: treeName("orders") }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: treeName("customers") }));
     expect(screen.getByRole("tab", { name: /customers/, selected: true })).toBeTruthy();
     release();
   });

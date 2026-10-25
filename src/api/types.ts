@@ -152,7 +152,10 @@ export type ObjectKind = "table" | "view" | "procedure" | "function" | "trigger"
 export interface DbObject {
   kind: ObjectKind;
   name: string;
+  /** The server's row estimate (MySQL TABLE_ROWS, PostgreSQL reltuples): it can be far off. */
   rows: number | null;
+  /** Set by the front end once a table tab counted the rows exactly (up to 1,000); the Core never sends it. */
+  counted?: number;
   /** The server's size estimate in bytes; tables only. Older Cores send none. */
   bytes?: number | null;
 }
@@ -578,7 +581,7 @@ export interface ModelFiles {
 
 // Diagrams: mirrors crates/contura-core/src/diagrams.rs.
 
-export type DiagramKind = "dfd" | "flow" | "cloud" | "er" | "sequence" | "state" | "class" | "mindmap" | "timeline" | "unknown";
+export type DiagramKind = "dfd" | "flow" | "cloud" | "sequence" | "state" | "class" | "mindmap" | "timeline" | "unknown";
 
 /** One diagram in Contura's diagrams folder, from its file's first line. */
 export interface DiagramEntry {
@@ -818,6 +821,23 @@ export interface PlannedStatement {
   byAssistant?: boolean;
   /** Why a read from an answer counts as a write here (R6.4), to follow "Written by the assistant and": "calls pg_sleep()". */
   reason?: string;
+}
+
+/** An UPDATE or DELETE that changes every row (`safety::NoWhere`). */
+export interface NoWhere {
+  verb: "UPDATE" | "DELETE";
+  table: string;
+  /** The piece of a plain `;` split that asks (round 8): the text the ask shows. */
+  text: string;
+}
+
+/** One statement a run sends, as the Core splits it (`safety::PlannedRun`); `from` and `to` are UTF-16 offsets in its piece. */
+export interface PlannedRun {
+  text: string;
+  piece: number;
+  from: number;
+  to: number;
+  noWhere: NoWhere | null;
 }
 
 export type RunVerdict =
@@ -1472,6 +1492,8 @@ export interface AskedIn {
    * and never sends them to the webview (the stamp and every thread view leave them out), so they are never here.
    */
   otherSteps?: never;
+  /** The key of the tab it was asked in (`query:<id>`), so "Asked in" can show that tab (UX step 9, A7). */
+  tabKey?: string;
 }
 
 /** The outline step of a preview: how big the outline is and the exact text it would send. */

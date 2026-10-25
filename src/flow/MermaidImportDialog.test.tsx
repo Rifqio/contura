@@ -39,7 +39,7 @@ function setup(beforeReplace?: (name: string) => void) {
       <MermaidImportDialog groups={GROUPS} defaultGroup={null} lang={lang} onClose={onClose} onCreated={onCreated} beforeReplace={beforeReplace} />
     </ToastProvider>,
   );
-  const dialog = screen.getByRole("dialog", { name: "New flow from Mermaid" });
+  const dialog = screen.getByRole("dialog", { name: "Diagram from Mermaid" });
   const view = () => EditorView.findFromDOM(dialog.querySelector(".cm-editor") as HTMLElement)!;
   const paste = (text: string) => act(() => view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: text } }));
   const create = () => within(dialog).getByRole("button", { name: /Create flow/ }) as HTMLButtonElement;
@@ -57,18 +57,18 @@ test("pasting_draws_the_nodes_150ms_after_the_last_keystroke", async () => {
   await act(() => vi.advanceTimersByTimeAsync(60));
   vi.useRealTimers();
   await waitFor(() => expect(nodes()).toHaveLength(7));
-  expect(within(dialog).getByText("7 nodes, 7 links")).toBeTruthy();
+  expect(within(dialog).getByText("Flowchart: 7 shapes, 7 lines")).toBeTruthy();
 });
 
 test("the_flow_text_tab_shows_the_text_create_flow_writes", async () => {
   const { dialog, paste } = setup();
   paste(MMD);
-  await waitFor(() => expect(within(dialog).getByText("7 nodes, 7 links")).toBeTruthy());
+  await waitFor(() => expect(within(dialog).getByText("Flowchart: 7 shapes, 7 lines")).toBeTruthy());
   await userEvent.click(within(dialog).getByRole("radio", { name: ".flow text" }));
   const block = within(dialog).getByRole("group", { name: "The .flow text" });
-  // The Name field's default is new-flow.flow, so the title is New flow.
+  // The Name field's default is New diagram's, so the title is Untitled diagram (fix round 1, M8).
   const lines = [...block.querySelectorAll("code")].map((c) => c.textContent);
-  expect(lines.join("\n")).toBe(FLOW.replace('"Order handover"', '"New flow"').trimEnd());
+  expect(lines.join("\n")).toBe(FLOW.replace('"Order handover"', '"Untitled diagram"').trimEnd());
 });
 
 test("the_notes_list_names_what_was_not_carried_over", async () => {
@@ -90,8 +90,9 @@ test("an_unreadable_line_shows_the_banner_and_disables_create_flow_until_fixed",
   paste(MMD.replace("  D --> B", "  D -> B"));
   const banner = await within(dialog).findByText("Line 5: cannot read the link D -> B. Mermaid links are -->, ---, -.-> or ==>.");
   expect(banner.closest("[role=alert]")).toBeTruthy();
-  expect(within(dialog).getByText("Line 5 is left out until it can be read. The rest is drawn.")).toBeTruthy();
-  expect(within(dialog).getByText("7 nodes, 6 links read")).toBeTruthy();
+  // Step 10: the line blocks Create until it is fixed or deleted.
+  expect(within(dialog).getByText("Fix or delete line 5 to go on.")).toBeTruthy();
+  expect(within(dialog).getByText("Flowchart: 7 shapes, 6 lines read")).toBeTruthy();
   expect(create().disabled).toBe(true);
   paste(MMD);
   await waitFor(() => expect(create().disabled).toBe(false));
@@ -107,7 +108,7 @@ test("ctrl_o_opens_a_mmd_file_into_the_editor_and_names_the_flow", async () => {
   await waitFor(() => expect(view().state.doc.toString()).toBe(MMD));
   expect(plugin.open).toHaveBeenCalledTimes(1);
   expect(callsTo("read_text_file")).toEqual([{ path: "C:\\flows\\order-handover.mmd" }]);
-  expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("order-handover.flow");
+  expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("order-handover");
 });
 
 async function readyToCreate(exists: boolean | "refuse", beforeReplace?: (name: string) => void) {
@@ -126,7 +127,7 @@ async function readyToCreate(exists: boolean | "refuse", beforeReplace?: (name: 
   await userEvent.click(within(s.dialog).getByRole("combobox", { name: "Group" }));
   await userEvent.click(screen.getByRole("option", { name: "Kestrel Foods" }));
   s.paste(MMD);
-  await waitFor(() => expect(within(s.dialog).getByText("7 nodes, 7 links")).toBeTruthy());
+  await waitFor(() => expect(within(s.dialog).getByText("Flowchart: 7 shapes, 7 lines")).toBeTruthy());
   return s;
 }
 
@@ -143,7 +144,7 @@ test("create_flow_saves_by_name_in_the_diagrams_folder_and_reports_the_name", as
   // Both files in one Core call by name, through writeDiagram (step 7 finding I1).
   expect(callsTo("write_text_file")).toEqual([]);
   expect(callsTo("write_diagram")).toEqual([{ name: "order-handover", text: FLOW, layout: LAYOUT, overwrite: false }]);
-  expect(screen.getByText("Created order-handover.flow")).toBeTruthy();
+  expect(screen.getByText("Created order-handover")).toBeTruthy();
 });
 
 test("an_existing_name_asks_before_replacing", async () => {
@@ -225,7 +226,7 @@ test("flow_nodes_draw_with_tokens_only_and_a_handle_at_each_port", () => {
 test("two_unreadable_lines_are_both_named_under_the_preview", async () => {
   const { dialog, paste } = setup();
   paste("flowchart TB\n  A --> B\n  B -> C\n  C -> D");
-  expect(await within(dialog).findByText("Lines 3 and 4 are left out until they can be read. The rest is drawn.")).toBeTruthy();
+  expect(await within(dialog).findByText("Fix or delete the 2 lines marked to go on.")).toBeTruthy();
   expect(within(dialog).getAllByRole("alert")).toHaveLength(2);
 });
 

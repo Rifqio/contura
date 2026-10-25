@@ -130,6 +130,7 @@ pub fn run() {
             commands::restore_script_sql_mode,
             commands::visual_query_sql,
             commands::run_visual_query,
+            commands::plan_run,
             commands::prepare_run,
             commands::confirm_run,
             commands::plan_edits,

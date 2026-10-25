@@ -6,11 +6,13 @@ import {
   type FlowGroup,
   type FlowLink,
   type FlowNode,
+  attrItems,
   flowLabel,
   flowName,
   flowValue,
-  linkEndText,
   MAX_GROUP_DEPTH,
+  isStateMarker,
+  nodeStatement,
   quote,
 } from "../lang/flow/model";
 
@@ -18,9 +20,15 @@ export type { DiagramKind, FlowArrow, FlowDoc, FlowGroup, FlowKind, FlowLink, Fl
 export { flowName, needsQuotes } from "../lang/flow/model";
 
 function nodeLine(n: FlowNode, kind: DiagramKind): string {
+  // Step 10: the newer kinds write their own statement (`interface Payable`, `Check [choice]`, `note: text`), and a
+  // class's members follow on their own lines.
+  if (kind !== "dfd" && kind !== "flow" && kind !== "cloud") {
+    const own = nodeStatement(kind, n);
+    return kind === "class" && n.rows?.length ? [own, ...n.rows.map((r) => `${flowName(n.name)} : ${r}`)].join("\n") : own;
+  }
   // A cloud node is always a service, so its kind is left unsaid.
   const parts = kind === "cloud" && n.kind === "service" ? [] : [n.kind as string];
-  for (const [key, value] of Object.entries(n.attrs)) parts.push(`${key}: ${flowValue(value)}`);
+  parts.push(...attrItems(n.attrs));
   return parts.length ? `${flowName(n.name)} [${parts.join(", ")}]` : flowName(n.name);
 }
 
@@ -28,17 +36,24 @@ function nodeLine(n: FlowNode, kind: DiagramKind): string {
 const indentAt = (depth: number) => "  ".repeat(Math.min(depth, MAX_GROUP_DEPTH));
 
 /** A group and everything in it, walked with a stack (never recursion), a blank line before each inner group. */
-function groupLines(root: FlowGroup, byName: Map<string, FlowNode>, kind: DiagramKind): string[] {
+function groupLines(root: FlowGroup, byName: Map<string, FlowNode>, kind: DiagramKind, own: Map<string, FlowLink[]> = new Map()): string[] {
   const lines: string[] = [];
   type Frame = { g: FlowGroup; depth: number; child: number; body: boolean };
   const open = (g: FlowGroup, depth: number): Frame => {
-    const icon = g.icon !== undefined ? ` [icon: ${flowValue(g.icon)}]` : "";
-    lines.push(`${indentAt(depth)}${flowName(g.name)}${icon} {`);
+    // A group takes an icon and a colour (step 11), in the attribute order.
+    const items = [...(g.icon !== undefined ? [`icon: ${flowValue(g.icon)}`] : []), ...(g.color !== undefined ? [`color: ${flowValue(g.color)}`] : [])];
+    lines.push(`${indentAt(depth)}${flowName(g.name)}${items.length ? ` [${items.join(", ")}]` : ""} {`);
     let body = false;
     for (const name of g.nodes) {
       const n = byName.get(name);
-      if (!n) continue;
+      // A composite's own start and end are written only by its `[*]` lines (I4).
+      if (!n || (kind === "state" && isStateMarker(name))) continue;
       lines.push(indentAt(depth + 1) + nodeLine(n, kind));
+      body = true;
+    }
+    // The lines to and from its own [*], inside its braces, so they read back as its own.
+    for (const l of linkLines(own.get(g.name) ?? [])) {
+      lines.push(indentAt(depth + 1) + l);
       body = true;
     }
     return { g, depth, child: 0, body };
@@ -72,17 +87,19 @@ function linkLines(links: FlowLink[]): string[] {
   // The end of the last line while it can still take a chain link (it has no label).
   let open: string | null = null;
   for (const l of links) {
-    // An ER relationship's ends carry their columns (ER build C).
-    const from = linkEndText(l.from, l.fromColumn);
-    const to = linkEndText(l.to, l.toColumn);
-    if (l.chained && !l.label && open === from) {
+    // A state diagram's start and end markers are both written [*].
+    const from = isStateMarker(l.from) ? "[*]" : flowName(l.from);
+    const to = isStateMarker(l.to) ? "[*]" : flowName(l.to);
+    // A coloured line is written on its own (step 11): its colour goes after it, so nothing chains on.
+    if (l.chained && !l.label && l.color === undefined && open === from) {
       lines[lines.length - 1] += ` ${l.arrow} ${to}`;
       open = to;
       continue;
     }
     const label = l.label ? `: ${flowLabel(l.label)}` : "";
-    lines.push(`${from} ${l.arrow} ${to}${label}`);
-    open = l.label ? null : to;
+    const color = l.color !== undefined ? ` [color: ${flowValue(l.color)}]` : "";
+    lines.push(`${from} ${l.arrow} ${to}${label}${color}`);
+    open = l.label || l.color !== undefined ? null : to;
   }
   return lines;
 }
@@ -96,9 +113,18 @@ export function writeFlow(doc: FlowDoc): string {
   // A comment ends at the line end, so a line break inside one becomes a space.
   const comment = (text: string) => text.replace(/[\r\n]+/g, " ");
   if (doc.comments.length) parts.push(doc.comments.map((c) => (c.text ? `// ${comment(c.text)}` : "//")));
-  const loose = doc.nodes.filter((n) => !inGroups.has(n.name)).map((n) => nodeLine(n, doc.kind));
+  const loose = doc.nodes.filter((n) => !inGroups.has(n.name) && !(doc.kind === "state" && isStateMarker(n.name))).map((n) => nodeLine(n, doc.kind));
   if (loose.length) parts.push(loose);
-  for (const g of doc.groups) parts.push(groupLines(g, byName, doc.kind));
-  if (doc.links.length) parts.push(linkLines(doc.links));
+  // A state composite's own [*] lines go inside its braces (I4); every other line after the groups.
+  const own = new Map<string, FlowLink[]>();
+  const rest: FlowLink[] = [];
+  for (const l of doc.links) {
+    const m = doc.kind === "state" ? [l.from, l.to].find((n) => isStateMarker(n) && n.includes(" in ")) : undefined;
+    const g = m ? m.slice(m.indexOf(" in ") + 4) : null;
+    if (g === null) rest.push(l);
+    else own.set(g, [...(own.get(g) ?? []), l]);
+  }
+  for (const g of doc.groups) parts.push(groupLines(g, byName, doc.kind, own));
+  if (rest.length) parts.push(linkLines(rest));
   return `${parts.map((p) => p.join("\n")).join("\n\n")}\n`;
 }

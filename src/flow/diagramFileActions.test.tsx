@@ -44,7 +44,7 @@ test("delete_asks_then_moves_the_diagram_to_the_recycle_bin", async () => {
   const remove = registerFlow("checkout", { save: "waiting", line: null, col: null, errors: 0, flush, discard, hold });
   const { opts, actions } = setup(["checkout"]);
   act(() => actions().remove("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Move checkout.flow to the Recycle Bin?" });
+  const dialog = await screen.findByRole("dialog", { name: "Move checkout to the Recycle Bin?" });
   expect(callsTo("delete_diagram")).toEqual([]);
   await userEvent.click(within(dialog).getByRole("button", { name: "Move to Recycle Bin" }));
   await waitFor(() => expect(callsTo("delete_diagram")).toEqual([{ name: "checkout" }]));
@@ -54,7 +54,7 @@ test("delete_asks_then_moves_the_diagram_to_the_recycle_bin", async () => {
   expect(flush).not.toHaveBeenCalled();
   expect(opts.dropTab).toHaveBeenCalledWith("checkout");
   expect(opts.onChanged).toHaveBeenCalled();
-  expect(await screen.findByText("Moved checkout.flow to the Recycle Bin.")).toBeTruthy();
+  expect(await screen.findByText("Moved checkout to the Recycle Bin.")).toBeTruthy();
   remove();
 });
 
@@ -62,7 +62,7 @@ test("cancel_on_delete_keeps_the_diagram", async () => {
   routeInvoke({ delete_diagram: () => undefined });
   const { opts, actions } = setup();
   act(() => actions().remove("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Move checkout.flow to the Recycle Bin?" });
+  const dialog = await screen.findByRole("dialog", { name: "Move checkout to the Recycle Bin?" });
   await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(callsTo("delete_diagram")).toEqual([]);
@@ -104,7 +104,7 @@ test("rename_moves_both_files_and_reopens_the_open_tab_under_the_new_name", asyn
   routeInvoke({ rename_diagram: () => undefined });
   const { opts, actions } = setup(["checkout"]);
   act(() => actions().rename("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Rename checkout.flow" });
+  const dialog = await screen.findByRole("dialog", { name: "Rename checkout" });
   const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
   expect(name.value).toBe("checkout");
   await userEvent.clear(name);
@@ -125,7 +125,7 @@ test("rename_to_a_taken_name_says_so_and_keeps_the_old_tab", async () => {
   });
   const { opts, actions } = setup(["checkout"]);
   act(() => actions().rename("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Rename checkout.flow" });
+  const dialog = await screen.findByRole("dialog", { name: "Rename checkout" });
   const name = within(dialog).getByRole("textbox", { name: "Name" });
   await userEvent.clear(name);
   await userEvent.type(name, "payments{Enter}");
@@ -138,7 +138,7 @@ test("rename_kept_when_the_close_guard_says_cancel", async () => {
   routeInvoke({ rename_diagram: () => undefined });
   const { actions } = setup(["checkout"], { confirmClose: vi.fn(async () => false) });
   act(() => actions().rename("checkout"));
-  const dialog = await screen.findByRole("dialog", { name: "Rename checkout.flow" });
+  const dialog = await screen.findByRole("dialog", { name: "Rename checkout" });
   const name = within(dialog).getByRole("textbox", { name: "Name" });
   await userEvent.clear(name);
   await userEvent.type(name, "payments{Enter}");

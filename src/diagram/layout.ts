@@ -42,6 +42,11 @@ export interface LayoutRequest {
   rankdir: "LR" | "TB";
   /** A node placed on the last rank, after every other node. */
   pin?: string;
+  /**
+   * diag-910 fix round 3 (L8): the group each node or group sits in. Each group is laid out as one block (dagre's
+   * clusters), so nothing outside it lands on its area. The `\u0000` group ids never collide with node ids.
+   */
+  parents?: Record<string, string>;
 }
 
 const NODE_SEP = 40;
@@ -56,13 +61,30 @@ export async function layoutMissing(req: LayoutRequest): Promise<Positions> {
   const missing = req.nodes.filter((n) => !has(n.id));
   if (missing.length === 0) return req.existing;
   const { default: dagre } = await import("@dagrejs/dagre");
-  const g = new dagre.graphlib.Graph();
+  const compound = !!req.parents && Object.keys(req.parents).length > 0;
+  const g = new dagre.graphlib.Graph(compound ? { compound: true } : undefined);
   g.setGraph({ rankdir: req.rankdir, nodesep: NODE_SEP, ranksep: RANK_SEP });
   g.setDefaultEdgeLabel(() => ({}));
   // dagre keys plain objects by id, so a name such as __proto__ would break it: it sees numbered ids only.
   const key = new Map<string, string>();
   req.nodes.forEach((n, i) => key.set(n.id, `n${i}`));
   for (const n of req.nodes) g.setNode(key.get(n.id)!, { width: n.w, height: n.h });
+  if (compound) {
+    // A cluster per group, each node in its innermost group; groups nest as they do in the text.
+    let c = 0;
+    const own = (id: string) => Object.prototype.hasOwnProperty.call(req.parents, id);
+    const cluster = (id: string): string => {
+      let k = key.get(id);
+      if (!k) {
+        k = `g${c++}`;
+        key.set(id, k);
+        g.setNode(k, {});
+        if (own(id)) g.setParent(k, cluster(req.parents![id]));
+      }
+      return k;
+    };
+    for (const n of req.nodes) if (own(n.id)) g.setParent(key.get(n.id)!, cluster(req.parents![n.id]));
+  }
   for (const e of req.edges) {
     const a = key.get(e.from);
     const b = key.get(e.to);

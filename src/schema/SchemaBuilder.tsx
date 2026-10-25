@@ -23,6 +23,8 @@ import type { MakeEdits } from "./TableCard";
 export type ModelDoc = {
   /** Null until the first Save asks where to put it. */
   path: string | null;
+  /** The name of a model with no file yet, such as an ER diagram opened as DBML (ADR 0030); the first Save suggests it. */
+  name?: string;
   dbml: string;
   /** The text as last saved; empty for a model that was never saved. */
   savedDbml: string;
@@ -101,7 +103,7 @@ export default function SchemaBuilder({ doc, onClose, client, ask, sourceConnect
   textRef.current = text;
 
   const bandRef = useRef<{ from: number; to: number }[]>([]);
-  const name = path ? basename(path).replace(/\.dbml$/i, "") : "schema";
+  const name = path ? basename(path).replace(/\.dbml$/i, "") : (doc.name ?? "schema");
   const model: SchemaModel | null = result ? (result.r.model ?? result.r.lastValid) : null;
   const blocked = !!result && result.r.model === null;
   const firstError = result?.r.diagnostics.find((d) => d.severity === "error");
