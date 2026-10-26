@@ -4,9 +4,12 @@ import type { QuickFix } from "../protocol";
 import {
   ARROWS,
   ATTR_DIAGRAMS,
+  LINE_COLOUR_DIAGRAMS,
   ATTR_KEYS,
-  COLOUR_WORDS,
+  COLUMN_FLAGS,
+  type ColumnFlag,
   DIAGRAM_KINDS,
+  KIND_ALIASES,
   type DiagramKind,
   type FlowArrow,
   type FlowDoc,
@@ -16,16 +19,19 @@ import {
   type FlowNodeKind,
   flowName,
   KINDS,
+  MAX_FAN_LINKS,
   MAX_GROUP_DEPTH,
+  needsQuotes,
   NOTE_KINDS,
   nodeStatement,
-  isPaletteName,
   isStateMarker,
   PALETTE,
   STATE_END,
   STATE_START,
   stateMarkerName,
 } from "./model";
+import { CSS_COLOURS, isColourValue } from "./colours";
+import { endsInMultiplicity, migrateOldEr, OLD_ER_ARROWS, type OldErArrow, oldErArrowAt, type OldErScan, scanOldEr } from "./erMigrate";
 import { FIX_TITLES, type FlowProblem, MESSAGES, nearestNames, nearWord } from "./problems";
 
 export type { FlowProblem } from "./problems";
@@ -36,6 +42,8 @@ export type FlowRange = { from: number; to: number };
  * A source range with the ranges of its parts, one key per element.
  * - `diagram`, `kind`, `title`: plain ranges.
  * - `node:<name>`: the statement; `name`, and when it has brackets `attrs`, `kind` and `values` (each attribute's value).
+ *   An ER table written as a block runs from its name to its `}`.
+ * - `table:<name>`: an ER table block, through its `}`; `name`, `attrs`, `open` (`{`), `close` (`}`).
  * - `group:<name>`: through its `}`; `name`, `open` (`{`), `close` (`}`), `attrs`, `values`.
  * - `link:<i>`: from its first name to its second; `fromName`, `toName`, `arrow`, `label`, `line` (the whole statement),
  *   and `attrs` (its `[color: ..]`, step 11) on the last link of a statement that has one.
@@ -59,9 +67,15 @@ export type FlowSpan = FlowRange & {
 export type FlowParse = {
   /** The kind on the first line; null when the first line is wrong. */
   kind: DiagramKind | null;
+  /** The title on the first line as read, "" when it has none; kept while the text has errors. */
+  title: string;
   /** Null while the text has an error; hints alone keep it. */
   doc: FlowDoc | null;
   problems: FlowProblem[];
+  /** True when an unknown icon was left without its "Did you mean" lookup (ICON_LOOKUP_BUDGET): parse again for it. */
+  iconsDeferred: boolean;
+  /** An ER frame still in the old form (`table.column` lines, `1--*`), which "Rewrite as table blocks" fixes. */
+  readonly oldEr: boolean;
   /** The 1-based line each node and group is defined on, kept while the text has errors. */
   readonly lineOf: Record<string, number>;
   /** The source ranges of one element (see FlowSpan), kept while the text has errors; null when there is none. */
@@ -79,16 +93,21 @@ export type FlowParse = {
   /** Names defined more than once (each is already a problem). */
   readonly definedTwice: ReadonlySet<string>;
   /**
-   * Step 12: the lines that belong to a node besides its own (a class's member lines), and in each the range of
-   * the node's name, so a delete takes them and a rename follows.
+   * Step 12: the lines that belong to a node besides its own (a class's member lines, an ER table's column lines),
+   * with the ranges a delete, a rename or a column edit reads (see RowSpan).
    */
   rowsOf(name: string): readonly RowSpan[];
   /** Step 11: each shape's `label:` (the words it shows), by its name. */
   readonly labels: ReadonlyMap<string, string>;
+  /** The kind of the node of that name, kept while the text has errors; undefined when no node has it. */
+  kindOf(name: string): FlowNodeKind | undefined;
 };
 
-/** A node's own extra line: the line's statement and the node's name in it. */
-export type RowSpan = { line: FlowRange; name: FlowRange };
+/**
+ * A node's own extra line: the line's statement; for a class member the owner's name in it; for an ER column its
+ * name, its type when written, and its flags from the first to the last.
+ */
+export type RowSpan = { line: FlowRange; name?: FlowRange; column?: FlowRange; type?: FlowRange; flags?: FlowRange };
 
 // Packed spans: `[from, to, ...parts]`, each part a from/to pair, -1 where the element has no such part.
 const NODE_PARTS = ["name", "attrs", "kind"] as const;
@@ -98,7 +117,7 @@ type Part = (typeof NODE_PARTS)[number] | (typeof GROUP_PARTS)[number] | (typeof
 
 function partsOf(key: string): readonly Part[] {
   if (key.startsWith("node:")) return NODE_PARTS;
-  if (key.startsWith("group:") || key.startsWith("frame:")) return GROUP_PARTS;
+  if (key.startsWith("group:") || key.startsWith("frame:") || key.startsWith("table:")) return GROUP_PARTS;
   if (key.startsWith("link:")) return LINK_PARTS;
   return [];
 }
@@ -133,7 +152,7 @@ const ICON_NEAR_CAP = 2000;
 export const ICON_LOOKUP_BUDGET = 100_000;
 
 /** More than this many problems is noise; the rest still count as errors. */
-const MAX_PROBLEMS = 200;
+export const MAX_PROBLEMS = 200;
 
 const BAD = Symbol("bad");
 
@@ -162,7 +181,14 @@ type GroupBuild = {
   /** A second group of the same name, or one nested too deep: it pairs its braces but stays out of the tree. */
   repeated: boolean;
 };
-type Use = { name: string; from: number; to: number; line: number; end: "from" | "to"; other: string };
+/** An ER table block being read: `node` is null for a second table of a name, whose lines are read and dropped. */
+type TableBuild = { name: string; node: FlowNode | null; from: number; nameTo: number; line: number };
+/** One token of an ER column line: a quoted string, or a run to white space outside parentheses. */
+type ColumnToken = { value: string; from: number; to: number; quoted: boolean };
+/** A link end that names no shape; `list` is the comma list it was written in, when it had more than one name. */
+type Use = { name: string; from: number; to: number; line: number; end: "from" | "to"; other: string; list: FlowRange | null };
+/** The names at one end of an arrow, `q` after them, and a comma with no name after it (else -1). */
+type EndList = { names: Token[]; q: number; comma: number };
 
 /** The same characters as the `\s` in the writer's quoting rule. */
 function isWs(c: number): boolean {
@@ -219,6 +245,19 @@ class Parser {
   /** Step 11: each shape's `label:`, by its name, and the names that show each label (built when a line end needs it). */
   private labels = new Map<string, string>();
   private showing: Map<string, string[]> | null = null;
+  /** Fan links by index: the from and to comma lists they were written in (from, to pairs, -1 for a single name). */
+  private fanEnds = new Map<number, number[]>();
+  /** The ER table block open now, and the braces of refused blocks inside it still to close. */
+  private table: TableBuild | null = null;
+  private innerBraces = 0;
+  /** An ER frame's old forms (null when it has none), read once its kind is known. */
+  private oldEr: OldErScan | null | undefined;
+  /** The old-form problems so far, and which one comes first in the text: only that one offers the rewrite. */
+  private oldCount = 0;
+  private firstOld = -1;
+  private firstOldFrom = 0;
+  /** The old ER frame rewritten to table blocks, as one edit. */
+  private rewrite: QuickFix["edits"][number] | null = null;
 
   constructor(text: string, opts: FlowParseOptions) {
     this.s = text;
@@ -229,6 +268,8 @@ class Parser {
   private readonly iconNear: Map<string, string | null>;
   /** Icon names compared for suggestions in this parse (ICON_LOOKUP_BUDGET). */
   private iconLookups = 0;
+  /** An unknown icon was past the budget, so its suggestion waits for a later parse. */
+  private iconsDeferred = false;
 
   run(): FlowParse {
     const s = this.s;
@@ -276,8 +317,12 @@ class Parser {
     let lines: Record<string, number> | null = null;
     return {
       kind: this.kind,
+      title: this.title,
       doc,
       problems,
+      iconsDeferred: this.iconsDeferred,
+      // A frame with no statement after its header was never scanned.
+      oldEr: this.kind === "er" && (this.oldEr === undefined ? scanOldEr(this.s) : this.oldEr) !== null,
       span,
       defined: defs,
       links: this.links,
@@ -286,6 +331,7 @@ class Parser {
       definedTwice: this.twice,
       rowsOf: (name: string) => this.rows.get(name) ?? [],
       labels: this.labels,
+      kindOf: (name: string) => this.byName.get(name)?.kind,
       // Built on first read: the worker answers line questions from `defs`, so most parses never build these.
       get lineOf() {
         if (!lines) {
@@ -382,35 +428,45 @@ class Parser {
     return null;
   }
 
-  /** A name at `p`: null when there is none, BAD when its quote never closes (the problem is recorded). */
-  private name(p: number, e: number): Token | null | typeof BAD {
+  /**
+   * A name at `p`: null when there is none, BAD when its quote never closes (the problem is recorded unless `quiet`).
+   * With `atComma` a bare name also stops at a comma: one name of a link end's list.
+   */
+  private name(p: number, e: number, atComma = false, quiet = false): Token | null | typeof BAD {
     // A state diagram's start and end marker.
     if (this.kind === "state" && this.s.startsWith("[*]", p) && p + 3 <= e) return { value: "[*]", from: p, to: p + 3 };
     if (p < e && this.s.charCodeAt(p) === 34) {
       const q = this.quoted(p, e);
       if (!q) {
-        this.error(p, this.trimBack(e, p), MESSAGES.nameQuote);
+        if (!quiet) this.error(p, this.trimBack(e, p), MESSAGES.nameQuote);
         return BAD;
       }
       return { value: q.value, from: p, to: q.end };
     }
     let j = p;
-    while (j < e && !this.stopsName(j, e)) j++;
+    if (atComma) while (j < e && this.s.charCodeAt(j) !== 44 && !this.stopsName(j, e)) j++;
+    else while (j < e && !this.stopsName(j, e)) j++;
     const to = this.trimBack(j, p);
     return to === p ? null : { value: this.s.slice(p, to), from: p, to };
   }
 
-  private arrow(q: number, e: number): FlowArrow | null {
+  private arrow(q: number, e: number): FlowArrow | OldErArrow | null {
     const s = this.s;
     if (q >= e) return null;
+    if (this.kind === "er") {
+      const old = oldErArrowAt(s, q, e);
+      if (old) return old;
+    }
     const c = s.charCodeAt(q);
     const at = (i: number) => (q + i < e ? s.charCodeAt(q + i) : -1);
     const endsAt = (i: number) => q + i >= e || isWs(s.charCodeAt(q + i));
     if (c === 62) return ">";
     if (c === 60) {
       if (at(1) === 62) return "<>";
-      // <|-- inheritance (class).
-      return at(1) === 124 && at(2) === 45 && at(3) === 45 ? "<|--" : null;
+      // <|-- inheritance (class); a lone < is an ER line (one to many).
+      if (at(1) === 124) return at(2) === 45 && at(3) === 45 ? "<|--" : null;
+      // `<-`, `<--` and `<=` are no arrows any kind draws: the line is left unread, as it always was.
+      return at(1) === 45 || at(1) === 61 ? null : "<";
     }
     if (c === 45) {
       if (at(1) === 45 && at(2) === 62) return "-->";
@@ -433,6 +489,11 @@ class Parser {
   private splitLead(t: Token, e: number): { token: Token; q: number } {
     const s = this.s;
     const q = this.ws(t.to, e);
+    // An old ER line writes its near multiplicity the same way (`customers 1--* orders`).
+    if (this.kind === "er" && s.charCodeAt(q) === 45 && s.charCodeAt(q + 1) === 45 && s.charCodeAt(t.from) !== 34 && endsInMultiplicity(s, t.from, t.to)) {
+      const to = this.trimBack(t.to - 1, t.from);
+      return { token: { value: s.slice(t.from, to), from: t.from, to }, q: t.to - 1 };
+    }
     if (this.kind !== "class" || s.charCodeAt(q) !== 45 || s.charCodeAt(q + 1) !== 45) return { token: t, q };
     if (t.to - t.from < 3 || s.charCodeAt(t.to - 1) !== 42 || !isWs(s.charCodeAt(t.to - 2))) return { token: t, q };
     const to = this.trimBack(t.to - 1, t.from);
@@ -468,6 +529,16 @@ class Parser {
       this.header = true;
       if (this.diagramLine(p, e)) return;
     }
+    if (p === a && this.notAKindHeader(p, e)) return;
+    if (this.kind === "er" && this.oldEr === undefined) this.oldEr = scanOldEr(this.s);
+    const old = this.oldEr?.columns.get(this.line - 1);
+    if (old) {
+      this.oldForm(old.from, old.to, MESSAGES.oldColumn);
+      const r = this.ws(old.to, e);
+      if (r < e && this.isComment(r, e)) this.comment(r, e);
+      return;
+    }
+    if (this.table) return this.columnLine(p, e);
     if (this.s.charCodeAt(p) === 125) return this.close(p, e);
     if (this.kindStatement(a, p, e)) return;
     this.nameStatement(p, e);
@@ -559,6 +630,7 @@ class Parser {
         return true;
       }
     }
+    if (k === "er" && w && spaced && w.word === "group") return this.erGroup(p, after, e);
     if (k === "class" && w && spaced && (w.word === "class" || w.word === "interface" || w.word === "enum")) return this.declared(p, after, e, w.word);
     if (k === "mindmap" && w && spaced && w.word === "root") {
       if (!this.declared(p, after, e, "root")) return true;
@@ -594,9 +666,36 @@ class Parser {
     const node: FlowNode = { name: t.value, kind, attrs: {} };
     if (kind === "root") node.depth = 0;
     if (this.kind === "timeline" && this.section !== undefined) node.section = this.section;
+    const q = this.ws(t.to, e);
+    if ((kind === "participant" || kind === "actor") && q < e && this.s.charCodeAt(q) === 91) {
+      const attrs = this.participantAttrs(this.attrs(q, e));
+      node.attrs = attrs.attrs;
+      this.pushNode(node, { from: p, to: attrs.to }, t);
+      const key = `node:${t.value}`;
+      this.packed.set(key, [p, attrs.to, t.from, t.to, attrs.from, attrs.to, -1, -1]);
+      this.values.set(key, attrs.values);
+      this.checkIcon(attrs.attrs.icon, attrs.values.icon);
+      this.end(attrs.to, e);
+      return true;
+    }
     this.pushNode(node, { from: p, to: t.to }, t);
     this.end(t.to, e);
     return true;
+  }
+
+  /** A participant's brackets take an icon, a label and a colour; a kind word, an id or a table is an error. */
+  private participantAttrs(attrs: Attrs): Attrs {
+    const bad = (r: FlowRange) => this.error(r.from, r.to, MESSAGES.participantAttrs, () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(r)] }]);
+    if (attrs.kind) bad(attrs.kind);
+    for (const key of ["id", "table"]) {
+      if (!attrs.items[key]) continue;
+      bad(attrs.items[key]);
+      delete attrs.attrs[key];
+      delete attrs.values[key];
+      attrs.keys = attrs.keys.filter((k) => k !== key);
+    }
+    this.checkColour(attrs.attrs.color, attrs.values.color);
+    return attrs;
   }
 
   /** A timeline item: `2026-10-19: Docs ready`, or a period `2026-09 to 2026-10: Data transfer`. */
@@ -657,14 +756,288 @@ class Parser {
     this.packed.set(`node:${node.name}`, [span.from, span.to, name.from, name.to, -1, -1, -1, -1]);
   }
 
-  /** An extra line of a node (a class member). */
-  private addRow(owner: string, text: string, line: FlowRange, name: FlowRange) {
+  /** An extra line of a node (a class member, an ER column with its flags). */
+  private addRow(owner: string, text: string, span: RowSpan, flags?: ColumnFlag[], comment: string | null = null) {
     const n = this.byName.get(owner);
     if (!n) return;
-    (n.rows ??= []).push(text);
+    const rows = (n.rows ??= []);
+    rows.push(text);
+    // Flags and comments only once a column has some: the rows before it get none.
+    if (flags && flags.length > 0 && !n.rowFlags) n.rowFlags = rows.slice(0, -1).map(() => []);
+    if (n.rowFlags) n.rowFlags.push(flags ?? []);
+    if (comment !== null && !n.rowComments) n.rowComments = rows.slice(0, -1).map(() => undefined);
+    if (n.rowComments) n.rowComments.push(comment ?? undefined);
     const list = this.rows.get(owner) ?? [];
-    list.push({ line, name });
+    list.push(span);
     this.rows.set(owner, list);
+  }
+
+  // ----- ER tables
+
+  /** An old-form problem; the first in the text offers "Rewrite as table blocks" after its own fixes. */
+  private oldForm(from: number, to: number, message: string, own: () => QuickFix[] = () => []) {
+    const id = this.oldCount++;
+    if (this.firstOld < 0 || from < this.firstOldFrom) {
+      this.firstOld = id;
+      this.firstOldFrom = from;
+    }
+    this.error(from, to, message, () => (this.firstOld === id ? [...own(), this.rewriteFix()] : own()));
+  }
+
+  /** An old `Billing {` group: read as a group, with the problem that it now starts with the word group. */
+  private oldGroup(t: Token, attrs: Attrs | null, brace: number, e: number) {
+    this.oldForm(t.from, this.lineEnd(t.from, e), MESSAGES.oldGroup);
+    this.openGroup(t, attrs, brace, e);
+  }
+
+  /** "Rewrite as table blocks": one edit over the span the rewrite changes, computed once per parse. */
+  private rewriteFix(): QuickFix {
+    if (!this.rewrite) {
+      const s = this.s;
+      const to = migrateOldEr(s, this.oldEr ?? null);
+      let a = 0;
+      const most = Math.min(s.length, to.length);
+      while (a < most && s.charCodeAt(a) === to.charCodeAt(a)) a++;
+      let b = 0;
+      while (b < most - a && s.charCodeAt(s.length - 1 - b) === to.charCodeAt(to.length - 1 - b)) b++;
+      this.rewrite = { from: a, to: s.length - b, insert: to.slice(a, to.length - b) };
+    }
+    return { title: FIX_TITLES.rewriteBlocks, edits: [{ ...this.rewrite }] };
+  }
+
+  /** `group Billing [icon: .., color: ..] {` in an ER diagram; false leaves a line with no `{` to the name statement. */
+  private erGroup(p: number, at: number, e: number): boolean {
+    const s = this.s;
+    const stop = this.lineEnd(p, e);
+    if (stop <= at || s.charCodeAt(stop - 1) !== 123) return false;
+    const t = this.name(at, e);
+    if (t === BAD) return true;
+    if (!t) return false;
+    let q = this.ws(t.to, e);
+    let attrs: Attrs | null = null;
+    if (q < e && s.charCodeAt(q) === 91) {
+      attrs = this.attrs(q, e);
+      q = this.ws(attrs.to, e);
+    }
+    if (q >= e || s.charCodeAt(q) !== 123) {
+      this.end(q, e);
+      return true;
+    }
+    this.openGroup(t, attrs, q, e, p);
+    return true;
+  }
+
+  /** `orders [weak, icon: .., label: .., color: ..] {`: a table whose lines are its columns until its `}`. */
+  private openTable(t: Token, attrs: Attrs | null, brace: number, e: number) {
+    const s = this.s;
+    const fresh = this.node(t, attrs, brace + 1);
+    this.table = { name: t.value, node: fresh ? (this.byName.get(t.value) ?? null) : null, from: t.from, nameTo: t.to, line: this.line };
+    if (fresh) {
+      // GROUP_PARTS: name, attrs, open, close (filled in at the `}`).
+      this.packed.set(`table:${t.value}`, [t.from, brace + 1, t.from, t.to, attrs ? attrs.from : -1, attrs ? attrs.to : -1, brace, brace + 1, -1, -1]);
+    }
+    // `orders {}`: a table with no columns, closed on its own line.
+    const r = this.ws(brace + 1, e);
+    if (r < e && s.charCodeAt(r) === 125) {
+      this.closeTable(r);
+      this.end(r + 1, e);
+      return;
+    }
+    this.end(brace + 1, e);
+  }
+
+  private closeTable(p: number) {
+    const t = this.table;
+    this.table = null;
+    if (!t?.node) return;
+    const node = this.packed.get(`node:${t.name}`);
+    if (node) node[1] = p + 1;
+    const table = this.packed.get(`table:${t.name}`);
+    if (table) {
+      table[1] = p + 1;
+      table[8] = p;
+      table[9] = p + 1;
+    }
+  }
+
+  /**
+   * The tokens of a column line and the comment after them (null when none); null when a quote never closes (the
+   * problem is recorded). An open `(` is a problem; its token then also ends before a flag word, so the flags are read.
+   */
+  private columnTokens(p: number, e: number): { tokens: ColumnToken[]; comment: string | null } | null {
+    const s = this.s;
+    const tokens: ColumnToken[] = [];
+    let j = this.ws(p, e);
+    while (j < e && !this.isComment(j, e)) {
+      if (s.charCodeAt(j) === 34) {
+        const q = this.quoted(j, e);
+        if (!q) {
+          this.error(j, this.trimBack(e, j), MESSAGES.textQuote);
+          return null;
+        }
+        tokens.push({ value: q.value, from: j, to: q.end, quoted: true });
+        j = this.ws(q.end, e);
+        continue;
+      }
+      let k = j;
+      let depth = 0;
+      let openAt = -1;
+      for (; k < e; k++) {
+        const c = s.charCodeAt(k);
+        if (c === 40) {
+          if (depth++ === 0) openAt = k;
+        } else if (c === 41) depth = Math.max(0, depth - 1);
+        else if (depth > 0 && (c === 39 || c === 34)) {
+          // A quoted value inside parentheses (`enum('does not apply')`) is part of the type, whatever it holds.
+          const close = s.indexOf(String.fromCharCode(c), k + 1);
+          if (close >= 0 && close < e) k = close;
+        } else if (this.isComment(k, e)) break;
+        else if (isWs(c) && (depth === 0 || this.flagWordAt(this.ws(k, e), e))) break;
+      }
+      if (depth > 0) this.error(openAt, openAt + 1, MESSAGES.openParen);
+      tokens.push({ value: s.slice(j, k), from: j, to: k, quoted: false });
+      j = this.ws(k, e);
+    }
+    return { tokens, comment: j < e ? s.slice(j + 2, e).trim() : null };
+  }
+
+  /**
+   * True when a flag's first word (`pk`, `not`, `unique`, any case) stands alone at `p`; one followed by `)` is a
+   * value inside the type (`set(a, pk )`).
+   */
+  private flagWordAt(p: number, e: number): boolean {
+    const w = this.word(p, e);
+    if (!w || !(w.to >= e || isWs(this.s.charCodeAt(w.to)) || this.isComment(w.to, e))) return false;
+    const after = this.ws(w.to, e);
+    if (after < e && this.s.charCodeAt(after) === 41) return false;
+    const lower = w.word.toLowerCase();
+    return lower === "pk" || lower === "not" || lower === "unique";
+  }
+
+  /** A line inside a table block: its `}`, or a column `name type flags`. */
+  private columnLine(p: number, e: number) {
+    const s = this.s;
+    const table = this.table!;
+    if (s.charCodeAt(p) === 125) {
+      if (this.innerBraces > 0) this.innerBraces--;
+      else this.closeTable(p);
+      this.end(p + 1, e);
+      return;
+    }
+    const read = this.columnTokens(p, e);
+    if (!read || read.tokens.length === 0) return;
+    const { tokens, comment } = read;
+    const last = tokens[tokens.length - 1];
+    if (!last.quoted && last.value.endsWith("{")) {
+      // A block inside a table: refused once, its braces paired so the table still closes at its own `}`.
+      if (this.innerBraces === 0 && table.node) this.error(p, last.to, MESSAGES.tableInTable);
+      this.innerBraces++;
+      return;
+    }
+    if (this.innerBraces > 0 || !table.node) return;
+    const name = tokens[0];
+    if (name.quoted || needsQuotes(name.value)) {
+      this.error(name.from, name.to, MESSAGES.columnName);
+      return;
+    }
+    const isFlagStart = (t: ColumnToken) => {
+      if (t.quoted) return false;
+      const w = t.value.toLowerCase();
+      return w === "pk" || w === "unique" || w === "not";
+    };
+    let i = 1;
+    let type: ColumnToken | null = null;
+    if (i < tokens.length && !isFlagStart(tokens[i])) type = tokens[i++];
+    const found = new Set<ColumnFlag>();
+    const flagsFrom = i < tokens.length ? tokens[i].from : -1;
+    for (; i < tokens.length; i++) {
+      const t = tokens[i];
+      const w = t.value.toLowerCase();
+      if (!t.quoted && (w === "pk" || w === "unique")) {
+        found.add(w);
+        continue;
+      }
+      let word = t.value;
+      let to = t.to;
+      if (!t.quoted && w === "not" && i + 1 < tokens.length) {
+        const next = tokens[i + 1];
+        if (!next.quoted && next.value.toLowerCase() === "null") {
+          found.add("not null");
+          i++;
+          continue;
+        }
+        // `not nul`: the two words are one flag misspelt, unless the second is a flag of its own.
+        if (!isFlagStart(next) && !next.quoted) {
+          word = `${t.value} ${next.value}`;
+          to = next.to;
+          i++;
+        }
+      }
+      // A quoted flag and a lone `not` are a flag written wrong: the fix writes it plainly.
+      const exact = (COLUMN_FLAGS as readonly string[]).includes(w) ? (w as ColumnFlag) : null;
+      const near = exact ?? (word.toLowerCase() === "not" ? "not null" : nearWord(word.toLowerCase(), COLUMN_FLAGS));
+      const at = t.from;
+      this.error(at, to, MESSAGES.unknownFlag(word, near), () => (near ? [{ title: FIX_TITLES.use(near), edits: [{ from: at, to, insert: near }] }] : []));
+    }
+    const typeText = type && type.value !== "" ? type.value : null;
+    const span: RowSpan = { line: { from: name.from, to: last.to }, column: { from: name.from, to: name.to } };
+    if (type) span.type = { from: type.from, to: type.to };
+    if (flagsFrom >= 0) span.flags = { from: flagsFrom, to: last.to };
+    this.addRow(table.name, typeText === null ? name.value : `${name.value} ${typeText}`, span, COLUMN_FLAGS.filter((f) => found.has(f)), comment);
+  }
+
+  /**
+   * A line end `table.column` that names no node of its own is that table's column, once every line is read (a line
+   * may come before its tables). The table is the longest part before a dot that names one, so `sales.orders.id`
+   * is the column id of a table `sales.orders`. The end becomes the table and the column goes beside it; a column the
+   * table does not have is a problem. A quoted end is a name, never a column.
+   */
+  private columnEnds() {
+    const s = this.s;
+    const told = new Set<number>();
+    // Each table's column names, built on first use.
+    const columns = new Map<string, Set<string>>();
+    const columnsOf = (table: string, node: FlowNode) => {
+      let set = columns.get(table);
+      if (!set) {
+        set = new Set((node.rows ?? []).map(columnName));
+        columns.set(table, set);
+      }
+      return set;
+    };
+    this.links.forEach((l, i) => {
+      const p = this.linkPacked[i];
+      for (const end of ["from", "to"] as const) {
+        const name = end === "from" ? l.from : l.to;
+        const at = p[end === "from" ? 2 : 4];
+        if (this.defs.has(name) || s.charCodeAt(at) === 34) continue;
+        let table = "";
+        let node: FlowNode | undefined;
+        for (let dot = name.lastIndexOf("."); dot > 0; dot = name.lastIndexOf(".", dot - 1)) {
+          const found = this.byName.get(name.slice(0, dot));
+          if (found && (found.kind === "entity" || found.kind === "weak")) {
+            table = name.slice(0, dot);
+            node = found;
+            break;
+          }
+        }
+        if (!node) continue;
+        const column = name.slice(table.length + 1);
+        // A fan line repeats an end in several links: its problem is told once.
+        // An old frame's columns are not read yet: the rewrite puts them in their tables.
+        if (!this.oldEr && !columnsOf(table, node).has(column) && !told.has(at)) {
+          told.add(at);
+          this.error(at, p[end === "from" ? 3 : 5], MESSAGES.noColumn(table, column), () => [], this.linkLines[i]);
+        }
+        if (end === "from") {
+          l.from = table;
+          l.fromColumn = column;
+        } else {
+          l.to = table;
+          l.toColumn = column;
+        }
+      }
+    });
   }
 
   private diagramLine(p: number, e: number): boolean {
@@ -684,6 +1057,12 @@ class Parser {
     if ((DIAGRAM_KINDS as readonly string[]).includes(word)) {
       this.kind = word as DiagramKind;
       this.packed.set("kind", [q, r]);
+    } else if (r > q && this.aliasEnd(q, r, e) !== null) {
+      // Another name for a kind (`flowchart`, `mind map`) is said as it is on a later line, with its one fix.
+      r = this.aliasEnd(q, r, e)!;
+      const said = s.slice(q, r);
+      const use = KIND_ALIASES.get(said.toLowerCase().replace(/\s+/g, " "))!;
+      this.error(q, r, MESSAGES.notAKind(said, use), () => [{ title: FIX_TITLES.use(use), edits: [{ from: q, to: r, insert: use }] }]);
     } else {
       const from = r > q ? q : p;
       const to = r > q ? r : p + 7;
@@ -716,6 +1095,58 @@ class Parser {
     }
     this.packed.set("diagram", [p, stop]);
     return true;
+  }
+
+  /**
+   * A line at column 0 shaped like a header whose word is no diagram kind (`diagram flowchart "Checkout"`). Only a known
+   * kind starts a frame, so this line sits in the frame before it: it gets one problem, a fix when the word is another
+   * name for a kind, and nothing else. Another name for a kind counts before a quoted title, a comment or the line end;
+   * any other word only before a quoted title, so shapes named `diagram cleanup` or `diagram store [step]` stay shapes.
+   */
+  private notAKindHeader(p: number, e: number): boolean {
+    const s = this.s;
+    if (!s.startsWith("diagram", p) || p + 7 >= e || !isWs(s.charCodeAt(p + 7))) return false;
+    const q = this.ws(p + 7, e);
+    const wordEnd = (from: number) => {
+      let j = from;
+      while (j < e && /[A-Za-z0-9_-]/.test(s[j])) j++;
+      return j;
+    };
+    let r = wordEnd(q);
+    if (r === q) return false;
+    let word = s.slice(q, r);
+    // "mind map" is the one alias of two words.
+    if (word.toLowerCase() === "mind") {
+      const m = this.ws(r, e);
+      const n = wordEnd(m);
+      if (m > r && s.slice(m, n).toLowerCase() === "map") {
+        r = n;
+        word = s.slice(q, r);
+      }
+    }
+    if ((DIAGRAM_KINDS as readonly string[]).includes(word)) return false;
+    const use = KIND_ALIASES.get(word.toLowerCase().replace(/\s+/g, " ")) ?? null;
+    if (r < e && !isWs(s.charCodeAt(r)) && s.charCodeAt(r) !== 34) return false;
+    const t = this.ws(r, e);
+    const titled = t < e && s.charCodeAt(t) === 34;
+    if (use ? !titled && t < e && !this.isComment(t, e) : !titled) return false;
+    const fixes = use ? () => [{ title: FIX_TITLES.use(use), edits: [{ from: q, to: r, insert: use }] }] : undefined;
+    this.error(q, r, MESSAGES.notAKind(word, use), fixes);
+    return true;
+  }
+
+  /**
+   * Where a first line's kind word `s[q, r)` ends when it is another name for a kind, taking `map` after `mind`; null
+   * when it is no such name.
+   */
+  private aliasEnd(q: number, r: number, e: number): number | null {
+    const s = this.s;
+    const word = s.slice(q, r).toLowerCase();
+    if (word === "mind") {
+      const m = this.ws(r, e);
+      if (m > r && s.slice(m, m + 3).toLowerCase() === "map" && (m + 3 >= e || isWs(s.charCodeAt(m + 3)) || s.charCodeAt(m + 3) === 34)) return m + 3;
+    }
+    return KIND_ALIASES.has(word) ? r : null;
   }
 
   /** The start of the line holding `p`. */
@@ -758,16 +1189,59 @@ class Parser {
     this.end(p + 1, e);
   }
 
-  private nameStatement(p: number, e: number) {
-    const named = this.name(p, e);
-    if (named === BAD) return;
-    if (!named) {
-      this.error(p, this.lineEnd(p, e), MESSAGES.needsName);
-      return;
+  /** The comma list of names at `p` (one end of an arrow); null when no name starts there. */
+  private endList(p: number, e: number, quiet: boolean): EndList | null | typeof BAD {
+    const s = this.s;
+    const first = this.name(p, e, true, quiet);
+    if (first === BAD || !first) return first;
+    const names = [first];
+    let comma = -1;
+    for (let c = this.ws(first.to, e); c < e && s.charCodeAt(c) === 44; ) {
+      const next = this.name(this.ws(c + 1, e), e, true, quiet);
+      if (next === BAD) return BAD;
+      if (!next) {
+        comma = c;
+        break;
+      }
+      names.push(next);
+      c = this.ws(next.to, e);
     }
-    const { token: first, q } = this.splitLead(named, e);
-    const arrow = this.arrow(q, e);
-    if (arrow) return this.link(first, q, arrow, e);
+    const split = this.splitLead(names[names.length - 1], e);
+    names[names.length - 1] = split.token;
+    return { names, q: comma >= 0 ? comma : split.q, comma };
+  }
+
+  private nameStatement(p: number, e: number) {
+    // One look-ahead: a comma list followed by an arrow is a link line. Any other line is read again from its start,
+    // where a bare comma is part of a node's name (old files); a line with no comma is never read twice.
+    const head = this.endList(p, e, true);
+    if (head && head !== BAD && head.comma < 0) {
+      const arrow = this.arrow(head.q, e);
+      if (arrow) return this.link(head.names, head.q, arrow, e);
+    }
+    let first: Token;
+    let q: number;
+    if (head && head !== BAD && head.comma < 0 && head.names.length === 1) {
+      first = head.names[0];
+      q = head.q;
+    } else {
+      const named = this.name(p, e);
+      if (named === BAD) return;
+      if (!named) {
+        this.error(p, this.lineEnd(p, e), MESSAGES.needsName);
+        return;
+      }
+      ({ token: first, q } = this.splitLead(named, e));
+      const arrow = this.arrow(q, e);
+      if (arrow) {
+        // `A, > B` and `A,, B > C`: a comma with no name after it; `, A > B`: one with no name before it.
+        const comma = head && head !== BAD ? head.comma : -1;
+        if (comma >= 0) this.error(comma, comma + 1, MESSAGES.listName);
+        else if (!head && this.s.charCodeAt(p) === 44) this.error(p, p + 1, MESSAGES.listNameBefore);
+        else this.link([first], q, arrow, e);
+        return;
+      }
+    }
     const c = q < e ? this.s.charCodeAt(q) : -1;
     // A class member: `Invoice : + send()`.
     if (this.kind === "class" && c === 58) {
@@ -778,7 +1252,7 @@ class Parser {
         this.error(first.from, first.to, MESSAGES.noClass(first.value));
         return;
       }
-      this.addRow(first.value, text?.value ?? "", { from: first.from, to: text?.to ?? q + 1 }, first);
+      this.addRow(first.value, text?.value ?? "", { line: { from: first.from, to: text?.to ?? q + 1 }, name: first });
       return;
     }
     if (this.kind === "timeline") {
@@ -788,12 +1262,12 @@ class Parser {
     if (c === 91) {
       const attrs = this.attrs(q, e);
       const r = this.ws(attrs.to, e);
-      if (r < e && this.s.charCodeAt(r) === 123) return this.openGroup(first, attrs, r, e);
+      if (r < e && this.s.charCodeAt(r) === 123) return this.kind !== "er" ? this.openGroup(first, attrs, r, e) : this.oldEr?.groups.has(this.line - 1) ? this.oldGroup(first, attrs, r, e) : this.openTable(first, attrs, r, e);
       this.node(first, attrs, attrs.to);
       if (attrs.to > q && this.s.charCodeAt(attrs.to - 1) === 93) this.end(attrs.to, e);
       return;
     }
-    if (c === 123) return this.openGroup(first, null, q, e);
+    if (c === 123) return this.kind !== "er" ? this.openGroup(first, null, q, e) : this.oldEr?.groups.has(this.line - 1) ? this.oldGroup(first, null, q, e) : this.openTable(first, null, q, e);
     this.node(first, null, first.to);
     this.end(q, e);
   }
@@ -926,6 +1400,7 @@ class Parser {
         return "process";
       }
       if (dk === "cloud") return "service";
+      if (dk === "er") return "entity";
       if (dk === "state") return "state";
       if (dk === "sequence") return "participant";
       if (dk === "class") return "class";
@@ -946,11 +1421,11 @@ class Parser {
     this.error(word.from, word.to, MESSAGES.unknownKind(word.value, dk, near), () =>
       near ? [{ title: FIX_TITLES.use(near), edits: [{ from: word.from, to: word.to, insert: near }] }] : [],
     );
-    return dk === "dfd" ? "process" : "step";
+    return dk === "dfd" ? "process" : dk === "er" ? "entity" : "step";
   }
 
   private checkIcon(icon: string | undefined, range: FlowRange | undefined) {
-    if (this.kind !== "cloud" || !this.icons || icon === undefined || !range || this.icons.has(icon)) return;
+    if ((this.kind !== "cloud" && this.kind !== "sequence") || !this.icons || icon === undefined || !range || this.icons.has(icon)) return;
     let found = this.iconNear.get(icon);
     if (found === undefined && this.iconLookups + this.icons.size <= ICON_LOOKUP_BUDGET) {
       this.iconLookups += this.icons.size;
@@ -962,6 +1437,9 @@ class Parser {
         this.iconNear.delete(oldest);
       }
       this.iconNear.set(icon, found);
+    } else if (found === undefined && this.icons.size <= ICON_LOOKUP_BUDGET) {
+      // A later parse can look it up; a list past the whole budget never can.
+      this.iconsDeferred = true;
     }
     const near = found ?? null;
     this.problem("hint", range.from, range.to, MESSAGES.notAnIcon(icon, near), () =>
@@ -969,13 +1447,12 @@ class Parser {
     );
   }
 
-  /** Step 11: a `color:` outside the palette is a hint with the palette name it most likely means. */
+  /** A `color:` that is no preset, CSS colour name or hex is a hint with the nearest name and the six presets. */
   private checkColour(value: string | undefined, range: FlowRange | undefined) {
-    if (value === undefined || !range || isPaletteName(value)) return;
-    const word = value.trim().toLowerCase();
-    const use = isPaletteName(word) ? word : (COLOUR_WORDS[word] ?? null);
-    this.problem("hint", range.from, range.to, MESSAGES.notAColour(value, use), () =>
-      (use ? [use] : PALETTE).map((c) => ({ title: FIX_TITLES.use(c), edits: [{ from: range.from, to: range.to, insert: c }] })),
+    if (value === undefined || !range || isColourValue(value)) return;
+    const near = nearWord(value.trim(), [...PALETTE, ...CSS_COLOURS.keys()]);
+    this.problem("hint", range.from, range.to, MESSAGES.notAColour(value, near), () =>
+      (near ? [near, ...PALETTE] : [...PALETTE]).map((c) => ({ title: FIX_TITLES.use(c), edits: [{ from: range.from, to: range.to, insert: c }] })),
     );
   }
 
@@ -985,15 +1462,17 @@ class Parser {
     for (const key of ["label", "color"]) {
       const item = attrs.items[key];
       if (!item) continue;
-      if (dk && !ATTR_DIAGRAMS.has(dk)) this.error(item.from, item.to, MESSAGES.noAttrHere(key, dk), () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(item)] }]);
+      // A sequence takes them only on `participant Name [..]`, not on a bare `Name [..]`.
+      if (dk && (!ATTR_DIAGRAMS.has(dk) || dk === "sequence")) this.error(item.from, item.to, MESSAGES.noAttrHere(key, dk), () => [{ title: FIX_TITLES.remove, edits: [this.removeItem(item)] }]);
     }
     this.checkColour(attrs.attrs.color, attrs.values.color);
   }
 
-  private node(t: Token, attrs: Attrs | null, to: number) {
+  /** Adds a node from its statement; false when its name is already taken (the problem is recorded). */
+  private node(t: Token, attrs: Attrs | null, to: number): boolean {
     const kind = this.nodeKind(t, attrs);
     if (attrs) this.checkShapeAttrs(attrs);
-    if (!this.define(t)) return;
+    if (!this.define(t)) return false;
     if (attrs?.attrs.label !== undefined) this.labels.set(t.value, attrs.attrs.label);
     const node: FlowNode = { name: t.value, kind, attrs: attrs ? attrs.attrs : {} };
     if (this.kind === "mindmap") this.mindTopic(node, t.from);
@@ -1008,6 +1487,7 @@ class Parser {
       this.values.set(key, attrs.values);
       this.checkIcon(attrs.attrs.icon, attrs.values.icon);
     }
+    return true;
   }
 
   /** A mind map topic: its depth from the indent (two spaces a level), and the branch from its parent. */
@@ -1023,7 +1503,8 @@ class Parser {
     this.mindPath.push({ name: node.name, depth });
   }
 
-  private openGroup(t: Token, attrs: Attrs | null, brace: number, e: number) {
+  /** A group; `start` is where its statement starts when a word comes before its name (`group Billing {`). */
+  private openGroup(t: Token, attrs: Attrs | null, brace: number, e: number, start = t.from) {
     // A group takes an icon and a colour (step 11); its name stays unique, so no label.
     if (attrs && (attrs.kind || attrs.keys.some((k) => k !== "icon" && k !== "color"))) this.error(attrs.from, attrs.to, MESSAGES.groupAttrs);
     if (attrs) this.checkColour(attrs.attrs.color, attrs.values.color);
@@ -1031,7 +1512,7 @@ class Parser {
     const tooDeep = this.stack.length >= MAX_GROUP_DEPTH;
     if (tooDeep) this.error(t.from, t.to, MESSAGES.tooDeep);
     const fresh = !tooDeep && this.define(t);
-    const g: GroupBuild = { name: t.value, nodes: [], groups: [], from: t.from, nameTo: t.to, line: this.line, repeated: !fresh };
+    const g: GroupBuild = { name: t.value, nodes: [], groups: [], from: start, nameTo: t.to, line: this.line, repeated: !fresh };
     if (attrs?.attrs.icon !== undefined) g.icon = attrs.attrs.icon;
     if (attrs?.attrs.color !== undefined) g.color = attrs.attrs.color;
     if (fresh) {
@@ -1039,7 +1520,7 @@ class Parser {
       (parent ? parent.groups : this.roots).push(g);
       const key = `group:${t.value}`;
       // GROUP_PARTS: name, attrs, open, close (filled in at the `}`).
-      this.packed.set(key, [t.from, brace + 1, t.from, t.to, attrs ? attrs.from : -1, attrs ? attrs.to : -1, brace, brace + 1, -1, -1]);
+      this.packed.set(key, [start, brace + 1, t.from, t.to, attrs ? attrs.from : -1, attrs ? attrs.to : -1, brace, brace + 1, -1, -1]);
       if (attrs) {
         this.values.set(key, attrs.values);
         this.checkIcon(attrs.attrs.icon, attrs.values.icon);
@@ -1049,28 +1530,33 @@ class Parser {
     this.end(brace + 1, e);
   }
 
-  private link(first: Token, q: number, firstArrow: FlowArrow, e: number) {
+  /** A link statement: `head` is the comma list before the first arrow; every list after an arrow is read here. */
+  private link(head: Token[], q: number, firstArrow: FlowArrow | OldErArrow, e: number) {
     const s = this.s;
-    const names: Token[] = [first];
-    const arrows: { arrow: FlowArrow; from: number; to: number }[] = [];
-    let arrow: FlowArrow | null = firstArrow;
+    const lists: Token[][] = [head];
+    const arrows: { arrow: FlowArrow | OldErArrow; from: number; to: number }[] = [];
+    let arrow: FlowArrow | OldErArrow | null = firstArrow;
     while (arrow) {
       arrows.push({ arrow, from: q, to: q + arrow.length });
       const r = this.ws(q + arrow.length, e);
-      const read = this.name(r, e);
+      const read = this.endList(r, e, false);
       if (read === BAD) return;
       if (!read) {
         this.error(q, q + arrow.length, MESSAGES.noTarget(arrow));
         return;
       }
-      const split = this.splitLead(read, e);
-      names.push(split.token);
-      q = split.q;
+      if (read.comma >= 0) {
+        this.error(read.comma, read.comma + 1, MESSAGES.listName);
+        return;
+      }
+      lists.push(read.names);
+      q = read.q;
       arrow = this.arrow(q, e);
     }
+    const lastList = lists[lists.length - 1];
     let label: string | undefined;
     let labelRange: FlowRange | null = null;
-    let stop = names[names.length - 1].to;
+    let stop = lastList[lastList.length - 1].to;
     // Step 11: `[color: ..]` after the label, or after the last name when there is none (eraser.io).
     let attrs: Attrs | null = null;
     const bracket = (at: number) => {
@@ -1117,40 +1603,65 @@ class Parser {
     }
     const color = this.lineColour(attrs);
     const last = arrows.length - 1;
-    const line = { from: first.from, to: stop };
+    const line = { from: head[0].from, to: stop };
     const dk = this.kind;
     const lineAttrs = attrs as Attrs | null;
     if (dk === "timeline") {
-      this.error(first.from, stop, MESSAGES.noLines);
+      this.error(line.from, stop, MESSAGES.noLines);
       return;
     }
+    const fan = lists.some((l) => l.length > 1);
+    if (fan) {
+      if (dk === "sequence") {
+        for (const l of lists) if (l.length > 1) this.error(l[0].from, l[l.length - 1].to, MESSAGES.oneParticipant);
+        return;
+      }
+      let count = 0;
+      for (let k = 0; k < arrows.length; k++) count += lists[k].length * lists[k + 1].length;
+      if (count > MAX_FAN_LINKS) {
+        this.error(line.from, line.to, MESSAGES.fanTooBig);
+        return;
+      }
+    }
+    // The span of a list with more than one name, for the fix that quotes an old name written with commas.
+    const listRange = (l: Token[]) => (l.length > 1 ? [l[0].from, l[l.length - 1].to] : [-1, -1]);
     arrows.forEach((a, k) => {
-      if (a.arrow === "..>" && (dk === "dfd" || dk === "flow")) {
+      const old = dk === "er" && a.arrow in OLD_ER_ARROWS ? (a.arrow as OldErArrow) : null;
+      const drawn: FlowArrow = old ? OLD_ER_ARROWS[old] : (a.arrow as FlowArrow);
+      if (old) {
+        const use = OLD_ER_ARROWS[old];
+        this.oldForm(a.from, a.to, MESSAGES.oldCard(old, use), () => [{ title: FIX_TITLES.use(use), edits: [{ from: a.from, to: a.to, insert: use }] }]);
+      } else if (a.arrow === "..>" && (dk === "dfd" || dk === "flow")) {
         this.error(a.from, a.to, MESSAGES.dotted, () => [{ title: FIX_TITLES.use("-->"), edits: [{ from: a.from, to: a.to, insert: "-->" }] }]);
-      } else if (dk && !ARROWS[dk].includes(a.arrow)) {
+      } else if (dk && !ARROWS[dk].includes(drawn)) {
         const use = ARROWS[dk][0];
         this.error(a.from, a.to, MESSAGES.arrowKind(a.arrow, dk, use), () => [{ title: FIX_TITLES.use(use), edits: [{ from: a.from, to: a.to, insert: use }] }]);
       }
-      const from = names[k];
-      const to = names[k + 1];
-      // A state diagram's [*] is the start before the arrow and the end after it.
-      // Inside a composite's braces it is that composite's own (diag-910 fix round 1, I4).
-      const fromName = from.value === "[*]" && dk === "state" ? this.stateMark("start") : from.value;
-      const toName = to.value === "[*]" && dk === "state" ? this.stateMark("end") : to.value;
-      const link: FlowLink = { from: fromName, to: toName, arrow: a.arrow };
-      const labelled = k === last && label !== undefined;
-      if (labelled) link.label = label;
-      // The label and the colour are the last link's; such a link is written on its own, so it is not chained.
-      const coloured = k === last && color !== undefined;
-      if (coloured) link.color = color;
-      if (k > 0 && !labelled && !coloured) link.chained = true;
-      const i = this.links.length;
-      this.links.push(link);
-      this.linkLines.push(this.line);
-      const lab = labelled && labelRange ? labelRange : null;
-      const own = k === last ? lineAttrs : null;
-      // LINK_PARTS: fromName, toName, arrow, label, line, attrs. The undefined-name check reads the names from here.
-      this.linkPacked[i] = [from.from, to.to, from.from, from.to, to.from, to.to, a.from, a.to, lab ? lab.from : -1, lab ? lab.to : -1, line.from, line.to, own ? own.from : -1, own ? own.to : -1];
+      const ends = fan ? [...listRange(lists[k]), ...listRange(lists[k + 1])] : null;
+      for (const from of lists[k]) {
+        for (const to of lists[k + 1]) {
+          // A state diagram's [*] is the start before the arrow and the end after it.
+          // Inside a composite's braces it is that composite's own (diag-910 fix round 1, I4).
+          const fromName = from.value === "[*]" && dk === "state" ? this.stateMark("start") : from.value;
+          const toName = to.value === "[*]" && dk === "state" ? this.stateMark("end") : to.value;
+          const link: FlowLink = { from: fromName, to: toName, arrow: drawn };
+          const labelled = k === last && label !== undefined;
+          if (labelled) link.label = label;
+          // The label and the colour are the last segment's; such a link is written on its own, so it is not chained,
+          // and neither is any link of a fan line.
+          const coloured = k === last && color !== undefined;
+          if (coloured) link.color = color;
+          if (k > 0 && !fan && !labelled && !coloured) link.chained = true;
+          const i = this.links.length;
+          this.links.push(link);
+          this.linkLines.push(this.line);
+          if (ends) this.fanEnds.set(i, ends);
+          const lab = labelled && labelRange ? labelRange : null;
+          const own = k === last ? lineAttrs : null;
+          // LINK_PARTS: fromName, toName, arrow, label, line, attrs. The undefined-name check reads the names from here.
+          this.linkPacked[i] = [from.from, to.to, from.from, from.to, to.from, to.to, a.from, a.to, lab ? lab.from : -1, lab ? lab.to : -1, line.from, line.to, own ? own.from : -1, own ? own.to : -1];
+        }
+      }
     });
   }
 
@@ -1199,7 +1710,7 @@ class Parser {
     if (!attrs) return undefined;
     const dk = this.kind;
     const s = this.s;
-    if (dk && !ATTR_DIAGRAMS.has(dk)) {
+    if (dk && !LINE_COLOUR_DIAGRAMS.has(dk)) {
       if (dk === "timeline") return undefined;
       let from = attrs.from;
       while (from > 0 && (s.charCodeAt(from - 1) === 32 || s.charCodeAt(from - 1) === 9)) from--;
@@ -1243,6 +1754,17 @@ class Parser {
     if (!this.header) {
       this.error(0, 0, MESSAGES.firstLine, () => DIAGRAM_KINDS.map((k) => ({ title: FIX_TITLES.addFirstLine(k), edits: [{ from: 0, to: 0, insert: `diagram ${k} "Untitled"\n` }] })), 1);
     }
+    const t = this.table;
+    if (t) {
+      this.error(t.from, t.nameTo, MESSAGES.unclosed(t.name), () => [{ title: FIX_TITLES.closeGroup, edits: [{ from: s.length, to: s.length, insert: s.endsWith("\n") ? "}\n" : "\n}\n" }] }], t.line);
+      if (t.node) {
+        const end = this.trimBack(s.length, t.from);
+        for (const key of [`node:${t.name}`, `table:${t.name}`]) {
+          const span = this.packed.get(key);
+          if (span) span[1] = end;
+        }
+      }
+    }
     for (const g of this.stack) {
       const insert = s.endsWith("\n") ? "}\n" : "\n}\n";
       this.error(g.from, g.nameTo, MESSAGES.unclosed(g.name), () => [{ title: FIX_TITLES.closeGroup, edits: [{ from: s.length, to: s.length, insert }] }], g.line);
@@ -1268,13 +1790,23 @@ class Parser {
     if (this.kind === "mindmap" && this.nodes.length > 0 && !this.nodes.some((n) => n.node.kind === "root")) {
       this.problem("hint", 0, 0, MESSAGES.noRoot, () => [], 1);
     }
+    if (this.kind === "er") this.columnEnds();
+    // A fan line expands to several links sharing the same name tokens and span: each is reported once.
+    const reported = new Set<number>();
+    const hinted = new Set<number>();
     this.links.forEach((l, i) => {
       const p = this.linkPacked[i];
       const line = this.linkLines[i];
       for (const end of ["from", "to"] as const) {
         const name = end === "from" ? l.from : l.to;
         if (this.defs.has(name) || (this.kind === "state" && isStateMarker(name))) continue;
-        const u: Use = { name, from: p[end === "from" ? 2 : 4], to: p[end === "from" ? 3 : 5], line, end, other: end === "from" ? l.to : l.from };
+        const tokenFrom = p[end === "from" ? 2 : 4];
+        if (reported.has(tokenFrom)) continue;
+        reported.add(tokenFrom);
+        const fanList = this.fanEnds.get(i);
+        const at = end === "from" ? 0 : 2;
+        const list = fanList && fanList[at] >= 0 ? { from: fanList[at], to: fanList[at + 1] } : null;
+        const u: Use = { name, from: p[end === "from" ? 2 : 4], to: p[end === "from" ? 3 : 5], line, end, other: end === "from" ? l.to : l.from, list };
         // Step 11: an end that matches only a label means a shape by the words it shows; lines name it by its name.
         const shows = this.namesShowing(name);
         if (shows.length > 0) {
@@ -1284,7 +1816,8 @@ class Parser {
         }
         this.error(u.from, u.to, MESSAGES.notDefined(name), () => this.undefinedFixes(u), line);
       }
-      if (this.kind === "flow" && l.label === undefined && this.byName.get(l.from)?.kind === "decision") {
+      if (this.kind === "flow" && l.label === undefined && this.byName.get(l.from)?.kind === "decision" && !hinted.has(p[0])) {
+        hinted.add(p[0]);
         this.problem("hint", p[0], p[1], MESSAGES.decisionLabels, () => [], line);
       }
     });
@@ -1305,6 +1838,11 @@ class Parser {
     const s = this.s;
     const kind = this.addKind(u);
     const fixes: QuickFix[] = [];
+    // An old name written with commas (`Pay, ship > Done`) now reads as a list: quoting it keeps its meaning.
+    if (u.list) {
+      const joined = s.slice(u.list.from, u.list.to);
+      if (this.defs.has(joined)) fixes.push({ title: FIX_TITLES.useQuoted(joined), edits: [{ from: u.list.from, to: u.list.to, insert: flowName(joined) }] });
+    }
     const line = this.addLine(u.name, kind);
     fixes.push({ title: FIX_TITLES.addAs(u.name, kind), edits: [{ from: s.length, to: s.length, insert: s.length === 0 || s.endsWith("\n") ? `${line}\n` : `\n${line}` }] });
     for (const name of this.nearest(u.name).filter((n) => n !== u.other).slice(0, 2)) {
@@ -1331,6 +1869,7 @@ class Parser {
   /** The kind a missing name is added as: in a data flow, a store when a process sends to it, an entity when it sends. */
   private addKind(u: Use): FlowNodeKind {
     if (this.kind === "cloud") return "service";
+    if (this.kind === "er") return "entity";
     if (this.kind === "state") return "state";
     if (this.kind === "class") return "class";
     if (this.kind === "mindmap") return "topic";
@@ -1385,6 +1924,13 @@ class Parser {
     if (kind === "timeline") doc.sections = this.sections;
     return doc;
   }
+}
+
+/** An ER row's column name: the row up to its first white space ("customer_id int" is customer_id). */
+function columnName(row: string): string {
+  let j = 0;
+  while (j < row.length && !isWs(row.charCodeAt(j))) j++;
+  return row.slice(0, j);
 }
 
 /** Parses .flow text; never throws on odd text, and reports what is wrong as problems with fixes. */

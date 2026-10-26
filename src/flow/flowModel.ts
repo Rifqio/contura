@@ -12,14 +12,17 @@ import {
   flowValue,
   MAX_GROUP_DEPTH,
   isStateMarker,
+  linkEndText,
   nodeStatement,
   quote,
+  tableText,
 } from "../lang/flow/model";
 
 export type { DiagramKind, FlowArrow, FlowDoc, FlowGroup, FlowKind, FlowLink, FlowNode, FlowNodeKind } from "../lang/flow/model";
 export { flowName, needsQuotes } from "../lang/flow/model";
 
 function nodeLine(n: FlowNode, kind: DiagramKind): string {
+  if (kind === "er") return tableText(n);
   // Step 10: the newer kinds write their own statement (`interface Payable`, `Check [choice]`, `note: text`), and a
   // class's members follow on their own lines.
   if (kind !== "dfd" && kind !== "flow" && kind !== "cloud") {
@@ -42,13 +45,15 @@ function groupLines(root: FlowGroup, byName: Map<string, FlowNode>, kind: Diagra
   const open = (g: FlowGroup, depth: number): Frame => {
     // A group takes an icon and a colour (step 11), in the attribute order.
     const items = [...(g.icon !== undefined ? [`icon: ${flowValue(g.icon)}`] : []), ...(g.color !== undefined ? [`color: ${flowValue(g.color)}`] : [])];
-    lines.push(`${indentAt(depth)}${flowName(g.name)}${items.length ? ` [${items.join(", ")}]` : ""} {`);
+    // An ER group says so (`group Billing {`): a block of tables would otherwise read as a table.
+    lines.push(`${indentAt(depth)}${kind === "er" ? "group " : ""}${flowName(g.name)}${items.length ? ` [${items.join(", ")}]` : ""} {`);
     let body = false;
     for (const name of g.nodes) {
       const n = byName.get(name);
       // A composite's own start and end are written only by its `[*]` lines (I4).
       if (!n || (kind === "state" && isStateMarker(name))) continue;
-      lines.push(indentAt(depth + 1) + nodeLine(n, kind));
+      // Every line of a node written on several lines (a table's columns, a class's members) takes the indent.
+      for (const line of nodeLine(n, kind).split("\n")) lines.push(indentAt(depth + 1) + line);
       body = true;
     }
     // The lines to and from its own [*], inside its braces, so they read back as its own.
@@ -88,8 +93,9 @@ function linkLines(links: FlowLink[]): string[] {
   let open: string | null = null;
   for (const l of links) {
     // A state diagram's start and end markers are both written [*].
-    const from = isStateMarker(l.from) ? "[*]" : flowName(l.from);
-    const to = isStateMarker(l.to) ? "[*]" : flowName(l.to);
+    // An ER relationship's ends carry their columns.
+    const from = isStateMarker(l.from) ? "[*]" : linkEndText(l.from, l.fromColumn);
+    const to = isStateMarker(l.to) ? "[*]" : linkEndText(l.to, l.toColumn);
     // A coloured line is written on its own (step 11): its colour goes after it, so nothing chains on.
     if (l.chained && !l.label && l.color === undefined && open === from) {
       lines[lines.length - 1] += ` ${l.arrow} ${to}`;
@@ -127,4 +133,9 @@ export function writeFlow(doc: FlowDoc): string {
   for (const g of doc.groups) parts.push(groupLines(g, byName, doc.kind, own));
   if (rest.length) parts.push(linkLines(rest));
   return `${parts.map((p) => p.join("\n")).join("\n\n")}\n`;
+}
+
+/** A board's .flow text: each diagram written by `writeFlow`, one blank line between; one doc is exactly `writeFlow(doc)`. */
+export function writeBoard(docs: readonly FlowDoc[]): string {
+  return docs.map(writeFlow).join("\n");
 }

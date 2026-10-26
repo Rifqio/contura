@@ -45,7 +45,7 @@ import { insertColumnsTemplate, SQL_TEMPLATES, type SqlTemplate } from "../lang/
 // The same Theme-token syntax colours as the DBML editor.
 import { dbmlHighlight as themeHighlight } from "../schema/dbmlLanguage";
 import { functionCallMarks } from "./functionCalls";
-import { type Stmt, splitStatements, statementOnLine } from "./statements";
+import { type Stmt, selectionStatement, splitStatements, statementOnLine } from "./statements";
 import {
   closeZone,
   discardSuggestion,
@@ -914,12 +914,7 @@ export default function SqlEditor({
       runTarget() {
         const { from, to } = view.state.selection.main;
         const text = view.state.doc.toString();
-        if (from !== to) {
-          const raw = text.slice(from, to);
-          const lead = raw.length - raw.trimStart().length;
-          const body = raw.trim().replace(/;$/, "").trimEnd();
-          return body ? { from: from + lead, to: from + lead + body.length, text: body } : null;
-        }
+        if (from !== to) return selectionStatement(text, from, to, latest.current.dialect);
         // A blank line, or a comment between statements, is outside any statement: Run finds nothing (DataGrip).
         return statementOnLine(text, from, splitStatements(text, latest.current.dialect), latest.current.dialect)?.stmt ?? null;
       },

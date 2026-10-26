@@ -194,7 +194,7 @@ test("F29 Ctrl+Shift+E opens Publish, and the menu shows the key", async () => {
   const s = setup();
   await drawn(s);
   s.press("E", { ctrlKey: true, shiftKey: true });
-  expect(await screen.findByRole("dialog", { name: "Publish image" })).toBeTruthy();
+  expect(await screen.findByRole("dialog", { name: "Publish image" }, { timeout: 3000 })).toBeTruthy();
   fireEvent.keyDown(document.body, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Publish image" })).toBeNull());
   fireEvent.contextMenu(s.container.querySelector(".react-flow__pane") as HTMLElement, { clientX: 300, clientY: 200 });

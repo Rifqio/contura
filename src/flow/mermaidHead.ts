@@ -7,8 +7,8 @@ const unquote = (s: string) => {
   return t.length >= 2 && t.startsWith('"') && t.endsWith('"') ? t.slice(1, -1) : t;
 };
 
-/** ER diagrams are the Schema Builder's (user decision, 25 Oct): DBML is Contura's only ERD. */
-export const ER_REFUSED = "ER diagrams live in the Schema Builder. Open the Schema Builder to model tables.";
+/** Mermaid's erDiagram is not translated yet: an ER diagram is started and its tables written in .flow. */
+export const ER_REFUSED = "Mermaid ER diagrams are not imported yet. Start an ER diagram and write its tables.";
 
 /** The first word of each Mermaid kind that comes in, and the Contura kind it becomes. */
 export const MERMAID_KINDS: Record<string, DiagramKind> = {

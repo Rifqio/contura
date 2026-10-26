@@ -16,7 +16,7 @@ import DiagramCanvas, { type CanvasMenuAt } from "../diagram/DiagramCanvas";
 import { PlacedMenu, type PlacedMenuState } from "./DiagramMenu";
 import { type AlignHow, type ColourMenu, groupMenuItems, lineMenuItems, messageMenuItems, paneMenuItems, selectionMenuItems, shapeMenuItems } from "./canvasMenus";
 import { labelNotice, planWords, takesLabel } from "./labels";
-import { COLOUR_INFO, drawnColour, type PaletteName } from "./palette";
+import { COLOUR_INFO, type DrawnColour, drawnColour, type PaletteName } from "./palette";
 import { useFlowAssistMode, useFlowSidePanel } from "../prefs/usePrefs";
 import SidePanel from "./SidePanel";
 import DiagramAssistant from "./ai/DiagramAssistant";
@@ -24,6 +24,7 @@ import { useDiagramAsk } from "./ai/useDiagramAsk";
 import { acceptLabel } from "./ai/ProposalCard";
 import NodeEditor, { type NodeEdit, nodeEditOps } from "./NodeEditor";
 import PublishDialog from "../diagram/export/PublishDialog";
+import type { ExportTheme } from "../diagram/export/palette";
 import type { Box as SceneBox, Scene } from "../diagram/export/scene";
 import { type MotionKey, motionMs } from "../diagram/motion";
 import { routeOrthogonal } from "../diagram/route";
@@ -39,8 +40,7 @@ import { DIRS, freeSpotNear, layoutGap, placeNext, type Side } from "./addNext";
 import type { Shape } from "./ShapePicker";
 import { createKindEditStore, DATE_MESSAGES, type KindEdit, KindEditContext, MEMBER_MESSAGES } from "./kindEdit";
 import { COLOUR_WHY, EDIT_MESSAGES, GROUP_WORD, groupNeedsName, MARKER_NOTE, MULTI_LINE, NO_COLOUR, NO_GROUPS, needsName, nounOf, oneLineHint, said, takenName } from "./editWords";
-import ErMoved from "./ErMoved";
-import { isErFlowText } from "./erToDbml";
+import { openAsDbml } from "./erToDbml";
 import { CanvasOverlay, createOverlayStore } from "./interactions/overlay";
 import QuickAdd, { quickItems } from "./interactions/QuickAdd";
 import { glideFrames } from "./interactions/glide";
@@ -48,10 +48,10 @@ import { afterPaint, easeExit, tween } from "./interactions/tween";
 import type { LivePositions } from "../diagram/livePositions";
 import type { NodeState } from "./nodes/parts";
 import type { TextEdit } from "../lang/protocol";
-import { type FlowEditOp, LINK_NOTES, type LinkRef, linkRefOf } from "../lang/flow/edits";
+import { ER_NOTES, type FlowEditOp, LINK_NOTES, type LinkRef, linkRefOf } from "../lang/flow/edits";
 import { LOOP_CUT } from "../lang/flow/orderEdits";
 import { copyLines, nonEmptyLines, TOO_MANY_LINES } from "../lang/flow/clip";
-import { isoToday, MAX_FLOW_NODES, overTextLimit, quote } from "../lang/flow/model";
+import { isoToday, MAX_FLOW_NODES, overTextLimit, quote, sqlFreeName } from "../lang/flow/model";
 import type { FlowPasteOp } from "../lang/flow/service";
 import { readClipboard, writeClipboard } from "../grid/clipboard";
 import { appLang } from "../lang/appLang";
@@ -62,6 +62,7 @@ import type { LangClient } from "../lang/client";
 import { flowLanguageWith } from "../lang/flow/cm";
 import {
   ATTR_DIAGRAMS,
+  LINE_COLOUR_DIAGRAMS,
   defaultArrow,
   type DiagramKind,
   FIXED_KINDS,
@@ -86,6 +87,8 @@ import { groupDragEnd, groupDragFrame, groupDropAt, startGroupDrag } from "./gro
 import { deletedWords, GroupAsk, groupContents } from "./groupGestures";
 import { ER_REFUSED, headOf, isMermaid, kindWord, MERMAID_KINDS } from "./mermaidHead";
 import { insertFlow, KIND_SHORT } from "../lang/flow/insert";
+import { article } from "../format/article";
+import { pasteFrame } from "../lang/flow/board";
 import { parseFlow } from "../lang/flow/parse";
 import { createOrderDragStore, drawAt, DROP, type FoldDot, foldDotsOf, laneIndex, nearestIndex, topicDropAt, type TopicDrop, type TopicIndex, topicIndex } from "./orderDrag";
 import OrderDragLayer, { FoldDots } from "./interactions/OrderDragLayer";
@@ -102,6 +105,7 @@ const KIND_TITLE: Record<DiagramKind, string> = {
   dfd: "Data flow",
   flow: "Flowchart",
   cloud: "Cloud",
+  er: "Entity relationship",
   sequence: "Sequence",
   state: "State",
   class: "Class",
@@ -122,6 +126,7 @@ const NODE_WORD: Record<FlowNodeKind, string> = {
   service: "Service",
   document: "Document",
   database: "Database",
+  weak: "Weak table",
   participant: "Participant",
   actor: "Actor",
   state: "State",
@@ -143,6 +148,7 @@ const LINE_WORD: Record<DiagramKind, string> = {
   dfd: "Flow",
   flow: "Line",
   cloud: "Line",
+  er: "Relationship",
   sequence: "Message",
   state: "Transition",
   class: "Line",
@@ -150,8 +156,14 @@ const LINE_WORD: Record<DiagramKind, string> = {
   timeline: "Line",
 };
 
-/** The strip's words for one selected shape: its kind and its lines. */
+/**
+ * The strip's words for one selected shape: an ER table in ER words (table, columns, relationships; A2), any other
+ * shape as its kind and its lines.
+ */
 function selectionWords(kind: DiagramKind | null, node: FlowNode, lines: number): string {
+  if (kind === "er" && (node.kind === "entity" || node.kind === "weak")) {
+    return `${node.kind === "weak" ? "Weak table" : "Table"}, ${plural(node.rows?.length ?? 0, "column")}, ${plural(lines, "relationship")}`;
+  }
   return `${NODE_WORD[node.kind]}, ${plural(lines, kind === "dfd" ? "flow" : "line")}`;
 }
 
@@ -178,6 +190,12 @@ const NODE_ICON: Partial<Record<FlowNodeKind, IconName>> = {
   service: "cube",
 };
 
+/** The selection chip's icon, by diagram kind as its words are: an ER table shows the table icon of its card's header. */
+function chipIcon(kind: DiagramKind | null, node: FlowNode): IconName | undefined {
+  if (kind === "er" && (node.kind === "entity" || node.kind === "weak")) return "table";
+  return NODE_ICON[node.kind];
+}
+
 /** A set without `item` (a new set, for state). */
 const without = <T,>(set: ReadonlySet<T>, item: T): ReadonlySet<T> => {
   const next = new Set(set);
@@ -198,6 +216,7 @@ function countsOf(kind: DiagramKind, doc: FlowDoc): string {
   // Step 12 kinds: their own nouns (the start and end markers and the indent branches are not counted).
   const shown = doc.nodes.filter((n) => !(doc.kind === "state" && isStateMarker(n.name))).length;
   const drawn = doc.links.filter((l) => !l.tree).length;
+  if (kind === "er") return `${plural(shown, "table")}, ${plural(drawn, "relationship")}`;
   if (kind === "sequence") return `${plural(shown, "participant")}, ${plural(drawn, "message")}`;
   if (kind === "state") return `${plural(shown, "state")}, ${plural(drawn, "transition")}`;
   if (kind === "class") return `${plural(shown, "type")}, ${plural(drawn, "line")}`;
@@ -497,6 +516,7 @@ const FIRST_LINE: Record<DiagramKind, string> = {
   dfd: "Customer [entity]",
   flow: "Request in [start]",
   cloud: "Users [icon: users]",
+  er: "orders {",
   sequence: "participant App",
   state: "[*] > Draft",
   class: "class Invoice",
@@ -847,6 +867,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       noticeDoc.current = null;
       setNoticeState(null);
     }
+    // "Rewrite as table blocks first" is true only while the frame is old form: the rewrite takes it away.
+    if (!parsed?.result.oldEr) setNoticeState((n) => (n === ER_NOTES.oldForm ? null : n));
   }, [parsed]);
   // Motion (spec section 4): positions drawn part of the way through a glide, nodes fading in or out, the
   // drag and draw overlay, the label box, "Add and connect" and the canvas note.
@@ -1036,6 +1058,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       ...(growing !== null ? { grow: { [growing]: 1 } } : {}),
     });
   }, [shown, layout.nodes, layout.sizes, layout.axes, look, shownStates, freshEdge, marks, growing, folded, ghostParent, ghostAfter, ghostW, ghostH]);
+  /** The latest Publish theme change, so a slower earlier one never overwrites it. */
+  const publishInkSeq = useRef(0);
   const graphRef = useRef(graph);
   graphRef.current = graph;
 
@@ -1047,7 +1071,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const d = drawnRef.current;
     if (!d) return;
     const { nodes, style, axes } = layoutRef.current;
-    const icons = await loadSceneIcons(sceneIconNames(d));
+    const icons = await loadSceneIcons(sceneIconNames(d), "light");
     let onScreen: SceneBox = { x: 0, y: 0, w: 0, h: 0 };
     const r = canvasEl.current?.getBoundingClientRect();
     const f = instance.current;
@@ -1058,6 +1082,17 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     }
     // A folded topic publishes folded, as the canvas shows it.
     setPublishing({ scene: flowScene(d, nodes, style, icons, axes, folded), onScreen });
+  }
+
+  /** The Publish dialog's theme changed: the icons are inked again for it, and the scene is drawn with them. */
+  async function repaintPublishIcons(theme: ExportTheme) {
+    const d = drawnRef.current;
+    if (!d) return;
+    const mine = ++publishInkSeq.current;
+    const { nodes, style, axes } = layoutRef.current;
+    const icons = await loadSceneIcons(sceneIconNames(d), theme);
+    if (mine !== publishInkSeq.current) return;
+    setPublishing((p) => (p ? { ...p, scene: flowScene(d, nodes, style, icons, axes, folded) } : p));
   }
 
   // A name the drawing does not hold (an add on broken text, a node removed by typing) is not kept selected,
@@ -1321,7 +1356,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
 
   /** Where a new node goes: the middle of the view, on the grid. */
   function viewCentre(kindOfNode: FlowNodeKind, nodeName: string): { x: number; y: number } {
-    const s = nodeSize(drawnKind(kindOfNode), look, nodeName);
+    const s = nodeSize(drawnKind(kindOfNode, kind), look, nodeName);
     const rect = canvasEl.current?.getBoundingClientRect();
     const at = instance.current && rect ? instance.current.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }) : { x: 0, y: 0 };
     return { x: snap(at.x - s.w / 2), y: snap(at.y - s.h / 2) };
@@ -1340,11 +1375,48 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     return placed.find((p) => p.mid > at.x)?.id;
   }
 
-  /** A key or a tool opens the new shape with its name ready, written only when the name is kept (fix round 1). */
+  /**
+   * A key or a tool opens the new shape with its name ready, written only when the name is kept. An ER table
+   * is written at once under its free name (table_1) and selected; its name is edited in the text for now.
+   */
   function add(tool: AddTool, at?: Point) {
     if (aiLock.current) return;
     if (!kind || tool.kind === "group") return;
+    if (kind === "er") {
+      // An old-form ER frame draws nothing and takes no edit until it is rewritten as table blocks.
+      if (parsedRef.current?.result.oldEr) return setNotice(ER_NOTES.oldForm);
+      return void addTable(tool.kind === "weak" ? "weak" : null, tool.base, at);
+    }
     addShape(toolKind(tool), at);
+  }
+
+  async function addTable(tableKind: "weak" | null, base: string, at?: Point) {
+    setNotice(null);
+    // A refusal (an old-form frame waits for its rewrite) is said in the strip.
+    const r = await doc.run({ op: "addNode", name: base, kind: tableKind, unique: true }, { onRefused: (why) => setNotice(why) });
+    if (!r?.name) return;
+    const shape = tableKind ?? "entity";
+    const size = newSize(shape, r.name);
+    doc.place({ [r.name]: at ? { x: Math.round(at.x - size.w / 2), y: Math.round(at.y - size.h / 2) } : viewCentre(shape, r.name) }, true);
+    enter(r.name);
+    setSelected([r.name]);
+  }
+
+  /** ER: a column at the end of `table`, under a free name (column_1) the text then renames. */
+  function addColumnTo(table: string) {
+    const t = (parsedRef.current?.result.doc ?? drawnRef.current)?.nodes.find((n) => n.name === table);
+    if (!t) return;
+    const rows = t.rows ?? [];
+    const name = sqlFreeName("column", rows.map((r) => r.split(/\s/, 1)[0]), 1);
+    void doc.run({ op: "addColumn", table, at: rows.length, before: null, name, type: "text" }, { onRefused: (why) => setNotice(why) });
+  }
+
+  /** "Open as DBML": the ER diagram's tables and relationships as an unsaved Schema Model under the diagram's name. */
+  function openDbml() {
+    const text = doc.view()?.state.doc.toString() ?? parsedRef.current?.text ?? null;
+    const dbml = text === null ? null : openAsDbml(text, 0, name);
+    if (dbml === null) return setNotice(EDIT_MESSAGES.stale);
+    onOpenModel?.(name, dbml);
   }
 
   /** Opens the icon picker for a service, under the strip's Choose icon button (or the top of the canvas). */
@@ -1444,6 +1516,8 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const base = nodeKind === "end" ? "End" : (tool?.base ?? BASE_NAME[nodeKind] ?? nounOf(nodeKind).replace(/^./, (c) => c.toUpperCase()));
     if (nodeKind === "note") return base;
     const known = parsedRef.current?.result.doc ?? drawnRef.current;
+    // An ER table's free name is a plain SQL name, numbered from 1 (table_1), as the writer numbers one (I4).
+    if (kind === "er") return sqlFreeName(base, known ? namesOf(known) : [], 1);
     return freeName(base, known ? namesOf(known) : new Set());
   }
 
@@ -1505,7 +1579,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       .map((g) => g.box);
     const at = placeNext({ src: from, dir, size, gap, boxes: [...boxes.values()], avoid });
     if (!at) {
-      setNotice(`No room on that side for another ${nounOf(nodeKind)}.`);
+      setNotice(`No room on that side for another ${nounOf(nodeKind, kind)}.`);
       return;
     }
     // Lined up with its source (not slid): the alignment guide through both middles (board DiagramAddNext).
@@ -1551,7 +1625,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (!kind || !PLUS_KINDS.has(kind) || ai.locked || field !== null) return null;
     const n = drawnRef.current?.nodes.find((x) => x.name === node);
     if (!n || n.kind === "note" || isStateEnd(node)) return null;
-    const noun = nounOf(isStateStart(node) ? "state" : n.kind);
+    const noun = nounOf(isStateStart(node) ? "state" : n.kind, kind);
     const spot: Record<Side, Point> = { t: { x: b.x + b.w / 2, y: b.y - 16 }, r: { x: b.x + b.w + 16, y: b.y + b.h / 2 }, b: { x: b.x + b.w / 2, y: b.y + b.h + 16 }, l: { x: b.x - 16, y: b.y + b.h / 2 } };
     const exit: Record<Side, Point> = { t: { x: b.x + b.w / 2, y: b.y }, r: { x: b.x + b.w, y: b.y + b.h / 2 }, b: { x: b.x + b.w / 2, y: b.y + b.h }, l: { x: b.x, y: b.y + b.h / 2 } };
     const tipText = `Click: add the next ${noun} here, connected. Drag: draw a line.`;
@@ -1773,7 +1847,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (aiLock.current) return refuseField(e, EDIT_MESSAGES.locked);
     if (!kind) return;
     const note = e.node === "note";
-    if (!value) return refuseField(e, needsName(e.node));
+    if (!value) return refuseField(e, needsName(e.node, kind));
     // A text opened with an error has no drawing to check names against: the writer refuses a taken name itself.
     const known = parsedRef.current?.result.doc ?? (e.from ? null : drawnRef.current);
     if (!known && e.from) return refuseField(e, LINK_NOTES.broken);
@@ -1948,6 +2022,12 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       void addMarker(p.end, id);
       return true;
     }
+    if (p.what === "member" && kind === "er") {
+      if (n.kind !== "entity" && n.kind !== "weak") return true;
+      setShapePick(null);
+      addColumnTo(id);
+      return true;
+    }
     if (p.what === "member") {
       if (n.kind !== "class" && n.kind !== "interface" && n.kind !== "enum") return true;
       setShapePick(null);
@@ -1993,6 +2073,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const a = sh.act;
     switch (a.kind) {
       case "node":
+        if (kind === "er" && sh.tool) return add(sh.tool, at);
         return addShape(a.node, at);
       case "line": {
         const from = sel.length === 1 ? sel[0] : null;
@@ -2019,6 +2100,12 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         setShapePick({ what: "marker", end: a.end }, a.end === "start" ? "Click the first state: the start dot goes before it." : "Click the last state: the end goes after it.");
         return;
       case "member":
+        if (kind === "er") {
+          if (parsedRef.current?.result.oldEr) return setNotice(ER_NOTES.oldForm);
+          if (one && (one.kind === "entity" || one.kind === "weak")) return addColumnTo(one.name);
+          setShapePick({ what: "member" }, "Click the table to add a column to.");
+          return;
+        }
         if (one && (one.kind === "class" || one.kind === "interface" || one.kind === "enum")) return openMember(one.name, null);
         setShapePick({ what: "member" }, "Click the class to add a member to.");
         return;
@@ -3194,7 +3281,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     };
     // A labelled shape edits the words it shows (step 11).
     if (target === (isNote ? (n?.text ?? "") : n ? shownName(n) : old)) return close();
-    if (!target) return refuseField(e, needsName(n?.kind));
+    if (!target) return refuseField(e, needsName(n?.kind, kind));
     let plan: { ops: FlowEditOp[]; name: string; notice: string | null } = { ops: [{ op: "renameNode", old, next: target }], name: target, notice: null };
     if (!isNote) {
       const taken = await doc.linesOf([target]);
@@ -3654,33 +3741,53 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
    * never lost (fix round 1, I2); its translation then replaces it as a second undo step, so a second Ctrl+Z leaves the
    * Mermaid as pasted (VS Code's paste-then-undo). A kind this diagram does not take, and an ER diagram, are refused
    * before anything is pasted. Over the whole file, or into a file with no shapes, the paste sets the kind and keeps the
-   * title (and the comments); elsewhere it never lands above the `diagram` line (I1).
+   * title (and the comments); elsewhere it never lands above the `diagram` line (I1). On a board all of this is about
+   * the frame that holds the paste, frame 0 (the one drawn) for a paste on the canvas.
    */
   function pasteMermaid(raw: string, where: { from: number; to: number } | null) {
     if (aiLock.current) return setNotice("The Assistant is working on the text, so nothing was pasted. Paste again once it finishes.");
     const view = doc.view();
     if (!view) return;
-    const text = view.state.doc.toString();
+    const full = view.state.doc.toString();
     const word = kindWord(headOf(raw.split(/\r?\n/, 400)).head);
     if (word === null) return;
     if (word === "erDiagram") return setNotice(ER_REFUSED);
     const theirs = MERMAID_KINDS[word];
+    const whole = !!where && where.from === 0 && where.to === full.length && full.length > 0;
+    // On a board the Mermaid goes into one frame, read and written as a diagram of its own.
+    const frame = whole ? { from: 0, to: full.length } : pasteFrame(full, where);
+    if (!frame) return setNotice("The selection takes more than one diagram, so nothing was pasted. Select inside one diagram.");
+    const text = full.slice(frame.from, frame.to);
     const here = (/^\uFEFF?[ \t]*diagram[ \t]+(\w+)/.exec(text)?.[1] ?? null) as DiagramKind | null;
-    const whole = !!where && where.from === 0 && where.to === text.length && text.length > 0;
     const shapeless = text.split(/\r?\n/).slice(here ? 1 : 0).every((l) => l.trim() === "" || l.trim().startsWith("//"));
     if (!whole && !shapeless && here && theirs !== here) {
-      return setNotice(`The pasted Mermaid is a ${KIND_SHORT[theirs]} and this is a ${KIND_SHORT[here]}, so nothing was pasted. New diagram > From Mermaid makes it a diagram of its own.`);
+      return setNotice(`The pasted Mermaid is ${article(KIND_SHORT[theirs])} and this is ${article(KIND_SHORT[here])}, so nothing was pasted. New diagram > From Mermaid makes it a diagram of its own.`);
     }
-    const title = parsedRef.current?.result.doc?.title ?? drawnRef.current?.title ?? name;
-    const rawFrom = where ? where.from : text.length;
-    const rawTo = where ? where.to : text.length;
+    const title = frame.from === 0 ? (parsedRef.current?.result.doc?.title ?? drawnRef.current?.title ?? name) : parseFlow(text).title || name;
+    const rawFrom = where ? where.from : frame.to;
+    const rawTo = where ? where.to : frame.to;
     const lead = !where && text.length > 0 && !text.endsWith("\n") ? "\n" : "";
     view.dispatch({ changes: { from: rawFrom, to: rawTo, insert: lead + raw }, selection: { anchor: rawFrom + lead.length + raw.length }, userEvent: "input.paste", annotations: isolateHistory.of("full") });
-    void translateMermaid({ raw, text, where, pasted: view.state.doc, view, title, whole, shapeless });
+    const own = where && { from: where.from - frame.from, to: where.to - frame.from };
+    void translateMermaid({ raw, full, frame, text, where: own, pasted: view.state.doc, view, title, whole, shapeless });
   }
 
-  /** The second half of a Mermaid paste: the translation over the Mermaid as pasted, or the reason it stays. */
-  async function translateMermaid(p: { raw: string; text: string; where: { from: number; to: number } | null; pasted: unknown; view: EditorView; title: string; whole: boolean; shapeless: boolean }) {
+  /**
+   * The second half of a Mermaid paste: the translation over the Mermaid as pasted, or the reason it stays. `text` is
+   * the frame's span `frame` of the file `full` as it was before the paste, and `where` is relative to it.
+   */
+  async function translateMermaid(p: {
+    raw: string;
+    full: string;
+    frame: { from: number; to: number };
+    text: string;
+    where: { from: number; to: number } | null;
+    pasted: unknown;
+    view: EditorView;
+    title: string;
+    whole: boolean;
+    shapeless: boolean;
+  }) {
     const stays = (why: string) => setNotice(why);
     let r;
     try {
@@ -3719,6 +3826,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       if (ins.edits.length === 0) return stays(`${ins.note ?? "The Mermaid could not go in here."} It stays as pasted.`);
       final = ins.edits.slice().sort((a, b) => b.from - a.from).reduce((t, e) => t.slice(0, e.from) + e.insert + t.slice(e.to), rest);
     }
+    final = p.full.slice(0, p.frame.from) + final + p.full.slice(p.frame.to);
     const now = p.view.state.doc.toString();
     let a = 0;
     while (a < now.length && a < final.length && now[a] === final[a]) a++;
@@ -3812,7 +3920,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     if (isField(e.target)) return;
     pastePending.current = false;
     e.preventDefault();
-    void pasteFromKeys(e.clipboardData.getData("text/plain"));
+    // An empty clipboard (on Linux Contura keeps an empty offer, paste_guard.rs) pastes the last copy made here (I1).
+    const text = e.clipboardData.getData("text/plain") || lastClip?.text;
+    if (text) void pasteFromKeys(text);
   };
 
   /**
@@ -4248,8 +4358,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       const taken = await doc.linesOf([rename.next]);
       if (taken && taken[rename.next] != null) return setEditingNode({ ...open, problem: `${rename.next} is already used.` });
     }
-    const r = await doc.run(ops.length === 1 ? ops[0] : { op: "batch", ops });
-    if (!r) return setEditingNode({ ...open, problem: "The text changed meanwhile. Try again." });
+    let why: string | null = null;
+    const r = await doc.run(ops.length === 1 ? ops[0] : { op: "batch", ops }, { onRefused: (w) => (why = w) });
+    if (!r) return setEditingNode({ ...open, problem: why ?? EDIT_MESSAGES.changed });
     setEditingNode(null);
     if (rename && rename.op === "renameNode" && node.kind !== "note") {
       const kept = doc.layout.nodes[node.name];
@@ -4288,7 +4399,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
    */
   function editLine(
     link: LinkRef | null,
-    op: { op: "setLinkArrow"; arrow: FlowArrow } | { op: "reverseLink" } | { op: "setLinkEnd"; end: "from" | "to"; node: string } | { op: "setLinkColor"; color: PaletteName | null },
+    op: { op: "setLinkArrow"; arrow: FlowArrow } | { op: "reverseLink" } | { op: "setLinkEnd"; end: "from" | "to"; node: string } | { op: "setLinkColor"; color: string | null },
   ) {
     if (aiLock.current || !link) return;
     setNotice(null);
@@ -4303,6 +4414,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
 
   /** Why `n` takes no colour (its kind is written with a word, a note, a marker, the central idea); null when it does. */
   function colourWhy(n: FlowNode | undefined): string | null {
+    if (kind === "sequence") return NO_COLOUR.sequence ?? COLOUR_WHY.lines;
     if (!kind || !ATTR_DIAGRAMS.has(kind)) return (kind && NO_COLOUR[kind]) ?? COLOUR_WHY.lines;
     if (!n) return null;
     if (n.kind === "note") return COLOUR_WHY.note;
@@ -4329,9 +4441,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       .map((l) => linkIndex(l))
       .filter((i): i is number => i !== null && !!d?.links[i] && !d.links[i].tree)
       .map((i) => ({ i, l: d!.links[i] }));
-    const lineWhy = kind && ATTR_DIAGRAMS.has(kind) ? null : COLOUR_WHY.lines;
+    const lineWhy = kind && LINE_COLOUR_DIAGRAMS.has(kind) ? null : COLOUR_WHY.lines;
     const now = new Set([...nodes.map((n) => drawnColour(n.attrs.color) ?? ""), ...(lineWhy ? [] : links.map((x) => drawnColour(x.l.color) ?? ""))]);
-    const current = now.size === 1 ? ([...now][0] as PaletteName | "") : now.size === 0 ? "" : null;
+    const current = now.size === 1 ? ([...now][0] as DrawnColour | "") : now.size === 0 ? "" : null;
     const one = shapes.length === 1 && lines.length === 0 ? d?.nodes.find((n) => n.name === shapes[0]) : undefined;
     const why =
       nodes.length === 0 && (links.length === 0 || lineWhy !== null)
@@ -4572,7 +4684,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           remove: () => void removeSelected(),
           colour: {
             current: drawnColour(link.color) ?? "",
-            why: ATTR_DIAGRAMS.has(kind) ? null : COLOUR_WHY.lines,
+            why: LINE_COLOUR_DIAGRAMS.has(kind) ? null : COLOUR_WHY.lines,
             pick: (color) => {
               if ((link.color ?? null) === color) return setNotice(`The line is ${color ? COLOUR_INFO[color].label : "uncoloured"} already.`);
               editLine(ref, { op: "setLinkColor", color });
@@ -4743,7 +4855,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   /** The field's accessible name: what it names. */
   function fieldLabel(f: NonNullable<typeof field>, note: boolean): string {
     if (f.kind === "label") return note ? "Edit the note" : `Rename ${said(f.node)}`;
-    if (f.kind === "new") return f.node === "note" ? "Note text" : `Name the new ${nounOf(f.node)}`;
+    if (f.kind === "new") return f.node === "note" ? "Note text" : `Name the new ${nounOf(f.node, kind)}`;
     if (f.kind === "newloop") return "Loop label";
     if (f.kind === "loop") return `${f.was.split(" ")[0].replace(/^./, (c) => c.toUpperCase())} label`;
     if (f.kind === "newsection") return "Section name";
@@ -4808,9 +4920,6 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       </div>
     );
   }
-  // ADR 0030: the ER kind left the language; an old ER file is read-only here, with Open as DBML.
-  if (doc.initialText !== null && isErFlowText(doc.initialText)) return <ErMoved name={name} text={doc.initialText} onOpenModel={onOpenModel} />;
-
   return (
     <div
       className="flow-tab"
@@ -4971,8 +5080,9 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
             <span className="flow-selchip">{`New flow: ${labelBox.from} to ${labelBox.to}`}</span>
           ) : one ? (
             <>
-              <span className="flow-selchip">
-                {NODE_ICON[one.kind] && <Icon name={NODE_ICON[one.kind]!} size={14} />}
+              {/* A weak table's chip is dashed, as its card is. */}
+              <span className={kind === "er" && one.kind === "weak" ? "flow-selchip is-weak" : "flow-selchip"}>
+                {chipIcon(kind, one) && <Icon name={chipIcon(kind, one)!} size={14} />}
                 {one.attrs.id && <span className="flow-selchip-id">{one.attrs.id}</span>}
                 {/* A labelled shape: the words it shows, and the name lines use (step 11). */}
                 <span>{one.attrs.label !== undefined && one.kind !== "note" ? `${said(shownName(one))}, named ${said(one.name)}` : one.name}</span>
@@ -5235,6 +5345,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
                 onShape={(shape) => runShape(shape)}
                 shapeDisabled={shapeDisabled}
                 onMermaid={onMermaid && kind ? () => onMermaid({ kind, file: name, run: insertMermaid }) : undefined}
+                onOpenAsDbml={kind === "er" && onOpenModel ? openDbml : undefined}
               />
             )}
             {ai.working && (
@@ -5340,6 +5451,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           onScreen={publishing.onScreen}
           onClose={() => setPublishing(null)}
           onSaved={() => setPublishing(null)}
+          onTheme={(t) => void repaintPublishIcons(t)}
         />
       )}
     </div>

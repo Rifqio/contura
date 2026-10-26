@@ -135,8 +135,8 @@ describe("links", () => {
     expect(thick.doc.links[0].arrow).toBe(">");
     expect(notes(thick)).toEqual(["Line 2: thick lines are drawn normal."]);
     const dotted = one("-.-");
-    expect(dotted.doc.links[0].arrow).toBe("-");
-    expect(notes(dotted)).toEqual(["Line 2: the dotted line -.- is drawn as a plain line."]);
+    expect(dotted.doc.links[0].arrow).toBe("--");
+    expect(notes(dotted)).toEqual([]);
     const circle = one("--o");
     expect(circle.doc.links[0].arrow).toBe(">");
     expect(notes(circle)).toEqual(["Line 2: the circle end --o became an arrow."]);
@@ -410,8 +410,8 @@ describe("minor cases", () => {
     expect(thick.doc.links[0]).toEqual({ from: "A", to: "B", arrow: "-", label: "big" });
     expect(notes(thick)).toEqual(["Line 2: thick lines are drawn normal."]);
     const dotted = conv("A -. soft .- B");
-    expect(dotted.doc.links[0]).toEqual({ from: "A", to: "B", arrow: "-", label: "soft" });
-    expect(notes(dotted)).toEqual(["Line 2: the dotted line -.- is drawn as a plain line."]);
+    expect(dotted.doc.links[0]).toEqual({ from: "A", to: "B", arrow: "--", label: "soft" });
+    expect(notes(dotted)).toEqual([]);
   });
 
   test("a_node_named_like_a_group_gets_a_number", () => {

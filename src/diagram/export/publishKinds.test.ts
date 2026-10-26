@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Lineage } from "../../api/types";
 import { flowScene, loadSceneIcons, sceneIconNames } from "../../flow/flowScene";
 import { nodeSize } from "../../flow/flowNodes";
-import { resetIcons } from "../../flow/icons";
+import { resetIcons, setIconTheme } from "../../flow/icons";
 import { parseFlow } from "../../lang/flow/parse";
 import type { FlowDoc } from "../../lang/flow/model";
 import { lineageScene } from "../../lineage/scene";
@@ -196,14 +196,14 @@ test("cloud_export_loads_only_the_icons_it_uses_and_draws_them_unchanged", async
     },
   });
   expect(sceneIconNames(CLOUD).sort()).toEqual(["aws-api-gateway", "aws-cloud", "aws-nothing", "aws-sqs", "users"]);
-  const icons = await loadSceneIcons(sceneIconNames(CLOUD));
+  const icons = await loadSceneIcons(sceneIconNames(CLOUD), "light");
   expect(callsTo("icon").map((c) => c.name).sort()).toEqual(["aws-api-gateway", "aws-cloud", "aws-nothing", "aws-sqs", "users"]);
   expect([...icons.keys()].sort()).toEqual(["aws-api-gateway", "aws-cloud", "users"]);
 
   const scene = flowScene(CLOUD, CLOUD_AT, "modern", icons);
   const gateway = scene.nodes.find((n) => n.id === "API Gateway")!;
-  expect(gateway).toMatchObject({ kind: "service", iconName: "aws-api-gateway", plate: false, w: 104, h: 72 });
-  expect(scene.nodes.find((n) => n.id === "Users")!.plate).toBe(true);
+  expect(gateway).toMatchObject({ kind: "service", iconName: "aws-api-gateway", w: 104, h: 72 });
+  expect(scene.nodes.find((n) => n.id === "Users")).not.toHaveProperty("plate");
   expect(scene.nodes.find((n) => n.id === "Ghost")!.icon).toBeUndefined();
   expect(scene.areas?.[0]).toMatchObject({ name: "AWS" });
   expect(scene.areas?.[0].icon).toMatch(/^data:image\/svg\+xml;base64,/);
@@ -222,17 +222,56 @@ test("cloud_export_loads_only_the_icons_it_uses_and_draws_them_unchanged", async
   expect(images.sort()).toEqual([LUCIDE, PIXEL, PIXEL].sort());
   expect(svg).not.toContain("<title>Gateway");
   expect(svg).not.toContain("currentColor");
-  // An icon that could not be read draws the dashed cube tile; the plate sits behind the general icon.
+  // An icon that could not be read draws the dashed cube tile; no icon has a plate behind it.
   expect(svg).toMatch(/data-node="Ghost"><rect [^>]*stroke-dasharray/);
   expect(svg).toMatch(/data-node="Queue"><rect [^>]*stroke-dasharray/);
-  expect(svg).toMatch(new RegExp(`data-node="Users"><rect [^>]*fill="${PALETTE.iconTile}"`));
+  expect(svg).not.toContain(`fill="${PALETTE.iconTile}"`);
   expect(svg).toMatch(new RegExp(`data-area="AWS"><rect [^>]*fill="${PALETTE.groupTint}"[^>]*stroke="${PALETTE.group}"[^>]*stroke-dasharray`));
   expect(svg).toMatch(/data-edge="edge:1"><path [^>]*stroke-dasharray="1 4"/);
   expect(svg.match(/data-marker="head"/g)).toHaveLength(1);
 });
 
+test("publish_inks_icons_for_the_publish_theme", async () => {
+  routeInvoke({ icon: () => PIXEL });
+  setIconTheme("light");
+  const icons = await loadSceneIcons(["database"], "dark");
+  expect(callsTo("icon")).toEqual([{ name: "database", ink: "#f8f8f2" }]);
+  const doc: FlowDoc = { ...CLOUD, nodes: CLOUD.nodes.filter((n) => n.name === "Users") };
+  const svg = sceneToSvg(flowScene(doc, CLOUD_AT, "modern", new Map([["users", icons.get("database")!]])), PALETTE, opts);
+  expect(svg).toContain("<image");
+  expect(svg).not.toContain(`fill="${PALETTE.iconTile}"`);
+});
+
+test("a_pale_logo_is_outlined_in_publish_with_one_filter", () => {
+  const doc: FlowDoc = { ...CLOUD, nodes: CLOUD.nodes.filter((n) => n.name === "Users" || n.name === "API Gateway") };
+  const data = `data:image/svg+xml;base64,${btoa(PIXEL)}`;
+  const scene = flowScene(doc, CLOUD_AT, "modern", new Map([["users", { url: data, outline: true }], ["aws-api-gateway", { url: data, outline: false }], ["aws-cloud", { url: data, outline: true }]]));
+  expect(scene.nodes.find((n) => n.id === "Users")!.iconOutline).toBe(true);
+  expect(scene.nodes.find((n) => n.id === "API Gateway")).not.toHaveProperty("iconOutline");
+  expect(scene.areas?.[0].iconOutline).toBe(true);
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  // The filter is the only thing besides plain shapes, and it is made of filter primitives only.
+  const defs = /<defs>(.*?)<\/defs>/.exec(svg)![1];
+  expect(defs).not.toMatch(/<(?!\/?(filter|feMorphology|feFlood|feComposite|feMerge|feMergeNode)\b)[a-z]/i);
+  expect(defs).not.toMatch(/href|url\(/i);
+  plainSvg(svg.replace(/<defs>.*?<\/defs>/, ""));
+  onlyTokenColours(svg);
+  // One filter, in the text colour, used by the outlined images only.
+  expect(svg.match(/<filter\b/g)).toHaveLength(1);
+  expect(svg).toContain(`<filter id="icon-hairline"`);
+  expect(svg).toContain(`flood-color="${PALETTE.text}"`);
+  const images = [...svg.matchAll(/<image\b[^>]*>/g)].map((m) => m[0]);
+  expect(images).toHaveLength(3);
+  expect(images.filter((i) => i.includes('filter="url(#icon-hairline)"'))).toHaveLength(2);
+  expect(svg).toMatch(/data-node="API Gateway">(?:(?!<\/g>).)*<image (?![^>]*filter=)/);
+  // A drawing with no outlined logo has no filter.
+  const plain = sceneToSvg(flowScene(doc, CLOUD_AT, "modern", new Map([["users", { url: data }]])), PALETTE, opts);
+  expect(plain).not.toContain("<filter");
+  expect(plain).not.toContain("filter=");
+});
+
 test("an_icon_url_that_is_not_a_data_image_is_never_drawn", () => {
-  const scene = flowScene(CLOUD, CLOUD_AT, "modern", new Map([["users", "javascript:alert(1)"], ["aws-api-gateway", "https://example.com/x.svg"]]));
+  const scene = flowScene(CLOUD, CLOUD_AT, "modern", new Map([["users", { url: "javascript:alert(1)" }], ["aws-api-gateway", { url: "https://example.com/x.svg" }]]));
   const svg = sceneToSvg(scene, PALETTE, opts);
   expect(svg).not.toContain("<image");
   expect(svg).not.toContain("javascript:");
@@ -673,4 +712,124 @@ test("flowchart_document_and_database_have_their_curved_foot_and_cylinder", () =
   onlyTokenColours(svg);
   expect(part(svg, "data-node", "Report")).toMatch(/data-part="document"[^>]* d="[^"]*[QC]/);
   expect(part(svg, "data-node", "Ledger")).toMatch(/<rect data-part="cylinder" [^>]*ry="10"/);
+});
+
+test("publish_draws_a_dotted_line", () => {
+  const doc = parseFlow(["diagram flow \"Dots\"", "A", "B", "C", "A --> B", "B -- C"].join("\n")).doc!;
+  const scene = flowScene(doc, { A: { x: 0, y: 0 }, B: { x: 300, y: 0 }, C: { x: 600, y: 0 } }, "modern", new Map());
+  expect(scene.edges.map((e) => [e.line, e.heads])).toEqual([
+    ["dashed", "end"],
+    ["dashed", "none"],
+  ]);
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  const dash = (id: string) => new RegExp(`data-edge="${id}"><path [^>]*stroke-dasharray="([^"]+)"`).exec(svg)?.[1];
+  expect(dash("edge:1")).toBeDefined();
+  expect(dash("edge:1")).toBe(dash("edge:0"));
+  expect(svg.match(/data-marker="head"/g)).toHaveLength(1);
+});
+
+test("publish_keeps_a_class_dash_dash_solid", () => {
+  const doc = parseFlow(["diagram class \"Types\"", "class A", "class B", "A -- B"].join("\n")).doc!;
+  const scene = flowScene(doc, { A: { x: 0, y: 0 }, B: { x: 300, y: 0 } }, "modern", new Map());
+  expect(scene.edges.map((e) => [e.line ?? "solid", e.heads])).toEqual([["solid", "none"]]);
+  expect(sceneToSvg(scene, PALETTE, opts)).not.toMatch(/data-edge="edge:0"><path [^>]*stroke-dasharray/);
+});
+
+test("publish_draws_er_cards_and_relationships", () => {
+  const er = doc(
+    [
+      'diagram er "Billing"',
+      "customers {",
+      "  id int pk",
+      "  email text not null",
+      "  note text",
+      "}",
+      "orders [weak] {",
+      "  id int pk",
+      "  customer_id int",
+      "}",
+      "orders.customer_id > customers.id",
+      "customers < orders",
+      "customers - orders",
+      "customers <> orders",
+    ].join("\n"),
+  );
+  const at = { customers: { x: 0, y: 0 }, orders: { x: 500, y: 0 } };
+  const scene = flowScene(er, at, "modern", new Map());
+  // Each table is a card with its rows: the name, the type on the right, the key marked and not null said.
+  expect(scene.nodes.map((n) => [n.id, n.kind, n.title])).toEqual([
+    ["customers", "table", "customers"],
+    ["orders", "table", "orders"],
+  ]);
+  expect(scene.nodes[0].rows).toEqual([
+    { left: "id", right: "int", mark: "pk", notNull: true },
+    { left: "email", right: "text", notNull: true },
+    { left: "note", right: "text", notNull: false },
+  ]);
+  // A relationship between columns meets each card at its column's row; a table-to-table one at the header.
+  const [cols, oneMany, oneOne, manyMany] = scene.edges;
+  const orders = scene.nodes[1];
+  const customers = scene.nodes[0];
+  expect(cols.points[0]).toEqual({ x: orders.x, y: orders.y + 47 + 22 });
+  expect(cols.points[cols.points.length - 1]).toEqual({ x: customers.x + customers.w, y: customers.y + 47 });
+  // Crow's-foot ends: one end a bar, many a crow's foot, read from the first end to the second.
+  expect(scene.edges.map((e) => e.marks)).toEqual([
+    { start: "many", end: "one" },
+    { start: "one", end: "many" },
+    { start: "one", end: "one" },
+    { start: "many", end: "many" },
+  ]);
+  expect(oneMany.heads).toBe("none");
+  expect(oneOne.heads).toBe("none");
+  expect(manyMany.heads).toBe("none");
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  onlyTokenColours(svg);
+  const card = part(svg, "data-node", "customers");
+  expect(card).toContain(">email<");
+  expect(card).toContain(">text<");
+  expect(card).toContain(">PK<");
+  // Not null is the filled diamond, nullable the outline.
+  expect(card.match(/data-marker="not-null"/g)).toHaveLength(2);
+  expect(card.match(/data-marker="nullable"/g)).toHaveLength(1);
+  const edge0 = part(svg, "data-edge", "edge:0");
+  expect(edge0).toContain('data-marker="crow"');
+  expect(edge0).toContain('data-marker="bar"');
+  expect(edge0).not.toContain('data-marker="head"');
+  expect(part(svg, "data-edge", "edge:3").match(/data-marker="crow"/g)).toHaveLength(2);
+  expect(part(svg, "data-edge", "edge:2").match(/data-marker="bar"/g)).toHaveLength(2);
+});
+
+test("publish_keeps_an_er_tables_colour_label_weak_dash_and_nullable_marks", () => {
+  const er = doc(
+    [
+      'diagram er "Billing"',
+      "customers [color: #cc2200, label: Customers] {",
+      "  email text",
+      "  note text",
+      "}",
+      "order_lines [weak] {",
+      "  id int pk",
+      "}",
+      "order_lines.id > customers.email [color: #cc2200]",
+    ].join("\n"),
+  );
+  const scene = flowScene(er, { customers: { x: 0, y: 0 }, order_lines: { x: 500, y: 0 } }, "modern", new Map());
+  const [customers, lines] = scene.nodes;
+  expect([customers.title, customers.color, customers.dashed ?? false]).toEqual(["Customers", "#cc2200", false]);
+  expect([lines.title, lines.dashed]).toEqual(["order_lines", true]);
+  // Every ER row says whether it is null, so a card of nullable columns still draws its outlines.
+  expect(customers.rows.map((r) => r.notNull)).toEqual([false, false]);
+  const svg = sceneToSvg(scene, PALETTE, opts);
+  plainSvg(svg);
+  const card = part(svg, "data-node", "customers");
+  expect(card).toContain(">Customers<");
+  expect(card).toMatch(/<rect [^>]*stroke="#cc2200"/);
+  expect(card.match(/data-marker="nullable"/g)).toHaveLength(2);
+  expect(card).not.toContain('data-marker="not-null"');
+  expect(part(svg, "data-node", "order_lines")).toMatch(/<rect [^>]*stroke-dasharray="5 4"/);
+  // A coloured relationship's crow's foot and bar take its colour.
+  const edge = part(svg, "data-edge", "edge:0");
+  expect(edge).toMatch(/data-marker="crow"[^>]*stroke="#cc2200"/);
+  expect(edge).toMatch(/data-marker="bar"[^>]*stroke="#cc2200"/);
 });

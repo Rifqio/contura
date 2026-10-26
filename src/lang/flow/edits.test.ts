@@ -14,7 +14,7 @@ import {
   uniqueName,
 } from "./edits";
 import { parseFlow } from "./parse";
-import { applyFlowBatch } from "./service";
+import { applyFlowBatch, applyFlowSteps } from "./service";
 
 const FIXTURES = import.meta.glob("./fixtures/*.flow", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 const fixture = (name: string) => FIXTURES[`./fixtures/${name}`];
@@ -152,6 +152,17 @@ describe("renameNode", () => {
     expect(d.links.filter((l) => l.from === "Orders service" || l.to === "Orders service")).toHaveLength(4);
     expect(after).toContain("Users > Gateway > Orders service: HTTPS");
     untouched(text, after, text.split("\n").filter((l) => l.includes("Orders API")));
+  });
+
+  test("a note's new text with a comma is written as the note's text, unquoted", () => {
+    const text = lines('diagram flow "x"', "A", "note: ask legal", "B [step]");
+    const after = run(text, (t, p) => renameNode(t, p, "Note 1", "ask legal, then sign"));
+    expect(after).toBe(lines('diagram flow "x"', "A", "note: ask legal, then sign", "B [step]"));
+  });
+
+  test("a node whose name starts with note is no note: a comma in its new name is quoted", () => {
+    const text = lines('diagram flow "x"', "notebook [step]");
+    expect(run(text, (t, p) => renameNode(t, p, "notebook", "notes, kept"))).toBe(lines('diagram flow "x"', '"notes, kept" [step]'));
   });
 
   test("renaming to a name with a colon quotes it", () => {
@@ -489,6 +500,18 @@ describe("addGroup", () => {
     const r = applyFlowBatch(CLOUD, parseFlow(CLOUD), [{ op: "addGroup", name: "Production", group: null }]);
     expect(r.edits.length).toBe(1);
     expect(Object.keys(r)).toEqual(["edits"]);
+  });
+
+  test("a refused batch says why, with the refusing op's note", () => {
+    const text = lines('diagram flow "x"', "A", "B", "A > B");
+    const ref = { from: "A", to: "B", label: null, nth: 0 };
+    const r = applyFlowBatch(text, parseFlow(text), [
+      { op: "addNode", name: "C", kind: null, attrs: {}, group: null },
+      { op: "setLinkEnd", link: ref, end: "to", node: "Nowhere" },
+    ]);
+    expect(r).toEqual({ edits: [], note: "Nowhere is not in the text." });
+    // The step runner says why too.
+    expect(applyFlowSteps(text, parseFlow(text), 1, () => ({ op: "setLinkEnd", link: ref, end: "to", node: "Nowhere" }))).toEqual({ edits: [], note: "Nowhere is not in the text." });
   });
 
   test("CRLF stays CRLF", () => {

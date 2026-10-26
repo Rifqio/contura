@@ -1,17 +1,18 @@
 // Step 12, item 19: the shapes of the newer diagram kinds on the engine's canvas (frame DiagramElements). Each
-// is a node type with the shared shell (selection ring, ports, levels of detail) and its own inside: class cards
-// with their rows, state pills and markers, sequence participants with their lifelines, mind map topics,
+// is a node type with the shared shell (selection ring, ports, levels of detail) and its own inside: ER and class
+// cards with their rows, state pills and markers, sequence participants with their lifelines, mind map topics,
 // timeline items and notes. The lines of these kinds are here too: sequence messages along their rows and the
 // curved branches of a mind map.
 import { BaseEdge, type EdgeProps, EdgeLabelRenderer, type NodeProps, useInternalNode } from "@xyflow/react";
-import { memo, useContext } from "react";
+import { memo, useContext, useLayoutEffect, useRef, useState } from "react";
 import Icon from "../components/Icon";
 import type { DrawnKind } from "../diagram/types";
-import { isMethod, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { ER_CARD_CHROME, ER_MAX_ROWS, isMethod, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { type NodeLook, NodeShell, type NodeState, type ShapeColour } from "./nodes/parts";
 import InlineEdit from "./interactions/InlineEdit";
 import DateEdit from "./interactions/DateEdit";
 import { type KindEdit, KindEditContext, useKindEdit } from "./kindEdit";
+import type { ColumnFlag } from "../lang/flow/model";
 
 /** What a step 12 node carries on the canvas. */
 export type KindNodeData = {
@@ -22,6 +23,8 @@ export type KindNodeData = {
   naturalW?: number;
   naturalH?: number;
   rows?: string[];
+  /** An ER table's column flags, one list per row. */
+  rowFlags?: ColumnFlag[][];
   text?: string;
   depth?: number;
   date?: string;
@@ -39,10 +42,12 @@ export type KindNodeData = {
 /** The words a shape shows: its label, else its name. */
 const wordsOf = (d: KindNodeData) => d.shows ?? d.name;
 
-/** The shape in words, for its accessible name ("Class Invoice", "State Draft"). */
+/** The shape in words, for its accessible name ("Table orders", "State Draft"). */
 export const KIND_WORD: Partial<Record<DrawnKind, string>> = {
   document: "Document",
   database: "Database",
+  erTable: "Table",
+  erWeak: "Weak table",
   participant: "Participant",
   actor: "Actor",
   state: "State",
@@ -60,6 +65,62 @@ export const KIND_WORD: Partial<Record<DrawnKind, string>> = {
   milestone: "Milestone",
   note: "Note",
 };
+
+/** An ER column row's name and type: "customer_id int" is customer_id and int; a row with no type has none. */
+function splitRow(row: string): { name: string; type: string } {
+  const at = row.search(/\s/);
+  return at < 0 ? { name: row, type: "" } : { name: row.slice(0, at), type: row.slice(at + 1).trim() };
+}
+
+/**
+ * An ER table card, draw-only for now: the header, then one row per column with its key gutter, name, type and
+ * not-null mark. Past 20 columns, or more than a card resized smaller holds, the rows scroll inside it.
+ */
+function ErCard({ d }: { d: KindNodeData }) {
+  const rows = d.rows ?? [];
+  const words = wordsOf(d);
+  // A header name has a tip, the app's hover hint, only when it is cut off (M13).
+  const nameRef = useRef<HTMLSpanElement>(null);
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const el = nameRef.current;
+    setCut(!!el && el.scrollWidth > el.clientWidth);
+  }, [words, d.sized?.w, d.naturalW]);
+  const fits = d.sized ? Math.floor((d.sized.h - ER_CARD_CHROME) / KIND_ROW) : ER_MAX_ROWS;
+  return (
+    <>
+      <span className="fkind-head">
+        <Icon name="table" size={14} />
+        <span ref={nameRef} className="fnode-name" title={cut ? words : undefined}>
+          {words}
+        </span>
+      </span>
+      {/* Rows that scroll take the wheel (I3); a card that fits lets the canvas pan, as draw.io and Figma do. */}
+      <div className={rows.length > fits ? "fkind-er-body nowheel is-scroll" : "fkind-er-body"}>
+        <ul className="fkind-rows fkind-er-rows">
+          {rows.map((r, i) => {
+            const { name, type } = splitRow(r);
+            const flags = d.rowFlags?.[i] ?? [];
+            const pk = flags.includes("pk");
+            const nn = pk || flags.includes("not null");
+            // The row's hover hint, which is also its one accessible description (M13).
+            const tip = `${name}${type ? ` ${type}` : ""} (${[pk ? "primary key" : "", flags.includes("unique") && !pk ? "unique" : "", nn ? "not null" : "nullable"].filter(Boolean).join(", ")})`;
+            return (
+              <li key={`${i}:${name}`} className="fkind-row fkind-er-row" style={{ height: KIND_ROW }} title={tip}>
+                <span className={pk ? "fkind-gut is-pk" : "fkind-gut"} aria-hidden="true">
+                  {pk && <Icon name="key" size={14} className="fkind-key" />}
+                </span>
+                <span className="fkind-col">{name}</span>
+                <span className="fkind-type">{type}</span>
+                <span className={nn ? "fkind-nn is-nn" : "fkind-nn"} aria-hidden="true" />
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </>
+  );
+}
 
 /**
  * A class card's parts: fields, then methods (members with brackets); an enum lists its values. CL1: each row is
@@ -113,6 +174,9 @@ function ClassParts({ name, kind, rows }: { name: string; kind: DrawnKind; rows:
 function KindInside({ d }: { d: KindNodeData }) {
   const rows = d.rows ?? [];
   switch (d.kind) {
+    case "erTable":
+    case "erWeak":
+      return <ErCard d={d} />;
     case "class":
     case "interface":
     case "enum":

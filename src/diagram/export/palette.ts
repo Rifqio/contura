@@ -1,5 +1,7 @@
 // Export colours are read from the tokens at export time, never written as literals (ADR 0008),
 // so an image follows the theme the user picks in the Publish dialog, whatever the window shows.
+import { mixHex } from "../../lang/flow/colours";
+import type { SceneColour } from "./scene";
 import { ICON_TILE_TOKEN, NODE_TOKENS, type NodeKind, PALETTE_TOKENS } from "../types";
 
 export type ExportTheme = "light" | "dark";
@@ -24,6 +26,12 @@ export interface ExportPalette {
   panel: string;
   /** Step 11: the six palette colours (fill, border, words) a shape, group or line may take; uncoloured without them. */
   colours?: Record<keyof typeof PALETTE_TOKENS, { fill: string; stroke: string; text: string }>;
+}
+
+/** The fill, border and words a colour draws in this palette: a preset's own, or a custom hex as an outline over a soft tint. */
+export function sceneColour(palette: ExportPalette, c: SceneColour): { fill: string; stroke: string; text: string } {
+  if (c[0] === "#") return { fill: mixHex(c, palette.surface, 0.18), stroke: c, text: palette.text };
+  return palette.colours?.[c as keyof typeof PALETTE_TOKENS] ?? { fill: palette.surface, stroke: palette.border, text: palette.text };
 }
 
 /** Reads the tokens from a hidden `.theme-light` or `.theme-dark` element, so a dark window can still export Alucard colours. */

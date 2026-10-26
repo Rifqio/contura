@@ -15,8 +15,16 @@ export interface Token {
 const WORD_START = /[A-Za-z_\u0080-￿]/;
 const WORD_PART = /[A-Za-z0-9_$\u0080-￿]/;
 
+/**
+ * Whether a MySQL `--` with `at` after it starts a comment: the server wants an ASCII blank or control character (or
+ * the end) there, so a no-break space does not (the Core's `mysql_comment_after`).
+ */
+export function mysqlCommentAfter(text: string, at: number): boolean {
+  return at >= text.length || text.charCodeAt(at) <= 0x20 || text.charCodeAt(at) === 0x7f;
+}
+
 /** Index after a quoted run starting at `i` with `q`; a doubled `q` stays inside. */
-function quotedEnd(text: string, i: number, q: string, backslash: boolean): number {
+export function quotedEnd(text: string, i: number, q: string, backslash: boolean): number {
   let j = i + 1;
   while (j < text.length) {
     const c = text[j];
@@ -67,8 +75,8 @@ export function tokenize(text: string, dialect: DialectKind): Token[] {
   while (i < text.length) {
     const c = text[i];
     const next = text[i + 1];
-    if (c === "-" && next === "-" && (dialect !== "mysql" || i + 2 >= text.length || /\s/.test(text[i + 2]))) {
-      // MySQL reads `--` as a comment only before white space or the end: `1--1` is one minus another.
+    if (c === "-" && next === "-" && (dialect !== "mysql" || mysqlCommentAfter(text, i + 2))) {
+      // MySQL reads `--` as a comment only before an ASCII blank, a control character or the end: `1--1` is one minus another.
       const nl = text.indexOf("\n", i);
       push("comment", nl === -1 ? text.length : nl);
     } else if (c === "#" && dialect === "mysql") {

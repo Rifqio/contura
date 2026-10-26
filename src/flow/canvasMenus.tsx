@@ -6,7 +6,7 @@ import type { MenuItem } from "../components/Menu";
 import type { DiagramKind, FlowArrow } from "../lang/flow/model";
 import { ARROWS } from "../lang/flow/model";
 import type { AddTool } from "./FlowToolbar";
-import { COLOUR_INFO, colourVars, PALETTE, type PaletteName } from "./palette";
+import { COLOUR_INFO, colourVars, type DrawnColour, PALETTE, type PaletteName, presetOf } from "./palette";
 
 /**
  * Step 11 (board DiagramColourLabels; draw.io Fill, Miro, eraser.io `color`): Colour in a shape's, a selection's, a
@@ -14,15 +14,15 @@ import { COLOUR_INFO, colourVars, PALETTE, type PaletteName } from "./palette";
  * colour. Where a colour cannot be written the row is off and its tooltip says why.
  */
 export interface ColourMenu {
-  /** The colour now: a palette name, "" for none, null when the shapes picked differ. */
-  current: PaletteName | "" | null;
+  /** The colour now: a palette name or a custom hex, "" for none, null when the shapes picked differ. */
+  current: DrawnColour | "" | null;
   /** Why no colour can be written here; null when one can. */
   why: string | null;
   pick(colour: PaletteName | null): void;
 }
 
 export function colourMenuItem(c: ColourMenu): MenuItem {
-  const hint = c.why ? "not here" : c.current === null ? "mixed" : c.current ? COLOUR_INFO[c.current].label : "none";
+  const hint = c.why ? "not here" : c.current === null ? "mixed" : c.current ? (presetOf(c.current) ? COLOUR_INFO[presetOf(c.current)!].label : "custom") : "none";
   return {
     key: "colour",
     label: "Colour",
@@ -54,13 +54,14 @@ export function colourMenuItem(c: ColourMenu): MenuItem {
 
 /** What each arrow is called in a line's menu, by kind: draw.io's line styles and the UML names. */
 const ARROW_NAMES: Record<DiagramKind, Partial<Record<FlowArrow, string>>> = {
-  dfd: { ">": "One way", "<>": "Both ways", "-->": "Dashed", "-": "No arrow" },
-  flow: { ">": "One way", "<>": "Both ways", "-->": "Dashed", "-": "No arrow" },
-  cloud: { ">": "One way", "<>": "Both ways", "-": "No arrow", "-->": "Dashed", "..>": "Dotted (assumes)" },
+  dfd: { ">": "One way", "<>": "Both ways", "-->": "Dashed", "-": "No arrow", "--": "Dotted" },
+  flow: { ">": "One way", "<>": "Both ways", "-->": "Dashed", "-": "No arrow", "--": "Dotted" },
+  cloud: { ">": "One way", "<>": "Both ways", "-": "No arrow", "--": "Dotted", "-->": "Dashed", "..>": "Dotted (assumes)" },
+  er: { ">": "Many to one", "<": "One to many", "-": "One to one", "<>": "Many to many" },
   sequence: { "->": "Request", "-->": "Reply" },
-  state: { ">": "One way", "-->": "Dashed" },
+  state: { ">": "One way", "-->": "Dashed", "--": "Dotted" },
   class: { "<|--": "Inheritance", "*--": "Composition", "..>": "Dependency", "-->": "Association", "--": "Link", "-": "No arrow" },
-  mindmap: { ">": "One way", "-": "No arrow" },
+  mindmap: { ">": "One way", "-": "No arrow", "--": "Dotted" },
   timeline: {},
 };
 

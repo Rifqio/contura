@@ -1,6 +1,8 @@
-//! The packed cloud icon sets (step 6+, C1b). `scripts/pack-icons.mjs` writes
+//! The packed icon sets (step 6+, C1b; pack v2, Plan C). `scripts/pack-icons.mjs` writes
 //! `src-tauri/icons-pack/icons.bin`, built into the exe here; the index is read once and
-//! each icon is inflated only when asked for, byte for byte as the official file.
+//! each icon is inflated only when asked for. Each icon's root tag was fitted to a 24 by 24
+//! frame at pack time and its drawing is byte for byte the official file; an outline or mono
+//! icon is served in the theme's ink, a `color` inserted at the offset the index records.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -17,9 +19,11 @@ static PACK: &[u8] = include_bytes!(concat!(
 ));
 
 const MAGIC: &[u8; 8] = b"CTRICON1";
+/// The index format this Core reads (Plan C Decision 4: styles, aliases, ink offsets).
+const VERSION: u64 = 2;
 /// An icon of this size or more is left out of the pack and not served (Rulings P7, P9).
 const MAX_SVG_BYTES: usize = 256 * 1024;
-/// The unpacked index may not reach this (P9); today's is about 220 KB.
+/// The unpacked index may not reach this (P9); the v2 index is about 320 KB.
 const MAX_INDEX_BYTES: usize = 1024 * 1024;
 /// One name in the pack. Aliases (`aws-s3`) are entries of their own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +35,13 @@ pub struct IconEntry {
     /// The icon's own licence and where it is from, for a brand logo that has one.
     #[serde(default)]
     pub licence: Option<String>,
+    /// The name this one is an alias of (`aws-s3` of `aws-simple-storage-service`).
+    #[serde(rename = "aliasOf", default)]
+    pub alias_of: Option<String>,
+    /// A brand logo's own colour, `#rrggbb` in lower case; only Simple Icons logos have one.
+    /// The front end passes it as the ink where it reads on the theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hex: Option<String>,
 }
 
 /// A set as Icon credits lists it.
@@ -45,20 +56,31 @@ pub struct IconSet {
     /// The licence text that travels with the copies, where the set has one.
     #[serde(default)]
     pub notice: String,
+    /// outline (Lucide), mono (logos) or colour (vendor icons, never inked). Defaults so a
+    /// version 1 index reads far enough to be refused for its version.
+    #[serde(default)]
+    pub style: String,
+    /// What the pack changed in the set's icons (Decision 11).
+    #[serde(default)]
+    pub changes: String,
 }
 
 #[derive(Deserialize)]
 struct RawIndex {
+    #[serde(default)]
+    version: u64,
     sets: Vec<IconSet>,
-    /// `[name, set index, title, offset, length, licence?]`
+    /// `[name, set index, title, offset, length, licence, aliasOf, inkAt, hex]`, licence,
+    /// aliasOf and inkAt null when not there; only a logo's row has hex.
     icons: Vec<Vec<serde_json::Value>>,
 }
 
 struct Pack {
     sets: Vec<IconSet>,
     entries: Vec<IconEntry>,
-    /// Name to the icon's compressed bytes within the pack.
-    blobs: HashMap<String, (usize, usize)>,
+    /// Name to the icon's compressed bytes within the pack, and the byte offset of its root
+    /// tag's `>` in the inflated icon where the ink goes, for an outline or mono icon.
+    blobs: HashMap<String, (usize, usize, Option<usize>)>,
 }
 
 fn damaged(what: &str) -> Error {
@@ -92,6 +114,9 @@ fn read_pack(bytes: &[u8]) -> Result<Pack> {
         .ok_or_else(|| damaged("index past the end"))?;
     let index = inflate(&bytes[12..blobs_at], MAX_INDEX_BYTES, "the index")?;
     let raw: RawIndex = serde_json::from_slice(&index).map_err(|e| damaged(&e.to_string()))?;
+    if raw.version != VERSION {
+        return Err(damaged("pack version"));
+    }
     let blob_room = bytes.len() - blobs_at;
 
     let mut entries = Vec::with_capacity(raw.icons.len());
@@ -108,12 +133,31 @@ fn read_pack(bytes: &[u8]) -> Result<Pack> {
         if offset.checked_add(len).is_none_or(|end| end > blob_room) {
             return Err(damaged(&format!("{name} past the end")));
         }
-        blobs.insert(name.clone(), (blobs_at + offset, len));
+        let ink_at = match row.get(7) {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => Some(
+                v.as_u64()
+                    .map(|n| n as usize)
+                    .ok_or_else(|| damaged(&format!("{name} ink offset")))?,
+            ),
+        };
+        let hex = match row.get(8) {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => Some(
+                v.as_str()
+                    .filter(|hex| ink_ok(hex))
+                    .map(str::to_string)
+                    .ok_or_else(|| damaged(&format!("{name} colour")))?,
+            ),
+        };
+        blobs.insert(name.clone(), (blobs_at + offset, len, ink_at));
         entries.push(IconEntry {
             name,
             set: set.id.clone(),
             title,
             licence: text(5),
+            alias_of: text(6),
+            hex,
         });
     }
     Ok(Pack {
@@ -132,12 +176,34 @@ fn pack() -> Result<&'static Pack> {
         .map_err(|e| Error::File(e.clone()))
 }
 
-/// Icon `name` from `pack`, whose bytes are `bytes`. An icon that fails the safety check
-/// is answered as not there, and logged (P9).
-fn icon_in(pack: &Pack, bytes: &[u8], name: &str) -> Result<String> {
+/// `#` and six lower-case hex digits, the only ink the Core inserts (Decision 4).
+fn ink_ok(ink: &str) -> bool {
+    ink.len() == 7
+        && ink.starts_with('#')
+        && ink[1..]
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// Icon `name` from `pack`, whose bytes are `bytes`, in `ink` when it is an outline or mono
+/// icon. An icon that fails the safety check, ink included, is answered as not there, and
+/// logged (P9).
+fn icon_in(pack: &Pack, bytes: &[u8], name: &str, ink: Option<&str>) -> Result<String> {
+    if ink.is_some_and(|ink| !ink_ok(ink)) {
+        return Err(Error::InvalidInput("an icon ink is #rrggbb".into()));
+    }
     let not_an_icon = || Error::NotFound(format!("{name} is not an icon"));
-    let &(at, len) = pack.blobs.get(name).ok_or_else(not_an_icon)?;
-    let svg = inflate(&bytes[at..at + len], MAX_SVG_BYTES, name)?;
+    let &(at, len, ink_at) = pack.blobs.get(name).ok_or_else(not_an_icon)?;
+    let mut svg = inflate(&bytes[at..at + len], MAX_SVG_BYTES, name)?;
+    if let Some(ink_at) = ink_at {
+        if svg.get(ink_at) != Some(&b'>') {
+            return Err(damaged(&format!("{name} ink offset")));
+        }
+        if let Some(ink) = ink {
+            let color = format!(" color=\"{ink}\"");
+            svg.splice(ink_at..ink_at, color.bytes());
+        }
+    }
     if let Some(why) = unsafe_reason(&svg) {
         eprintln!("icon {name} refused: {why}");
         return Err(not_an_icon());
@@ -155,9 +221,11 @@ pub fn icon_sets() -> Result<Vec<IconSet>> {
     Ok(pack()?.sets.clone())
 }
 
-/// Icon `name`'s SVG text, exactly as the official file; inflates this one icon only.
-pub fn icon(name: &str) -> Result<String> {
-    icon_in(pack()?, PACK, name)
+/// Icon `name`'s SVG text, framed 24 by 24 with its drawing exactly as the official file;
+/// inflates this one icon only. An outline or mono icon is drawn in `ink` (`#rrggbb`); a
+/// colour icon ignores it.
+pub fn icon(name: &str, ink: Option<&str>) -> Result<String> {
+    icon_in(pack()?, PACK, name, ink)
 }
 
 /// The pack's size in bytes, as built into the exe.
@@ -247,6 +315,7 @@ const STYLED: &[&str] = &[
     "fx",
     "fy",
     "offset",
+    "color",
     "fill",
     "fill-rule",
     "fill-opacity",
@@ -754,24 +823,28 @@ mod tests {
         out.finish().unwrap()
     }
 
-    /// A pack of `icons` (name, SVG bytes) built the way the script builds one.
-    fn build(icons: &[(&str, &[u8])]) -> Vec<u8> {
+    /// A pack of `icons` (name, SVG bytes, ink offset) at `version`, built the way the script
+    /// builds one.
+    fn build_version(version: u32, icons: &[(&str, &[u8], Option<usize>)]) -> Vec<u8> {
         let mut blobs = Vec::new();
         let mut rows = Vec::new();
-        for (name, svg) in icons {
+        for (name, svg, ink_at) in icons {
             let packed = deflate(svg);
             rows.push(serde_json::json!([
                 name,
                 0,
                 name,
                 blobs.len(),
-                packed.len()
+                packed.len(),
+                null,
+                null,
+                ink_at
             ]));
             blobs.extend(packed);
         }
         let index = serde_json::json!({
-            "version": 1,
-            "sets": [{ "id": "t", "title": "T", "licence": "L", "source": "https://t" }],
+            "version": version,
+            "sets": [{ "id": "t", "title": "T", "licence": "L", "source": "https://t", "style": "outline", "changes": "C" }],
             "icons": rows,
         });
         let index = deflate(index.to_string().as_bytes());
@@ -781,6 +854,17 @@ mod tests {
         pack.extend(blobs);
         pack
     }
+
+    /// A version 2 pack of `icons` (name, SVG bytes), none of them inked.
+    fn build(icons: &[(&str, &[u8])]) -> Vec<u8> {
+        let rows: Vec<_> = icons.iter().map(|&(n, s)| (n, s, None)).collect();
+        build_version(2, &rows)
+    }
+
+    /// Lucide's `database` root as `scripts/icon-frame.mjs` frames it (pad 0, stroke 1.5,
+    /// outline ink), and the byte offset of its root tag's `>` that the script records.
+    const FRAMED: &str = "<!-- @license lucide-static v1.61.0 - ISC -->\n<svg class=\"lucide lucide-database\" xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\">\n  <path d=\"M3 5V19\" />\n</svg>\n";
+    const FRAMED_INK_AT: usize = 212;
 
     #[test]
     fn a_damaged_pack_is_refused_not_a_panic() {
@@ -805,11 +889,11 @@ mod tests {
         ]);
         let pack = read_pack(&bytes).unwrap();
         assert_eq!(
-            icon_in(&pack, &bytes, "good").unwrap(),
+            icon_in(&pack, &bytes, "good", None).unwrap(),
             "<svg><path d=\"M0 0\"/></svg>"
         );
         assert!(matches!(
-            icon_in(&pack, &bytes, "bad"),
+            icon_in(&pack, &bytes, "bad", None),
             Err(Error::NotFound(m)) if m == "bad is not an icon"
         ));
     }
@@ -820,7 +904,10 @@ mod tests {
         let big = vec![b' '; MAX_SVG_BYTES];
         let bytes = build(&[("big", &big)]);
         let pack = read_pack(&bytes).unwrap();
-        assert!(matches!(icon_in(&pack, &bytes, "big"), Err(Error::File(_))));
+        assert!(matches!(
+            icon_in(&pack, &bytes, "big", None),
+            Err(Error::File(_))
+        ));
 
         // An index that inflates to 1 MB is refused.
         let index = deflate(&vec![b' '; MAX_INDEX_BYTES]);
@@ -832,5 +919,110 @@ mod tests {
             err.to_string()
                 .contains("the index unpacks to 1024 KB or more")
         );
+    }
+
+    #[test]
+    fn ink_goes_in_at_the_offset() {
+        assert_eq!(FRAMED.as_bytes()[FRAMED_INK_AT], b'>');
+        let bytes = build_version(2, &[("database", FRAMED.as_bytes(), Some(FRAMED_INK_AT))]);
+        let pack = read_pack(&bytes).unwrap();
+        let dark = icon_in(&pack, &bytes, "database", Some("#f8f8f2")).unwrap();
+        assert!(
+            dark.contains(r##"viewBox="0 0 24 24" color="#f8f8f2">"##),
+            "{dark}"
+        );
+        assert_eq!(dark.replace(r##" color="#f8f8f2""##, ""), FRAMED);
+        assert_eq!(icon_in(&pack, &bytes, "database", None).unwrap(), FRAMED);
+    }
+
+    #[test]
+    fn a_bad_ink_is_refused() {
+        let bytes = build_version(2, &[("database", FRAMED.as_bytes(), Some(FRAMED_INK_AT))]);
+        let pack = read_pack(&bytes).unwrap();
+        for ink in [
+            "#FFF",
+            "red",
+            "#12345g",
+            "#F8F8F2",
+            "#f8f8f2 ",
+            "#f8f8f2\"",
+            "",
+        ] {
+            assert!(
+                matches!(
+                    icon_in(&pack, &bytes, "database", Some(ink)),
+                    Err(Error::InvalidInput(m)) if m == "an icon ink is #rrggbb"
+                ),
+                "{ink:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ink_offset_off_the_root_end_is_damage() {
+        for at in [FRAMED_INK_AT - 1, FRAMED.len(), FRAMED.len() + 10] {
+            let bytes = build_version(2, &[("database", FRAMED.as_bytes(), Some(at))]);
+            let pack = read_pack(&bytes).unwrap();
+            for ink in [None, Some("#1f1f1f")] {
+                let err = icon_in(&pack, &bytes, "database", ink).unwrap_err();
+                assert!(
+                    err.to_string().contains("database ink offset"),
+                    "{at}: {err}"
+                );
+            }
+        }
+    }
+
+    /// A version 2 pack of one logo whose row ends with `hex`.
+    fn build_logo(hex: serde_json::Value) -> Vec<u8> {
+        let packed = deflate(b"<svg><path d=\"M0 0\"/></svg>");
+        let index = serde_json::json!({
+            "version": 2,
+            "sets": [{ "id": "simple", "title": "S", "licence": "L", "source": "https://s", "style": "mono", "changes": "C" }],
+            "icons": [["brand-x", 0, "X", 0, packed.len(), null, null, null, hex]],
+        });
+        let index = deflate(index.to_string().as_bytes());
+        let mut pack = MAGIC.to_vec();
+        pack.extend((index.len() as u32).to_le_bytes());
+        pack.extend(index);
+        pack.extend(packed);
+        pack
+    }
+
+    #[test]
+    fn a_logo_row_carries_its_colour() {
+        let pack = read_pack(&build_logo(serde_json::json!("#4169e1"))).unwrap();
+        assert_eq!(pack.entries[0].hex.as_deref(), Some("#4169e1"));
+        let row = serde_json::to_value(&pack.entries[0]).unwrap();
+        assert_eq!(row["hex"], "#4169e1");
+        // A row without one has none, and says nothing about it.
+        let pack = read_pack(&build(&[("database", b"<svg/>")])).unwrap();
+        assert_eq!(pack.entries[0].hex, None);
+        let row = serde_json::to_value(&pack.entries[0]).unwrap();
+        assert!(row.get("hex").is_none(), "{row}");
+        let pack = read_pack(&build_logo(serde_json::Value::Null)).unwrap();
+        assert_eq!(pack.entries[0].hex, None);
+    }
+
+    #[test]
+    fn a_bad_logo_colour_is_damage() {
+        for hex in [
+            serde_json::json!("#4169E1"),
+            serde_json::json!("4169e1"),
+            serde_json::json!("#4169e1\""),
+            serde_json::json!(4169),
+        ] {
+            let err = read_pack(&build_logo(hex.clone())).err().unwrap();
+            assert!(err.to_string().contains("brand-x colour"), "{hex}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_version_1_pack_is_damaged() {
+        let bytes = build_version(1, &[("database", FRAMED.as_bytes(), None)]);
+        let err = read_pack(&bytes).err().unwrap();
+        assert!(err.to_string().contains("pack version"), "{err}");
+        let bytes = build_version(3, &[("database", FRAMED.as_bytes(), None)]);
+        assert!(read_pack(&bytes).is_err());
     }
 }

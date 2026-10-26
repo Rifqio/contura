@@ -670,6 +670,7 @@ name = "contura"
 version = "1.0.0"
 dependencies = [
  "contura-core",
+ "gtk",
  "serde",
  "serde_json",
  "tauri",
@@ -678,6 +679,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "tokio",
+ "webkit2gtk",
  "windows-sys 0.61.2",
 ]
 

@@ -1,6 +1,6 @@
 // The .flow language (A2): the document the parser returns and the writer writes, and the one quoting rule both follow.
 
-export type DiagramKind = "dfd" | "flow" | "cloud" | "sequence" | "state" | "class" | "mindmap" | "timeline";
+export type DiagramKind = "dfd" | "flow" | "cloud" | "er" | "sequence" | "state" | "class" | "mindmap" | "timeline";
 
 /** Data flow kinds (Gane-Sarson). */
 export type DfdKind = "entity" | "process" | "store";
@@ -8,7 +8,8 @@ export type DfdKind = "entity" | "process" | "store";
 /** Flowchart kinds; a flowchart node with no kind is a step. */
 export type FlowKind = "start" | "end" | "step" | "decision" | "io" | "subprocess";
 
-/** Step 12, item 19: the kinds of the newer diagrams. */
+/** Step 12, item 19: the kinds of the newer diagrams. An ER table's `entity` is a table (a data flow's is an outside party). */
+export type ErKind = "entity" | "weak";
 export type SequenceKind = "participant" | "actor";
 export type StateKind = "state" | "choice" | "fork";
 export type ClassKind = "class" | "interface" | "enum";
@@ -22,6 +23,7 @@ export type FlowNodeKind =
   | "service"
   | "document"
   | "database"
+  | ErKind
   | SequenceKind
   | StateKind
   | ClassKind
@@ -29,7 +31,22 @@ export type FlowNodeKind =
   | TimelineKind
   | "note";
 
-export const DIAGRAM_KINDS: readonly DiagramKind[] = ["dfd", "flow", "cloud", "sequence", "state", "class", "mindmap", "timeline"];
+export const DIAGRAM_KINDS: readonly DiagramKind[] = ["dfd", "flow", "cloud", "er", "sequence", "state", "class", "mindmap", "timeline"];
+
+/** Other names people write for a diagram kind, lowercase: a header using one gets a fix to the kind. */
+export const KIND_ALIASES: ReadonlyMap<string, DiagramKind> = new Map<string, DiagramKind>([
+  ["flowchart", "flow"],
+  ["erd", "er"],
+  ["entity", "er"],
+  ["seq", "sequence"],
+  ["mind map", "mindmap"],
+  ["mind-map", "mindmap"],
+  ["dataflow", "dfd"],
+  ["data-flow", "dfd"],
+  ["statechart", "state"],
+  ["uml", "class"],
+  ...DIAGRAM_KINDS.map((k) => [k, k] as [string, DiagramKind]),
+]);
 
 /**
  * The kind words each diagram takes in brackets, in the order the problems list them. Sequence, class, mind map
@@ -40,6 +57,7 @@ export const KINDS: Record<DiagramKind, readonly FlowNodeKind[]> = {
   dfd: ["entity", "process", "store"],
   flow: ["start", "end", "step", "decision", "io", "subprocess", "document", "database"],
   cloud: ["service"],
+  er: ["entity", "weak"],
   sequence: [],
   state: ["state", "choice", "fork"],
   class: [],
@@ -71,33 +89,21 @@ export type FlowAttrKey = "id" | "icon" | "label" | "color" | "table";
 export const ATTR_KEYS: readonly FlowAttrKey[] = ["id", "icon", "label", "color", "table"];
 
 /**
- * Step 11 (PRODUCT.md principle 5): `color` is one of six theme colours named by what they mean, never a hex or a
- * free colour name. Each draws from theme tokens (ADR 0008), so dark, light and Publish draw it their own way.
+ * Step 11 (PRODUCT.md principle 5): `color` is one of six theme colours named by what they mean (a CSS colour name or
+ * a hex is also read, see colours.ts). Each preset draws from theme tokens (ADR 0008), so dark, light and Publish draw it their own way.
  */
 export const PALETTE = ["accent", "info", "success", "warning", "danger", "muted"] as const;
 export type PaletteName = (typeof PALETTE)[number];
 export const isPaletteName = (v: string | null | undefined): v is PaletteName => (PALETTE as readonly string[]).includes(v ?? "");
 
-/** The words people type for a colour, and the palette name each means (a problem's quick fix). */
-export const COLOUR_WORDS: Readonly<Record<string, PaletteName>> = {
-  red: "danger",
-  green: "success",
-  blue: "info",
-  cyan: "info",
-  yellow: "warning",
-  orange: "warning",
-  amber: "warning",
-  purple: "accent",
-  violet: "accent",
-  grey: "muted",
-  gray: "muted",
-};
-
 /**
- * Step 11: the kinds whose shapes are written `Name [..]`, so they take `label:` and `color:`, and whose lines and
- * groups take `color:`. Sequence, class and timeline items are written with a word or a date and take neither in 1.0.
+ * The kinds whose shapes take `label:` and `color:`: those written `Name [..]`, and a sequence's participants, written
+ * `participant Name [..]`. Class and timeline items are written with a word or a date and take neither.
  */
-export const ATTR_DIAGRAMS: ReadonlySet<DiagramKind> = new Set(["flow", "dfd", "state", "cloud", "mindmap"]);
+export const ATTR_DIAGRAMS: ReadonlySet<DiagramKind> = new Set(["flow", "dfd", "state", "cloud", "mindmap", "sequence", "er"]);
+
+/** The kinds whose lines and groups take `color:`. A sequence colours its participants, not its messages. */
+export const LINE_COLOUR_DIAGRAMS: ReadonlySet<DiagramKind> = new Set(["flow", "dfd", "state", "cloud", "mindmap", "er"]);
 
 export function isFlowchartKind(kind: FlowNodeKind): kind is FlowKind {
   return (KINDS.flow as readonly string[]).includes(kind);
@@ -111,8 +117,15 @@ export interface FlowNode {
    * (`schema.table`), in the order they are written.
    */
   attrs: Record<string, string>;
-  /** Rows written on their own lines: a class's members (`Invoice : + send()`) as "+ send()", in the order they are written. */
+  /**
+   * Rows written on their own lines, in the order they are written: an ER table's columns (`  email text` inside its
+   * braces) as "email text", or "email" with no type; a class's members (`Invoice : + send()`) as "+ send()".
+   */
   rows?: string[];
+  /** An ER table's column flags, one list per row in `rows`, in COLUMN_FLAGS order. Absent when no column has any. */
+  rowFlags?: ColumnFlag[][];
+  /** An ER table's column comments (`id int pk // the key`), one per row in `rows`. Absent when no column has one. */
+  rowComments?: (string | undefined)[];
   /** A mind map topic's depth: 1 for a topic, 2 for a subtopic, and so on (the root is 0). */
   depth?: number;
   /** A timeline item's date (`2026-10-19`, `2026-10`), and a period's end. */
@@ -126,9 +139,19 @@ export interface FlowNode {
 
 /**
  * `>` one way, `-` no arrow, `-->` dashed, `<>` both ways, `..>` dotted one way (cloud and class). Step 12 adds:
- * `->` a sequence message (`-->` its reply); `--` an association, `<|--` inheritance, `*--` composition (class).
+ * `->` a sequence message (`-->` its reply); `<|--` inheritance, `*--` composition (class). `--` is a dotted line with no
+ * head in every kind with lines, and the solid association in a class diagram. An ER relationship is `>` many to one,
+ * `<` one to many, `-` one to one and `<>` many to many (DBML's operators).
  */
-export type FlowArrow = ">" | "-" | "-->" | "<>" | "..>" | "->" | "--" | "<|--" | "*--";
+export type FlowArrow = ">" | "<" | "-" | "-->" | "<>" | "..>" | "->" | "--" | "<|--" | "*--";
+
+/** What each ER line says about the rows at its ends, read from the first end to the second. */
+export const erCardinality: Record<">" | "<" | "-" | "<>", "many-to-one" | "one-to-many" | "one-to-one" | "many-to-many"> = {
+  ">": "many-to-one",
+  "<": "one-to-many",
+  "-": "one-to-one",
+  "<>": "many-to-many",
+};
 
 /** The line a flow drawn on the canvas writes, by diagram kind. */
 export function defaultArrow(kind: DiagramKind | null): FlowArrow {
@@ -142,13 +165,14 @@ export const FIXED_KINDS: ReadonlySet<DiagramKind> = new Set(["sequence", "mindm
 
 /** The lines each diagram kind draws; any other arrow is a problem with a fix to the first. */
 export const ARROWS: Record<DiagramKind, readonly FlowArrow[]> = {
-  dfd: [">", "<>", "-->", "-"],
-  flow: [">", "<>", "-->", "-"],
-  cloud: [">", "<>", "-", "-->", "..>"],
+  dfd: [">", "<>", "-->", "-", "--"],
+  flow: [">", "<>", "-->", "-", "--"],
+  cloud: [">", "<>", "-", "--", "-->", "..>"],
+  er: [">", "<", "-", "<>"],
   sequence: ["->", "-->"],
-  state: [">", "-->"],
+  state: [">", "-->", "--"],
   class: ["<|--", "*--", "..>", "-->", "--", "-"],
-  mindmap: [">", "-"],
+  mindmap: [">", "-", "--"],
   timeline: [],
 };
 
@@ -164,7 +188,69 @@ export interface FlowLink {
   chained?: boolean;
   /** Step 11: `A > B: label [color: warning]`, a PALETTE name (eraser.io's connection colour). */
   color?: string;
+  /**
+   * An ER relationship's column at each end (`orders.customer_id > customers.id`); `from` and `to` stay the tables, so
+   * a line between columns draws and deletes as a line between tables does. Absent on a table-to-table line.
+   */
+  fromColumn?: string;
+  toColumn?: string;
 }
+
+/**
+ * A line end as .flow writes it: the node's name, then `.column` for an ER relationship's column. A table with a column
+ * end never needs quotes: the edits refuse one that would (`ER_NOTES.quotedEnd`), and a pasted table's free name
+ * keeps to SQL's letters.
+ */
+export function linkEndText(name: string, column?: string): string {
+  return column === undefined ? flowName(name) : `${flowName(name)}.${column}`;
+}
+
+/** What an ER column says about itself after its type, in the order the writer writes them. */
+export type ColumnFlag = "pk" | "not null" | "unique";
+export const COLUMN_FLAGS: readonly ColumnFlag[] = ["pk", "not null", "unique"];
+
+/** A column's flags as the writer writes them: ` pk not null unique` in that order, only those set, or nothing. */
+export function columnFlagsText(flags: Iterable<ColumnFlag>): string {
+  const set = new Set(flags);
+  const out = COLUMN_FLAGS.filter((f) => set.has(f));
+  return out.length ? ` ${out.join(" ")}` : "";
+}
+
+/**
+ * A column type as the writer writes it: bare when it reads back as one token, else quoted. A token stops at white space
+ * outside parentheses (`decimal(10, 2)` stays bare); a quote, a `//`, a brace, or a word that reads as a flag
+ * (`pk`, `not`, `unique`) is quoted too.
+ */
+export function columnTypeText(type: string): string {
+  if (type === "" || /["{}]|\/\//.test(type) || /^(pk|not|unique)$/i.test(type)) return quote(type);
+  let depth = 0;
+  for (let i = 0; i < type.length; i++) {
+    const c = type[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /\s/.test(c)) return quote(type);
+  }
+  return type;
+}
+
+/** An ER table: its statement alone, or with its columns as a block, one `  name type flags` line each. */
+export function tableText(n: FlowNode): string {
+  const own = nodeStatement("er", n);
+  if (!n.rows?.length) return own;
+  const columns = n.rows.map((row, i) => {
+    const space = row.search(/\s/);
+    const name = space < 0 ? row : row.slice(0, space);
+    const type = space < 0 ? "" : row.slice(space + 1);
+    const note = n.rowComments?.[i];
+    // A comment ends at the line end, so a line break inside one becomes a space.
+    const comment = note === undefined ? "" : note ? ` // ${note.replace(/[\r\n]+/g, " ")}` : " //";
+    return `  ${name}${type ? ` ${columnTypeText(type)}` : ""}${columnFlagsText(n.rowFlags?.[i] ?? [])}${comment}`;
+  });
+  return [`${own} {`, ...columns, "}"].join("\n");
+}
+
+/** An ER column name the canvas writes: letters, digits and _ (board ER interactions). */
+export const isColumnName = (s: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
 
 export interface FlowGroup {
   name: string;
@@ -212,9 +298,10 @@ export const MAX_GROUP_DEPTH = 20;
 
 /**
  * Text .flow reads as syntax inside a name: brackets, braces, `:`, `>`, `<`, quotes, a backslash, a `//`
- * comment, a lone `-` (the no-arrow link), `--` (the dashed link) and a line break. The parser reads the same rule.
+ * comment, a lone `-` (the no-arrow link), `--` (the dashed link), a line break, and a comma (it separates the
+ * ends of a fan-out link; a node line still reads a bare comma as part of its name). The parser reads the same rule.
  */
-const RESERVED = /[[\]{}:><"\\\r\n]|\/\/|(^|\s)-(\s|$)|--/;
+const RESERVED = /[[\]{}:><"\\,\r\n]|\/\/|(^|\s)-(\s|$)|--/;
 
 /** True when the name has to be written in double quotes. */
 export function needsQuotes(name: string): boolean {
@@ -246,6 +333,7 @@ export function flowValue(value: string): string {
  */
 export function attrValue(key: string, value: string): string {
   if (key === "label") return needsQuotes(value) || value.includes(",") ? quote(value) : value;
+  if (key === "color" && value.startsWith("#")) return quote(value);
   return flowValue(value);
 }
 
@@ -278,7 +366,10 @@ export function isoToday(now = new Date()): string {
 export function nodeStatement(diagram: DiagramKind | null, node: Pick<FlowNode, "name" | "kind" | "attrs"> & Partial<FlowNode>): string {
   const name = flowName(node.name);
   if (node.kind === "note") return `note: ${flowLabel(node.text ?? node.name)}`;
-  if (WORD_KINDS.has(node.kind)) return `${node.kind} ${name}`;
+  if (WORD_KINDS.has(node.kind)) {
+    const items = node.kind === "participant" || node.kind === "actor" ? attrItems(node.attrs) : [];
+    return `${node.kind} ${name}${items.length ? ` [${items.join(", ")}]` : ""}`;
+  }
   if (diagram === "mindmap") {
     // A topic takes `label:` and `color:` (step 11).
     const items = attrItems(node.attrs);
@@ -289,9 +380,37 @@ export function nodeStatement(diagram: DiagramKind | null, node: Pick<FlowNode, 
     return node.kind === "period" ? `${date} to ${node.until ?? date}: ${name}` : `${date}: ${name}`;
   }
   // A cloud node is always a service, and the default kind of the newer diagrams goes unsaid.
-  const unsaid = (diagram === "cloud" && node.kind === "service") || (diagram === "state" && node.kind === "state");
+  const unsaid = (diagram === "cloud" && node.kind === "service") || (diagram === "state" && node.kind === "state") || (diagram === "er" && node.kind === "entity");
   const parts: string[] = unsaid ? [] : [node.kind];
   parts.push(...attrItems(node.attrs));
   return parts.length ? `${name} [${parts.join(", ")}]` : name;
 }
 
+/**
+ * An ER table's free name: `name` when no table has it in any case (SQL folds unquoted names), else `name_2`,
+ * `name_3`. Only a trailing `_N` the app itself added counts on: `orders_2` exists because `orders` does, so its copy
+ * is `orders_3`; `log_2024` is a name of its own, so its copy is `log_2024_2`. With `first`, the name is always
+ * numbered, from `name_<first>` on.
+ */
+export function sqlFreeName(name: string, taken: Iterable<string>, first?: number): string {
+  const lower = new Set<string>();
+  for (const t of taken) lower.add(t.toLowerCase());
+  // A numbered series (a table added by double-click is table_1, table_2): never the bare name.
+  if (first !== undefined) {
+    for (let n = first; ; n++) if (!lower.has(`${name}_${n}`.toLowerCase())) return `${name}_${n}`;
+  }
+  if (!lower.has(name.toLowerCase())) return name;
+  let base = name;
+  let n = 2;
+  const m = /^(.+)_(\d+)$/.exec(name);
+  if (m && Number(m[2]) >= 2 && lower.has(m[1].toLowerCase())) {
+    base = m[1];
+    n = Number(m[2]) + 1;
+  }
+  for (; ; n++) if (!lower.has(`${base}_${n}`.toLowerCase())) return `${base}_${n}`;
+}
+
+/** Caps for one board file: frames, shapes across all frames, and links one fan expands to. */
+export const MAX_BOARD_FRAMES = 50;
+export const MAX_BOARD_SHAPES = 10_000;
+export const MAX_FAN_LINKS = 100;

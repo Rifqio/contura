@@ -15,6 +15,8 @@ const SETS = [
     source: "https://aws.amazon.com/architecture/icons/",
     note: "Release 07312026",
     notice: "",
+    style: "colour",
+    changes: "Fitted into a 24 by 24 frame with even margins; never redrawn or recoloured.",
   },
   {
     id: "lucide",
@@ -23,16 +25,28 @@ const SETS = [
     source: "https://lucide.dev",
     note: "",
     notice: "ISC License\n\nCopyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 <b>as part of Feather</b>.",
+    style: "outline",
+    changes: "Fitted into a 24 by 24 frame and drawn at stroke 1.5 in the theme's text colour.",
   },
-  { id: "simple", title: "Simple Icons", licence: "CC0-1.0", source: "https://simpleicons.org", note: "Brand logos are trademarks of their owners.", notice: "" },
-  { id: "odd", title: "Odd set", licence: "MIT", source: "javascript:alert(1)", note: "", notice: "" },
-  { id: "plain", title: "Plain set", licence: "MIT", source: "http://example.com/icons", note: "", notice: "" },
+  { id: "simple", title: "Simple Icons", licence: "CC0-1.0", source: "https://simpleicons.org", note: "Brand logos are trademarks of their owners.", notice: "", style: "mono", changes: "Fitted into a 24 by 24 frame and drawn in its brand colour; a logo too pale for the light theme gets a hairline outline in the text colour, and one too dark for the dark theme is drawn in the text colour." },
+  { id: "odd", title: "Odd set", licence: "MIT", source: "javascript:alert(1)", note: "", notice: "", style: "colour", changes: "Fitted." },
+  { id: "plain", title: "Plain set", licence: "MIT", source: "http://example.com/icons", note: "", notice: "", style: "colour", changes: "Fitted." },
 ];
+
+const SA_SIX = [
+  ["brand-debian", "CC-BY-SA-3.0, from https://www.debian.org/logos"],
+  ["brand-jenkins", "CC-BY-SA-3.0, from https://get.jenkins.io/art/"],
+  ["brand-php", "CC-BY-SA-4.0, from https://php.net/download-logos.php"],
+  ["brand-r", "CC-BY-SA-4.0, from https://www.r-project.org/logo/"],
+  ["brand-ruby", "CC-BY-SA-2.5, from https://www.ruby-lang.org/en/about/logo/"],
+  ["brand-rust", "CC-BY-SA-4.0, from https://www.rust-lang.org"],
+] as const;
 
 const ROUTES = {
   icon_sets: () => SETS,
   icon_index: () => [
-    { name: "brand-rust", set: "simple", title: "Rust", licence: "CC-BY-SA-4.0, https://www.rust-lang.org/policies/media-guide" },
+    ...SA_SIX.map(([name, licence]) => ({ name, set: "simple", title: name, licence })),
+    { name: "brand-git", set: "simple", title: "Git", licence: "CC-BY-3.0, from https://git-scm.com/community/logos" },
     { name: "aws-s3", set: "aws", title: "S3", licence: null },
   ],
 };
@@ -116,7 +130,33 @@ test("a_link_that_opens_clears_the_last_failure", async () => {
 
 test("brand_logos_with_their_own_licence_are_named", async () => {
   render(<IconCredits onClose={() => {}} />);
-  expect(await screen.findByText("brand-rust: CC-BY-SA-4.0, https://www.rust-lang.org/policies/media-guide")).toBeTruthy();
+  expect(await screen.findByText("brand-rust: CC-BY-SA-4.0, from https://www.rust-lang.org")).toBeTruthy();
+  expect(await screen.findByText("brand-git: CC-BY-3.0, from https://git-scm.com/community/logos")).toBeTruthy();
+});
+
+test("each_set_says_how_it_was_changed", async () => {
+  render(<IconCredits onClose={() => {}} />);
+  const dialog = screen.getByRole("dialog", { name: "Icon credits" });
+  for (const s of SETS.filter((x) => x.changes !== "Fitted.")) {
+    const set = await within(dialog).findByRole("region", { name: s.title });
+    expect(within(set).getByText(`Changed: ${s.changes}`)).toBeTruthy();
+  }
+});
+
+test("the_six_cc_by_sa_logos_say_the_adapted_file_is_shared_under_the_same_licence", async () => {
+  render(<IconCredits onClose={() => {}} />);
+  const dialog = screen.getByRole("dialog", { name: "Icon credits" });
+  const simple = await within(dialog).findByRole("region", { name: "Simple Icons" });
+  for (const [name, licence] of SA_SIX) {
+    const kind = licence.split(",")[0];
+    expect(
+      within(simple).getByText(
+        `${name}: fitted into a 24 by 24 frame and drawn in its brand colour; a logo too pale for the light theme gets a hairline outline in the text colour, and one too dark for the dark theme is drawn in the text colour. This adapted file is shared under the same licence, ${kind}.`,
+      ),
+    ).toBeTruthy();
+  }
+  // A logo under another licence gets no such line.
+  expect(within(simple).queryByText(/brand-git: Fitted/)).toBeNull();
 });
 
 test("unreadable_credits_say_so", async () => {

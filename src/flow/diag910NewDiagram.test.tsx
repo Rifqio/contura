@@ -1,8 +1,8 @@
 // Diagram step 10 (board DiagramStartWell, F27; user decision of 25 Oct): New diagram starts from the kind's example by
 // default (Example / Blank, draw.io's templates and Blank Diagram); a free default name is ready ("Untitled diagram 2"
 // when "Untitled diagram" is taken, VS Code's Untitled-N), so Enter creates at once; a double-click on a card creates
-// (draw.io); the selected kind follows the search, so Create never makes a kind you cannot see. ER diagrams live in the
-// Schema Builder, so there is no ER card.
+// (draw.io); the selected kind follows the search, so Create never makes a kind you cannot see. ER diagrams are a kind
+// again: their card comes after cloud.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
@@ -100,10 +100,11 @@ test("a double-click on a card creates that kind at once (draw.io)", async () =>
   expect(callsTo("write_diagram")[0].text).toBe(exampleText("timeline", "Untitled diagram 2"));
 });
 
-test("no ER card: ER diagrams live in the Schema Builder", () => {
+test("the ER card comes after cloud, and its example is table blocks", () => {
   const { dialog } = setup();
   const cards = within(within(dialog).getByRole("radiogroup", { name: "Kind" })).getAllByRole("radio").map((c) => c.getAttribute("aria-label"));
-  expect(cards).toEqual(["Data flow", "Flowchart", "Cloud architecture", "Sequence", "State", "Class", "Mind map", "Timeline"]);
+  expect(cards).toEqual(["Data flow", "Flowchart", "Cloud architecture", "ER diagram", "Sequence", "State", "Class", "Mind map", "Timeline"]);
+  expect(exampleText("er", "Shop")).toContain("customers {\n  id int pk\n");
 });
 
 test("the default name is not a change: a click outside closes; a changed name is kept from a click outside", async () => {
@@ -148,6 +149,7 @@ test("fix round 1, M8: each card draws its kind's real example, from the example
     "Data flow": ["Customer", "Take order", "Orders"],
     Flowchart: ["Order in", "Check stock", "In stock?"],
     "Cloud architecture": ["Gateway", "Orders API", "AWS"],
+    "ER diagram": ["customers", "orders", "customer_id", "numeric"],
     Sequence: ["Customer", "Shop", "Payments"],
     State: ["Draft", "Sent", "Overdue"],
     Class: ["Invoice", "Payable", "LineItem"],

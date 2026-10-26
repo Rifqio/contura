@@ -2,6 +2,7 @@
 // from the theme the Publish dialog picks (light or dark), never a literal.
 import { afterEach, expect, test, vi } from "vitest";
 import { flowScene } from "../../flow/flowScene";
+import { mixHex } from "../../lang/flow/colours";
 import { parseFlow } from "../../lang/flow/parse";
 import { NODE_TOKENS, PALETTE_TOKENS } from "../types";
 import { exportPalette, type ExportPalette } from "./palette";
@@ -94,4 +95,33 @@ test("the palette is read from the theme Publish picks, light or dark", () => {
   expect(dark.colours?.danger.fill).toMatch(/^#d1/);
   expect(light.colours?.danger.fill).not.toBe(dark.colours?.danger.fill);
   expect(Object.keys(light.colours ?? {})).toEqual(["accent", "info", "success", "warning", "danger", "muted"]);
+});
+
+test("a_custom_colour_publishes_concrete_values", () => {
+  const doc = parseFlow(['diagram flow "Orders"', "Charge card [step, color: teal]", "Ship"].join("\n")).doc!;
+  const scene = flowScene(doc, { "Charge card": { x: 0, y: 0 }, Ship: { x: 300, y: 0 } }, "modern", new Map());
+  const svg = sceneToSvg(scene, BASE, opts);
+  const node = /<g data-node="Charge card"[^]*?<\/g>/.exec(svg)![0];
+  expect(node).toContain(`fill="${mixHex("#008080", BASE.surface, 0.18)}"`);
+  expect(node).toContain('stroke="#008080"');
+  expect(node).toContain(`fill="${BASE.text}"`);
+  expect(svg).not.toContain("color-mix");
+  expect(svg).not.toContain("var(");
+});
+
+test("a_hex_group_line_and_arrowhead_publish_concrete_values", () => {
+  const text = ['diagram flow "Orders"', "Charge card [step]", "Ship [step]", "Dispatch [color: #3b82f6] {", "  Pack", "}", "Charge card > Ship [color: #3b82f6]"].join("\n");
+  const doc = parseFlow(text).doc!;
+  const scene = flowScene(doc, { "Charge card": { x: 0, y: 0 }, Ship: { x: 300, y: 0 }, Pack: { x: 600, y: 0 } }, "modern", new Map());
+  const svg = sceneToSvg(scene, BASE, opts);
+  const area = /<g data-area="Dispatch">[^]*?<\/g>/.exec(svg)![0];
+  expect(area).toContain('stroke="#3b82f6"');
+  expect(area).toContain(`fill="${mixHex("#3b82f6", BASE.surface, 0.18)}"`);
+  // The title reads in the theme's text; the hue stays on the border.
+  expect(/<text[^>]*>Dispatch<\/text>/.exec(area)![0]).toContain(`fill="${BASE.text}"`);
+  const edge = /<g data-edge="edge:0">[^]*?<\/g>/.exec(svg)![0];
+  expect(edge).toContain('stroke="#3b82f6"');
+  expect(edge).toMatch(/data-marker="head"[^>]*fill="#3b82f6"/);
+  expect(svg).not.toContain("color-mix");
+  expect(svg).not.toContain("var(");
 });

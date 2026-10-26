@@ -196,6 +196,33 @@ fn random_texts_split_like_the_lexer() {
     }
 }
 
+/// A DELIMITER script, as a Backup or mysqldump writes it, runs in the editor as the same
+/// statements this reader gives Restore and SQL file import: a routine or compound statement
+/// a custom delimiter ends is sent whole, its `;`s included, by both. (Any other chunk the
+/// reader sends whole, as the mysql client does, and the editor splits on `;`.)
+#[test]
+fn mysql_delimiter_scripts_split_as_the_editor_runs_them() {
+    let scripts = [
+        "DELIMITER ;;\nCREATE PROCEDURE `p`() BEGIN SELECT 1; END;;\nDELIMITER ;\nSELECT 2;\n",
+        "DELIMITER ;;\nCREATE FUNCTION `f`() RETURNS int\n    DETERMINISTIC\nRETURN 1;;\nDELIMITER ;\n",
+        "DELIMITER ;;\n/*!50003 CREATE*/ /*!50003 TRIGGER tr BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.a = 1; SET NEW.b = 2; END */;;\nDELIMITER ;\nINSERT INTO t VALUES (1);",
+        "DROP PROCEDURE IF EXISTS p;\nDELIMITER ;;\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 'a;;b';\nEND ;;\nDELIMITER ;\nCALL p();\ndelimiter //\nCREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.a = 1; END//\nDELIMITER ;\n",
+        "  delimiter $$\nSELECT '$$', `a$$b` -- $$\n$$\nDELIMITER ;\nSELECT 3;",
+        "DELIMITER $$\nCREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW IF NEW.a > 0 THEN SET NEW.b = 1; DELETE FROM log WHERE id < 5; END IF$$\nDELIMITER ;\n",
+        "DELIMITER //\nBEGIN NOT ATOMIC DELETE FROM t WHERE a=1; SELECT 1; END//\nDELIMITER ;\n",
+        // `--` starts a comment only before an ASCII blank or control character.
+        "SELECT 1 --\u{a0}x; SELECT 2;\nSELECT 3 --\u{1}x; SELECT 4\n;",
+    ];
+    for sql in scripts {
+        let read = split(MY, sql);
+        let editor: Vec<&str> = crate::safety::split_statements(MY, sql)
+            .into_iter()
+            .map(|r| &sql[r])
+            .collect();
+        assert_eq!(texts(&read), editor, "{sql:?}");
+    }
+}
+
 #[test]
 fn mysql_delimiter_routines() {
     let sql = "DROP PROCEDURE IF EXISTS p;\n\

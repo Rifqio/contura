@@ -180,7 +180,7 @@ test("where a colour cannot be written, Colour is off and says why", async () =>
   const menu = await screen.findByRole("menu", { name: "App actions" });
   const colour = within(menu).getByRole("menuitem", { name: "Colour" });
   expect(colour.hasAttribute("disabled")).toBe(true);
-  expect(colour.getAttribute("title")).toBe("Participants are written with a word (participant Shop) and take no brackets, so no colour or label in 1.0.");
+  expect(colour.getAttribute("title")).toBe("Colour a participant in the code, for example participant App [color: info].");
 });
 
 test("a name typed that another shape has keeps the shape: the next free name and label:, lines unchanged", async () => {

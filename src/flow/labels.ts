@@ -11,11 +11,11 @@ import { said } from "./editWords";
 
 /**
  * Whether a shape can show a label: the kinds whose shapes are written `Name [..]` (flowchart, data flow, state, cloud
- * and mind map topics). Notes, the central idea and `[*]` markers keep the refusal, as do participants, classes and
- * timeline items.
+ * and mind map topics). Notes, the central idea and `[*]` markers keep the refusal, as do participants (their head
+ * shows the name), classes and timeline items.
  */
 export function takesLabel(diagram: DiagramKind | null, kind: FlowNodeKind | null | undefined, name?: string): boolean {
-  if (!diagram || !ATTR_DIAGRAMS.has(diagram)) return false;
+  if (!diagram || diagram === "sequence" || !ATTR_DIAGRAMS.has(diagram)) return false;
   if (kind === "note" || kind === "root") return false;
   return !(name !== undefined && isStateMarker(name));
 }

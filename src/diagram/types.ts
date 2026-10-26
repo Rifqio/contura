@@ -18,6 +18,8 @@ export type DrawnKind =
   // Step 12, item 19: the newer diagram kinds' shapes.
   | "document"
   | "database"
+  | "erTable"
+  | "erWeak"
   | "participant"
   | "actor"
   | "state"
@@ -82,6 +84,8 @@ export const NODE_TOKENS: Record<NodeKind, { fill: string; stroke: string }> = {
   // the neutral pair for people, markers and forks, views for interfaces and the root, notes in the note pair.
   document: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
   database: { fill: "--c-node-datastore-fill", stroke: "--c-node-datastore-stroke" },
+  erTable: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
+  erWeak: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
   participant: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },
   actor: { fill: "--c-node-external-fill", stroke: "--c-node-external-stroke" },
   state: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },

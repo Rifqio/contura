@@ -226,9 +226,9 @@ describe("refused kinds", () => {
     expect(r.nodes).toBe(0);
   });
 
-  test("an ER diagram goes to the Schema Builder", () => {
+  test("an ER diagram is not imported yet: start one and write its tables", () => {
     const r = mermaidToFlow(lines("erDiagram", "    CUSTOMER ||--o{ ORDER : places"), "S");
-    expect(r.errors.map((e) => e.text)).toEqual(["ER diagrams live in the Schema Builder. Open the Schema Builder to model tables."]);
+    expect(r.errors.map((e) => e.text)).toEqual(["Mermaid ER diagrams are not imported yet. Start an ER diagram and write its tables."]);
     expect(r.nodes).toBe(0);
   });
 });

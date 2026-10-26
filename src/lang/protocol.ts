@@ -44,7 +44,7 @@ export type ParseResult = {
   ranges: Ranges;
 };
 
-export type { FlowBatchOp, FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowResult, FlowSpansResult } from "./flow/service";
+export type { FlowBatchOp, FlowBoardOp, FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowResult, FlowSpansResult, FrameResult } from "./flow/service";
 export type { FlowCompletionResult } from "./flow/complete";
 export type { FlowEditOp } from "./flow/edits";
 
@@ -80,13 +80,16 @@ export type ToWorker =
   | { type: "dbmlClose"; docId: string }
   /** A flow tab opened again under a closed id. */
   | { type: "flowOpen"; docId: string }
-  /** Source ranges of the parse with `version`; refused as stale when the text has changed since. */
-  | { type: "flowSpans"; id: number; docId: string; version: number; keys: string[]; names: string[] }
-  /** A canvas action as text edits against the parse with `version`; refused as stale when the text has changed. */
-  | { type: "flowEdit"; id: number; docId: string; version: number; edit: FlowRequestOp }
-  /** The outline of the parse with `version`, for the diagram assistant; refused as stale when the text has changed. */
-  | { type: "flowOutline"; id: number; docId: string; version: number }
-  /** Completion at `pos` in a .flow text. */
+  /**
+   * Source ranges of the parse with `version`, in frame `frameIndex` (0 when not given), in file positions; refused
+   * as stale when the text has changed since.
+   */
+  | { type: "flowSpans"; id: number; docId: string; version: number; keys: string[]; names: string[]; frameIndex?: number }
+  /** A canvas action on frame `frameIndex` as text edits against the parse with `version`; refused as stale when the text has changed. */
+  | { type: "flowEdit"; id: number; docId: string; version: number; edit: FlowRequestOp; frameIndex?: number }
+  /** The outline of frame `frameIndex` of the parse with `version`, for the diagram assistant; refused as stale when the text has changed. */
+  | { type: "flowOutline"; id: number; docId: string; version: number; frameIndex?: number }
+  /** Completion at `pos` in a .flow text, in the frame holding `pos`. */
   | { type: "flowComplete"; id: number; docId: string; text: string; pos: number }
   /** Every icon name, for completion after `icon:`. */
   | { type: "flowIcons"; names: string[] };

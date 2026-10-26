@@ -55,14 +55,202 @@ pub fn statement_count(dialect: DialectKind, sql: &str) -> usize {
 /// previous `;` to the next, trimmed of whitespace; pieces with only comments are dropped.
 /// Leading comments stay with the statement they precede, as the editor splits it, and a
 /// CREATE TRIGGER, PROCEDURE, FUNCTION or EVENT keeps its `BEGIN ... END` body whole, `;`s
-/// inside it included (round 5, N1).
+/// inside it included (round 5, N1). On MySQL, `DELIMITER` lines are read first (see
+/// `delimited_chunks`): they are never part of a piece, and a custom delimiter ends one.
 pub fn split_statements(dialect: DialectKind, sql: &str) -> Vec<std::ops::Range<usize>> {
+    split_statements_from(dialect, sql, ";")
+}
+
+/// `split_statements` for text that starts where `delimiter` is in force (MySQL only; an
+/// empty one is `;`). A chunk a custom delimiter ends is one piece, `;`s included, when it is
+/// one routine or compound statement (see `compound`); any other chunk splits on `;`, so
+/// each of its parts runs as its own statement with its own result.
+pub fn split_statements_from(
+    dialect: DialectKind,
+    sql: &str,
+    delimiter: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let Some(chunks) = delimited_chunks(dialect, sql, delimiter, true) else {
+        return split_plain(dialect, sql);
+    };
+    let mut out = Vec::new();
+    for (c, whole) in chunks {
+        let chunk = &sql[c.clone()];
+        if whole && compound(dialect, chunk) {
+            let start = c.start + (chunk.len() - trim_start(chunk).len());
+            out.push(start..start + trim(chunk).len());
+        } else {
+            out.extend(
+                split_plain(dialect, chunk)
+                    .into_iter()
+                    .map(|r| c.start + r.start..c.start + r.end),
+            );
+        }
+    }
+    out
+}
+
+/// Whether a MySQL chunk is one routine or compound statement, which the server reads as one
+/// statement, `;`s inside: a routine's CREATE (`opens_routine`), or after an optional
+/// `label:` a BEGIN block (BEGIN followed by a word other than WORK, so not a transaction),
+/// LOOP, WHILE or REPEAT, or without a label an IF or CASE statement. The editor's
+/// `compound` reads the same.
+fn compound(dialect: DialectKind, chunk: &str) -> bool {
+    let top = top_tokens(&plain_tokens(dialect, chunk, false));
+    let word = |k: usize| match top.get(k) {
+        Some(Top::Word(w)) => Some(w.as_str()),
+        _ => None,
+    };
+    let heads: Vec<Option<String>> = top
+        .iter()
+        .map(|t| match t {
+            Top::Word(w) => Some(w.clone()),
+            _ => None,
+        })
+        .collect();
+    if opens_routine(&heads) {
+        return true;
+    }
+    let labelled = word(0).is_some() && matches!(top.get(1), Some(Top::Colon));
+    let k = if labelled { 2 } else { 0 };
+    match word(k) {
+        Some("BEGIN") => word(k + 1).is_some_and(|w| w != "WORK"),
+        Some("LOOP" | "WHILE" | "REPEAT") => true,
+        Some("IF" | "CASE") => !labelled,
+        _ => false,
+    }
+}
+
+/// Trims as the editor's `String.trim` does: Unicode white space and the byte order mark,
+/// but not U+0085, which JavaScript does not count as white space.
+fn is_trimmed(c: char) -> bool {
+    c == '\u{feff}' || c.is_whitespace() && c != '\u{85}'
+}
+
+fn trim(s: &str) -> &str {
+    s.trim_matches(is_trimmed)
+}
+
+fn trim_start(s: &str) -> &str {
+    s.trim_start_matches(is_trimmed)
+}
+
+/// MySQL `DELIMITER` lines, read as the mysql client reads them and as the SQL file
+/// import's script reader does: a line whose first word is DELIMITER (any case, after
+/// blanks), outside strings, quoted names and comments, sets the statement end to its
+/// argument (a quoted string or the first word; the rest of the line is ignored) until the
+/// next one, and is itself never sent. One with no argument, or a backslash in it, is text.
+/// The chunks are the text between DELIMITER lines, cut at each custom delimiter; `true`
+/// marks a chunk a custom delimiter is in force for, which is one statement sent whole, as
+/// the client sends it, when it is a routine or compound statement (`compound`; its
+/// `;`-parts are still each classified and checked, since `classify` and `no_where` read
+/// every one). Any other chunk is split as any other text.
+/// None on other Dialects and when the text has no DELIMITER line and starts under `;`, so
+/// such text splits exactly as before. The editor's `delimitedChunks` reads the same.
+fn delimited_chunks(
+    dialect: DialectKind,
+    sql: &str,
+    initial: &str,
+    backslash: bool,
+) -> Option<Vec<(std::ops::Range<usize>, bool)>> {
+    if dialect != DialectKind::MySql {
+        return None;
+    }
+    const WORD: &[u8] = b"delimiter";
+    let b = sql.as_bytes();
+    let len = b.len();
+    let mut chunks = Vec::new();
+    let mut delimiter = if initial.is_empty() { ";" } else { initial };
+    let mut found = delimiter != ";";
+    let (mut from, mut i, mut line_start) = (0, 0, true);
+    while i < len {
+        let c = b[i];
+        if c == b'\n' {
+            line_start = true;
+            i += 1;
+            continue;
+        }
+        if matches!(c, b' ' | b'\t' | b'\r' | 0x0b | 0x0c) {
+            i += 1;
+            continue;
+        }
+        let word_after = b.get(i + WORD.len());
+        if line_start
+            && b[i..].len() >= WORD.len()
+            && b[i..i + WORD.len()].eq_ignore_ascii_case(WORD)
+            && word_after.is_none_or(|x| matches!(x, b' ' | b'\t' | b'\r' | b'\n'))
+        {
+            let end = b[i..]
+                .iter()
+                .position(|x| *x == b'\n')
+                .map_or(len, |p| i + p);
+            if let Some(arg) = delimiter_arg(&sql[i + WORD.len()..end]) {
+                chunks.push((from..i, delimiter != ";"));
+                delimiter = arg;
+                found = true;
+                (from, i) = (end, end);
+                continue;
+            }
+        }
+        line_start = false;
+        if delimiter != ";" && b[i..].starts_with(delimiter.as_bytes()) {
+            chunks.push((from..i, true));
+            i += delimiter.len();
+            from = i;
+            continue;
+        }
+        let next = b.get(i + 1).copied();
+        let dash_comment =
+            c == b'-' && next == Some(b'-') && mysql_comment_after(char_at(sql, i + 2));
+        i = if dash_comment || c == b'#' {
+            line_comment_end(b, i, false)
+        } else if c == b'/' && next == Some(b'*') {
+            sql[i + 2..].find("*/").map_or(len, |p| i + 2 + p + 2)
+        } else if c == b'\'' || c == b'"' {
+            skip_quoted(sql, i, char::from(c), backslash).0
+        } else if c == b'`' {
+            skip_quoted(sql, i, '`', false).0
+        } else {
+            i + 1
+        };
+    }
+    if !found {
+        return None;
+    }
+    chunks.push((from..len, delimiter != ";"));
+    Some(chunks)
+}
+
+/// Whether a MySQL `--` followed by `next` starts a comment: the server wants an ASCII
+/// blank or control character (or the end) after it, so a no-break space does not.
+pub(crate) fn mysql_comment_after(next: Option<char>) -> bool {
+    next.is_none_or(|c| c.is_ascii_whitespace() || c.is_ascii_control())
+}
+
+/// The argument of a `DELIMITER` line; None when it is missing or holds a backslash.
+fn delimiter_arg(rest: &str) -> Option<&str> {
+    let src = rest.trim();
+    let arg = match src.chars().next() {
+        Some(q @ ('\'' | '"' | '`')) => {
+            let inner = &src[1..];
+            inner.find(q).map_or(inner, |i| &inner[..i])
+        }
+        _ => src
+            .split([' ', '\t', '\r', '\x0b', '\x0c'])
+            .next()
+            .unwrap_or(""),
+    };
+    (!arg.is_empty() && !arg.contains('\\')).then_some(arg)
+}
+
+/// `split_statements` for text with no DELIMITER line in force.
+fn split_plain(dialect: DialectKind, sql: &str) -> Vec<std::ops::Range<usize>> {
     whole_routines(dialect, sql, lex(dialect, sql, false).ranges)
         .into_iter()
         .map(|r| {
             let piece = &sql[r.clone()];
-            let start = r.start + (piece.len() - piece.trim_start().len());
-            start..start + piece.trim().len()
+            let start = r.start + (piece.len() - trim_start(piece).len());
+            start..start + trim(piece).len()
         })
         .collect()
 }
@@ -949,9 +1137,8 @@ fn gated_tokens(dialect: DialectKind, sql: &str, flip: bool) -> Vec<(PTok, bool)
         if exec.is_some() && c == '*' && next == Some('/') {
             exec = None;
         }
-        let dash_comment = c == '-'
-            && next == Some('-')
-            && (!mysql || char_at(sql, i + 2).is_none_or(|c| c.is_whitespace() || c.is_control()));
+        let dash_comment =
+            c == '-' && next == Some('-') && (!mysql || mysql_comment_after(char_at(sql, i + 2)));
         if dash_comment || mysql && c == '#' {
             i = line_comment_end(b, i, postgres);
             continue;
@@ -1072,14 +1259,20 @@ pub fn no_where(dialect: DialectKind, sql: &str) -> Option<NoWhere> {
 fn no_where_reading(dialect: DialectKind, sql: &str, flip: bool) -> Option<NoWhere> {
     // The safety net (round 8): every piece of a plain `;` split is read, a routine's body
     // included, so no grouping of statements can hide an UPDATE or DELETE without WHERE.
-    for r in lex(dialect, sql, flip).ranges {
-        let piece = sql[r].trim();
-        if let Some((verb, table)) = no_where_piece(dialect, piece, flip) {
-            return Some(NoWhere {
-                verb,
-                table,
-                text: piece.to_string(),
-            });
+    // MySQL DELIMITER lines are read first, as `split_statements` reads them.
+    let chunks = delimited_chunks(dialect, sql, ";", !flip)
+        .unwrap_or_else(|| std::iter::once((0..sql.len(), false)).collect());
+    for (c, _) in chunks {
+        let chunk = &sql[c];
+        for r in lex(dialect, chunk, flip).ranges {
+            let piece = chunk[r].trim();
+            if let Some((verb, table)) = no_where_piece(dialect, piece, flip) {
+                return Some(NoWhere {
+                    verb,
+                    table,
+                    text: piece.to_string(),
+                });
+            }
         }
     }
     None
@@ -1231,12 +1424,25 @@ pub struct PlannedRun {
 /// The statements a run of `statements` sends, split by the Core's lexer, each with its
 /// missing-WHERE answer. A piece with only comments sends nothing.
 pub fn plan_run(dialect: DialectKind, statements: &[String]) -> Vec<PlannedRun> {
+    plan_run_delimited(dialect, statements, &[])
+}
+
+/// `plan_run`, each statement split from the MySQL delimiter in force where it starts
+/// (`delimiters`, by index; a missing one is `;`). The editor sends a statement it cut at a
+/// custom delimiter with that delimiter, so it stays one statement here too. Grouping never
+/// hides a write: `classify` and the missing-WHERE answer read every `;`-part of a statement.
+pub fn plan_run_delimited(
+    dialect: DialectKind,
+    statements: &[String],
+    delimiters: &[String],
+) -> Vec<PlannedRun> {
     let utf16 = |s: &str| s.encode_utf16().count();
     let mut out = Vec::new();
     for (piece, sql) in statements.iter().enumerate() {
+        let delimiter = delimiters.get(piece).map_or(";", String::as_str);
         // A running count, so a long script is read once (the ranges come in order).
         let (mut at, mut units) = (0, 0);
-        for r in split_statements(dialect, sql) {
+        for r in split_statements_from(dialect, sql, delimiter) {
             let text = &sql[r.clone()];
             if text.is_empty() {
                 continue;
@@ -2004,9 +2210,8 @@ fn scan(
             continue;
         }
         // MySQL needs whitespace, a control character or the end after `--`.
-        let dash_comment = c == '-'
-            && next == Some('-')
-            && (!mysql || char_at(sql, i + 2).is_none_or(|c| c.is_whitespace() || c.is_control()));
+        let dash_comment =
+            c == '-' && next == Some('-') && (!mysql || mysql_comment_after(char_at(sql, i + 2)));
         if dash_comment || mysql && c == '#' {
             let body = i + if c == '#' { 1 } else { 2 };
             i = line_comment_end(b, i, postgres);
@@ -3898,7 +4103,11 @@ mod no_where_tests {
             let plan = plan_run(d, std::slice::from_ref(&c.sql));
             let got: Vec<&str> = plan.iter().map(|p| p.text.as_str()).collect();
             assert_eq!(got, c.pieces, "{}: {}", c.note, c.sql);
-            assert_eq!(statement_count(d, &c.sql), c.pieces.len(), "{}", c.note);
+            // `statement_count` reads `;` only, so a MySQL DELIMITER script counts its
+            // DELIMITER lines and `;`-parts instead.
+            if !(d == MY && c.sql.to_ascii_uppercase().contains("DELIMITER")) {
+                assert_eq!(statement_count(d, &c.sql), c.pieces.len(), "{}", c.note);
+            }
             let asks = plan
                 .last()
                 .and_then(|p| p.no_where.as_ref())
@@ -4283,5 +4492,210 @@ mod no_where_tests {
             ]
         );
         assert!(plan[1].no_where.is_some() && plan[3].no_where.is_none());
+    }
+
+    const R: StatementClass = StatementClass::Read;
+    const W: StatementClass = StatementClass::Write;
+
+    fn mysql(production: bool, read_only: bool) -> ConnectionConfig {
+        ConnectionConfig {
+            id: uuid::Uuid::nil(),
+            name: "shop".into(),
+            dialect: MY,
+            host: String::new(),
+            port: 0,
+            user: String::new(),
+            database: None,
+            ssl: crate::model::SslMode::Disable,
+            group_id: None,
+            file: None,
+            query_timeout_secs: None,
+            ai_access: Default::default(),
+            ai_sync: Default::default(),
+            production,
+            read_only,
+        }
+    }
+
+    /// MySQL DELIMITER: the gate sees the statements the run sends, so no DELIMITER can
+    /// hide a write, a CALL, DO, PREPARE or EXECUTE from Production or Read-only.
+    #[test]
+    fn delimiter_cannot_hide_a_write_from_the_gate() {
+        let scripts: &[(&str, &str)] = &[
+            ("DELIMITER //\nDROP TABLE x//", "DROP TABLE x"),
+            ("DELIMITER //\nDROP TABLE x//\nDELIMITER ;", "DROP TABLE x"),
+            (
+                "delimiter //\nSELECT 1//\n  DROP TABLE x //",
+                "DROP TABLE x",
+            ),
+            ("DELIMITER $$\nSELECT 1; DROP TABLE x$$", "DROP TABLE x"),
+            (
+                "DELIMITER $$\nBEGIN NOT ATOMIC SELECT 1; DROP TABLE x; END$$",
+                "BEGIN NOT ATOMIC SELECT 1; DROP TABLE x; END",
+            ),
+            ("DELIMITER ;;\nSELECT 1;;DROP TABLE x;;", "DROP TABLE x"),
+            ("DELIMITER //\nSELECT '//'//DROP TABLE x", "DROP TABLE x"),
+            ("DELIMITER ;;\nCALL p();;", "CALL p()"),
+            (
+                "DELIMITER //\nDO RELEASE_LOCK('a')//",
+                "DO RELEASE_LOCK('a')",
+            ),
+            ("DELIMITER //\nPREPARE s FROM @q//", "PREPARE s FROM @q"),
+            ("DELIMITER //\nEXECUTE s//", "EXECUTE s"),
+        ];
+        for (sql, write) in scripts {
+            let texts = texts(MY, sql);
+            assert!(texts.iter().any(|t| t == write), "{sql:?}: {texts:?}");
+            for t in &texts {
+                assert!(
+                    !t.to_ascii_uppercase().contains("DELIMITER"),
+                    "{sql:?}: {t:?}"
+                );
+            }
+            let at = texts.iter().position(|t| t == write).unwrap();
+            assert_eq!(
+                verdict(&mysql(false, true), None, &texts),
+                RunVerdict::ReadOnly { statement: at },
+                "{sql:?}"
+            );
+            let RunVerdict::NeedsConfirmation { statements, .. } =
+                verdict(&mysql(true, false), None, &texts)
+            else {
+                panic!("{sql:?} must ask on Production");
+            };
+            assert_eq!(statements[at].class, W, "{sql:?}");
+        }
+    }
+
+    /// Statements inside DELIMITER blocks are classified as the same statements are without
+    /// them: the trigger with its BEGIN ... END body is one statement, as it is with `;`.
+    #[test]
+    fn delimiter_blocks_plan_as_the_same_statements_do() {
+        let trigger = "CREATE TRIGGER t BEFORE INSERT ON orders FOR EACH ROW\nBEGIN\n  SET NEW.total = 0;\nEND";
+        let delimited =
+            format!("DELIMITER $$\n{trigger}$$\nDELIMITER ;\nINSERT INTO orders VALUES (1);");
+        let plain = format!("{trigger};\nINSERT INTO orders VALUES (1);");
+        assert_eq!(texts(MY, &delimited), texts(MY, &plain));
+        assert_eq!(
+            texts(MY, &delimited),
+            [trigger, "INSERT INTO orders VALUES (1)"]
+        );
+        let classes = |sql: &str| -> Vec<StatementClass> {
+            texts(MY, sql).iter().map(|t| classify(MY, t)).collect()
+        };
+        assert_eq!(classes(&delimited), classes(&plain));
+        assert_eq!(classes(&delimited), [W, W]);
+        assert_eq!(classes("DELIMITER //\nSELECT 1//\nSHOW TABLES//"), [R, R]);
+        // The missing-WHERE ask reads what is sent.
+        let plan = plan_run(
+            MY,
+            &["DELIMITER //\nUPDATE t SET a = 1//\nDELIMITER ;".into()],
+        );
+        assert_eq!(plan[0].text, "UPDATE t SET a = 1");
+        assert!(plan[0].no_where.is_some());
+    }
+
+    /// A custom delimiter's chunk that is one routine or compound statement is sent whole,
+    /// as the mysql client sends it, and each of its `;`-parts still counts: one write makes
+    /// it a write, and one UPDATE or DELETE without WHERE asks. Any other chunk splits on
+    /// `;`, so each part runs as its own statement with its own result.
+    #[test]
+    fn delimiter_chunk_is_whole_only_for_a_compound_statement() {
+        let trigger = "CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW IF NEW.a > 0 THEN SET NEW.b = 1; DELETE FROM log WHERE id < 5; END IF";
+        assert_eq!(texts(MY, &format!("DELIMITER $$\n{trigger}$$")), [trigger]);
+        let block = "BEGIN NOT ATOMIC DELETE FROM t WHERE a=1; SELECT 1; END";
+        assert_eq!(texts(MY, &format!("DELIMITER //\n{block}//")), [block]);
+        assert_eq!(classify(MY, block), W);
+        assert_eq!(
+            texts(MY, "DELIMITER $$\nSELECT 1; DROP TABLE x$$"),
+            ["SELECT 1", "DROP TABLE x"]
+        );
+        for (sql, whole) in [
+            ("lbl: BEGIN SELECT 1; END", true),
+            ("lbl: WHILE 1 DO SELECT 1; END WHILE", true),
+            ("REPEAT SELECT 1; UNTIL 1 END REPEAT", true),
+            (
+                "CREATE OR REPLACE DEFINER = `a`@`%` EVENT e ON SCHEDULE EVERY 1 DAY DO BEGIN SELECT 1; END",
+                true,
+            ),
+            ("BEGIN; SELECT 1", false),
+            ("BEGIN WORK; SELECT 1", false),
+            ("CREATE TABLE t (a int); INSERT INTO t VALUES (1)", false),
+            ("lbl: SELECT 1; SELECT 2", false),
+            ("WITH a AS (SELECT 1) SELECT * FROM a; SELECT 2", false),
+        ] {
+            let n = texts(MY, &format!("DELIMITER //\n{sql}//")).len();
+            assert_eq!(n == 1, whole, "{sql}");
+        }
+
+        let hidden = texts(
+            MY,
+            "DELIMITER $$\nBEGIN NOT ATOMIC SELECT 1; DROP TABLE x; END$$",
+        );
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(
+            verdict(&mysql(false, true), None, &hidden),
+            RunVerdict::ReadOnly { statement: 0 }
+        );
+        assert!(matches!(
+            verdict(&mysql(true, false), None, &hidden),
+            RunVerdict::NeedsConfirmation { writes: 1, .. }
+        ));
+        let plan = plan_run(
+            MY,
+            &["DELIMITER $$\nBEGIN NOT ATOMIC SELECT 1; DELETE FROM t; END$$".into()],
+        );
+        assert_eq!(plan.len(), 1);
+        assert_eq!(
+            plan[0].no_where.as_ref().map(|n| n.text.as_str()),
+            Some("DELETE FROM t")
+        );
+
+        // The editor sends a statement it cut at a custom delimiter with that delimiter, so
+        // the Core reads it the same way; `;` and other Dialects split as before.
+        let run = |d: DialectKind, sql: &str, delimiter: &str| -> Vec<String> {
+            plan_run_delimited(d, &[sql.to_string()], &[delimiter.to_string()])
+                .into_iter()
+                .map(|p| p.text)
+                .collect()
+        };
+        assert_eq!(run(MY, trigger, "$$"), [trigger]);
+        assert_eq!(run(MY, trigger, ";").len(), 3);
+        assert_eq!(run(MY, "SELECT 1; SELECT 2", "$$").len(), 2);
+        assert_eq!(
+            run(MY, "SELECT 1$$ SELECT 2", "$$"),
+            ["SELECT 1", "SELECT 2"]
+        );
+        assert_eq!(run(MY, "SELECT 1; SELECT 2", ""), ["SELECT 1", "SELECT 2"]);
+        assert_eq!(
+            run(PG, "SELECT 1; SELECT 2", "$$"),
+            ["SELECT 1", "SELECT 2"]
+        );
+        // A DELIMITER line inside the statement still applies.
+        assert_eq!(
+            run(MY, "SELECT 1$$\nDELIMITER ;\nSELECT 2; SELECT 3", "$$"),
+            ["SELECT 1", "SELECT 2", "SELECT 3"]
+        );
+        // Missing delimiters mean `;`.
+        assert_eq!(
+            plan_run_delimited(MY, &["SELECT 1; SELECT 2".into()], &[]).len(),
+            2
+        );
+    }
+
+    /// Each planned statement points at its own text, in UTF-16 units, past DELIMITER lines.
+    #[test]
+    fn delimiter_statements_keep_their_place() {
+        let sql = "-- é\nDELIMITER //\nSELECT 'ü'//\nDELIMITER ;\nSELECT 2;";
+        let plan = plan_run(MY, &[sql.to_string()]);
+        let units: Vec<u16> = sql.encode_utf16().collect();
+        let got: Vec<String> = plan
+            .iter()
+            .map(|p| String::from_utf16(&units[p.from..p.to]).unwrap())
+            .collect();
+        assert_eq!(got, ["SELECT 'ü'", "SELECT 2"]);
+        for r in split_statements(MY, sql) {
+            assert!(!sql[r].contains("//"));
+        }
     }
 }

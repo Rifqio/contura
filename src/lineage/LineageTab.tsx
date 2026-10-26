@@ -38,7 +38,7 @@ type Depth = "1" | "2" | "3" | "all";
 type Source = "flows" | "views";
 type Load = { s: "loading" } | { s: "failed"; error: unknown } | { s: "ready"; lineage: Lineage };
 /** `key` names the card in the layout file, so a moved card keeps its place when the rows change. */
-type Ref = { kind: "flow" | "view"; key: string; title: string; file: string; access: FlowTableAccess; open?: () => void };
+type Ref = { kind: "flow" | "view"; key: string; title: string; file: string; diagram: string; access: FlowTableAccess; open?: () => void };
 /**
  * The diagrams or views below the table; `failed` when the diagrams folder or the views could not be read,
  * `catalog` when the views came from the catalog's own record rather than a name match.
@@ -88,7 +88,7 @@ function rawText(e: unknown, dialect: DialectKind): string {
   return errorText(e, dialect);
 }
 
-type FlowRow = { file: string; process: string | null; access: FlowTableAccess };
+type FlowRow = { file: string; frame: string | null; process: string | null; access: FlowTableAccess };
 
 /**
  * One row per process that touches the table in each diagram ("Ship order in Fulfilment reads orders"), and
@@ -97,31 +97,36 @@ type FlowRow = { file: string; process: string | null; access: FlowTableAccess }
  */
 function flowRefs(all: Awaited<ReturnType<typeof listFlowTableLinks>>, path: ObjectPath): FlowRow[] {
   const out = new Map<string, FlowRow>();
-  const add = (file: string, process: string | null, access: FlowTableAccess) => {
-    const key = JSON.stringify([file, process]);
+  const add = (file: string, frame: string | null, process: string | null, access: FlowTableAccess) => {
+    const key = JSON.stringify([file, frame, process]);
     const was = out.get(key);
-    out.set(key, { file, process, access: was === undefined || was.access === access ? access : "both" });
+    out.set(key, { file, frame, process, access: was === undefined || was.access === access ? access : "both" });
   };
   for (const f of all) {
     if (!flowMatches(f.table, path)) continue;
     const processes = f.processes ?? [];
-    if (processes.length === 0) add(f.file, null, f.access);
-    for (const p of processes) add(f.file, p.node, p.access);
+    const frame = f.frame == null ? null : f.frame === "" ? "Untitled" : f.frame;
+    if (processes.length === 0) add(f.file, frame, null, f.access);
+    for (const p of processes) add(f.file, frame, p.node, p.access);
   }
   return [...out.values()];
 }
 
 /** The views as rows: "reads" when the catalog said so, "names" for a name match. */
 function viewRefs(views: ObjectPath[], path: ObjectPath, reads: boolean, onOpenView?: (path: ObjectPath) => void): Ref[] {
-  return views.map((v) => ({
-    kind: "view" as const,
-    // The database too: on MySQL views come from every database and have no schema (P18).
-    key: `r:view:${JSON.stringify([v.database, v.schema ?? null, v.name])}`,
-    title: `${v.name} ${reads ? "reads" : "names"} ${path.name}`,
-    file: v.schema ? `${v.schema}.${v.name}` : v.database !== path.database ? `${v.database}.${v.name}` : v.name,
-    access: "reads" as const,
-    open: onOpenView && (() => onOpenView(v)),
-  }));
+  return views.map((v) => {
+    const label = v.schema ? `${v.schema}.${v.name}` : v.database !== path.database ? `${v.database}.${v.name}` : v.name;
+    return {
+      kind: "view" as const,
+      // The database too: on MySQL views come from every database and have no schema (P18).
+      key: `r:view:${JSON.stringify([v.database, v.schema ?? null, v.name])}`,
+      title: `${v.name} ${reads ? "reads" : "names"} ${path.name}`,
+      file: label,
+      diagram: label,
+      access: "reads" as const,
+      open: onOpenView && (() => onOpenView(v)),
+    };
+  });
 }
 
 /** Under the Views rows when the server keeps a view catalog but reading it failed (P18). */
@@ -202,11 +207,13 @@ export default function LineageTab({ connection, path, onOpenTable, onAddForeign
     const read: Promise<Refs> =
       source === "flows"
         ? listFlowTableLinks().then((all) => ({
-            rows: flowRefs(all, path).map(({ file, process, access }) => ({
+            rows: flowRefs(all, path).map(({ file, frame, process, access }) => ({
               kind: "flow" as const,
-              key: `r:flow:${JSON.stringify([file, process])}`,
+              // A board names the frame beside the file; a one-frame file keeps its old key.
+              key: `r:flow:${JSON.stringify(frame === null ? [file, process] : [file, frame, process])}`,
               title: process === null ? flowSentence(file, access, path) : processSentence(process, access, path),
-              file,
+              file: frame === null ? file : `${file}: ${frame}`,
+              diagram: file,
               access,
               open: onOpenDiagram && (() => onOpenDiagram(file)),
             })),
@@ -391,7 +398,7 @@ export default function LineageTab({ connection, path, onOpenTable, onAddForeign
     setPublishing({ scene, onScreen });
   }
 
-  const panelRefs: RefRow[] | null = refs && refs.map((r, i) => ({ key: refId(i), kind: r.kind, title: r.title, file: r.file, onOpen: r.open }));
+  const panelRefs: RefRow[] | null = refs && refs.map((r, i) => ({ key: refId(i), kind: r.kind, title: r.title, file: r.file, diagram: r.diagram, onOpen: r.open }));
   const nothing = lineage !== null && lineage.links.length === 0 && refs !== null && refs.length === 0 && direction === "both";
   // Nothing linked says what was searched, and when the diagrams folder could not be read.
   const nothingText =

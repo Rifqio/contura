@@ -278,7 +278,7 @@ function parseStatement(s: string, linksBefore: number): Parsed {
     if ((m = /^--\s+([^|]+?)\s+(-{2,}>|-{3,})/.exec(rest))) return take(m, { arrow: m[2].endsWith(">") ? ">" : "-", label: m[1] });
     if ((m = /^-\.\s*([^|]+?)\s*\.-+>/.exec(rest))) return take(m, { arrow: "-->", label: m[1] });
     if ((m = /^-\.\s*([^|]+?)\s*\.-(?![->])/.exec(rest)))
-      return take(m, { arrow: "-", label: m[1], note: "the dotted line -.- is drawn as a plain line." });
+      return take(m, { arrow: "--", label: m[1] });
     if ((m = /^==\s+([^|]+?)\s+={2,}>/.exec(rest))) return take(m, { arrow: ">", label: m[1], note: "thick lines are drawn normal." });
     if ((m = /^==\s+([^|]+?)\s+={3,}(?!>)/.exec(rest))) return take(m, { arrow: "-", label: m[1], note: "thick lines are drawn normal." });
     let t: LinkToken | null = null;
@@ -291,7 +291,7 @@ function parseStatement(s: string, linksBefore: number): Parsed {
     else if ((m = /^-{2,}x(?![\w])/.exec(rest))) t = take(m, { arrow: ">", note: "the cross end --x became an arrow." });
     else if ((m = /^-{3,}/.exec(rest))) t = take(m, { arrow: "-" });
     else if ((m = /^-\.+->/.exec(rest))) t = take(m, { arrow: "-->" });
-    else if ((m = /^-\.+-/.exec(rest))) t = take(m, { arrow: "-", note: "the dotted line -.- is drawn as a plain line." });
+    else if ((m = /^-\.+-/.exec(rest))) t = take(m, { arrow: "--" });
     else if ((m = /^={2,}>/.exec(rest))) t = take(m, { arrow: ">", note: "thick lines are drawn normal." });
     else if ((m = /^={3,}/.exec(rest))) t = take(m, { arrow: "-", note: "thick lines are drawn normal." });
     else if ((m = /^~{3,}/.exec(rest))) t = take(m, { arrow: "-", hidden: true });

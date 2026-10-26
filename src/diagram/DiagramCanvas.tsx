@@ -31,7 +31,7 @@ import { type DragEvent, type KeyboardEvent, type MutableRefObject, type ReactNo
 import Icon from "../components/Icon";
 import { ConnectableContext } from "./CardFrame";
 import { DetailContext, GRID_FROM, detailFor } from "./detail";
-import { EdgeMarkers, OrthogonalEdge, StraightEdge } from "./edges";
+import { EdgeMarkers, hexArrowsIn, OrthogonalEdge, StraightEdge } from "./edges";
 import { CARD_WIDTH } from "./metrics";
 import { applyLive, drawsTheSame, type LivePositions, restoreBase } from "./livePositions";
 import { liveResizes } from "./resize";
@@ -476,6 +476,7 @@ function Flow(props: DiagramCanvasProps) {
       return { ...e, ...(ported ? {} : { sourceHandle: null, targetHandle: null, ...(fast ? { type: "straight" } : {}) }), ...(on ? { selected: true } : {}) };
     });
   }, [props.edges, detail, fast, lineKey]);
+  const hexArrows = useMemo(() => hexArrowsIn(props.edges), [props.edges]);
   // Lines are picked as cards are when the selection is controlled: the next set goes to the owner.
   const lineRef = useRef(props.lineSelection);
   lineRef.current = props.lineSelection;
@@ -793,7 +794,7 @@ function Flow(props: DiagramCanvasProps) {
       onDragLeave={onDragLeavePane}
       onDrop={onDropPane}
     >
-      <EdgeMarkers />
+      <EdgeMarkers hexes={hexArrows} />
       <DetailContext.Provider value={detailValue}>
         <ConnectableContext.Provider value={connectable}>
           <ReactFlow

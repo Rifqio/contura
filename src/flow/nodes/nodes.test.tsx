@@ -186,8 +186,8 @@ describe("looks", () => {
     expect(img.getAttribute("src")).toBe(src);
     expect(img.getAttribute("alt")).toBe("");
     expect(tile.nextElementSibling?.classList.contains("fnode-name")).toBe(true);
-    // Lucide and Simple Icons draw black, so the tile is light in both themes.
-    expect(getComputedStyle(tile).backgroundColor).toBe("var(--c-node-icon-tile)");
+    // The Core inks the icon for the theme, so nothing sits behind it.
+    expect(tile.classList.contains("fnode-tile-bare")).toBe(true);
     expect(flowCanvasCss).toMatch(/\.fnode-service \.fnode-tile\s*\{[^}]*width:\s*48px;[^}]*height:\s*48px;/);
   });
 
@@ -197,15 +197,25 @@ describe("looks", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
-  test("a_provider_icon_draws_without_the_plate", () => {
+  test("an_icon_draws_without_a_plate", () => {
     const src = "data:image/svg+xml;base64,PHN2Zy8+";
-    const { container } = render(<ServiceNode name="Orders" icon={src} plate={false} style="modern" selected={false} />);
+    const { container } = render(<ServiceNode name="Orders" icon={src} style="modern" selected={false} />);
     const tile = container.querySelector(".fnode-tile") as HTMLElement;
     expect(tile.classList.contains("fnode-tile-bare")).toBe(true);
     expect(tile.querySelector("img")?.getAttribute("src")).toBe(src);
     // The provider's own square fills the 48 px tile: no plate, no border, no padding around it.
     expect(flowCanvasCss).toMatch(/\.fnode-service \.fnode-tile-bare\s*\{[^}]*border-color:\s*transparent;[^}]*background-color:\s*transparent;/);
     expect(flowCanvasCss).toMatch(/\.fnode-service \.fnode-tile-bare img\s*\{[^}]*width:\s*48px;[^}]*height:\s*48px;/);
+  });
+
+  test("a_pale_logo_draws_with_a_hairline", () => {
+    const src = "data:image/svg+xml;base64,PHN2Zy8+";
+    const { container, rerender } = render(<ServiceNode name="Orders" icon={src} iconOutline style="modern" selected={false} />);
+    expect(container.querySelector("img")?.classList.contains("icon-hairline")).toBe(true);
+    rerender(<ServiceNode name="Orders" icon={src} style="modern" selected={false} />);
+    expect(container.querySelector("img")?.classList.contains("icon-hairline")).toBe(false);
+    // A hairline in the theme's text colour: three tight shadows around the logo's own shape.
+    expect(flowCanvasCss).toMatch(/\.icon-hairline\s*\{[^}]*filter:\s*drop-shadow\(0 0 0\.3px var\(--c-text\)\) drop-shadow\(0 0 0\.3px var\(--c-text\)\) drop-shadow\(0 0 0\.3px var\(--c-text\)\);/);
   });
 
   test("a_service_s_ports_sit_on_its_48px_tile", () => {

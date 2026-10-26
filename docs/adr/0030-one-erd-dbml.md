@@ -1,6 +1,8 @@
 # One ERD: DBML
 
-**Status:** accepted, 2026-10-25 (user decision: "we should only use dbml for erd, throw away the diagram erd").
+**Status:** Superseded for diagrams by ADR 0031 (2026-10-25). DBML and the Schema Builder stay as this ADR describes; its "Moves to 1.1" list stands.
+
+Originally accepted 2026-10-25 (user decision: "we should only use dbml for erd, throw away the diagram erd").
 
 ## Context
 

@@ -48,8 +48,44 @@ function labelW(s: string): number {
 const CODE_CHAR = 7.2;
 const codeW = (s: string) => s.length * CODE_CHAR;
 
-/** A card row (a class member). */
+/** A card row (an ER column, a class member). */
 export const KIND_ROW = 22;
+/** An ER card shows at most this many rows; the rest scroll inside it. */
+export const ER_MAX_ROWS = 20;
+/** An ER card's height without its rows: 2 px of border, the 32 px header and 3 px above and below the rows. */
+export const ER_CARD_CHROME = 40;
+/**
+ * ER build C: where a relationship meets row `row` of an ER card `top` px down a card `h` tall, its rows scrolled by
+ * `scroll`: the middle of the row (1 px of border, the 32 px header, 3 px above the rows). A row scrolled out of
+ * view puts the end on the card's top or bottom edge, whichever the row is past (DataGrip and
+ * dbdiagram). Row -1 is the header, where a line to the whole table meets it.
+ */
+export function erRowY(top: number, h: number, row: number, scroll = 0): number {
+  if (row < 0) return top + 17;
+  const y = 47 + row * KIND_ROW - scroll;
+  if (y < 36) return top;
+  if (y > h - 4) return top + h;
+  return top + y;
+}
+/** ER build C: the row of `column` among an ER table's rows ("customer_id int"), or -1 (the header) when absent. */
+export function erColumnRow(rows: readonly string[], column: string | undefined): number {
+  if (column === undefined) return -1;
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    const next = row.charCodeAt(column.length);
+    if (row.startsWith(column) && (row.length === column.length || next === 32 || next === 9)) return r;
+  }
+  return -1;
+}
+/** An ER card's width bounds (board ER interactions); a longer name ends in an ellipsis with its tip. */
+const ER_MIN_W = 184;
+const ER_MAX_W = 300;
+/** A column row's own width: its name and type in Code small, then the gutter, gaps, type padding and not-null mark. */
+export const erRowWidth = (row: string) => {
+  const at = row.search(/\s/);
+  const chars = at < 0 ? row.length : at + row.slice(at + 1).trim().length;
+  return Math.ceil(chars * CODE_CHAR + 92);
+};
 /** A sequence message row, and the participant header above the lifelines. */
 export const SEQ_ROW = 44;
 export const SEQ_HEAD = 40;
@@ -73,6 +109,14 @@ export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "t
     case "document":
     case "database":
       return { w: 150, h: 52 };
+    case "erTable":
+    case "erWeak":
+      // As wide as its longest row (name, type, key gutter and not-null mark) within 184 to 300 px, and as tall as
+      // its rows; past 20 columns the card stops growing and its rows scroll inside it (board ER interactions).
+      return {
+        w: clamp(Math.max(textW(n.name) + 48, ...rows.map(erRowWidth)), ER_MIN_W, ER_MAX_W),
+        h: ER_CARD_CHROME + Math.min(Math.max(rows.length, 1), ER_MAX_ROWS) * KIND_ROW,
+      };
     case "class":
     case "interface":
     case "enum": {

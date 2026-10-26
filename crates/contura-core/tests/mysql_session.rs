@@ -315,3 +315,58 @@ async fn mode(s: &SessionHandle) -> String {
     let (_, r, _) = rows(s.execute("SELECT @@SESSION.sql_mode").await.unwrap());
     text(&r[0][0]).to_string()
 }
+
+/// A text the server answers with several results (a compound statement sent whole, a CALL,
+/// or several statements): each is read before the run goes on, and the first error from
+/// any of them is the statement's error, so Run all stops there.
+#[tokio::test]
+async fn my_several_results_surface_a_later_error() {
+    let (db, _d, s) = fixture().await;
+    assert!(
+        s.execute("SELECT 1; DELETE FROM nope WHERE a = 1")
+            .await
+            .is_err()
+    );
+    assert!(
+        s.execute("DO 1; DELETE FROM nope WHERE a = 1")
+            .await
+            .is_err()
+    );
+    s.execute("CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM nope; END")
+        .await
+        .unwrap();
+    assert!(s.execute("CALL p()").await.is_err());
+    // The session goes on.
+    let (_, r, _) = rows(s.execute("SELECT 2").await.unwrap());
+    assert_eq!(text(&r[0][0]), "2");
+    s.close().await.unwrap();
+    db.drop_db().await;
+}
+
+/// Rows changed are summed over every result; a first result with rows is shown (at most
+/// one page, with no more to fetch, when other results follow it), and every later part
+/// has run when the outcome comes back.
+#[tokio::test]
+async fn my_several_results_run_every_part() {
+    let (db, _d, s) = fixture().await;
+    s.execute("CREATE TABLE t (id int)").await.unwrap();
+    assert_eq!(
+        s.execute("INSERT INTO t VALUES (1); INSERT INTO t VALUES (2), (3)")
+            .await
+            .unwrap(),
+        ExecOutcome::Affected { rows: 3 }
+    );
+    let (_, r, more) = rows(
+        s.execute("SELECT 1 AS a; INSERT INTO t VALUES (4)")
+            .await
+            .unwrap(),
+    );
+    assert_eq!((r.len(), more), (1, false));
+    let big = format!("{N2500} SELECT i FROM n; INSERT INTO t VALUES (5)");
+    let (_, r, more) = rows(s.execute(&big).await.unwrap());
+    assert_eq!((r.len(), more), (1000, false));
+    let (_, r, _) = rows(s.execute("SELECT COUNT(*) FROM t").await.unwrap());
+    assert_eq!(text(&r[0][0]), "5");
+    s.close().await.unwrap();
+    db.drop_db().await;
+}

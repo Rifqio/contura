@@ -609,6 +609,7 @@ export default function QueryTab({
     const plan = await planRun(
       s,
       list.map((x) => x.text),
+      list.map((x) => x.delimiter ?? ";"),
     );
     let out = plan.map((p) => {
       const src = list[p.piece];
@@ -842,7 +843,7 @@ export default function QueryTab({
           resolve({ ran: false });
           return;
         }
-        const stmts = splitStatements(sql, dialect).map((x) => ({ from: 0, to: 0, text: x.text }));
+        const stmts = splitStatements(sql, dialect).map((x) => ({ from: 0, to: 0, text: x.text, delimiter: x.delimiter }));
         external.current = { stmts, resolve, phase: "preparing" };
         if (!run(stmts)) settleExternal({ ran: false });
       });

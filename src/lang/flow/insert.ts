@@ -3,15 +3,17 @@
 // diagram already has comes in free (`Ship order 2`, the paste rule); a sequence reuses its participants by name; a mind
 // map's central idea comes in as a topic under the open map's. Runs in the language worker against the cached parse.
 import type { TextEdit } from "../protocol";
-import { lineBreak, lineStart, nextLine, renameNode } from "./edits";
-import { type DiagramKind, isStateMarker } from "./model";
+import { ER_NOTES, erRenameNote, lineBreak, lineStart, nextLine, renameNode } from "./edits";
+import { type DiagramKind, isStateMarker, sqlFreeName } from "./model";
 import { type FlowParse, parseFlow } from "./parse";
+import { article } from "../../format/article";
 
 /** The kind as Insert's reason says it. */
 export const KIND_SHORT: Record<DiagramKind, string> = {
   dfd: "data flow",
   flow: "flowchart",
   cloud: "cloud diagram",
+  er: "ER diagram",
   sequence: "sequence",
   state: "state diagram",
   class: "class diagram",
@@ -21,7 +23,7 @@ export const KIND_SHORT: Record<DiagramKind, string> = {
 
 /** Why Insert refuses another kind (board DiagramStartWell). */
 export const insertKindRefusal = (here: DiagramKind, that: DiagramKind) =>
-  `Insert takes a ${KIND_SHORT[here]} here; this is a ${KIND_SHORT[that]}. Create makes it a new diagram.`;
+  `Insert takes ${article(KIND_SHORT[here])} here; this is ${article(KIND_SHORT[that])}. Create makes it a new diagram.`;
 
 /** Applies sorted, non-overlapping edits to `text`. */
 function applyEdits(text: string, edits: readonly TextEdit[]): string {
@@ -52,6 +54,8 @@ export function insertFlow(text: string, parse: FlowParse, flow: string, at?: nu
   let src = flow;
   let p = parseFlow(src);
   if (!kind) return refuse("Fix the diagram's first line first, so nothing was inserted.");
+  if (parse.oldEr) return refuse(ER_NOTES.oldForm);
+  if (p.oldEr) return refuse(ER_NOTES.oldIncoming);
   if (!p.kind || !p.doc) return refuse("The Mermaid did not convert, so nothing was inserted.");
   if (p.kind !== kind) return refuse(insertKindRefusal(kind, p.kind));
   const here = new Set(parse.defined.keys());
@@ -74,7 +78,8 @@ export function insertFlow(text: string, parse: FlowParse, flow: string, at?: nu
       }
       continue;
     }
-    const next = here.has(name) ? freeName(name, taken) : name;
+    // An ER table comes in with a plain SQL name (orders_2), as a paste names it.
+    const next = here.has(name) ? (kind === "er" ? sqlFreeName(name, taken) : freeName(name, taken)) : name;
     taken.add(next);
     names[name] = next;
     if (next !== name) renames.push([name, next]);
@@ -88,7 +93,8 @@ export function insertFlow(text: string, parse: FlowParse, flow: string, at?: nu
   // One at a time, each from the text the one before left, so every line that names it follows.
   for (const [from, to] of renames) {
     const edits = renameNode(src, p, from, to);
-    if (edits.length === 0) continue;
+    // renameNode checks erRenameNote itself; it is asked again only to say why.
+    if (edits.length === 0) return refuse(erRenameNote(src, p, from, to) ?? `${from} could not be renamed ${to}, so nothing was inserted.`);
     src = applyEdits(src, edits);
     p = parseFlow(src);
   }

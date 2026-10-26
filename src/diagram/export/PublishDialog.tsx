@@ -40,6 +40,8 @@ interface Props {
   onClose(): void;
   /** Called with the path after Save as writes the file; the dialog closes itself when absent. */
   onSaved?(path: string): void;
+  /** Called when the theme choice changes, for a diagram whose scene holds theme-inked icons. */
+  onTheme?(theme: ExportTheme): void;
 }
 
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -129,7 +131,7 @@ function inside(box: Box, region: Box): Box {
   };
 }
 
-export default function PublishDialog({ scene, fileName, selected: chosen, onScreen, onClose, onSaved }: Props) {
+export default function PublishDialog({ scene, fileName, selected: chosen, onScreen, onClose, onSaved, onTheme }: Props) {
   // Only selected nodes the scene draws count: one selected in the text but not yet placed is not in it.
   const selected = useMemo(() => {
     const drawn = new Set(scene.nodes.map((n) => n.id));
@@ -339,7 +341,10 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
                 <Segmented
                   label="Theme colours"
                   value={theme}
-                  onChange={setTheme}
+                  onChange={(t) => {
+                    setTheme(t);
+                    onTheme?.(t);
+                  }}
                   options={[
                     { value: "light", label: "Light" },
                     { value: "dark", label: "Dark" },

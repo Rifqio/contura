@@ -78,6 +78,10 @@ describe("highlighting", () => {
     expect(roleOf(TEXT, 'order "details"')).toBe("string");
   });
 
+  test("an ER line's < is an arrow", () => {
+    expect(roleOf('diagram er "A"\ncustomers.id < orders.customer_id\n', "<")).toBe("arrow");
+  });
+
   test("a name with spaces is one name, and a quoted name reads as a name", () => {
     expect(roleOf(TEXT, "Charge card")).toBe("name");
     expect(roleOf('diagram flow "A"\n"a: b" > X\n', '"a: b"')).toBe("name");

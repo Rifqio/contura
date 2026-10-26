@@ -10,6 +10,10 @@ import { callsTo, routeInvoke } from "../test/invoke";
 import { mockEditorDom } from "../test/editor";
 import { fakeWorker } from "../test/langWorker";
 import { mockReactFlowDom } from "../test/reactFlow";
+import { ER_NOTES } from "../lang/flow/edits";
+import tabCss from "../styles/flow-tab.css?raw";
+import { parseFlow } from "../lang/flow/parse";
+import { README_BILLING } from "./fixtures/erBilling";
 import { flowEntry } from "./flowRegistry";
 import FlowTab from "./FlowTab";
 import { usePendingEditsGuard } from "../app/usePendingEditsGuard";
@@ -72,7 +76,7 @@ type Files = { text: string; layout: string | null };
 function setup(
   files: Files | ((name: string) => Files) = { text: DFD, layout: null },
   name = "checkout",
-  opts: { write?: (args: Record<string, unknown>) => unknown } = {},
+  opts: { write?: (args: Record<string, unknown>) => unknown; onOpenModel?: (name: string, dbml: string) => void } = {},
 ) {
   const read = typeof files === "function" ? files : () => files;
   routeInvoke({
@@ -83,7 +87,7 @@ function setup(
   const client = new LangClient(() => fakeWorker());
   const utils = render(
     <div style={{ width: 1280, height: 800 }}>
-      <FlowTab name={name} client={client} />
+      <FlowTab name={name} client={client} onOpenModel={opts.onOpenModel} />
     </div>,
   );
   const view = () => EditorView.findFromDOM(utils.container.querySelector(".cm-editor") as HTMLElement)!;
@@ -1051,4 +1055,163 @@ test("esc_in_the_diagram_find_box_closes_only_the_find_panel_and_keeps_the_selec
   fireEvent.keyDown(box, { key: "Escape", keyCode: 27 });
   expect(s.view().dom.querySelector(".cm-search")).toBeNull();
   expect(banded(s.container)).toEqual(["Checkout [process, id: 1.0]"]);
+});
+
+/** An ER diagram in table blocks. */
+const ER_BLOCKS = [
+  'diagram er "Billing"',
+  "customers {",
+  "  id int pk",
+  "  email text not null",
+  "}",
+  "orders {",
+  "  id int pk",
+  "  customer_id int",
+  "}",
+  "orders.customer_id > customers.id",
+  "",
+].join("\n");
+
+test("an_old_er_file_opens_editable_with_the_rewrite_fix", async () => {
+  const s = setup({ text: README_BILLING, layout: null }, "billing");
+  await waitFor(() => expect(s.container.querySelector(".flow-problems")).not.toBeNull(), { timeout: 4000 });
+  const problems = s.container.querySelector(".flow-problems") as HTMLElement;
+  expect((await within(problems).findAllByText("Columns go inside their table's braces now.")).length).toBeGreaterThan(0);
+  expect(s.container.textContent).not.toContain("ER diagrams moved");
+  expect(s.view().state.readOnly).toBe(false);
+  expect(s.container.querySelector(".react-flow")).not.toBeNull();
+  await userEvent.click(within(problems).getAllByRole("button", { name: "Rewrite as table blocks" })[0]);
+  await waitFor(() => expect(s.text()).toContain("customers {\n"));
+  for (const t of ["customers", "orders", "invoices"]) await waitFor(() => expect(s.node(`Table ${t}`)).not.toBeNull(), { timeout: 4000 });
+  expect(s.container.querySelectorAll(".fkind-er-row")).toHaveLength(8);
+});
+
+test("the_rewrite_notice_goes_once_the_old_er_frame_is_rewritten", async () => {
+  const s = setup({ text: README_BILLING, layout: null }, "billing");
+  await waitFor(() => expect(s.container.querySelector(".flow-problems")).not.toBeNull(), { timeout: 4000 });
+  s.press("t");
+  expect(await screen.findByText(ER_NOTES.oldForm)).toBeTruthy();
+  const problems = s.container.querySelector(".flow-problems") as HTMLElement;
+  await userEvent.click(within(problems).getAllByRole("button", { name: "Rewrite as table blocks" })[0]);
+  await waitFor(() => expect(s.text()).toContain("customers {\n"));
+  await waitFor(() => expect(screen.queryByText(ER_NOTES.oldForm)).toBeNull(), { timeout: 4000 });
+});
+
+test("the_selection_chip_shows_a_table_with_the_card_header_icon", async () => {
+  const s = setup({ text: `${ER_BLOCKS}audit_log [weak] {\n  id int pk\n}\n`, layout: null }, "billing");
+  await drawn(s, "Table customers");
+  const chip = () => s.container.querySelector(".flow-selchip") as HTMLElement;
+  select(s, "Table customers");
+  await waitFor(() => expect(chip()?.textContent).toContain("customers"));
+  expect([...chip().querySelectorAll("svg")].map((i) => i.dataset.icon)).toEqual(["table"]);
+  expect(chip().classList.contains("is-weak")).toBe(false);
+  select(s, "Weak table audit_log");
+  await waitFor(() => expect(chip()?.textContent).toContain("audit_log"));
+  expect([...chip().querySelectorAll("svg")].map((i) => i.dataset.icon)).toEqual(["table"]);
+  expect(chip().classList.contains("is-weak")).toBe(true);
+  expect(/\.flow-selchip\.is-weak\s*\{([^}]*)\}/.exec(tabCss)?.[1]).toContain("dashed");
+});
+
+test("open_as_dbml_sends_the_converted_model", async () => {
+  const onOpenModel = vi.fn();
+  const s = setup({ text: ER_BLOCKS, layout: null }, "billing", { onOpenModel });
+  await drawn(s, "Table customers");
+  const button = within(s.container.querySelector(".flow-toolbar") as HTMLElement).getByRole("button", { name: "Open as DBML" });
+  expect(button.getAttribute("title")).toBeNull();
+  await userEvent.click(button);
+  expect(onOpenModel).toHaveBeenCalledTimes(1);
+  const [name, dbml] = onOpenModel.mock.calls[0];
+  expect(name).toBe("billing");
+  expect(dbml).toContain("Table customers {");
+  expect(dbml).toContain("Ref: orders.customer_id > customers.id");
+  // With an error in the text there is nothing to convert: the strip says why and nothing opens.
+  s.type(ER_BLOCKS.replace("orders.customer_id > customers.id", "orders.customer_id >"));
+  await waitFor(() => expect(s.container.querySelector(".flow-stale")).not.toBeNull(), { timeout: 4000 });
+  await userEvent.click(within(s.container.querySelector(".flow-toolbar") as HTMLElement).getByRole("button", { name: "Open as DBML" }));
+  expect(onOpenModel).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText("Fix the text first: the drawing is from the last text that worked.")).toBeTruthy();
+});
+
+test("open_as_dbml_is_only_on_an_er_diagram", async () => {
+  const s = setup();
+  await drawn(s);
+  expect(within(s.container.querySelector(".flow-toolbar") as HTMLElement).queryByRole("button", { name: "Open as DBML" })).toBeNull();
+});
+
+test("add_table_writes_a_free_name", async () => {
+  const s = setup({ text: ER_BLOCKS, layout: null }, "billing");
+  await drawn(s, "Table customers");
+  s.press("t");
+  await waitFor(() => expect(s.text()).toContain("\ntable_1\n"));
+  await waitFor(() => expect(s.node("Table table_1")).not.toBeNull());
+  s.press("t");
+  await waitFor(() => expect(s.text()).toContain("\ntable_2\n"));
+  s.press("w");
+  await waitFor(() => expect(s.text()).toContain("\nweak_1 [weak]\n"));
+  await waitFor(() => expect(s.node("Weak table weak_1")).not.toBeNull());
+});
+
+test("er_shapes_write_what_their_samples_show", async () => {
+  const s = setup({ text: ER_BLOCKS, layout: null }, "billing");
+  await drawn(s, "Table customers");
+  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  const list = screen.getByRole("menu", { name: "Shapes" });
+  const said = (label: string) => within(list).getByRole("menuitem", { name: label }).getAttribute("aria-description");
+  expect([said("Table"), said("Weak table"), said("Column")]).toEqual(["Writes table_1", "Writes weak_1 [weak]", "Writes column_1 text"]);
+  await userEvent.click(within(list).getByRole("menuitem", { name: "Table" }));
+  await waitFor(() => expect(s.text()).toContain("\ntable_1\n"));
+  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Weak table" }));
+  await waitFor(() => expect(s.text()).toContain("\nweak_1 [weak]\n"));
+  // Column goes at the end of the selected table.
+  await waitFor(() => expect(s.node("Table customers")).not.toBeNull());
+  select(s, "Table customers");
+  await waitFor(() => expect(s.node("Table customers")!.classList.contains("selected")).toBe(true));
+  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Column" }));
+  await waitFor(() => expect(s.text()).toContain("customers {\n  id int pk\n  email text not null\n  column_1 text\n}\n"));
+});
+
+test("add_table_and_column_on_an_old_er_file_say_to_rewrite_first_and_write_nothing", async () => {
+  const s = setup({ text: README_BILLING, layout: null }, "billing");
+  await waitFor(() => expect(s.container.querySelector(".flow-problems")).not.toBeNull(), { timeout: 4000 });
+  const strip = () => s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
+  const note = "Rewrite this diagram as table blocks first: its first problem has the fix.";
+  s.press("t");
+  await waitFor(() => expect(strip().textContent).toContain(note));
+  act(() => s.press("Escape"));
+  s.press("w");
+  await waitFor(() => expect(strip().textContent).toContain(note));
+  // Nothing is drawn to pick, so Column says the same at once rather than wait for a table.
+  act(() => s.press("Escape"));
+  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Column" }));
+  await waitFor(() => expect(strip().textContent).toContain(note));
+  expect(strip().textContent).not.toContain("Click the table");
+  expect(s.text()).toBe(README_BILLING);
+  expect(s.saves().filter((x) => x.cmd === "write_diagram")).toEqual([]);
+});
+
+test("ctrl_g_puts_er_tables_in_a_group_block_that_parses_clean", async () => {
+  const s = setup({ text: ER_BLOCKS, layout: null }, "billing");
+  await drawn(s, "Table customers");
+  act(() => canvas.props!.onSelect!(["customers", "orders"]));
+  s.press("g", { ctrlKey: true });
+  await userEvent.type(await screen.findByRole("textbox", { name: "Group name" }), "{Enter}");
+  await waitFor(() => expect(s.text()).toContain("group Group {\n  customers {\n"));
+  const r = parseFlow(s.text());
+  expect(r.problems.filter((p) => p.severity === "error")).toEqual([]);
+  expect(r.doc!.groups.map((g) => [g.name, g.nodes])).toEqual([["Group", ["customers", "orders"]]]);
+  expect(r.doc!.nodes.find((n) => n.name === "orders")!.rows).toEqual(["id int", "customer_id int"]);
+});
+
+test("a_selected_er_table_is_named_a_table_in_the_strip", async () => {
+  const s = setup({ text: ER_BLOCKS.replace("orders {", "orders [weak] {"), layout: null }, "billing");
+  await drawn(s, "Table customers");
+  const strip = () => s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
+  select(s, "Table customers");
+  await waitFor(() => expect(within(strip()).getByText("Table, 2 columns, 1 relationship")).toBeTruthy());
+  select(s, "Weak table orders");
+  await waitFor(() => expect(within(strip()).getByText("Weak table, 2 columns, 1 relationship")).toBeTruthy());
+  expect(strip().textContent).not.toContain("Outside party");
 });

@@ -102,12 +102,12 @@ test("another kind is refused with the reason, and the Mermaid is not pasted", a
   expect(s.doc()).toBe(SEQ);
 });
 
-test("an ER diagram goes to the Schema Builder, and nothing is pasted", async () => {
+test("a Mermaid ER diagram is not imported yet, and nothing is pasted", async () => {
   const s = setup(SEQ);
   await ready(s, SEQ);
   await waitFor(() => expect(s.container.querySelector(".react-flow__node")).not.toBeNull(), { timeout: 4000 });
   s.pasteOnCanvas(lines("erDiagram", "    CUSTOMER ||--o{ ORDER : places"));
-  await waitFor(() => expect(s.status()).toBe("ER diagrams live in the Schema Builder. Open the Schema Builder to model tables."));
+  await waitFor(() => expect(s.status()).toBe("Mermaid ER diagrams are not imported yet. Start an ER diagram and write its tables."));
   expect(s.doc()).toBe(SEQ);
 });
 
@@ -270,4 +270,32 @@ test("N5 a selection that takes the diagram line but not the whole file keeps th
   pasteOver(s, PACK, 0, FLOW2.indexOf("Spare"));
   await waitFor(() => expect(s.status()).toBe("The selection takes the diagram's first line, so the Mermaid stays as pasted. Select from line 2, or the whole file, to translate it."));
   expect(s.doc()).toBe(PACK + FLOW2.slice(FLOW2.indexOf("Spare")));
+});
+
+// ----- a board: the paste goes to the frame that holds it
+
+const BOARD_FLOW = lines('diagram flow "Orders"', "Ship order", "Done [end]", "", "Ship order > Done");
+const BOARD_SEQ = lines('diagram sequence "Checkout"', "participant Shop", "participant Payments", "Shop -> Payments: charge");
+const BOARD = `${BOARD_FLOW}\n${BOARD_SEQ}`;
+
+test("on a board, Mermaid on the canvas goes to the end of frame 0, its names free against frame 0 only", async () => {
+  const s = setup(BOARD);
+  await drawnFlow(s, BOARD);
+  // Shop is a participant of the sequence frame, not a shape of frame 0, so it keeps its name.
+  s.pasteOnCanvas(lines("flowchart LR", "    A[Shop] --> B[Ship order]"));
+  await waitFor(() => expect(s.status()).toBe("Pasted Mermaid as flow text."));
+  expect(s.doc()).toBe(`${BOARD_FLOW}${lines("", "Shop [step]", "Ship order 2 [step]", "", "Shop > Ship order 2")}\n${BOARD_SEQ}`);
+});
+
+test("on a board, Mermaid pasted in the text is checked against the frame it goes into, and lands there", async () => {
+  const s = setup(BOARD);
+  await drawnFlow(s, BOARD);
+  // A flowchart pasted inside the sequence frame is refused: that frame is a sequence.
+  s.pasteInText(PACK, BOARD.length);
+  await waitFor(() => expect(s.status()).toBe("The pasted Mermaid is a flowchart and this is a sequence, so nothing was pasted. New diagram > From Mermaid makes it a diagram of its own."));
+  expect(s.doc()).toBe(BOARD);
+  // A sequence goes in there, though frame 0 is a flowchart.
+  s.pasteInText(lines("sequenceDiagram", "    Shop->>Bank: pay"), BOARD.length);
+  await waitFor(() => expect(s.status()).toBe("Pasted Mermaid as flow text."));
+  expect(s.doc()).toBe(BOARD + lines("Shop -> Bank: pay"));
 });

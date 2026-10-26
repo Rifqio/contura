@@ -13,7 +13,7 @@ import { exportPalette } from "../diagram/export/palette";
 import { exampleSvg } from "./previewScene";
 import Kbd from "../components/Kbd";
 import { agoText } from "../format/units";
-import { type DiagramKind, flowName, quote } from "../lang/flow/model";
+import { DIAGRAM_KINDS, type DiagramKind, flowName, quote } from "../lang/flow/model";
 import { DIAGRAM_KIND_WORD, freeDiagramName, typedDiagramName } from "./diagramKinds";
 
 export { freeDiagramName };
@@ -50,17 +50,21 @@ const RECENT_SHOWN = 8;
 
 type KindGroup = "data" | "software" | "planning";
 
-/** Every kind, in the frame's order; `group` sorts them under the switch. */
-export const KINDS: { kind: DiagramKind; title: string; text: string; group: KindGroup }[] = [
-  { kind: "dfd", title: "Data flow", text: "Processes, data stores and outside parties. Stores can link to tables.", group: "data" },
-  { kind: "flow", title: "Flowchart", text: "Steps, decisions, input and output, start and end.", group: "data" },
-  { kind: "cloud", title: "Cloud architecture", text: "Services as provider icons, grouped by network or layer.", group: "software" },
-  { kind: "sequence", title: "Sequence", text: "Who calls whom, in order: requests, replies and waits.", group: "software" },
-  { kind: "state", title: "State", text: "States and the events that move between them.", group: "software" },
-  { kind: "class", title: "Class", text: "Types with their fields and methods, and how they extend each other.", group: "software" },
-  { kind: "mindmap", title: "Mind map", text: "One idea in the middle, branches out from it.", group: "planning" },
-  { kind: "timeline", title: "Timeline", text: "Dated events and periods along one line.", group: "planning" },
-];
+/** Each kind's card; `group` sorts them under the switch. */
+const CARDS: Record<DiagramKind, { title: string; text: string; group: KindGroup }> = {
+  dfd: { title: "Data flow", text: "Processes, data stores and outside parties. Stores can link to tables.", group: "data" },
+  flow: { title: "Flowchart", text: "Steps, decisions, input and output, start and end.", group: "data" },
+  cloud: { title: "Cloud architecture", text: "Services as provider icons, grouped by network or layer.", group: "software" },
+  er: { title: "ER diagram", text: "Tables with their columns and the relationships between them.", group: "data" },
+  sequence: { title: "Sequence", text: "Who calls whom, in order: requests, replies and waits.", group: "software" },
+  state: { title: "State", text: "States and the events that move between them.", group: "software" },
+  class: { title: "Class", text: "Types with their fields and methods, and how they extend each other.", group: "software" },
+  mindmap: { title: "Mind map", text: "One idea in the middle, branches out from it.", group: "planning" },
+  timeline: { title: "Timeline", text: "Dated events and periods along one line.", group: "planning" },
+};
+
+/** Every kind, in the language's order (DIAGRAM_KINDS). */
+export const KINDS: { kind: DiagramKind; title: string; text: string; group: KindGroup }[] = DIAGRAM_KINDS.map((kind) => ({ kind, ...CARDS[kind] }));
 
 const GROUPS: { value: "all" | KindGroup; label: string }[] = [
   { value: "all", label: "All" },
@@ -125,6 +129,19 @@ const EXAMPLES: Partial<Record<DiagramKind, string[]>> = {
     "Orders API <> Orders table",
     "Orders API > Receipts",
   ],
+  er: [
+    "customers {",
+    "  id int pk",
+    "  email text not null unique",
+    "}",
+    "orders {",
+    "  id int pk",
+    "  customer_id int not null",
+    "  total numeric",
+    "}",
+    "",
+    "orders.customer_id > customers.id",
+  ],
   sequence: [
     "actor Customer",
     "participant Shop",
@@ -168,7 +185,7 @@ const DEFAULT_NAME = "Untitled diagram";
 
 /**
  * The drawn preview of each kind: its real example, drawn as Publish draws it (fix round 1, M8; board DiagramStartWell).
- * Made once per theme for all cards, and kept: eight small SVG strings.
+ * Made once per theme for all cards, and kept: nine small SVG strings.
  */
 const drawings = new Map<string, Map<DiagramKind, string>>();
 function drawingsFor(theme: "light" | "dark"): Map<DiagramKind, string> {

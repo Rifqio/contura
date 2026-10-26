@@ -83,7 +83,7 @@ Write the schema as [DBML](https://dbml.dbdiagram.io/) on the left and the diagr
 
 ### Draw diagrams from text
 
-A diagram is a short text file (`.flow`) that Contura draws, and edits on the canvas go back into the text. There are eight kinds: data flow, flowchart, cloud architecture, sequence, state, class, mind map and timeline. Cloud diagrams come with AWS, Azure, Google Cloud and Kubernetes icons. Publish any diagram as PNG or SVG.
+A diagram is a short text file (`.flow`) that Contura draws, and edits on the canvas go back into the text. There are nine kinds: data flow, flowchart, cloud architecture, sequence, state, class, mind map, timeline and ER. One file can hold a whole board of several diagrams, each in its own frame. ER diagrams on a board are for sketching tables and relationships; to design a real database, use the Schema Builder above, which writes SQL and reaches your Connection, and Open as DBML turns an ER frame into one. Cloud diagrams come with AWS, Azure, Google Cloud and Kubernetes icons. Publish any diagram as PNG or SVG.
 
 The assistant can draw too: describe a change ("add a Redis cache between the API and the database"), review each proposed change, and undo the whole set with one Ctrl+Z. It only ever edits the diagram's text, never a database.
 

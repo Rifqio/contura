@@ -1,6 +1,6 @@
 // What the .flow parser says when the text is wrong, in plain words (spec section 2, frame 6+.3).
 import type { QuickFix } from "../protocol";
-import { ATTR_KEYS, type DiagramKind, type FlowNodeKind, KINDS } from "./model";
+import { ATTR_KEYS, DIAGRAM_KINDS, type DiagramKind, type FlowNodeKind, KINDS, quote } from "./model";
 import { article } from "../../format/article";
 
 export type FlowProblem = {
@@ -20,12 +20,19 @@ const KIND_WORDS: Record<DiagramKind, string> = {
   dfd: "data flow",
   flow: "flowchart",
   cloud: "cloud",
+  er: "ER",
   sequence: "sequence",
   state: "state",
   class: "class",
   mindmap: "mind map",
   timeline: "timeline",
 };
+
+/** "A data flow", "An ER": the kind with its article, starting a sentence. */
+function aKind(kind: DiagramKind): string {
+  const words = article(KIND_WORDS[kind]);
+  return words[0].toUpperCase() + words.slice(1);
+}
 
 /** How the kinds without bracket words are written. */
 const LEADING: Partial<Record<DiagramKind, string>> = {
@@ -43,26 +50,40 @@ function either(words: readonly string[]): string {
 
 export const MESSAGES = {
   firstLine: "The first line must say diagram and a kind, such as diagram dfd, diagram flow or diagram sequence.",
-  arrowKind: (arrow: string, kind: DiagramKind, use: string) => `A ${KIND_WORDS[kind]} diagram does not draw ${arrow}. Use ${use}.`,
+  notAKind: (word: string, use: DiagramKind | null) =>
+    `${word} is not a diagram kind. Use ${use ?? `one of: ${DIAGRAM_KINDS.join(", ")}`}.`,
+  arrowKind: (arrow: string, kind: DiagramKind, use: string) => `${aKind(kind)} diagram does not draw ${arrow}. Use ${use}.`,
   noLines: "A timeline has no lines between items: its order comes from the dates.",
-  bracketKinds: (kind: DiagramKind) => `A ${KIND_WORDS[kind]} diagram takes no kind in brackets. ${LEADING[kind] ?? ""}`.trim(),
+  bracketKinds: (kind: DiagramKind) => `${aKind(kind)} diagram takes no kind in brackets. ${LEADING[kind] ?? ""}`.trim(),
   badDate: "Write the date as YYYY-MM-DD, YYYY-MM or YYYY, for example 2026-10-19.",
   timelineLine: "A timeline line starts with a date, milestone or section, for example 2026-10-19: Release.",
   needsColon: "Put a colon after the date, then the name, for example 2026-10-19: Release.",
   noFrame: "This } closes no frame.",
   frameNeedsBrace: "A frame ends its first line with {, for example loop retry 3 times {.",
   unclosedFrame: (label: string) => `${label} has no closing }.`,
+  noColumn: (table: string, column: string) => `${table} has no column ${column}.`,
+  tableInTable: "A table holds columns. Put tables side by side, or in a group: group Billing {.",
+  columnName: "Start a column with its name, for example id int pk.",
+  openParen: "This ( has no closing ).",
+  oldColumn: "Columns go inside their table's braces now.",
+  oldGroup: "Groups start with the word group now: group Name {.",
+  oldCard: (arrow: string, use: string) => `${arrow} is the old way to write a relationship. Use ${use}.`,
+  unknownFlag: (word: string, near: string | null) =>
+    near ? `Unknown column flag "${word}". Did you mean ${near}?` : `Unknown column flag "${word}". Use pk, not null or unique.`,
   noClass: (name: string) => `${name} is not a class. Add class ${name} first.`,
   noRoot: "A mind map starts with its central idea, for example root Q4 plan.",
   dfdNeedsKind: "A data flow node needs a kind: entity, process or store.",
   decisionLabels: "A decision needs a label on each way out, for example yes and no.",
   cloudKind: "A cloud node takes an icon, not a kind, for example [icon: aws-s3].",
+  participantAttrs: "A participant takes an icon, a label and a colour, for example [icon: aws-lambda, color: info].",
   groupAttrs: "A group takes only an icon and a colour, for example [icon: aws-vpc, color: muted].",
   // Step 11: the colour palette and label:.
-  notAColour: (value: string, use: string | null) =>
-    use ? `${value} is not a Contura colour. Use ${use}: colours are named by what they mean.` : `${value || "An empty value"} is not a Contura colour. Use accent, info, success, warning, danger or muted.`,
-  noAttrHere: (_key: string, kind: DiagramKind) => `A ${KIND_WORDS[kind]} diagram's shapes take no colour or label.`,
-  noLineColour: (kind: DiagramKind) => `A ${KIND_WORDS[kind]} diagram's lines take no colour.`,
+  notAColour: (value: string, near: string | null) =>
+    near
+      ? `${value} is not a colour. Did you mean ${near}?`
+      : `${value || "An empty value"} is not a colour. Use a preset such as accent, a CSS colour name such as teal, or a hex such as "#3b82f6".`,
+  noAttrHere: (_key: string, kind: DiagramKind) => `${aKind(kind)} diagram's shapes take no colour or label.`,
+  noLineColour: (kind: DiagramKind) => `${aKind(kind)} diagram's lines take no colour.`,
   lineAttrs: "A line takes only a colour, for example [color: warning].",
   isLabel: (label: string, name: string) => `${label} is a label: lines name a shape by its name, so write ${name}.`,
   sharedLabel: (label: string) => `Several shapes show ${label}: a line names one by its name.`,
@@ -83,8 +104,19 @@ export const MESSAGES = {
   noValue: (key: string) => `${key} needs a value.`,
   notAnIcon: (icon: string, near: string | null) => (near ? `${icon} is not an icon. Did you mean ${near}?` : `${icon} is not an icon.`),
   noTarget: (arrow: string) => `This link needs a name after ${arrow}.`,
+  listName: "Put a name after the comma.",
+  listNameBefore: "Put a name before the comma.",
+  fanTooBig: "One line makes at most 100 links. Split it into several lines.",
+  oneParticipant: "A message goes to one participant. Write one line per message.",
   unclosed: (group: string) => `${group} has no closing }.`,
-  extra: (text: string) => `Can't read "${text.length > 24 ? `${text.slice(0, 24)}...` : text}" here.`,
+  frameTwice: (title: string, first: number, second: number) => `Two diagrams on this board are called ${title || "Untitled"} (lines ${first} and ${second}).`,
+  tooManyFrames: "A board holds at most 50 diagrams. This one and the ones after it are not read.",
+  tooManyShapes: "This board has more than 10,000 shapes. Move some diagrams to a new board.",
+  extra: (text: string) => {
+    // A quoted token already has its quotes: show what is inside them in one pair.
+    const inner = text.length >= 2 && text.startsWith('"') && text.endsWith('"') ? text.slice(1, -1) : text;
+    return `Can't read "${inner.length > 24 ? `${inner.slice(0, 24)}...` : inner}" here.`;
+  },
 };
 
 export const FIX_TITLES = {
@@ -96,7 +128,9 @@ export const FIX_TITLES = {
   renameSecond: "Rename the second one",
   makeKind: (kind: FlowNodeKind) => `Make it ${article(kind)}`,
   use: (word: string) => `Use ${word}`,
+  useQuoted: (name: string) => `Use ${quote(name)}`,
   closeGroup: "Add } at the end",
+  rewriteBlocks: "Rewrite as table blocks",
   remove: "Remove it",
 };
 

@@ -2,7 +2,7 @@
 // Arrange > Insert > Mermaid). Taken names come in free, as a paste's do; a sequence reuses its participants by name; a
 // mind map's central idea comes in as a topic. One edit list; every other byte stays.
 import { expect, test } from "vitest";
-import { insertFlow } from "./insert";
+import { insertFlow, insertKindRefusal } from "./insert";
 import { parseFlow } from "./parse";
 
 const lines = (...l: string[]) => `${l.join("\n")}\n`;
@@ -53,6 +53,11 @@ test("another kind is refused with the reason, and nothing is written", () => {
   const r = apply(ORDERS, lines('diagram sequence "Pay"', "A -> B: pay"));
   expect(r.edits).toEqual([]);
   expect(r.note).toBe("Insert takes a flowchart here; this is a sequence. Create makes it a new diagram.");
+});
+
+test("the refusal says an before ER", () => {
+  expect(insertKindRefusal("er", "flow")).toBe("Insert takes an ER diagram here; this is a flowchart. Create makes it a new diagram.");
+  expect(insertKindRefusal("flow", "er")).toBe("Insert takes a flowchart here; this is an ER diagram. Create makes it a new diagram.");
 });
 
 test("at a place: the lines go where you are typing", () => {

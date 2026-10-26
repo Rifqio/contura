@@ -76,10 +76,10 @@ test("a line that cannot be read is marked on its line, says why, and blocks Cre
   expect(s.dialog.querySelector(".mermaid-problems")).toBeNull();
 });
 
-test("an ER diagram is refused: it belongs to the Schema Builder", async () => {
+test("an ER diagram is refused: Mermaid ER is not imported yet", async () => {
   const s = setup();
   s.paste(lines("erDiagram", "    CUSTOMER ||--o{ ORDER : places"));
-  expect(await within(s.dialog).findByText("ER diagrams live in the Schema Builder. Open the Schema Builder to model tables.")).toBeTruthy();
+  expect(await within(s.dialog).findByText("Mermaid ER diagrams are not imported yet. Start an ER diagram and write its tables.")).toBeTruthy();
   expect(s.button(/^Create/).disabled).toBe(true);
 });
 

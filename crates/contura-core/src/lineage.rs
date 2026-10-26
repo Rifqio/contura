@@ -2,7 +2,7 @@
 //! and the `table:` links of the diagrams in `<data>\diagrams`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::diagrams::{DiagramKind, diagram_head, diagrams_dir};
+use crate::diagrams::{
+    DiagramKind, READ_MAX, diagram_head, diagrams_dir, is_blank_or_comment, is_frame_header,
+    read_flow_line,
+};
 use crate::dialect::Dialect;
 use crate::error::{Error, Result};
 use crate::jobs::paths::{
@@ -23,9 +26,6 @@ pub const MAX_TABLES: usize = 300;
 
 /// The longest a lineage reads the catalog; then it returns what it found, `truncated`.
 pub const DEADLINE: Duration = Duration::from_secs(10);
-
-/// The longest `.flow` line the table-link scan keeps; a longer one is skipped unread.
-const MAX_LINE: usize = 64 * 1024;
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +111,9 @@ pub struct FlowTableLink {
     pub kind: String,
     /// The `table:` value as written, such as `shop.orders`.
     pub table: String,
+    /// The title of the board frame the node is in; `None` when the file has one frame.
+    #[serde(default)]
+    pub frame: Option<String>,
     pub access: Access,
     /// What touches the table. A step kind (`io`, `step`, `subprocess`, `process`, or an
     /// unkinded flowchart node) is itself the step, with its own access. Any other node
@@ -130,6 +133,9 @@ pub struct FlowProcess {
     pub node: String,
     pub access: Access,
 }
+
+/// The most links one line makes (the language's `MAX_FAN_LINKS`).
+const MAX_FAN_LINKS: usize = 100;
 
 /// The most processes named for one `table:` node.
 pub const MAX_PROCESSES: usize = 20;
@@ -713,12 +719,13 @@ pub fn list_flow_table_links(data_dir: &Path) -> Result<Vec<FlowTableLink>> {
                 node: found.node,
                 kind: found.kind,
                 table: found.table,
+                frame: found.frame,
                 access: found.access,
                 processes: found.processes,
             });
         }
     }
-    out.sort_by(|a, b| (&a.file, &a.node).cmp(&(&b.file, &b.node)));
+    out.sort_by(|a, b| (&a.file, &a.frame, &a.node).cmp(&(&b.file, &b.frame, &b.node)));
     Ok(out)
 }
 
@@ -727,6 +734,8 @@ pub(crate) struct ScannedLink {
     pub node: String,
     pub kind: String,
     pub table: String,
+    /// The frame's title; `None` when the file has one frame.
+    pub frame: Option<String>,
     pub access: Access,
     pub processes: Vec<FlowProcess>,
 }
@@ -736,40 +745,6 @@ pub(crate) struct FlowScan {
     /// The largest the line buffer grew, so a test can see the file was read line by line.
     #[cfg_attr(not(test), allow(dead_code))]
     pub peak_line: usize,
-}
-
-/// Reads one line into `buf` (without the newline). `Some(false)` is a line longer than
-/// `MAX_LINE`, whose rest is skipped without being kept; `None` is the end of the file.
-fn read_line(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> Option<bool> {
-    buf.clear();
-    let mut fits = true;
-    let mut any = false;
-    loop {
-        let chunk = match reader.fill_buf() {
-            Ok(chunk) => chunk,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return any.then_some(false),
-        };
-        if chunk.is_empty() {
-            return any.then_some(fits);
-        }
-        any = true;
-        let (part, done) = match chunk.iter().position(|&b| b == b'\n') {
-            Some(i) => (&chunk[..i], i + 1),
-            None => (chunk, chunk.len()),
-        };
-        let ended = done > part.len();
-        if fits && buf.len() + part.len() <= MAX_LINE {
-            buf.extend_from_slice(part);
-        } else {
-            fits = false;
-            buf.clear();
-        }
-        reader.consume(done);
-        if ended {
-            return Some(fits);
-        }
-    }
 }
 
 #[derive(Default)]
@@ -797,33 +772,54 @@ impl Touch {
     }
 }
 
-/// The `table:` nodes of one `.flow` file and the arrows that meet them.
+/// One frame's nodes and lines while the file is read; every frame starts fresh.
+#[derive(Default)]
+struct FrameScan {
+    kind: Option<DiagramKind>,
+    title: String,
+    /// Node name -> (kind, table), in the order written.
+    nodes: Vec<(String, String, String)>,
+    /// Every declared node's kind as written, or None when the line names none.
+    kinds: HashMap<String, Option<String>>,
+    touches: HashMap<String, Touch>,
+}
+
+/// The `table:` nodes of one `.flow` file and the arrows that meet them, frame by frame.
 pub(crate) fn scan_flow(reader: impl Read) -> FlowScan {
-    let mut reader = BufReader::new(reader);
+    let mut reader = BufReader::new(reader.take(READ_MAX));
     let mut buf = Vec::new();
     let mut peak_line = 0;
-    let mut kind = DiagramKind::Unknown;
     let mut first = true;
-    // Node name -> (kind, table), in the order written.
-    let mut nodes: Vec<(String, String, String)> = Vec::new();
-    // Every declared node's kind as written, or None when the line names none.
-    let mut kinds: HashMap<String, Option<String>> = HashMap::new();
-    let mut touches: HashMap<String, Touch> = HashMap::new();
-    while let Some(fits) = read_line(&mut reader, &mut buf) {
+    let mut frames = 0;
+    let mut cur = FrameScan::default();
+    let mut links = Vec::new();
+    while let Some(fits) = read_flow_line(&mut reader, &mut buf) {
         peak_line = peak_line.max(buf.capacity());
         if !fits {
             first = false;
             continue;
         }
         let line = String::from_utf8_lossy(&buf);
-        if first {
-            first = false;
-            kind = diagram_head(line.as_bytes()).0;
+        // Blank lines and comments before the first header belong to no frame.
+        if first && is_blank_or_comment(&line) {
             continue;
         }
+        let head = first || is_frame_header(&line);
+        if head {
+            if !first {
+                finish_frame(std::mem::take(&mut cur), &mut links);
+            }
+            first = false;
+            frames += 1;
+            let (kind, title) = diagram_head(line.as_bytes());
+            cur.kind = Some(kind);
+            cur.title = title.unwrap_or_default();
+            continue;
+        }
+        let kind = cur.kind.unwrap_or(DiagramKind::Unknown);
         match parse_line(line.trim()) {
             Some(Line::Node { name, attrs }) => {
-                kinds.insert(name.clone(), attrs.kind.clone());
+                cur.kinds.insert(name.clone(), attrs.kind.clone());
                 let Some(table) = attrs.table else { continue };
                 let node_kind = attrs.kind.unwrap_or_else(|| {
                     if kind == DiagramKind::Flow {
@@ -833,13 +829,13 @@ pub(crate) fn scan_flow(reader: impl Read) -> FlowScan {
                     }
                     .to_string()
                 });
-                match nodes.iter_mut().find(|(n, _, _)| *n == name) {
+                match cur.nodes.iter_mut().find(|(n, _, _)| *n == name) {
                     Some(found) => *found = (name, node_kind, table),
-                    None => nodes.push((name, node_kind, table)),
+                    None => cur.nodes.push((name, node_kind, table)),
                 }
             }
-            Some(Line::Links(links)) => {
-                for (from, arrow, to) in links {
+            Some(Line::Links(found)) => {
+                for (from, arrow, to) in found {
                     if from == to {
                         continue;
                     }
@@ -848,12 +844,12 @@ pub(crate) fn scan_flow(reader: impl Read) -> FlowScan {
                         Arrow::Both => true,
                         Arrow::Plain => continue,
                     };
-                    let t = touches.entry(to.clone()).or_default();
+                    let t = cur.touches.entry(to.clone()).or_default();
                     t.into = true;
                     t.out_of |= both;
                     // `from` sends into `to`: it writes there, and with `<>` reads too.
                     t.meet(&from, true, both);
-                    let f = touches.entry(from.clone()).or_default();
+                    let f = cur.touches.entry(from.clone()).or_default();
                     f.out_of = true;
                     f.into |= both;
                     // `to` takes from `from`: it reads it, and with `<>` writes too.
@@ -863,7 +859,25 @@ pub(crate) fn scan_flow(reader: impl Read) -> FlowScan {
             None => {}
         }
     }
-    let tables: std::collections::HashSet<&str> = nodes.iter().map(|n| n.0.as_str()).collect();
+    finish_frame(cur, &mut links);
+    if frames <= 1 {
+        for l in &mut links {
+            l.frame = None;
+        }
+    }
+    FlowScan { links, peak_line }
+}
+
+/// The links of one finished frame, added to `links` with the frame's title.
+fn finish_frame(frame: FrameScan, links: &mut Vec<ScannedLink>) {
+    let FrameScan {
+        title,
+        nodes,
+        kinds,
+        touches,
+        ..
+    } = frame;
+    let tables: HashSet<&str> = nodes.iter().map(|n| n.0.as_str()).collect();
     let is_process = |name: &str| {
         !tables.contains(name)
             && kinds
@@ -871,7 +885,6 @@ pub(crate) fn scan_flow(reader: impl Read) -> FlowScan {
                 .and_then(Option::as_deref)
                 .is_none_or(|k| !NOT_PROCESSES.contains(&k))
     };
-    let mut links = Vec::new();
     for (node, kind, table) in &nodes {
         let Some(t) = touches.get(node) else { continue };
         let Some(access) = access_of(t.into, t.out_of) else {
@@ -902,11 +915,11 @@ pub(crate) fn scan_flow(reader: impl Read) -> FlowScan {
             node: node.clone(),
             kind: kind.clone(),
             table: table.clone(),
+            frame: Some(title.clone()),
             access,
             processes,
         });
     }
-    FlowScan { links, peak_line }
 }
 
 /// `writes` and `reads` as one `Access`; `None` when neither.
@@ -962,6 +975,11 @@ fn quoted(s: &str) -> Option<(String, &str)> {
 /// A node name at the start of `s`: quoted, or bare up to the first piece of syntax
 /// (`flowModel.ts` RESERVED), and the text after it.
 fn name(s: &str) -> Option<(String, &str)> {
+    name_in(s, false)
+}
+
+/// `name`, and with `at_comma` a bare name also stops at a comma: one end of a link line.
+fn name_in(s: &str, at_comma: bool) -> Option<(String, &str)> {
     let s = s.trim_start();
     if s.starts_with('"') {
         return quoted(s);
@@ -972,6 +990,7 @@ fn name(s: &str) -> Option<(String, &str)> {
     while i < b.len() {
         let stop = match b[i] {
             b'[' | b']' | b'{' | b'}' | b':' | b'>' | b'<' | b'"' | b'\\' => true,
+            b',' => at_comma,
             b'/' => b.get(i + 1) == Some(&b'/'),
             b'-' => b.get(i + 1) == Some(&b'-') || ((i == 0 || space(i - 1)) && space(i + 1)),
             _ => false,
@@ -996,7 +1015,8 @@ fn arrow(s: &str) -> Option<(Arrow, &str)> {
     if let Some(rest) = s.strip_prefix('>') {
         return Some((Arrow::One, rest));
     }
-    let rest = s.strip_prefix('-')?;
+    // `--` is the dotted line with no arrowhead, `-` the plain one.
+    let rest = s.strip_prefix("--").or_else(|| s.strip_prefix('-'))?;
     (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((Arrow::Plain, rest))
 }
 
@@ -1061,22 +1081,43 @@ fn attrs(body: &str) -> Attrs {
     out
 }
 
+/// One end of a link line: names separated by commas outside quotes (`A, B`), and the text
+/// after the last one.
+fn ends(s: &str) -> Option<(Vec<String>, &str)> {
+    let (first, mut rest) = name_in(s, true)?;
+    let mut out = vec![first];
+    while let Some(after) = rest.trim_start().strip_prefix(',') {
+        let Some((next, r)) = name_in(after, true) else {
+            break;
+        };
+        out.push(next);
+        rest = r;
+    }
+    Some((out, rest))
+}
+
 /// A node line (`Orders [store, table: shop.orders]`) or a link line
-/// (`A > B > C: label`); `None` for a comment, a group, a brace or anything else.
+/// (`A, B > C > D: label`); `None` for a comment, a group, a brace or anything else.
 fn parse_line(line: &str) -> Option<Line> {
     if line.is_empty() || line.starts_with("//") || line.starts_with('}') {
         return None;
     }
-    let (first, rest) = name(line)?;
-    // `Name {` opens a group; anything after the brace on the same line is read as a line.
-    if let Some(inner) = rest.trim_start().strip_prefix('{') {
-        return parse_line(inner.trim().trim_end_matches('}').trim());
-    }
-    if let Some((mut kind, mut rest)) = arrow(rest) {
+    // A comma list followed by an arrow is a link line; any other line reads as a node line,
+    // where a bare comma is part of the name.
+    if let Some((first, rest)) = ends(line)
+        && let Some((mut kind, mut rest)) = arrow(rest)
+    {
         let mut from = first;
         let mut out = Vec::new();
-        while let Some((to, after)) = name(rest) {
-            out.push((from, kind, to.clone()));
+        'segments: while let Some((to, after)) = ends(rest) {
+            for f in &from {
+                for t in &to {
+                    if out.len() >= MAX_FAN_LINKS {
+                        break 'segments;
+                    }
+                    out.push((f.clone(), kind, t.clone()));
+                }
+            }
             match arrow(after) {
                 Some((k, r)) => {
                     from = to;
@@ -1087,6 +1128,11 @@ fn parse_line(line: &str) -> Option<Line> {
             }
         }
         return Some(Line::Links(out));
+    }
+    let (first, rest) = name(line)?;
+    // `Name {` opens a group; anything after the brace on the same line is read as a line.
+    if let Some(inner) = rest.trim_start().strip_prefix('{') {
+        return parse_line(inner.trim().trim_end_matches('}').trim());
     }
     let (body, after) = bracket(rest.trim_start())?;
     // `Name [icon: x] {` opens a group, which is not a node.
@@ -1102,6 +1148,7 @@ fn parse_line(line: &str) -> Option<Line> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagrams::MAX_LINE;
 
     fn found(scan: &FlowScan) -> Vec<(&str, &str, &str, Access)> {
         scan.links
@@ -1145,10 +1192,10 @@ mod tests {
             ]
         );
 
-        // A 5 MB comment block, and one 1 MB comment line, are read a line at a time.
+        // A 3 MB comment block, and one 1 MB comment line, are read a line at a time. The whole file stays under READ_MAX.
         let mut big = String::from("diagram dfd \"Big\"\nP [process]\n");
         let comment = format!("// {}\n", "x".repeat(97));
-        while big.len() < 5 * 1024 * 1024 {
+        while big.len() < 3 * 1024 * 1024 {
             big.push_str(&comment);
         }
         big.push_str(&format!(
@@ -1180,7 +1227,11 @@ mod tests {
         assert_eq!(name(r#""two\nlines\r" > b"#).unwrap().0, "two\nlines\r");
         assert_eq!(name(r#""a\\nb" > c"#).unwrap().0, "a\\nb");
         assert!(parse_line("G [icon: x] {").is_none());
-        assert!(parse_line("A -- B").is_none());
+        // A dotted `--` is a line with no direction, not a node line.
+        assert!(matches!(
+            parse_line("A -- B"),
+            Some(Line::Links(l)) if l == [("A".into(), Arrow::Plain, "B".into())]
+        ));
     }
 
     fn path(name: &str) -> ObjectPath {
@@ -1307,6 +1358,162 @@ mod tests {
                 ("S", "store", "shop.s", Access::Writes),
                 ("T", "store", "shop.t", Access::Reads),
             ]
+        );
+    }
+
+    type Who<'a> = Vec<(&'a str, Option<&'a str>, &'a str, &'a str, Access)>;
+
+    fn by_frame(scan: &FlowScan) -> Who<'_> {
+        scan.links
+            .iter()
+            .flat_map(|l| {
+                l.processes.iter().map(|p| {
+                    (
+                        l.table.as_str(),
+                        l.frame.as_deref(),
+                        l.node.as_str(),
+                        p.node.as_str(),
+                        p.access,
+                    )
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn multi_frame_files_scan_each_frame() {
+        let text = "diagram dfd \"Orders\"\n\
+                    Orders [store, table: shop.orders]\n\
+                    Pay [process]\n\
+                    Pay > Orders\n\
+                    \n\
+                    diagram dfd \"Refunds\"\n\
+                    Orders [store, table: shop.refunds]\n\
+                    Refund [process]\n\
+                    Orders > Refund\n";
+        let scan = scan_flow(text.as_bytes());
+        assert_eq!(scan.links.len(), 2);
+        assert_eq!(
+            by_frame(&scan),
+            [
+                (
+                    "shop.orders",
+                    Some("Orders"),
+                    "Orders",
+                    "Pay",
+                    Access::Writes
+                ),
+                (
+                    "shop.refunds",
+                    Some("Refunds"),
+                    "Orders",
+                    "Refund",
+                    Access::Reads
+                ),
+            ]
+        );
+        assert_eq!(scan.links[0].access, Access::Writes);
+        assert_eq!(scan.links[1].access, Access::Reads);
+    }
+
+    #[test]
+    fn one_frame_files_name_no_frame() {
+        let text = "diagram dfd \"Solo\"\nS [store, table: shop.s]\nP [process]\nP > S\n";
+        let scan = scan_flow(text.as_bytes());
+        assert_eq!(scan.links.len(), 1);
+        assert_eq!(scan.links[0].frame, None);
+    }
+
+    #[test]
+    fn fan_out_lines_meet_each_end() {
+        let text = "diagram dfd \"Fan\"\n\
+                    Orders [store, table: shop.orders]\n\
+                    Pay [process]\n\
+                    Ship [process]\n\
+                    Pay, Ship > Orders\n";
+        let scan = scan_flow(text.as_bytes());
+        assert_eq!(
+            by_frame(&scan),
+            [
+                ("shop.orders", None, "Orders", "Pay", Access::Writes),
+                ("shop.orders", None, "Orders", "Ship", Access::Writes),
+            ]
+        );
+        assert!(matches!(
+            parse_line("A > B, C > D"),
+            Some(Line::Links(l)) if l.len() == 4
+        ));
+    }
+
+    #[test]
+    fn a_quoted_comma_name_is_one_end() {
+        let text = "diagram dfd \"Q\"\n\
+                    Orders [store, table: shop.orders]\n\
+                    \"Pay, ship\" > Orders\n";
+        let scan = scan_flow(text.as_bytes());
+        assert_eq!(
+            by_frame(&scan),
+            [("shop.orders", None, "Orders", "Pay, ship", Access::Writes)]
+        );
+    }
+
+    #[test]
+    fn dotted_line_is_plain() {
+        let text = "diagram dfd \"D\"\n\
+                    Orders [store, table: shop.orders]\n\
+                    Pay [process]\n\
+                    Pay -- Orders\n";
+        assert!(scan_flow(text.as_bytes()).links.is_empty());
+    }
+
+    #[test]
+    fn a_leading_comment_is_no_frame() {
+        let text = "\u{feff}// shop\n\ndiagram dfd \"Solo\"\n\
+                    S [store, table: shop.s]\n\
+                    P [process]\n\
+                    P > S\n";
+        let scan = scan_flow(text.as_bytes());
+        assert_eq!(scan.links.len(), 1);
+        assert_eq!(scan.links[0].frame, None);
+        // A board that starts with a comment still names its frames.
+        let board =
+            format!("// shop\n{text}\ndiagram dfd \"Two\"\nT [store, table: shop.t]\nP > T\n");
+        let scan = scan_flow(board.as_bytes());
+        let frames: Vec<_> = scan.links.iter().map(|l| l.frame.as_deref()).collect();
+        assert_eq!(frames, [Some("Solo"), Some("Two")]);
+    }
+
+    fn pairs(line: &str) -> Vec<(String, Arrow, String)> {
+        match parse_line(line) {
+            Some(Line::Links(l)) => l,
+            _ => panic!("not a link line: {line}"),
+        }
+    }
+
+    #[test]
+    fn fan_out_pairs_are_exact() {
+        let one = Arrow::One;
+        let p = |a: &str, b: &str| (a.to_string(), one, b.to_string());
+        assert_eq!(
+            pairs("A, B > C > D, E"),
+            [p("A", "C"), p("B", "C"), p("C", "D"), p("C", "E")]
+        );
+        assert_eq!(
+            pairs("A > B, C > D"),
+            [p("A", "B"), p("A", "C"), p("B", "D"), p("C", "D")]
+        );
+        // A trailing comma drops nothing and adds nothing.
+        assert_eq!(pairs("A > B,"), [p("A", "B")]);
+        // One line makes at most MAX_FAN_LINKS links.
+        let side = |n: &str| {
+            (0..20)
+                .map(|i| format!("{n}{i}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        assert_eq!(
+            pairs(&format!("{} > {}", side("A"), side("B"))).len(),
+            MAX_FAN_LINKS
         );
     }
 }

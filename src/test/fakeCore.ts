@@ -7,9 +7,14 @@ import { tokenize } from "../lang/sql/tokens";
  * missing-WHERE ask comes. It knows plain SQL only; tests about the hard inputs route the Core's own answer, taken
  * from its Rust tests.
  */
-export function fakePlan(statements: string[], dialect: DialectKind = "postgres", noWhere: (sql: string) => NoWhere | null = fakeNoWhere): PlannedRun[] {
+export function fakePlan(
+  statements: string[],
+  dialect: DialectKind = "postgres",
+  noWhere: (sql: string) => NoWhere | null = fakeNoWhere,
+  delimiters: string[] = [],
+): PlannedRun[] {
   return statements.flatMap((sql, piece) =>
-    splitStatements(sql, dialect).map((s) => ({ text: s.text, piece, from: s.from, to: s.to, noWhere: noWhere(s.text) })),
+    splitStatements(sql, dialect, delimiters[piece] ?? ";").map((s) => ({ text: s.text, piece, from: s.from, to: s.to, noWhere: noWhere(s.text) })),
   );
 }
 

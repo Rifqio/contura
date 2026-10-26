@@ -1,11 +1,15 @@
 import type { DialectKind } from "../api/types";
-import { type Token, tokenize } from "../lang/sql/tokens";
+import { mysqlCommentAfter, type Token, quotedEnd, tokenize } from "../lang/sql/tokens";
 
-/** One statement: its trimmed text, without the closing `;`, and where it sits. */
+/**
+ * One statement: its trimmed text, without the closing `;`, and where it sits. `delimiter` is the custom MySQL
+ * delimiter that ended it: the Core is told it, so it keeps the statement whole too.
+ */
 export interface Stmt {
   from: number;
   to: number;
   text: string;
+  delimiter?: string;
 }
 
 /** Statements whose body is a BEGIN ... END block, with semicolons inside it. */
@@ -184,14 +188,173 @@ function topTokens(tokens: readonly Token[]): Top[] {
   return top;
 }
 
+/** Where a MySQL `DELIMITER` line sits (the word to the end of its line) and the delimiter it sets. */
+interface DelimiterLine {
+  from: number;
+  to: number;
+  delimiter: string;
+}
+
+/** Blanks that keep a DELIMITER at the start of its line, as the Core's `delimited_chunks` reads them. */
+const LINE_BLANK = new Set([" ", "\t", "\r", "\v", "\f"]);
+
+/**
+ * The argument of a `DELIMITER` line, as the mysql client reads it: a quoted string, or the first word; the rest of
+ * the line is ignored. None when it is missing or holds a backslash: then the line is text, as the Core reads it.
+ */
+function delimiterArg(rest: string): string | null {
+  const src = rest.trim();
+  const q = src[0];
+  let arg: string;
+  if (q === "'" || q === '"' || q === "`") {
+    const inner = src.slice(1);
+    const close = inner.indexOf(q);
+    arg = close < 0 ? inner : inner.slice(0, close);
+  } else arg = src.split(/[ \t\r\v\f]/)[0] ?? "";
+  return arg === "" || arg.includes("\\") ? null : arg;
+}
+
+/**
+ * MySQL `DELIMITER` lines, as the Core's `delimited_chunks` reads them (and the SQL file import's script reader): a
+ * line whose first word is DELIMITER, outside strings, quoted names and comments, sets the statement end until the
+ * next one, and is itself never sent. The chunks are the text between DELIMITER lines, cut at each custom delimiter.
+ * A chunk a custom delimiter is in force for (`delimiter` set) that is one routine or compound statement (`compound`)
+ * is sent whole, as the mysql client sends it; the Core still classifies and checks each of its `;`-parts. Any other
+ * chunk is split as any other text, so each of its parts runs as its own statement with its own result. Null on
+ * other dialects and when the text has no DELIMITER line and starts under `;`, so such text splits exactly as before.
+ */
+function delimitedChunks(
+  text: string,
+  dialect: DialectKind,
+  initial = ";",
+): { chunks: { from: number; to: number; delimiter?: string }[]; lines: DelimiterLine[] } | null {
+  if (dialect !== "mysql") return null;
+  const chunks: { from: number; to: number; delimiter?: string }[] = [];
+  const lines: DelimiterLine[] = [];
+  let delimiter = initial || ";";
+  const chunk = (from: number, to: number) => chunks.push(delimiter === ";" ? { from, to } : { from, to, delimiter });
+  let from = 0;
+  let lineStart = true;
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const c = text[i];
+    if (c === "\n") {
+      lineStart = true;
+      i++;
+      continue;
+    }
+    if (LINE_BLANK.has(c)) {
+      i++;
+      continue;
+    }
+    if (lineStart && text.slice(i, i + 9).toLowerCase() === "delimiter" && (i + 9 === len || " \t\r\n".includes(text[i + 9]))) {
+      const nl = text.indexOf("\n", i);
+      const end = nl < 0 ? len : nl;
+      const arg = delimiterArg(text.slice(i + 9, end));
+      if (arg !== null) {
+        chunk(from, i);
+        lines.push({ from: i, to: end, delimiter: arg });
+        delimiter = arg;
+        from = end;
+        i = end;
+        continue;
+      }
+    }
+    lineStart = false;
+    if (delimiter !== ";" && text.startsWith(delimiter, i)) {
+      chunk(from, i);
+      i += delimiter.length;
+      from = i;
+      continue;
+    }
+    const next = text[i + 1];
+    if ((c === "-" && next === "-" && mysqlCommentAfter(text, i + 2)) || c === "#") {
+      const nl = text.indexOf("\n", i);
+      i = nl < 0 ? len : nl;
+    } else if (c === "/" && next === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close < 0 ? len : close + 2;
+    } else if (c === "'" || c === '"' || c === "`") {
+      i = quotedEnd(text, i, c, c !== "`");
+    } else i++;
+  }
+  if (lines.length === 0 && (initial || ";") === ";") return null;
+  chunk(from, len);
+  return { chunks, lines };
+}
+
+/** The delimiter in force at `pos`: the one the last DELIMITER line before it set, else `;`. */
+export function delimiterAt(text: string, pos: number, dialect: DialectKind): string {
+  let delimiter = ";";
+  for (const line of delimitedChunks(text, dialect)?.lines ?? []) {
+    if (line.to > pos) break;
+    delimiter = line.delimiter;
+  }
+  return delimiter;
+}
+
 /**
  * Statements split on real statement ends; pieces with only comments are dropped. Inside a CREATE TRIGGER,
  * PROCEDURE, FUNCTION or EVENT, semicolons within its BEGIN ... END body do not end the statement. The same rules as
  * the Core's `split_statements` (round 7): only a real routine's CREATE opens a body, a BEGIN opens a block only
  * where one can start, END closes one only at a statement's start, and a body still open at the end of the text is
- * no routine: from its CREATE on, each `;` ends a statement.
+ * no routine: from its CREATE on, each `;` ends a statement. On MySQL, DELIMITER lines are read first (see
+ * `delimitedChunks`); `delimiter` is the one in force where the text starts.
  */
-export function splitStatements(text: string, dialect: DialectKind): Stmt[] {
+export function splitStatements(text: string, dialect: DialectKind, delimiter = ";"): Stmt[] {
+  const delimited = delimitedChunks(text, dialect, delimiter);
+  if (!delimited) return splitPlain(text, dialect);
+  return delimited.chunks.flatMap((c): Stmt[] => {
+    const piece = text.slice(c.from, c.to);
+    if (c.delimiter === undefined || !compound(piece, dialect))
+      return splitPlain(piece, dialect).map((s) => ({ from: c.from + s.from, to: c.from + s.to, text: s.text }));
+    const from = c.from + piece.length - piece.trimStart().length;
+    const body = piece.trim();
+    return [{ from, to: from + body.length, text: body, delimiter: c.delimiter }];
+  });
+}
+
+/**
+ * Whether a MySQL chunk is one routine or compound statement, which the server reads as one statement, `;`s inside,
+ * as the Core's `compound` reads it: a routine's CREATE, or after an optional `label:` a BEGIN block (BEGIN followed
+ * by a word other than WORK, so not a transaction), LOOP, WHILE or REPEAT, or without a label an IF or CASE statement.
+ */
+export function compound(chunk: string, dialect: DialectKind): boolean {
+  const top = topTokens(tokenize(chunk, dialect).filter((t) => isCode(t, dialect)));
+  if (opensRoutine(top)) return true;
+  const word = (k: number) => {
+    const t = top[k];
+    return t && typeof t === "object" ? t.w : null;
+  };
+  const labelled = word(0) !== null && top[1] === ":";
+  const w = word(labelled ? 2 : 0);
+  const next = word(labelled ? 3 : 1);
+  if (w === "BEGIN") return next !== null && next !== "WORK";
+  if (w === "LOOP" || w === "WHILE" || w === "REPEAT") return true;
+  return !labelled && (w === "IF" || w === "CASE");
+}
+
+/**
+ * What a run of the selection `from`..`to` sends: the selected text, trimmed and without a last `;` (or the custom
+ * MySQL delimiter in force where it starts), which the Core splits. That delimiter goes with it, so the Core splits
+ * the selection as the editor reads it: a routine or compound statement runs whole, and plain statements as a `;`
+ * selection does (the last one).
+ */
+export function selectionStatement(doc: string, from: number, to: number, dialect: DialectKind): Stmt | null {
+  const raw = doc.slice(from, to);
+  const delimiter = delimiterAt(doc, from, dialect);
+  const lead = raw.length - raw.trimStart().length;
+  let body = raw.trim();
+  if (body.endsWith(delimiter)) body = body.slice(0, body.length - delimiter.length).trimEnd();
+  if (!body) return null;
+  const stmt: Stmt = { from: from + lead, to: from + lead + body.length, text: body };
+  return delimiter === ";" ? stmt : { ...stmt, delimiter };
+}
+
+
+/** `splitStatements` for text with no DELIMITER line in force. */
+function splitPlain(text: string, dialect: DialectKind): Stmt[] {
   const tokens = tokenize(text, dialect);
   // The parts between top-level `;`s that hold code: where each runs and its code tokens.
   const parts: { from: number; to: number; code: Token[] }[] = [];

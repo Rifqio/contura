@@ -34,6 +34,11 @@ export const ADD_TOOLS: Record<DiagramKind, AddTool[]> = {
     { label: "Group", key: "G", icon: "square", kind: "group", base: "Group" },
   ],
   // Step 12, item 19: the newer kinds' main shapes; the Shape picker lists them all.
+  er: [
+    // T, the table tool's key (erd-ux-research 5.8); nothing else takes T on the ER canvas. A table writes no kind.
+    { label: "Add table", key: "T", icon: "table", kind: "entity", base: "table" },
+    { label: "Add weak table", key: "W", icon: "layers", kind: "weak", base: "weak" },
+  ],
   sequence: [
     { label: "Add participant", key: "P", icon: "square", kind: "participant", base: "Participant" },
     { label: "Add actor", key: "A", icon: "user", kind: "actor", base: "Actor" },
@@ -113,9 +118,11 @@ interface Props {
   shapeDisabled?(shape: Shape): string | null;
   /** Step 10: Mermaid... opens the Mermaid dialog to insert into this diagram (draw.io's Arrange > Insert > Mermaid). */
   onMermaid?(): void;
+  /** An ER diagram: opens its tables in the Schema Builder as an unsaved DBML model. */
+  onOpenAsDbml?(): void;
 }
 
-export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySelection, onShape, shapeDisabled, onMermaid }: Props) {
+export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySelection, onShape, shapeDisabled, onMermaid, onOpenAsDbml }: Props) {
   return (
     <div className="flow-toolbar nodrag nopan" role="toolbar" aria-label="Diagram tools">
       {ADD_TOOLS[kind].map((t) => (
@@ -132,6 +139,7 @@ export default function FlowToolbar({ kind, look, onAdd, onLook, onTidy, tidySel
       )}
       {!FIXED_KINDS.has(kind) && <Tool label="Tidy" hint={tidySelection ? "Tidy selection" : "Tidy"} icon="tidy" onClick={onTidy} />}
       {onMermaid && <Tool label="Mermaid..." hint="Insert from Mermaid" icon="flow" onClick={onMermaid} />}
+      {onOpenAsDbml && <Tool label="Open as DBML" hint="Open as DBML in the Schema Builder" icon="database" onClick={onOpenAsDbml} />}
     </div>
   );
 }

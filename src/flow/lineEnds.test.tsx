@@ -40,8 +40,8 @@ const lines = (...l: string[]) => `${l.join("\n")}\n`;
 const FLOW = lines('diagram flow "Refund"', "Request in [start]", "Check", "Done [end]", "Request in > Check", "Check > Done: yes");
 const LAYOUT = JSON.stringify({ version: 1, nodes: { "Request in": { x: 0, y: 0 }, Check: { x: 300, y: 0 }, Done: { x: 0, y: 300 } } });
 
-function setup() {
-  routeInvoke({ read_diagram: () => ({ text: FLOW, layout: LAYOUT }), write_diagram: () => null, write_diagram_layout: () => null });
+function setup(text = FLOW) {
+  routeInvoke({ read_diagram: () => ({ text, layout: LAYOUT }), write_diagram: () => null, write_diagram_layout: () => null });
   const client = new LangClient(() => fakeWorker());
   const utils = render(
     <div style={{ width: 1280, height: 800 }}>
@@ -106,4 +106,27 @@ test("let go on empty canvas or Esc mid-drag, and the line stays as it was", asy
   fireEvent.pointerUp(window, { pointerId: 1, ...s.centre("Done") });
   await new Promise((r) => setTimeout(r, 50));
   expect(s.doc()).toBe(FLOW);
+});
+
+test("a_dotted_line_has_the_dash_and_no_head", async () => {
+  const dotted = lines('diagram flow "Refund"', "Request in [start]", "Check", "Done [end]", "Request in --> Check", "Check -- Done", "Done -- Request in [color: #3b82f6]");
+  const s = setup(dotted);
+  await waitFor(() => expect(canvas.props?.edges).toHaveLength(3), { timeout: 4000 });
+  const [dashed, plain, coloured] = canvas.props!.edges;
+  expect(dashed.markerEnd).toBeTruthy();
+  for (const e of [plain, coloured]) {
+    expect(e.markerStart).toBeUndefined();
+    expect(e.markerEnd).toBeUndefined();
+    expect(e.className).toContain("flow-line-dashed");
+  }
+  expect(plain.className).toBe(dashed.className);
+  await waitFor(() => expect(s.container.querySelectorAll(".react-flow__edge.flow-line-dashed")).toHaveLength(3));
+});
+
+test("a_class_association_dash_dash_stays_solid", async () => {
+  const s = setup(lines('diagram class "Types"', "class Animal", "class Dog", "Animal -- Dog"));
+  await waitFor(() => expect(canvas.props?.edges).toHaveLength(1), { timeout: 4000 });
+  expect(canvas.props!.edges[0].className).not.toContain("flow-line-dashed");
+  expect(canvas.props!.edges[0].className).not.toContain("flow-line-dotted");
+  await waitFor(() => expect(s.container.querySelectorAll(".react-flow__edge")).toHaveLength(1));
 });

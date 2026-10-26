@@ -8,6 +8,7 @@ import type { TextEdit } from "../protocol";
 import { functionMap, keywordSet, type SqlFunction } from "./dialects";
 import { type Token, tokenize } from "./tokens";
 import type { SqlSchema, SqlTable } from "./types";
+import { compound, splitStatements } from "../../query/statements";
 
 export type Range = { from: number; to: number };
 
@@ -351,6 +352,12 @@ export function analyzeSql(text: string, dialect: DialectKind, schema: SqlSchema
       st = i + 1;
     }
   }
+  // A routine or compound statement's body names NEW and OLD, its locals, parameters and labels, which the schema
+  // does not hold: its schema problems are dropped, its syntax problems kept. The statements are the editor's split,
+  // which honours MySQL DELIMITER lines and keeps a routine's body whole.
+  const bodies = splitStatements(text, dialect).filter((s) => compound(s.text, dialect));
+  if (bodies.length > 0)
+    A.problems = A.problems.filter((p) => p.kind !== "schema" || !bodies.some((b) => p.from >= b.from && p.from < b.to));
   return A;
 }
 

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
+import type { TextEdit } from "../protocol";
 import { ICON_LOOKUP_BUDGET, parseFlow } from "./parse";
-import { CLOSED_KEPT, createFlowService } from "./service";
+import { applyEdits, CLOSED_KEPT, createFlowService } from "./service";
 
 const CLOUD = ['diagram cloud "Order API"', "Orders [icon: aws-dynamdb]", "Assets [icon: aws-s3]", ""].join("\n");
 
@@ -68,6 +69,19 @@ test("unknown_icon_lookups_have_a_per_parse_budget", () => {
   expect(first.problems.some((p) => p.message === "other-150 is not an icon.")).toBe(true);
 });
 
+test("an_icon_list_past_the_budget_never_defers_its_lookup", () => {
+  // No parse could ever look up a name in it, so the parse is not owed one and a board keeps reusing it.
+  const { icons, counter } = countingIcons(Array.from({ length: ICON_LOOKUP_BUDGET + 1 }, (_, i) => `i${i}`));
+  const r = parseFlow('diagram cloud "x"\nA [icon: nope]\n', { icons, iconNear: new Map() });
+  expect(r.problems.map((p) => p.message)).toEqual(["nope is not an icon."]);
+  expect(r.iconsDeferred).toBe(false);
+  expect(counter.reads).toBe(0);
+  // Under the budget a name past this parse's lookups is owed one.
+  const some = countingIcons(Array.from({ length: 4000 }, (_, i) => `i${i}`));
+  const owed = parseFlow(['diagram cloud "x"', ...Array.from({ length: 30 }, (_, i) => `N${i} [icon: x${i}]`), ""].join("\n"), { icons: some.icons, iconNear: new Map() });
+  expect(owed.iconsDeferred).toBe(true);
+});
+
 test("the_misspelling_cache_drops_its_oldest_entry_not_everything", () => {
   const { icons, counter } = countingIcons(["aws-s3"]);
   const iconNear = new Map<string, string | null>();
@@ -117,4 +131,209 @@ test("a paste is one worker op on the cached parse: one edit list and the names 
   // Planned on an older text: stale, as every canvas action.
   flow.parse("p", `${text}C\n`);
   expect(flow.edit("p", version, { op: "paste", text: "A\n" })).toEqual({ stale: true });
+});
+
+// The brief's board wrote only `Pay > Done`, which a flow diagram reads as two names not defined (no doc, no spans),
+// so each frame defines its shapes first: frame 1 starts on line 6 and defines Pay on line 7.
+const BOARD = 'diagram flow "Checkout"\nPay\nDone\nPay > Done\n\ndiagram flow "Refund"\nPay\nDone\nPay > Done\n';
+const REFUND = BOARD.indexOf('diagram flow "Refund"');
+
+test("a_parse_posts_every_frame_and_frame_zero_on_top", () => {
+  const s = createFlowService();
+  const r = s.parse("d", BOARD);
+  expect(r.frames.map((f) => [f.kind, f.title, f.line])).toEqual([
+    ["flow", "Checkout", 1],
+    ["flow", "Refund", 6],
+  ]);
+  expect(r.doc).toEqual(r.frames[0].doc);
+  expect(r.frames.map((f) => [f.index, f.from, f.to])).toEqual([
+    [0, 0, BOARD.indexOf("\n\n") + 1],
+    [1, REFUND, BOARD.length],
+  ]);
+});
+
+test("edits_in_one_frame_never_touch_another", () => {
+  const s = createFlowService();
+  const { version } = s.parse("d", BOARD);
+  const a = s.edit("d", version, { op: "renameNode", old: "Pay", next: "Charge" }, 1);
+  expect(a.stale).toBe(false);
+  expect(applyEdits(BOARD, (a as { edits: TextEdit[] }).edits)).toBe(BOARD.slice(0, REFUND) + BOARD.slice(REFUND).split("Pay").join("Charge"));
+  const spans = s.spans("d", version, ["node:Pay"], ["Pay"], 1);
+  expect(spans.stale === false && BOARD.slice(spans.spans["node:Pay"]!.from, spans.spans["node:Pay"]!.to)).toBe("Pay");
+  expect(spans.stale === false && spans.lineOf.Pay).toBe(7);
+});
+
+test("a_crlf_board_edits_its_last_frame_with_crlf", () => {
+  const t = '\ufeffdiagram flow "A"\r\nA\r\n\r\ndiagram flow "B"\r\nB\r\n\r\ndiagram flow "C"\r\nC\r\n';
+  const s = createFlowService();
+  const { version, problems } = s.parse("d", t);
+  expect(problems).toEqual([]);
+  const a = s.edit("d", version, { op: "addNode", name: "D", kind: null }, 2) as { edits: TextEdit[] };
+  expect(applyEdits(t, a.edits)).toBe(`${t}D\r\n`);
+});
+
+test("completion_reads_the_frame_where_you_type", () => {
+  const t = 'diagram flow "Checkout"\nPay\nDone\n\ndiagram flow "Refund"\nAsk\nRefund\nAsk > \n';
+  const s = createFlowService();
+  s.parse("d", t);
+  const at = t.indexOf("Ask > \n") + 6;
+  const names = s.complete("d", t, at);
+  expect(names.from).toBe(at);
+  expect(names.items.filter((i) => i.kind === "node").map((i) => i.label)).toEqual(["Ask", "Refund"]);
+  // A newer text than the cached one reads the same frame.
+  const newer = `${t.slice(0, at)}R${t.slice(at)}`;
+  expect(s.complete("d", newer, at + 1).items.map((i) => i.label)).toEqual(["Refund"]);
+  // A column-0 "diagram s" on line 9 is a frame being started: the kinds are offered.
+  const k = `${t}diagram s`;
+  s.parse("d", k);
+  const kinds = s.complete("d", k, k.length);
+  expect(kinds.from).toBe(k.length - 1);
+  expect(kinds.items.map((i) => i.label)).toEqual(["sequence", "state"]);
+});
+
+test("a_paste_past_the_board_limit_is_refused", () => {
+  const frame = (i: number, n: number) => `diagram flow "F${i}"\n${Array.from({ length: n }, (_, k) => `N${i}x${k}`).join("\n")}\n`;
+  const t = [frame(0, 2000), frame(1, 2000), frame(2, 2000), frame(3, 2000), frame(4, 1000), frame(5, 999)].join("\n");
+  const s = createFlowService();
+  const { version } = s.parse("d", t);
+  expect(s.edit("d", version, { op: "paste", text: "P\nQ\n" }, 5)).toEqual({ stale: false, edits: [], note: "This board would have more than 10,000 shapes, so nothing was added." });
+  expect(s.edit("d", version, { op: "insert", text: 'diagram flow "M"\nP\nQ\n' }, 5)).toEqual({ stale: false, edits: [], note: "This board would have more than 10,000 shapes, so nothing was added." });
+  // One shape still fits.
+  const one = s.edit("d", version, { op: "paste", text: "P\n" }, 5);
+  expect(one.stale === false && one.edits.length).toBeGreaterThan(0);
+});
+
+test("a_frame_index_with_no_frame_answers_nothing", () => {
+  const s = createFlowService();
+  const { version } = s.parse("d", BOARD);
+  expect(s.edit("d", version, { op: "addNode", name: "X", kind: null }, 2)).toEqual({ stale: false, edits: [] });
+  expect(s.spans("d", version, ["node:Pay"], ["Pay"], 2)).toEqual({ stale: false, spans: { "node:Pay": null }, lineOf: { Pay: null } });
+  const o = s.outline("d", version, 5);
+  expect(o.stale === false && o.outline.nodes).toEqual([]);
+});
+
+test("the_outline_of_a_frame_is_in_file_lines", () => {
+  const s = createFlowService();
+  const { version } = s.parse("d", BOARD);
+  const o = s.outline("d", version, 1);
+  if (o.stale) throw new Error("expected an outline");
+  expect(o.outline.nodes.map((n) => [n.name, n.line])).toEqual([
+    ["Pay", 7],
+    ["Done", 8],
+  ]);
+  expect(o.outline.links.map((l) => l.line)).toEqual([9]);
+});
+
+test("the_last_good_doc_is_kept_per_frame_title", () => {
+  const s = createFlowService();
+  const good = s.parse("d", BOARD);
+  const broken = s.parse("d", BOARD.replace("Pay > Done\n\n", "Pay > Done [\n\n"));
+  expect(broken.frames[0].doc).toBeNull();
+  expect(broken.frames[0].lastValid).toEqual(good.frames[0].doc);
+  expect(broken.lastValid).toEqual(good.frames[0].doc);
+  // Frame 1 parses, so its doc is sent and no last good one.
+  expect(broken.frames[1].doc).not.toBeNull();
+  expect(broken.frames[1].lastValid).toBeNull();
+});
+
+test("an_insert_at_a_file_position_lands_in_its_frame", () => {
+  const s = createFlowService();
+  const { version } = s.parse("d", BOARD);
+  const r = s.edit("d", version, { op: "insert", text: 'diagram flow "M"\nNew\n', at: BOARD.length }, 1);
+  if (r.stale) throw new Error("expected edits");
+  expect(applyEdits(BOARD, r.edits)).toBe(`${BOARD}New\n`);
+});
+
+test("new_icons_parse_every_frame_again", () => {
+  const s = createFlowService();
+  const t = 'diagram cloud "A"\nOrders [icon: aws-dynamdb]\n\ndiagram cloud "B"\nX [icon: aws-s3]\n';
+  expect(s.parse("d", t).problems).toEqual([]);
+  s.setIcons(["aws-dynamodb", "aws-s3"]);
+  expect(s.parse("d", t).problems.map((p) => p.line)).toEqual([2]);
+});
+
+test("a_retyped_title_beside_an_untitled_frame_keeps_its_own_drawing", () => {
+  const s = createFlowService();
+  const t = 'diagram flow\nA\n\ndiagram flow "Refund"\nR\n';
+  const good = s.parse("d", t);
+  // Deleting the closing quote leaves frame 1 broken with no title, as frame 0 has none.
+  const broken = s.parse("d", t.replace('"Refund"', '"Refund'));
+  expect(broken.frames[1].doc).toBeNull();
+  expect(broken.frames[1].title).toBe("");
+  expect(broken.frames[1].lastValid).toEqual(good.frames[1].doc);
+});
+
+test("a_never_parsed_frame_moved_up_does_not_take_the_drawing_below", () => {
+  const s = createFlowService();
+  const a = 'diagram flow "A"\nA\n';
+  const n = 'diagram flow "N"\nX > Nowhere\n';
+  s.parse("d", `${a}\n${n}`);
+  const moved = s.parse("d", `${n}\n${a}`);
+  expect(moved.frames[0].title).toBe("N");
+  expect(moved.frames[0].lastValid).toBeNull();
+  expect(moved.lastValid).toBeNull();
+  // Nothing wrong sticks: one more parse still has none.
+  expect(s.parse("d", `${n}\n${a}`).frames[0].lastValid).toBeNull();
+});
+
+test("a_broken_frame_of_another_kind_pasted_over_does_not_take_the_drawing", () => {
+  const s = createFlowService();
+  const keep = 'diagram flow "Checkout"\nPay\n';
+  s.parse("d", `${keep}\ndiagram flow "Refund"\nR\n`);
+  const pasted = s.parse("d", `${keep}\ndiagram state "Return"\nIdle > Gone\n`);
+  expect(pasted.frames[1].kind).toBe("state");
+  expect(pasted.frames[1].doc).toBeNull();
+  expect(pasted.frames[1].lastValid).toBeNull();
+});
+
+test("a_one_diagram_file_keeps_its_drawing_while_its_title_is_typed", () => {
+  const s = createFlowService();
+  const good = s.parse("d", 'diagram flow "Checkout"\nPay\n');
+  const typing = s.parse("d", 'diagram flow "Check\nPay\n');
+  expect(typing.doc).toBeNull();
+  expect(typing.lastValid).toEqual(good.doc);
+  // An untitled one-diagram file keeps it too while its body is broken.
+  const untitled = s.parse("d2", "diagram flow\nPay\n");
+  expect(s.parse("d2", "diagram flow\nPay [\n").lastValid).toEqual(untitled.doc);
+});
+
+test("the_outline_of_a_broken_frame_uses_its_own_last_good_doc", () => {
+  const s = createFlowService();
+  // Frame 0 is untitled, and the broken frame 1 reads as untitled too: its kinds still come from its own doc.
+  const t = 'diagram flow\nA\n\ndiagram flow "B"\nB\n';
+  const good = s.parse("d", t);
+  const { version } = s.parse("d", t.replace('"B"', '"B'));
+  const o = s.outline("d", version, 1);
+  if (o.stale) throw new Error("expected an outline");
+  expect(o.outline.nodes.map((n) => [n.name, n.kind])).toEqual([["B", good.frames[1].doc!.nodes[0].kind]]);
+  expect(good.frames[1].doc!.nodes[0].kind).not.toBeNull();
+});
+
+test("an_unchanged_frame_gets_its_deferred_icon_suggestions", () => {
+  const s = createFlowService();
+  s.setIcons(Array.from({ length: 4000 }, (_, i) => `aws-icon-${i}`));
+  // 4,000 icons a lookup: one parse looks up 25 names, so the last 5 wait for the next parse.
+  const cloud = `diagram cloud "C"\n${Array.from({ length: 30 }, (_, i) => `N${i} [icon: aws-icon-${i}x]`).join("\n")}\n`;
+  const t = `${cloud}\ndiagram flow "F"\nA\n`;
+  const first = s.parse("d", t);
+  const last = (r: typeof first) => r.problems.find((p) => p.message.startsWith("aws-icon-29x"))!.message;
+  expect(last(first)).toBe("aws-icon-29x is not an icon.");
+  // Only frame 1 changes; frame 0 still gets the suggestions it was owed.
+  const next = s.parse("d", t.replace("A\n", "B\n"));
+  expect(last(next)).toBe("aws-icon-29x is not an icon. Did you mean aws-icon-29?");
+});
+
+test("completion_past_the_fifty_read_frames_offers_no_names_from_frame_49", () => {
+  const s = createFlowService();
+  const t = `${Array.from({ length: 52 }, (_, i) => `diagram flow "F${i}"\nA${i}\n`).join("\n")}A51 > `;
+  s.parse("d", t);
+  const r = s.complete("d", t, t.length);
+  expect(r.items.filter((i) => i.label === "A49")).toEqual([]);
+});
+
+test("completion_offers_a_tables_columns_after_a_dot_in_an_er_frame", () => {
+  const s = createFlowService();
+  const t = 'diagram er "Shop"\ncustomers {\n  id int pk\n  email text\n}\norders > customers.';
+  s.parse("d", t);
+  expect(s.complete("d", t, t.length).items.map((i) => i.label)).toEqual(["id", "email"]);
 });

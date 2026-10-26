@@ -1,6 +1,8 @@
 {
   "comment": "Shared by crates/contura-core/src/icons.rs (tests/icons.rs) and scripts/svg-check.mjs (src/flow/svgCheck.test.ts): both must give each refused SVG the same reason and keep each kept SVG (Rulings P9, P10: an allow list).",
   "refused": [
+    { "why": "value not allowed", "svg": "<svg color=\"url(https://evil/x#g)\"/>" },
+    { "why": "value not allowed", "svg": "<svg color=\"&quot;x&quot;\"/>" },
     { "why": "element not allowed", "svg": "<svg><script>alert(1)</script></svg>" },
     { "why": "element not allowed", "svg": "<svg><SCRIPT/></svg>" },
     { "why": "element not allowed", "svg": "<svg><s:script>alert(1)</s:script></svg>" },
@@ -117,6 +119,7 @@
     { "why": "element not allowed", "svg": "<svg><x:a id=\"a1\"/></svg>" }
   ],
   "kept": [
+    "<svg viewBox=\"0 0 24 24\" stroke=\"currentColor\" color=\"#1f1f1f\"><path d=\"M0 0h1\"/></svg>",
     "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><use xlink:href=\"#a\"/></svg>",
     "<svg><defs><linearGradient id=\"grad\"/></defs><rect fill=\"url(#grad)\" style=\"fill: url( #grad )\"/></svg>",
     "<svg><!-- @license lucide-static - ISC --><path d=\"M0 0\"/></svg>",

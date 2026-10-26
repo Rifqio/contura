@@ -10,6 +10,8 @@ export const DIAGRAM_KIND_WORD: Record<DiagramKind, string> = {
   class: "Class",
   mindmap: "Mind map",
   timeline: "Timeline",
+  er: "ER diagram",
+  board: "Board",
   unknown: "Diagram",
 };
 

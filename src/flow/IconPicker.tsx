@@ -5,7 +5,7 @@
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { IconEntry } from "../api/types";
 import { providerOf, rankIcons } from "../lang/flow/iconRank";
-import { iconEntries, iconPlate, useIcon } from "./icons";
+import { iconEntries, useIcon } from "./icons";
 
 /** The grid shows this many matches at most, so a short search never loads hundreds of icons. */
 export const PICKER_LIMIT = 48;
@@ -25,10 +25,10 @@ function normalise(q: string): string {
 }
 
 function Tile({ name }: { name: string }) {
-  const { url, missing, failed } = useIcon(name);
+  const { url, missing, failed, outline } = useIcon(name);
   return (
-    <span className={iconPlate(name) ? "icon-picker-tile" : "icon-picker-tile is-bare"}>
-      {url && !missing && !failed && <img src={url} alt="" draggable={false} />}
+    <span className="icon-picker-tile is-bare">
+      {url && !missing && !failed && <img className={outline ? "icon-hairline" : undefined} src={url} alt="" draggable={false} />}
     </span>
   );
 }

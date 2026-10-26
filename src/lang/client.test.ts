@@ -4,6 +4,7 @@ import type { LayoutRequest } from "../diagram/layout";
 import { LangClient, type WorkerLike } from "./client";
 import type { FromWorker, ToWorker } from "./protocol";
 import { KFC_SCHEMA } from "./sql/fixtures";
+import { applyEdits } from "./flow/service";
 import { createHandler } from "./worker";
 
 afterEach(() => vi.useRealTimers());
@@ -133,7 +134,8 @@ test("flow_result_sends_only_the_doc_problems_and_last_good_doc", () => {
   const posts: FromWorker[] = [];
   createHandler((m) => posts.push(m), 0)({ type: "flowParse", id: 1, docId: "f", text: 'diagram flow "F"\nA\n' });
   const [r] = flowResults(posts);
-  expect(Object.keys(r.result).sort()).toEqual(["doc", "kind", "lastValid", "problems", "version"]);
+  expect(Object.keys(r.result).sort()).toEqual(["doc", "frames", "kind", "lastValid", "problems", "version"]);
+  expect(Object.keys(r.result.frames[0]).sort()).toEqual(["doc", "from", "index", "kind", "lastValid", "line", "title", "to"]);
 });
 
 test("flow_spans_come_from_the_worker_for_the_current_version_only", () => {
@@ -230,6 +232,34 @@ test("lang_client_flow_resolves_with_the_parse_and_its_spans", async () => {
   client.dispose();
 });
 
+
+test("lang_client_asks_for_one_frame_of_a_board", async () => {
+  let handler: (m: ToWorker) => void = () => {};
+  const client = new LangClient(() => {
+    const fake: WorkerLike = { onmessage: null, onerror: null, postMessage: (m) => handler(m), terminate: () => {} };
+    handler = createHandler((m) => fake.onmessage?.({ data: m }), 0);
+    return fake;
+  });
+  const text = 'diagram flow "A"\nX\nY\n\ndiagram flow "B"\nP\nQ\nP > Q\n';
+  const r = await client.flow("b", text);
+  expect(r.frames.map((f) => f.title)).toEqual(["A", "B"]);
+  const spans = await client.flowSpans("b", r.version, ["node:P"], ["P"], 1);
+  if (spans.stale) throw new Error("expected spans");
+  expect(spans.lineOf).toEqual({ P: 6 });
+  expect(spans.spans["node:P"]?.from).toBe(text.indexOf("P\n"));
+  const edit = await client.flowEdit("b", r.version, { op: "addNode", name: "Z", kind: null }, 1);
+  if (edit.stale) throw new Error("expected edits");
+  expect(applyEdits(text, edit.edits)).toBe(text.replace("Q\nP > Q", "Q\nZ\nP > Q"));
+  const outline = await client.flowOutline("b", r.version, 1);
+  expect(outline.stale === false && outline.outline.nodes.map((n) => [n.name, n.line])).toEqual([
+    ["P", 6],
+    ["Q", 7],
+  ]);
+  // No frame index is frame 0, as before boards.
+  const first = await client.flowOutline("b", r.version);
+  expect(first.stale === false && first.outline.nodes.map((n) => n.name)).toEqual(["X", "Y"]);
+  client.dispose();
+});
 
 test("flow_edits_run_in_the_worker_on_the_version_they_were_planned_on", () => {
   const posts: FromWorker[] = [];

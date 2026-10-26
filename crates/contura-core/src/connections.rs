@@ -691,15 +691,22 @@ impl ConnectionService {
 
     /// The statements a run of `statements` on the session sends, as the Core splits them,
     /// each with its missing-WHERE answer (UX step 9, round 4). The editor runs these, not
-    /// its own split, and asks before any that changes every row.
+    /// its own split, and asks before any that changes every row. `delimiters` holds the
+    /// MySQL delimiter in force where each statement starts (`;` when missing), so one the
+    /// editor cut at a custom delimiter stays whole.
     pub fn plan_run(
         &self,
         s: QuerySessionId,
         statements: Vec<String>,
+        delimiters: Vec<String>,
     ) -> Result<Vec<crate::safety::PlannedRun>> {
         let (conn, _, _) = self.query_slot(s)?;
         let config = self.config(conn)?;
-        Ok(crate::safety::plan_run(config.dialect, &statements))
+        Ok(crate::safety::plan_run_delimited(
+            config.dialect,
+            &statements,
+            &delimiters,
+        ))
     }
 
     /// What running these statements on the session needs: nothing, a block or a confirmation.

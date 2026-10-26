@@ -102,6 +102,7 @@ import {
 import { NEW_VISUAL_NAME, savedVisualModel } from "./visualquery/drafts";
 import { emptyQuery } from "./visualquery/model";
 import VisualQueryTab, { type VisualTabControl } from "./visualquery/VisualQueryTab";
+import { setIconTheme } from "./flow/icons";
 import { useTheme } from "./theme/useTheme";
 import { type CommandHandlers, KeymapProvider, useCommandKeys } from "./commands/useCommandKeys";
 import { pressedKeys } from "./commands/keys";
@@ -1026,6 +1027,9 @@ function Workspace() {
 
   // Reconciles the painted theme with the Core setting; the status bar's theme switch chooses through it.
   const theme = useTheme();
+  useEffect(() => {
+    setIconTheme(theme.effective);
+  }, [theme.effective]);
 
   /** Ctrl+Alt+1 to Ctrl+Alt+9: the places in the switcher's order (PR7). */
   const openPlaceAt = (n: number) => {

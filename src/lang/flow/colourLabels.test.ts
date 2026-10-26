@@ -91,28 +91,22 @@ describe("color:", () => {
     expect(r.doc?.nodes[0].attrs.color).toBe("danger");
   });
 
-  test("a common colour word is a hint with the palette name it means", () => {
-    const text = lines(FLOW, "Retry [color: red]");
-    const r = parseFlow(text);
-    expect(r.doc).not.toBeNull();
-    expect(r.problems).toHaveLength(1);
-    expect(r.problems[0]).toMatchObject({ severity: "hint", message: "red is not a Contura colour. Use danger: colours are named by what they mean." });
-    expect(r.problems[0].fixes.map((f) => f.title)).toEqual(["Use danger"]);
-    expect(apply(text, r.problems[0].fixes[0].edits)).toContain("Retry [color: danger]");
-  });
-
-  test("any other value lists the six", () => {
-    const r = parseFlow(lines(FLOW, "Retry [color: #ff0000]"));
-    expect(r.problems[0].message).toBe("#ff0000 is not a Contura colour. Use accent, info, success, warning, danger or muted.");
-    expect(r.problems[0].fixes.map((f) => f.title)).toEqual(PALETTE.map((c) => `Use ${c}`));
-  });
-
   test("groups take a colour beside their icon, but no label", () => {
     const doc = ok(lines(FLOW, "Dispatch [color: muted] {", "  Ship", "}"));
     expect(doc.groups[0]).toEqual({ name: "Dispatch", color: "muted", nodes: ["Ship"], groups: [] });
     const cloud = ok(lines('diagram cloud "C"', "VPC [icon: aws-vpc, color: info] {", "  API", "}"));
     expect(cloud.groups[0]).toMatchObject({ icon: "aws-vpc", color: "info" });
     expect(errors(lines(FLOW, "Dispatch [label: D] {", "}"))[0].message).toBe(MESSAGES.groupAttrs);
+  });
+
+  test("groups and lines take a CSS name or a hex too", () => {
+    const doc = ok(lines(FLOW, "Dispatch [color: #3B82F6] {", "  Ship", "  Pack", "}", "Ship > Pack [color: teal]", 'Pack > Ship [color: "#fff8"]'));
+    expect(doc.groups[0].color).toBe("#3B82F6");
+    expect(doc.links.map((l) => l.color)).toEqual(["teal", "#fff8"]);
+    // A value that is no colour is a hint on a group and on a line, as on a shape.
+    for (const text of [lines(FLOW, "Dispatch [color: blurple] {", "  Ship", "}"), lines(FLOW, "A", "B", "A > B [color: #12345]")]) {
+      expect(parseFlow(text).problems.map((p) => p.severity)).toEqual(["hint"]);
+    }
   });
 });
 
@@ -156,9 +150,31 @@ describe("a line's attributes", () => {
     expect(p.message).toBe("A sequence diagram's lines take no colour.");
   });
 
-  test("an off-palette line colour is a hint", () => {
-    const r = parseFlow(lines(FLOW, "A", "B", "A > B [color: green]"));
-    expect(r.problems.map((p) => p.message)).toEqual(["green is not a Contura colour. Use success: colours are named by what they mean."]);
+  test("colour_values_at_the_edges", () => {
+    const ok = ["red", "Teal", "rebeccapurple", "#FFF", "#ffffff80", '"#3B82F6"', "warning"];
+    for (const v of ok) expect(parseFlow(`diagram flow "x"\nA [color: ${v}]\n`).problems, v).toEqual([]);
+    for (const v of ["#12345", "transparent", "currentColor", '""', "blurple"]) {
+      const ps = parseFlow(`diagram flow "x"\nA [color: ${v}]\n`).problems;
+      expect(ps.map((p) => p.severity), v).toEqual(["hint"]);
+    }
+    expect(parseFlow('diagram flow "x"\nA [color: rgb(1, 2, 3)]\n').problems.length).toBeGreaterThan(0);
+  });
+
+  test("a_misspelt_colour_offers_the_name_then_the_presets", () => {
+    const p = parseFlow('diagram flow "x"\nA [color: gren]\n').problems[0];
+    expect(p.message).toBe("gren is not a colour. Did you mean green?");
+    expect(p.fixes.map((f) => f.title)).toEqual(["Use green", "Use accent", "Use info", "Use success", "Use warning", "Use danger", "Use muted"]);
+  });
+
+  test("set_attr_writes_a_hex_quoted", () => {
+    const run = (t: string, op: Parameters<typeof applyFlowEdit>[2]) => apply(t, applyFlowEdit(t, parseFlow(t), op).edits);
+    const text = lines(FLOW, "A");
+    const hex = run(text, { op: "setAttr", name: "A", key: "color", value: "#3B82F6" });
+    expect(hex).toContain('A [color: "#3B82F6"]');
+    expect(parseFlow(hex).problems).toEqual([]);
+    expect(run(text, { op: "setAttr", name: "A", key: "color", value: "blurple" })).toBe(text);
+    const linked = lines(FLOW, "A", "B", "A > B");
+    expect(run(linked, { op: "setLinkColor", link: { from: "A", to: "B", label: null, nth: 0 }, color: "teal" })).toContain("A > B [color: teal]");
   });
 
   test("the span of a line with attributes covers them", () => {
@@ -272,5 +288,72 @@ describe("the edits", () => {
       { op: "setAttr", name: "Again", key: "label", value: null },
     ]);
     expect(apply(text, r.edits)).toBe(lines(FLOW, "Retry", "Again", "Again > Retry"));
+  });
+});
+
+describe("participants take attributes", () => {
+  const SEQ = 'diagram sequence "S"';
+
+  test("participant_attributes", () => {
+    const doc = ok(lines(SEQ, 'participant App [icon: aws-lambda, color: info, label: "Mobile app"]', "App -> API"));
+    expect(doc.nodes[0]).toEqual({ name: "App", kind: "participant", attrs: { icon: "aws-lambda", color: "info", label: "Mobile app" } });
+    expect(parseFlow(lines(SEQ, "participant App [color: info]", "actor Ann [label: Ann B]", "App -> Ann")).problems).toEqual([]);
+    for (const bad of ["participant App [process]", "participant App [id: 2]", "participant App [table: t]"]) {
+      const found = errors(lines(SEQ, bad, "App -> API"));
+      expect(found).toHaveLength(1);
+      expect(found[0].message).toBe(MESSAGES.participantAttrs);
+    }
+    expect(MESSAGES.participantAttrs).toBe("A participant takes an icon, a label and a colour, for example [icon: aws-lambda, color: info].");
+  });
+
+  test("participant_order", () => {
+    const doc = ok(lines(SEQ, "A -> B", "participant C", "C -> A"));
+    expect(doc.nodes.map((n) => n.name)).toEqual(["C", "A", "B"]);
+  });
+
+  test("set_attr_on_a_participant", () => {
+    const text = lines(SEQ, "participant App", "App -> API");
+    const out = apply(text, setAttr(text, parseFlow(text), "App", "color", "warning"));
+    expect(out).toBe(lines(SEQ, "participant App [color: warning]", "App -> API"));
+    expect(apply(out, setAttr(out, parseFlow(out), "App", "color", null))).toBe(text);
+  });
+
+  test("sequence_messages_still_take_no_colour", () => {
+    const [p] = errors(lines(SEQ, "A -> B [color: info]"));
+    expect(p.message).toBe(MESSAGES.noLineColour("sequence"));
+  });
+
+  test("a participant is written with its attributes", () => {
+    expect(nodeStatement("sequence", { name: "App", kind: "participant", attrs: { color: "info", icon: "aws-lambda" } })).toBe("participant App [icon: aws-lambda, color: info]");
+    expect(nodeStatement("sequence", { name: "App", kind: "actor", attrs: {} })).toBe("actor App");
+  });
+});
+
+describe("participants with brackets", () => {
+  const SEQ = 'diagram sequence "S"';
+  const set = (text: string, key: "icon" | "label" | "color", value: string | null) => apply(text, setAttr(text, parseFlow(text), "App", key, value));
+
+  test("setAttr inserts, replaces and removes inside the brackets", () => {
+    const text = lines(SEQ, "participant App [icon: users, label: Mobile]", "App -> API");
+    expect(set(text, "color", "info")).toBe(lines(SEQ, "participant App [icon: users, label: Mobile, color: info]", "App -> API"));
+    expect(set(lines(SEQ, "participant App [color: info, label: Mobile]", "App -> API"), "icon", "users")).toBe(
+      lines(SEQ, "participant App [icon: users, color: info, label: Mobile]", "App -> API"),
+    );
+    expect(set(text, "label", "Phone")).toBe(lines(SEQ, "participant App [icon: users, label: Phone]", "App -> API"));
+    expect(set(text, "icon", null)).toBe(lines(SEQ, "participant App [label: Mobile]", "App -> API"));
+  });
+
+  test("a bad colour is the colour hint and an unknown icon the icon problem", () => {
+    const colour = parseFlow(lines(SEQ, "participant App [color: nope]", "App -> API"));
+    expect(colour.problems).toHaveLength(1);
+    expect(colour.problems[0].severity).toBe("hint");
+    expect(colour.problems[0].message).toMatch(/is not a colour/);
+    const icon = parseFlow(lines(SEQ, "participant App [icon: aws-lamda]", "App -> API"), { icons: new Set(["aws-lambda", "users"]) });
+    expect(icon.problems.map((p) => p.message)).toEqual([MESSAGES.notAnIcon("aws-lamda", "aws-lambda")]);
+  });
+
+  test("an unclosed bracket still checks the rest of the line", () => {
+    const found = parseFlow(lines(SEQ, "participant App [color: info", "App -> API")).problems.filter((p) => p.severity === "error");
+    expect(found.map((p) => p.message)).toEqual([MESSAGES.openList]);
   });
 });

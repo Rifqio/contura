@@ -23,6 +23,8 @@ export interface RefRow {
   kind: "flow" | "view";
   title: string;
   file: string;
+  /** The diagram's own name, so the frames of one board count once. */
+  diagram: string;
   /** Opens the diagram or view; without it the row has no Open. */
   onOpen?(): void;
 }
@@ -164,7 +166,7 @@ export default function LineagePanel({ lineage, effects, hasDefault, sqlite, ref
         <Group
           label={source === "flows" ? "Diagrams" : "Views"}
           // Diagrams counts diagrams, not their process rows (P18).
-          count={String(source === "flows" ? new Set(refs.map((r) => r.file)).size : refs.length)}
+          count={String(source === "flows" ? new Set(refs.map((r) => r.diagram)).size : refs.length)}
           icon={source === "flows" ? "flow" : "view"}
           notes={refNotes}
         >

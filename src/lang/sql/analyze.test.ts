@@ -184,3 +184,35 @@ test("except_and_intersect_end_a_select_list", () => {
   expect(a.statements[0].blocks[0].select.map((x) => x.text)).toEqual(["1"]);
   expect(pg("SELECT id FROM EXCEPT SELECT 1").problems.map((p) => p.message)).toContain("Expected a table name after FROM.");
 });
+
+// ---- Routine and compound bodies: NEW, OLD, locals, parameters and labels are not schema names ----
+
+const TRIGGER_SCRIPT =
+  "DELIMITER $$\nCREATE TRIGGER products_audit AFTER UPDATE ON products FOR EACH ROW BEGIN DECLARE n INT; SET n = NEW.id; INSERT INTO delim_log (note) VALUES (CONCAT('updated ', n)); END$$\nDELIMITER ;\n";
+
+test("compound_bodies_have_no_schema_problems", () => {
+  const my = analyzeSql(TRIGGER_SCRIPT, "mysql", KFC_SCHEMA);
+  expect(my.problems.filter((p) => p.kind === "schema")).toEqual([]);
+  // The same in a plain `;` script, and for a procedure's parameters and labels.
+  const plain = analyzeSql(
+    "CREATE PROCEDURE p(IN x INT) BEGIN lbl: LOOP SELECT x FROM nowhere WHERE OLD.a = 1; LEAVE lbl; END LOOP lbl; END;",
+    "mysql",
+    KFC_SCHEMA,
+  );
+  expect(plain.problems.filter((p) => p.kind === "schema")).toEqual([]);
+});
+
+test("compound_bodies_still_report_syntax_problems", () => {
+  const text = "DELIMITER $$\nCREATE TRIGGER t AFTER UPDATE ON products FOR EACH ROW BEGIN SET @n = (1 + NEW.id; END$$\nDELIMITER ;\n";
+  const a = analyzeSql(text, "mysql", KFC_SCHEMA);
+  expect(a.problems.filter((p) => p.kind === "syntax").map((p) => p.message)).toContain("This ( is never closed.");
+  expect(a.problems.filter((p) => p.kind === "schema")).toEqual([]);
+});
+
+test("a_statement_after_the_delimiter_block_still_gets_schema_problems", () => {
+  const text = `${TRIGGER_SCRIPT}SELECT * FROM bogus_table;`;
+  const a = analyzeSql(text, "mysql", KFC_SCHEMA);
+  const schema = a.problems.filter((p) => p.kind === "schema");
+  expect(schema.map((p) => p.message.startsWith("Unknown table"))).toEqual([true]);
+  expect(text.slice(schema[0].from, schema[0].to)).toBe("bogus_table");
+});

@@ -100,3 +100,11 @@ test("an_unreadable_index_says_so", async () => {
   render(<IconPicker onPick={() => {}} onCancel={() => {}} />);
   expect(await screen.findByText("Couldn't read the icon list.")).toBeTruthy();
 });
+
+test("the_picker_tiles_draw_bare", async () => {
+  render(<IconPicker onPick={() => {}} onCancel={() => {}} />);
+  await waitFor(() => expect(screen.getAllByRole("option").length).toBe(INDEX.length));
+  const tiles = [...document.querySelectorAll(".icon-picker-tile")];
+  expect(tiles.length).toBe(INDEX.length);
+  expect(tiles.filter((t) => !t.classList.contains("is-bare"))).toEqual([]);
+});

@@ -172,7 +172,7 @@ A design of tables, columns, indexes, enums and Foreign Keys for one Dialect, wr
 _Avoid_: ER diagram, design, draft, model file
 
 **Schema Builder**:
-Where a Schema Model is edited, either as DBML text or on a canvas, with each kept in step with the other. It is where ER diagrams live: DBML is Contura's only ERD (ADR 0030), and an old `diagram er` file converts to a Schema Model with Open as DBML.
+Where a Schema Model is edited, either as DBML text or on a canvas, with each kept in step with the other. It is where ER diagrams of real databases live: DBML is the one ERD that reaches SQL and a Connection (ADR 0030). A `diagram er` frame on a Board is a sketch, and Open as DBML converts it to a Schema Model (ADR 0031).
 _Avoid_: ER designer, modeler, diagram editor
 
 **Layout**:
@@ -185,12 +185,20 @@ _Avoid_: Canvas library, renderer, React Flow
 
 ### Diagrams
 
+**Board**:
+One `.flow` file holding several Diagrams, each in its own Frame, plus loose sketches. A file with one Diagram is a Board of one Frame (ADR 0031).
+_Avoid_: canvas, workspace, page
+
+**Frame**:
+One Diagram on a Board: its own `diagram <kind> "<title>"` block in the `.flow`, named by its title. A sequence diagram's `loop` or `alt` box is a sequence frame, always said in full.
+_Avoid_: panel, section
+
 **Diagram**:
-A drawing the user writes and draws in a diagram tab: a data flow diagram, a flowchart or a cloud architecture diagram. It is a `.flow` file plus its layout file in Contura's diagrams folder, named by the user; Publish and Save a copy as are the only ways it leaves that folder (ADR 0019).
+A drawing the user writes and draws in a diagram tab, one of nine kinds: data flow, flowchart, cloud architecture, sequence, state, class, mind map, timeline and ER (tables, columns and relationships, for sketching; the Schema Builder is for real databases). It is a Frame of a Board: a `.flow` file plus its layout file in Contura's diagrams folder, named by the user. Publish and Save a copy as are the only ways it leaves that folder (ADR 0019, ADR 0031).
 _Avoid_: Chart, drawing file, model, Schema Model
 
 **.flow**:
-The small text language a Diagram is written in: a first line `diagram dfd|flow|cloud "<title>"`, then nodes with `[kind, key: value]`, links (`>`, `<>`, `-`, `-->`, and `..>` in cloud), groups in braces and `//` comments. The text is the diagram; the canvas edits it through text edits, and moves go only to the layout file.
+The small text language a Board is written in: a first line `diagram <kind> "<title>"` for each Diagram, then nodes with `[kind, key: value]` (a `color` is a preset, a CSS colour name or a hex), links (`>`, `<>`, `-`, `-->`, `--` dotted, and `..>` in cloud; `A > B, C` fans out to several), groups in braces, ER tables as `orders { id int pk }` blocks and `//` comments. The text is the diagram; the canvas edits it through text edits, and moves go only to the layout file.
 _Avoid_: DSL, Mermaid, script
 
 **Lineage**:
@@ -198,7 +206,7 @@ A read-only drawing of one table's Foreign Keys both ways, with the Diagrams and
 _Avoid_: Dependency graph, ER diagram, impact analysis
 
 **Icon pack**:
-The cloud and general icon sets packed into the app (`icons.bin`): AWS, Azure, Google Cloud, Kubernetes, Lucide and a chosen set of Simple Icons brand logos. Icons load one at a time, are shown only as images, never changed, and credited in Icon credits.
+The cloud and general icon sets packed into the app (`icons.bin`): AWS, Azure, Google Cloud, Kubernetes, Lucide and a chosen set of Simple Icons brand logos. Icons load one at a time, are shown only as images, fitted into one 24×24 frame (the drawing never changed), outline icons in the theme's text colour, logos in their brand colour (a pale logo on light gets a hairline outline; a dark logo on dark takes the text colour), and credited in Icon credits.
 _Avoid_: Icon font, sprite, stencils
 
 **Import**:

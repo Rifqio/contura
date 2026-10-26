@@ -389,5 +389,308 @@
    "DELETE FROM t"
   ],
   "lastAsks": "DELETE"
+ },
+ {
+  "note": "D1 delimiter trigger then insert",
+  "dialect": "mysql",
+  "sql": "DELIMITER $$\nCREATE TRIGGER t BEFORE INSERT ON orders FOR EACH ROW\nBEGIN\n  SET NEW.total = 0;\nEND$$\nDELIMITER ;\nINSERT INTO orders VALUES (1);",
+  "pieces": [
+   "CREATE TRIGGER t BEFORE INSERT ON orders FOR EACH ROW\nBEGIN\n  SET NEW.total = 0;\nEND",
+   "INSERT INTO orders VALUES (1)"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D2 delimiter cannot hide a drop",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nDROP TABLE x//\nDELIMITER ;",
+  "pieces": [
+   "DROP TABLE x"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D3 a plain delimiter chunk splits on its semicolons",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nSELECT 1; DELETE FROM t//",
+  "pieces": [
+   "SELECT 1",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "D4 a chunk that starts a routine is sent whole, its delete still asks",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END; DELETE FROM t//\nDELIMITER ;",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT 1; END; DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "D5 delete between delimiter statements",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nCREATE TABLE a (x int)//\nDELETE FROM t//\nDELIMITER ;",
+  "pieces": [
+   "CREATE TABLE a (x int)",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "D6 lower case, indented, procedure body",
+  "dialect": "mysql",
+  "sql": "  delimiter $$\nCREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END $$\n\tdelimiter ;\nSELECT 3;",
+  "pieces": [
+   "CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END",
+   "SELECT 3"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D7 the delimiter inside strings, names and comments",
+  "dialect": "mysql",
+  "sql": "DELIMITER $$\nSELECT '$$', \"$$\", `a$$b` FROM t /* $$ */ # $$\n$$\nDELIMITER ;",
+  "pieces": [
+   "SELECT '$$', \"$$\", `a$$b` FROM t /* $$ */ # $$"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D8 a DELIMITER line inside a string or comment is text",
+  "dialect": "mysql",
+  "sql": "SELECT 'x\nDELIMITER //\n'; /*\nDELIMITER //\n*/ SELECT 2;",
+  "pieces": [
+   "SELECT 'x\nDELIMITER //\n'",
+   "/*\nDELIMITER //\n*/ SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D9 double semicolon, as a Backup writes",
+  "dialect": "mysql",
+  "sql": "DELIMITER ;;\nCREATE PROCEDURE `p`() BEGIN SELECT 1; END;;\nDELIMITER ;\nSELECT 2;",
+  "pieces": [
+   "CREATE PROCEDURE `p`() BEGIN SELECT 1; END",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D10 mysqldump trigger in executable comments",
+  "dialect": "mysql",
+  "sql": "DELIMITER ;;\n/*!50003 CREATE*/ /*!50003 TRIGGER tr BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.a = 1; SET NEW.b = 2; END */;;\nDELIMITER ;\nINSERT INTO t VALUES (1);",
+  "pieces": [
+   "/*!50003 CREATE*/ /*!50003 TRIGGER tr BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.a = 1; SET NEW.b = 2; END */",
+   "INSERT INTO t VALUES (1)"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D11 a statement still open at DELIMITER ends there",
+  "dialect": "mysql",
+  "sql": "SELECT 1\nDELIMITER //\nSELECT 2//",
+  "pieces": [
+   "SELECT 1",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D12 a quoted delimiter, the rest of the line ignored",
+  "dialect": "mysql",
+  "sql": "DELIMITER '$$' x\nSELECT 1$$SELECT 2$$",
+  "pieces": [
+   "SELECT 1",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D13 DELIMITER not at a line start is text",
+  "dialect": "mysql",
+  "sql": "SELECT 1; DELIMITER //\nSELECT 2//",
+  "pieces": [
+   "SELECT 1",
+   "DELIMITER //\nSELECT 2//"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D14 DELIMITER with nothing after it is text",
+  "dialect": "mysql",
+  "sql": "DELIMITER\nSELECT 1; SELECT 2",
+  "pieces": [
+   "DELIMITER\nSELECT 1",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D15 the last statement needs no delimiter, comments stay with it",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\n-- note\nSELECT 1//\n-- only a note\n//\nDELETE FROM t",
+  "pieces": [
+   "-- note\nSELECT 1",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "D16 Postgres has no DELIMITER",
+  "dialect": "postgres",
+  "sql": "DELIMITER //\nSELECT 1//; SELECT 2",
+  "pieces": [
+   "DELIMITER //\nSELECT 1//",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D17 SQLite has no DELIMITER",
+  "dialect": "sqlite",
+  "sql": "DELIMITER //\nSELECT 1//; SELECT 2",
+  "pieces": [
+   "DELIMITER //\nSELECT 1//",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D18 a trigger body with no BEGIN stays whole in its delimiter chunk",
+  "dialect": "mysql",
+  "sql": "DELIMITER $$\nCREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW IF NEW.a > 0 THEN SET NEW.b = 1; DELETE FROM log WHERE id < 5; END IF$$",
+  "pieces": [
+   "CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW IF NEW.a > 0 THEN SET NEW.b = 1; DELETE FROM log WHERE id < 5; END IF"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D19 a MariaDB BEGIN NOT ATOMIC block stays whole in its delimiter chunk",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nBEGIN NOT ATOMIC DELETE FROM t WHERE a=1; SELECT 1; END//",
+  "pieces": [
+   "BEGIN NOT ATOMIC DELETE FROM t WHERE a=1; SELECT 1; END"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D20 a drop in a plain delimiter chunk is its own statement",
+  "dialect": "mysql",
+  "sql": "DELIMITER $$\nSELECT 1; DROP TABLE x$$\nDELIMITER ;\nSELECT 2;",
+  "pieces": [
+   "SELECT 1",
+   "DROP TABLE x",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "C1 MySQL dash dash before a no-break space is no comment",
+  "dialect": "mysql",
+  "sql": "SELECT 1 -- x; SELECT 2",
+  "pieces": [
+   "SELECT 1 -- x",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "C2 MySQL dash dash before a control character is a comment",
+  "dialect": "mysql",
+  "sql": "SELECT 1 --\u0001x; SELECT 2\nSELECT 3; SELECT 4",
+  "pieces": [
+   "SELECT 1 --\u0001x; SELECT 2\nSELECT 3",
+   "SELECT 4"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "C3 MySQL dash dash before a tab is a comment",
+  "dialect": "mysql",
+  "sql": "SELECT 1 --\tx; SELECT 2\n; SELECT 3",
+  "pieces": [
+   "SELECT 1 --\tx; SELECT 2",
+   "SELECT 3"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D21 a labelled loop is one compound statement",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nlbl: LOOP SELECT 1; LEAVE lbl; END LOOP lbl//",
+  "pieces": [
+   "lbl: LOOP SELECT 1; LEAVE lbl; END LOOP lbl"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D22 an IF is one compound statement",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nIF 1 THEN SELECT 1; ELSE SELECT 2; END IF//",
+  "pieces": [
+   "IF 1 THEN SELECT 1; ELSE SELECT 2; END IF"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D23 a bare BEGIN is a transaction, not a block",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nBEGIN; DELETE FROM t//",
+  "pieces": [
+   "BEGIN",
+   "DELETE FROM t"
+  ],
+  "lastAsks": "DELETE"
+ },
+ {
+  "note": "D24 BEGIN WORK is a transaction, not a block",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nBEGIN WORK; SELECT 1//",
+  "pieces": [
+   "BEGIN WORK",
+   "SELECT 1"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D25 a lower case routine with a definer and a comment before it",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\n-- c\ncreate definer=`a`@`%` function f() returns int begin return 1; end//\nDELIMITER ;",
+  "pieces": [
+   "-- c\ncreate definer=`a`@`%` function f() returns int begin return 1; end"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "D26 a CASE statement and a WHILE are compound",
+  "dialect": "mysql",
+  "sql": "DELIMITER //\nCASE WHEN 1 THEN SELECT 1; END CASE//\nWHILE 0 DO SELECT 2; END WHILE//",
+  "pieces": [
+   "CASE WHEN 1 THEN SELECT 1; END CASE",
+   "WHILE 0 DO SELECT 2; END WHILE"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "B1 a byte order mark is trimmed as white space",
+  "dialect": "mysql",
+  "sql": "﻿SELECT 1;﻿ SELECT 2",
+  "pieces": [
+   "SELECT 1",
+   "SELECT 2"
+  ],
+  "lastAsks": null
+ },
+ {
+  "note": "B2 a byte order mark is trimmed as white space",
+  "dialect": "postgres",
+  "sql": "﻿SELECT 1;﻿ SELECT 2",
+  "pieces": [
+   "SELECT 1",
+   "SELECT 2"
+  ],
+  "lastAsks": null
  }
 ]

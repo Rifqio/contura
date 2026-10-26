@@ -805,3 +805,40 @@ test("F32 a drag on the empty lineage canvas selects; it does not pan", async ()
   });
   expect(pane.classList.contains("draggable")).toBe(false);
 });
+
+test("a_board_reference_names_its_frame", async () => {
+  const { calls } = setup({
+    list_flow_table_links: () => [
+      { file: "shop-board", frame: "Refunds", node: "Orders", kind: "store", table: "shop.orders", access: "reads", processes: [{ node: "Refund", access: "reads" }] },
+    ],
+  });
+  await screen.findByText("Refund reads orders");
+  const row = within(group("Diagrams")).getByText("Refund reads orders").closest("li")!;
+  expect(within(row).getByText("shop-board: Refunds")).toBeTruthy();
+  // Opening it opens the board's file.
+  fireEvent.click(within(row).getByRole("button", { name: "Open shop-board: Refunds" }));
+  expect(calls.openDiagram).toHaveBeenCalledWith("shop-board");
+});
+
+test("two_frames_of_one_board_count_as_one_diagram", async () => {
+  setup({
+    list_flow_table_links: () => [
+      { file: "shop-board", frame: "Orders", node: "Orders", kind: "store", table: "shop.orders", access: "writes", processes: [{ node: "Pay", access: "writes" }] },
+      { file: "shop-board", frame: "Refunds", node: "Orders", kind: "store", table: "shop.orders", access: "reads", processes: [{ node: "Refund", access: "reads" }] },
+    ],
+  });
+  await screen.findByText("Refund reads orders");
+  const diagrams = group("Diagrams");
+  expect(within(diagrams).getByText("1")).toBeTruthy();
+  expect(within(diagrams).getByText("shop-board: Orders")).toBeTruthy();
+});
+
+test("an_untitled_board_frame_reads_untitled", async () => {
+  setup({
+    list_flow_table_links: () => [
+      { file: "shop-board", frame: "", node: "Orders", kind: "store", table: "shop.orders", access: "writes", processes: [{ node: "Pay", access: "writes" }] },
+    ],
+  });
+  await screen.findByText("Pay writes orders");
+  expect(within(group("Diagrams")).getByText("shop-board: Untitled")).toBeTruthy();
+});

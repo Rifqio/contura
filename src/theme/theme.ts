@@ -38,7 +38,10 @@ export function writeMirror(c: ThemeChoice): void {
   }
 }
 
-/** Paints the mirrored theme. `main.tsx` calls it before the first render. */
-export function applyStoredTheme(): void {
-  applyTheme(document.documentElement, readMirror());
+/** Paints the mirrored theme and returns the one on screen. `main.tsx` calls it before the first render. */
+export function applyStoredTheme(): "light" | "dark" {
+  const choice = readMirror();
+  applyTheme(document.documentElement, choice);
+  if (choice !== "system") return choice;
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }

@@ -103,8 +103,8 @@ test("a_48px_tile_shows_the_icon_unchanged_with_the_name_under_it", async () => 
   expect(s.container.querySelector(".react-flow__node svg title")).toBeNull();
   expect(tile.nextElementSibling?.classList.contains("fnode-name")).toBe(true);
   expect(tile.nextElementSibling?.textContent).toBe("Users");
-  // A general icon sits on the light plate; a provider icon draws without it.
-  expect(tile.classList.contains("fnode-tile-bare")).toBe(false);
+  // No icon sits on a plate: general and provider icons both draw bare.
+  expect(tile.classList.contains("fnode-tile-bare")).toBe(true);
   const gateway = s.node("Service API Gateway")!;
   await waitFor(() => expect(gateway.querySelector(".fnode-tile img")).not.toBeNull());
   expect(gateway.querySelector(".fnode-tile")!.classList.contains("fnode-tile-bare")).toBe(true);

@@ -21,19 +21,30 @@ const HEAD_MAX: u64 = 4096;
 /// plain message instead of filling memory. The parser's own tests go up to this size.
 pub const READ_MAX: u64 = 5 * 1024 * 1024;
 
+/// The longest `.flow` line the line scans keep; a longer one is skipped unread.
+pub(crate) const MAX_LINE: usize = 64 * 1024;
+
+/// The kind words a header line may name, as `DIAGRAM_KINDS` in `lang/flow/model.ts`.
+const HEADER_KINDS: [&str; 9] = [
+    "dfd", "flow", "cloud", "sequence", "state", "class", "mindmap", "timeline", "er",
+];
+
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagramKind {
     Dfd,
     Flow,
     Cloud,
-    /// Step 12, item 19: the kinds the New diagram dialog added. An old `diagram er` file
-    /// (ADR 0030: DBML is the only ERD) lists as `Unknown`.
+    /// Step 12, item 19: the kinds the New diagram dialog added.
     Sequence,
     State,
     Class,
     Mindmap,
     Timeline,
+    /// An ER diagram: tables, columns and relationships.
+    Er,
+    /// A file of more than one frame; its title is the file name.
+    Board,
     /// The first line names none of the kinds above.
     Unknown,
 }
@@ -45,7 +56,7 @@ pub struct DiagramEntry {
     /// The name as typed: the file name without `.flow`.
     pub name: String,
     pub kind: DiagramKind,
-    /// The quoted title on the first line, or the name when there is none.
+    /// The quoted title on the first line, or the name when there is none (a board has none).
     pub title: String,
     /// When the `.flow` file last changed, in milliseconds since 1970.
     pub modified_ms: i64,
@@ -110,17 +121,18 @@ fn unquote(rest: &str) -> Option<String> {
     None
 }
 
-/// The kind and title from a diagram's first line, `diagram dfd "Checkout"`. It reads at
-/// most 4 KB, so a large file costs no more than a small one.
+/// The kind and title from a diagram's header, `diagram dfd "Checkout"`: the first line that
+/// is not blank or a `//` comment. It reads at most 4 KB, so a large file costs no more than
+/// a small one.
 pub fn diagram_head(reader: impl Read) -> (DiagramKind, Option<String>) {
-    let mut line = Vec::new();
-    if BufReader::new(reader.take(HEAD_MAX))
-        .read_until(b'\n', &mut line)
-        .is_err()
-    {
+    let mut chunk = Vec::new();
+    if reader.take(HEAD_MAX).read_to_end(&mut chunk).is_err() {
         return (DiagramKind::Unknown, None);
     }
-    let line = String::from_utf8_lossy(&line);
+    let chunk = String::from_utf8_lossy(&chunk);
+    let Some(line) = chunk.split('\n').find(|l| !is_blank_or_comment(l)) else {
+        return (DiagramKind::Unknown, None);
+    };
     let line = line.trim_start_matches('\u{feff}').trim();
     let Some(rest) = line.strip_prefix("diagram") else {
         return (DiagramKind::Unknown, None);
@@ -139,6 +151,7 @@ pub fn diagram_head(reader: impl Read) -> (DiagramKind, Option<String>) {
         "class" => DiagramKind::Class,
         "mindmap" => DiagramKind::Mindmap,
         "timeline" => DiagramKind::Timeline,
+        "er" => DiagramKind::Er,
         _ => return (DiagramKind::Unknown, None),
     };
     let rest = rest.trim();
@@ -151,7 +164,77 @@ pub fn diagram_head(reader: impl Read) -> (DiagramKind, Option<String>) {
     (kind, title.filter(|t| !t.is_empty()))
 }
 
-/// Every diagram in the folder, newest first. Only the first line of each file is read.
+/// True when `line` starts a frame after the first (plan decision 1): `diagram` at column 0,
+/// spaces or tabs, a known kind word, then a space, tab, `"`, `//` or the end of the line.
+pub fn is_frame_header(line: &str) -> bool {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let Some(rest) = line.strip_prefix("diagram") else {
+        return false;
+    };
+    let rest_trim = rest.trim_start_matches([' ', '\t']);
+    if rest_trim.len() == rest.len() {
+        return false;
+    }
+    let word_end = rest_trim
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(rest_trim.len());
+    if !HEADER_KINDS.contains(&&rest_trim[..word_end]) {
+        return false;
+    }
+    let after = &rest_trim[word_end..];
+    after.is_empty() || after.starts_with([' ', '\t', '"']) || after.starts_with("//")
+}
+
+/// A blank line or a comment: what may come before the first header.
+pub(crate) fn is_blank_or_comment(line: &str) -> bool {
+    let line = line.trim_start_matches([' ', '\t', '\r', '\u{feff}']);
+    line.is_empty() || line.starts_with("//")
+}
+
+/// The 1-based line each frame starts on: line 1, then every header line after the first
+/// statement line. The shared fixture `frame_headers.json` holds the cases; `splitFrames`
+/// in `lang/flow/board.ts` gives the same answers.
+pub fn frame_start_lines(text: &str) -> Vec<usize> {
+    let mut starts = vec![1];
+    let mut seen_first = false;
+    for (i, line) in text.split('\n').enumerate() {
+        if !seen_first {
+            seen_first = !is_blank_or_comment(line);
+        } else if is_frame_header(line) {
+            starts.push(i + 1);
+        }
+    }
+    starts
+}
+
+/// The kind and title a diagram lists under: the first header as `diagram_head` reads it, or
+/// `Board` with no title once a second header turns up. The file is read line by line, at
+/// most `READ_MAX` bytes of it.
+pub fn diagram_summary(reader: impl Read) -> (DiagramKind, Option<String>) {
+    let mut reader = BufReader::new(reader.take(READ_MAX));
+    // The head is the first 4 KB at most, whatever the first line holds.
+    let head = match reader.fill_buf() {
+        Ok(chunk) => diagram_head(&chunk[..chunk.len().min(HEAD_MAX as usize)]),
+        Err(_) => return (DiagramKind::Unknown, None),
+    };
+    let mut buf = Vec::new();
+    let mut seen_first = false;
+    while let Some(fits) = read_flow_line(&mut reader, &mut buf) {
+        if !fits {
+            seen_first = true;
+            continue;
+        }
+        let line = String::from_utf8_lossy(&buf);
+        if !seen_first {
+            seen_first = !is_blank_or_comment(&line);
+        } else if is_frame_header(&line) {
+            return (DiagramKind::Board, None);
+        }
+    }
+    head
+}
+
+/// Every diagram in the folder, newest first. Each file is read line by line, to find a second header.
 pub fn list_diagrams(data_dir: &Path) -> Result<Vec<DiagramEntry>> {
     let dir = diagrams_dir(data_dir);
     let entries = match std::fs::read_dir(&dir) {
@@ -186,7 +269,7 @@ pub fn list_diagrams(data_dir: &Path) -> Result<Vec<DiagramEntry>> {
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
         let (kind, title) = match std::fs::File::open(entry.path()) {
-            Ok(f) => diagram_head(f),
+            Ok(f) => diagram_summary(f),
             Err(_) => (DiagramKind::Unknown, None),
         };
         out.push(DiagramEntry {
@@ -339,4 +422,38 @@ pub fn save_diagram_copy(text: &str, layout: &str, target: &Path, data_dir: &Pat
     check_user_path(&lp, data_dir, PathUse::Export)?;
     write_atomic(target, text.as_bytes())?;
     write_atomic(&lp, layout.as_bytes())
+}
+
+/// Reads one line into `buf` (without the newline). `Some(false)` is a line longer than
+/// `MAX_LINE`, whose rest is skipped without being kept; `None` is the end of the file.
+pub(crate) fn read_flow_line(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> Option<bool> {
+    buf.clear();
+    let mut fits = true;
+    let mut any = false;
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return any.then_some(false),
+        };
+        if chunk.is_empty() {
+            return any.then_some(fits);
+        }
+        any = true;
+        let (part, done) = match chunk.iter().position(|&b| b == b'\n') {
+            Some(i) => (&chunk[..i], i + 1),
+            None => (chunk, chunk.len()),
+        };
+        let ended = done > part.len();
+        if fits && buf.len() + part.len() <= MAX_LINE {
+            buf.extend_from_slice(part);
+        } else {
+            fits = false;
+            buf.clear();
+        }
+        reader.consume(done);
+        if ended {
+            return Some(fits);
+        }
+    }
 }

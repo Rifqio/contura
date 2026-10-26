@@ -293,7 +293,7 @@ impl Splitter {
                 if n2.is_none() && !eof {
                     return false;
                 }
-                if n2.is_none_or(|x| x.is_whitespace() || x.is_control()) {
+                if crate::safety::mysql_comment_after(n2) {
                     self.line_comment();
                     return true;
                 }

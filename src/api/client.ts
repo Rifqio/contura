@@ -237,8 +237,11 @@ export const iconSets = (): Promise<IconSet[]> => invoke<IconSet[]>("icon_sets")
 /** Opens an https link in the system browser; the Core checks it again (https only, no user name or password). */
 export const openUrl = (url: string): Promise<void> => invoke<void>("open_url", { url });
 
-/** Icon `name`'s SVG text, unchanged. Show it only as an image (`src/flow/icons.ts`), never as markup. */
-export const icon = (name: string): Promise<string> => invoke<string>("icon", { name });
+/**
+ * Icon `name`'s SVG text, framed 24 by 24; an outline or mono icon is drawn in `ink` (`#rrggbb`), null
+ * leaves it in `currentColor`. Show it only as an image (`src/flow/icons.ts`), never as markup.
+ */
+export const icon = (name: string, ink?: string): Promise<string> => invoke<string>("icon", { name, ink: ink ?? null });
 
 /** Saves diagram `name`; without `overwrite`, a taken name rejects with `diagramExists`. */
 export const writeDiagram = (name: string, text: string, layout: string, overwrite: boolean): Promise<void> =>
@@ -348,8 +351,9 @@ export const runVisualQuery = (
 ): Promise<VqRun> => invoke("run_visual_query", { session, query, types, pass });
 
 /** The statements a run sends, split by the Core, with the missing-WHERE answer for each (UX step 9, round 4). */
-export const planRun = (session: QuerySessionId, statements: string[]): Promise<PlannedRun[]> =>
-  invoke("plan_run", { session, statements });
+/** `delimiters`: the MySQL delimiter in force where each statement starts (`;` when missing). */
+export const planRun = (session: QuerySessionId, statements: string[], delimiters: string[] = []): Promise<PlannedRun[]> =>
+  invoke("plan_run", { session, statements, delimiters });
 
 export const prepareRun = (session: QuerySessionId, statements: string[]): Promise<RunVerdict> =>
   invoke("prepare_run", { session, statements });

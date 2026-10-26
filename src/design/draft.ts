@@ -11,6 +11,7 @@ import type {
   Position,
   TableDesign,
 } from "../api/types";
+import { sqlFreeName } from "../lang/flow/model";
 
 export interface DraftColumn extends ColumnDraft {
   id: string;
@@ -268,25 +269,6 @@ export function copyColumn(dr: Draft, id: string): { column: ColumnDraft; droppe
     column: { name: c.name, typeSql: c.typeSql, nullable: c.nullable, defaultSql, increment: false, comment: c.comment },
     dropped: c.increment || defaultSql !== c.defaultSql ? "increment" : null,
   };
-}
-
-/**
- * A column's free name: `name` when no column has it in any case (SQL folds unquoted names), else `name_2`, `name_3`.
- * Only a trailing `_N` the app itself added counts on: `total_2` exists because `total` does, so its copy is `total_3`;
- * `log_2024` is a name of its own, so its copy is `log_2024_2`.
- */
-function sqlFreeName(name: string, taken: Iterable<string>): string {
-  const lower = new Set<string>();
-  for (const t of taken) lower.add(t.toLowerCase());
-  if (!lower.has(name.toLowerCase())) return name;
-  let base = name;
-  let n = 2;
-  const m = /^(.+)_(\d+)$/.exec(name);
-  if (m && Number(m[2]) >= 2 && lower.has(m[1].toLowerCase())) {
-    base = m[1];
-    n = Number(m[2]) + 1;
-  }
-  for (; ; n++) if (!lower.has(`${base}_${n}`.toLowerCase())) return `${base}_${n}`;
 }
 
 /**

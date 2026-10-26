@@ -4,20 +4,20 @@
 // dialog's preview both draw through it.
 import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer, Handle, type InternalNode, type Node, type NodeProps, type NodeTypes, Position, useInternalNode, useReactFlow, useStoreApi } from "@xyflow/react";
 import { createContext, memo, type PointerEvent as ReactPointerEvent, useContext, useEffect, useRef, useState } from "react";
-import { ARROW_MARKER, colourArrow, DIAMOND_MARKER, OPEN_ARROW_MARKER, TRIANGLE_MARKER } from "../diagram/edges";
+import { ARROW_MARKER, colourArrow, colourEnd, DIAMOND_MARKER, MANY_MARKER, ONE_MARKER, OPEN_ARROW_MARKER, TRIANGLE_MARKER } from "../diagram/edges";
 import type { Positions } from "../diagram/layout";
 import { axisKey } from "./layout";
-import { type Rect, routeOrthogonal } from "../diagram/route";
+import { type Rect, routeOrthogonal, routeRows } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
 import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, type FlowNodeKind, isStateEnd, isStateMarker, isStateStart, shownName } from "../lang/flow/model";
-import { COLOUR_TOKENS, colourVars, drawnColour } from "./palette";
-import { fixedLayout, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { colourClass, colourStroke, colourVars, drawnColour } from "./palette";
+import { erColumnRow, erRowY, fixedLayout, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { KindNode, type KindNodeData, MindEdge, SeqEdge, SeqFrame, SeqFrameTab, TimeAxis, TimeSection } from "./kindNodes";
 import DfdNode, { type DfdNodeKind } from "./nodes/DfdNode";
 import FlowchartNode, { type FlowchartNodeKind } from "./nodes/FlowchartNode";
 import { useDetail } from "../diagram/detail";
 import { liveResizes, ResizeZones } from "../diagram/resize";
-import { iconPlate, useIcon } from "./icons";
+import { useIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import type { NodeLook, NodeState, ShapeColour } from "./nodes/parts";
 import ServiceNode from "./nodes/ServiceNode";
@@ -140,6 +140,12 @@ export type FlowAreaData = {
 
 export type FlowEdgeData = {
   label?: string;
+  /**
+   * ER build C: a relationship between columns meets each card at its column's row (the row's index, -1 for the
+   * header when that end is the whole table). Worked out once when the graph is built, never per frame.
+   */
+  fromRow?: number;
+  toRow?: number;
   /** Fading out with a deleted node. */
   leaving?: boolean;
   /** Step 6: the axis a + drew this line on; it keeps that side. */
@@ -150,19 +156,22 @@ export type FlowEdgeData = {
 export type FlowFamily = "dfd" | "flowchart" | "service" | "kind";
 
 /**
- * The text's kind word as the engine's node kind: a data flow's entity is the engine's outside party, and a state
- * diagram's start and end are its two markers.
+ * The text's kind word as the engine's node kind: a data flow's entity is the engine's outside party, an ER
+ * diagram's entity is a table card, and a state diagram's start and end are its two markers.
  */
 export function drawnKind(kind: FlowNodeKind, diagram?: DiagramKind | null, name?: string): DrawnKind {
+  if (diagram === "er" && (kind === "entity" || kind === "weak")) return kind === "weak" ? "erWeak" : "erTable";
   if (diagram === "state" && name !== undefined && isStateStart(name)) return "stateStart";
   if (diagram === "state" && name !== undefined && isStateEnd(name)) return "stateEnd";
-  if (kind === "entity") return "external";
+  if (kind === "entity" || kind === "weak") return "external";
   return kind;
 }
 
 const KIND_FAMILY: ReadonlySet<DrawnKind> = new Set([
   "document",
   "database",
+  "erTable",
+  "erWeak",
   "participant",
   "actor",
   "state",
@@ -279,7 +288,7 @@ const ServiceFlowNode = memo(function ServiceFlowNode({ data, selected }: NodePr
         id={d.id}
         icon={icon.url ?? undefined}
         unknownIcon={icon.missing || icon.failed}
-        plate={d.iconName ? iconPlate(d.iconName) : true}
+        iconOutline={icon.outline}
         style={d.look}
         selected={!!selected}
         state={d.state}
@@ -295,8 +304,8 @@ const ServiceFlowNode = memo(function ServiceFlowNode({ data, selected }: NodePr
  */
 function AreaIcon({ name }: { name: string }) {
   const { detail } = useDetail();
-  const { url, missing, failed } = useIcon(detail === "full" ? name : null);
-  if (url) return <img className="flow-area-icon" src={url} alt="" draggable={false} />;
+  const { url, missing, failed, outline } = useIcon(detail === "full" ? name : null);
+  if (url) return <img className={outline ? "flow-area-icon icon-hairline" : "flow-area-icon"} src={url} alt="" draggable={false} />;
   return missing || failed ? <i className="flow-area-swatch" aria-hidden="true" /> : null;
 }
 
@@ -313,7 +322,7 @@ const FlowArea = memo(function FlowArea({ data }: NodeProps) {
   const on = useContext(FlowGroupSelContext) === d.name;
   return (
     <div
-      className={`flow-area${d.depth > 0 ? " is-inner" : ""}${on ? " is-selected" : ""}${d.color ? ` is-col is-col-${d.color}` : ""}`}
+      className={`flow-area${d.depth > 0 ? " is-inner" : ""}${on ? " is-selected" : ""}${d.color ? ` ${colourClass(d.color)}` : ""}`}
       role="group"
       aria-label={`Group ${d.name}`}
       style={d.color ? colourVars(d.color) : undefined}
@@ -393,13 +402,21 @@ function LineEnds({ id, from, to }: { id: string; from: { x: number; y: number }
   );
 }
 
+/** A relationship between columns, at each end's row (ER build C). */
+export function rowRoute(a: Rect, b: Rect, fromRow: number, toRow: number, self: boolean) {
+  return routeRows(a, erRowY(a.y, a.h, fromRow), b, erRowY(b.y, b.h, toRow), self);
+}
+
 /** A flow line: square-cornered with 8 px corners from the side facing the other node, its label on a chip. */
 const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
   const a = useInternalNode(p.source);
   const b = useInternalNode(p.target);
   const data = p.data as FlowEdgeData | undefined;
   if (!a || !b) return null;
-  const route = routeOrthogonal(rectOf(a), rectOf(b), data?.axis ? { axis: data.axis } : {});
+  const route =
+    data?.fromRow !== undefined
+      ? rowRoute(rectOf(a), rectOf(b), data.fromRow, data.toRow ?? -1, p.source === p.target)
+      : routeOrthogonal(rectOf(a), rectOf(b), data?.axis ? { axis: data.axis } : {});
   const label = data?.label;
   return (
     <>
@@ -552,15 +569,27 @@ function areaNodes(groups: FlowGroup[], placed: Map<string, Box>, kept?: (name: 
 
 const DASH: Partial<Record<FlowArrow, string>> = { "-->": "flow-line flow-line-dashed", "..>": "flow-line flow-line-dotted" };
 
-/** The marker at each end of a line, by its arrow (step 12 adds the class marks); a coloured head keeps its colour (step 11). */
+/** The class names of a line's dash: `--` takes the dash of `-->` in every kind but class, where it is solid. */
+function dashOf(arrow: FlowArrow, diagram: DiagramKind): string {
+  if (arrow === "--" && diagram !== "class") return DASH["-->"]!;
+  return DASH[arrow] ?? "flow-line";
+}
+
+/** The marker at each end of a line, by its arrow (step 12 adds the class marks); a coloured head or ER end keeps its colour (step 11). */
 function markers(arrow: FlowArrow, diagram: DiagramKind, colour?: ShapeColour): { start?: string; end?: string } {
   const m = plainMarkers(arrow, diagram);
   if (!colour) return m;
-  const own = (id?: string) => (id === ARROW_MARKER ? colourArrow(colour) : id);
+  // A crow's-foot end takes the line's colour too.
+  const own = (id?: string) => (id === ARROW_MARKER ? colourArrow(colour) : id === MANY_MARKER || id === ONE_MARKER ? colourEnd(id, colour) : id);
   return { ...(m.start ? { start: own(m.start) } : {}), ...(m.end ? { end: own(m.end) } : {}) };
 }
 
 function plainMarkers(arrow: FlowArrow, diagram: DiagramKind): { start?: string; end?: string } {
+  // An ER relationship's ends are crow's feet: a bar at a one end, a crow's foot at a many end.
+  if (diagram === "er") {
+    const ends = ER_ENDS[arrow];
+    if (ends) return { start: ends[0], end: ends[1] };
+  }
   switch (arrow) {
     case "-":
     case "..>":
@@ -580,6 +609,14 @@ function plainMarkers(arrow: FlowArrow, diagram: DiagramKind): { start?: string;
   }
 }
 
+/** Each ER line's ends, first end then second: `>` many to one, `<` one to many, `-` one to one, `<>` many to many. */
+const ER_ENDS: Partial<Record<FlowArrow, readonly [string, string]>> = {
+  ">": [MANY_MARKER, ONE_MARKER],
+  "<": [ONE_MARKER, MANY_MARKER],
+  "-": [ONE_MARKER, ONE_MARKER],
+  "<>": [MANY_MARKER, MANY_MARKER],
+};
+
 /** A node's canvas data: its words, rows and dates, whatever its family draws. */
 function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook): FlowNodeData & KindNodeData {
   const data: FlowNodeData & KindNodeData = { name: n.name, kind, look };
@@ -590,6 +627,7 @@ function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook): FlowNodeData & 
   if (n.attrs.table !== undefined) data.table = n.attrs.table;
   if (kind === "service" && n.attrs.icon) data.iconName = n.attrs.icon;
   if (n.rows) data.rows = n.rows;
+  if (n.rowFlags) data.rowFlags = n.rowFlags;
   if (n.text !== undefined) data.text = n.text;
   if (n.depth !== undefined) data.depth = n.depth;
   if (n.date !== undefined) data.date = n.date;
@@ -686,7 +724,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
       source: l.from,
       target: l.to,
       type: "flow",
-      className: "flow-line flow-line-dashed" + cls + (colour ? ` is-col is-col-${colour}` : ""),
+      className: "flow-line flow-line-dashed" + cls + (colour ? ` ${colourClass(colour)}` : ""),
       markerEnd: m.end,
       markerStart: m.start,
       data: l.label ? { label: l.label } : {},
@@ -735,7 +773,7 @@ function withGhost(doc: FlowDoc, ghost: NonNullable<GraphOptions["ghost"]>): Flo
 }
 
 /** A coloured line's stroke, inline so the selected state keeps it (step 11). */
-const lineStyle = (c: ShapeColour) => ({ stroke: `var(${COLOUR_TOKENS[c].stroke})` });
+const lineStyle = (c: ShapeColour) => ({ stroke: colourStroke(c) });
 
 /** The class a link takes from the assistant's review. */
 const markClass = (opts: GraphOptions, i: number) => {
@@ -775,6 +813,13 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
   const groupNames = groupShapes(doc.groups);
   const endOf = (name: string) => (placed.has(name) ? name : groupNames.has(name) ? `\u0000group:${name}` : null);
   const edges: Edge[] = [];
+  // ER build C: a column's row, by table and column, built only when a line names a column.
+  let rowsOf: Map<string, readonly string[]> | null = null;
+  const rowOf = (table: string, column: string | undefined): number => {
+    if (column === undefined) return -1;
+    rowsOf ??= new Map(doc.nodes.map((n) => [n.name, n.rows ?? []]));
+    return erColumnRow(rowsOf.get(table) ?? [], column);
+  };
   doc.links.forEach((l, i) => {
     const source = endOf(l.from);
     const target = endOf(l.to);
@@ -783,6 +828,10 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     if (l.label) data.label = l.label;
     const axis = opts.axes?.[axisKey(l.from, l.to)];
     if (axis) data.axis = axis;
+    if (l.fromColumn !== undefined || l.toColumn !== undefined) {
+      data.fromRow = rowOf(l.from, l.fromColumn);
+      data.toRow = rowOf(l.to, l.toColumn);
+    }
     const leaving = opts.states?.get(l.from) === "leaving" || opts.states?.get(l.to) === "leaving";
     if (leaving) data.leaving = true;
     // A dotted "assumes" line has no head (frame 6+.5): it is a permission, not data going one way.
@@ -794,7 +843,7 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
       source,
       target,
       type: "flow",
-      className: (DASH[l.arrow] ?? "flow-line") + (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : "") + markClass(opts, i) + (colour ? ` is-col is-col-${colour}` : ""),
+      className: dashOf(l.arrow, doc.kind) + (leaving ? " is-leaving" : "") + (opts.fresh === i ? " is-new" : "") + markClass(opts, i) + (colour ? ` ${colourClass(colour)}` : ""),
       markerEnd: m.end,
       markerStart: m.start,
       data,

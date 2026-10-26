@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import type { DiagramOp, FlowOutline, ProposedChange } from "../../api/types";
 import { flowOutline } from "../../lang/flow/outline";
 import { parseFlow } from "../../lang/flow/parse";
-import { changeEditOp, changeLine, changeMark, landedSummary, planLanding, removalCount, withDependents, wouldBreak } from "./proposal";
+import { applyEdits } from "../../lang/flow/service";
+import { askedFrame, changeEditOp, changeLine, changeMark, landedSummary, planLanding, removalCount, withDependents, wouldBreak } from "./proposal";
 
 const FIXTURES = import.meta.glob("../../lang/flow/fixtures/*.flow", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 const fixture = (name: string) => FIXTURES[`../../lang/flow/fixtures/${name}`];
@@ -131,6 +132,28 @@ describe("planLanding", () => {
     expect(planLanding(ORDER, parse, [ok(0, { add_node: { name: "X", group: "Nowhere" } })], new Set([0]), "flow")).toBeNull();
     const dropped: ProposedChange = { index: 0, op: ADD_CUSTOMS, status: { kind: "dropped", reason: "unknownGroup", message: "m" }, dependsOn: [] };
     expect(planLanding(ORDER, parse, [dropped], new Set([0]), "flow")).toBeNull();
+  });
+
+  test("on_a_board_changes_land_in_frame_0_only", () => {
+    // Both frames define Pay and Done; the Assistant was given frame 0's outline, so frame 0 is what it changes.
+    const second = 'diagram flow "B"\nPay\nDone\nPay > Done\n';
+    const board = `diagram flow "A"\nPay\nDone\nPay > Done\n\n${second}`;
+    // Frame 0 ends after its last line; the blank line before the next header is not part of it.
+    const cut = board.indexOf('\n\ndiagram flow "B"') + 1;
+    expect(askedFrame(board)).toEqual({ from: 0, to: cut, text: board.slice(0, cut) });
+    const parse = parseFlow(askedFrame(board).text);
+    const add = planLanding(board, parse, [ok(0, { add_node: { name: "X" } })], new Set([0]), "flow");
+    const at = add?.text.indexOf("\nX\n") ?? -1;
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(add?.text.indexOf('diagram flow "B"') ?? 0);
+    expect(add?.text.endsWith(second)).toBe(true);
+    expect(applyEdits(board, add?.edits ?? [])).toBe(add?.text);
+    // Not refused as "defined twice": only frame 0's Pay is renamed.
+    const rename = planLanding(board, parse, [ok(0, { rename_node: { target: "Pay", name: "Charge" } })], new Set([0]), "flow");
+    expect(rename?.text).toBe(`diagram flow "A"\nCharge\nDone\nCharge > Done\n\n${second}`);
+    expect(applyEdits(board, rename?.edits ?? [])).toBe(rename?.text);
+    // A one-diagram file is all frame 0.
+    expect(askedFrame(ORDER)).toEqual({ from: 0, to: ORDER.length, text: ORDER });
   });
 
   test("crlf_text_keeps_its_line_breaks", () => {

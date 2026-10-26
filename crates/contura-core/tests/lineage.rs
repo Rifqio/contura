@@ -780,6 +780,7 @@ fn link(
         node: node.into(),
         kind: kind.into(),
         table: table.into(),
+        frame: None,
         access,
         processes: processes
             .iter()

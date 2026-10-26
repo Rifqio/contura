@@ -24,7 +24,7 @@ const ELEMENTS = new Set([
 /** Geometry and presentation attributes; their values pass the style rule. */
 const STYLED = new Set([
   "d", "points", "viewBox", "width", "height", "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "r",
-  "rx", "ry", "fx", "fy", "offset", "fill", "fill-rule", "fill-opacity", "stroke", "stroke-width",
+  "rx", "ry", "fx", "fy", "offset", "color", "fill", "fill-rule", "fill-opacity", "stroke", "stroke-width",
   "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stop-color", "stop-opacity",
   "opacity", "clip-rule", "clip-path", "mask", "filter", "isolation", "overflow",
   "pointer-events", "text-anchor", "enable-background", "gradientUnits", "maskUnits",

@@ -1,0 +1,177 @@
+[
+  {
+    "name": "one diagram",
+    "text": "diagram flow \"A\"\nA > B\n",
+    "starts": [
+      1
+    ]
+  },
+  {
+    "name": "two frames with a blank line between",
+    "text": "diagram flow \"A\"\n\ndiagram flow \"B\"\n",
+    "starts": [
+      1,
+      3
+    ]
+  },
+  {
+    "name": "two frames with a body and a blank line",
+    "text": "diagram flow \"A\"\nA > B\n\ndiagram flow \"B\"\nC > D\n",
+    "starts": [
+      1,
+      4
+    ]
+  },
+  {
+    "name": "indented second header",
+    "text": "diagram flow \"A\"\n  diagram flow \"B\"\n",
+    "starts": [
+      1
+    ]
+  },
+  {
+    "name": "unknown kind",
+    "text": "diagram flow \"A\"\ndiagram gantt \"x\"\n",
+    "starts": [
+      1
+    ]
+  },
+  {
+    "name": "glued word diagramflow",
+    "text": "diagram flow \"A\"\ndiagramflow\n",
+    "starts": [
+      1
+    ]
+  },
+  {
+    "name": "glued kind flowchart",
+    "text": "diagram flow \"A\"\ndiagram flowchart \"x\"\n",
+    "starts": [
+      1
+    ]
+  },
+  {
+    "name": "tab between diagram and kind",
+    "text": "diagram flow \"A\"\ndiagram\tsequence \"x\"\n",
+    "starts": [
+      1,
+      2
+    ]
+  },
+  {
+    "name": "diagram er second header",
+    "text": "diagram flow \"A\"\nA > B\n\ndiagram er \"Shop\"\norders {\n  id int pk\n}\n",
+    "starts": [
+      1,
+      4
+    ]
+  },
+  {
+    "name": "bare header",
+    "text": "diagram flow \"A\"\ndiagram flow\n",
+    "starts": [
+      1,
+      2
+    ]
+  },
+  {
+    "name": "comment right after the kind",
+    "text": "diagram flow \"A\"\ndiagram flow// note\n",
+    "starts": [
+      1,
+      2
+    ]
+  },
+  {
+    "name": "header after an unclosed brace",
+    "text": "diagram flow \"A\"\nG {\ndiagram state \"B\"\n",
+    "starts": [
+      1,
+      3
+    ]
+  },
+  {
+    "name": "comment lines before the first header",
+    "text": "// top\ndiagram flow \"A\"\n",
+    "starts": [
+      1
+    ]
+  },
+  {
+    "name": "bad first statement then a header",
+    "text": "hello\ndiagram flow \"A\"\n",
+    "starts": [
+      1,
+      2
+    ]
+  },
+  {
+    "name": "crlf with a bom, two frames",
+    "text": "﻿diagram flow \"A\"\r\nX\r\n\r\ndiagram flow \"B\"\r\nY\r\n",
+    "starts": [
+      1,
+      4
+    ]
+  },
+  {
+    "name": "55 headers",
+    "text": "diagram flow \"F1\"\ndiagram flow \"F2\"\ndiagram flow \"F3\"\ndiagram flow \"F4\"\ndiagram flow \"F5\"\ndiagram flow \"F6\"\ndiagram flow \"F7\"\ndiagram flow \"F8\"\ndiagram flow \"F9\"\ndiagram flow \"F10\"\ndiagram flow \"F11\"\ndiagram flow \"F12\"\ndiagram flow \"F13\"\ndiagram flow \"F14\"\ndiagram flow \"F15\"\ndiagram flow \"F16\"\ndiagram flow \"F17\"\ndiagram flow \"F18\"\ndiagram flow \"F19\"\ndiagram flow \"F20\"\ndiagram flow \"F21\"\ndiagram flow \"F22\"\ndiagram flow \"F23\"\ndiagram flow \"F24\"\ndiagram flow \"F25\"\ndiagram flow \"F26\"\ndiagram flow \"F27\"\ndiagram flow \"F28\"\ndiagram flow \"F29\"\ndiagram flow \"F30\"\ndiagram flow \"F31\"\ndiagram flow \"F32\"\ndiagram flow \"F33\"\ndiagram flow \"F34\"\ndiagram flow \"F35\"\ndiagram flow \"F36\"\ndiagram flow \"F37\"\ndiagram flow \"F38\"\ndiagram flow \"F39\"\ndiagram flow \"F40\"\ndiagram flow \"F41\"\ndiagram flow \"F42\"\ndiagram flow \"F43\"\ndiagram flow \"F44\"\ndiagram flow \"F45\"\ndiagram flow \"F46\"\ndiagram flow \"F47\"\ndiagram flow \"F48\"\ndiagram flow \"F49\"\ndiagram flow \"F50\"\ndiagram flow \"F51\"\ndiagram flow \"F52\"\ndiagram flow \"F53\"\ndiagram flow \"F54\"\ndiagram flow \"F55\"\n",
+    "starts": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ]
+  }
+]

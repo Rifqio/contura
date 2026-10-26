@@ -1,6 +1,6 @@
 // Icon credits (spec 6+ section 7): each packed icon set, its licence and its source. The text comes from the
 // pack, so it is shown as plain text only, and only an https source becomes a link (ruling P9).
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { errorText, iconSets, openUrl } from "../api/client";
 import type { IconEntry, IconSet } from "../api/types";
 import Dialog from "../components/Dialog";
@@ -14,6 +14,12 @@ export function httpsUrl(source: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** The licence name (CC-BY-SA-4.0) when a logo's own licence is share-alike, else null: the adapted file must carry it on. */
+function shareAlike(licence: string | null): string | null {
+  const name = licence?.split(",")[0].trim() ?? "";
+  return /^CC-BY-SA-/.test(name) ? name : null;
 }
 
 /**
@@ -92,8 +98,14 @@ export default function IconCredits({ onClose }: { onClose(): void }) {
               <p>{s.licence}</p>
               <Source source={s.source} onFailed={setLinkError} />
               {s.note && <p>{s.note}</p>}
+              {s.changes && <p>{`Changed: ${s.changes}`}</p>}
               {(own.get(s.id) ?? []).map((e) => (
-                <p key={e.name}>{`${e.name}: ${e.licence}`}</p>
+                <Fragment key={e.name}>
+                  <p>{`${e.name}: ${e.licence}`}</p>
+                  {shareAlike(e.licence) && (
+                    <p>{`${e.name}: ${s.changes.charAt(0).toLowerCase()}${s.changes.slice(1)} This adapted file is shared under the same licence, ${shareAlike(e.licence)}.`}</p>
+                  )}
+                </Fragment>
               ))}
               {s.notice && <pre className="icon-credits-notice">{s.notice}</pre>}
             </section>

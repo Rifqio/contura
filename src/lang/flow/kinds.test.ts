@@ -12,19 +12,19 @@ const ok = (text: string) => {
 };
 
 describe("entity relationship", () => {
-  // ADR 0030: DBML is the only ERD. `diagram er` is no kind of the flow language, and no fix offers it.
-  test("diagram er is refused like any unknown kind, and no fix or kind list names it", () => {
-    expect(DIAGRAM_KINDS).not.toContain("er");
-    const r = parseFlow(lines('diagram er "Billing"', "customers", "customers.id int [pk]"));
-    expect(r.doc).toBeNull();
-    expect(r.problems[0].message).toBe(MESSAGES.firstLine);
-    const titles = r.problems[0].fixes.map((f) => f.title);
-    expect(titles).toContain("Make it diagram flow");
-    expect(titles.some((t) => /\ber\b/.test(t))).toBe(false);
-    // A file with no first line offers each kind, never er.
+  // The ER kind is back, in table blocks (erBlocks.test.ts reads them in full).
+  test("diagram er is a kind after cloud, offered by the first-line fixes, with entity and weak in brackets", () => {
+    expect(DIAGRAM_KINDS.indexOf("er")).toBe(DIAGRAM_KINDS.indexOf("cloud") + 1);
+    const doc = ok(lines('diagram er "Billing"', "customers {", "  id int pk", "}", "lines [weak]"));
+    expect(doc.nodes.map((n) => [n.name, n.kind])).toEqual([
+      ["customers", "entity"],
+      ["lines", "weak"],
+    ]);
+    expect(nodeStatement("er", { name: "customers", kind: "entity", attrs: {} })).toBe("customers");
+    expect(nodeStatement("er", { name: "lines", kind: "weak", attrs: {} })).toBe("lines [weak]");
     const none = parseFlow("customers\n").problems[0].fixes.map((f) => f.title);
-    expect(none).toContain("Add diagram dfd");
-    expect(none).not.toContain("Add diagram er");
+    expect(none).toContain("Add diagram er");
+    expect(parseFlow(lines('diagram er "x"', "a [process]")).problems[0].message).toBe(MESSAGES.unknownKind("process", "er", null));
   });
 });
 
@@ -174,6 +174,19 @@ describe("timeline", () => {
   });
 });
 
+describe("dotted line", () => {
+  test("dotted_line_in_every_line_kind", () => {
+    for (const k of ["dfd", "flow", "cloud", "state", "mindmap"]) {
+      const text = k === "mindmap" ? lines('diagram mindmap "x"', "Root", "  Child", "Root -- Child") : lines(`diagram ${k} "x"`, k === "dfd" ? "A [entity]" : "A", k === "dfd" ? "B [process]" : "B", "A -- B");
+      const links = ok(text).links.filter((l) => !l.tree);
+      expect(links.map((l) => l.arrow), k).toEqual(["--"]);
+    }
+    expect(ok(lines('diagram class "x"', "class A", "class B", "A -- B")).links.map((l) => l.arrow)).toEqual(["--"]);
+    const seq = parseFlow(lines('diagram sequence "x"', "A -- B"));
+    expect(seq.problems.some((p) => p.severity === "error")).toBe(true);
+  });
+});
+
 describe("shared", () => {
   test("a note is a remark the canvas draws, in the kinds that have it", () => {
     const doc = ok(lines('diagram flow "x"', "note: Prices exclude tax.", "A"));
@@ -224,5 +237,15 @@ describe("canvas edits", () => {
     const cls = lines('diagram class "x"', "class Invoice", "Invoice : + send()", "class Line", "Invoice *-- Line");
     expect(apply(cls, { op: "deleteNode", name: "Invoice" })).toBe(lines('diagram class "x"', "class Line"));
     expect(apply(cls, { op: "renameNode", old: "Invoice", next: "Bill" })).toBe(lines('diagram class "x"', "class Bill", "Bill : + send()", "class Line", "Bill *-- Line"));
+  });
+});
+
+describe("icon checks by kind", () => {
+  const icons = new Set(["aws-lambda", "users"]);
+  const hints = (text: string) => parseFlow(text, { icons }).problems.map((p) => p.message);
+
+  test("a flowchart node's unknown icon is not checked, a cloud node's is", () => {
+    expect(hints(lines('diagram flow "F"', "Run [step, icon: aws-lamda]"))).toEqual([]);
+    expect(hints(lines('diagram cloud "C"', "Run [icon: aws-lamda]"))).toEqual([MESSAGES.notAnIcon("aws-lamda", "aws-lambda")]);
   });
 });

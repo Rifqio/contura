@@ -1,11 +1,12 @@
 // Copy and paste on the diagram canvas (diagram-ux-research F2, draw.io's Ctrl+C, Ctrl+V and Ctrl+D). The clipboard
-// holds plain .flow lines: the copied shapes' statements (a class with its members),
+// holds plain .flow lines: the copied shapes' statements (an ER table with its block of columns, a class with its members),
 // then the lines between copied shapes. A paste reads clipboard text only as .flow lines of the open diagram's kind,
 // refuses anything else, and writes the shapes with free names (`Step 2`) where new shapes go, their lines with the
 // others. It runs in the language worker against the cached parse, as the other canvas actions do.
 import type { TextEdit } from "../protocol";
-import { insertLine, lastLinkIn, lineBreak, nextLine, normalize } from "./edits";
+import { bareColumnClash, ER_NOTES, insertLine, lastLinkIn, lineBreak, nextLine, normalize } from "./edits";
 import {
+  attrValue,
   DIAGRAM_KINDS,
   type DiagramKind,
   type FlowDoc,
@@ -18,6 +19,9 @@ import {
   nodeStatement,
   overTextLimit,
   isStateMarker,
+  linkEndText,
+  sqlFreeName,
+  tableText,
 } from "./model";
 import { type FlowParse, parseFlow } from "./parse";
 
@@ -30,7 +34,10 @@ const isMarker = (name: string) => isStateMarker(name);
 const endText = (name: string) => (isMarker(name) ? "[*]" : flowName(name));
 
 function linkText(l: FlowLink, from: string, to: string): string {
-  return `${endText(from)} ${l.arrow} ${endText(to)}${l.label ? `: ${flowLabel(l.label)}` : ""}`;
+  // An ER relationship's columns go with its ends.
+  const a = l.fromColumn === undefined ? endText(from) : linkEndText(from, l.fromColumn);
+  const b = l.toColumn === undefined ? endText(to) : linkEndText(to, l.toColumn);
+  return `${a} ${l.arrow} ${b}${l.label ? `: ${flowLabel(l.label)}` : ""}${l.color !== undefined ? ` [color: ${attrValue("color", l.color)}]` : ""}`;
 }
 
 /** A node's statement under `name`; a flowchart step leaves its kind unsaid, as it is usually written. */
@@ -42,10 +49,12 @@ function statementOf(kind: DiagramKind, n: FlowNode, name: string): string {
   return nodeStatement(kind, { ...n, name });
 }
 
-/** A node's own extra lines under `name`: a class's members. */
-function rowsOf(kind: DiagramKind, n: FlowNode, name: string): string[] {
-  if (kind === "class") return (n.rows ?? []).map((r) => `${flowName(name)} : ${r}`);
-  return [];
+/** A node's statement and its own extra lines under `name`: an ER table's block of columns, a class's members. */
+function shapeText(kind: DiagramKind, n: FlowNode, name: string): string[] {
+  if (kind === "er") return tableText({ ...n, name }).split("\n");
+  const own = statementOf(kind, n, name);
+  if (kind === "class") return [own, ...(n.rows ?? []).map((r) => `${flowName(name)} : ${r}`)];
+  return [own];
 }
 
 /** A mind map topic at `depth` (the central idea copied comes back as a topic). */
@@ -75,7 +84,7 @@ export function copyLines(doc: FlowDoc, names: readonly string[]): string {
       out.push(topicLine(n.name, depth));
     }
   } else {
-    for (const n of nodes) out.push(statementOf(doc.kind, n, n.name), ...rowsOf(doc.kind, n, n.name));
+    for (const n of nodes) out.push(...shapeText(doc.kind, n, n.name));
   }
   if (out.length === 0) return "";
   // A line to a composite's own [*] stays out: pasted, its [*] would read as the diagram's (fix round 2, N9).
@@ -108,6 +117,7 @@ const KIND_WORD: Record<DiagramKind, string> = {
   dfd: "data flow",
   flow: "flowchart",
   cloud: "cloud",
+  er: "ER",
   sequence: "sequence",
   state: "state",
   class: "class",
@@ -118,6 +128,7 @@ const KIND_A: Record<DiagramKind, string> = {
   dfd: "a data flow diagram",
   flow: "a flowchart",
   cloud: "a cloud diagram",
+  er: "an ER diagram",
   sequence: "a sequence diagram",
   state: "a state diagram",
   class: "a class diagram",
@@ -173,14 +184,17 @@ function afterNote(text: string, parse: FlowParse, note: string): number {
   return close ? nextLine(text, close.from) : text.length;
 }
 
-/** Where new shapes go: after the last shape outside every group and its own lines; else after the first line. */
+/**
+ * Where new shapes go: after the last shape outside every group and its own lines (an ER table's to its `}`); else
+ * after the first line.
+ */
 function shapeSpot(text: string, parse: FlowParse): number {
   let at = -1;
   for (const name of parse.defined.keys()) {
     if (isMarker(name) || parse.parentOf(name) !== null) continue;
     const sp = parse.span(`node:${name}`);
     if (!sp) continue;
-    at = Math.max(at, sp.from, ...parse.rowsOf(name).map((r) => r.line.from));
+    at = Math.max(at, sp.from, ...parse.rowsOf(name).map((r) => r.line.from), parse.span(`table:${name}`)?.close?.from ?? -1);
   }
   if (at >= 0) return nextLine(text, at);
   const header = parse.span("diagram");
@@ -236,6 +250,7 @@ export function pasteLines(text: string, parse: FlowParse, clip: string, place?:
   const refuse = (note: string): PasteResult => ({ edits: [], names: {}, note });
   const kind = parse.kind;
   if (!kind) return refuse("Fix the diagram's first line first, so nothing was pasted.");
+  if (parse.oldEr) return refuse(ER_NOTES.oldForm);
   if (overTextLimit(clip)) return refuse("The clipboard text is larger than 1 MB, so nothing was pasted.");
   // O3: a count of the non-empty lines first, so a long list is refused without a parse.
   if (nonEmptyLines(clip) > MAX_FLOW_NODES) return refuse(TOO_MANY_LINES);
@@ -260,7 +275,8 @@ export function pasteLines(text: string, parse: FlowParse, clip: string, place?:
       names[n.name] = `Note ${++noteNo}`;
       return n;
     }
-    const name = freeName(n.name, taken);
+    // An ER table's copy stays a plain SQL name (orders_2), one rule with every other place that names one.
+    const name = kind === "er" ? sqlFreeName(n.name, taken) : freeName(n.name, taken);
     taken.add(name);
     names[n.name] = name;
     const id = n.attrs.id;
@@ -272,6 +288,12 @@ export function pasteLines(text: string, parse: FlowParse, clip: string, place?:
     ids.add(next);
     return { ...n, name, attrs: { ...n.attrs, id: next } };
   });
+  if (kind === "er") {
+    // A pasted table written bare as `sales.lines` would read as a column of a table `sales`.
+    const added = renamed.map((n) => ({ name: n.name, table: true, bare: !n.rows?.length && n.kind === "entity" && Object.keys(n.attrs).length === 0 }));
+    const clash = bareColumnClash(text, parse, undefined, added);
+    if (clash) return refuse(clash);
+  }
   const nameOf = (n: string) => (isMarker(n) ? n : (names[n] ?? n));
   const links = snip.links.filter((l) => !l.tree).map((l) => linkText(l, nameOf(l.from), nameOf(l.to)));
   const noteLines = renamed.filter((n) => n.kind === "note").map((n) => statementOf(kind, n, n.name));
@@ -286,7 +308,7 @@ export function pasteLines(text: string, parse: FlowParse, clip: string, place?:
     shapeLines = shapesOnly.map((n) => topicLine(n.name, spot.depth + (n.depth ?? 0) - min));
   } else {
     pos = shapeSpot(text, parse);
-    shapeLines = shapesOnly.flatMap((n) => [statementOf(kind, n, n.name), ...rowsOf(kind, n, n.name)]);
+    shapeLines = shapesOnly.flatMap((n) => shapeText(kind, n, n.name));
   }
   const notePos = existing.last !== null ? afterNote(text, parse, existing.last) : pos;
 

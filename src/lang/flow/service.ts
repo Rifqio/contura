@@ -1,25 +1,49 @@
-// The language worker's .flow state (ruling P5). Source ranges stay here: a parse sends only the doc, its problems
-// and the last good doc, which keeps the posted result small. Span and edit requests are answered against the
-// cached parse of one text version, and a request planned on an older version is refused.
+// The language worker's .flow state (ruling P5). Source ranges stay here: a parse sends only the docs, their problems
+// and the last good docs, which keeps the posted result small. A .flow file is a board of frames (one diagram each);
+// span, edit and outline requests name a frame and are answered against the cached parse of one text version, in
+// whole-file positions, and a request planned on an older version is refused.
 import { insertFlow } from "./insert";
-import { completeFlow, type FlowCompletionResult } from "./complete";
+import { type BoardParse, type FrameParse, parseBoard, shiftEdits, shiftSpan, splitFrames } from "./board";
+import { completeFlow, type FlowCompletionResult, kindItems } from "./complete";
 import type { TextEdit } from "../protocol";
 import { pasteLines } from "./clip";
+import { addFrame, deleteFrame, renameFrame } from "./boardEdits";
 import { applyFlowEdit, type FlowEditOp, type FlowEditResult } from "./edits";
-import type { FlowDoc } from "./model";
+import { type DiagramKind, type FlowDoc, MAX_BOARD_SHAPES } from "./model";
 import { flowOutline } from "./outline";
 import type { FlowOutline } from "../../api/types";
 import { type FlowParse, type FlowSpan, parseFlow } from "./parse";
 import type { FlowProblem } from "./problems";
 
+/** One frame of a parse, in file positions; `line` is the 1-based file line it starts on. */
+export type FrameResult = {
+  index: number;
+  kind: DiagramKind | null;
+  title: string;
+  from: number;
+  to: number;
+  line: number;
+  /** Null while the frame has an error. */
+  doc: FlowDoc | null;
+  /** The frame's most recent good doc (kept by its title), sent only while `doc` is null. */
+  lastValid: FlowDoc | null;
+  /** Set (true) only on an ER frame still in the old form, whose edits wait for "Rewrite as table blocks". */
+  oldEr?: true;
+};
+
 /** What a parse posts to the editor side. */
 export type FlowResult = {
+  /** Frame 0's kind, doc and last good doc, so a one-diagram file reads as it always did. */
   kind: FlowParse["kind"];
-  /** Null while the text has an error. */
+  /** Null while frame 0 has an error. */
   doc: FlowDoc | null;
+  /** The whole board's, in file positions. */
   problems: FlowProblem[];
-  /** The most recent good doc for this document, sent only while `doc` is null (else `doc` is it), so it is sent once. */
+  /** Frame 0's most recent good doc, sent only while `doc` is null (else `doc` is it), so it is sent once. */
   lastValid: FlowDoc | null;
+  frames: FrameResult[];
+  /** Set (true) only when frame 0 is an ER frame still in the old form. */
+  oldEr?: true;
   /** The text version this result is for; span and edit requests name it. */
   version: number;
 };
@@ -49,8 +73,14 @@ export type FlowPasteOp = { op: "paste"; text: string; under?: string; after?: s
  */
 export type FlowInsertOp = { op: "insert"; text: string; at?: number };
 
+/** A board's own edit: add, rename or delete a frame. It runs on the whole text, so a request's `frameIndex` is ignored. */
+export type FlowBoardOp =
+  | { op: "addFrame"; kind: DiagramKind; title: string }
+  | { op: "renameFrame"; frameIndex: number; title: string }
+  | { op: "deleteFrame"; frameIndex: number };
+
 /** What a canvas action asks the worker for. */
-export type FlowRequestOp = FlowEditOp | FlowBatchOp | FlowPasteOp | FlowInsertOp;
+export type FlowRequestOp = FlowEditOp | FlowBatchOp | FlowPasteOp | FlowInsertOp | FlowBoardOp;
 
 /** Applies sorted, non-overlapping edits to `text`. */
 export function applyEdits(text: string, edits: readonly TextEdit[]): string {
@@ -61,12 +91,12 @@ export function applyEdits(text: string, edits: readonly TextEdit[]): string {
 
 /**
  * Runs the ops in turn on the text, parsing again between them, and returns one replace of the changed span
- * against the original text. An op that does not apply refuses the whole batch (an empty list).
+ * against the original text. An op that does not apply refuses the whole batch (an empty list, with that op's note).
  */
 export function applyFlowBatch(text: string, parse: FlowParse, ops: readonly FlowEditOp[]): FlowEditResult {
   // Only the edits: the worker answers a canvas batch without posting the whole text back.
-  const { edits } = applyFlowSteps(text, parse, ops.length, (_, i) => ops[i]);
-  return { edits };
+  const { edits, note } = applyFlowSteps(text, parse, ops.length, (_, i) => ops[i]);
+  return note === undefined ? { edits } : { edits, note };
 }
 
 /**
@@ -81,7 +111,8 @@ export function applyFlowSteps(text: string, parse: FlowParse, count: number, op
     const op = opAt(p, i);
     if (!op) return { edits: [] };
     const r = applyFlowEdit(t, p, op);
-    if (r.edits.length === 0) return { edits: [] };
+    // The refusing op's note says why, for the caller to show.
+    if (r.edits.length === 0) return r.note === undefined ? { edits: [] } : { edits: [], note: r.note };
     t = applyEdits(t, r.edits);
     if (i < count - 1) p = parseFlow(t);
   }
@@ -102,13 +133,60 @@ export type FlowEditAnswer = { stale: true } | ({ stale: false } & FlowEditResul
 /** Completion items; `stale` when a newer text was still waiting to be parsed (it has been parsed now, so ask again). */
 export type FlowCompleteAnswer = FlowCompletionResult & { stale?: true };
 
-type Cached = { version: number; text: string; parse: FlowParse; lastValid: FlowDoc | null };
+/**
+ * `lastValid` holds each titled frame's last good doc by its title, and `lasts` each frame's own by index; both are
+ * rebuilt from the current frames on each parse.
+ */
+type Cached = { version: number; text: string; board: BoardParse; lastValid: Map<string, FlowDoc>; lasts: (FlowDoc | null)[]; icons: number };
+
+/** A paste or insert refused because the board would be over MAX_BOARD_SHAPES. */
+export const BOARD_FULL = "This board would have more than 10,000 shapes, so nothing was added.";
+
+/** A frame being started: `diagram` at column 0 and a partial kind. */
+const HEADER_START = /^diagram[ \t]+(\w*)$/;
+
+/** Runs `edit` on the frame's own text; the edits are relative to the frame. */
+function editFrame(f: FrameParse, edit: Exclude<FlowRequestOp, FlowBoardOp>): FlowEditResult {
+  if (edit.op === "batch") return applyFlowBatch(f.text, f.parse, edit.ops);
+  if (edit.op === "insert") return insertFlow(f.text, f.parse, edit.text, edit.at === undefined ? undefined : Math.min(Math.max(edit.at - f.from, 0), f.text.length));
+  if (edit.op === "paste") {
+    const place = edit.under !== undefined ? { under: edit.under } : edit.after !== undefined ? { after: edit.after } : undefined;
+    return pasteLines(f.text, f.parse, edit.text, place);
+  }
+  return applyFlowEdit(f.text, f.parse, edit);
+}
+
+/**
+ * The last good doc for frame `i` of `board`: its own doc, else the one kept under its title (never ""), else the
+ * one of the frame at its place before, only when that frame was this one renamed: the same kind, and either the
+ * same title or a title no frame has now (a moved frame keeps its title, so it is never taken for this one).
+ */
+function lastFor(board: BoardParse, i: number, old: Cached | undefined, titles: ReadonlySet<string>): FlowDoc | null {
+  const p = board.frames[i].parse;
+  if (p.doc) return p.doc;
+  if (!old) return null;
+  if (p.title !== "") {
+    const kept = old.lastValid.get(p.title);
+    if (kept) return kept;
+  }
+  if (old.board.frames.length !== board.frames.length) return null;
+  const was = old.board.frames[i].parse;
+  if (was.kind !== p.kind || (was.title !== p.title && titles.has(was.title))) return null;
+  return old.lasts[i];
+}
 
 /**
  * How many closed diagram ids the worker remembers, newest kept: a parse that arrives just after its tab closed is
  * dropped, and older ids are forgotten so the set does not grow with every diagram ever opened.
  */
 export const CLOSED_KEPT = 64;
+
+/** An ER table's column names, read off the parse's row spans (the parse's own resolution of the table). */
+function columnsOf(parse: FlowParse, text: string, table: string): string[] | null {
+  const kind = parse.kindOf(table);
+  if (kind !== "entity" && kind !== "weak") return null;
+  return parse.rowsOf(table).flatMap((r) => (r.column ? [text.slice(r.column.from, r.column.to)] : []));
+}
 
 export function createFlowService() {
   const docs = new Map<string, Cached>();
@@ -119,6 +197,8 @@ export function createFlowService() {
   /** The nearest icon for each misspelt name, kept while the list is the same. */
   const iconNear = new Map<string, string | null>();
   let nextVersion = 1;
+  /** Bumped by `setIcons`: a cached board parsed with other icons is not reused. */
+  let iconsSeen = 0;
 
   /** The cached parse for `version`, or null when the text has changed since (or the tab closed). */
   function current(docId: string, version: number): Cached | null {
@@ -144,42 +224,72 @@ export function createFlowService() {
     },
 
     parse(docId: string, text: string): FlowResult {
-      const parse = parseFlow(text, { icons: iconSet, iconNear });
-      const lastValid = parse.doc ?? docs.get(docId)?.lastValid ?? null;
+      const old = docs.get(docId);
+      const board = parseBoard(text, { icons: iconSet, iconNear }, old && old.icons === iconsSeen ? old.board : null);
+      const lastValid = new Map<string, FlowDoc>();
+      const titles = new Set(board.frames.map((f) => f.parse.title));
+      const lasts = board.frames.map((_, i) => lastFor(board, i, old, titles));
+      const frames: FrameResult[] = board.frames.map((f, i) => {
+        const p = f.parse;
+        const last = lasts[i];
+        if (last && p.title !== "" && !lastValid.has(p.title)) lastValid.set(p.title, last);
+        return { index: f.index, kind: p.kind, title: p.title, from: f.from, to: f.to, line: f.line, doc: p.doc, lastValid: p.doc ? null : last, ...(p.oldEr ? { oldEr: true as const } : {}) };
+      });
       const version = nextVersion++;
-      docs.set(docId, { version, text, parse, lastValid });
-      return { kind: parse.kind, doc: parse.doc, problems: parse.problems, lastValid: parse.doc ? null : lastValid, version };
+      docs.set(docId, { version, text, board, lastValid, lasts, icons: iconsSeen });
+      const top = frames[0];
+      return { kind: top.kind, doc: top.doc, problems: board.problems, lastValid: top.lastValid, frames, version, ...(top.oldEr ? { oldEr: true as const } : {}) };
     },
 
-    spans(docId: string, version: number, keys: readonly string[], names: readonly string[]): FlowSpansResult {
+    spans(docId: string, version: number, keys: readonly string[], names: readonly string[], frameIndex = 0): FlowSpansResult {
       const c = current(docId, version);
       if (!c) return { stale: true };
+      const f = c.board.frames[frameIndex];
       // No prototype, so a name such as __proto__ is a plain key.
       const spans = Object.create(null) as Record<string, FlowSpan | null>;
-      for (const k of keys) spans[k] = c.parse.span(k);
+      for (const k of keys) spans[k] = f ? shiftSpan(f.parse.span(k), f.from) : null;
       const lineOf = Object.create(null) as Record<string, number | null>;
-      for (const n of names) lineOf[n] = c.parse.defined.get(n) ?? null;
+      for (const n of names) {
+        const line = f?.parse.defined.get(n);
+        lineOf[n] = line === undefined ? null : line + f.line - 1;
+      }
       return { stale: false, spans, lineOf };
     },
 
-    /** The outline the diagram assistant sends and checks against, from the parse of `version`. */
-    outline(docId: string, version: number): FlowOutlineAnswer {
+    /** The outline the diagram assistant sends and checks against, from the parse of `version`, in file lines. */
+    outline(docId: string, version: number, frameIndex = 0): FlowOutlineAnswer {
       const c = current(docId, version);
       if (!c) return { stale: true };
-      return { stale: false, outline: flowOutline(c.parse, c.lastValid) };
+      const f = c.board.frames[frameIndex];
+      if (!f) return { stale: false, outline: { kind: null, kinds: [], nodes: [], groups: [], links: [] } };
+      const o = flowOutline(f.parse, c.lasts[frameIndex]);
+      const by = f.line - 1;
+      if (by === 0) return { stale: false, outline: o };
+      return {
+        stale: false,
+        outline: {
+          ...o,
+          nodes: o.nodes.map((n) => ({ ...n, line: n.line + by })),
+          groups: o.groups.map((g) => ({ ...g, line: g.line + by })),
+          links: o.links.map((l) => ({ ...l, line: l.line + by })),
+        },
+      };
     },
 
-    /** Runs a canvas action on the text of `version`; works while that text has errors. */
-    edit(docId: string, version: number, edit: FlowRequestOp): FlowEditAnswer {
+    /** Runs a canvas action on one frame of the text of `version`; works while that text has errors. */
+    edit(docId: string, version: number, edit: FlowRequestOp, frameIndex = 0): FlowEditAnswer {
       const c = current(docId, version);
       if (!c) return { stale: true };
-      if (edit.op === "batch") return { stale: false, ...applyFlowBatch(c.text, c.parse, edit.ops) };
-      if (edit.op === "insert") return { stale: false, ...insertFlow(c.text, c.parse, edit.text, edit.at) };
-      if (edit.op === "paste") {
-        const place = edit.under !== undefined ? { under: edit.under } : edit.after !== undefined ? { after: edit.after } : undefined;
-        return { stale: false, ...pasteLines(c.text, c.parse, edit.text, place) };
+      if (edit.op === "addFrame") return { stale: false, ...addFrame(c.text, c.board, edit.kind, edit.title) };
+      if (edit.op === "renameFrame") return { stale: false, ...renameFrame(c.text, c.board, edit.frameIndex, edit.title) };
+      if (edit.op === "deleteFrame") return { stale: false, ...deleteFrame(c.text, c.board, edit.frameIndex) };
+      const f = c.board.frames[frameIndex];
+      if (!f) return { stale: false, edits: [] };
+      const r = editFrame(f, edit);
+      if ((edit.op === "paste" || edit.op === "insert") && r.names && c.board.shapes + Object.keys(r.names).length > MAX_BOARD_SHAPES) {
+        return { stale: false, edits: [], note: BOARD_FULL };
       }
-      return { stale: false, ...applyFlowEdit(c.text, c.parse, edit) };
+      return { stale: false, ...r, edits: f.from === 0 ? r.edits : shiftEdits(r.edits, f.from) };
     },
 
     /** Every icon name, for completion after `icon:` and the unknown-icon check; an empty list checks nothing. */
@@ -187,12 +297,34 @@ export function createFlowService() {
       icons = names;
       iconSet = names.length > 0 ? new Set(names) : undefined;
       iconNear.clear();
+      iconsSeen++;
     },
 
-    /** Completion at `pos`; the cached names are used when they are for this same text. */
+    /**
+     * Completion at `pos` in the frame holding it (a gap counts as the frame before); the cached names are used
+     * when they are for this same text.
+     */
     complete(docId: string, text: string, pos: number): FlowCompletionResult {
+      const lineFrom = text.lastIndexOf("\n", pos - 1) + 1;
+      const header = HEADER_START.exec(text.slice(lineFrom, pos));
+      if (header) {
+        const typed = header[1];
+        return { from: pos - typed.length, items: kindItems(typed) };
+      }
       const c = docs.get(docId);
-      return c && c.text === text ? completeFlow(text, pos, icons, c.parse.defined, c.parse.labels) : completeFlow(text, pos, icons);
+      const cached = c && c.text === text ? c.board : null;
+      const slices = cached ? cached.frames : splitFrames(text);
+      let i = cached ? cached.frameAt(pos) : 0;
+      if (!cached) while (i + 1 < slices.length && slices[i + 1].from <= pos) i++;
+      const from = slices[i].from;
+      // Up to the next frame, so a position in the gap after this frame is still in the text read. The last frame
+      // read ends at its own end: past it (frames past MAX_BOARD_FRAMES) nothing is offered.
+      const end = i + 1 < slices.length ? slices[i + 1].from : slices[i].to;
+      if (pos > end) return { from: pos, items: [] };
+      const own = text.slice(from, end);
+      const f = cached?.frames[i];
+      const r = f ? completeFlow(own, pos - from, icons, f.parse.defined, f.parse.labels, (table) => columnsOf(f.parse, own, table), f.parse.oldEr) : completeFlow(own, pos - from, icons);
+      return from === 0 ? r : { from: r.from + from, items: r.items };
     },
   };
 }

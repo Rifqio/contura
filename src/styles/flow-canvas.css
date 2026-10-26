@@ -382,10 +382,14 @@
   height: 40px;
   object-fit: contain;
 }
-/* A provider icon is its own coloured square: no plate, no border, drawn at the tile's full 48 px. */
+/* An icon draws bare: no plate, no border, at the tile's full 48 px (the Core inks it for the theme). */
 .fnode-service .fnode-tile-bare {
   border-color: transparent;
   background-color: transparent;
+}
+/* A pale logo on light (a white or yellow brand colour) keeps its colour with a hairline in the text colour. */
+.icon-hairline {
+  filter: drop-shadow(0 0 0.3px var(--c-text)) drop-shadow(0 0 0.3px var(--c-text)) drop-shadow(0 0 0.3px var(--c-text));
 }
 .fnode-service .fnode-tile-bare img {
   width: 48px;
@@ -478,10 +482,78 @@
   font-variant-ligatures: contextual;
   font-feature-settings: "calt" 1, "liga" 1;
 }
+.fkind-key {
+  flex: none;
+  color: var(--c-group-gold);
+}
 .fkind-col {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.fkind-type {
+  margin-left: auto;
+  color: var(--c-syn-type);
+  font-style: italic;
+}
+/*
+  ER table card, draw-only (Plan A): the rows scroll inside the card past 20, and each row has a key gutter and a
+  not-null mark.
+*/
+.fkind-er-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  border-radius: 0 0 5px 5px;
+  background: var(--c-bg-surface);
+}
+/* Only rows past 20, or more than a card dragged smaller holds, scroll: a card that fits hugs them with no bar. */
+.fkind-er-body.is-scroll {
+  overflow-y: auto;
+}
+.fkind-er-rows {
+  background: transparent;
+}
+.fkind-er-row {
+  position: relative;
+  gap: 6px;
+  padding: 0 10px 0 10px;
+  white-space: nowrap;
+}
+.fkind-gut {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--c-text-subtle);
+}
+.fkind-er-row .fkind-type {
+  flex: none;
+  max-width: 110px;
+  padding-left: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Not null: a filled diamond (MySQL Workbench); nullable: an outline. */
+.fkind-nn {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--c-text-subtle);
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+.fkind-nn.is-nn {
+  background: var(--c-text-subtle);
+}
+/* A weak table: its border dashed. */
+.fnode-erWeak {
+  border-style: dashed;
 }
 /* A card's name in its header ends in an ellipsis when it is longer than the card. */
 .fkind-head .fnode-name {

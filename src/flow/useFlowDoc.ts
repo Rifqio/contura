@@ -80,7 +80,7 @@ export interface HistoryMove {
   undo: boolean;
 }
 
-const KIND_LINE = /^﻿?[ \t]*diagram[ \t]+(dfd|flow|cloud)\b/;
+const KIND_LINE = /^\uFEFF?[ \t]*diagram[ \t]+(dfd|flow|cloud)\b/;
 
 /** The diagram kind from the first line, read without a parse, so the layout defaults are right from the start. */
 export function kindOfText(text: string): DiagramKind | null {

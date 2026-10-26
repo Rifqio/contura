@@ -1658,8 +1658,8 @@ const mysqlConn = { ...conn, id: "c1", dialect: "mysql" as const };
  * its split and its missing-WHERE answer.
  */
 const planOn = (dialect: "mysql" | "postgres" | "sqlite", noWhere?: { verb: "UPDATE" | "DELETE"; table: string }) => ({
-  plan_run: ({ statements }: Record<string, unknown>) =>
-    fakePlan(statements as string[], dialect, (sql) => (noWhere ? { ...noWhere, text: sql.trim() } : null)),
+  plan_run: ({ statements, delimiters }: Record<string, unknown>) =>
+    fakePlan(statements as string[], dialect, (sql) => (noWhere ? { ...noWhere, text: sql.trim() } : null), delimiters as string[]),
 });
 
 /** Runs by Ctrl+Enter or by the Run button. */
@@ -1871,6 +1871,86 @@ test("r5_run_all_sends_a_script_with_a_trigger_as_whole_statements", async () =>
   key(view(), "Enter", { ctrlKey: true, shiftKey: true });
   await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(3));
   expect(callsTo("execute_sql").map((c) => c.sql)).toEqual(["SELECT 1", TRIGGER, "SELECT 2"]);
+});
+
+// ---- MySQL DELIMITER: DELIMITER lines are never sent, and each run uses the delimiter in force ----
+
+const DELIMITED_TRIGGER = "CREATE TRIGGER t BEFORE INSERT ON orders FOR EACH ROW\nBEGIN\n  SET NEW.total = 0;\nEND";
+const DELIMITED = `DELIMITER $$\n${DELIMITED_TRIGGER}$$\nDELIMITER ;\nINSERT INTO orders VALUES (1);`;
+
+test("delimiter_run_all_sends_the_statements_without_delimiter_lines", async () => {
+  routes(planOn("mysql"));
+  const { view } = setup(doc(DELIMITED), true, { connections: [mysqlConn] });
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(2));
+  expect(callsTo("execute_sql").map((c) => c.sql)).toEqual([DELIMITED_TRIGGER, "INSERT INTO orders VALUES (1)"]);
+});
+
+for (const [where, at, sent] of [
+  ["in_the_trigger_body", DELIMITED.indexOf("SET NEW") + 2, DELIMITED_TRIGGER],
+  ["below_the_delimiter_block", DELIMITED.indexOf("INSERT INTO") + 2, "INSERT INTO orders VALUES (1)"],
+] as const)
+  test(`delimiter_run_current_${where}_uses_the_delimiter_in_force`, async () => {
+    routes(planOn("mysql"));
+    const { view } = setup(doc(DELIMITED), true, { connections: [mysqlConn] });
+    await sessionOpen();
+    act(() => view().dispatch({ selection: { anchor: at } }));
+    key(view(), "Enter", { ctrlKey: true });
+    await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+    expect(callsTo("execute_sql")[0].sql).toBe(sent);
+  });
+
+const IF_TRIGGER = "CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW IF NEW.a > 0 THEN\n  SET NEW.b = 1;\n  DELETE FROM log WHERE id < 5;\nEND IF";
+
+test("delimiter_run_current_inside_a_chunk_sends_the_whole_chunk", async () => {
+  routes(planOn("mysql"));
+  const text = `DELIMITER $$\n${IF_TRIGGER}$$\nDELIMITER ;\nSELECT 2;`;
+  const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+  await sessionOpen();
+  act(() => view().dispatch({ selection: { anchor: text.indexOf("DELETE FROM log") + 2 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+  expect(callsTo("execute_sql")[0].sql).toBe(IF_TRIGGER);
+  // The Core is told the delimiter the statement was cut with, so it keeps it whole.
+  expect(callsTo("plan_run")[0]).toMatchObject({ statements: [IF_TRIGGER], delimiters: ["$$"] });
+});
+
+test("delimiter_run_all_sends_a_compound_chunk_whole_and_splits_a_plain_one", async () => {
+  routes(planOn("mysql"));
+  const text = `DELIMITER $$\n${IF_TRIGGER}$$\nSELECT 1; SELECT 2$$\nDELIMITER ;\nSELECT 3; SELECT 4;`;
+  const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+  await sessionOpen();
+  key(view(), "Enter", { ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(5));
+  expect(callsTo("execute_sql").map((c) => c.sql)).toEqual([IF_TRIGGER, "SELECT 1", "SELECT 2", "SELECT 3", "SELECT 4"]);
+});
+
+for (const [what, chosen, sent] of [
+  ["a_compound_statement_runs_whole", IF_TRIGGER, IF_TRIGGER],
+  ["plain_statements_run_the_last_as_with_semicolons", "SELECT 1; DELETE FROM t WHERE id = 1", "DELETE FROM t WHERE id = 1"],
+] as const)
+  test(`delimiter_run_selection_${what}`, async () => {
+    routes(planOn("mysql"));
+    const text = `DELIMITER $$\n${chosen}$$\nDELIMITER ;`;
+    const { view } = setup(doc(text), true, { connections: [mysqlConn] });
+    await sessionOpen();
+    const from = text.indexOf(chosen);
+    act(() => view().dispatch({ selection: { anchor: from, head: from + chosen.length + 2 } }));
+    key(view(), "Enter", { ctrlKey: true });
+    await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+    expect(callsTo("execute_sql")[0].sql).toBe(sent);
+  });
+
+test("delimiter_run_selection_drops_the_delimiter_in_force", async () => {
+  routes(planOn("mysql"));
+  const { view } = setup(doc(DELIMITED), true, { connections: [mysqlConn] });
+  await sessionOpen();
+  const from = DELIMITED.indexOf("CREATE");
+  act(() => view().dispatch({ selection: { anchor: from, head: from + DELIMITED_TRIGGER.length + 2 } }));
+  key(view(), "Enter", { ctrlKey: true });
+  await waitFor(() => expect(callsTo("execute_sql")).toHaveLength(1));
+  expect(callsTo("execute_sql")[0].sql).toBe(DELIMITED_TRIGGER);
 });
 
 // ---- Round 8: the ask names the plain piece the Core's net found ----

@@ -692,3 +692,85 @@ describe("fix round 1", () => {
     expect(r.problems.every((p) => p.fixes[0].title.startsWith("Add "))).toBe(true);
   });
 });
+
+describe("text it can't read", () => {
+  test("a quoted token is shown in one pair of quotes", () => {
+    expect(errors('diagram flow "x"\nA "Checkout"\n').map((p) => p.message)).toEqual([`Can't read "Checkout" here.`]);
+    expect(MESSAGES.extra("<- B")).toBe(`Can't read "<- B" here.`);
+    expect(MESSAGES.extra('"')).toBe(`Can't read """ here.`);
+  });
+});
+
+describe("a header with a word that is no diagram kind", () => {
+  const ALL = "dfd, flow, cloud, er, sequence, state, class, mindmap, timeline";
+  const fix = (text: string) => {
+    const p = parseFlow(text).problems.filter((x) => x.line === 3);
+    expect(p).toHaveLength(1);
+    return { p: p[0], text };
+  };
+
+  test("a known other name is one problem with a fix to the kind", () => {
+    const { p, text } = fix('diagram flow "x"\nA [step]\ndiagram flowchart "Checkout"\n');
+    expect(p.message).toBe("flowchart is not a diagram kind. Use flow.");
+    expect(at(text, p.from, p.to)).toBe("flowchart");
+    expect(p.fixes.map((f) => f.title)).toEqual(["Use flow"]);
+    expect(apply(text, p.fixes[0].edits)).toBe('diagram flow "x"\nA [step]\ndiagram flow "Checkout"\n');
+    // The line defines nothing: the rest of the frame reads as before.
+    expect(parseFlow(text).doc).toBeNull();
+    expect(parseFlow(text).problems).toHaveLength(1);
+  });
+
+  test("every alias names its kind", () => {
+    const cases: [string, string][] = [
+      ["flowchart", "flow"],
+      ["erd", "er"],
+      ["entity", "er"],
+      ["seq", "sequence"],
+      ["mind map", "mindmap"],
+      ["mind-map", "mindmap"],
+      ["dataflow", "dfd"],
+      ["data-flow", "dfd"],
+      ["statechart", "state"],
+      ["uml", "class"],
+      ["Flow", "flow"],
+    ];
+    for (const [word, kind] of cases) {
+      const { p, text } = fix(`diagram flow "x"\nA [step]\ndiagram ${word} "Checkout"\n`);
+      expect(p.message).toBe(`${word} is not a diagram kind. Use ${kind}.`);
+      expect(apply(text, p.fixes[0].edits)).toBe(`diagram flow "x"\nA [step]\ndiagram ${kind} "Checkout"\n`);
+    }
+  });
+
+  test("an unknown word lists the kinds and offers no fix", () => {
+    const { p, text } = fix('diagram flow "x"\nA [step]\ndiagram chart "Checkout" // later\n');
+    expect(p.message).toBe(`chart is not a diagram kind. Use one of: ${ALL}.`);
+    expect(at(text, p.from, p.to)).toBe("chart");
+    expect(p.fixes).toEqual([]);
+    expect(fix('diagram flow "x"\nA [step]\ndiagram erd // later\n').p.message).toBe("erd is not a diagram kind. Use er.");
+  });
+
+  test("on the first line an alias gets the same problem and fix; another word keeps the fixes for every kind", () => {
+    const text = 'diagram flowchart "X"\nA [step]\n';
+    const p = parseFlow(text).problems;
+    expect(p.map((x) => [x.message, at(text, x.from, x.to)])).toEqual([["flowchart is not a diagram kind. Use flow.", "flowchart"]]);
+    expect(p[0].fixes.map((f) => f.title)).toEqual(["Use flow"]);
+    expect(apply(text, p[0].fixes[0].edits)).toBe('diagram flow "X"\nA [step]\n');
+    const mind = 'diagram mind map "X"\n';
+    const m = parseFlow(mind).problems[0];
+    expect([m.message, at(mind, m.from, m.to)]).toEqual(["mind map is not a diagram kind. Use mindmap.", "mind map"]);
+    expect(apply(mind, m.fixes[0].edits)).toBe('diagram mindmap "X"\n');
+    const other = parseFlow('diagram chart "X"\n').problems[0];
+    expect(other.message).toBe(MESSAGES.firstLine);
+    expect(other.fixes).toHaveLength(9);
+  });
+
+  test("an indented line or a shape called diagram something is left alone", () => {
+    ok('diagram flow "x"\ngroup G {\n  diagram store [step]\n}\n');
+    ok('diagram flow "x"\ndiagram store [step]\n');
+    ok('diagram flow "x"\ndiagram cleanup\n');
+    ok('diagram flow "x"\ndiagram entity [step]\n');
+    expect(errors('diagram flow "x"\n  diagram flowchart "Checkout"\n').map((p) => p.message)).not.toContain(
+      "flowchart is not a diagram kind. Use flow.",
+    );
+  });
+});

@@ -3,6 +3,8 @@ mod commands;
 mod fatal;
 mod folders;
 mod job_commands;
+#[cfg(target_os = "linux")]
+mod paste_guard;
 mod paths;
 mod updater;
 mod window_size;
@@ -372,6 +374,9 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Display scale changes, monitor moves and focus refit the minimum (lib.rs on_window_event).
     app.manage(window_size::WindowFit::new(zoom, min_size));
     let window = builder.build()?;
+    // WebKitGTK 2.54.0/2.54.1 crash on a paste of an empty selection (paste_guard.rs).
+    #[cfg(target_os = "linux")]
+    paste_guard::install(&window);
     // Before the page paints.
     if zoom != 1.0 {
         let _ = window.set_zoom(zoom);

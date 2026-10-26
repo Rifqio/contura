@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { completeFlow } from "./complete";
+import { PALETTE } from "./model";
 
 const ICONS = ["users", "server", "database", "aws-s3", "aws-lambda", "aws-dynamodb", "azure-sql", "gcp-bigquery", "k8s-pod", "aws-sqs"];
 
@@ -76,9 +77,8 @@ describe("completeFlow", () => {
   });
 
   test("the first line offers the diagram kinds", () => {
-    // ADR 0030: no er; DBML is the only ERD.
-    expect(at("diagram |").labels).toEqual(["dfd", "flow", "cloud", "sequence", "state", "class", "mindmap", "timeline"]);
-    expect(at("diagram e|").labels).toEqual([]);
+    expect(at("diagram |").labels).toEqual(["dfd", "flow", "cloud", "er", "sequence", "state", "class", "mindmap", "timeline"]);
+    expect(at("diagram e|").labels).toEqual(["er"]);
     expect(at("// notes\ndiagram cl|").labels).toEqual(["cloud", "class"]);
   });
 
@@ -116,13 +116,17 @@ describe("step 11: labels and colours", () => {
   test("the label and colour keys say what they are for", () => {
     const r = at('diagram flow "A"\nCook [|');
     expect(r.items.find((i) => i.label === "label")?.detail).toBe("the words it shows, when another shape has the name");
-    expect(r.items.find((i) => i.label === "color")?.detail).toBe("one of six palette colours");
+    expect(r.items.find((i) => i.label === "color")?.detail).toBe("a preset, a CSS colour name or a hex");
   });
 
-  test("after color: the six palette names, with what each means", () => {
+  test("colour_completion_lists_presets_first", () => {
     const r = at('diagram flow "A"\nCook [color: |');
-    expect(r.labels).toEqual(["accent", "info", "success", "warning", "danger", "muted"]);
+    expect(r.labels.slice(0, 6)).toEqual([...PALETTE]);
+    expect(r.labels[6]).toBe("aliceblue");
+    expect(r.labels).toHaveLength(154);
     expect(r.items[4]).toMatchObject({ label: "danger", apply: "danger", detail: "Danger: failure, error, data at risk" });
+    expect(r.items[6]).toMatchObject({ label: "aliceblue", detail: "#f0f8ff" });
+    expect(at('diagram flow "A"\nCook [color: te|').labels).toEqual(["teal"]);
     expect(at('diagram flow "A"\nCook [step, color: wa|').labels).toEqual(["warning"]);
   });
 
@@ -130,7 +134,7 @@ describe("step 11: labels and colours", () => {
     const text = 'diagram flow "A"\nPaid?\nRetry\n';
     expect(at(`${text}Paid? > Retry [|`).labels).toEqual(["color"]);
     expect(at(`${text}Paid? > Retry: no [|`).labels).toEqual(["color"]);
-    expect(at(`${text}Paid? > Retry: no [color: d|`).labels).toEqual(["danger"]);
+    expect(at(`${text}Paid? > Retry: no [color: dang|`).labels).toEqual(["danger"]);
   });
 
   test("sequence, class and timeline shapes are offered no label or colour", () => {
@@ -144,5 +148,84 @@ describe("step 11: labels and colours", () => {
     expect(r.labels).toEqual(["Retry", "Retry 2"]);
     expect(r.items[1]).toMatchObject({ apply: "Retry 2", detail: 'shows "Retry" (label:)' });
     expect(r.items[0].detail).toBeUndefined();
+  });
+});
+
+describe("a participant's brackets", () => {
+  test("participant_bracket_completion", () => {
+    expect(at('diagram sequence "A"\nparticipant App [|').labels).toEqual(["icon", "label", "color"]);
+    expect(at('diagram sequence "A"\nactor Ann [icon: users, |').labels).toEqual(["label", "color"]);
+    expect(at('diagram sequence "A"\nparticipant App [icon: |').labels.sort()).toEqual([...ICONS].sort());
+  });
+});
+
+describe("a bare shape in a sequence", () => {
+  test("offers no attribute keys after Name [", () => {
+    expect(at('diagram sequence "A"\nShop [|').labels).toEqual([]);
+  });
+});
+
+describe("ER completion", () => {
+  const TABLES: Record<string, string[]> = { orders: ["id", "customer_id"], customers: ["id", "email"], "sales.orders": ["id", "total"] };
+  const columnsOf = (t: string): readonly string[] | null => TABLES[t] ?? null;
+  const er = (text: string, extra: { oldEr?: boolean; cols?: typeof columnsOf } = {}) => {
+    const pos = text.indexOf("|");
+    const clean = text.slice(0, pos) + text.slice(pos + 1);
+    const r = completeFlow(clean, pos, ICONS, undefined, undefined, extra.cols ?? columnsOf, extra.oldEr);
+    return { ...r, labels: r.items.map((i) => i.label), pos };
+  };
+  const HEAD = 'diagram er "Shop"\n';
+
+  test("flags_after_a_column_type", () => {
+    expect(er(`${HEAD}orders {\n  id int |`).labels).toEqual(["pk", "not null", "unique"]);
+    expect(er(`${HEAD}orders {\n  id int pk |`).labels).toEqual(["not null", "unique"]);
+    expect(er(`${HEAD}orders {\n  id int not null |`).labels).toEqual(["pk", "unique"]);
+    expect(er(`${HEAD}orders {\n  id int u|`).labels).toEqual(["unique"]);
+    expect(er(`${HEAD}orders {\n  id decimal(10, 2) |`).labels).toEqual(["pk", "not null", "unique"]);
+  });
+
+  test("no flags before the type is written, in a comment or outside a table", () => {
+    expect(er(`${HEAD}orders {\n  id |`).labels).toEqual([]);
+    expect(er(`${HEAD}orders {\n  id i|`).labels).toEqual([]);
+    expect(er(`${HEAD}orders {\n  id int // |`).labels).toEqual([]);
+    expect(er(`${HEAD}orders {\n  id int pk\n}\nid int |`).labels).not.toContain("pk");
+  });
+
+  test("columns_after_a_table_dot", () => {
+    const r = er(`${HEAD}orders.customer_id > customers.|`);
+    expect(r.labels).toEqual(["id", "email"]);
+    expect(r.from).toBe(r.pos);
+    expect(er(`${HEAD}orders.customer_id > customers.em|`).labels).toEqual(["email"]);
+    expect(er(`${HEAD}orders.|`).labels).toEqual(["id", "customer_id"]);
+    // The longest prefix that names a table.
+    expect(er(`${HEAD}sales.orders.|`).labels).toEqual(["id", "total"]);
+    expect(er(`${HEAD}nothing.|`).labels).toEqual([]);
+    // A table with no columns still names the table: no fall back to a shorter prefix.
+    const cols = (t: string) => ({ sales: ["region"], "sales.empty": [] as string[] })[t] ?? null;
+    expect(er(`${HEAD}sales.empty.|`, { cols }).labels).toEqual([]);
+  });
+
+  test("group_at_a_line_start", () => {
+    expect(er(`${HEAD}|`).labels).toEqual(["group"]);
+    expect(er(`${HEAD}orders\ngr|`).labels).toEqual(["group"]);
+    expect(er(`${HEAD}group Billing {\n  |`).labels).toContain("group");
+    expect(er(`${HEAD}orders {\n  |`).labels).toEqual([]);
+  });
+
+  test("table_bracket_keys", () => {
+    expect(er(`${HEAD}orders [|`).items.map((i) => i.apply)).toEqual(["entity", "weak", "icon: ", "label: ", "color: "]);
+    expect(er(`${HEAD}orders [weak, |`).labels).toEqual(["icon", "label", "color"]);
+    expect(er(`${HEAD}group Billing [|`).labels).toEqual(["icon", "color"]);
+  });
+
+  test("an old ER frame offers nothing ER-specific", () => {
+    expect(er(`${HEAD}orders.customer_id > customers.|`, { oldEr: true }).labels).toEqual([]);
+    expect(er(`${HEAD}|`, { oldEr: true }).labels).toEqual([]);
+    expect(er(`${HEAD}orders [|`, { oldEr: true }).labels).toEqual(["entity", "weak", "id", "icon", "label", "color", "table"]);
+  });
+
+  test("braces in quotes and comments do not open a block", () => {
+    expect(er(`${HEAD}"a {" [entity]\n// {\n|`).labels).toContain("group");
+    expect(er(`${HEAD}orders {\n  "x}" int pk\n  id int |`).labels).toEqual(["pk", "not null", "unique"]);
   });
 });

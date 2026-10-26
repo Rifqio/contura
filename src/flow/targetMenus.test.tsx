@@ -87,7 +87,7 @@ test("a flowchart line's menu: Arrow with the kind's arrows, Reverse, and Show i
   expect(rowsOf(menu)).toEqual(["Edit label|F2", "Arrow", "Colour|none", "Reverse", "Show in the text", "Delete|Delete"]);
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Arrow" }));
   const sub = await screen.findByRole("menu", { name: "Arrow" });
-  expect(rowsOf(sub)).toEqual(["One way|> ✓", "Both ways|<>", "Dashed|-->", "No arrow|-"]);
+  expect(rowsOf(sub)).toEqual(["One way|> ✓", "Both ways|<>", "Dashed|-->", "No arrow|-", "Dotted|--"]);
   await userEvent.click(within(sub).getByRole("menuitemcheckbox", { name: "Dashed" }));
   await waitFor(() => expect(s.doc()).toBe(FLOW.replace("Check > Done: yes", "Check --> Done: yes")));
   fireEvent.contextMenu(s.edge(1), { clientX: 300, clientY: 200 });
@@ -96,6 +96,22 @@ test("a flowchart line's menu: Arrow with the kind's arrows, Reverse, and Show i
   fireEvent.contextMenu(s.edge(1), { clientX: 300, clientY: 200 });
   await userEvent.click(within(await screen.findByRole("menu", { name: "Line actions" })).getByRole("menuitem", { name: "Show in the text" }));
   await waitFor(() => expect(s.view().state.doc.lineAt(s.view().state.selection.main.head).text).toBe("Done --> Check: yes"));
+});
+
+test("a dotted line shows Dotted checked in its Arrow menu, and choosing Dotted writes --", async () => {
+  const dotted = FLOW.replace("Check > Done: yes", "Check -- Done: yes");
+  const s = setup(dotted);
+  await waitFor(() => expect(s.node("Step Check")).not.toBeNull(), { timeout: 4000 });
+  fireEvent.contextMenu(s.edge(1), { clientX: 300, clientY: 200 });
+  await userEvent.click(within(await screen.findByRole("menu", { name: "Line actions" })).getByRole("menuitem", { name: "Arrow" }));
+  const sub = await screen.findByRole("menu", { name: "Arrow" });
+  expect(rowsOf(sub)).toEqual(["One way|>", "Both ways|<>", "Dashed|-->", "No arrow|-", "Dotted|-- ✓"]);
+  await userEvent.click(within(sub).getByRole("menuitemcheckbox", { name: "One way" }));
+  await waitFor(() => expect(s.doc()).toBe(FLOW));
+  fireEvent.contextMenu(s.edge(1), { clientX: 300, clientY: 200 });
+  await userEvent.click(within(await screen.findByRole("menu", { name: "Line actions" })).getByRole("menuitem", { name: "Arrow" }));
+  await userEvent.click(within(await screen.findByRole("menu", { name: "Arrow" })).getByRole("menuitemcheckbox", { name: "Dotted" }));
+  await waitFor(() => expect(s.doc()).toBe(dotted));
 });
 
 test("a class line's menu names the relationship kinds (CL2)", async () => {

@@ -246,6 +246,22 @@ async fn read_page(
     Ok((page, false))
 }
 
+/// Reads every result left in `result`, from the current one on, and sums the rows they
+/// changed: the first error from any of them is the error. A result with rows adds none.
+async fn drain(result: &mut Result_<'_>) -> mysql_async::Result<u64> {
+    let mut changed = 0;
+    while let Some(columns) = result.columns() {
+        if columns.is_empty() {
+            changed += result.affected_rows();
+        }
+        while result.next().await?.is_some() {}
+    }
+    // No result is left, or a later one failed: the driver keeps that error pending, and
+    // reading on gives it.
+    result.next().await?;
+    Ok(changed)
+}
+
 /// Runs one statement. While its rows last, answers `FetchMore`; returns the
 /// first other command so the outer loop handles it.
 async fn execute(
@@ -265,15 +281,16 @@ async fn execute(
             return None;
         }
     };
+    // A routine or compound statement sent whole (several `;`-parts) may answer with
+    // several results: its first one is not paged, so the rest can be read now.
+    let several = crate::safety::statement_count(crate::model::DialectKind::MySql, sql) > 1;
     let columns = result.columns().filter(|c| !c.is_empty());
     let Some(columns) = columns else {
-        let affected = result.affected_rows();
-        let done = result
-            .drop_result()
+        let done = drain(&mut result)
             .await
             .map_err(|e| session_err(e, read_only));
         let _ = reply.send(
-            done.map(|_| ExecOutcome::Affected { rows: affected })
+            done.map(|rows| ExecOutcome::Affected { rows })
                 .map_err(fail),
         );
         return None;
@@ -302,7 +319,7 @@ async fn execute(
         })
         .collect();
     let mut carry = None;
-    let (page, has_more) = match read_page(&mut result, &kinds, &mut carry, read_only).await {
+    let (page, mut has_more) = match read_page(&mut result, &kinds, &mut carry, read_only).await {
         Ok(p) => p,
         Err(e) => {
             let _ = result.drop_result().await;
@@ -310,6 +327,20 @@ async fn execute(
             return None;
         }
     };
+    // Every later result is read before the outcome goes back, so its error is this
+    // statement's error. A first result still open is read on only for a single statement.
+    if !has_more || several {
+        let skipped = async {
+            while result.next().await?.is_some() {}
+            drain(&mut result).await
+        };
+        if let Err(e) = skipped.await {
+            let _ = result.drop_result().await;
+            let _ = reply.send(Err(fail(session_err(e, read_only))));
+            return None;
+        }
+        has_more = false;
+    }
     // A killed function call (SLEEP, BENCHMARK) ends with a normal-looking row, not an
     // error. The user asked to stop it, so its row is not a result.
     if flag.take() {

@@ -1,16 +1,12 @@
-// One ERD (ADR 0030): the flow language has no `diagram er` any more, and DBML is the only way to draw tables. An
-// old ER file opens read-only with "Open as DBML", which converts it here. It reads the ER text on its own (the
-// flow parser no longer knows the kind): tables, `table.column type [pk, not null, unique]` lines, and lines with
-// a cardinality (`1--*`, `*--1`, `1--1`, `*--*`, or `--`), whose ends may name columns. A line between two whole
-// tables joins the key and the referring column the ER board would have made; when there is none, its words stay
-// as a comment and no column is invented. Relationship names and `[weak]` become notes.
+// "Open as DBML": an ER diagram's tables and relationships as DBML for the Schema Builder, opened as an unsaved model.
+// A frame in table blocks reads from the parsed doc (`erFrameToDbml`); an old-form frame reads its own text: tables,
+// `table.column type [pk, not null, unique]` lines, and lines with a cardinality (`1--*`, `*--1`, `1--1`, `*--*`, or
+// `--`), whose ends may name columns. A line between two whole tables joins the key and the referring column the ER
+// board would have made; when there is none, its words stay as a comment and no column is invented. Relationship
+// names and `[weak]` become notes.
 
-const HEAD = /^﻿?[ \t]*diagram[ \t]+(\w+)/;
-
-/** True when the text's first line is `diagram er`: an ER diagram from before ADR 0030. */
-export function isErFlowText(text: string): boolean {
-  return HEAD.exec(text)?.[1] === "er";
-}
+import { parseBoard } from "../lang/flow/board";
+import type { FlowDoc } from "../lang/flow/model";
 
 type Card = "1--*" | "*--1" | "1--1" | "*--*" | "--";
 const CARDS: readonly Card[] = ["1--*", "*--1", "1--1", "*--*", "--"];
@@ -29,6 +25,8 @@ interface Table {
 interface End {
   name: string;
   quoted: boolean;
+  /** Set by a doc's ends: `name` is then the whole table's name and this its column, so no dotted text is split. */
+  column?: string;
 }
 interface Line {
   from: End;
@@ -112,7 +110,7 @@ function read(text: string): { tables: Table[]; lines: Line[] } {
   const tables: Table[] = [];
   const byName = new Map<string, Table>();
   const lines: Line[] = [];
-  const rows = text.replace(/^﻿/, "").split(/\r?\n/).slice(1);
+  const rows = text.replace(/^\uFEFF/, "").split(/\r?\n/).slice(1);
   for (const raw of rows) {
     const s = raw.slice(0, commentAt(raw)).trim();
     if (s === "" || s === "{" || s === "}") continue;
@@ -168,6 +166,8 @@ function read(text: string): { tables: Table[]; lines: Line[] } {
 
 const plain = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 const ident = (name: string) => (plain(name) ? name : `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
+/** A table name: `sales.orders` is schema-qualified in DBML, each part quoted only when it needs it. */
+const tableIdent = (name: string) => (name.includes(".") && name.split(".").every(plain) ? name : ident(name));
 const typeText = (type: string) => (type === "" ? "text" : /^[A-Za-z_][A-Za-z0-9_]*(\([0-9, ]*\))?$/.test(type) ? type : `"${type.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
 const noteText = (s: string) => `'${s.replace(/[\r\n]+/g, " ").replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
@@ -190,8 +190,18 @@ function referring(many: Table, one: Table, key: Column): Column | null {
  */
 export function erToDbml(text: string, name: string): string {
   const { tables, lines } = read(text);
+  return emit(tables, lines, name);
+}
+
+/** The shared emitter: tables and lines, as either reader made them, written as DBML. */
+function emit(tables: Table[], lines: Line[], name: string): string {
   const byName = new Map(tables.map((t) => [t.name, t]));
   const end = (e: End): { table: Table; column: Column | null } | null => {
+    if (e.column !== undefined) {
+      const table = byName.get(e.name);
+      const column = table?.columns.find((c) => c.name === e.column);
+      return table && column ? { table, column } : null;
+    }
     const whole = byName.get(e.name);
     if (whole || e.quoted) return whole ? { table: whole, column: null } : null;
     const dot = e.name.indexOf(".");
@@ -205,7 +215,7 @@ export function erToDbml(text: string, name: string): string {
   for (const l of lines) {
     const a = end(l.from);
     const b = end(l.to);
-    const words = `${l.from.name} ${l.card} ${l.to.name}${l.label ? ` : ${l.label}` : ""}`;
+    const words = `${endText(l.from)} ${l.card} ${endText(l.to)}${l.label ? ` : ${l.label}` : ""}`;
     if (!a || !b) {
       comments.push(`// Not converted: ${words}. One end is not a table or a column of one.`);
       continue;
@@ -235,8 +245,8 @@ export function erToDbml(text: string, name: string): string {
     }
     const op = l.card === "1--1" ? "-" : l.card === "*--*" ? "<>" : ">";
     if (l.label) manyCol.notes.push(`${a.table.name} ${l.label} ${b.table.name}`);
-    const left = `${ident(many.table.name)}.${ident(manyCol.name)}`;
-    const right = `${ident(one.table.name)}.${ident(oneCol.name)}`;
+    const left = `${tableIdent(many.table.name)}.${ident(manyCol.name)}`;
+    const right = `${tableIdent(one.table.name)}.${ident(oneCol.name)}`;
     const key = [left, right].sort().join(" ");
     if (seen.has(key)) continue;
     seen.add(key);
@@ -250,7 +260,7 @@ export function erToDbml(text: string, name: string): string {
       out.push(`// Table ${t.name} had no columns in the ER diagram; add one to keep it.`);
       continue;
     }
-    out.push(`Table ${ident(t.name)} {`);
+    out.push(`Table ${tableIdent(t.name)} {`);
     for (const c of t.columns) {
       const settings = [...c.flags, ...(c.notes.length > 0 ? [`note: ${noteText(c.notes.join("; "))}`] : [])];
       out.push(`  ${ident(c.name)} ${typeText(c.type)}${settings.length > 0 ? ` [${settings.join(", ")}]` : ""}`);
@@ -260,6 +270,45 @@ export function erToDbml(text: string, name: string): string {
   }
   if (refs.length > 0 || comments.length > 0) out.push("", ...refs, ...comments);
   return `${out.join("\n")}\n`;
+}
+
+const endText = (e: End) => (e.column === undefined ? e.name : `${e.name}.${e.column}`);
+
+const ARROW_CARD: Record<string, Card> = { ">": "*--1", "<": "1--*", "-": "1--1", "<>": "*--*" };
+
+/**
+ * Converts an ER frame in the table-block form to DBML, as `erToDbml` does an old one: cardinalities from the
+ * arrows, columns from the table's rows and flags, a column's comment as its note; groups, icons and colours are dropped.
+ */
+export function erFrameToDbml(doc: FlowDoc, name: string): string {
+  const tables: Table[] = [];
+  for (const n of doc.nodes) {
+    if (n.kind !== "entity" && n.kind !== "weak") continue;
+    const columns = (n.rows ?? []).map((row, i): Column => {
+      const space = row.search(/\s/);
+      return { name: space < 0 ? row : row.slice(0, space), type: space < 0 ? "" : row.slice(space + 1).trim(), flags: [...(n.rowFlags?.[i] ?? [])], notes: n.rowComments?.[i] ? [n.rowComments[i]!] : [] };
+    });
+    tables.push({ name: n.name, weak: n.kind === "weak", columns });
+  }
+  const lines: Line[] = doc.links.map((l) => ({
+    from: { name: l.from, quoted: true, column: l.fromColumn },
+    to: { name: l.to, quoted: true, column: l.toColumn },
+    card: ARROW_CARD[l.arrow] ?? "--",
+    label: l.label ?? null,
+  }));
+  return emit(tables, lines, name);
+}
+
+/**
+ * "Open as DBML" for one frame of a board (0-based): an old-form ER frame reads through `erToDbml`, a table-block
+ * one through `erFrameToDbml`. Null when the frame is not an ER diagram or its text has errors.
+ */
+export function openAsDbml(text: string, frameIndex: number, name: string): string | null {
+  const frame = parseBoard(text).frames[frameIndex];
+  if (!frame) return null;
+  if (frame.parse.oldEr) return erToDbml(frame.text, name);
+  const doc = frame.parse.doc;
+  return doc?.kind === "er" ? erFrameToDbml(doc, name) : null;
 }
 
 // The Rails inflector's singular rules, as the ER board named a referring column (ER build C, fix round 2, I4).

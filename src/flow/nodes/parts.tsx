@@ -3,10 +3,11 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useDetail } from "../../diagram/detail";
 import { motionMs } from "../../diagram/motion";
-import { type DrawnKind, NODE_TOKENS, PALETTE_TOKENS } from "../../diagram/types";
+import { type DrawnKind, NODE_TOKENS } from "../../diagram/types";
+import { colourStyle, type DrawnColour, presetOf } from "../palette";
 
-/** Step 11: a palette colour a shape takes (`color: danger`). */
-export type ShapeColour = keyof typeof PALETTE_TOKENS;
+/** A colour a shape takes: a preset (`color: danger`) or a custom one (`color: teal`). */
+export type ShapeColour = DrawnColour;
 
 /** Modern is the pastel card (frame 6+.2); Classic draws the textbook Gane-Sarson shapes. Kept per diagram. */
 export type NodeLook = "modern" | "classic";
@@ -37,11 +38,8 @@ const STATE_NOTE: Partial<Record<NodeState, string>> = { suggested: ", suggested
 
 /** The kind's token pair as the custom properties the stylesheet reads (ADR 0008: tokens only). */
 function kindStyle(kind: DrawnKind, color?: ShapeColour): CSSProperties {
-  // Step 11: a palette colour draws its fill, border and words in place of the kind's pair (ADR 0019).
-  if (color) {
-    const c = PALETTE_TOKENS[color];
-    return { "--fnode-fill": `var(${c.fill})`, "--fnode-stroke": `var(${c.stroke})`, color: `var(${c.text})` } as CSSProperties;
-  }
+  // A colour draws its fill, border and words in place of the kind's pair (ADR 0019).
+  if (color) return colourStyle(color);
   const t = NODE_TOKENS[kind];
   return { "--fnode-fill": `var(${t.fill})`, "--fnode-stroke": `var(${t.stroke})` } as CSSProperties;
 }
@@ -118,7 +116,7 @@ export function NodeShell({ kind, family, look, selected, label: plain, name, st
     </span>
   ) : null;
   const hover = useHoverPorts();
-  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "") + (sized ? " fnode-sized" : "") + (color ? ` fnode-col fnode-col-${color}` : "");
+  const sel = (selected ? " fnode-selected" : "") + (state ? ` fnode-${state}` : "") + (sized ? " fnode-sized" : "") + (color ? ` fnode-col${presetOf(color) ? ` fnode-col-${color}` : ""}` : "");
   // The node itself takes the size, not React Flow's wrapper, which stays measured from it.
   const box: CSSProperties = sized ? { ...kindStyle(kind, color), width: sized.w, height: sized.h } : kindStyle(kind, color);
   // Zoomed out the node drops its family and look classes, so no shape rule (diamond, slant, pill) applies.

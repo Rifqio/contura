@@ -156,19 +156,19 @@ export class LangClient {
     return this.ask((id) => ({ type: "flowParse", id, docId, text }));
   }
 
-  /** Source ranges and lines from the parse with `version`; `{ stale: true }` once the text has changed. */
-  flowSpans(docId: string, version: number, keys: string[], names: string[]): Promise<FlowSpansResult> {
-    return this.ask((id) => ({ type: "flowSpans", id, docId, version, keys, names }));
+  /** Source ranges and lines in frame `frameIndex` of the parse with `version`, in file positions; `{ stale: true }` once the text has changed. */
+  flowSpans(docId: string, version: number, keys: string[], names: string[], frameIndex = 0): Promise<FlowSpansResult> {
+    return this.ask((id) => ({ type: "flowSpans", id, docId, version, keys, names, frameIndex }));
   }
 
-  /** A canvas action as text edits on the text of `version`; `{ stale: true }` once the text has changed. */
-  flowEdit(docId: string, version: number, edit: FlowRequestOp): Promise<FlowEditAnswer> {
-    return this.ask((id) => ({ type: "flowEdit", id, docId, version, edit }));
+  /** A canvas action on frame `frameIndex` as text edits on the text of `version`; `{ stale: true }` once the text has changed. */
+  flowEdit(docId: string, version: number, edit: FlowRequestOp, frameIndex = 0): Promise<FlowEditAnswer> {
+    return this.ask((id) => ({ type: "flowEdit", id, docId, version, edit, frameIndex }));
   }
 
-  /** The outline of the parse with `version`, for the diagram assistant; `{ stale: true }` once the text has changed. */
-  flowOutline(docId: string, version: number): Promise<FlowOutlineAnswer> {
-    return this.ask((id) => ({ type: "flowOutline", id, docId, version }));
+  /** The outline of frame `frameIndex` of the parse with `version`, for the diagram assistant; `{ stale: true }` once the text has changed. */
+  flowOutline(docId: string, version: number, frameIndex = 0): Promise<FlowOutlineAnswer> {
+    return this.ask((id) => ({ type: "flowOutline", id, docId, version, frameIndex }));
   }
 
   /** Completion at `pos` in a .flow text, worked out in the worker; `stale` asks the caller to ask once more. */

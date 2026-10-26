@@ -4,6 +4,7 @@
 import { plural } from "../../format/plural";
 import type { DiagramOp, FlowOutline, ProposedChange, ToolOutcome } from "../../api/types";
 import { type FlowEditOp, nodeText } from "../../lang/flow/edits";
+import { shiftEdits, splitFrames } from "../../lang/flow/board";
 import { applyFlowSteps } from "../../lang/flow/service";
 import { type DiagramKind, defaultArrow, type FlowNodeKind, flowLabel, flowName } from "../../lang/flow/model";
 import type { FlowParse } from "../../lang/flow/parse";
@@ -97,7 +98,17 @@ export function changeMark(change: ProposedChange): "+" | "-" | "~" | "!" {
 }
 
 /**
- * The accepted changes, in index order, as one edit on `text` and the text it gives. Each change is made against
+ * The part of `text` the Assistant reads and writes: frame 0 of a board, the frame its outline was made from, and the
+ * whole of a one-diagram file.
+ */
+export function askedFrame(text: string): { from: number; to: number; text: string } {
+  const f = splitFrames(text)[0];
+  return { from: f.from, to: f.to, text: text.slice(f.from, f.to) };
+}
+
+/**
+ * The accepted changes, in index order, as one edit on `text` and the text it gives. They land on `askedFrame(text)`,
+ * which `parse` is the parse of; the rest of a board is left as it is. Each change is made against
  * the text the ones before it left, so a line found by its index is the right one. Null when nothing is accepted,
  * an accepted change is not Ok, or one does not apply (the whole set is refused).
  */
@@ -110,8 +121,10 @@ export function planLanding(
 ): { edits: TextEdit[]; text: string } | null {
   const list = changes.filter((c) => accepted.has(c.index)).sort((a, b) => a.index - b.index);
   if (list.length === 0) return null;
-  const r = applyFlowSteps(text, parse, list.length, (p, i) => changeEditOp(list[i], p, kind));
-  return r.edits.length === 0 || r.text === undefined ? null : { edits: r.edits, text: r.text };
+  const frame = askedFrame(text);
+  const r = applyFlowSteps(frame.text, parse, list.length, (p, i) => changeEditOp(list[i], p, kind));
+  if (r.edits.length === 0 || r.text === undefined) return null;
+  return { edits: shiftEdits(r.edits, frame.from), text: text.slice(0, frame.from) + r.text + text.slice(frame.to) };
 }
 
 /** A message without its numbers, so a line number that moved with an insert is still the same problem. */

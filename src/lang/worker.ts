@@ -95,7 +95,7 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         // the caller's next try is current.
         if (flushFlow(m.docId)) return post({ type: "flowSpans", ids: [m.id], result: { stale: true } });
         try {
-          post({ type: "flowSpans", ids: [m.id], result: flow.spans(m.docId, m.version, m.keys, m.names) });
+          post({ type: "flowSpans", ids: [m.id], result: flow.spans(m.docId, m.version, m.keys, m.names, m.frameIndex) });
         } catch (e) {
           fail([m.id], e);
         }
@@ -103,7 +103,7 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
       case "flowEdit":
         if (flushFlow(m.docId)) return post({ type: "flowEdit", ids: [m.id], result: { stale: true } });
         try {
-          post({ type: "flowEdit", ids: [m.id], result: flow.edit(m.docId, m.version, m.edit) });
+          post({ type: "flowEdit", ids: [m.id], result: flow.edit(m.docId, m.version, m.edit, m.frameIndex) });
         } catch (e) {
           fail([m.id], e);
         }
@@ -111,7 +111,7 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
       case "flowOutline":
         if (flushFlow(m.docId)) return post({ type: "flowOutline", ids: [m.id], result: { stale: true } });
         try {
-          post({ type: "flowOutline", ids: [m.id], result: flow.outline(m.docId, m.version) });
+          post({ type: "flowOutline", ids: [m.id], result: flow.outline(m.docId, m.version, m.frameIndex) });
         } catch (e) {
           fail([m.id], e);
         }

@@ -8,8 +8,8 @@ use contura_core::Error;
 use contura_core::diagrams::delete_diagram;
 use contura_core::diagrams::{
     DiagramKind, NAME_REFUSAL, READ_MAX, check_diagram_name, delete_diagram_with, diagram_head,
-    diagrams_dir, list_diagrams, read_diagram, rename_diagram, save_diagram_copy, write_diagram,
-    write_diagram_layout,
+    diagram_summary, diagrams_dir, frame_start_lines, list_diagrams, read_diagram, rename_diagram,
+    save_diagram_copy, write_diagram, write_diagram_layout,
 };
 
 fn put(data: &Path, name: &str, text: &[u8]) {
@@ -33,7 +33,7 @@ impl<R: Read> Read for Counting<R> {
 }
 
 #[test]
-fn list_reads_first_line_only() {
+fn list_reads_heads_line_by_line() {
     let data = tempfile::tempdir().unwrap();
     let mut big = b"diagram cloud \"Edge \\\"west\\\"\"\n".to_vec();
     big.extend(std::iter::repeat_n(b'x', 10 * 1024 * 1024));
@@ -430,9 +430,97 @@ fn head_reads_the_step_12_kinds() {
         diagram_head(&b"diagram gantt \"x\"\n"[..]).0,
         DiagramKind::Unknown
     );
-    // ADR 0030: the ER kind left the language; an old ER file lists as an unknown diagram, under its name.
     assert_eq!(
         diagram_head(&b"diagram er \"Billing\"\n"[..]),
-        (DiagramKind::Unknown, None)
+        (DiagramKind::Er, Some("Billing".into()))
     );
+}
+
+#[test]
+fn frame_headers_match_the_shared_fixture() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/flow/frame_headers.json")).unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let text = case["text"].as_str().unwrap();
+        let starts: Vec<usize> = case["starts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| usize::try_from(n.as_u64().unwrap()).unwrap())
+            .collect();
+        assert_eq!(frame_start_lines(text), starts, "{}", case["name"]);
+    }
+}
+
+#[test]
+fn list_names_a_board_and_an_er_diagram() {
+    let data = tempfile::tempdir().unwrap();
+    put(
+        data.path(),
+        "shop",
+        b"diagram flow \"Orders\"\nA > B\n\ndiagram state \"Life\"\nX > Y\n",
+    );
+    put(data.path(), "billing", b"diagram er \"Billing\"\n");
+    put(
+        data.path(),
+        "indented",
+        b"diagram flow \"x\"\n  diagram flow \"y\"\n",
+    );
+    let list = list_diagrams(data.path()).unwrap();
+    let by = |n: &str| list.iter().find(|e| e.name == n).unwrap();
+    assert_eq!(by("shop").kind, DiagramKind::Board);
+    assert_eq!(by("shop").title, "shop");
+    assert_eq!(by("billing").kind, DiagramKind::Er);
+    assert_eq!(by("billing").title, "Billing");
+    assert_eq!(by("indented").kind, DiagramKind::Flow);
+    assert_eq!(by("indented").title, "x");
+}
+
+#[test]
+fn list_reads_a_header_after_comments() {
+    let data = tempfile::tempdir().unwrap();
+    put(
+        data.path(),
+        "noted",
+        b"\xEF\xBB\xBF// shop notes\n\n  // more\ndiagram state \"Life\"\nX > Y\n",
+    );
+    put(
+        data.path(),
+        "noted-board",
+        b"// shop notes\n\ndiagram flow \"A\"\nX > Y\n\ndiagram flow \"B\"\n",
+    );
+    let list = list_diagrams(data.path()).unwrap();
+    let by = |n: &str| list.iter().find(|e| e.name == n).unwrap();
+    assert_eq!(by("noted").kind, DiagramKind::State);
+    assert_eq!(by("noted").title, "Life");
+    assert_eq!(by("noted-board").kind, DiagramKind::Board);
+}
+
+#[test]
+fn summary_reads_crlf_and_long_comments_and_stops_at_the_cap() {
+    let summary = |t: &[u8]| diagram_summary(Cursor::new(t.to_vec()));
+    assert_eq!(
+        summary(b"diagram flow \"A\"\r\nX\r\n\r\ndiagram state \"B\"\r\nY\r\n").0,
+        DiagramKind::Board
+    );
+    assert_eq!(
+        summary(b"\xEF\xBB\xBFdiagram flow \"A\"\r\nX > Y\r\n"),
+        (DiagramKind::Flow, Some("A".to_string()))
+    );
+    // A comment longer than the 4 KB head, before one header, leaves one diagram.
+    let long = format!("// {}\ndiagram flow \"A\"\nX\n", "x".repeat(5000));
+    assert_ne!(summary(long.as_bytes()).0, DiagramKind::Board);
+    // A second header past READ_MAX is not read, and no more than READ_MAX bytes are taken.
+    let mut big = b"diagram flow \"A\"\n".to_vec();
+    while big.len() as u64 <= READ_MAX {
+        big.extend_from_slice(b"X > Y\n");
+    }
+    big.extend_from_slice(b"diagram flow \"B\"\n");
+    let mut counted = Counting {
+        inner: Cursor::new(big),
+        taken: 0,
+    };
+    assert_eq!(diagram_summary(&mut counted).0, DiagramKind::Flow);
+    assert!(counted.taken as u64 <= READ_MAX);
 }

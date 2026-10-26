@@ -1,5 +1,5 @@
 // The engine's edges: the markers, the orthogonal edge (8 px corners) with its badge slot, and the straight edge of fast mode.
-import { BaseEdge, EdgeLabelRenderer, type EdgeProps, getSmoothStepPath, getStraightPath } from "@xyflow/react";
+import { BaseEdge, type Edge, EdgeLabelRenderer, type EdgeProps, getSmoothStepPath, getStraightPath } from "@xyflow/react";
 import type { ReactNode } from "react";
 import { PALETTE_TOKENS } from "./types";
 
@@ -13,8 +13,41 @@ export const ARROW_MARKER = "arrow";
 export const TRIANGLE_MARKER = "hollow-triangle";
 export const DIAMOND_MARKER = "filled-diamond";
 export const OPEN_ARROW_MARKER = "open-arrow";
-/** Step 11: the arrowhead of a line in one of the six palette colours keeps that colour. */
-export const colourArrow = (colour: keyof typeof PALETTE_TOKENS) => `${ARROW_MARKER}-${colour}`;
+/** The arrowhead of a coloured line keeps its colour: one marker per preset, one per custom hex in use (no `#` in an id). */
+export const colourArrow = (colour: keyof typeof PALETTE_TOKENS | `#${string}`) => (colour[0] === "#" ? `${HEX_ARROW}${colour.slice(1)}` : `${ARROW_MARKER}-${colour}`);
+const HEX_ARROW = `${ARROW_MARKER}-hex-`;
+/** An ER relationship's crow's-foot end on a coloured line keeps the line's colour, as an arrowhead does. */
+export const colourEnd = (end: typeof MANY_MARKER | typeof ONE_MARKER, colour: keyof typeof PALETTE_TOKENS | `#${string}`) =>
+  colour[0] === "#" ? `${end}-hex-${colour.slice(1)}` : `${end}-${colour}`;
+const HEX_PREFIXES = [HEX_ARROW, `${MANY_MARKER}-hex-`, `${ONE_MARKER}-hex-`];
+
+/** The distinct custom colours the edges' coloured ends use, sorted: the marker set follows the scene and never grows. */
+export function hexArrowsIn(edges: readonly Pick<Edge, "markerStart" | "markerEnd">[]): `#${string}`[] {
+  const found = new Set<`#${string}`>();
+  for (const e of edges) {
+    for (const m of [e.markerStart, e.markerEnd]) {
+      if (typeof m !== "string") continue;
+      const prefix = HEX_PREFIXES.find((p) => m.startsWith(p));
+      if (prefix) found.add(`#${m.slice(prefix.length)}`);
+    }
+  }
+  return [...found].sort();
+}
+
+/** The crow's foot and the bar, in `stroke` when coloured. */
+function CrowEnds({ many, one, stroke }: { many: string; one: string; stroke?: string }) {
+  const style = stroke ? { stroke } : undefined;
+  return (
+    <>
+      <marker id={many} viewBox="0 0 14 14" refX="14" refY="7" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+        <path className="edge-marker" style={style} d="M4 7L14 1M4 7H14M4 7L14 13M2 2V12" />
+      </marker>
+      <marker id={one} viewBox="0 0 14 14" refX="14" refY="7" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+        <path className="edge-marker" style={style} d="M6 2V12M9.5 2V12" />
+      </marker>
+    </>
+  );
+}
 
 /** Corner radius of an orthogonal edge (DESIGN-NEXT 10.6). */
 export const EDGE_RADIUS = 8;
@@ -26,34 +59,11 @@ export type DiagramEdgeData = { badge?: ReactNode };
  * The marker definitions edges refer to by id (`markerStart`, `markerEnd`). Strokes and fills come
  * from `.edge-marker` in app.css, so the theme colours them.
  */
-export function EdgeMarkers() {
+export function EdgeMarkers({ hexes = [] }: { hexes?: readonly `#${string}`[] }) {
   return (
     <svg className="edge-markers" width="0" height="0" aria-hidden="true" focusable="false">
       <defs>
-        <marker
-          id={MANY_MARKER}
-          viewBox="0 0 14 14"
-          refX="14"
-          refY="7"
-          markerWidth="14"
-          markerHeight="14"
-          markerUnits="userSpaceOnUse"
-          orient="auto-start-reverse"
-        >
-          <path className="edge-marker" d="M4 7L14 1M4 7H14M4 7L14 13M2 2V12" />
-        </marker>
-        <marker
-          id={ONE_MARKER}
-          viewBox="0 0 14 14"
-          refX="14"
-          refY="7"
-          markerWidth="14"
-          markerHeight="14"
-          markerUnits="userSpaceOnUse"
-          orient="auto-start-reverse"
-        >
-          <path className="edge-marker" d="M6 2V12M9.5 2V12" />
-        </marker>
+        <CrowEnds many={MANY_MARKER} one={ONE_MARKER} />
         <marker
           id={ARROW_MARKER}
           viewBox="0 0 6 6"
@@ -70,6 +80,17 @@ export function EdgeMarkers() {
           <marker key={c} id={colourArrow(c)} viewBox="0 0 6 6" refX="6" refY="3" markerWidth="6" markerHeight="6" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
             <path className="edge-marker-fill" style={{ fill: `var(${PALETTE_TOKENS[c].stroke})` }} d="M0 0L6 3L0 6Z" />
           </marker>
+        ))}
+        {hexes.map((h) => (
+          <marker key={h} id={colourArrow(h)} viewBox="0 0 6 6" refX="6" refY="3" markerWidth="6" markerHeight="6" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+            <path className="edge-marker-fill" style={{ fill: h }} d="M0 0L6 3L0 6Z" />
+          </marker>
+        ))}
+        {(Object.keys(PALETTE_TOKENS) as (keyof typeof PALETTE_TOKENS)[]).map((c) => (
+          <CrowEnds key={`crow-${c}`} many={colourEnd(MANY_MARKER, c)} one={colourEnd(ONE_MARKER, c)} stroke={`var(${PALETTE_TOKENS[c].stroke})`} />
+        ))}
+        {hexes.map((h) => (
+          <CrowEnds key={`crow-${h}`} many={colourEnd(MANY_MARKER, h)} one={colourEnd(ONE_MARKER, h)} stroke={h} />
         ))}
         <marker id={TRIANGLE_MARKER} viewBox="0 0 12 12" refX="12" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
           <path className="edge-marker edge-marker-hollow" d="M1 1L12 6L1 11Z" />

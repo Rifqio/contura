@@ -356,6 +356,11 @@
   font: var(--font-small);
   font-weight: 600;
 }
+/* A weak table's chip: dashed, as its card is. */
+.flow-selchip.is-weak {
+  box-sizing: border-box;
+  border: 1px dashed var(--c-text-subtle);
+}
 .flow-selchip-id {
   color: var(--c-text-muted);
   font: var(--font-mono-micro);
@@ -617,6 +622,10 @@
 }
 .flow-area.is-col .flow-area-name {
   color: var(--col-edge);
+}
+/* A custom colour is any hue, so its title reads in the theme's text; the border and swatch keep the hue. */
+.flow-area.is-col:not([class*="is-col-"]) .flow-area-name {
+  color: var(--col-words);
 }
 .flow-area.is-col .flow-area-swatch {
   background: var(--col-edge);
@@ -1961,8 +1970,4 @@
  */
 .flow-canvas .react-flow__edgelabel-renderer {
   z-index: 5;
-}
-/* ADR 0030: an old ER diagram, read-only, with Open as DBML. */
-.flow-er-moved {
-  flex: 1;
 }

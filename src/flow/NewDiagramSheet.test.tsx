@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ToastProvider } from "../components/Toast";
 import { callsTo, routeInvoke } from "../test/invoke";
-import NewDiagramSheet from "./NewDiagramSheet";
+import { DIAGRAM_KINDS } from "../lang/flow/model";
+import NewDiagramSheet, { KINDS } from "./NewDiagramSheet";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -51,6 +52,7 @@ test("every_kind_card_and_the_selected_one_has_the_outline_and_check", async () 
     "Data flow",
     "Flowchart",
     "Cloud architecture",
+    "ER diagram",
     "Sequence",
     "State",
     "Class",
@@ -60,6 +62,7 @@ test("every_kind_card_and_the_selected_one_has_the_outline_and_check", async () 
   expect(within(cards[0]).getByText("Processes, data stores and outside parties. Stores can link to tables.")).toBeTruthy();
   expect(within(cards[1]).getByText("Steps, decisions, input and output, start and end.")).toBeTruthy();
   expect(within(cards[2]).getByText("Services as provider icons, grouped by network or layer.")).toBeTruthy();
+  expect(within(cards[3]).getByText("Tables with their columns and the relationships between them.")).toBeTruthy();
   // Data flow is picked first: the outline class and the check sit on that card only.
   expect(cards.map((c) => c.getAttribute("aria-checked")).slice(0, 3)).toEqual(["true", "false", "false"]);
   expect(cards[0].classList.contains("is-on")).toBe(true);
@@ -163,6 +166,15 @@ test("recent_diagrams_list_with_their_kind_and_compact_time", async () => {
   expect(calls.open).toHaveBeenCalledWith("refund-policy");
 });
 
+test("a_recent_board_row_reads_board", async () => {
+  const { dialog } = setup({
+    list_diagrams: () => [{ name: "shop", kind: "board", title: "shop", modifiedMs: NOW.getTime() - 2 * HOUR }],
+  });
+  const recent = await within(dialog).findByRole("list", { name: "Recent diagrams" });
+  await waitFor(() => expect(within(recent).getAllByRole("button")).toHaveLength(1));
+  expect(within(recent).getAllByRole("button")[0].textContent).toBe("shopBoard, 2h ago");
+});
+
 test("flow_from_mermaid_opens_the_mermaid_dialog", async () => {
   const { dialog, calls } = setup();
   expect(within(dialog).getByText("Have a Mermaid diagram already?")).toBeTruthy();
@@ -233,4 +245,8 @@ test("item_19_find_a_kind_by_a_word_or_a_group_and_create_names_the_kind", async
   await userEvent.click(within(dialog).getByRole("button", { name: /^Create sequence/ }));
   await waitFor(() => expect(callsTo("write_diagram")).toHaveLength(1));
   expect(callsTo("write_diagram")[0]).toMatchObject({ name: "pay", text: 'diagram sequence "pay"\n' });
+});
+
+test("the_sheet_lists_every_kind_in_diagram_kinds_order", () => {
+  expect(KINDS.map((k) => k.kind)).toEqual([...DIAGRAM_KINDS]);
 });

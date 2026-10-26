@@ -77,6 +77,17 @@ export function shapesOf(kind: DiagramKind): Shape[] {
         line("Line", "arrowRight", "A > B: label", ">"),
         line("Dotted line", "arrowRight", "A ..> B: label", "..>"),
       ];
+    case "er":
+      return [
+        // What each writes: a table and a weak table under their free names, a column at the end of the selected table.
+        t("Table", "table", "table_1", "Add table"),
+        t("Weak table", "layers", "weak_1 [weak]", "Add weak table"),
+        other("Column", "columns", "column_1 text", { kind: "member" }),
+        line("Many to one", "arrowRight", "A.b_id > B.id", ">"),
+        line("One to many", "arrowLeft", "A.id < B.a_id", "<"),
+        line("One to one", "minus", "A.id - B.a_id", "-"),
+        line("Many to many", "swap", "A.id <> B.id", "<>"),
+      ];
     case "sequence":
       return [
         t("Participant", "square", "participant Name", "Add participant"),

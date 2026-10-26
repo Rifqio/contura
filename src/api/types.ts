@@ -581,14 +581,15 @@ export interface ModelFiles {
 
 // Diagrams: mirrors crates/contura-core/src/diagrams.rs.
 
-export type DiagramKind = "dfd" | "flow" | "cloud" | "sequence" | "state" | "class" | "mindmap" | "timeline" | "unknown";
+export type DiagramKind = "dfd" | "flow" | "cloud" | "sequence" | "state" | "class" | "mindmap" | "timeline" | "er" | "board" | "unknown";
 
-/** One diagram in Contura's diagrams folder, from its file's first line. */
+/** One diagram in Contura's diagrams folder, from its file's header lines. */
 export interface DiagramEntry {
   /** The name as typed: the file name without `.flow`. */
   name: string;
+  /** `board` when the file holds more than one diagram. */
   kind: DiagramKind;
-  /** The quoted title on the first line, or the name when there is none. */
+  /** The title of its header, or the name when there is none or the file is a board. */
   title: string;
   /** When the `.flow` file last changed, in milliseconds since 1970. */
   modifiedMs: number;
@@ -610,6 +611,10 @@ export interface IconEntry {
   title: string;
   /** A brand logo's own licence and where it is from, when it has one. */
   licence: string | null;
+  /** The icon this name is another name for, when it is an alias. */
+  aliasOf: string | null;
+  /** A brand logo's own colour, `#rrggbb` in lower case; only Simple Icons logos have one. */
+  hex?: string;
 }
 
 /** A packed icon set as Icon credits lists it. */
@@ -621,6 +626,10 @@ export interface IconSet {
   note: string;
   /** The licence text that travels with the copies, where the set has one. */
   notice: string;
+  /** How the set's icons are drawn: outline and mono take the ink, colour keeps its own. */
+  style: "outline" | "mono" | "colour";
+  /** What was changed from the upstream files, for Icon credits. */
+  changes: string;
 }
 
 // Lineage: mirrors crates/contura-core/src/lineage.rs.
@@ -690,6 +699,8 @@ export interface FlowTableLink {
   kind: string;
   /** The `table:` value as written, such as `shop.orders`. */
   table: string;
+  /** The title of the board frame the node is in; null or absent when the file has one frame. */
+  frame?: string | null;
   access: FlowTableAccess;
   /** The process or step nodes on the other end of its lines, each once, at most 20. */
   processes: FlowProcess[];

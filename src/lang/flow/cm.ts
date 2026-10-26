@@ -143,7 +143,7 @@ export const flowLanguage = StreamLanguage.define<State>({
       st.label = true;
       return "operator";
     }
-    if (stream.match(/^(<\|--|[1*]--[1*](?=\s)|\*--(?=\s)|-->|--(?=\s)|->|\.\.>|<>|>)/)) return "variableName.special";
+    if (stream.match(/^(<\|--|[1*]--[1*](?=\s)|\*--(?=\s)|-->|--(?=\s)|->|\.\.>|<>|<|>)/)) return "variableName.special";
     const s = stream.string;
     if (ch === "-" && stopsName(s, stream.pos)) {
       stream.next();

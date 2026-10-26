@@ -329,11 +329,11 @@ pub async fn icon_sets() -> Result<Vec<contura_core::icons::IconSet>, Error> {
     contura_core::icons::icon_sets()
 }
 
-/// Icon `name`'s SVG text, unchanged and checked again as it is served; the UI shows it
-/// only as an image (P7, P9).
+/// Icon `name`'s SVG text, framed and checked again as it is served, an outline or mono icon
+/// drawn in `ink` (`#rrggbb`); the UI shows it only as an image (P7, P9).
 #[tauri::command]
-pub async fn icon(name: String) -> Result<String, Error> {
-    contura_core::icons::icon(&name)
+pub async fn icon(name: String, ink: Option<String>) -> Result<String, Error> {
+    contura_core::icons::icon(&name, ink.as_deref())
 }
 
 /// Both files of diagram `name`, off the main thread; a file over 5 MB is refused (P24 M4).
@@ -634,8 +634,9 @@ pub fn plan_run(
     service: Service<'_>,
     session: QuerySessionId,
     statements: Vec<String>,
+    delimiters: Option<Vec<String>>,
 ) -> Result<Vec<safety::PlannedRun>, Error> {
-    service.plan_run(session, statements)
+    service.plan_run(session, statements, delimiters.unwrap_or_default())
 }
 
 #[tauri::command]

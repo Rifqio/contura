@@ -12,7 +12,7 @@ import { type FlowParse, parseFlow } from "../../lang/flow/parse";
 import type { TextEdit } from "../../lang/protocol";
 import type { FlowHold } from "../flowRegistry";
 import type { FlowDocApi, Parsed } from "../useFlowDoc";
-import { landedSummary, planLanding, removalCount, withDependents, wouldBreak } from "./proposal";
+import { askedFrame, landedSummary, planLanding, removalCount, withDependents, wouldBreak } from "./proposal";
 import { reviewOverlay } from "./reviewOverlay";
 
 /** The tool's name on the wire and in the record. */
@@ -200,8 +200,11 @@ function withNeeds(w: Waiting, index: number): Set<number> {
 const okIndexes = (p: DiagramProposal) => p.changes.filter((c) => c.status.kind === "ok").map((c) => c.index);
 const acceptedOf = (w: Waiting) => new Set(okIndexes(w.proposal).filter((i) => !w.rejected.has(i)));
 
+/** The parse of the part of `text` the Assistant works on: frame 0 of a board, as its outline was. */
+const askedParse = (text: string) => parseFlow(askedFrame(text).text);
+
 /** The landing of `accepted` on the text the proposal was made against; null when it does not apply. */
-function planOf(w: Waiting, accepted: ReadonlySet<number>, parse: FlowParse = parseFlow(w.text)) {
+function planOf(w: Waiting, accepted: ReadonlySet<number>, parse: FlowParse = askedParse(w.text)) {
   return planLanding(w.text, parse, w.proposal.changes, accepted, parse.kind);
 }
 
@@ -384,7 +387,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       setWaiting(null);
       release();
       // Shapes drawn for review that did not land lose the place they were given.
-      docRef.current.settleProposed(parseFlow(plan.text).defined);
+      docRef.current.settleProposed(askedParse(plan.text).defined);
       const added = w.proposal.changes.flatMap((c) => (accepted.has(c.index) && "add_node" in c.op ? [c.op.add_node.name] : []));
       clearTimeout(airTimer.current);
       setAiring(new Set(added));
@@ -407,10 +410,10 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       }
       if (ok.size > 0 && w.auto) {
         // Auto-apply lands the whole set at once unless it would leave the text with a new problem.
-        const parse = parseFlow(w.text);
+        const parse = askedParse(w.text);
         const plan = planOf(w, ok, parse);
         if (plan) {
-          const broke = wouldBreak(parse, parseFlow(plan.text), plan.text);
+          const broke = wouldBreak(parse, askedParse(plan.text), plan.text);
           if (broke === null) {
             // A landing that did not apply has already put the proposal up for review with why.
             land(w, ok);
@@ -621,7 +624,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
     if (!w) return;
     setWaiting(null);
     release();
-    docRef.current.settleProposed(parseFlow(w.text).defined);
+    docRef.current.settleProposed(askedParse(w.text).defined);
     record(w, 0);
   }, [record, release, setWaiting]);
 
@@ -658,7 +661,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       const w = waitingRef.current;
       if (!w) return;
       setWaiting(null);
-      docRef.current.settleProposed(parseFlow(w.text).defined);
+      docRef.current.settleProposed(askedParse(w.text).defined);
       release();
       record(w, 0);
       void send(fixQuestion(messages), w.opts);
@@ -672,7 +675,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       const w = waitingRef.current;
       if (w) {
         setWaiting(null);
-        docRef.current.settleProposed(parseFlow(w.text).defined);
+        docRef.current.settleProposed(askedParse(w.text).defined);
         release();
         record(w, 0);
       }
@@ -698,11 +701,11 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
   const planned = useMemo(() => {
     // An unclear word, a refused landing and a stale text have nothing to show yet.
     if (!waiting || (waiting.step !== "review" && waiting.step !== "remove")) return null;
-    const parse = parseFlow(waiting.text);
+    const parse = askedParse(waiting.text);
     const accepted = acceptedOf(waiting);
     const plan = accepted.size > 0 ? planOf(waiting, accepted, parse) : null;
     const after = plan?.text ?? waiting.text;
-    const proposed = plan ? parseFlow(plan.text).doc : parse.doc;
+    const proposed = plan ? askedParse(plan.text).doc : parse.doc;
     return {
       ghost: { edits: ghostEdits(waiting.text, after), text: waiting.text },
       lines: touchedLines(waiting.text, after),

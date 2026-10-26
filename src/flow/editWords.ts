@@ -15,6 +15,7 @@ const NOUN: Partial<Record<FlowNodeKind, string>> = {
   process: "process",
   store: "data store",
   entity: "outside party",
+  weak: "weak table",
   state: "state",
   choice: "choice",
   fork: "fork or join",
@@ -31,17 +32,18 @@ const NOUN: Partial<Record<FlowNodeKind, string>> = {
   topic: "topic",
 };
 
-/** What a shape of `kind` is called in a sentence: "data store", "outside party". */
-export function nounOf(kind: FlowNodeKind | null | undefined): string {
+/** What a shape of `kind` is called in a sentence: "data store", "outside party"; an ER diagram's entity is a "table". */
+export function nounOf(kind: FlowNodeKind | null | undefined, diagram?: DiagramKind | null): string {
+  if (diagram === "er" && kind === "entity") return "table";
   return (kind && NOUN[kind]) || "shape";
 }
 
 const article = (noun: string) => (/^[aeiou]/.test(noun) ? "An" : "A");
 
 /** "A data store needs a name.", "A note needs some text." */
-export function needsName(kind: FlowNodeKind | null | undefined): string {
+export function needsName(kind: FlowNodeKind | null | undefined, diagram?: DiagramKind | null): string {
   if (kind === "note") return "A note needs some text.";
-  const noun = nounOf(kind);
+  const noun = nounOf(kind, diagram);
   return `${article(noun)} ${noun} needs a name.`;
 }
 
@@ -62,6 +64,7 @@ const KIND_NAME: Record<DiagramKind, string> = {
   timeline: "timeline",
   cloud: "cloud",
   mindmap: "mind map",
+  er: "table",
 };
 
 /** What Shift+Enter says where a name stays on one line. */
@@ -72,7 +75,7 @@ export function oneLineHint(diagram: DiagramKind): string {
 export const MARKER_NOTE = "The start and end markers have no name: they are written [*].";
 
 /** What Ctrl+G makes in a kind: a group, a data flow's area, a state's composite; null where a kind has none. */
-export const GROUP_WORD: Partial<Record<DiagramKind, string>> = { flow: "Group", dfd: "Area", cloud: "Group", state: "Composite" };
+export const GROUP_WORD: Partial<Record<DiagramKind, string>> = { flow: "Group", dfd: "Area", cloud: "Group", state: "Composite", er: "Group" };
 
 /** Why Ctrl+G groups nothing in a kind with no groups. */
 export const NO_GROUPS: Partial<Record<DiagramKind, string>> = {
@@ -93,7 +96,7 @@ export const EDIT_MESSAGES = {
 
 /** Step 11 (board DiagramColourLabels): why Colour is off. The kinds written with a word or a date take no brackets. */
 export const NO_COLOUR: Partial<Record<DiagramKind, string>> = {
-  sequence: "Participants are written with a word (participant Shop) and take no brackets, so no colour or label in 1.0.",
+  sequence: "Colour a participant in the code, for example participant App [color: info].",
   class: "Classes are written with a word (class Invoice) and take no brackets, so no colour or label in 1.0.",
   timeline: "Timeline items start with a date and take no brackets, so no colour or label in 1.0.",
 };

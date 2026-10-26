@@ -319,6 +319,18 @@ test("I1 Ctrl+V with no paste event reads the system clipboard first, and the la
   await waitFor(() => expect(s.text()).toContain("Check 2 [decision]\n"));
 });
 
+test("I1 a paste event with no text pastes the last copy made here (Linux keeps an empty clipboard offer)", async () => {
+  const s = setup();
+  await drawn(s);
+  s.pick("Check");
+  s.press("c", { ctrlKey: true });
+  await waitFor(() => expect(board.text).toBe(lines("Check [decision]")));
+  board.text = "";
+  s.press("v", { ctrlKey: true });
+  fireEvent.paste(s.canvasEl(), { clipboardData: { getData: () => "" } });
+  await waitFor(() => expect(s.text()).toContain("Check 2 [decision]\n"));
+});
+
 test("I5 a duplicated note gets the next note name, is placed and selected, and no other note moves", async () => {
   const text = lines('diagram flow "N"', "A", "note: first", "", "G {", "  B", "  note: in group", "}", "", "A > B");
   const s = setup(text, "notes");

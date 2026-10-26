@@ -159,3 +159,16 @@ test("a_failed_core_read_keeps_the_mirrored_choice", async () => {
   await waitFor(() => expect(callsTo("ui_prefs")).toHaveLength(1));
   expect(result.current.choice).toBe("light");
 });
+
+test("the_stored_theme_start_returns_the_theme_it_painted", () => {
+  localStorage.setItem(THEME_MIRROR_KEY, "dark");
+  expect(applyStoredTheme()).toBe("dark");
+  localStorage.setItem(THEME_MIRROR_KEY, "light");
+  expect(applyStoredTheme()).toBe("light");
+  // System follows Windows.
+  localStorage.setItem(THEME_MIRROR_KEY, "system");
+  fakeMatchMedia(true);
+  expect(applyStoredTheme()).toBe("dark");
+  fakeMatchMedia(false);
+  expect(applyStoredTheme()).toBe("light");
+});

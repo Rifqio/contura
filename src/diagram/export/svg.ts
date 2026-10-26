@@ -1,12 +1,13 @@
 // A scene as plain SVG: rect, text, path and (for cloud icons) image elements only, no foreignObject and no web
 // fonts, so other tools open it cleanly. Each kind is drawn as the canvas draws it (flow-canvas.css, kindNodes.tsx). Every colour comes from the palette, read from the tokens. A cloud icon
-// is an <image> of the pack's own bytes as a data: URL, never inline markup (ruling P9).
+// is an <image> of the pack's own bytes as a data: URL, never inline markup (ruling P9); a pale logo on light also
+// takes the one hairline filter, made of filter primitives only.
 import { iconPath, type IconName } from "../../components/Icon";
 import { CARD_HEADER, CARD_ROW } from "../metrics";
 import { roundedPath } from "../route";
 import type { EdgeKind } from "../types";
-import type { ExportPalette } from "./palette";
-import { type Box, type Scene, type SceneArea, type SceneAxis, type SceneEdge, type SceneFrame, type SceneMark, type SceneNode, type SceneSection, sceneBounds } from "./scene";
+import { type ExportPalette, sceneColour } from "./palette";
+import { type Box, type Scene, type SceneArea, type SceneAxis, type SceneColour, type SceneEdge, type SceneFrame, type SceneMark, type SceneNode, type SceneSection, sceneBounds } from "./scene";
 
 export interface SvgOptions {
   /** The part of the scene to draw, in scene units; the whole scene when absent. */
@@ -33,8 +34,17 @@ export function svgFrame(scene: Scene, opts: Pick<SvgOptions, "crop" | "padding"
 
 /** Only a data: image is ever drawn; anything else (a link, a script URL) is left out. */
 const SAFE_IMAGE = /^data:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*,[^"<>\s]*$/i;
-const imageSvg = (url: string, x: number, y: number, size: number) =>
-  SAFE_IMAGE.test(url) ? `<image href="${esc(url)}" x="${num(x)}" y="${num(y)}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"/>` : "";
+const imageSvg = (url: string, x: number, y: number, size: number, outline?: boolean) =>
+  SAFE_IMAGE.test(url)
+    ? `<image href="${esc(url)}" x="${num(x)}" y="${num(y)}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"${outline ? ` filter="url(#${HAIRLINE})"` : ""}/>`
+    : "";
+
+/** The hairline a pale logo draws with on light (the canvas's `icon-hairline`): its shape grown half a unit, in the text colour, under it. */
+const HAIRLINE = "icon-hairline";
+const hairlineDefs = (palette: ExportPalette) =>
+  `<defs><filter id="${HAIRLINE}" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">` +
+  `<feMorphology in="SourceAlpha" operator="dilate" radius="0.5" result="grown"/><feFlood flood-color="${palette.text}"/>` +
+  `<feComposite in2="grown" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`;
 
 /** One of the app's own outline icons at `size` px, top-left at x, y. */
 function glyph(name: IconName, x: number, y: number, size: number, stroke: string, part?: string): string {
@@ -148,11 +158,11 @@ function serviceSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
       `<rect x="${num(tx)}" y="${y}" width="48" height="48" rx="6" fill="${palette.surface}" stroke="${palette.strongBorder}" stroke-dasharray="4 3"/>`,
       glyph("cube", tx + 14, y + 14, 20, palette.subtle),
     );
-  } else if (n.plate !== false || !url) {
-    // General and brand icons draw black, so they sit on the light plate in both themes.
+  } else if (!url) {
+    // A service with no icon keeps its plain tile.
     parts.push(`<rect x="${num(tx)}" y="${y}" width="48" height="48" rx="6" fill="${palette.iconTile}" stroke="${palette.border}"/>`);
     if (url) parts.push(imageSvg(url, tx + 4, y + 4, 40));
-  } else parts.push(imageSvg(url, tx, y, 48));
+  } else parts.push(imageSvg(url, tx, y, 48, n.iconOutline));
   parts.push(text(x + w / 2, y + 66, n.title, ` text-anchor="middle" font-size="12"`));
   if (n.tag) parts.push(text(tx + 54, y + 12, n.tag, ` font-size="11" fill="${palette.subtle}"`));
 }
@@ -330,11 +340,14 @@ const CLASS_KINDS: ReadonlySet<string> = new Set(["class", "interface", "enum"])
 const MIND_KINDS: ReadonlySet<string> = new Set(["root", "topic"]);
 const TIME_KINDS: ReadonlySet<string> = new Set(["event", "period", "milestone"]);
 
+/** A colour's drawn values; a preset needs the palette to carry the presets, a custom hex never does. */
+const coloured = (palette: ExportPalette, c: SceneColour | undefined) => (c && (c[0] === "#" || palette.colours) ? sceneColour(palette, c) : undefined);
+
 /** A drawn node: data flow, flowchart, cloud (frames 6+.2, 6+.4, 6+.5), state and the step 12 kinds, as the canvas draws them. */
 function drawnSvg(n: SceneNode, given: ExportPalette): string {
   const parts: string[] = [];
   // Step 11: a coloured shape draws its palette colour's fill and border in place of its kind's, and its words.
-  const c = n.color ? given.colours?.[n.color] : undefined;
+  const c = coloured(given, n.color);
   const palette = c ? { ...given, nodes: { ...given.nodes, [n.kind]: { fill: c.fill, stroke: c.stroke } } } : given;
   if (n.kind === "process" || n.kind === "store" || n.kind === "external") dfdSvg(n, palette, parts);
   else if (n.kind === "service") serviceSvg(n, palette, parts);
@@ -353,13 +366,13 @@ function drawnSvg(n: SceneNode, given: ExportPalette): string {
 function areaSvg(a: SceneArea, palette: ExportPalette): string {
   const dash = a.depth === 0 ? ` stroke-dasharray="5 4"` : "";
   // Step 11: a coloured group takes its colour on its border, tint and title, as the canvas draws it.
-  const c = a.color ? palette.colours?.[a.color] : undefined;
+  const c = coloured(palette, a.color);
   const edge = c ? c.stroke : palette.group;
   const tint = c ? `fill="${c.fill}" fill-opacity="0.55"` : `fill="${palette.groupTint}" fill-opacity="0.7"`;
   const parts = [`<rect x="${num(a.x)}" y="${num(a.y)}" width="${num(a.w)}" height="${num(a.h)}" rx="10" ${tint} stroke="${edge}"${dash}/>`];
-  const icon = a.icon ? imageSvg(a.icon, a.x + 12, a.y + 8, 16) : "";
+  const icon = a.icon ? imageSvg(a.icon, a.x + 12, a.y + 8, 16, a.iconOutline) : "";
   parts.push(icon || `<rect x="${num(a.x + 12)}" y="${num(a.y + 8)}" width="16" height="16" rx="3" fill="${edge}"/>`);
-  parts.push(text(a.x + 34, a.y + 21, a.name, ` font-size="12" font-weight="600"${c ? ` fill="${c.stroke}"` : ""}`));
+  parts.push(text(a.x + 34, a.y + 21, a.name, ` font-size="12" font-weight="600"${c ? ` fill="${a.color![0] === "#" ? c.text : c.stroke}"` : ""}`));
   return `<g data-area="${esc(a.name)}">${parts.join("")}</g>`;
 }
 
@@ -385,6 +398,9 @@ function markSvg(mark: SceneMark, from: { x: number; y: number }, tip: { x: numb
   const at = (back: number, side: number) => `${num(tip.x - ux * back - uy * side)} ${num(tip.y - uy * back + ux * side)}`;
   const stroke = palette.subtle;
   if (mark === "open") return `<path${tag} data-marker="open" d="M${at(9, -4)} L${at(0, 0)} L${at(9, 4)}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>`;
+  // An ER end, as the canvas's markers draw it: a bar across the line 8 px in, or a crow's foot spreading onto the card.
+  if (mark === "one") return `<path${tag} data-marker="bar" d="M${at(8, -5)} L${at(8, 5)}" fill="none" stroke="${stroke}" stroke-width="1.5"/>`;
+  if (mark === "many") return `<path${tag} data-marker="crow" d="M${at(10, 0)} L${at(0, -5)} M${at(10, 0)} L${at(0, 5)} M${at(10, 0)} L${at(0, 0)}" fill="none" stroke="${stroke}" stroke-width="1.5"/>`;
   if (mark === "triangle") return `<path${tag} data-marker="triangle" d="M${at(0, 0)} L${at(11, 5)} L${at(11, -5)} Z" fill="${palette.canvas}" stroke="${stroke}" stroke-width="1.5"/>`;
   return `<path${tag} data-marker="diamond" d="M${at(0, 0)} L${at(7, 5)} L${at(14, 0)} L${at(7, -5)} Z" fill="${stroke}"/>`;
 }
@@ -393,7 +409,7 @@ function markSvg(mark: SceneMark, from: { x: number; y: number }, tip: { x: numb
 function flowEdgeSvg(e: SceneEdge, given: ExportPalette): string {
   const pts = e.points;
   // Step 11: a coloured line keeps its colour and its arrowheads; its label chip stays plain.
-  const c = e.color ? given.colours?.[e.color] : undefined;
+  const c = coloured(given, e.color);
   const palette = c ? { ...given, subtle: c.stroke } : given;
   const stroke = palette.subtle;
   const dash = e.line === "dashed" ? ` stroke-dasharray="5 4"` : e.line === "dotted" ? ` stroke-dasharray="1 4" stroke-linecap="round"` : "";
@@ -481,7 +497,9 @@ function axisSvg(a: SceneAxis, palette: ExportPalette): string {
 
 function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   if (n.look) return drawnSvg(n, palette);
-  const colours = palette.nodes[n.kind];
+  // Step 11: a coloured ER table draws its colour's border and header in place of its kind's.
+  const c = coloured(palette, n.color);
+  const colours = c ? { fill: c.fill, stroke: c.stroke } : palette.nodes[n.kind];
   const r = 6;
   const { x, y, w, h } = n;
   const header = `M${x} ${y + CARD_HEADER} V${y + r} Q${x} ${y} ${x + r} ${y} H${x + w - r} Q${x + w} ${y} ${x + w} ${y + r} V${y + CARD_HEADER} Z`;
@@ -494,12 +512,24 @@ function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   if (n.subtitle) parts.push(`<text x="${x + w - 10}" y="${y + 21}" text-anchor="end" font-size="12" fill="${palette.subtle}">${esc(n.subtitle)}</text>`);
   const marked = n.rows.some((row) => row.mark);
   const nameX = x + (marked ? 32 : 10);
-  const typeX = x + w - 10;
+  // An ER card's not-null marks, as the canvas draws them: a filled diamond, an outline for a nullable column (M11).
+  const nulls = n.rows.some((row) => row.notNull !== undefined);
+  const typeX = x + w - (nulls ? 24 : 10);
   n.rows.forEach((row, i) => {
     const ty = y + CARD_HEADER + CARD_ROW * i + 16;
     if (row.mark) parts.push(`<text x="${x + 10}" y="${ty}" font-size="9" font-weight="600" fill="${palette.subtle}">${row.mark.toUpperCase()}</text>`);
     parts.push(`<text x="${nameX}" y="${ty}">${esc(row.left)}</text>`);
     if (row.right) parts.push(`<text x="${typeX}" y="${ty}" text-anchor="end" fill="${palette.type}">${esc(row.right)}</text>`);
+    if (nulls) {
+      const cx = x + w - 14;
+      const cy = ty - 4;
+      const d = `M${cx} ${cy - 4} L${cx + 4} ${cy} L${cx} ${cy + 4} L${cx - 4} ${cy} Z`;
+      parts.push(
+        row.notNull
+          ? `<path data-marker="not-null" d="${d}" fill="${palette.subtle}"/>`
+          : `<path data-marker="nullable" d="${d}" fill="none" stroke="${palette.subtle}" stroke-width="1.5"/>`,
+      );
+    }
   });
   const footer = n.footer ?? [];
   if (footer.length > 0) {
@@ -587,5 +617,8 @@ export function sceneToSvg(scene: Scene, palette: ExportPalette, opts: SvgOption
   const nodes = scene.nodes.map((n) => nodeSvg(n, palette)).join("");
   const messages = scene.edges.filter((e) => e.kind === "message").map((e) => edgeSvg(e, palette)).join("");
   const tabs = (scene.frames ?? []).map((fr, i) => frameTabSvg(fr, i, palette)).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="${palette.text}">${background}${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}${mark}</svg>\n`;
+  // The hairline filter is defined once, and only when an outlined logo is drawn.
+  const outlined = scene.nodes.some((n) => n.iconOutline && n.icon) || (scene.areas ?? []).some((a) => a.iconOutline && a.icon);
+  const defs = outlined ? hairlineDefs(palette) : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="${palette.text}">${defs}${background}${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}${mark}</svg>\n`;
 }

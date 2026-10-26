@@ -1,7 +1,8 @@
 // Completion for .flow (spec section 2, "Editor"): kinds and attribute keys inside brackets, icon names after
 // `icon:` (provider prefix first), node names where a name goes, and the diagram kinds on the first line.
 import { rankIcons } from "./iconRank";
-import { ATTR_DIAGRAMS, ATTR_KEYS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS, NOTE_KINDS, PALETTE } from "./model";
+import { CSS_COLOURS } from "./colours";
+import { ATTR_DIAGRAMS, ATTR_KEYS, COLUMN_FLAGS, DIAGRAM_KINDS, type DiagramKind, flowName, KINDS, LINE_COLOUR_DIAGRAMS, NOTE_KINDS, PALETTE } from "./model";
 import { parseFlow } from "./parse";
 
 export type FlowCompletion = {
@@ -17,6 +18,11 @@ export type FlowCompletion = {
 export type FlowCompletionResult = { from: number; items: FlowCompletion[] };
 
 export { rankIcons };
+
+/** The diagram kinds that start with `typed`, as completion items. */
+export function kindItems(typed: string): FlowCompletion[] {
+  return DIAGRAM_KINDS.filter((k) => k.startsWith(typed)).map((k) => ({ label: k, kind: "keyword" as const, apply: k }));
+}
 
 const KIND_LINE = new RegExp(`^diagram\\s+(${DIAGRAM_KINDS.join("|")})(?=$|[\\s"]|//)`);
 
@@ -72,8 +78,98 @@ export const COLOUR_MEANING: Record<(typeof PALETTE)[number], string> = {
 
 const KEY_DETAIL: Partial<Record<string, string>> = {
   label: "the words it shows, when another shape has the name",
-  color: "one of six palette colours",
+  color: "a preset, a CSS colour name or a hex",
 };
+
+/**
+ * The block the line at `lineFrom` is written in, read by walking the lines before it to the innermost open `{`
+ * (quotes and comments skipped): a table, a group (its line starts with the word), or null at the top.
+ */
+function openBlock(text: string, lineFrom: number): "table" | "group" | null {
+  const open: number[] = [];
+  let lineStart = 0;
+  let inQuote = false;
+  for (let i = 0; i < lineFrom; i++) {
+    const c = text[i];
+    if (c === "\n") {
+      inQuote = false;
+      lineStart = i + 1;
+    } else if (inQuote) {
+      if (c === "\\") i++;
+      else if (c === '"') inQuote = false;
+    } else if (c === '"') inQuote = true;
+    else if (c === "/" && text[i + 1] === "/") {
+      const e = text.indexOf("\n", i);
+      if (e < 0 || e >= lineFrom) break;
+      i = e - 1;
+    } else if (c === "{") open.push(lineStart);
+    else if (c === "}") open.pop();
+  }
+  if (open.length === 0) return null;
+  return /^\s*group\b/.test(text.slice(open[open.length - 1], lineFrom)) ? "group" : "table";
+}
+
+/** The words of a column line up to the position, with the word being typed (a quote or a comment ends the offer). */
+function columnWords(line: string): { done: string[]; typed: string } | null {
+  const done: string[] = [];
+  let start = -1;
+  let depth = 0;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === "/" && line[i + 1] === "/") return null;
+    if (c === '"') {
+      const close = line.indexOf('"', i + 1);
+      if (close < 0) return null;
+      if (start < 0) start = i;
+      i = close;
+    } else if (c === "(") {
+      depth++;
+      if (start < 0) start = i;
+    } else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (/\s/.test(c) && depth === 0) {
+      if (start >= 0) done.push(line.slice(start, i));
+      start = -1;
+    } else if (start < 0) start = i;
+  }
+  return { done, typed: start >= 0 ? line.slice(start) : "" };
+}
+
+/** The flags a column line has not yet written, offered once its type (or a first flag) is there. */
+function flagItems(line: string): { typed: string; items: FlowCompletion[] } | null {
+  const words = columnWords(line);
+  if (!words) return null;
+  const { done, typed } = words;
+  if (typed.startsWith('"') || done.length < 2) return null;
+  const lower = done.map((w) => w.toLowerCase());
+  const isFlag = (w: string) => w === "pk" || w === "unique" || w === "not";
+  // The type is the word after the name unless that word is a flag already.
+  const flagsFrom = isFlag(lower[1]) ? 1 : 2;
+  const have = new Set<string>();
+  for (let i = flagsFrom; i < lower.length; i++) {
+    if (lower[i] === "not" && lower[i + 1] === "null") {
+      have.add("not null");
+      i++;
+    } else have.add(lower[i]);
+  }
+  if (lower[lower.length - 1] === "not" && lower.length > flagsFrom) {
+    return { typed, items: startsWithCi("null", typed) ? [{ label: "null", kind: "keyword", apply: "null" }] : [] };
+  }
+  const items = COLUMN_FLAGS.filter((f) => !have.has(f) && startsWithCi(f, typed)).map((f) => ({ label: f, kind: "keyword" as const, apply: f }));
+  return { typed, items };
+}
+
+/** The columns after `table.`: the table is the longest part before a dot that names a table (at most four dots). */
+function columnItems(typed: string, columnsOf: (table: string) => readonly string[] | null): { rest: string; items: FlowCompletion[] } | null {
+  if (typed.startsWith('"')) return null;
+  let dot = typed.lastIndexOf(".");
+  for (let n = 0; dot > 0 && n < 4; n++, dot = typed.lastIndexOf(".", dot - 1)) {
+    const columns = columnsOf(typed.slice(0, dot));
+    if (columns === null) continue;
+    const rest = typed.slice(dot + 1);
+    return { rest, items: columns.filter((c) => startsWithCi(c, rest)).map((c) => ({ label: c, kind: "node" as const, apply: c })) };
+  }
+  return null;
+}
 
 /** What the line holds up to `pos`, read as the parser reads it. */
 type Context =
@@ -176,6 +272,10 @@ export function completeFlow(
   defined?: ReadonlyMap<string, number>,
   /** Step 11: each shape's `label:` by its name (the parse's `labels`), shown beside its name. */
   labels?: ReadonlyMap<string, string>,
+  /** ER: the column names of a table by its name (null when there is no such table). */
+  columnsOf?: (table: string) => readonly string[] | null,
+  /** The parse's `oldEr`: an old-form ER frame offers nothing ER-specific. Read from a parse here when not given. */
+  oldEr?: boolean,
 ): FlowCompletionResult {
   const lineFrom = text.lastIndexOf("\n", pos - 1) + 1;
   const line = text.slice(lineFrom, pos);
@@ -184,8 +284,25 @@ export function completeFlow(
   const header = /^(\s*diagram\s+)(\w*)$/.exec(line);
   if (header && firstStatement(text, lineFrom)) {
     const typed = header[2];
-    const items = DIAGRAM_KINDS.filter((k) => k.startsWith(typed)).map((k) => ({ label: k, kind: "keyword" as const, apply: k }));
-    return { from: pos - typed.length, items };
+    return { from: pos - typed.length, items: kindItems(typed) };
+  }
+
+  // ER (table blocks): what is offered depends on the block the line is in.
+  const dk = diagramKind(text);
+  let erBlock: ReturnType<typeof openBlock> | undefined;
+  let parsed: ReturnType<typeof parseFlow> | null = null;
+  if (dk === "er") {
+    if (oldEr === undefined) {
+      parsed = defined ? null : parseFlow(text);
+      oldEr = parsed?.oldEr ?? false;
+    }
+    if (!oldEr) {
+      erBlock = openBlock(text, lineFrom);
+      if (erBlock === "table") {
+        const flags = flagItems(line);
+        return flags ? { from: pos - flags.typed.length, items: flags.items } : none;
+      }
+    }
   }
 
   const ctx = context(line, lineFrom);
@@ -193,13 +310,13 @@ export function completeFlow(
 
   if (ctx.at === "bracket") {
     const colon = ctx.item.indexOf(":");
-    const dk = diagramKind(text);
     if (colon >= 0) {
       const key = ctx.item.slice(0, colon).trim();
       const typed = ctx.item.slice(colon + 1).trimStart();
       if (key === "color") {
-        const colours = PALETTE.filter((c) => startsWithCi(c, typed)).map((c) => ({ label: c, kind: "keyword" as const, apply: c, detail: COLOUR_MEANING[c] }));
-        return { from: pos - typed.length, items: colours };
+        const presets = PALETTE.filter((c) => startsWithCi(c, typed)).map((c) => ({ label: c, kind: "keyword" as const, apply: c, detail: COLOUR_MEANING[c] }));
+        const names = [...CSS_COLOURS].filter(([c]) => startsWithCi(c, typed)).map(([c, hex]) => ({ label: c, kind: "keyword" as const, apply: c, detail: hex }));
+        return { from: pos - typed.length, items: [...presets, ...names] };
       }
       if (key !== "icon" || ctx.line) return none;
       return { from: pos - typed.length, items: rankIcons(iconNames, typed).map((i) => ({ label: i, kind: "icon" as const, apply: i })) };
@@ -207,11 +324,22 @@ export function completeFlow(
     const typed = ctx.item.trimStart();
     const used = new Set(ctx.items.map((i) => (i.includes(":") ? i.slice(0, i.indexOf(":")).trim() : i)));
     const hasKind = ctx.items.some((i) => i !== "" && !i.includes(":"));
-    const kinds = ctx.line || dk === "cloud" || hasKind ? [] : dk ? KINDS[dk] : [...KINDS.dfd, ...KINDS.flow];
+    if (erBlock !== undefined && !ctx.line) {
+      // A table takes a kind, an icon, a label and a colour; a group an icon and a colour.
+      const group = /^\s*group\b/.test(line);
+      const erKeys = (group ? ["icon", "color"] : ["icon", "label", "color"]).filter((k) => !used.has(k));
+      const erKinds = group || hasKind ? [] : KINDS.er;
+      const erItems: FlowCompletion[] = [
+        ...erKinds.map((k) => ({ label: k, kind: "kind" as const, apply: k })),
+        ...erKeys.map((k) => ({ label: k, kind: "attr" as const, apply: `${k}: `, ...(KEY_DETAIL[k] ? { detail: KEY_DETAIL[k] } : {}) })),
+      ];
+      return { from: pos - typed.length, items: erItems.filter((i) => startsWithCi(i.label, typed)) };
+    }
+    const kinds = ctx.line || dk === "cloud" || dk === "sequence" || hasKind ? [] : dk ? KINDS[dk] : [...KINDS.dfd, ...KINDS.flow];
     // A cloud node is drawn by its icon, so the icon key comes first there. A line takes only a colour; the kinds
     // written with a word or a date take no label or colour (step 11).
-    const all = dk === "cloud" ? ["icon", ...ATTR_KEYS.filter((k) => k !== "icon")] : [...ATTR_KEYS];
-    const keys = ctx.line ? (!dk || ATTR_DIAGRAMS.has(dk) ? ["color"] : []) : all.filter((k) => !dk || ATTR_DIAGRAMS.has(dk) || (k !== "label" && k !== "color"));
+    const all = dk === "cloud" ? ["icon", ...ATTR_KEYS.filter((k) => k !== "icon")] : dk === "sequence" ? (/^\s*(participant|actor)\s/.test(line) ? ["icon", "label", "color"] : []) : [...ATTR_KEYS];
+    const keys = ctx.line ? (!dk || LINE_COLOUR_DIAGRAMS.has(dk) ? ["color"] : []) : all.filter((k) => !dk || ATTR_DIAGRAMS.has(dk) || (k !== "label" && k !== "color"));
     const items: FlowCompletion[] = [
       ...kinds.map((k) => ({ label: k, kind: "kind" as const, apply: k })),
       ...keys.filter((k) => !used.has(k)).map((k) => ({ label: k, kind: "attr" as const, apply: `${k}: `, ...(KEY_DETAIL[k] ? { detail: KEY_DETAIL[k] } : {}) })),
@@ -221,13 +349,16 @@ export function completeFlow(
 
   const typed = ctx.typed.startsWith('"') ? ctx.typed.slice(1) : ctx.typed;
   // Step 12: at the start of a line, the words a kind starts its statements with.
-  const dk = diagramKind(text);
   const startOfLine = line.slice(0, ctx.from - lineFrom).trim() === "";
-  const words = startOfLine && dk ? [...(LEADING_WORDS[dk] ?? []), ...(NOTE_KINDS.has(dk) ? ["note"] : [])] : [];
+  if (erBlock !== undefined && columnsOf) {
+    const cols = columnItems(typed, columnsOf);
+    if (cols) return { from: pos - cols.rest.length, items: cols.items };
+  }
+  const words = startOfLine && dk ? [...(erBlock !== undefined ? ["group"] : []), ...(LEADING_WORDS[dk] ?? []), ...(NOTE_KINDS.has(dk) ? ["note"] : [])] : [];
   const lead: FlowCompletion[] = words
     .filter((w) => startsWithCi(w, typed) && w !== typed)
     .map((w) => ({ label: w, kind: "keyword" as const, apply: w === "note" ? "note: " : `${w} ` }));
-  const parsed = defined ? null : parseFlow(text);
+  parsed ??= defined ? null : parseFlow(text);
   const names = defined ?? parsed!.defined;
   const shows = labels ?? parsed?.labels;
   let lineNo = 1;
