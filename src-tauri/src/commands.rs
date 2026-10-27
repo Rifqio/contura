@@ -135,11 +135,15 @@ pub async fn ai_resync(
     .await
 }
 
-/// "Clear all AI data": every thread of every place and every AI Context.
+/// "Clear all AI data": every thread of every place and every AI Context. Off the main
+/// thread: the clear overwrites what it deletes and checkpoints the WAL.
 #[tauri::command]
-pub fn ai_clear_all(app: AppHandle) -> Result<(), Error> {
-    app.state::<AiService>().clear_all_threads()?;
-    app.state::<ConnectionService>().clear_ai_context(None)
+pub async fn ai_clear_all(app: AppHandle) -> Result<(), Error> {
+    off_runtime(move || {
+        app.state::<AiService>().clear_all_threads()?;
+        app.state::<ConnectionService>().clear_ai_context(None)
+    })
+    .await
 }
 
 /// Deletes the Connection, then its Recent steps kept with Asks on other Connections. The
@@ -867,13 +871,14 @@ pub fn query_history(
 
 /// Clears the Connection's history (every Connection's with `None`), then its Recent steps
 /// kept with Asks on other Connections.
+/// Off the main thread: the clear overwrites what it deletes and checkpoints the WAL.
 #[tauri::command]
-pub fn clear_query_history(
-    service: Service<'_>,
-    ai: Ai<'_>,
-    id: Option<ConnectionId>,
-) -> Result<(), Error> {
-    ai.clear_query_history(&service, id)
+pub async fn clear_query_history(app: AppHandle, id: Option<ConnectionId>) -> Result<(), Error> {
+    off_runtime(move || {
+        app.state::<AiService>()
+            .clear_query_history(&app.state::<ConnectionService>(), id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1436,9 +1441,14 @@ pub fn delete_ai_thread(ai: Ai<'_>, id: ThreadId) -> Result<(), Error> {
 
 /// Clears the place's threads, then the Recent steps of its Connections kept with Asks of
 /// other places.
+/// Off the main thread: the clear overwrites what it deletes and checkpoints the WAL.
 #[tauri::command]
-pub fn clear_ai_threads(ai: Ai<'_>, service: Service<'_>, place: String) -> Result<(), Error> {
-    ai.clear_place_history(&place, &service)
+pub async fn clear_ai_threads(app: AppHandle, place: String) -> Result<(), Error> {
+    off_runtime(move || {
+        app.state::<AiService>()
+            .clear_place_history(&place, &app.state::<ConnectionService>())
+    })
+    .await
 }
 
 /// Runs `f` on the blocking pool: Credential Manager reads block, and an async command

@@ -24,7 +24,7 @@ use crate::ai::preview::{
     memory_line, precheck_continue, recall, stamp_continued,
 };
 use crate::ai::prompt::system_prompt;
-use crate::ai::provider::url::host_of;
+use crate::ai::provider::url::{host_of, plain_text_off_this_computer};
 use crate::ai::provider::{
     AiProvider, ChatMessage, ChatRequest, ChatRole, PromptBlock, ProviderEvent, StopReason, Usage,
     max_tokens_on_wire, wire_thinking,
@@ -406,8 +406,11 @@ pub(crate) fn request_step(
 ) -> ProcessStep {
     let host = base.map(host_of).unwrap_or_default();
     let how = match base {
+        Some(u) if plain_text_off_this_computer(u) => {
+            format!("Sent over http to {host}, not encrypted.")
+        }
         Some(u) if u.scheme() == "http" => {
-            format!("Sent over http to {host} on this computer or a private network.")
+            format!("Sent over http to {host} on this computer.")
         }
         _ => format!("Sent over https to {host}."),
     };
@@ -1648,6 +1651,22 @@ const THINKING_NOT_SHARED: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_step_says_when_http_leaves_this_computer() {
+        let rule = |raw: &str| {
+            let url = url::Url::parse(raw).unwrap();
+            request_step(0, 1, None, Some(&url), ToolsAllowed::None).rule
+        };
+        assert!(
+            rule("http://127.0.0.1:11434/v1")
+                .starts_with("Sent over http to 127.0.0.1:11434 on this computer.")
+        );
+        assert!(
+            rule("http://192.168.1.20:11434/v1")
+                .starts_with("Sent over http to 192.168.1.20:11434, not encrypted.")
+        );
+    }
 
     #[test]
     fn request_left_reads_the_attempts() {

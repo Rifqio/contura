@@ -60,19 +60,61 @@ mod sql_only {
     }
 }
 
+/// The store's files are for this OS user only (L1, security audit 1.0). A new file is
+/// made 0600 before SQLite opens it, and SQLite gives the WAL, shared-memory and
+/// journal files the mode of the database file. Files an older build left looser are
+/// tightened on every open.
+fn private_store_files(path: &Path) -> Result<()> {
+    // Not a file: an in-memory store, or a URI SQLite parses itself.
+    let raw = path.as_os_str();
+    if raw.is_empty() || raw == ":memory:" || path.to_str().is_some_and(|p| p.starts_with("file:"))
+    {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        if !path.exists() {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+            {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(Error::Store(format!("cannot create the app store: {e}"))),
+            }
+        }
+    }
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        crate::private::private_file(Path::new(&name));
+    }
+    Ok(())
+}
+
 /// SQLite store for Connections, Groups and settings. Passwords are never
 /// stored here.
 pub struct AppStore {
     db: Connection,
+    /// Makes the next checkpoints fail, to test that a committed clear still succeeds.
+    #[cfg(test)]
+    fail_checkpoint: std::cell::Cell<bool>,
 }
 
 impl AppStore {
     pub fn open(path: &Path) -> Result<AppStore> {
+        private_store_files(path)?;
         let db = Connection::open(path).map_err(store_err)?;
         // A safety net behind the single-instance guard: wait for a lock instead of failing.
         db.busy_timeout(std::time::Duration::from_millis(5000))
             .map_err(store_err)?;
         db.pragma_update(None, "journal_mode", "WAL")
+            .map_err(store_err)?;
+        // Deleted rows are overwritten, not left in free pages (L2, security audit 1.0).
+        db.pragma_update(None, "secure_delete", "ON")
             .map_err(store_err)?;
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -231,7 +273,11 @@ impl AppStore {
                 .map_err(store_err)?;
             tx.commit().map_err(store_err)?;
         }
-        Ok(AppStore { db })
+        Ok(AppStore {
+            db,
+            #[cfg(test)]
+            fail_checkpoint: std::cell::Cell::new(false),
+        })
     }
 
     pub(crate) fn conn(&self) -> &Connection {
@@ -402,6 +448,27 @@ impl AppStore {
         tx.commit().map_err(store_err)
     }
 
+    /// Copies the WAL into app.sqlite and empties it, after a clear: with secure_delete
+    /// the deleted text is then gone from both files (L2, security audit 1.0). Readers on
+    /// other connections can hold part of the WAL back; that part goes at the next
+    /// checkpoint, so a busy result is not an error. Best effort: the delete before it has
+    /// committed, so a failure is logged and the clear still succeeds.
+    pub fn checkpoint(&self) {
+        if let Err(e) = self.try_checkpoint() {
+            eprintln!("app store: the WAL checkpoint after a clear failed: {e}");
+        }
+    }
+
+    fn try_checkpoint(&self) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_checkpoint.get() {
+            return Err(Error::Store("disk I/O error".into()));
+        }
+        self.db
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .map_err(store_err)
+    }
+
     pub fn clear_ai_threads(&self, place: &str) -> Result<()> {
         let tx = self.db.unchecked_transaction().map_err(store_err)?;
         let ids: Vec<String> = {
@@ -418,7 +485,9 @@ impl AppStore {
         tool_uses::delete_for_threads(&tx, &ids)?;
         tx.execute("DELETE FROM ai_threads WHERE place = ?1", params![place])
             .map_err(store_err)?;
-        tx.commit().map_err(store_err)
+        tx.commit().map_err(store_err)?;
+        self.checkpoint();
+        Ok(())
     }
 
     /// Every thread of every place.
@@ -433,7 +502,9 @@ impl AppStore {
         ] {
             tx.execute(sql, []).map_err(store_err)?;
         }
-        tx.commit().map_err(store_err)
+        tx.commit().map_err(store_err)?;
+        self.checkpoint();
+        Ok(())
     }
 
     /// Adds a Query History row and keeps only that Connection's newest `HISTORY_LIMIT`.
@@ -542,6 +613,7 @@ impl AppStore {
         self.db
             .execute("DELETE FROM query_history", [])
             .map_err(store_err)?;
+        self.checkpoint();
         Ok(())
     }
 
@@ -605,6 +677,7 @@ impl AppStore {
                 params![conn.to_string()],
             )
             .map_err(store_err)?;
+        self.checkpoint();
         Ok(())
     }
 
@@ -751,7 +824,9 @@ impl AppStore {
             params![from, to],
         )
         .map_err(store_err)?;
-        tx.commit().map_err(store_err)
+        tx.commit().map_err(store_err)?;
+        self.checkpoint();
+        Ok(())
     }
 
     pub fn list_groups(&self) -> Result<Vec<Group>> {
@@ -1034,6 +1109,39 @@ mod tests {
             production: false,
             read_only: false,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn store_files_are_for_this_user_only() {
+        // L1 (security audit 1.0): app.sqlite and its WAL and shared-memory files are
+        // 0600, made so and tightened on open when an older build left them looser.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let files = [
+            path.clone(),
+            dir.path().join("app.sqlite-wal"),
+            dir.path().join("app.sqlite-shm"),
+        ];
+        {
+            let store = AppStore::open(&path).unwrap();
+            store.set_setting("k", "v").unwrap();
+            for f in &files {
+                assert_eq!(mode(f), 0o600, "{}", f.display());
+            }
+            for f in &files {
+                std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            let _again = AppStore::open(&path).unwrap();
+            for f in &files {
+                assert_eq!(mode(f), 0o600, "{}", f.display());
+            }
+        }
+        // An in-memory store makes no file named after it.
+        drop(AppStore::open(Path::new(":memory:")).unwrap());
+        assert!(!Path::new(":memory:").exists());
     }
 
     fn open_tmp() -> (tempfile::TempDir, AppStore) {
@@ -1414,6 +1522,142 @@ mod tests {
         // Only one ";" is ignored.
         assert!(!ids.contains(&double));
         assert!(!ids.contains(&near));
+    }
+
+    /// Whether `needle` is anywhere in the store's files on disk.
+    fn on_disk(dir: &Path, needle: &str) -> Vec<String> {
+        ["app.sqlite", "app.sqlite-wal"]
+            .into_iter()
+            .filter(|f| {
+                std::fs::read(dir.join(f))
+                    .is_ok_and(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes()))
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn cleared_history_and_ai_threads_leave_no_trace_in_the_files() {
+        // L2 (security audit 1.0): Clear history and Clear all AI data overwrite what
+        // they delete (secure_delete) and empty the WAL (checkpoint TRUNCATE), so the
+        // text cannot be read back from app.sqlite or its WAL.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let s = AppStore::open(&path).unwrap();
+        let conn = Uuid::new_v4();
+        s.add_history(&entry(
+            conn,
+            "ALTER USER app PASSWORD 'hist-7f3a-marker'",
+            Outcome::Ok,
+            true,
+        ))
+        .unwrap();
+        let mut t = thread("ungrouped", "t", 1);
+        t.messages[0].text = "sample row ai-9c2e-marker".into();
+        s.save_ai_thread(&t).unwrap();
+        let mut g = thread("group:g1", "g", 2);
+        g.messages[0].text = "place row place-5d1b-marker".into();
+        s.save_ai_thread(&g).unwrap();
+        // A second connection, as the app has, keeps reading the same file.
+        let other = AppStore::open(&path).unwrap();
+        assert_eq!(other.list_ai_threads("ungrouped").unwrap().len(), 1);
+        drop(other);
+        assert!(!on_disk(dir.path(), "hist-7f3a-marker").is_empty());
+
+        s.clear_history(conn).unwrap();
+        assert_eq!(
+            on_disk(dir.path(), "hist-7f3a-marker"),
+            Vec::<String>::new()
+        );
+        s.clear_ai_threads("group:g1").unwrap();
+        assert_eq!(
+            on_disk(dir.path(), "place-5d1b-marker"),
+            Vec::<String>::new()
+        );
+        s.clear_all_ai_threads().unwrap();
+        assert_eq!(on_disk(dir.path(), "ai-9c2e-marker"), Vec::<String>::new());
+        assert_eq!(
+            std::fs::metadata(dir.path().join("app.sqlite-wal"))
+                .map(|m| m.len())
+                .unwrap_or(0),
+            0
+        );
+
+        s.add_history(&entry(conn, "select 'all-0b4c-marker'", Outcome::Ok, false))
+            .unwrap();
+        s.clear_all_history().unwrap();
+        assert_eq!(on_disk(dir.path(), "all-0b4c-marker"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_deleted_connection_leaves_no_trace_in_the_files() {
+        // L2 follow-up: deleting a Connection overwrites its row and empties the WAL.
+        let dir = tempfile::tempdir().unwrap();
+        let s = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+        let mut c = conn("prod-db-3e8f-marker", None);
+        c.host = "db-3e8f-marker.internal".into();
+        s.save_connection(&c).unwrap();
+        assert!(!on_disk(dir.path(), "3e8f-marker").is_empty());
+        s.delete_connection(c.id).unwrap();
+        assert_eq!(on_disk(dir.path(), "3e8f-marker"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failed_checkpoint_after_a_committed_clear_is_not_a_failed_clear() {
+        // L2 review: the rows are gone once the delete commits; a checkpoint that fails
+        // afterwards is logged, and the clear still reports success.
+        let (_d, s) = open_tmp();
+        let id = Uuid::new_v4();
+        s.add_history(&entry(id, "select 1", Outcome::Ok, false))
+            .unwrap();
+        s.save_ai_thread(&thread("ungrouped", "t", 1)).unwrap();
+        let c = conn("gone", None);
+        s.save_connection(&c).unwrap();
+        s.fail_checkpoint.set(true);
+        s.clear_history(id).unwrap();
+        s.clear_all_history().unwrap();
+        s.clear_ai_threads("ungrouped").unwrap();
+        s.clear_all_ai_threads().unwrap();
+        s.delete_connection(c.id).unwrap();
+        assert!(s.list_ai_threads("ungrouped").unwrap().is_empty());
+        assert!(s.list_connections().unwrap().is_empty());
+    }
+
+    /// L2 timing on a large store: `cargo test -p contura-core --lib -- --ignored
+    /// --nocapture clear_on_a_big_store`.
+    #[test]
+    #[ignore = "timing: prints how long the clears take on a large store"]
+    fn clear_on_a_big_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = AppStore::open(&dir.path().join("app.sqlite")).unwrap();
+        let text = "x".repeat(256 * 1024);
+        for i in 0..200 {
+            let mut t = thread("ungrouped", "t", i);
+            t.messages[0].text = text.clone();
+            s.save_ai_thread(&t).unwrap();
+        }
+        let sql = format!("select '{}'", "y".repeat(2000));
+        let conns: Vec<Uuid> = (0..10).map(|_| Uuid::new_v4()).collect();
+        for c in &conns {
+            for _ in 0..HISTORY_LIMIT {
+                s.add_history(&entry(*c, &sql, Outcome::Ok, false)).unwrap();
+            }
+        }
+        let size = std::fs::metadata(dir.path().join("app.sqlite"))
+            .unwrap()
+            .len();
+        let t0 = std::time::Instant::now();
+        s.clear_all_history().unwrap();
+        let history = t0.elapsed();
+        let t0 = std::time::Instant::now();
+        s.clear_all_ai_threads().unwrap();
+        let threads = t0.elapsed();
+        println!(
+            "store {} MB: clear all history {:?}, clear all AI threads {:?}",
+            size / (1024 * 1024),
+            history,
+            threads
+        );
     }
 
     fn entry(conn: Uuid, sql: &str, outcome: Outcome, changed: bool) -> NewHistory {

@@ -43,7 +43,9 @@ impl ConnectionService {
 
     /// Deletes one Connection's Contexts, or every Context with `None`.
     pub fn clear_ai_context(&self, id: Option<ConnectionId>) -> Result<()> {
-        self.clear_context(id)
+        self.clear_context(id)?;
+        self.store()?.checkpoint();
+        Ok(())
     }
 
     /// The Secrets cleaner's input: every saved provider key and Connection password

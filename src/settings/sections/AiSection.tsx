@@ -7,7 +7,10 @@ import {
   aiTest,
   clearAiThreads,
   errorText,
+  insecureUrlText,
+  plainTextUrlText,
   isCommandError,
+  plainHttpOffThisComputer,
   saveAiSettings,
 } from "../../api/client";
 import type {
@@ -604,7 +607,15 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
       {info && (
         <Row
           {...ROW.baseUrl}
-          hint={s.provider === "custom" ? "Ollama uses port 11434, LM Studio uses 1234." : "Filled from the provider. Change it for a proxy."}
+          hint={
+            plainHttpOffThisComputer(baseUrl)
+              ? keySaved
+                ? insecureUrlText()
+                : plainTextUrlText
+              : s.provider === "custom"
+                ? "Ollama uses port 11434, LM Studio uses 1234."
+                : "Filled from the provider. Change it for a proxy."
+          }
         >
           {({ hintId }) => (
             <input

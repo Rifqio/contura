@@ -1,6 +1,7 @@
 mod full_value;
 mod introspect;
 mod keys;
+mod link;
 pub(crate) mod page;
 pub mod quote;
 mod session;
@@ -12,7 +13,9 @@ mod writer;
 use std::time::Duration;
 
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
+use mysql_async::{Conn, OptsBuilder, PoolConstraints, PoolOpts, SslOpts};
+
+use link::{Opts, Pool};
 
 use crate::design::{
     self, DesignOutcome, DesignPlan, Parts, RunControl, RunOutcome, StatementPlan,
@@ -35,7 +38,7 @@ const MYSQL_READ_ONLY_TRANSACTION: u16 = 1792;
 pub struct MySqlDialect {
     pool: Pool,
     /// Query sessions open their own connection with these, outside the pool.
-    opts: OptsBuilder,
+    opts: Opts,
     read_only: bool,
     /// N5: the server has window functions (MySQL 8.0, MariaDB 10.2 and later), read once
     /// when the Connection opens; `locate_row` needs them.
@@ -85,11 +88,16 @@ impl MySqlDialect {
     }
 
     /// Builds the pool and checks out one connection, so a bad config fails right away.
+    /// Preferred tries TLS first on every new connection (`link`).
     pub async fn connect(config: &ConnectionConfig, password: Option<&str>) -> Result<Self> {
-        let opts = build_opts(config, password);
-        let pool = Pool::new(opts.clone());
+        let opts = Opts::new(
+            build_opts(config, password),
+            matches!(config.ssl, SslMode::Prefer),
+        );
+        let pool = Pool::new(&opts);
         let target = format!("{}:{}", config.host, config.port);
-        match tokio::time::timeout(CONNECT_TIMEOUT, pool.get_conn()).await {
+        let first = tokio::time::timeout(CONNECT_TIMEOUT, pool.get_conn()).await;
+        match first {
             Ok(Ok(mut conn)) => {
                 let version: Option<String> =
                     conn.query_first("SELECT VERSION()").await.ok().flatten();
@@ -196,7 +204,7 @@ impl MySqlDialect {
         plan: &DesignPlan,
     ) -> Result<DesignOutcome> {
         let parts = design::runnable(plan)?;
-        let mut conn = Conn::new(self.opts.clone()).await.map_err(query_err)?;
+        let mut conn = self.opts.conn().await.map_err(query_err)?;
         conn.query_drop(session_sql).await.map_err(query_err)?;
         let outcome = run_design(&mut conn, plan, &parts, self.read_only, None).await;
         let _ = conn.disconnect().await;
@@ -208,7 +216,8 @@ fn build_opts(config: &ConnectionConfig, password: Option<&str>) -> OptsBuilder 
     let constraints = PoolConstraints::new(0, 2).expect("min 0 <= max 2");
     let ssl = match &config.ssl {
         SslMode::Disable => None,
-        SslMode::Require => Some(
+        // Preferred asks as Required does; `link` drops TLS for one attempt whose greeting has none.
+        SslMode::Prefer | SslMode::Require => Some(
             SslOpts::default()
                 .with_danger_accept_invalid_certs(true)
                 .with_danger_skip_domain_validation(true),
@@ -563,8 +572,9 @@ impl Dialect for MySqlDialect {
     async fn apply_planned(&self, _database: &str, edits: &[PlannedEdit]) -> Result<TxOutcome> {
         // Found rows, not changed rows: an UPDATE to a value equal after conversion
         // (`1` into a DECIMAL holding `1.00`) still counts its row.
-        let opts = self.opts.clone().client_found_rows(true);
-        let mut conn = Conn::new(opts)
+        let opts = self.opts.with(|o| o.client_found_rows(true));
+        let mut conn = opts
+            .conn()
             .await
             .map_err(|e| Error::Connect(format!("cannot open a connection for the save: {e}")))?;
         let outcome = run_planned(&mut conn, edits, self.read_only).await;
@@ -576,9 +586,10 @@ impl Dialect for MySqlDialect {
     /// The planned statements name their database, so `database` is not used.
     async fn apply_design(&self, _database: &str, plan: &DesignPlan) -> Result<DesignOutcome> {
         let parts = design::runnable(plan)?;
-        let mut conn = Conn::new(self.opts.clone())
-            .await
-            .map_err(|e| Error::Connect(format!("cannot open a connection for the change: {e}")))?;
+        let mut conn =
+            self.opts.conn().await.map_err(|e| {
+                Error::Connect(format!("cannot open a connection for the change: {e}"))
+            })?;
         #[cfg(any(test, feature = "test-util"))]
         if let Ok(mut ids) = self.design_conns.lock() {
             ids.push(conn.id());
@@ -597,9 +608,10 @@ impl Dialect for MySqlDialect {
     ) -> Result<RunOutcome> {
         let design = design::statement_design_plan(DialectKind::MySql, plan)?;
         let parts = design::runnable(&design)?;
-        let mut conn = Conn::new(self.opts.clone())
-            .await
-            .map_err(|e| Error::Connect(format!("cannot open a connection for the change: {e}")))?;
+        let mut conn =
+            self.opts.conn().await.map_err(|e| {
+                Error::Connect(format!("cannot open a connection for the change: {e}"))
+            })?;
         let outcome = run_design(&mut conn, &design, &parts, self.read_only, Some(&control)).await;
         let _ = conn.disconnect().await;
         design::run_outcome(
@@ -734,6 +746,170 @@ mod tests {
     }
 
     #[test]
+    fn preferred_offers_tls_and_accepts_any_certificate() {
+        let opts: mysql_async::Opts = build_opts(&config_with(SslMode::Prefer), None).into();
+        let ssl = opts.ssl_opts().expect("Preferred asks for TLS first");
+        assert!(ssl.accept_invalid_certs() && ssl.skip_domain_validation());
+    }
+
+    /// A fake server that greets each client with a protocol 10 handshake, with or
+    /// without the TLS flag, then closes. Returns the port and the count of clients.
+    async fn greeting_server(tls: bool) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = count.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // LONG_PASSWORD, PROTOCOL_41, TRANSACTIONS, SECURE_CONNECTION, PLUGIN_AUTH,
+                // and SSL when `tls`.
+                let caps: u32 =
+                    0x0001 | 0x0200 | 0x2000 | 0x8000 | 0x8_0000 | if tls { 0x0800 } else { 0 };
+                let mut p = vec![0x0a];
+                p.extend_from_slice(b"8.0.36\0");
+                p.extend_from_slice(&7u32.to_le_bytes());
+                p.extend_from_slice(b"abcdefgh\0");
+                p.extend_from_slice(&(caps as u16).to_le_bytes());
+                p.push(0xff);
+                p.extend_from_slice(&2u16.to_le_bytes());
+                p.extend_from_slice(&((caps >> 16) as u16).to_le_bytes());
+                p.push(21);
+                p.extend_from_slice(&[0; 10]);
+                p.extend_from_slice(b"ijklmnopqrst\0");
+                p.extend_from_slice(b"mysql_native_password\0");
+                let mut packet = (p.len() as u32).to_le_bytes()[..3].to_vec();
+                packet.push(0);
+                packet.extend_from_slice(&p);
+                let _ = s.write_all(&packet).await;
+                let mut reply = vec![0u8; 512];
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(2), s.read(&mut reply))
+                    .await;
+            }
+        });
+        (port, count)
+    }
+
+    async fn connect_to(ssl: SslMode, port: u16) -> Result<()> {
+        let mut config = config_with(ssl);
+        config.host = "127.0.0.1".into();
+        config.port = port;
+        MySqlDialect::connect(&config, Some("pw")).await.map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn preferred_retries_once_without_tls_only_when_the_server_has_none() {
+        use std::sync::atomic::Ordering::SeqCst;
+        // M2: no TLS on the server: one retry in plain text.
+        let (port, count) = greeting_server(false).await;
+        assert!(connect_to(SslMode::Prefer, port).await.is_err());
+        assert_eq!(count.load(SeqCst), 2);
+        // Required never falls back.
+        let (port, count) = greeting_server(false).await;
+        assert!(connect_to(SslMode::Require, port).await.is_err());
+        assert_eq!(count.load(SeqCst), 1);
+        // The server offers TLS and the handshake fails: no plain-text retry.
+        let (port, count) = greeting_server(true).await;
+        assert!(connect_to(SslMode::Prefer, port).await.is_err());
+        assert_eq!(count.load(SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn preferred_on_the_test_server_encrypts_when_it_can() {
+        // Live: Preferred connects, and is encrypted exactly when Required can connect.
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let live = |ssl: SslMode| {
+            let mut c = config_with(ssl);
+            c.host = env("DBVIEW_TEST_MYSQL_HOST", "127.0.0.1");
+            c.port = env("DBVIEW_TEST_MYSQL_PORT", "3306").parse().unwrap();
+            c.user = env("DBVIEW_TEST_MYSQL_USER", "dbview_test");
+            c
+        };
+        let pw = env("DBVIEW_TEST_MYSQL_PASSWORD", "dbview_test");
+        let tls = MySqlDialect::connect(&live(SslMode::Require), Some(&pw))
+            .await
+            .is_ok();
+        let d = MySqlDialect::connect(&live(SslMode::Prefer), Some(&pw))
+            .await
+            .expect("Preferred connects");
+        let cipher = d
+            .browse_first_for_test("SELECT VARIABLE_VALUE FROM performance_schema.session_status WHERE VARIABLE_NAME = 'Ssl_cipher'")
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(!cipher.is_empty(), tls, "cipher {cipher:?}");
+    }
+
+    /// A proxy to the test server that clears the TLS flag in the greeting of the first
+    /// connection only, as an on-path attacker or a flaky middlebox might.
+    async fn strip_first_greeting(server: (String, u16)) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut first = true;
+            while let Ok((mut client, _)) = listener.accept().await {
+                let strip = std::mem::take(&mut first);
+                let target = server.clone();
+                tokio::spawn(async move {
+                    let mut up = tokio::net::TcpStream::connect(target).await.unwrap();
+                    let mut head = [0u8; 4];
+                    up.read_exact(&mut head).await.unwrap();
+                    let len = u32::from_le_bytes([head[0], head[1], head[2], 0]) as usize;
+                    let mut greeting = vec![0u8; len];
+                    up.read_exact(&mut greeting).await.unwrap();
+                    if strip {
+                        // Protocol 10: version, NUL-ended server version, id (4), scramble
+                        // (8), filler (1), then the lower capability bytes.
+                        let at =
+                            1 + greeting[1..].iter().position(|b| *b == 0).unwrap() + 1 + 4 + 8 + 1;
+                        greeting[at + 1] &= !0x08; // CLIENT_SSL is 0x0800
+                    }
+                    client.write_all(&head).await.unwrap();
+                    client.write_all(&greeting).await.unwrap();
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+                });
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_preferred_fall_back_is_for_that_connection_only() {
+        // M2 review: one greeting without TLS makes that connection plain; the next new
+        // connection asks for TLS again.
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let host = env("DBVIEW_TEST_MYSQL_HOST", "127.0.0.1");
+        let port: u16 = env("DBVIEW_TEST_MYSQL_PORT", "3306").parse().unwrap();
+        let pw = env("DBVIEW_TEST_MYSQL_PASSWORD", "dbview_test");
+        let live = |ssl: SslMode, port: u16| {
+            let mut c = config_with(ssl);
+            c.host = "127.0.0.1".into();
+            c.port = port;
+            c.user = env("DBVIEW_TEST_MYSQL_USER", "dbview_test");
+            c
+        };
+        let mut direct = live(SslMode::Require, port);
+        direct.host = host.clone();
+        MySqlDialect::connect(&direct, Some(&pw))
+            .await
+            .expect("the test server offers TLS");
+        let proxy = strip_first_greeting((host, port)).await;
+        let d = MySqlDialect::connect(&live(SslMode::Prefer, proxy), Some(&pw))
+            .await
+            .expect("Preferred connects in plain text when the greeting has no TLS");
+        let cipher = d
+            .browse_first_for_test(
+                "SELECT VARIABLE_VALUE FROM performance_schema.session_status WHERE VARIABLE_NAME = 'Ssl_cipher'",
+            )
+            .await
+            .unwrap()
+            .unwrap_or_default();
+        assert!(!cipher.is_empty(), "the next connection is encrypted again");
+    }
+
+    #[test]
     fn read_only_is_a_setup_command_so_pool_resets_keep_it() {
         let mut config = config_with(SslMode::Disable);
         config.read_only = true;
@@ -766,7 +942,7 @@ mod tests {
             read_only: false,
         };
         let pw = env("DBVIEW_TEST_MYSQL_PASSWORD", "dbview_test");
-        let pool = Pool::new(build_opts(&config, Some(&pw)));
+        let pool = mysql_async::Pool::new(build_opts(&config, Some(&pw)));
         let mut conn = pool.get_conn().await.expect("connect");
         let (results, client): (String, String) = conn
             .query_first("SELECT @@character_set_results, @@character_set_client")

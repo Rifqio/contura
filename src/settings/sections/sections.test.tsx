@@ -1429,6 +1429,32 @@ test("parity_P11_17_custom_lists_its_models_without_a_key", async () => {
   expect(await screen.findByText("2 models from 127.0.0.1:11434. Fetched just now.")).toBeTruthy();
 });
 
+test("security_L3_plain_http_off_this_computer_says_why", async () => {
+  // Revised L3: keyless is allowed over http to another machine, and the hint says it is plain text.
+  const lan: AiSettings = { ...GROQ, provider: "custom", preset: null, baseUrl: "http://192.168.1.20:11434/v1", model: "llama3.1:8b" };
+  settingsRoutes({ ai_settings: () => aiView({ settings: lan, keySaved: false }) });
+  const shown = renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  const field = (await screen.findByLabelText("Base URL")) as HTMLInputElement;
+  const plain = "This address is not encrypted. What you send travels as plain text.";
+  const refused = "This address is not encrypted. Use https or a local address on this computer, or remove the saved key.";
+  await waitFor(() => expect(field.value).toBe("http://192.168.1.20:11434/v1"));
+  const hint = () => document.getElementById(field.getAttribute("aria-describedby")!)?.textContent;
+  expect(hint()).toBe(plain);
+  // On this computer, http is fine and the usual hint is back.
+  await userEvent.clear(field);
+  await userEvent.type(field, "http://127.0.0.1:11434/v1");
+  expect(screen.queryByText(plain)).toBeNull();
+  expect(screen.getByText("Ollama uses port 11434, LM Studio uses 1234.")).toBeTruthy();
+  shown.unmount();
+
+  // With a key saved, the key would go in plain text, so the address is refused and the hint says why.
+  settingsRoutes({ ai_settings: () => aiView({ settings: lan, keySaved: true, keyLast4: "abcd" }) });
+  renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);
+  const keyed = (await screen.findByLabelText("Base URL")) as HTMLInputElement;
+  await waitFor(() => expect(keyed.value).toBe("http://192.168.1.20:11434/v1"));
+  expect(document.getElementById(keyed.getAttribute("aria-describedby")!)?.textContent).toBe(refused);
+});
+
 test("parity_P11_17_a_keyless_hosted_provider_still_waits_for_a_key", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: GROQ, keySaved: false }) });
   renderWithProviders(<AiSection groupId="g1" groupName={null} connections={[]} onConnectionSaved={() => {}} />);

@@ -19,6 +19,7 @@ pub mod model;
 pub mod model_files;
 pub mod mysql;
 pub mod postgres;
+pub mod private;
 pub mod query;
 pub mod recent;
 pub mod safety;

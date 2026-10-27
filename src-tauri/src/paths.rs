@@ -210,13 +210,11 @@ pub fn lock_data_dir(
     dir: &Path,
     wait: std::time::Duration,
 ) -> Result<Option<DataLock>, DataFolderBusy> {
-    let Ok(file) = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(dir.join("contura.lock"))
-    else {
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    let Ok(file) = open.open(dir.join("contura.lock")) else {
         return Ok(None);
     };
     let end = std::time::Instant::now() + wait;
@@ -246,8 +244,19 @@ pub fn data_dir() -> io::Result<PathBuf> {
             resolve(&env, &exe, writable)
         }
     };
-    std::fs::create_dir_all(dir.join("webview"))?;
+    prepare(&dir)?;
     Ok(dir)
+}
+
+/// Creates the data folder and its `webview` subfolder, for this OS user only (L1,
+/// security audit 1.0): on Unix a folder made here is 0700, and on each start Contura's
+/// own entries lose their group and other bits (`contura_core::private`). The user's
+/// own entries in the same folder are never touched.
+fn prepare(dir: &Path) -> io::Result<()> {
+    use contura_core::private::{private_dir, tighten_own_entries};
+    private_dir(&dir.join("webview"))?;
+    tighten_own_entries(dir);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -391,6 +400,52 @@ mod tests {
             resolve(&env, Path::new("/tmp/.mount_x/usr/bin/contura"), yes),
             PathBuf::from("/tmp/.mount_x/usr/bin/data")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_data_folder_is_for_this_user_only() {
+        // L1 (security audit 1.0): the folder and webview are 0700, the lock 0600, and
+        // what an older build left looser at the top of the folder is tightened.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("data");
+        prepare(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&dir.join("webview")), 0o700);
+        let _lock = lock_data_dir(&dir, std::time::Duration::ZERO).unwrap();
+        assert_eq!(mode(&dir.join("contura.lock")), 0o600);
+
+        let open = |p: &Path, m: u32| {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+        };
+        std::fs::create_dir(dir.join("diagrams")).unwrap();
+        std::fs::write(dir.join("app.sqlite"), b"").unwrap();
+        open(&dir, 0o755);
+        open(&dir.join("webview"), 0o775);
+        open(&dir.join("diagrams"), 0o755);
+        open(&dir.join("app.sqlite"), 0o644);
+        open(&dir.join("contura.lock"), 0o664);
+        // The user's own entries in the same folder: a file, a script and a link to a
+        // file outside. None of them changes.
+        let outside = tmp.path().join("outside.txt");
+        std::fs::write(&outside, b"x").unwrap();
+        open(&outside, 0o644);
+        std::fs::write(dir.join("notes.txt"), b"mine").unwrap();
+        open(&dir.join("notes.txt"), 0o644);
+        std::fs::write(dir.join("run.sh"), b"#!/bin/sh").unwrap();
+        open(&dir.join("run.sh"), 0o755);
+        std::os::unix::fs::symlink(&outside, dir.join("link.txt")).unwrap();
+        prepare(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&dir.join("webview")), 0o700);
+        assert_eq!(mode(&dir.join("diagrams")), 0o700);
+        assert_eq!(mode(&dir.join("app.sqlite")), 0o600);
+        assert_eq!(mode(&dir.join("contura.lock")), 0o600);
+        assert_eq!(mode(&dir.join("notes.txt")), 0o644);
+        assert_eq!(mode(&dir.join("run.sh")), 0o755);
+        assert_eq!(mode(&outside), 0o644);
     }
 
     #[cfg(unix)]

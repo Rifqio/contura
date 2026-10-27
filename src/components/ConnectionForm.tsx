@@ -72,6 +72,23 @@ const NOT_BUILT: ContextAge = { builtAt: null, stale: false, tables: 0 };
 type ContextShown = { age: ContextAge; withTables: boolean };
 
 type SslChoice = SslMode["mode"];
+
+/**
+ * A host on this computer: localhost, a loopback address or a socket path. A new Connection to one starts with SSL Off;
+ * any other host starts at Preferred, as libpq, pgAdmin and the MySQL client do (security audit M2).
+ */
+function hostOnThisComputer(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  return h === "" || h === "localhost" || h === "::1" || /^127\.\d+\.\d+\.\d+$/.test(h) || h.startsWith("/");
+}
+
+const SSL_OPTIONS: { value: SslChoice; label: string }[] = [
+  { value: "disable", label: "Off" },
+  { value: "prefer", label: "Preferred (encrypt if the server allows)" },
+  { value: "require", label: "Required (encrypt, don't verify the certificate)" },
+  { value: "verifyCa", label: "Verify CA" },
+  { value: "verifyFull", label: "Verify full (CA and host)" },
+];
 type ServerDialect = keyof typeof DIALECT_DEFAULTS;
 
 const SQLITE_FILTER = { name: "SQLite database", extensions: ["sqlite", "sqlite3", "db", "db3"] };
@@ -122,7 +139,17 @@ export default function ConnectionForm({
   const [passwordTouched, setPasswordTouched] = useState(false);
   const [removePassword, setRemovePassword] = useState(false);
   const [database, setDatabase] = useState(base?.database ?? "");
-  const [ssl, setSsl] = useState<SslChoice>(base?.ssl.mode ?? "disable");
+  // Null until chosen: a new Connection's SSL follows the host; a saved one keeps its mode.
+  const [sslChosen, setSsl] = useState<SslChoice | null>(base?.ssl.mode ?? null);
+  const ssl: SslChoice = sslChosen ?? (hostOnThisComputer(host) ? "disable" : "prefer");
+  // Off, Preferred and Required on a server elsewhere: a quiet note under the field (security audit M2).
+  const sslNote = hostOnThisComputer(host)
+    ? null
+    : ssl === "disable"
+      ? "This connection is not encrypted. Use Verify full to protect it and check the server."
+      : ssl === "prefer" || ssl === "require"
+        ? "The server's identity is not checked. Use Verify full to be sure you reach this server. Only a verify mode keeps your password safe."
+        : null;
   const [caPath, setCaPath] = useState(
     base?.ssl.mode === "verifyCa" || base?.ssl.mode === "verifyFull" ? (base.ssl.caPath ?? "") : "",
   );
@@ -561,14 +588,15 @@ export default function ConnectionForm({
                   value={ssl}
                   label="SSL"
                   onChange={setSsl}
-                  options={[
-                    { value: "disable", label: "Off" },
-                    { value: "require", label: "Required" },
-                    { value: "verifyCa", label: "Required, verify the CA" },
-                    { value: "verifyFull", label: "Required, verify the CA and host" },
-                  ]}
+                  describedBy={sslNote ? f("ssl-note") : undefined}
+                  options={SSL_OPTIONS}
                 />
               </div>
+              {sslNote && (
+                <span id={f("ssl-note")} className="field-hint field-wide" role="note">
+                  {sslNote}
+                </span>
+              )}
               {(ssl === "verifyCa" || ssl === "verifyFull") && (
                 <div className="field field-wide">
                   <label className="fl" htmlFor={f("ca")}>

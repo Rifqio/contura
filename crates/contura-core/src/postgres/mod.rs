@@ -150,17 +150,25 @@ fn build_settings(config: &ConnectionConfig, password: Option<&str>) -> Result<S
     }
     let tls = match &config.ssl {
         SslMode::Disable => None,
-        SslMode::Require => Some(MakeRustlsConnect::new(tls::accept_any_certificate())),
+        SslMode::Prefer | SslMode::Require => {
+            Some(MakeRustlsConnect::new(tls::accept_any_certificate()))
+        }
         SslMode::VerifyCa { ca_path } => Some(MakeRustlsConnect::new(tls::trust_only_ca(ca_path)?)),
         SslMode::VerifyFull { ca_path } => Some(MakeRustlsConnect::new(tls::verify_full(
             ca_path.as_deref(),
         )?)),
     };
-    base.ssl_mode(if tls.is_some() {
-        tokio_postgres::config::SslMode::Require
-    } else {
-        tokio_postgres::config::SslMode::Disable
+    base.ssl_mode(match &config.ssl {
+        SslMode::Disable => tokio_postgres::config::SslMode::Disable,
+        // A server that answers the TLS request with "no" gets plain text; a failed TLS
+        // handshake is an error, never a fall back (security audit M2).
+        SslMode::Prefer => tokio_postgres::config::SslMode::Prefer,
+        _ => tokio_postgres::config::SslMode::Require,
     });
+    // Channel binding stays at tokio-postgres' default, prefer: used when the server
+    // offers SCRAM-SHA-256-PLUS over TLS, skipped otherwise, so md5 and self-signed
+    // servers still sign in. Requiring it is not offered yet (M2 ruling: opt-in only).
+    base.channel_binding(tokio_postgres::config::ChannelBinding::Prefer);
     Ok(Settings {
         base,
         tls,
@@ -425,7 +433,7 @@ mod tls {
             .with_no_client_auth()
     }
 
-    /// `Require`: encrypt, but accept any certificate, as MySQL's `Require` does.
+    /// `Prefer` and `Require`: encrypt, but accept any certificate, as MySQL's do.
     pub(super) fn accept_any_certificate() -> ClientConfig {
         config_with(Arc::new(AcceptAny(provider())))
     }
@@ -887,5 +895,130 @@ mod tests {
     #[test]
     fn verify_full_without_a_ca_uses_the_system_store() {
         assert!(tls::verify_full(None).is_ok());
+    }
+
+    fn config_with(ssl: SslMode, host: &str, port: u16) -> ConnectionConfig {
+        ConnectionConfig {
+            id: uuid::Uuid::new_v4(),
+            name: "t".into(),
+            dialect: crate::model::DialectKind::Postgres,
+            host: host.into(),
+            port,
+            user: "u".into(),
+            database: None,
+            ssl,
+            group_id: None,
+            file: None,
+            query_timeout_secs: None,
+            ai_access: Default::default(),
+            ai_sync: Default::default(),
+            production: false,
+            read_only: false,
+        }
+    }
+
+    #[test]
+    fn ssl_modes_map_to_tokio_postgres() {
+        use tokio_postgres::config::{ChannelBinding, SslMode as Pg};
+        let mode = |ssl: SslMode| {
+            let s = build_settings(&config_with(ssl, "db.example.com", 5432), None).unwrap();
+            (
+                s.base.get_ssl_mode(),
+                s.tls.is_some(),
+                s.base.get_channel_binding(),
+            )
+        };
+        // M2: Preferred tries TLS (any certificate) and takes plain text only when the
+        // server says it has no TLS. Channel binding stays at tokio-postgres' prefer, so
+        // servers without SCRAM-PLUS still sign in.
+        assert_eq!(
+            mode(SslMode::Prefer),
+            (Pg::Prefer, true, ChannelBinding::Prefer)
+        );
+        assert_eq!(
+            mode(SslMode::Disable),
+            (Pg::Disable, false, ChannelBinding::Prefer)
+        );
+        assert_eq!(
+            mode(SslMode::Require),
+            (Pg::Require, true, ChannelBinding::Prefer)
+        );
+        assert_eq!(
+            mode(SslMode::VerifyFull { ca_path: None }),
+            (Pg::Require, true, ChannelBinding::Prefer)
+        );
+    }
+
+    #[tokio::test]
+    async fn preferred_on_the_test_server_encrypts_when_it_can() {
+        // Live: Preferred connects, and is encrypted exactly when Required can connect.
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let live = |ssl: SslMode| {
+            let mut c = config_with(
+                ssl,
+                &env("DBVIEW_TEST_PG_HOST", "127.0.0.1"),
+                env("DBVIEW_TEST_PG_PORT", "5432").parse().unwrap(),
+            );
+            c.user = env("DBVIEW_TEST_PG_USER", "dbview_test");
+            c
+        };
+        let pw = env("DBVIEW_TEST_PG_PASSWORD", "dbview_test");
+        let tls = open_client(
+            &build_settings(&live(SslMode::Require), Some(&pw)).unwrap(),
+            "postgres",
+        )
+        .await
+        .is_ok();
+        let client = open_client(
+            &build_settings(&live(SslMode::Prefer), Some(&pw)).unwrap(),
+            "postgres",
+        )
+        .await
+        .expect("Preferred connects");
+        let encrypted: bool = client
+            .query_one(
+                "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(encrypted, tls);
+    }
+
+    /// A server that answers the TLS request with `answer` and returns how many bytes the
+    /// client sent after it: a startup message means the client went on in plain text.
+    async fn after_ssl_answer(ssl: SslMode, answer: u8) -> (Result<()>, usize) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 8];
+            s.read_exact(&mut request).await.unwrap();
+            assert_eq!(request, [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f], "SSLRequest");
+            s.write_all(&[answer]).await.unwrap();
+            let mut rest = Vec::new();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), s.read_buf(&mut rest))
+                .await;
+            rest.len()
+        });
+        let got = PostgresDialect::connect(&config_with(ssl, "127.0.0.1", port), Some("pw"))
+            .await
+            .map(|_| ());
+        (got, server.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn preferred_goes_on_in_plain_text_only_when_the_server_has_no_tls() {
+        let (got, plain) = after_ssl_answer(SslMode::Prefer, b'N').await;
+        assert!(got.is_err());
+        assert!(
+            plain > 0,
+            "Preferred sends the startup message in plain text"
+        );
+        let (got, plain) = after_ssl_answer(SslMode::Require, b'N').await;
+        assert!(got.is_err());
+        assert_eq!(plain, 0, "Required never goes on in plain text");
     }
 }

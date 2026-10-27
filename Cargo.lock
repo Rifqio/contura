@@ -695,6 +695,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "keyring",
+ "libc",
  "minisign-verify",
  "mysql_async",
  "regex",

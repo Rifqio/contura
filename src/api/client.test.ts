@@ -27,6 +27,7 @@ import {
   setAiSyncMode,
   shortenPath,
   visualQuerySql,
+  plainHttpOffThisComputer,
 } from "./client";
 
 test("fileName_is_the_last_part_of_either_path_style", () => {
@@ -405,7 +406,7 @@ test("error_text_for_real_provider_errors", () => {
     "Could not check the certificate of api.groq.com. A proxy or antivirus may be inspecting https.",
   );
   expect(ai({ kind: "insecureUrl", host: "10.0.0.5" })).toBe(
-    "Use https for 10.0.0.5. Plain http is allowed only on this computer or a private network.",
+    "This address is not encrypted. Use https or a local address on this computer, or remove the saved key.",
   );
   expect(ai({ kind: "insecureUrl", host: "" })).toBe("The base URL is not a valid address.");
   expect(ai({ kind: "keyHostChanged", host: "api.example.com" })).toBe(
@@ -641,9 +642,18 @@ test("parity_P11_38_plain_http_names_this_pc_on_windows", () => {
   try {
     setPlatformForTests("windows");
     expect(errorText({ kind: "ai", message: { kind: "insecureUrl", host: "10.0.0.5" } })).toBe(
-      "Use https for 10.0.0.5. Plain http is allowed only on this PC or a private network.",
+      "This address is not encrypted. Use https or a local address on this PC, or remove the saved key.",
     );
   } finally {
     setPlatformForTests(null);
+  }
+});
+
+test("security_L3_plain_http_off_this_computer", () => {
+  for (const ok of ["https://192.168.1.20/v1", "http://127.0.0.1:11434/v1", "http://LOCALHOST:1234/v1", "http://[::1]:8080/v1", "http://[::ffff:127.0.0.1]/v1", "not a url"]) {
+    expect(plainHttpOffThisComputer(ok)).toBe(false);
+  }
+  for (const bad of ["http://192.168.1.20:11434/v1", "http://10.0.0.5/v1", "http://[fd00::1]/v1", "http://ollama.lan/v1", "http://[::ffff:192.168.1.20]/v1"]) {
+    expect(plainHttpOffThisComputer(bad)).toBe(true);
   }
 });

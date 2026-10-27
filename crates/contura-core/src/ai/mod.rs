@@ -33,7 +33,7 @@ use crate::ai::models::{
 };
 use crate::ai::provider::anthropic::Anthropic;
 use crate::ai::provider::openai::OpenAi;
-use crate::ai::provider::url::{check_base_url, host_of};
+use crate::ai::provider::url::{check_base_url, host_of, plain_text_off_this_computer};
 use crate::ai::provider::{AiProvider, ChatMessage, ChatRequest, ChatRole, ListedModel, Thinking};
 use crate::ai::rails::Secrets;
 use crate::ai::request::ItemKind;
@@ -259,7 +259,7 @@ pub enum AiError {
     #[error("the base URL now points to {host}; save the key again to send it there")]
     KeyHostChanged { host: String },
     #[error(
-        "use https for {host}; plain http is allowed only on this computer or a private network"
+        "this address is not encrypted; use https or a local address on this computer, or remove the saved key"
     )]
     InsecureUrl { host: String },
     /// `phase` names the wait that ran out (connect, first byte, between chunks).
@@ -870,12 +870,17 @@ impl AiService {
         let base = settings.effective_base_url().ok_or_else(not_configured)?;
         let url = check_base_url(base).map_err(Error::Ai)?;
         let host = host_of(&url);
+        let key = self.secrets.get_named(&account)?.filter(|k| !k.is_empty());
+        // L3: a key never goes over plain http to another machine; keyless is fine. Asked
+        // before the key host, so the user is not asked to send the key where it cannot go.
+        if key.is_some() && plain_text_off_this_computer(&url) {
+            return Err(Error::Ai(AiError::InsecureUrl { host }));
+        }
         let bound = self.key_host(&account)?;
         let moved = bound.as_ref().is_some_and(|bound| *bound != host);
         if moved && kind != AiProviderKind::Custom {
             return Err(Error::Ai(AiError::KeyHostChanged { host }));
         }
-        let key = self.secrets.get_named(&account)?.filter(|k| !k.is_empty());
         match &key {
             None if kind != AiProviderKind::Custom => return Err(not_configured()),
             Some(_) if moved => return Err(Error::Ai(AiError::KeyHostChanged { host })),
@@ -901,10 +906,14 @@ impl AiService {
         let (settings, _) = self.effective(group)?;
         let account = settings.key_account().ok_or_else(not_configured)?;
         let base = settings.effective_base_url().ok_or_else(not_configured)?;
-        let current = host_of(&check_base_url(base).map_err(Error::Ai)?);
+        let url = check_base_url(base).map_err(Error::Ai)?;
+        let current = host_of(&url);
         // The settings moved again since the question was asked: ask about the new host.
         if current != host {
             return Err(Error::Ai(AiError::KeyHostChanged { host: current }));
+        }
+        if self.key_saved(&account)? && plain_text_off_this_computer(&url) {
+            return Err(Error::Ai(AiError::InsecureUrl { host: current }));
         }
         if self.key_saved(&account)? {
             self.set_key_host(&account, Some(&current))?;
@@ -1538,6 +1547,8 @@ impl AiService {
         let done = self.forget_steps(Some(&ids))?;
         // Only the ids purged here: a delete may have added one since the read.
         self.update_pending_purges(|pending| pending.retain(|id| !ids.contains(id)))?;
+        // The rewritten threads leave their old text in the WAL until this (L2).
+        self.store()?.checkpoint();
         Ok(done)
     }
 
@@ -1583,6 +1594,7 @@ impl AiService {
             .collect();
         if !ids.is_empty() {
             self.forget_steps(Some(&ids))?;
+            self.store()?.checkpoint();
         }
         Ok(())
     }
@@ -1621,6 +1633,8 @@ impl AiService {
     ) -> Result<()> {
         connections.clear_query_history(id)?;
         self.forget_steps(id.as_ref().map(std::slice::from_ref))?;
+        // The threads the forget rewrote leave their old text in the WAL until this.
+        self.store()?.checkpoint();
         Ok(())
     }
 

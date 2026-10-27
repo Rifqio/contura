@@ -8,6 +8,8 @@ export type DialectKind = "mysql" | "postgres" | "sqlite";
 
 export type SslMode =
   | { mode: "disable" }
+  /** Encrypt when the server offers it, else plain; the certificate is not checked. */
+  | { mode: "prefer" }
   | { mode: "require" }
   | { mode: "verifyCa"; caPath: string }
   | { mode: "verifyFull"; caPath: string | null };

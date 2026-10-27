@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use mysql_async::consts::ColumnType;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Column, Conn, OptsBuilder, Pool, QueryResult, TextProtocol, Value};
+use mysql_async::{Column, Conn, QueryResult, TextProtocol, Value};
+
+use super::link::{Opts, Pool};
 use tokio::sync::{mpsc, oneshot};
 
 use super::quote::quote_ident;
@@ -38,12 +40,13 @@ impl Canceller for Kill {
 }
 
 pub(super) async fn spawn(
-    opts: OptsBuilder,
+    opts: Opts,
     database: Option<&str>,
     pool: Pool,
     read_only: bool,
 ) -> Result<SessionHandle> {
-    let mut conn = Conn::new(opts)
+    let mut conn = opts
+        .conn()
         .await
         .map_err(|e| Error::Connect(format!("cannot open the query session: {e}")))?;
     if let Some(db) = database {

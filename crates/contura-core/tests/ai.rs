@@ -280,6 +280,39 @@ fn custom_without_base_url_is_not_configured() {
 }
 
 #[test]
+fn keyless_http_off_this_computer_works_and_a_key_is_never_sent_there() {
+    // L3 revised: Ollama on another LAN machine over http, with no key, keeps working;
+    // with a key saved, the same URL is refused before anything is sent.
+    let (_dir, _secrets, svc) = service();
+    let s = AiSettings {
+        provider: Some(AiProviderKind::Custom),
+        base_url: "http://192.168.1.20:11434/v1".into(),
+        model: "m".into(),
+        ..AiSettings::default()
+    };
+    svc.save_settings(None, s.clone(), false, KeyChange::Keep)
+        .unwrap();
+    assert!(svc.provider_for(None).is_ok());
+    svc.save_settings(
+        None,
+        s,
+        false,
+        KeyChange::Set {
+            value: "sk-local-1234abcd".into(),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        svc.provider_for(None),
+        Err(Error::Ai(AiError::InsecureUrl { .. }))
+    ));
+    assert!(matches!(
+        svc.confirm_key_host(None, "192.168.1.20:11434"),
+        Err(Error::Ai(AiError::InsecureUrl { .. }))
+    ));
+}
+
+#[test]
 fn insecure_base_url_is_refused() {
     let (_dir, _secrets, svc) = service();
     let mut s = groq();
@@ -3661,7 +3694,7 @@ async fn steps_wording() {
         stream_settings(&answered(), &cat, &local, &Secrets::default(), &ask("q")).await;
     assert_eq!(
         step(&events, StepKind::Request).rule,
-        "Sent over http to 127.0.0.1:11434 on this computer or a private network. No tools were offered: the assistant cannot run anything."
+        "Sent over http to 127.0.0.1:11434 on this computer. No tools were offered: the assistant cannot run anything."
     );
     let line = log_lines(&events)
         .into_iter()

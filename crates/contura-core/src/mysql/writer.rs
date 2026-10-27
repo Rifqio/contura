@@ -4,8 +4,10 @@
 
 use std::sync::Arc;
 
+use mysql_async::Conn;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, OptsBuilder, Pool};
+
+use super::link::{Opts, Pool};
 
 use super::quote::quote_ident;
 use super::session::Kill;
@@ -26,13 +28,14 @@ pub(super) struct MySqlWriter {
 }
 
 pub(super) async fn open(
-    opts: OptsBuilder,
+    opts: Opts,
     pool: Pool,
     read_only: bool,
     database: Option<&str>,
     setup: &WriterSetup,
 ) -> Result<Box<dyn BulkWriter>> {
-    let mut conn = Conn::new(opts)
+    let mut conn = opts
+        .conn()
         .await
         .map_err(|e| Error::Connect(format!("cannot open a connection for the import: {e}")))?;
     let opened = prepare(&mut conn, read_only, database, setup).await;

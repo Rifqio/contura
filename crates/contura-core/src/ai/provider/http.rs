@@ -12,10 +12,10 @@ use reqwest::header::HeaderValue;
 use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
 use rustls_platform_verifier::BuilderVerifierExt;
-use url::{Host, Url};
+use url::Url;
 
 use crate::ai::log::{Level, Log};
-use crate::ai::provider::url::{host_of, is_local};
+use crate::ai::provider::url::{host_of, is_loopback, is_private_network};
 use crate::ai::rails::input::{Secrets, redact_secrets};
 use crate::ai::{AiError, AiProviderKind};
 use crate::error::{Error, Result};
@@ -562,13 +562,8 @@ fn tls_failed(e: &reqwest::Error) -> bool {
 /// Requests to this PC, and plain http to a private network, skip the proxy: a LAN
 /// server's prompt never crosses a proxy in clear text.
 fn goes_direct(url: &Url) -> bool {
-    let loopback = match url.host() {
-        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    };
-    loopback || (url.scheme() == "http" && url.host().is_some_and(|h| is_local(&h)))
+    url.host()
+        .is_some_and(|h| is_loopback(&h) || (url.scheme() == "http" && is_private_network(&h)))
 }
 
 fn client(limits: &Limits, proxied: bool) -> Result<Client> {
@@ -634,13 +629,17 @@ mod tests {
     }
 
     #[test]
-    fn private_http_goes_direct() {
+    fn loopback_and_private_http_go_direct() {
         let direct = |raw: &str| goes_direct(&Url::parse(raw).unwrap());
         assert!(direct("https://127.0.0.1:8443/v1"));
         assert!(direct("http://localhost:11434/v1"));
+        assert!(direct("http://[::1]:11434/v1"));
         assert!(direct("http://192.168.1.20:11434/v1"));
         assert!(direct("http://[fd00::1]/v1"));
         assert!(!direct("https://192.168.1.20/v1"));
+        assert!(!direct("http://ollama.example.com/v1"));
+        assert!(!direct("http://172.32.0.1/v1"));
+        assert!(!direct("http://[::ffff:8.8.8.8]/v1"));
         assert!(!direct("https://api.groq.com/openai/v1"));
     }
 

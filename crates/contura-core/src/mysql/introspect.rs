@@ -1,5 +1,7 @@
+use mysql_async::Row;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Pool, Row};
+
+use super::link::Pool;
 
 use super::query_err;
 use super::quote::quote_ident;

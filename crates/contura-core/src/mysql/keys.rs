@@ -1,7 +1,7 @@
 //! Lineage's catalog reads (B2, P6): every Foreign Key touching one database in one
 //! query, and the light column read of the tables lineage reached.
 
-use mysql_async::Pool;
+use super::link::Pool;
 use mysql_async::prelude::Queryable;
 
 use super::query_err;

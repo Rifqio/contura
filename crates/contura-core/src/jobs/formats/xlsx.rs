@@ -415,27 +415,48 @@ fn unpacked_text(what: Unpacked, bytes: u64, cap: u64) -> String {
     }
 }
 
-/// The unpacked sizes the zip directory declares, checked before calamine loads the
-/// shared strings whole (Q34 I4): the shared strings part and each sheet up to
-/// `caps.entry`, everything up to `caps.total`.
+/// The refusal when the bytes actually unpacked pass `cap`; the real size is not known
+/// because reading stops there.
+fn over_text(what: Unpacked, cap: u64) -> String {
+    let cap = size_text(cap);
+    match what {
+        Unpacked::SharedStrings => format!(
+            "This workbook's shared text unpacks to more than {cap}. Excel import takes up to {cap}; save it as CSV."
+        ),
+        Unpacked::Sheet => format!(
+            "A sheet in this workbook unpacks to more than {cap}. Excel import takes up to {cap} a sheet; save it as CSV."
+        ),
+        Unpacked::Total => format!(
+            "This workbook unpacks to more than {cap}. Excel import takes up to {cap}; save it as CSV."
+        ),
+    }
+}
+
+/// Which limit an entry's unpacked size counts against besides the total.
+fn entry_kind(name: &str) -> Option<Unpacked> {
+    let name = name.to_ascii_lowercase();
+    if name.ends_with("sharedstrings.xml") {
+        Some(Unpacked::SharedStrings)
+    } else if name.contains("worksheets/") && name.ends_with(".xml") {
+        Some(Unpacked::Sheet)
+    } else {
+        None
+    }
+}
+
+/// The unpacked sizes, checked before calamine loads the shared strings whole (Q34 I4):
+/// the shared strings part and each sheet up to `caps.entry`, everything up to
+/// `caps.total`. The sizes the zip directory declares are checked first, for an exact
+/// figure in the refusal; then every entry is unpacked and counted, stopping past the
+/// cap, because a crafted directory can declare any size (L4, security audit 1.0).
 fn check_unpacked(file: Source, caps: Caps) -> Result<()> {
-    let mut zip = zip::ZipArchive::new(BufReader::with_capacity(BUF_BYTES, file))
-        .map_err(|e| Error::File(format!("cannot read the workbook: {e}")))?;
+    let bad = |e: zip::result::ZipError| Error::File(format!("cannot read the workbook: {e}"));
+    let mut zip = zip::ZipArchive::new(BufReader::with_capacity(BUF_BYTES, file)).map_err(bad)?;
     let mut total = 0u64;
     for i in 0..zip.len() {
-        let entry = zip
-            .by_index_raw(i)
-            .map_err(|e| Error::File(format!("cannot read the workbook: {e}")))?;
+        let entry = zip.by_index_raw(i).map_err(bad)?;
         let size = entry.size();
-        let name = entry.name().to_ascii_lowercase();
-        let what = if name.ends_with("sharedstrings.xml") {
-            Some(Unpacked::SharedStrings)
-        } else if name.contains("worksheets/") && name.ends_with(".xml") {
-            Some(Unpacked::Sheet)
-        } else {
-            None
-        };
-        if let Some(what) = what
+        if let Some(what) = entry_kind(entry.name())
             && size > caps.entry
         {
             return Err(Error::File(unpacked_text(what, size, caps.entry)));
@@ -448,6 +469,32 @@ fn check_unpacked(file: Source, caps: Caps) -> Result<()> {
             total,
             caps.total,
         )));
+    }
+
+    let mut total = 0u64;
+    for i in 0..zip.len() {
+        // An entry this build cannot unpack (an unknown method, encryption) cannot be
+        // unpacked by calamine either, so it holds no hidden bytes; its declared size
+        // was counted above.
+        let Ok(mut entry) = zip.by_index(i) else {
+            continue;
+        };
+        let what = entry_kind(entry.name());
+        let left = caps.total - total;
+        let limit = if what.is_some() {
+            caps.entry.min(left)
+        } else {
+            left
+        };
+        let read = std::io::copy(&mut Read::take(&mut entry, limit + 1), &mut std::io::sink())
+            .map_err(|e| Error::File(format!("cannot read the workbook: {e}")))?;
+        if read > limit {
+            return Err(Error::File(match what {
+                Some(what) if read > caps.entry => over_text(what, caps.entry),
+                _ => over_text(Unpacked::Total, caps.total),
+            }));
+        }
+        total += read;
     }
     Ok(())
 }
@@ -1148,6 +1195,82 @@ mod tests {
             open(&p).starts_with("cannot read the workbook"),
             "{}",
             open(&p)
+        );
+    }
+
+    /// `crafted_zip`, then every entry's declared unpacked size rewritten to `declared`
+    /// in the local header and the central directory. The deflate stream and the CRC
+    /// stay true, so the entry still unpacks to its real size.
+    fn lying_zip(
+        dir: &Path,
+        name: &str,
+        entries: &[(&str, usize)],
+        declared: u32,
+    ) -> std::path::PathBuf {
+        let path = crafted_zip(dir, name, entries);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let mut patched = 0;
+        let mut i = 0;
+        while i + 4 <= bytes.len() {
+            let at = match bytes[i..i + 4] {
+                [0x50, 0x4b, 0x03, 0x04] => Some(i + 22),
+                [0x50, 0x4b, 0x01, 0x02] => Some(i + 24),
+                _ => None,
+            };
+            if let Some(at) = at {
+                bytes[at..at + 4].copy_from_slice(&declared.to_le_bytes());
+                patched += 1;
+            }
+            i += 1;
+        }
+        assert_eq!(patched, entries.len() * 2);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn unpacked_sizes_counted_not_trusted() {
+        // L4 (security audit 1.0): a zip directory that says 10 bytes for parts that
+        // really unpack past the caps is refused on the bytes actually unpacked.
+        let dir = tempfile::tempdir().unwrap();
+        let small = Caps {
+            entry: MIB,
+            total: 2 * MIB,
+            ..Caps::import()
+        };
+        let open = |path: &Path| match XlsxReader::open_capped(path, None, true, small) {
+            Err(Error::File(m)) => m,
+            other => panic!("{:?}", other.map(|_| ())),
+        };
+        let p = lying_zip(
+            dir.path(),
+            "s.xlsx",
+            &[("xl/sharedStrings.xml", 4 * MIB as usize)],
+            10,
+        );
+        assert_eq!(open(&p), over_text(Unpacked::SharedStrings, MIB));
+        let p = lying_zip(
+            dir.path(),
+            "w.xlsx",
+            &[("xl/worksheets/sheet1.xml", 2 * MIB as usize)],
+            10,
+        );
+        assert_eq!(open(&p), over_text(Unpacked::Sheet, MIB));
+        let third = (MIB as usize) * 3 / 4;
+        let p = lying_zip(
+            dir.path(),
+            "t.xlsx",
+            &[
+                ("xl/a.xml", third),
+                ("xl/b.xml", third),
+                ("xl/c.xml", third),
+            ],
+            10,
+        );
+        assert_eq!(open(&p), over_text(Unpacked::Total, 2 * MIB));
+        assert_eq!(
+            over_text(Unpacked::SharedStrings, ENTRY_UNPACKED),
+            "This workbook's shared text unpacks to more than 256 MB. Excel import takes up to 256 MB; save it as CSV."
         );
     }
 

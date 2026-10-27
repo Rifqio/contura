@@ -668,6 +668,31 @@ export function providerMessage(message: string): string {
   return /[.!?…]$/.test(capped) ? capped : `${capped}.`;
 }
 
+/** Plain http to another machine with no key: allowed, but what is sent can be read on the way (security audit L3). */
+export const plainTextUrlText = "This address is not encrypted. What you send travels as plain text.";
+
+/** Why a plain http base URL off this computer is refused while a key is saved: the key would cross a network unencrypted (security audit L3). */
+export const insecureUrlText = (): string =>
+  `This address is not encrypted. Use https or a local address on ${thisComputer()}, or remove the saved key.`;
+
+/**
+ * Whether a base URL is plain http to a host other than this computer, where the Core never sends a key.
+ * Mirrors `check_base_url`'s loopback rule: localhost, 127.0.0.0/8 and ::1 (also IPv4-mapped).
+ */
+export function plainHttpOffThisComputer(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:") return false;
+  const host = u.hostname.toLowerCase();
+  const loopback =
+    host === "localhost" || /^127\.\d+\.\d+\.\d+$/.test(host) || host === "[::1]" || /^\[::ffff:(127\.\d+\.\d+\.\d+|7f[0-9a-f]{2}:[0-9a-f]{1,4})\]$/.test(host);
+  return !loopback;
+}
+
 function aiErrorText(e: AiError): string {
   switch (e.kind) {
     case "notConfigured":
@@ -685,7 +710,7 @@ function aiErrorText(e: AiError): string {
     case "insecureUrl":
       return e.host === ""
         ? "The base URL is not a valid address."
-        : `Use https for ${e.host}. Plain http is allowed only on ${thisComputer()} or a private network.`;
+        : insecureUrlText();
     case "timeout":
       return "The provider did not answer in time.";
     case "cancelled":

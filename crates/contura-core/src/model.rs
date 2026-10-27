@@ -36,6 +36,10 @@ pub enum DialectKind {
 )]
 pub enum SslMode {
     Disable,
+    /// Encrypt when the server offers TLS, else go on in plain text; any certificate is
+    /// accepted (libpq `prefer`, MySQL `PREFERRED`). A TLS failure on a server that
+    /// offers TLS is an error, never a fall back to plain text.
+    Prefer,
     /// Encrypt, but accept any certificate.
     Require,
     /// The chain must lead to a CA from `ca_path`; the host name is not checked.
@@ -611,6 +615,18 @@ mod tests {
         );
         let read: SslMode = serde_json::from_str(r#"{"mode":"verifyFull"}"#).unwrap();
         assert_eq!(read, SslMode::VerifyFull { ca_path: None });
+        // M2: Preferred, and the saved modes read back as they were.
+        assert_eq!(
+            serde_json::to_value(SslMode::Prefer).unwrap(),
+            serde_json::json!({"mode":"prefer"})
+        );
+        for (json, mode) in [
+            (r#"{"mode":"prefer"}"#, SslMode::Prefer),
+            (r#"{"mode":"disable"}"#, SslMode::Disable),
+            (r#"{"mode":"require"}"#, SslMode::Require),
+        ] {
+            assert_eq!(serde_json::from_str::<SslMode>(json).unwrap(), mode);
+        }
     }
 
     #[test]

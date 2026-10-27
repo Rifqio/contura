@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use mysql_async::Pool;
+use super::link::Pool;
 use mysql_async::prelude::Queryable;
 
 use super::query_err;

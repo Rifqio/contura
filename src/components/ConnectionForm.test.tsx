@@ -199,7 +199,7 @@ test("sqlite_hides_server_fields_and_saves_the_file", async () => {
 test("parity_P11_38_ssl_ca_file_placeholder_follows_the_platform", async () => {
   const caPlaceholder = async () => {
     await userEvent.click(screen.getByRole("combobox", { name: "SSL" }));
-    await userEvent.click(screen.getByRole("option", { name: "Required, verify the CA" }));
+    await userEvent.click(screen.getByRole("option", { name: "Verify CA" }));
     return (screen.getByLabelText("CA certificate file") as HTMLInputElement).placeholder;
   };
   try {
@@ -617,9 +617,10 @@ test("group_and_ssl_use_the_themed_select_and_the_group_square", async () => {
   await userEvent.click(screen.getByRole("combobox", { name: "SSL" }));
   expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
     "Off",
-    "Required",
-    "Required, verify the CA",
-    "Required, verify the CA and host",
+    "Preferred (encrypt if the server allows)",
+    "Required (encrypt, don't verify the certificate)",
+    "Verify CA",
+    "Verify full (CA and host)",
   ]);
 });
 
@@ -628,7 +629,7 @@ async function saveVerifyFull(caFile: string) {
   const onSaved = vi.fn();
   render(<ConnectionForm connection={existing} groups={groups} defaultGroupId={null} onSaved={onSaved} onCancel={() => {}} />);
   await userEvent.click(screen.getByRole("combobox", { name: "SSL" }));
-  await userEvent.click(screen.getByRole("option", { name: "Required, verify the CA and host" }));
+  await userEvent.click(screen.getByRole("option", { name: "Verify full (CA and host)" }));
   const ca = screen.getByLabelText("CA certificate file") as HTMLInputElement;
   expect(ca.placeholder).toBe("Empty to trust the public CAs");
   if (caFile !== "") await userEvent.type(ca, caFile);
@@ -911,4 +912,73 @@ test("J2: editing a Connection is clean until a field changes", async () => {
   render(<ConnectionForm connection={existing} groups={groups} defaultGroupId={null} onSaved={() => {}} onCancel={onCancel} />);
   fireEvent.mouseDown(screen.getByRole("dialog").parentElement as HTMLElement);
   expect(onCancel).toHaveBeenCalledTimes(1);
+});
+
+const SSL_WARNING =
+  "The server's identity is not checked. Use Verify full to be sure you reach this server. Only a verify mode keeps your password safe.";
+const SSL_OFF_WARNING = "This connection is not encrypted. Use Verify full to protect it and check the server.";
+const sslShown = () => screen.getByRole("combobox", { name: "SSL" }).textContent;
+const hostInput = () => screen.getByLabelText("Host") as HTMLInputElement;
+async function setHost(value: string) {
+  await userEvent.clear(hostInput());
+  if (value !== "") await userEvent.type(hostInput(), value);
+}
+async function pickSsl(label: string) {
+  await userEvent.click(screen.getByRole("combobox", { name: "SSL" }));
+  await userEvent.click(screen.getByRole("option", { name: label }));
+}
+
+test("security_M2_a_new_connections_ssl_follows_the_host_until_touched", async () => {
+  routeInvoke({ save_connection: (a) => ({ ...existing, ...(a.input as object), id: "c9" }) });
+  const onSaved = renderNew();
+  // 127.0.0.1 is the starting host: this computer, so Off and no warning.
+  expect(sslShown()).toBe("Off");
+  expect(screen.queryByText(SSL_WARNING)).toBeNull();
+  await setHost("db.example.com");
+  expect(sslShown()).toBe("Preferred (encrypt if the server allows)");
+  expect(screen.getByText(SSL_WARNING)).toBeTruthy();
+  for (const local of ["localhost", "::1", "/var/run/mysqld/mysqld.sock", "127.0.0.1"]) {
+    await setHost(local);
+    expect({ local, ssl: sslShown() }).toEqual({ local, ssl: "Off" });
+    expect(screen.queryByText(SSL_WARNING)).toBeNull();
+  }
+  // Once chosen, the choice stays whatever the host.
+  await pickSsl("Required (encrypt, don't verify the certificate)");
+  await setHost("10.0.4.20");
+  expect(sslShown()).toBe("Required (encrypt, don't verify the certificate)");
+  expect(screen.getByText(SSL_WARNING)).toBeTruthy();
+  await pickSsl("Off");
+  await setHost("db.example.com");
+  expect(sslShown()).toBe("Off");
+  expect(screen.getByText(SSL_OFF_WARNING)).toBeTruthy();
+  expect(screen.queryByText(SSL_WARNING)).toBeNull();
+  await pickSsl("Verify CA");
+  expect(screen.queryByText(SSL_WARNING)).toBeNull();
+  expect(screen.queryByText(SSL_OFF_WARNING)).toBeNull();
+  await pickSsl("Verify full (CA and host)");
+  expect(screen.queryByText(SSL_WARNING)).toBeNull();
+  await pickSsl("Preferred (encrypt if the server allows)");
+  await userEvent.type(screen.getByLabelText("Name"), "Cloud");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect((callsTo("save_connection")[0].input as { ssl: unknown }).ssl).toEqual({ mode: "prefer" });
+});
+
+test("security_M2_a_new_remote_connection_saves_preferred", async () => {
+  routeInvoke({ save_connection: (a) => ({ ...existing, ...(a.input as object), id: "c9" }) });
+  const onSaved = renderNew();
+  await userEvent.type(screen.getByLabelText("Name"), "Cloud");
+  await setHost("db.example.com");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect((callsTo("save_connection")[0].input as { ssl: unknown }).ssl).toEqual({ mode: "prefer" });
+});
+
+test("security_M2_a_saved_connection_keeps_its_mode_and_warns_off_this_computer", async () => {
+  renderEditing({ ...existing, host: "db.example.com" });
+  expect(sslShown()).toBe("Off");
+  expect(screen.getByText(SSL_OFF_WARNING)).toBeTruthy();
+  await setHost("localhost");
+  expect(sslShown()).toBe("Off");
+  expect(screen.queryByText(SSL_OFF_WARNING)).toBeNull();
 });

@@ -50,6 +50,11 @@ semver = "1"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 
+# geteuid, so the data folder's modes are changed only on entries this user owns
+# (security audit 1.0 L1). Already in the tree through tokio and others: no new crate.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 # Helpers for tests outside this crate's unit tests, such as short pass lifetimes.
 test-util = []

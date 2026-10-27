@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use mysql_async::{Conn, OptsBuilder, Pool, Row, Value};
+use mysql_async::{Conn, Row, Value};
+
+use super::link::{Opts, Pool};
 
 use super::query_err;
 use super::quote::quote_ident;
@@ -297,7 +299,7 @@ enum ReadOut {
 /// asks the server to kill the query. A prepared statement is one statement, so the
 /// filter can't add a second. `server_limit` false leaves the server's limit off (tests).
 pub(crate) async fn count_rows(
-    opts: &OptsBuilder,
+    opts: &Opts,
     req: &CountRequest,
     timeout_ms: u64,
     server_limit: bool,
@@ -315,7 +317,7 @@ pub(crate) async fn count_rows(
 /// M3: the row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
 /// matching the filter, read as `count_rows` reads.
 pub(crate) async fn locate_row(
-    opts: &OptsBuilder,
+    opts: &Opts,
     req: &LocateRequest,
     timeout_ms: u64,
     server_limit: bool,
@@ -332,7 +334,7 @@ pub(crate) async fn locate_row(
 }
 
 async fn timed_read(
-    opts: &OptsBuilder,
+    opts: &Opts,
     read: Read<'_>,
     timeout_ms: u64,
     server_limit: bool,
@@ -340,7 +342,7 @@ async fn timed_read(
     let id = Arc::new(AtomicU32::new(0));
     let seen = id.clone();
     let work = async {
-        let mut conn = Conn::new(opts.clone()).await.map_err(query_err)?;
+        let mut conn = opts.conn().await.map_err(query_err)?;
         seen.store(conn.id(), Ordering::Relaxed);
         let out = read_on(&mut conn, &read, timeout_ms, server_limit).await;
         let _ = conn.disconnect().await;
@@ -355,7 +357,7 @@ async fn timed_read(
             if id != 0 {
                 let opts = opts.clone();
                 tokio::spawn(async move {
-                    if let Ok(mut conn) = Conn::new(opts).await {
+                    if let Ok(mut conn) = opts.conn().await {
                         let _ = conn.query_drop(format!("KILL QUERY {id}")).await;
                         let _ = conn.disconnect().await;
                     }

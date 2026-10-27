@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, OptsBuilder, Pool, Value as MyValue};
+use mysql_async::{Conn, Value as MyValue};
+
+use super::link::{Opts, Pool};
 
 use super::quote::quote_ident;
 use super::session::{BYTES, NUMERIC, type_name};
@@ -66,7 +68,7 @@ impl Canceller for Kill {
 }
 
 pub(super) async fn open(
-    opts: OptsBuilder,
+    opts: Opts,
     pool: Pool,
     read_only: bool,
     req: &SourceRequest,
@@ -82,8 +84,8 @@ pub(super) async fn open(
     .await
 }
 
-async fn produce(opts: OptsBuilder, pool: Pool, read_only: bool, req: SourceRequest, p: Producer) {
-    let mut conn = match Conn::new(opts).await {
+async fn produce(opts: Opts, pool: Pool, read_only: bool, req: SourceRequest, p: Producer) {
+    let mut conn = match opts.conn().await {
         Ok(c) => c,
         Err(e) => {
             let _ = p.ready.send(Err(Error::Connect(format!(
@@ -447,7 +449,7 @@ fn transactional(engine: &str) -> bool {
 /// Opens the Backup's snapshot of `database` on a connection of its own; see
 /// `Dialect::open_backup_read`.
 pub(super) async fn backup_read(
-    opts: OptsBuilder,
+    opts: Opts,
     pool: Pool,
     read_only: bool,
     database: &str,
@@ -456,7 +458,7 @@ pub(super) async fn backup_read(
     let (ready, opened, asks_tx, asks) = snapshot_channel();
     let database = database.to_string();
     tokio::spawn(async move {
-        let mut conn = match Conn::new(opts).await {
+        let mut conn = match opts.conn().await {
             Ok(c) => c,
             Err(e) => {
                 let _ = ready.send(Err(Error::Connect(format!(

@@ -1,7 +1,9 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use mysql_async::Value;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Pool, Value};
+
+use super::link::Pool;
 
 use super::page::{ColumnKind, ColumnMeta, table_column_meta};
 use super::query_err;
