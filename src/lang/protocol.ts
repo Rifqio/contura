@@ -1,7 +1,8 @@
 // Messages between the editor side (LangClient) and the language worker.
 import type { DialectKind, SchemaModel } from "../api/types";
+import type { FlowResultWire } from "./flow/wire";
 import type { MermaidResult } from "../flow/mermaid";
-import type { FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowResult, FlowSpansResult } from "./flow/service";
+import type { FlowCompleteAnswer, FlowEditAnswer, FlowOutlineAnswer, FlowRequestOp, FlowSpansResult } from "./flow/service";
 import type { LayoutRequest, Positions } from "../diagram/layout";
 import type { Range } from "./sql/analyze";
 import type { SqlCompletionResult } from "./sql/complete";
@@ -78,6 +79,8 @@ export type ToWorker =
   | { type: "flowClose"; docId: string }
   /** A DBML editor closed: forget its last valid model. */
   | { type: "dbmlClose"; docId: string }
+  /** The editor side missed a doc the post left out: re-parse the cached text and post in full to `ids`, the original request ids. */
+  | { type: "flowResend"; docId: string; ids: number[] }
   /** A flow tab opened again under a closed id. */
   | { type: "flowOpen"; docId: string }
   /**
@@ -102,7 +105,7 @@ export type FromWorker =
   | { type: "sqlRefactor"; ids: number[]; result: SqlRefactorResult }
   | { type: "layout"; ids: number[]; positions: Positions }
   | { type: "mermaid"; ids: number[]; result: MermaidResult }
-  | { type: "flowResult"; ids: number[]; docId: string; result: FlowResult }
+  | { type: "flowResult"; ids: number[]; docId: string; result: FlowResultWire }
   | { type: "flowSpans"; ids: number[]; result: FlowSpansResult }
   | { type: "flowEdit"; ids: number[]; result: FlowEditAnswer }
   | { type: "flowOutline"; ids: number[]; result: FlowOutlineAnswer }

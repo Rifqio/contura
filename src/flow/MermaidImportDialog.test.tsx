@@ -2,6 +2,7 @@ import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type NodeProps, ReactFlowProvider } from "@xyflow/react";
+import { useState } from "react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Group } from "../api/types";
 import { ToastProvider } from "../components/Toast";
@@ -14,6 +15,7 @@ import { FLOW_NODE_TYPES } from "./flowNodes";
 import flowTabCss from "../styles/flow-tab.css?raw";
 import flowFixture from "./fixtures/order-handover.flow?raw";
 import mmdFixture from "./fixtures/order-handover.mmd?raw";
+import type { MermaidAdd } from "./FlowTab";
 import MermaidImportDialog from "./MermaidImportDialog";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -30,13 +32,13 @@ const MMD = lf(mmdFixture);
 const FLOW = lf(flowFixture);
 const GROUPS: Group[] = [{ id: "g-kes", name: "Kestrel Foods", color: "teal", hasImage: false }];
 
-function setup(beforeReplace?: (name: string) => void) {
+function setup(beforeReplace?: (name: string) => void, add?: MermaidAdd) {
   const onClose = vi.fn();
   const onCreated = vi.fn();
   const lang = new LangClient(fakeWorker);
   render(
     <ToastProvider>
-      <MermaidImportDialog groups={GROUPS} defaultGroup={null} lang={lang} onClose={onClose} onCreated={onCreated} beforeReplace={beforeReplace} />
+      <MermaidImportDialog groups={GROUPS} defaultGroup={null} lang={lang} onClose={onClose} onCreated={onCreated} beforeReplace={beforeReplace} add={add} />
     </ToastProvider>,
   );
   const dialog = screen.getByRole("dialog", { name: "Diagram from Mermaid" });
@@ -256,4 +258,181 @@ test("the Mermaid editor's gutter takes the app tokens, not CodeMirror's dark gr
   expect(rule?.[2]).toMatch(/border-right:[^;]*var\(--c-border-subtle\)/);
   const numbers = [...plain.matchAll(/([^{}]+)\{([^}]*)\}/g)].find((m) => m[1].trim() === ".mermaid-editor .cm-lineNumbers");
   expect(numbers?.[2]).toMatch(/color:\s*var\(--c-text-faint\)/);
+});
+
+const TB = "flowchart TD\n  A[Start] --> B[Done]";
+const addOf = (run: MermaidAdd["run"]): MermaidAdd => ({ file: "board", run });
+
+test("add_mode_adds_a_frame_and_closes", async () => {
+  const run = vi.fn(async (_f: string, _d: "TB" | "LR") => null);
+  const { dialog, paste, onClose, onCreated } = setup(undefined, addOf(run));
+  const title = within(dialog).getByRole("textbox", { name: "Title" }) as HTMLInputElement;
+  expect(title.value).toBe("Untitled diagram");
+  expect(within(dialog).queryByRole("button", { name: /^Create/ })).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: /^Insert/ })).toBeNull();
+  expect(within(dialog).queryByRole("combobox", { name: "Group" })).toBeNull();
+  const add = within(dialog).getByRole("button", { name: /Add to board/ }) as HTMLButtonElement;
+  paste(TB);
+  await waitFor(() => expect(add.disabled).toBe(false));
+  fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(run.mock.calls[0][0]).toContain("Start");
+  expect(run.mock.calls[0][1]).toBe("TB");
+  expect(onCreated).not.toHaveBeenCalled();
+  expect(callsTo("write_diagram")).toEqual([]);
+});
+
+test("ctrl_enter_in_create_mode_is_unchanged", async () => {
+  const { dialog, onCreated } = await readyToCreate(false);
+  expect(within(dialog).queryByRole("button", { name: /Add to board/ })).toBeNull();
+  expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeTruthy();
+  fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("order-handover"));
+});
+
+test("a_refused_add_keeps_the_dialog_with_its_note", async () => {
+  const run = vi.fn(async () => "The board is full.");
+  const { dialog, paste, onClose } = setup(undefined, addOf(run));
+  paste(TB);
+  const add = within(dialog).getByRole("button", { name: /Add to board/ }) as HTMLButtonElement;
+  await waitFor(() => expect(add.disabled).toBe(false));
+  fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+  expect(await within(dialog).findByText("The board is full.")).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+test("a_typed_title_names_the_frame", async () => {
+  const run = vi.fn(async (_f: string, _d: "TB" | "LR") => null);
+  const { dialog, paste, onClose } = setup(undefined, addOf(run));
+  const title = within(dialog).getByRole("textbox", { name: "Title" });
+  await userEvent.clear(title);
+  await userEvent.type(title, "Payments flow");
+  paste(TB);
+  const add = within(dialog).getByRole("button", { name: /Add to board/ }) as HTMLButtonElement;
+  await waitFor(() => expect(add.disabled).toBe(false));
+  fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(run.mock.calls[0][0].split("\n")[0]).toBe('diagram flow "Payments flow"');
+});
+
+test("a_dashed_title_is_kept_as_typed", async () => {
+  const run = vi.fn(async (_f: string, _d: "TB" | "LR") => null);
+  const { dialog, paste, onClose } = setup(undefined, addOf(run));
+  const title = within(dialog).getByRole("textbox", { name: "Title" });
+  await userEvent.clear(title);
+  await userEvent.type(title, "pay-ments");
+  paste(TB);
+  const add = within(dialog).getByRole("button", { name: /Add to board/ }) as HTMLButtonElement;
+  await waitFor(() => expect(add.disabled).toBe(false));
+  fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(run.mock.calls[0][0].split("\n")[0]).toBe('diagram flow "pay-ments"');
+});
+
+// ----- B2 final review: one add per press (Important 1)
+
+test("add_pressed_twice_in_one_go_adds_once", async () => {
+  const run = vi.fn(async (_f: string, _d: "TB" | "LR") => null);
+  const { dialog, paste, onClose } = setup(undefined, addOf(run));
+  paste(TB);
+  const add = within(dialog).getByRole("button", { name: /Add to board/ }) as HTMLButtonElement;
+  await waitFor(() => expect(add.disabled).toBe(false));
+  act(() => {
+    fireEvent.click(add);
+    fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+  });
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  await new Promise((r) => setTimeout(r, 50));
+  expect(run).toHaveBeenCalledTimes(1);
+});
+
+test("create_pressed_twice_in_one_go_writes_once", async () => {
+  const { dialog, onCreated } = await readyToCreate(false);
+  const create = within(dialog).getByRole("button", { name: /^Create flow/ });
+  act(() => {
+    fireEvent.click(create);
+    fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
+  });
+  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  await new Promise((r) => setTimeout(r, 50));
+  expect(onCreated).toHaveBeenCalledTimes(1);
+  expect(callsTo("write_diagram")).toHaveLength(1);
+});
+
+// ----- B2 final review: Cancel cancels (Important 2)
+
+/** The dialog as App shows it: `onClose` unmounts it. */
+function hosted(add?: MermaidAdd) {
+  const onCreated = vi.fn();
+  function Host() {
+    const [open, setOpen] = useState(true);
+    return open ? (
+      <MermaidImportDialog groups={GROUPS} defaultGroup={null} lang={new LangClient(fakeWorker)} onClose={() => setOpen(false)} onCreated={onCreated} add={add} />
+    ) : null;
+  }
+  render(
+    <ToastProvider>
+      <Host />
+    </ToastProvider>,
+  );
+  const dialog = screen.getByRole("dialog", { name: "Diagram from Mermaid" });
+  const view = () => EditorView.findFromDOM(dialog.querySelector(".cm-editor") as HTMLElement)!;
+  act(() => view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: TB } }));
+  return { dialog, onCreated };
+}
+
+/** Holds the next conversions until `release` is called. */
+function slowConvert() {
+  let release = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  const real = LangClient.prototype.mermaid;
+  const spy = vi.spyOn(LangClient.prototype, "mermaid").mockImplementation(async function (this: LangClient, ...args: Parameters<LangClient["mermaid"]>) {
+    await gate;
+    return real.apply(this, args);
+  });
+  return { release: () => release(), spy };
+}
+
+test("cancel_while_converting_adds_no_frame", async () => {
+  const run = vi.fn(async (_f: string, _d: "TB" | "LR") => null);
+  const { dialog } = hosted(addOf(run));
+  const add = within(dialog).getByRole("button", { name: /Add to board/ }) as HTMLButtonElement;
+  await waitFor(() => expect(add.disabled).toBe(false));
+  const slow = slowConvert();
+  try {
+    fireEvent.click(add);
+    await waitFor(() => expect(slow.spy).toHaveBeenCalled());
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Cancel/ }));
+    expect(screen.queryByRole("dialog", { name: "Diagram from Mermaid" })).toBeNull();
+    await act(async () => {
+      slow.release();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(run).not.toHaveBeenCalled();
+  } finally {
+    slow.spy.mockRestore();
+  }
+});
+
+test("cancel_while_converting_writes_no_file", async () => {
+  routeInvoke({ list_diagrams: () => [], write_diagram: () => undefined });
+  const { dialog, onCreated } = hosted();
+  const create = within(dialog).getByRole("button", { name: /^Create/ }) as HTMLButtonElement;
+  await waitFor(() => expect(create.disabled).toBe(false));
+  const slow = slowConvert();
+  try {
+    fireEvent.click(create);
+    await waitFor(() => expect(slow.spy).toHaveBeenCalled());
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Cancel/ }));
+    expect(screen.queryByRole("dialog", { name: "Diagram from Mermaid" })).toBeNull();
+    await act(async () => {
+      slow.release();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(callsTo("write_diagram")).toEqual([]);
+    expect(onCreated).not.toHaveBeenCalled();
+  } finally {
+    slow.spy.mockRestore();
+  }
 });

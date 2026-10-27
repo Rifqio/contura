@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-1","model":"GLM-5.3-Flash","choices":[{"index":0,"delta":{"role":"assistant","content":"<think>"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","model":"GLM-5.3-Flash","choices":[{"index":0,"delta":{"content":"The user is asking for a count."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","model":"GLM-5.3-Flash","choices":[{"index":0,"delta":{"content":"</think>\n\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","model":"GLM-5.3-Flash","choices":[{"index":0,"delta":{"content":"SELECT count(*) FROM users;"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","model":"GLM-5.3-Flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

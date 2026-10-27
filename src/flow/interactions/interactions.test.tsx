@@ -261,13 +261,13 @@ test("drop_on_empty_opens_add_and_connect", async () => {
   await drawn(s);
   const cases = [
     { key: "s", x: 203, node: "Data store [store, id: D2]\n", link: "Customer > Data store\n" },
-    { key: "p", x: 603, node: "Process [process, id: 3.0]\n", link: "Customer > Process\n" },
+    { key: "r", x: 603, node: "Process [process, id: 3.0]\n", link: "Customer > Process\n" },
     { key: "e", x: 1003, node: "Outside party [entity]\n", link: "Customer > Outside party\n" },
   ];
   for (const c of cases) {
     act(() => canvas.props!.onConnectRelease!({ node: "Customer", port: "r" }, { x: c.x, y: 700 }));
     const menu = await screen.findByRole("menu", { name: "Add and connect" });
-    expect([...menu.querySelectorAll("[role=menuitem]")].map((b) => b.textContent)).toEqual(["ProcessP", "Data storeS", "Outside partyE"]);
+    expect([...menu.querySelectorAll("[role=menuitem]")].map((b) => b.textContent)).toEqual(["ProcessR", "Data storeS", "Outside partyE"]);
     fireEvent.keyDown(menu, { key: c.key });
     // The new shape opens with its name ready, centred where the line was let go; kept, it is written (fix round 1).
     fireEvent.keyDown(await screen.findByRole("textbox", { name: /^Name the new/ }), { key: "Enter" });
@@ -346,7 +346,7 @@ test("tidy_glides_240", async () => {
   await drawn(s);
   const from = canvas.renders.length;
   const start = performance.now();
-  await userEvent.click(screen.getByRole("button", { name: "Tidy" }));
+  await userEvent.click(screen.getByRole("button", { name: "Reset layout" }));
   await waitFor(() => expect(s.saves().length).toBeGreaterThan(0));
   const target = JSON.parse(s.saves()[s.saves().length - 1].layout).nodes.Customer as { x: number; y: number };
   expect(target).not.toEqual(PLACES.Customer);
@@ -363,7 +363,7 @@ test("tidy_jumps_under_reduced_motion", async () => {
   const s = setup();
   await drawn(s);
   const from = canvas.renders.length - 1;
-  await userEvent.click(screen.getByRole("button", { name: "Tidy" }));
+  await userEvent.click(screen.getByRole("button", { name: "Reset layout" }));
   await waitFor(() => expect(s.saves().length).toBeGreaterThan(0));
   const target = JSON.parse(s.saves()[s.saves().length - 1].layout).nodes.Customer;
   await waitFor(() => expect(shownAt("Customer")).toEqual(target));
@@ -378,7 +378,9 @@ test("tidy_selection_only_moves_selection", async () => {
   await drawn(s);
   act(() => canvas.props!.onSelect!(["Orders", "Card network"]));
   await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
-  await userEvent.click(screen.getByRole("button", { name: "Tidy" }));
+  // The frame bar's More menu (Task 9).
+  await userEvent.click(screen.getByRole("button", { name: "More" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Tidy selection" }));
   await waitFor(() => expect(s.saves().length).toBeGreaterThan(0));
   const nodes = JSON.parse(s.saves()[s.saves().length - 1].layout).nodes;
   for (const n of ["Customer", "Checkout", "Charge card"] as const) expect(nodes[n]).toEqual(PLACES[n]);
@@ -538,7 +540,7 @@ test("a_glide_frame_moves_only_the_gliding_nodes", async () => {
   const s = setup();
   await drawn(s);
   const from = canvas.renders.length;
-  await userEvent.click(screen.getByRole("button", { name: "Tidy" }));
+  await userEvent.click(screen.getByRole("button", { name: "Reset layout" }));
   await waitFor(() => expect(s.saves().length).toBeGreaterThan(0));
   await waitFor(() => expect(canvas.props!.livePositions ?? null).toBeNull(), { timeout: 3000 });
   const during = canvas.renders.slice(from).filter((r) => r.live);

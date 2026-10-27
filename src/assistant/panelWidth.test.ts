@@ -56,3 +56,91 @@ test("no_panel_row_has_a_fixed_width_wider_than_the_narrowest_panel", () => {
   }
   expect(wide).toEqual([]);
 });
+
+/** A track list split at its top-level spaces: "minmax(260px, var(--ask-width, 360px))" stays one track. */
+function tracksOf(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of list.trim()) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+test("nothing_in_the_ask_panel_is_wider_than_the_panel", () => {
+  // Owner report (Windows): paragraph text, Show exactly and the Enter hint were cut at the panel's right edge. In a
+  // real browser every row inside the panel fits it; what ran past the edge was the Ask column itself: with History
+  // open the four side minimums need 1,010 px, so on a narrower window the grid ran past the window's right edge.
+  // The Ask column follows the width set by its sash (--ask-width), 360 px until then.
+  expect(rule(".body-ai")["grid-template-columns"]).toBe("264px minmax(0, 1fr) var(--ask-width, 360px)");
+  expect(rule(".body-home.body-ai")["grid-template-columns"]).toBe("minmax(0, 1fr) var(--ask-width, 360px)");
+  expect(rule(".body-history.body-ai")["grid-template-columns"]).toBe(
+    "minmax(180px, 264px) minmax(320px, 1fr) minmax(220px, 360px) var(--ask-width, 360px)",
+  );
+  // Below 1,010 px each minimum gives way in proportion: at any window the four columns, three gaps and the padding fit.
+  const narrow = /@media \(max-width: 1009px\)\s*\{\s*\.body\.body-history\.body-ai\s*\{\s*grid-template-columns:\s*([^;]+);\s*\}\s*\}/.exec(css);
+  expect(narrow).not.toBeNull();
+  const tracks = tracksOf(narrow![1]);
+  expect(tracks).toHaveLength(4);
+  const least = (track: string, box: number) => {
+    const m = /^minmax\(min\((\d+)px, (\d+)%\),/.exec(track);
+    expect(m, track).not.toBeNull();
+    return Math.min(Number(m![1]), (Number(m![2]) / 100) * box);
+  };
+  for (const win of [1009, 900, 800, 640]) {
+    const box = win - 2 * 6;
+    expect(tracks.reduce((sum, t) => sum + least(t, box), 0) + 3 * 6, `${win} px`).toBeLessThanOrEqual(box);
+  }
+  // The sash is placed out of the flow on the panel's left edge: it adds no width.
+  expect(rule(".ai-panel").position).toBe("relative");
+  expect(rule(".ask-sash")).toMatchObject({ position: "absolute", width: "6px", cursor: "col-resize" });
+  // Long words and code inside the panel wrap or scroll in their own box.
+  expect(rule(".msg-ai")["overflow-wrap"]).toBe("anywhere");
+  expect(rule(".answer-code")["overflow-x"]).toBe("auto");
+  expect(rule(".payload").overflow).toBe("auto");
+});
+
+test("the_ask_panel_never_scrolls_sideways", () => {
+  // Owner report (Windows, dark): the panel's content was cut on both sides ("k Schema only", "ELECT * FROM", "Show
+  // ex..."): a box on the chain had been scrolled sideways. The panel clips in x, so it cannot be scrolled at all; the
+  // thread scrolls in y, where clip would compute to hidden, so it keeps hidden and its scroll handler puts
+  // scrollLeft back to 0 (AssistantPanel.test.tsx).
+  expect(rule(".ai-panel")).toMatchObject({ "overflow-x": "clip", "min-width": "0", "overflow-wrap": "anywhere" });
+  expect(rule(".thread")).toMatchObject({ "overflow-x": "hidden", "min-width": "0" });
+  // Every flex and grid child from the panel down to the messages, the code, the Sends rows and the composer can
+  // shrink to the column, at 300 px as at 360 px: none has a minimum wider than its content box.
+  for (const sel of [
+    ".ai-panel-head",
+    ".thread",
+    ".msg-user",
+    ".msg-ai",
+    ".msg-mark",
+    ".answer-sql",
+    ".answer-sql-head",
+    ".answer-sql-actions",
+    ".answer-code",
+    ".composer",
+    ".sends",
+    ".sends-row",
+    ".sends-list",
+    ".sends-item",
+    ".comp-box",
+    ".comp-foot",
+  ]) {
+    expect(rule(sel)["min-width"], sel).toBe("0");
+  }
+  expect(rule(".sends-list")["grid-template-columns"]).toBe("minmax(0, 1fr)");
+  // Code scrolls inside its own box; it never widens the message.
+  expect(rule(".answer-sql .sql-block")["overflow-x"]).toBe("auto");
+  expect(rule(".answer-code")["overflow-x"]).toBe("auto");
+  expect(rule(".payload").overflow).toBe("auto");
+  // The sash sits inside the panel's left edge, so the clip does not cut it off.
+  expect(rule(".ask-sash")).toMatchObject({ position: "absolute", left: "0", width: "6px" });
+});

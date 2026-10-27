@@ -1,4 +1,5 @@
-// The diagram tab's side panel (board 11.5): Editor and Assistant on a sliding switch, hidden to a 44 px rail.
+// The diagram tab's side panel (board 11.5): Editor and Assistant on a sliding switch, hidden to a 44 px rail, or
+// to nothing on a board (Decision 16).
 // Both panes stay mounted whichever tab shows (the inactive one is `hidden`), and so does the panel while it is
 // hidden, so the editor keeps its text and its undo history. The controls carry aria-labels only, no hover text.
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef } from "react";
@@ -15,6 +16,8 @@ export interface SidePanelProps {
   locked?: boolean;
   /** An Ask is running: the Assistant tab shows the working dot. */
   working?: boolean;
+  /** Hidden shows the 44 px rail (the default); false hides the panel to nothing (boards, Decision 16). */
+  rail?: boolean;
   onTab(tab: SideTab): void;
   onHide(): void;
   /** Shows the panel, on `tab` when given (the rail's Editor and Assistant), else on the tab it had. */
@@ -25,7 +28,7 @@ export interface SidePanelProps {
 
 const TABS: SideTab[] = ["editor", "assistant"];
 
-export default function SidePanel({ tab, hidden, pending, locked = false, working = false, onTab, onHide, onShow, editor, assistant }: SidePanelProps) {
+export default function SidePanel({ tab, hidden, pending, locked = false, working = false, rail = true, onTab, onHide, onShow, editor, assistant }: SidePanelProps) {
   const badgeId = useId();
   const ids = useId();
   const tabId = (t: SideTab) => `${ids}-tab-${t}`;
@@ -48,12 +51,14 @@ export default function SidePanel({ tab, hidden, pending, locked = false, workin
   useEffect(() => {
     if (was.current === hidden) return;
     was.current = hidden;
+    // With no rail there is nothing to take focus when hidden: the caller says where it goes.
+    if (hidden && !rail) return;
     (hidden ? showRef : tabRef).current?.focus();
-  }, [hidden]);
+  }, [hidden, rail]);
 
   return (
     <>
-      {hidden && (
+      {hidden && rail && (
         <nav className="srail" aria-label="Side panel, hidden">
           <button ref={showRef} type="button" className="btn ib" aria-label="Show the side panel" aria-expanded="false" onClick={() => onShow()}>
             <Icon name="sidebar" />

@@ -337,3 +337,16 @@ test("completion_offers_a_tables_columns_after_a_dot_in_an_er_frame", () => {
   s.parse("d", t);
   expect(s.complete("d", t, t.length).items.map((i) => i.label)).toEqual(["id", "email"]);
 });
+
+test("a_row_span_names_its_column_line", () => {
+  const s = createFlowService();
+  const t = 'diagram flow "Checkout"\nPay\n\ndiagram er "Shop"\norders {\n  id int pk\n  customer_id int\n  total numeric\n}\n';
+  const { version } = s.parse("d", t);
+  const r = s.spans("d", version, ["row:orders:2", "row:orders:3", "row:nope:0"], [], 1);
+  if (r.stale) throw new Error("stale");
+  const sp = r.spans["row:orders:2"]!;
+  // The row's own text, from its name on, shifted to the frame as every span is: a slice of the whole board's text.
+  expect(t.slice(sp.from, sp.to)).toBe("total numeric");
+  expect(r.spans["row:orders:3"]).toBeNull();
+  expect(r.spans["row:nope:0"]).toBeNull();
+});

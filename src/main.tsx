@@ -15,6 +15,8 @@ import "./styles/update.css";
 import "./styles/guide.css";
 import "./styles/lineage.css";
 import "./styles/flow-tab.css";
+import "./styles/flow-board.css";
+import "./styles/flow-shelf.css";
 import { installContextMenuGuard } from "./components/contextMenuGuard";
 import { installTooltipGuard } from "./components/tooltipGuard";
 import { setIconTheme } from "./flow/icons";

@@ -218,8 +218,9 @@ test("tree_is_288_and_264_beside_the_ai_panel", () => {
   expect(bodyOf(".body")).toMatch(/grid-template-columns:\s*var\(--layout-tree-width\)/);
   // S4, A4: the AI panel narrows the tree to 264, with or without History beside it; with both, the side columns
   // give way on a narrow window so the work area keeps 320 px (layoutFit.test.ts).
-  expect(bodyOf(".body-ai")).toMatch(/grid-template-columns:\s*264px minmax\(0, 1fr\) 360px/);
-  expect(bodyOf(".body-history.body-ai")).toMatch(/grid-template-columns:\s*minmax\(180px, 264px\) minmax\(320px, 1fr\) minmax\(220px, 360px\) minmax\(260px, 360px\)/);
+  // The Ask column follows its sash, 360 px until dragged (assistant/AskSash.tsx).
+  expect(bodyOf(".body-ai")).toMatch(/grid-template-columns:\s*264px minmax\(0, 1fr\) var\(--ask-width, 360px\)/);
+  expect(bodyOf(".body-history.body-ai")).toMatch(/grid-template-columns:\s*minmax\(180px, 264px\) minmax\(320px, 1fr\) minmax\(220px, 360px\) var\(--ask-width, 360px\)/);
   expect(bodyOf(".body-history")).toMatch(/grid-template-columns:\s*var\(--layout-tree-width\)/);
 });
 
@@ -557,7 +558,9 @@ test("parity_P11_23_answer_log_labels_wrap_instead_of_cutting", () => {
   expect(t).not.toMatch(/white-space:\s*nowrap/);
   expect(t).not.toMatch(/text-overflow:\s*ellipsis/);
   // The Log's source column is wide enough for the longest source, "rail.execution".
-  expect(bodyOf(".lrow")).toMatch(/grid-template-columns:\s*14px 44px 38px 14ch minmax\(0, 1fr\)/);
+  expect(bodyOf(".lrow")).toMatch(/grid-template-columns:\s*14px 44px 6ch 14ch minmax\(0, 1fr\)/);
+  // The level column fits "DEBUG" on one line (it wrapped to "DEBU G" in a 38 px column).
+  expect(bodyOf(".lv")).toMatch(/white-space:\s*nowrap/);
 });
 
 test("parity_P11_12_a_sends_label_stays_on_one_line_from_the_left", () => {

@@ -2160,6 +2160,12 @@ button.group-card-name:hover {
   padding-left: var(--spacing-lg);
 }
 
+.menu-right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
 .menu-chevron {
   color: var(--c-text-subtle);
 }
@@ -2869,6 +2875,14 @@ textarea.input {
   --xy-controls-button-color-default: var(--c-text);
   --xy-controls-button-border-color-default: var(--c-border);
   --xy-controls-box-shadow-default: 0 1px 2px rgba(0, 0, 0, 0.2);
+  /*
+    Its own compositing layer (blowup-report.md). React Flow draws each line in its own z-indexed svg at the flow
+    origin, so a line's layer spans from the origin to the line; on a board the origin lies far off, over the code
+    pane, whose scroller WebKitGTK composites. Each line then overlapped a composited layer and got one of its own,
+    sized to that span: gigabytes on a 10-frame board, and nothing painted. Opacity, not transform: a transform would
+    make the canvas the containing block of its fixed menus.
+  */
+  will-change: opacity;
 }
 /* The zoom control sits 10 px above the 140 px minimap, both 12 px from the right edge. */
 .diagram-canvas .react-flow__panel.canvas-zoom {
@@ -6198,33 +6212,69 @@ button.chip[aria-pressed="true"] {
 
 /* Assistant panel (step 4c) */
 /* S4, A4: the tree narrows to 264 px beside the AI panel. */
+/* The Ask column follows its sash (--ask-width, set on the body by App); 360 px until it is dragged. */
 .body-ai {
-  grid-template-columns: 264px minmax(0, 1fr) 360px;
+  grid-template-columns: 264px minmax(0, 1fr) var(--ask-width, 360px);
 }
 /* History and Ask together left the work area 8 px wide at 1,024 px (and 264 px at 1,280): the three side columns
    now give way, down to 180, 220 and 260 px, so the work area keeps at least 320 px. */
 /* Under a window tab (Home, Settings, Compare, ...) the sidebar is not drawn: the pane narrows by the panel's width. */
 .body-home.body-ai {
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) var(--ask-width, 360px);
 }
+/* With History open the Ask column is exactly the sash's width (useAskWidth leaves room for History's 220 px): History
+   and the tree give way first, down to their minimums. */
 .body-history.body-ai {
-  grid-template-columns: minmax(180px, 264px) minmax(320px, 1fr) minmax(220px, 360px) minmax(260px, 360px);
+  grid-template-columns: minmax(180px, 264px) minmax(320px, 1fr) minmax(220px, 360px) var(--ask-width, 360px);
+}
+/* The four minimums need 1,010 px: below that each gives way in proportion, or the Ask column ran past the window's
+   right edge (owner report: its text was cut at the edge). */
+@media (max-width: 1009px) {
+  .body.body-history.body-ai {
+    grid-template-columns: minmax(min(180px, 17%), 264px) minmax(min(320px, 30%), 1fr) minmax(min(220px, 20%), 360px) minmax(min(260px, 25%), var(--ask-width, 360px));
+  }
 }
 /* One column as wide as the panel: an auto column grew to the widest row's content (a long model name, a pill row),
    and every row then ran past the panel's right edge.
    Rows: the head, the thread, the composer. The composer row can shrink (minmax(0, auto)) and the thread keeps at
    least 30 percent of the panel (80 to 200 px), so on a short window the Sends list scrolls inside the composer and the message box stays in view;
    an auto composer row pushed the message box and the thread out of the panel. */
+/* Clipped in x (owner report: the content was cut on both sides once a box had scrolled sideways): the panel can
+   never be scrolled sideways, and long words and paths break anywhere. */
 .ai-panel {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(clamp(80px, 30%, 200px), 1fr) minmax(0, auto);
   min-width: 0;
+  overflow-x: clip;
+  overflow-wrap: anywhere;
   min-height: 0;
   background: var(--c-bg-panel);
 }
 /* A1, A5: 36 px strip on the panel colour, "Ask" in Title, the access chip, History and Close; no rule under it (frame d). */
+/* The resize edge (VS Code's chat sash): 6 px on the panel's left edge, inside it so the x clip keeps it. */
+.ask-sash {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.ask-sash:hover,
+.ask-sash.dragging,
+.ask-sash:focus-visible {
+  background: var(--c-border);
+}
+.ask-sash:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
 .ai-panel-head {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--spacing-xs);
@@ -6252,6 +6302,7 @@ button.chip[aria-pressed="true"] {
 /* Thread: 12 px padding, 14 px between messages. */
 /* A6: one column that never grows past the panel, so a long SQL line scrolls inside its block, never the thread. */
 .thread {
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
@@ -6262,6 +6313,7 @@ button.chip[aria-pressed="true"] {
 }
 /* The question: a right-aligned bubble on the active fill, 8 px radius, at most 88 percent wide. */
 .msg-user {
+  min-width: 0;
   justify-self: end;
   max-width: 88%;
   padding: var(--spacing-sm) 10px;
@@ -6298,6 +6350,7 @@ button.chip[aria-pressed="true"] {
 }
 /* Board 11.1: the 28 px head strip with the Core's label (check, or a warning for writes and flags) and Copy. */
 .answer-sql-head {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -6331,6 +6384,7 @@ button.chip[aria-pressed="true"] {
   padding-left: var(--spacing-md);
 }
 .answer-sql-actions {
+  min-width: 0;
   display: flex;
   /* A narrow panel (History open beside it) puts the buttons on a second line instead of cutting them. */
   flex-wrap: wrap;
@@ -6453,11 +6507,13 @@ button.chip[aria-pressed="true"] {
 .composer > * {
   flex: none;
 }
+/* Open, the list takes about a third of the panel at most and scrolls inside (owner report: it covered the chat). */
 .composer > .sends {
   flex: 0 1 auto;
   min-height: 0;
+  max-height: min(33vh, 320px);
   overflow-y: auto;
-  /* Room for an edge pill's focus ring inside the scroll area, as .new-diagram-kinds. */
+  /* Room for an edge pill's focus ring inside the scroll area. */
   margin: -3px;
   padding: 3px;
   /* A focused switch scrolls clear of the Sends line (28 px over the 3 px ring room), which stays put over the rows. */
@@ -6497,6 +6553,7 @@ button.chip[aria-pressed="true"] {
 }
 /* Under the input: what is not sent, the Enter hint and a 24 px send button. */
 .comp-foot {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--spacing-xs);
@@ -6866,6 +6923,7 @@ button.chip[aria-pressed="true"] {
   gap: var(--spacing-xs);
 }
 .sends-row {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -6887,8 +6945,13 @@ button.chip[aria-pressed="true"] {
 .sends-fold:hover {
   background: var(--c-bg-hover);
 }
+.sends-fold:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: var(--focus-ring-offset);
+}
+/* Muted, not subtle: on dark a subtle chevron read as part of a plain label. */
 .sends-fold > svg {
-  color: var(--c-text-subtle);
+  color: var(--c-text-muted);
 }
 .sends-label {
   font: var(--font-small);
@@ -6972,7 +7035,9 @@ button.send-pill:hover {
 }
 /* One row per item the Core built: the item, then its size or why it is locked. */
 .sends-list {
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
   margin: 0;
   padding: 0;
@@ -7218,6 +7283,7 @@ button.send-pill:hover {
 }
 /* Under a streamed answer: how it ended, the Sent line, and its one action. */
 .msg-mark {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -7568,7 +7634,7 @@ button.send-pill:hover {
 .lrow {
   display: grid;
   /* P11-23: the source column fits the longest source ("rail.execution") instead of cutting it. */
-  grid-template-columns: 14px 44px 38px 14ch minmax(0, 1fr);
+  grid-template-columns: 14px 44px 6ch 14ch minmax(0, 1fr);
   gap: 6px;
   align-items: start;
   padding: 3px var(--spacing-sm) 3px 4px;
@@ -7603,6 +7669,8 @@ button.send-pill:hover {
   color: var(--c-info-text);
   font: var(--font-micro);
   line-height: 16px;
+  /* DEBUG is the longest level; the column is sized in ch so it never wraps. */
+  white-space: nowrap;
   letter-spacing: 0.02em;
 }
 .lv.debug {
@@ -13224,4 +13292,89 @@ button.dbox:hover,
     animation: none;
     box-shadow: inset 0 0 0 2px var(--c-accent);
   }
+}
+
+/* An answer log line's or Steps row's body (owner request, 27 Oct): the whole answer, the thinking, or each checked
+   statement, as a Grafana Loki or Langfuse trace opens a line. The text scrolls inside its own box. */
+.lbody {
+  min-width: 0;
+  margin: 4px 0 6px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+}
+.lbody-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--spacing-xs);
+  height: 28px;
+  padding: 0 var(--spacing-xs) 0 var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.lbody-head .icon-button {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+.lbody-text {
+  max-height: 240px;
+  margin: 0;
+  padding: var(--spacing-sm);
+  overflow: auto;
+  font: var(--font-mono-micro);
+  font-variant-ligatures: contextual;
+  font-feature-settings: "calt" 1, "liga" 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lbody-note {
+  margin: 4px 0 6px;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.lchecks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-xs);
+  min-width: 0;
+  margin: 4px 0 6px;
+}
+.lcheck {
+  min-width: 0;
+}
+.lcheck .sql-block {
+  overflow-x: auto;
+  padding: var(--spacing-xs) 0;
+}
+.lcheck-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  min-width: 0;
+  margin: 2px 0 0;
+  font: var(--font-small);
+}
+.lcheck-verdict {
+  font-weight: 600;
+  color: var(--c-success-text);
+}
+.lcheck-verdict.write {
+  color: var(--c-warning-text);
+}
+.lcheck-verdict.flag {
+  color: var(--c-danger-text);
+}
+.lcheck-reason {
+  color: var(--c-text-muted);
+}
+/* Under a Log line the body sits in from the grid's edges, below the line's fields. */
+.lline > .lbody,
+.lline > .lchecks,
+.lline > .lbody-note {
+  margin-right: var(--spacing-sm);
+  margin-left: var(--spacing-sm);
 }

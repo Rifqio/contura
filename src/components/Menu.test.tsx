@@ -116,3 +116,21 @@ test("a_point_menu_opened_20_px_from_the_right_edge_moves_left_at_its_own_width"
   expect(box.style.width).toBe("");
   rect.mockRestore();
 });
+
+test("a_submenu_row_keeps_its_chevron_on_its_line", async () => {
+  await open([{ key: "c", label: "Colour", hint: "Blue", submenu: [{ key: "b", label: "Blue", onSelect: () => {} }] }]);
+  const row = screen.getByRole("menuitem", { name: "Colour" });
+  expect(row.children).toHaveLength(3);
+  const right = row.children[2];
+  expect(right.querySelector(".menu-hint")).not.toBeNull();
+  expect(right.querySelector(".menu-chevron")).not.toBeNull();
+});
+
+test("no_empty_overlay_survives_a_resize", async () => {
+  await open([]);
+  window.dispatchEvent(new Event("resize"));
+  expect(document.querySelector(".menu")).toBeNull();
+  render(<PointMenu x={10} y={10} items={[]} label="Cell" onClose={() => {}} onDismiss={() => {}} />);
+  window.dispatchEvent(new Event("resize"));
+  expect(document.querySelector(".menu")).toBeNull();
+});

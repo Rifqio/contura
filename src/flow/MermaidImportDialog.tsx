@@ -24,6 +24,7 @@ import { dbmlHighlight } from "../schema/dbmlLanguage";
 import FlowPreview from "./FlowPreview";
 import type { DiagramKind } from "../lang/flow/model";
 import { insertKindRefusal, KIND_SHORT } from "../lang/flow/insert";
+import type { MermaidAdd } from "./FlowTab";
 import type { MermaidResult } from "./mermaid";
 import { mermaidLang } from "./mermaidLang";
 
@@ -43,6 +44,11 @@ interface Props {
    * (draw.io's Arrange > Insert > Mermaid). `run` answers why it was refused, or null once it is in.
    */
   insert?: { kind: DiagramKind; file: string; run(flow: string): Promise<string | null> };
+  /**
+   * B2 decision 15: opened from the Shelf, the result becomes a new frame in the board `add.file`. The Name is the frame's
+   * Title; Create, Insert and the Group are hidden; Ctrl+Enter runs Add to board. `run` answers why it was refused, or null.
+   */
+  add?: MermaidAdd;
 }
 
 /** The lines the converter could not read, marked where they are written (board DiagramStartWell). */
@@ -94,7 +100,7 @@ function blockOf(text: string, result: MermaidResult | null): string | null {
   return null;
 }
 
-export default function MermaidImportDialog({ groups, defaultGroup, lang, onClose, onCreated, beforeReplace, onBack, insert }: Props) {
+export default function MermaidImportDialog({ groups, defaultGroup, lang, onClose, onCreated, beforeReplace, onBack, insert, add }: Props) {
   const { label: ungroupedLabel } = useUngroupedLabel();
   const toast = useToast();
   const [text, setText] = useState("");
@@ -103,6 +109,8 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   /** Every diagram's name, so the name it suggests is free (VS Code's Untitled-N). */
   const taken = useRef<string[]>([]);
   useEffect(() => {
+    // A frame's title needs no free file name.
+    if (add) return;
     let live = true;
     // Asked once; a test with no Core answer leaves the default as it is.
     Promise.resolve()
@@ -118,11 +126,23 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
     return () => {
       live = false;
     };
+    // The mode is fixed for the dialog's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [group, setGroup] = useState<string>(defaultGroup ?? "");
   const [tab, setTab] = useState<"diagram" | "text">("diagram");
   const [result, setResult] = useState<MermaidResult | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Create, Insert or Add is running: a second press before the first renders does nothing (`busy` lags a render). */
+  const running = useRef(false);
+  /** False once the dialog is gone (Cancel, Esc): a conversion or write still running then adds, writes and says nothing. */
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   const [message, setMessage] = useState<string | null>(null);
   /** The file name being asked about: "<name>.flow already exists. Replace it?" */
   const [asking, setAsking] = useState<string | null>(null);
@@ -134,7 +154,8 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   const fileName = /\.flow$/i.test(name.trim()) ? name.trim() : `${name.trim()}.flow`;
   /** The name the Core gets; it adds .flow and keeps the file in the diagrams folder. */
   const flowName = fileName.replace(/\.flow$/i, "");
-  const title = titleFromName(fileName);
+  // Add mode: the typed Title is the frame's header title as typed; addFrames makes it free. Empty keeps the default.
+  const title = add && name.trim() ? name.trim() : titleFromName(fileName);
 
   // Convert in the language worker 150 ms after the last change to the text or the Name.
   useEffect(() => {
@@ -163,8 +184,9 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   const insertWhy = !insert ? null : block ?? (result && result.kind !== insert.kind ? insertKindRefusal(insert.kind, result.kind) : null);
   const canInsert = !!insert && !busy && insertWhy === null;
 
+  const canAdd = !!add && !busy && block === null && name.trim() !== "";
   const actions = useRef({ create: () => {}, openFile: () => {}, insert: () => {} });
-  actions.current.create = () => void createFlow();
+  actions.current.create = () => void (add ? addFlow() : createFlow());
   actions.current.openFile = () => void openFile();
   actions.current.insert = () => void insertFlow();
 
@@ -232,8 +254,9 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
     setMessage(null);
     try {
       const picked = await open({ multiple: false, directory: false, filters: [{ name: "Mermaid", extensions: ["mmd", "mermaid"] }] });
-      if (typeof picked !== "string") return;
+      if (typeof picked !== "string" || !alive.current) return;
       const content = await readTextFile(picked);
+      if (!alive.current) return;
       const v = view.current;
       if (v) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: content } });
       else setText(content);
@@ -242,29 +265,35 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
         setName(freeDiagramName(base.replace(/\.[^.]*$/, "") || DEFAULT_NAME, taken.current));
       }
     } catch (e) {
-      setMessage(errorText(e));
+      if (alive.current) setMessage(errorText(e));
     }
   }
 
   async function createFlow(replace = false) {
-    if (!canCreate) return;
+    if (!canCreate || running.current) return;
+    running.current = true;
     setBusy(true);
     setMessage(null);
     setAsking(null);
     try {
       const fresh = await lang.mermaid(text, title);
+      if (!alive.current) return;
       setResult(fresh);
       if (blockOf(text, fresh) !== null) return;
       // One Core call writes the .flow and its layout file together in the diagrams folder, by name; a taken
       // name is refused unless this is the Replace answer.
       if (replace) await beforeReplace?.(flowName);
+      if (!alive.current) return;
       await writeDiagram(flowName, fresh.flow, flowLayoutJson(fresh.direction, group === "" ? null : group), replace);
+      if (!alive.current) return;
       toast.show({ kind: "success", text: `Created ${flowName}` });
       onCreated(flowName);
     } catch (e) {
+      if (!alive.current) return;
       if (isCommandError(e) && e.kind === "diagramExists") setAsking(`${e.message.name}.flow`);
       else setMessage(errorText(e));
     } finally {
+      running.current = false;
       setBusy(false);
     }
   }
@@ -282,20 +311,46 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
 
   /** Insert (step 10): the converted text into the open diagram, as one undo step; the dialog closes once it is in. */
   async function insertFlow() {
-    if (!insert || !canInsert) return;
+    if (!insert || !canInsert || running.current) return;
+    running.current = true;
     setBusy(true);
     setMessage(null);
     try {
       const fresh = await lang.mermaid(text, title);
+      if (!alive.current) return;
       setResult(fresh);
       if (blockOf(text, fresh) !== null) return;
       if (fresh.kind !== insert.kind) return setMessage(insertKindRefusal(insert.kind, fresh.kind));
       const why = await insert.run(fresh.flow);
+      if (!alive.current) return;
       if (why) setMessage(why);
       else onClose();
     } catch (e) {
-      setMessage(errorText(e));
+      if (alive.current) setMessage(errorText(e));
     } finally {
+      running.current = false;
+      setBusy(false);
+    }
+  }
+  /** Add to board (decision 15): the converted text as a new frame; the dialog closes once it is in, a refusal stays here. */
+  async function addFlow() {
+    if (!add || !canAdd || running.current) return;
+    running.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const fresh = await lang.mermaid(text, title);
+      if (!alive.current) return;
+      setResult(fresh);
+      if (blockOf(text, fresh) !== null) return;
+      const why = await add.run(fresh.flow, fresh.direction);
+      if (!alive.current) return;
+      if (why) setMessage(why);
+      else onClose();
+    } catch (e) {
+      if (alive.current) setMessage(errorText(e));
+    } finally {
+      running.current = false;
       setBusy(false);
     }
   }
@@ -390,7 +445,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
         )}
         <div className="mermaid-fields">
           <label className="field mermaid-name">
-            <span>Name</span>
+            <span>{add ? "Title" : "Name"}</span>
             <input
               className="input mono"
               value={name}
@@ -402,10 +457,12 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
               }}
             />
           </label>
-          <div className="field mermaid-group">
-            <span>Group</span>
-            <Select value={group} options={groupOptions} onChange={setGroup} label="Group" />
-          </div>
+          {!add && (
+            <div className="field mermaid-group">
+              <span>Group</span>
+              <Select value={group} options={groupOptions} onChange={setGroup} label="Group" />
+            </div>
+          )}
         </div>
       </div>
       {backAsk && onBack && (
@@ -455,22 +512,31 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
             Cancel
             <Kbd keys="Esc" />
           </button>
-          {insert && (
-            <button
-              type="button"
-              className="button"
-              disabled={!canInsert}
-              title={insertWhy ?? "Adds it to the open diagram, selected, as one undo step (Ctrl+Shift+Enter)"}
-              onClick={() => void insertFlow()}
-            >
-              {`Insert into ${insert.file}`}
-              <Kbd keys="Ctrl+Shift+Enter" />
+          {add ? (
+            <button type="button" className="button button-primary" disabled={!canAdd} onClick={() => void addFlow()}>
+              Add to board
+              <Kbd keys="Ctrl+Enter" />
             </button>
+          ) : (
+            <>
+              {insert && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!canInsert}
+                  title={insertWhy ?? "Adds it to the open diagram, selected, as one undo step (Ctrl+Shift+Enter)"}
+                  onClick={() => void insertFlow()}
+                >
+                  {`Insert into ${insert.file}`}
+                  <Kbd keys="Ctrl+Shift+Enter" />
+                </button>
+              )}
+              <button type="button" className="button button-primary" disabled={!canCreate} onClick={() => void createFlow()}>
+                {`Create ${createWord}`}
+                <Kbd keys="Ctrl+Enter" />
+              </button>
+            </>
           )}
-          <button type="button" className="button button-primary" disabled={!canCreate} onClick={() => void createFlow()}>
-            {`Create ${createWord}`}
-            <Kbd keys="Ctrl+Enter" />
-          </button>
         </footer>
       )}
     </Dialog>

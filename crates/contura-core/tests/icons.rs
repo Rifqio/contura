@@ -362,3 +362,18 @@ fn every_name_of_the_old_pack_still_resolves() {
         .collect();
     assert!(missing.is_empty(), "no longer resolve: {missing:?}");
 }
+
+/// Every `icon:` name the catalog's templates use is in the pack (the fixture is checked against the
+/// templates by `templates.test.ts`). The signature is the one in `main`: no fallback.
+#[test]
+fn the_catalog_icons_are_in_the_index() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/flow/catalog_icons.json"
+    );
+    let names: Vec<String> = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert!(!names.is_empty());
+    for name in &names {
+        icons::icon(name, None).unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+}

@@ -4,6 +4,8 @@ import { expect, test, vi } from "vitest";
 import type { AiAccess, ContextInfo, Preview, PreviewItem } from "../api/types";
 import { iconElement } from "../components/Icon";
 import Sends from "./Sends";
+import { SENDS_OPEN_KEY } from "./sendsFold";
+import appCss from "../styles/app.css?raw";
 import { setPlatformForTests } from "../platform";
 
 const EXACT = "<context>\nTable orders(id bigint pk)\n</context>\n\nwhy slow?  ";
@@ -431,4 +433,82 @@ test("recent_steps_pill_titles_and_off_state", async () => {
   // No steps: no row at all.
   rerender(<Sends preview={preview()} header="h" onToggle={onToggle} />);
   expect(screen.queryByRole("button", { name: /^Recent steps/ })).toBeNull();
+});
+
+// ---- Owner report: the open Sends list covered half the panel and would not close ----
+// The fold works like VS Code Copilot Chat's "Used n references": folded per answer, opened for a look.
+
+const foldButton = () => screen.getByRole("button", { name: "Sends" });
+
+/** The declarations of every rule whose selector list holds exactly `selector`, comments removed, merged in order. */
+function cssRule(selector: string): Record<string, string> {
+  const css = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  const out: Record<string, string> = {};
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!m[1].split(",").some((s: string) => s.trim() === selector)) continue;
+    for (const d of m[2].split(";")) {
+      const at = d.indexOf(":");
+      if (at > 0) out[d.slice(0, at).trim()] = d.slice(at + 1).trim();
+    }
+  }
+  return out;
+}
+
+test("a_slash_command_opens_sends_without_saving_it", () => {
+  localStorage.removeItem(SENDS_OPEN_KEY);
+  const view = render(<Sends preview={preview()} header="h" onToggle={() => {}} foldable openSignal={0} />);
+  expect(foldButton().getAttribute("aria-expanded")).toBe("false");
+  view.rerender(<Sends preview={preview()} header="h" onToggle={() => {}} foldable openSignal={1} />);
+  expect(foldButton().getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  // Open for this look only: the next panel starts as the preference says.
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBeNull();
+  view.unmount();
+  render(<Sends preview={preview()} header="h" onToggle={() => {}} foldable />);
+  expect(foldButton().getAttribute("aria-expanded")).toBe("false");
+});
+
+test("the_open_sends_list_is_capped_and_scrolls", () => {
+  // About a third of the panel at most; the rows scroll inside under the sticky Sends line.
+  expect(cssRule(".composer > .sends")).toMatchObject({ "max-height": "min(33vh, 320px)", "overflow-y": "auto", "min-height": "0" });
+  expect(cssRule(".composer > .sends > .sends-row")).toMatchObject({ position: "sticky", top: "0" });
+});
+
+test("the_fold_button_says_what_it_does", async () => {
+  localStorage.removeItem(SENDS_OPEN_KEY);
+  const user = userEvent.setup();
+  render(<Sends preview={preview()} header="h" onToggle={() => {}} foldable />);
+  expect(foldButton().getAttribute("title")).toBe("Show what this Ask sends");
+  await user.click(foldButton());
+  expect(foldButton().getAttribute("title")).toBe("Hide what this Ask sends");
+  // The chevron reads as a control on dark, not as a label, and keyboard focus shows a ring like the link buttons.
+  expect(cssRule(".sends-fold > svg").color).toBe("var(--c-text-muted)");
+  expect(cssRule(".sends-fold:focus-visible")).toMatchObject({
+    outline: "var(--focus-ring-width) solid var(--c-focus)",
+    "outline-offset": "var(--focus-ring-offset)",
+  });
+  localStorage.removeItem(SENDS_OPEN_KEY);
+});
+
+test("esc_folds_the_open_list_and_returns_focus", async () => {
+  localStorage.removeItem(SENDS_OPEN_KEY);
+  const user = userEvent.setup();
+  const outer = vi.fn();
+  render(
+    <div onKeyDown={(e) => e.key === "Escape" && outer()}>
+      <Sends preview={preview()} header="h" onToggle={() => {}} foldable />
+    </div>,
+  );
+  await user.click(foldButton());
+  screen.getByRole("button", { name: /^Schema/ }).focus();
+  await user.keyboard("{Escape}");
+  expect(foldButton().getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("listitem")).toBeNull();
+  expect(document.activeElement).toBe(foldButton());
+  // The key is used up: the panel's own Esc does not run as well.
+  expect(outer).not.toHaveBeenCalled();
+  // Folded, Esc does nothing here and goes on to the panel.
+  await user.keyboard("{Escape}");
+  expect(outer).toHaveBeenCalledTimes(1);
+  localStorage.removeItem(SENDS_OPEN_KEY);
 });

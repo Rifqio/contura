@@ -1,5 +1,5 @@
 import { fakeSqlEditor } from "../test/fakeSqlEditor";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
@@ -391,8 +391,9 @@ test("include_values_is_off_again_after_each_ask", async () => {
   expect(askSent().switches.values).toBe(true);
   await screen.findByText("Use an index.");
 
-  // The next question in the same thread starts with values off again.
+  // The next question in the same thread starts with values off again. The Ask folded the list; open it to look.
   await waitFor(() => expect(lastPreview().switches.values).toBe(false));
+  await user.click(sendsFold());
   expect((await values()).getAttribute("aria-pressed")).toBe("false");
   await user.type(screen.getByRole("textbox", { name: "Message" }), "and now?{Enter}");
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
@@ -740,6 +741,8 @@ test("rows_switch_off_after_send", async () => {
   expect(askSent().switches.rows).toBe(true);
   await screen.findByText("Use an index.");
   await waitFor(() => expect(lastPreview().switches.rows).toBe(false));
+  // The Ask folded the list; open it to look.
+  await user.click(sendsFold());
   expect((await screen.findByRole("button", { name: /^Sample rows/ })).getAttribute("aria-pressed")).toBe("false");
   await user.type(screen.getByRole("textbox", { name: "Message" }), "two{Enter}");
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
@@ -1125,6 +1128,28 @@ test("a_settings_change_opens_an_open_panels_sends", async () => {
   expect(sendsFold().getAttribute("aria-expanded")).toBe("false");
 });
 
+test("sending_an_ask_folds_the_sends_list", async () => {
+  // Owner report: the open list covered half the panel after every Ask. Like Copilot Chat's "Used n references",
+  // each Ask starts folded; the remembered choice is only how a new panel opens.
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  unfoldSends();
+  renderPanel();
+  await waitFor(() => expect(callsTo("ai_settings")).toHaveLength(1));
+  expect(await screen.findByRole("button", { name: "schema of 1 table" })).toBeTruthy();
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("true");
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(sendsFold().getAttribute("aria-expanded")).toBe("false");
+  expect(document.querySelector(".sends-list")).toBeNull();
+  // The preference is untouched: a new panel still opens with the list shown.
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("1");
+  cleanup();
+  renderPanel();
+  expect(await screen.findByRole("button", { name: "schema of 1 table" })).toBeTruthy();
+});
+
 const FENCED = "Join them:\n```sql\nSELECT id FROM orders\n```\nThat is all.";
 
 /** A query tab's editor holding `doc`, typing at its start. */
@@ -1473,7 +1498,7 @@ test("pick_tables_unfolds_sends_and_focuses_the_first_switch", async () => {
   // The preview is asked for again after the failure; focus lands once its switches are drawn.
   await waitFor(() => expect(document.activeElement).toBe(document.querySelector(".sends .send-pill[aria-pressed]")));
   expect(document.activeElement?.classList.contains("send-pill")).toBe(true);
-  // Remembered, as the chevron and /sends remember it.
+  // Remembered, as the chevron remembers it (/sends opens for one look only).
   expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("1");
 });
 
@@ -2518,13 +2543,13 @@ test("each_command_runs_its_control", async () => {
   expect(await screen.findByRole("dialog", { name: "Model" })).toBeTruthy();
   cleanup();
 
-  // /sends opens the Sends list in full, unfolding it, and the list stays open next time.
+  // /sends opens the Sends list in full, unfolding it for this look only: the preference is not saved.
   user = await slashPanel();
   expect(screen.getByRole("button", { name: "Sends" }).getAttribute("aria-expanded")).toBe("false");
   await user.type(composer(), "/sends{Enter}");
   expect(await screen.findByRole("button", { name: "Hide" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Sends" }).getAttribute("aria-expanded")).toBe("true");
-  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBe("1");
+  expect(localStorage.getItem(SENDS_OPEN_KEY)).toBeNull();
   cleanup();
 
   // /log opens the last answer's log.
@@ -2673,6 +2698,10 @@ test("sends_stays_collapsed_after_the_log_view", async () => {
   expect(await screen.findByRole("button", { name: "Show exactly" })).toBeTruthy();
   await user.type(composer(), "/log{Enter}");
   await user.click(await screen.findByRole("button", { name: "Back to the answer" }));
+  // /sends opened the list for that look only, so the composer comes back folded as the preference says, and the
+  // old /sends does not open the exact text again.
+  await waitFor(() => expect(screen.getByRole("button", { name: "Sends" }).getAttribute("aria-expanded")).toBe("false"));
+  await user.click(screen.getByRole("button", { name: "Sends" }));
   expect(await screen.findByRole("button", { name: "Show exactly" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Hide" })).toBeNull();
 });
@@ -3190,6 +3219,9 @@ test("Recent steps row and switch", async () => {
   // The turn was kept: the steps it carried are gone, and the switch is back on.
   await waitFor(() => expect(stepsOf("ungrouped")).toEqual([]));
   await waitFor(() => expect(lastPreview().off).not.toContain("steps"));
+  // The Ask folded the list; open it to look.
+  await user.click(screen.getByRole("button", { name: "Sends" }));
+  await screen.findByRole("button", { name: "Show exactly" });
   expect(screen.queryByRole("button", { name: /^Recent steps/ })).toBeNull();
   act(() => recordStep("ungrouped", trail[2]));
   expect((await pill()).getAttribute("aria-pressed")).toBe("true");
@@ -3332,4 +3364,17 @@ test("a7_the_tab_key_goes_with_the_question_when_it_is_saved", async () => {
   await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(1));
   const turn = callsTo("ai_append_turn")[0].turn as AppendTurn;
   expect(turn.messages[0].askedIn).toEqual({ ...askedIn, tabKey: "query:d2" });
+});
+
+test("the_thread_never_stays_scrolled_sideways", async () => {
+  // Owner report: a scroll into view of a wide code block left the thread scrolled sideways, its text cut on both
+  // sides. jsdom does no layout, so the scroll is set by hand and the thread's scroll handler must put it back.
+  renderPanel();
+  await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+  const thread = document.querySelector(".thread") as HTMLElement;
+  let left = 0;
+  Object.defineProperty(thread, "scrollLeft", { configurable: true, get: () => left, set: (v: number) => (left = v) });
+  thread.scrollLeft = 48;
+  fireEvent.scroll(thread);
+  expect(thread.scrollLeft).toBe(0);
 });

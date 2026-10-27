@@ -2332,19 +2332,106 @@ test("export_in_the_background_shows_the_status_item_and_a_click_reopens_the_dia
   expect(callsTo("cancel_job")).toEqual([]);
 });
 
-test("new_diagram_opens_from_home_and_with_ctrl_alt_n_and_leads_to_mermaid", async () => {
-  workspaceRoutes({ list_diagrams: () => [] });
+const catalogRoutes = (over: Record<string, (a: Record<string, unknown>) => unknown> = {}) =>
+  workspaceRoutes({ list_diagrams: () => [], icon_index: () => [], write_diagram: () => null, read_diagram: () => ({ text: 'diagram flow "Untitled diagram"\n', layout: null }), ...over });
+
+test("home_new_diagram_opens_the_catalog", async () => {
+  catalogRoutes();
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "New diagram" }));
-  const sheet = await screen.findByRole("dialog", { name: "New diagram" });
-  await userEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
+  const catalog = await screen.findByRole("dialog", { name: "New diagram" });
+  expect(within(catalog).getByRole("listbox", { name: "Diagrams" })).toBeTruthy();
+  expect(within(catalog).getByRole("listbox", { name: "Templates" })).toBeTruthy();
+  expect(within(catalog).queryByRole("button", { name: "From Mermaid..." })).toBeNull();
+  // Esc closes the catalog only: Home, behind it, stays.
+  await userEvent.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull());
+  expect(screen.getByRole("tab", { name: "Home" })).toBeTruthy();
+  expect(callsTo("write_diagram")).toEqual([]);
+});
+
+test("ctrl_alt_n_and_the_feature_bar_open_the_same_catalog", async () => {
+  catalogRoutes();
+  render(<App />);
+  await screen.findByRole("button", { name: "New diagram" });
   await userEvent.keyboard("{Control>}{Alt>}n{/Alt}{/Control}");
-  const again = await screen.findByRole("dialog", { name: "New diagram" });
-  // The sheet's Mermaid way in swaps it for the step 7 dialog.
-  await userEvent.click(within(again).getByRole("button", { name: "From Mermaid..." }));
-  expect(await screen.findByRole("dialog", { name: /Diagram from Mermaid/ })).toBeTruthy();
+  const viaKey = await screen.findByRole("dialog", { name: "New diagram" });
+  expect(within(viaKey).getByRole("listbox", { name: "Templates" })).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull());
+  await userEvent.click(screen.getByRole("button", { name: "Diagram" }));
+  const viaBar = await screen.findByRole("dialog", { name: "New diagram" });
+  expect(within(viaBar).getByRole("listbox", { name: "Templates" })).toBeTruthy();
+});
+
+test("a_kind_from_the_catalog_creates_the_file_and_opens_its_tab", async () => {
+  catalogRoutes();
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "New diagram" }));
+  const catalog = await screen.findByRole("dialog", { name: "New diagram" });
+  await userEvent.click(within(catalog).getByRole("option", { name: "Flowchart" }));
+  await waitFor(() => expect(callsTo("write_diagram")).toHaveLength(1));
+  expect(callsTo("write_diagram")[0]).toMatchObject({ name: "Untitled diagram", text: 'diagram flow "Untitled diagram"\n', overwrite: false });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull());
+  expect(await screen.findByRole("tab", { name: /Untitled diagram/ })).toBeTruthy();
+});
+
+test("from_mermaid_back_returns_to_the_catalog_with_the_search_kept", async () => {
+  catalogRoutes();
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "New diagram" }));
+  const catalog = await screen.findByRole("dialog", { name: "New diagram" });
+  await userEvent.type(within(catalog).getByRole("combobox"), "shop");
+  await userEvent.click(within(catalog).getByRole("option", { name: "From Mermaid" }));
+  const mermaid = await screen.findByRole("dialog", { name: /Diagram from Mermaid/ });
   expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull();
+  await userEvent.click(within(mermaid).getByRole("button", { name: "Back" }));
+  const again = await screen.findByRole("dialog", { name: "New diagram" });
+  expect((within(again).getByRole("combobox") as HTMLInputElement).value).toBe("shop");
+  expect(screen.queryByRole("dialog", { name: /Diagram from Mermaid/ })).toBeNull();
+});
+
+test("from_my_database_creates_a_file", async () => {
+  catalogRoutes({
+    ...ordersRoutes(shopMy),
+    schema_snapshot: () => ({
+      dialect: "mysql",
+      tables: [{ schema: null, name: "orders", alias: null, note: null, indexes: [], columns: [{ name: "id", typeName: "int", pk: true, increment: false, notNull: false, unique: false, default: null, note: null }] }],
+      refs: [], enums: [], skipped: [],
+    }),
+  });
+  render(<App />);
+  await closeHome();
+  await userEvent.click(await screen.findByRole("button", { name: "Open KFC Shop" }));
+  await screen.findByRole("treeitem", { name: treeName("orders") });
+  await userEvent.keyboard("{Control>}{Alt>}n{/Alt}{/Control}");
+  const catalog = await screen.findByRole("dialog", { name: "New diagram" });
+  await userEvent.type(within(catalog).getByRole("combobox"), "x");
+  await userEvent.clear(within(catalog).getByRole("combobox"));
+  await userEvent.click(within(catalog).getByRole("option", { name: "From my database" }));
+  const db = await screen.findByRole("dialog", { name: "From my database" });
+  expect(screen.queryByRole("dialog", { name: "New diagram" })).toBeNull();
+  await userEvent.click(within(db).getByRole("combobox", { name: "Connection" }));
+  await userEvent.click(screen.getByRole("option", { name: /KFC Shop/ }));
+  await within(db).findByRole("combobox", { name: "Database" });
+  await userEvent.click(within(db).getByRole("button", { name: /Read the database/ }));
+  await waitFor(() => expect(callsTo("write_diagram")).toHaveLength(1));
+  expect(String(callsTo("write_diagram")[0].text)).toContain("orders {");
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "From my database" })).toBeNull());
+  expect(await screen.findByRole("tab", { name: new RegExp(String(callsTo("write_diagram")[0].name)) })).toBeTruthy();
+});
+
+test("from_my_database_back_returns_to_the_catalog", async () => {
+  catalogRoutes();
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "New diagram" }));
+  const catalog = await screen.findByRole("dialog", { name: "New diagram" });
+  await userEvent.type(within(catalog).getByRole("combobox"), "shop");
+  await userEvent.click(within(catalog).getByRole("option", { name: "From my database" }));
+  const db = await screen.findByRole("dialog", { name: "From my database" });
+  await userEvent.click(within(db).getByRole("button", { name: "Back" }));
+  const again = await screen.findByRole("dialog", { name: "New diagram" });
+  expect((within(again).getByRole("combobox") as HTMLInputElement).value).toBe("shop");
 });
 
 test("a_restart_drops_import_tabs", async () => {
@@ -2625,8 +2712,10 @@ test("the Ask panel shows on Home and Settings, not on a diagram, where the togg
   expect(askPanel()).toBeNull();
   await toggleAsk();
   expect(await screen.findByRole("complementary", { name: "Ask" })).toBeTruthy();
-  // The window pane narrows by the panel's width.
+  // The window pane narrows by the panel's width, which its left edge sets.
   expect(document.querySelector(".body")!.className).toBe("body body-home body-ai");
+  expect((document.querySelector(".body") as HTMLElement).style.getPropertyValue("--ask-width")).toBe("360px");
+  expect(screen.getByRole("separator", { name: "Resize the Ask panel" })).toBeTruthy();
   expect(screen.getByRole("textbox", { name: "Message" }).getAttribute("placeholder")).toBe("Ask about Contura or SQL");
 
   await userEvent.keyboard("{Control>},{/Control}");

@@ -1,39 +1,29 @@
 import { expect, test } from "vitest";
 import type { FromWorker } from "../protocol";
 import { createHandler } from "../worker";
-import { MAX_BOARD_FRAMES, MAX_BOARD_SHAPES } from "./model";
+import { frameHeaders } from "./board";
+import { board, FRAMES, LINKS, TYPED_FRAME } from "./fixtures/bigBoard";
+import { type FlowDoc, MAX_BOARD_FRAMES, MAX_BOARD_SHAPES } from "./model";
 import { bestMedian } from "./perfGate";
+import { createFlowService, type FlowResult } from "./service";
+import { docsById, fromWire, toWire } from "./wire";
 
-// Timing tests: run alone through `npm run test:perf`. A board at the limit: 50 frames, each 200 shapes (198 nodes in
-// two groups, and the groups, which count as shapes) and 300 labelled links, so 10,000 shapes and 15,000 links in all.
-const FRAMES = 50;
-const NODES = 198;
-const LINKS = 300;
+// Timing tests: run alone through `npm run test:perf`. The board is A5's, at the limit (fixtures/bigBoard.ts).
 
-/** Frame `k`; `typed` is added to its last link's label, as typing in it would. */
-function frame(k: number, typed = ""): string {
-  const lines = [`diagram flow "Area ${k}"`, ""];
-  for (const [g, side] of ["Left", "Right"].entries()) {
-    lines.push(`${side} ${k} {`);
-    for (let i = 0; i < NODES / 2; i++) lines.push(`  Step ${g * (NODES / 2) + i}`);
-    lines.push("}");
-  }
-  for (let i = 0; i < LINKS; i++) lines.push(`Step ${i % NODES} > Step ${(i * 7 + 1) % NODES}: go ${i}${i === LINKS - 1 ? typed : ""}`);
-  return `${lines.join("\n")}\n`;
+/** The editor side's merge of a worker post: what the client resolves with. */
+function merge(out: FromWorker | null, held: Map<number, FlowDoc>): FlowResult {
+  if (out?.type !== "flowResult") throw new Error("expected a flow result");
+  const r = fromWire(out.result, held);
+  held.clear();
+  for (const [k, v] of docsById(r)) held.set(k, v);
+  return r;
 }
 
-const BEFORE = Array.from({ length: 25 }, (_, k) => `${frame(k)}\n`).join("");
-const AFTER = Array.from({ length: FRAMES - 26 }, (_, k) => `\n${frame(k + 26)}`).join("");
-const TYPED_FRAME = 25;
-const board = (typed = "") => `${BEFORE}${frame(TYPED_FRAME, typed)}${AFTER}`;
-
-function expectFullBoard(out: FromWorker | null) {
-  expect(out?.type).toBe("flowResult");
-  if (out?.type !== "flowResult") return;
-  expect(out.result.problems).toEqual([]);
-  expect(out.result.frames).toHaveLength(MAX_BOARD_FRAMES);
-  expect(out.result.frames.reduce((n, f) => n + (f.doc?.nodes.length ?? 0) + (f.doc?.groups.length ?? 0), 0)).toBe(MAX_BOARD_SHAPES);
-  expect(out.result.frames.reduce((n, f) => n + (f.doc?.links.length ?? 0), 0)).toBe(FRAMES * LINKS);
+function expectFullBoard(r: FlowResult) {
+  expect(r.problems).toEqual([]);
+  expect(r.frames).toHaveLength(MAX_BOARD_FRAMES);
+  expect(r.frames.reduce((n, f) => n + (f.doc?.nodes.length ?? 0) + (f.doc?.groups.length ?? 0), 0)).toBe(MAX_BOARD_SHAPES);
+  expect(r.frames.reduce((n, f) => n + (f.doc?.links.length ?? 0), 0)).toBe(FRAMES * LINKS);
 }
 
 test("a_10000_shape_board_parses_and_sends_under_120ms", () => {
@@ -47,35 +37,59 @@ test("a_10000_shape_board_parses_and_sends_under_120ms", () => {
     handle({ type: "flowParse", id: run, docId: ids[run], text });
     handle({ type: "flowClose", docId: ids[run] });
   }, 3, 10);
-  expectFullBoard(last);
+  expectFullBoard(merge(last, new Map()));
   expect(median).toBeLessThan(120);
 });
 
 test("typing_in_one_frame_of_a_10000_shape_board_parses_and_sends_under_40ms", () => {
   let last: FromWorker | null = null;
-  // The result as the service made it, before the clone: a reused frame's parse gives the same doc object.
-  let made: FromWorker | null = null;
-  const handle = createHandler((m) => {
-    made = m;
-    last = structuredClone(m);
-  }, 0);
+  const handle = createHandler((m) => (last = structuredClone(m)), 0);
+  const held = new Map<number, FlowDoc>();
   handle({ type: "flowParse", id: 0, docId: "board", text: board() });
-  const seed = made as FromWorker | null;
+  const seed = merge(last, held);
   // 3 batches of 20 runs; the texts are built before the timing (they share the 49 unchanged frames).
   const texts = Array.from({ length: 60 }, (_, run) => board(` typed ${run}`));
+  let merged = seed;
   const median = bestMedian((run) => {
     // A change in frame 25 only, as typing makes one: frames 0 to 24 and 26 to 49 reuse their parse.
     handle({ type: "flowParse", id: run + 1, docId: "board", text: texts[run] });
+    merged = merge(last, held);
   });
-  expectFullBoard(last);
-  const out = last as FromWorker | null;
-  if (out?.type !== "flowResult") throw new Error("expected a parse");
-  expect(out.result.frames[TYPED_FRAME].doc?.links[LINKS - 1].label).toBe(`go ${LINKS - 1} typed ${texts.length - 1}`);
-  const end = made as FromWorker | null;
-  if (seed?.type !== "flowResult" || end?.type !== "flowResult") throw new Error("expected a parse");
+  expectFullBoard(merged);
+  expect(merged.frames[TYPED_FRAME].doc?.links[LINKS - 1].label).toBe(`go ${LINKS - 1} typed ${texts.length - 1}`);
   for (let i = 0; i < FRAMES; i++) {
-    if (i === TYPED_FRAME) expect(end.result.frames[i].doc).not.toBe(seed.result.frames[i].doc);
-    else expect(end.result.frames[i].doc, `frame ${i} was parsed again`).toBe(seed.result.frames[i].doc);
+    if (i === TYPED_FRAME) expect(merged.frames[i].doc).not.toBe(seed.frames[i].doc);
+    else expect(merged.frames[i].doc, `frame ${i} was parsed again`).toBe(seed.frames[i].doc);
   }
   expect(median).toBeLessThan(40);
+});
+
+test("typing_in_one_frame_posts_and_merges_under_12ms", () => {
+  const svc = createFlowService();
+  const sent = new Set<number>();
+  const held = new Map<number, FlowDoc>();
+  const send = (text: string) => {
+    const wire = toWire(svc.parse("board", text), sent);
+    const r = fromWire(structuredClone(wire), held);
+    held.clear();
+    for (const [k, v] of docsById(r)) held.set(k, v);
+    return { wire, r };
+  };
+  send(board());
+  // A change in frame 25 only (its last link's label): one doc on the wire, the other 49 by id.
+  const texts = Array.from({ length: 60 }, (_, run) => board(` typed ${run}`));
+  let last = send(board());
+  const median = bestMedian((run) => {
+    last = send(texts[run]);
+  });
+  expect(last.wire.frames.filter((f) => f.doc !== undefined)).toHaveLength(1);
+  expectFullBoard(last.r);
+  expect(median).toBeLessThan(12);
+});
+
+test("frame_headers_on_a_full_board_under_2ms", () => {
+  const text = board();
+  expect(frameHeaders(text)).toHaveLength(FRAMES);
+  expect(frameHeaders(text)[TYPED_FRAME]).toMatchObject({ kind: "flow", title: `Area ${TYPED_FRAME}` });
+  expect(bestMedian(() => frameHeaders(text))).toBeLessThan(2);
 });

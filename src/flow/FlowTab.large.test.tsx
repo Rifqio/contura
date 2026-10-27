@@ -87,9 +87,12 @@ test("two_thousand_node_flow_tab_draws_only_what_is_visible_and_stays_responsive
     </div>,
   );
   await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBeGreaterThan(0), { timeout: 30000 });
-  // Every node is on the canvas's list; only the visible ones are in the page, drawn as name boxes.
-  await waitFor(() => expect(canvas.props!.nodes.length).toBe(N), { timeout: 30000 });
-  const rendered = container.querySelectorAll(".react-flow__node").length;
+  // Every node is on the canvas's list, beside the frame's own box (Plan B Task 6); only the visible ones are in the
+  // page, drawn as name boxes.
+  const shapes = () => canvas.props!.nodes.filter((n) => n.type !== "boardFrame");
+  await waitFor(() => expect(shapes().length).toBe(N), { timeout: 30000 });
+  expect(canvas.props!.nodes.length).toBe(N + 1);
+  const rendered = container.querySelectorAll(".react-flow__node:not(.react-flow__node-boardFrame)").length;
   expect(rendered).toBeLessThan(300);
   expect(container.querySelector(".diagram-canvas.is-fast")).not.toBeNull();
   expect(container.querySelectorAll(".fnode-box").length).toBe(rendered);
@@ -101,10 +104,13 @@ test("two_thousand_node_flow_tab_draws_only_what_is_visible_and_stays_responsive
   act(() => canvas.props!.onMove!("Node 7", 4000, 4000));
   await waitFor(() => expect(canvas.props!.nodes.find((n) => n.id === "Node 7")?.position).toEqual({ x: 4000, y: 4000 }), { timeout: 15000 });
   expect(view.state.doc.toString()).toBe(text);
-  fireEvent.keyDown(container.querySelector(".flow-canvas") as HTMLElement, { key: "p" });
+  fireEvent.keyDown(container.querySelector(".flow-canvas") as HTMLElement, { key: "r" });
+  fireEvent.keyDown(container.querySelector(".flow-canvas") as HTMLElement, { key: "Enter" });
   fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new process" }, { timeout: 15000 }), { key: "Enter" });
   await waitFor(() => expect(view.state.doc.toString()).toContain("Process [process, id: 2001.0]\n"), { timeout: 15000 });
   await waitFor(() => expect(callsTo("write_diagram").length).toBeGreaterThan(0), { timeout: 15000 });
   // Still only the visible part is in the page.
   expect(container.querySelectorAll(".react-flow__node").length).toBeLessThan(300);
+  // The level of detail counts the live frame's shapes (2,001 after the add), never the frame's box.
+  await waitFor(() => expect(canvas.props!.detailCount).toBe(N + 1), { timeout: 15000 });
 });

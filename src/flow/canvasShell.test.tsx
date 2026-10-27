@@ -113,16 +113,17 @@ test("F1 a clicked line is selected on the canvas and its right-click menu has D
   oneUndo(s, FLOW);
 });
 
-test("F1 every kind's line deletes through the canvas: a message, a class line, a transition", async () => {
+test("F1 every kind's line deletes through the canvas: a message, a relationship, a transition", async () => {
   const cases: [string, string, string, string][] = [
     [lines('diagram sequence "Pay"', "participant App", "participant Api", "App -> Api : charge", "Api --> App : ok"), "Participant App", "Api to App", "Api --> App : ok\n"],
+    [lines('diagram er "Billing"', "customers {", "  id int pk", "}", "invoices {", "  id int pk", "  customer_id int", "}", "", "invoices.customer_id > customers.id"), "Table customers", "invoices to customers", "invoices.customer_id > customers.id\n"],
     [lines('diagram class "Types"', "class Animal", "class Dog", "Animal <|-- Dog"), "Class Animal", "Animal to Dog", "Animal <|-- Dog\n"],
     [lines('diagram state "Invoice"', "Draft", "Sent", "[*] > Draft", "Draft > Sent : send"), "State Draft", "Draft to Sent", "Draft > Sent : send\n"],
   ];
   for (const [text, label, chip, gone] of cases) {
     const s = setup(text, `k-${label}`);
     await drawn(s, label);
-    const index = label === "Participant App" ? 1 : label === "Class Animal" ? 0 : 1;
+    const index = label === "Participant App" ? 1 : label === "Class Animal" || label === "Table customers" ? 0 : 1;
     act(() => canvas.props!.onLineSelect!([`edge:${index}`]));
     await waitFor(() => expect(within(s.strip()).getByText(chip)).toBeTruthy());
     s.press("Delete");
@@ -182,12 +183,18 @@ test("F6 Enter on a selected shape edits its name in place", async () => {
   oneUndo(s, FLOW);
 });
 
-test("F24 the tool bar has no inert Select button", async () => {
+test("F24 the tool bar's Select is not inert: it disarms the armed tool", async () => {
   const s = setup();
   await drawn(s);
-  const bar = screen.getByRole("toolbar", { name: "Diagram tools" });
-  expect(within(bar).queryByRole("button", { name: "Select" })).toBeNull();
-  expect(within(bar).getAllByRole("button")[0].getAttribute("aria-label")).toBe("Add step");
+  const bar = screen.getByRole("toolbar", { name: "Board tools" });
+  const select = within(bar).getAllByRole("button")[0];
+  expect(select.getAttribute("aria-label")).toBe("Select");
+  expect(select.getAttribute("aria-pressed")).toBe("true");
+  s.press("d");
+  expect(within(bar).getByRole("button", { name: "Decision" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(select);
+  expect(select.getAttribute("aria-pressed")).toBe("true");
+  expect(within(bar).getByRole("button", { name: "Decision" }).getAttribute("aria-pressed")).toBe("false");
 });
 
 test("F29 Ctrl+Shift+E opens Publish, and the menu shows the key", async () => {
@@ -228,7 +235,7 @@ test("I3 Enter on a focused tool bar button keeps its own Enter; it does not ren
   await drawn(s);
   act(() => canvas.props!.onSelect!(["Check"]));
   await waitFor(() => expect(s.node("Step Check")!.classList.contains("selected")).toBe(true));
-  const button = within(screen.getByRole("toolbar", { name: "Diagram tools" })).getByRole("button", { name: "Add decision" });
+  const button = within(screen.getByRole("toolbar", { name: "Board tools" })).getByRole("button", { name: "Decision" });
   button.focus();
   // Not cancelled: the browser still activates the button.
   expect(fireEvent.keyDown(button, { key: "Enter" })).toBe(true);

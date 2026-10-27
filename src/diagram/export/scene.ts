@@ -148,6 +148,8 @@ export interface Scene {
   /** A timeline's sections, behind everything, and its axis, behind the items. */
   sections?: SceneSection[];
   axis?: SceneAxis;
+  /** The frame's text size as a label scale (Decision 22): every label's font size is multiplied by it; unset at 1. */
+  textScale?: number;
 }
 
 /** Every edge a crop can snap to: the left and right of each node and area, and their tops and bottoms. */

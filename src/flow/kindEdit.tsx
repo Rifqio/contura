@@ -1,7 +1,9 @@
 // Diagram step 3 (board DiagramEditInPlace): the edits drawn inside a shape of the newer kinds, CL1's class member
 // rows and T1's date fields. One small store holds the open edit; each card reads it through a selector, so only
 // the card being edited draws again and 2,000 cards at rest keep nothing (memory is a requirement).
+import { useNodeId } from "@xyflow/react";
 import { createContext, useContext, useSyncExternalStore } from "react";
+import { isStaticId } from "./board/staticIds";
 import type { CommitHow } from "./interactions/InlineEdit";
 
 export type KindEdit =
@@ -50,10 +52,18 @@ export const KindEditContext = createContext<{ store: KindEditStore; api: KindEd
 const NONE = () => () => {};
 const nothing = () => null;
 
-/** The edit open on `node`, or null; a card draws again only when its own edit changes. */
+/**
+ * A shape of a static frame, in every form boardScene's `isStaticId` knows (B3 R1: one list). Static frames are inert:
+ * their cards never draw the live frame's edit rows, though their shapes may share its names (two frames with a "User").
+ */
+export const inStaticFrame = (id: string | null | undefined) => !!id && isStaticId(id);
+
+/** The edit open on `node`, or null; a card draws again only when its own edit changes. Null on a static frame's card. */
 export function useKindEdit(node: string): KindEdit | null {
   const ctx = useContext(KindEditContext);
-  return useSyncExternalStore(ctx ? ctx.store.subscribe : NONE, ctx ? () => (ctx.store.get()?.node === node ? ctx.store.get() : null) : nothing);
+  const live = !inStaticFrame(useNodeId());
+  const store = live ? ctx : null;
+  return useSyncExternalStore(store ? store.store.subscribe : NONE, store ? () => (store.store.get()?.node === node ? store.store.get() : null) : nothing);
 }
 
 export const MEMBER_MESSAGES = {

@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import type { FromWorker } from "../protocol";
 import { createHandler } from "../worker";
 import { bestMedian } from "./perfGate";
+import { fromWire } from "./wire";
 
 // Timing test: runs alone through `npm run test:perf`, so other test files don't compete for the CPU.
 test("parse_and_send_2000_nodes_3000_links_under_16ms_in_the_worker", () => {
@@ -28,8 +29,9 @@ test("parse_and_send_2000_nodes_3000_links_under_16ms_in_the_worker", () => {
   const out = last as FromWorker | null;
   expect(out?.type).toBe("flowResult");
   if (out?.type !== "flowResult") return;
-  expect(out.result.problems).toEqual([]);
-  expect(out.result.doc?.nodes).toHaveLength(2000);
-  expect(out.result.doc?.links).toHaveLength(3000);
+  const merged = fromWire(out.result, new Map());
+  expect(merged.problems).toEqual([]);
+  expect(merged.doc?.nodes).toHaveLength(2000);
+  expect(merged.doc?.links).toHaveLength(3000);
   expect(median).toBeLessThan(16);
 });

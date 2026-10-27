@@ -1,4 +1,4 @@
-// Real diagram tabs with the file actions and the New diagram sheet: what reaches the disk when a diagram that is
+// Real diagram tabs with the file actions and the New diagram catalog: what reaches the disk when a diagram that is
 // open is replaced, copied, deleted or renamed (ruling P19).
 import { EditorView } from "@codemirror/view";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
@@ -18,7 +18,7 @@ import { holdTimers } from "../test/timers";
 import { type DiagramFileActions, useDiagramFileActions } from "./diagramFileActions";
 import { flowEntry, unsavedFlows } from "./flowRegistry";
 import FlowTab from "./FlowTab";
-import NewDiagramSheet from "./NewDiagramSheet";
+import NewDiagramDialog from "./NewDiagramDialog";
 import { SAVE_DELAY_MS } from "./useFlowDoc";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -46,6 +46,7 @@ function folder(over: Record<string, (a: Record<string, unknown>) => unknown> = 
   const key = (n: unknown) => String(n).toLowerCase();
   routeInvoke({
     list_diagrams: () => [],
+    icon_index: () => [],
     read_diagram: ({ name }) => {
       const f = disk.get(key(name));
       if (!f) throw { kind: "notFound", message: `${name}.flow` };
@@ -110,15 +111,15 @@ function Workspace({ client, initial, sheet = false }: { client: LangClient; ini
         </div>
       ))}
       {sheetOpen && (
-        <NewDiagramSheet
+        <NewDiagramDialog
+          initialQuery=""
           onClose={() => setSheetOpen(false)}
-          beforeReplace={files.beforeReplace}
           onCreated={(n) => {
             setSheetOpen(false);
             setTabs((all) => (all.some((x) => same(x, n)) ? all : [...all, n]));
           }}
           onMermaid={() => {}}
-          onOpenDiagram={() => {}}
+          onDatabase={() => {}}
         />
       )}
       {files.dialog}
@@ -150,26 +151,18 @@ function setup(initial: string[] = ["checkout"], sheet = false) {
 const ready = (s: ReturnType<typeof setup>, tab: string) => waitFor(() => expect(s.editor(tab)).not.toBeNull(), { timeout: 4000 });
 const later = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)));
 
-test("replace_over_an_open_tab_drops_its_edits_and_opens_the_new_text", async () => {
+test("a_new_diagram_from_the_catalog_opens_beside_an_open_tab_and_leaves_it_alone", async () => {
   const disk = folder();
   const s = setup(["checkout"], true);
   await ready(s, "checkout");
-  const sheet = screen.getByRole("dialog", { name: "New diagram" });
-  // Step 10: the name starts filled and the sheet starts from the example; this is about the first line.
-  await userEvent.click(within(within(sheet).getByRole("radiogroup", { name: "Start with" })).getByRole("radio", { name: "Blank" }));
-  await userEvent.clear(within(sheet).getByRole("textbox", { name: "Name" }));
-  await userEvent.type(within(sheet).getByRole("textbox", { name: "Name" }), "Checkout{Enter}");
-  const replace = await within(sheet).findByRole("button", { name: "Replace" });
-  // An edit in the old tab, still waiting to be saved, when the user says Replace.
+  const dialog = screen.getByRole("dialog", { name: "New diagram" });
   s.typeIn("checkout", "Refunds [process]\n");
-  await userEvent.click(replace);
-  // The tab opens fresh on the new file, under the name typed.
-  await waitFor(() => expect(s.text("Checkout")).toBe('diagram dfd "Checkout"\n'), { timeout: 4000 });
-  await later(700);
-  // The old tab wrote nothing over the new diagram.
-  expect(disk.get("checkout")!.text).toBe('diagram dfd "Checkout"\n');
-  expect(callsTo("write_diagram").filter((c) => String(c.text).includes("Refunds"))).toEqual([]);
-  expect(ws.tabs).toEqual(["Checkout"]);
+  await userEvent.click(within(dialog).getByRole("option", { name: "Flowchart" }));
+  await waitFor(() => expect(ws.tabs).toEqual(["checkout", "Untitled diagram"]));
+  await waitFor(() => expect(s.text("Untitled diagram")).toBe('diagram flow "Untitled diagram"\n'), { timeout: 4000 });
+  expect(disk.get("untitled diagram")!.text).toBe('diagram flow "Untitled diagram"\n');
+  expect(JSON.parse(disk.get("untitled diagram")!.layout as string).version).toBe(1);
+  expect(s.text("checkout")).toContain("Refunds [process]");
 });
 
 test("save_a_copy_of_an_open_tab_copies_what_the_tab_shows_even_when_its_save_failed", async () => {
@@ -370,40 +363,6 @@ test("the_text_is_read_only_while_a_rename_runs", async () => {
 });
 
 // ---- Fix wave (ruling P24)
-
-test("replace_waits_for_a_write_already_on_its_way", async () => {
-  const write = gate();
-  const order: string[] = [];
-  const disk = folder({
-    write_diagram: async ({ name, text, layout, overwrite }) => {
-      if (!overwrite) throw { kind: "diagramExists", message: { name } };
-      if (String(text).includes("Refunds")) {
-        order.push("edit write starts");
-        await write.done;
-        order.push("edit write lands");
-      } else order.push("replace");
-      disk.set(String(name).toLowerCase(), { text: text as string, layout: layout as string });
-      return null;
-    },
-  });
-  const s = setup(["checkout"], true);
-  await ready(s, "checkout");
-  const sheet = screen.getByRole("dialog", { name: "New diagram" });
-  // Step 10: the name starts filled and the sheet starts from the example; this is about the first line.
-  await userEvent.click(within(within(sheet).getByRole("radiogroup", { name: "Start with" })).getByRole("radio", { name: "Blank" }));
-  await userEvent.clear(within(sheet).getByRole("textbox", { name: "Name" }));
-  await userEvent.type(within(sheet).getByRole("textbox", { name: "Name" }), "checkout{Enter}");
-  const replace = await within(sheet).findByRole("button", { name: "Replace" });
-  s.typeIn("checkout", "Refunds [process]\n");
-  await waitFor(() => expect(order).toEqual(["edit write starts"]), { timeout: 4000 });
-  await userEvent.click(replace);
-  await later(50);
-  // The new diagram is not written while the old tab's save is still on its way.
-  expect(order).toEqual(["edit write starts"]);
-  await act(async () => write.open(null));
-  await waitFor(() => expect(order).toEqual(["edit write starts", "edit write lands", "replace"]));
-  expect(disk.get("checkout")!.text).toBe('diagram dfd "checkout"\n');
-});
 
 test("rename_waits_for_a_write_already_on_its_way", async () => {
   const write = gate();

@@ -1,20 +1,22 @@
 // "Add and connect" (motion design answer 1A): a flow released on empty canvas opens this menu where it ended.
-// Each item adds a node there, already connected; its key picks it (P, S, E on a data flow). Esc or a click
+// Each item adds a node there, already connected; its kind tool's key picks it (R, S, E on a data flow). Esc or a click
 // away cancels, and the line pulls back into its port. Portalled to the window, so the clipped canvas never
 // cuts it off.
 import { type KeyboardEvent, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import Icon from "../../components/Icon";
 import type { DiagramKind } from "../../lang/flow/model";
+import { keyOfAddTool } from "../board/kindTools";
 import { ADD_TOOLS, type AddTool } from "../FlowToolbar";
 
-/** The kind's add tools as menu items: "Add data store" reads "Data store" here. */
-export function quickItems(kind: DiagramKind): { label: string; tool: AddTool }[] {
+/** The kind's add tools as menu items: "Add data store" reads "Data store" here, with its kind tool's key. */
+export function quickItems(kind: DiagramKind): { label: string; tool: AddTool; key?: string }[] {
   return ADD_TOOLS[kind]
     .filter((t) => t.kind !== "group")
     .map((t) => {
       const word = t.label.replace(/^Add (a )?/, "");
-      return { label: word.charAt(0).toUpperCase() + word.slice(1), tool: t };
+      const key = keyOfAddTool(kind, t.label);
+      return { label: word.charAt(0).toUpperCase() + word.slice(1), tool: t, ...(key ? { key } : {}) };
     });
 }
 
@@ -49,7 +51,7 @@ export default function QuickAdd({ kind, at, onPick, onCancel }: Props) {
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    const pick = items.find((i) => i.tool.key === e.key.toUpperCase());
+    const pick = items.find((i) => i.key !== undefined && i.key === e.key.toUpperCase());
     if (pick) {
       e.preventDefault();
       onPick(pick.tool);
@@ -72,13 +74,13 @@ export default function QuickAdd({ kind, at, onPick, onCancel }: Props) {
         <div className="menu-heading" role="presentation">
           Add and connect
         </div>
-        {items.map(({ label, tool }) => (
-          <button key={tool.key} type="button" role="menuitem" className="menu-item" aria-keyshortcuts={tool.key} onClick={() => onPick(tool)}>
+        {items.map(({ label, tool, key }) => (
+          <button key={tool.label} type="button" role="menuitem" className="menu-item" aria-keyshortcuts={key} onClick={() => onPick(tool)}>
             <span className="menu-icon">
               <Icon name={tool.icon} size={14} />
             </span>
             <span className="menu-label">{label}</span>
-            <span className="menu-shortcut">{tool.key}</span>
+            {key && <span className="menu-shortcut">{key}</span>}
           </button>
         ))}
       </div>

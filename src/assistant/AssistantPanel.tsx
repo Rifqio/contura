@@ -61,6 +61,7 @@ import { contextNotice } from "./contextText";
 import ModelPicker from "./ModelPicker";
 import Sends from "./Sends";
 import { saveSendsOpen } from "./sendsFold";
+import AskSash from "./AskSash";
 import { sampleReads } from "./StepsView";
 import SentRecord from "./SentRecord";
 import ThreadHistory from "./ThreadHistory";
@@ -78,6 +79,10 @@ import { clearSteps, stepsOf, takeSteps, useRecentSteps } from "./recentSteps";
 
 
 interface Props {
+  /** The panel's width and the most it may be, in px, with the setter its left edge drags (App's `useAskWidth`). */
+  width?: number;
+  widthMax?: number;
+  onWidth?(w: number): void;
   /** The drafts place key: "ungrouped" or "group:<id>". */
   place: string;
   /** What the place is called, for "Clear all chats in this place". */
@@ -274,6 +279,9 @@ function chipLabel(item: PreviewItem, ctx: AskContext): string {
 }
 
 export default function AssistantPanel({
+  width,
+  widthMax,
+  onWidth,
   place,
   placeName,
   groupId,
@@ -356,6 +364,8 @@ export default function AssistantPanel({
   const [slashClosedOn, setSlashClosedOn] = useState<string | null>(null);
   const [historyCommand, setHistoryCommand] = useState({ n: 0, kind: "open" as "open" | "clear" });
   const [sendsOpenSignal, setSendsOpenSignal] = useState(0);
+  /** Bumped by each Ask sent: the Sends list folds back to its line. */
+  const [sendsFoldSignal, setSendsFoldSignal] = useState(0);
   const sendsRef = useRef<HTMLDivElement>(null);
   /** Pick tables was pressed: the first switch takes focus once the Sends rows are drawn (after the unfold, and the preview). */
   const [pickTablesPending, setPickTablesPending] = useState(false);
@@ -676,7 +686,10 @@ export default function AssistantPanel({
   /** Scrolled up away from the end while it streams: the thread stays where the user put it. */
   const onThreadScroll = () => {
     const el = threadRef.current;
-    if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    if (!el) return;
+    // The thread scrolls only up and down: a scroll into view of a wide code block must not leave it sideways.
+    if (el.scrollLeft !== 0) el.scrollLeft = 0;
+    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   };
 
   const toggle = (kind: ItemKind) => {
@@ -735,6 +748,7 @@ export default function AssistantPanel({
     setConfirmStop(false);
     setAnswered(null);
     setPending({ q, included, at: askedAt, action });
+    setSendsFoldSignal((n) => n + 1);
     setMore(0);
     follow.current = true;
     if (asked === undefined) setQuestion("");
@@ -1366,6 +1380,7 @@ export default function AssistantPanel({
         live={saved === null && stream.running}
         connection={conn?.name ?? null}
         database={conn?.database ?? null}
+        dialect={conn?.dialect ?? "postgres"}
         providerName={record.sent ? nameOf(record.sent.provider) : providerName}
         onBack={() => setLogOf(null)}
       />
@@ -1374,6 +1389,7 @@ export default function AssistantPanel({
 
   return (
     <aside className="ai-panel" aria-label="Ask" ref={panel} data-pane>
+      {onWidth && width !== undefined && widthMax !== undefined && <AskSash width={width} max={widthMax} onWidth={onWidth} />}
       <header className="ai-panel-head">
         <span className="t">Ask</span>
         {accessChip && conn && (
@@ -1618,6 +1634,7 @@ export default function AssistantPanel({
           connection={conn}
           modelName={model?.name ?? null}
           openSignal={sendsOpenSignal}
+          foldSignal={sendsFoldSignal}
           foldable
         />
         {pickError && (

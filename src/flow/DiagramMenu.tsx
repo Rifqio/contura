@@ -1,6 +1,6 @@
 // The right-click menu of a diagram (a Recent row, a diagram tab): its file actions. Drawn in a portal at the
 // pointer, so no scrolling or clipping container around the row cuts it off.
-import { useLayoutEffect, useRef, useState } from "react";
+import { type RefObject, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Icon from "../components/Icon";
 import { type MenuItem, MenuList } from "../components/Menu";
@@ -30,8 +30,11 @@ export interface PlacedMenuState {
   items: MenuItem[];
 }
 
-/** A menu at a point, kept inside the window; a click outside, Escape or a pick closes it. Every right-click menu uses it. */
-export function PlacedMenu({ menu, onClose }: { menu: PlacedMenuState; onClose: () => void }) {
+/**
+ * A menu at a point, kept inside the window; a click outside, Escape or a pick closes it. Every right-click menu uses it.
+ * `keep`: the button that owns the menu, whose own click toggles it (a press there is not outside).
+ */
+export function PlacedMenu({ menu, onClose, keep = [] }: { menu: PlacedMenuState; onClose: () => void; keep?: RefObject<HTMLElement | null>[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: menu.x, y: menu.y });
   useLayoutEffect(() => {
@@ -44,7 +47,8 @@ export function PlacedMenu({ menu, onClose }: { menu: PlacedMenuState; onClose: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu]);
   // A press anywhere else (a canvas too, which stops its own events) or Escape closes it.
-  useDismiss(true, [ref], onClose);
+  useDismiss(true, [ref, ...keep], onClose);
+  if (menu.items.length === 0) return null;
   return createPortal(
     <div ref={ref} className="tree-menu" style={{ left: at.x, top: at.y }}>
       <MenuList items={menu.items} label={menu.label} onClose={onClose} />

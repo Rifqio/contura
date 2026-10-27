@@ -369,27 +369,6 @@
   width: 220px;
   height: 26px;
 }
-.flow-seg {
-  display: inline-flex;
-  padding: 2px;
-  border-radius: var(--rounded-md);
-  background: var(--c-bg-active);
-}
-.flow-seg-button {
-  height: 22px;
-  padding: 0 var(--spacing-sm);
-  border: 0;
-  border-radius: var(--rounded-sm);
-  background: transparent;
-  color: var(--c-text-muted);
-  font: var(--font-small);
-  cursor: pointer;
-}
-.flow-seg-button[aria-pressed="true"] {
-  background: var(--c-bg-surface);
-  color: var(--c-text);
-  font-weight: 600;
-}
 
 /* The canvas. */
 .flow-canvas {
@@ -427,31 +406,12 @@
   white-space: nowrap;
 }
 
-/* The floating tool bar, centred at the top of the canvas. */
-.flow-toolbar {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  z-index: 6;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px;
-  border: var(--border-hairline) solid var(--c-border-subtle);
-  border-radius: var(--rounded-lg);
-  background: var(--c-bg-surface);
-  box-shadow: var(--shadow-menu);
-  transform: translateX(-50%);
-}
+/* A divider between groups of tools (BoardToolbar). */
 .flow-toolbar-divider {
   width: 1px;
   height: 20px;
   margin: 0 4px;
   background: var(--c-border-subtle);
-}
-.flow-twin {
-  display: inline-flex;
-  gap: 2px;
 }
 .flow-tool {
   position: relative;
@@ -759,6 +719,34 @@
   opacity: 0;
 }
 
+/*
+  ER build C: a column's side ports (draw.io's connection points on a table row), on a hovered or selected table.
+  They sit just inside the card's edge, as the card's body clips what leaves it, in the row's 10 px side padding, so
+  they clear the key gutter and the not-null mark by 2 px; a drag from one draws a relationship.
+*/
+.react-flow__handle.fkind-port {
+  z-index: 3;
+  width: 8px;
+  height: 8px;
+  min-width: 0;
+  min-height: 0;
+  border: 1.5px solid var(--c-accent);
+  border-radius: 50%;
+  background: var(--c-bg-surface);
+  transform: translate(0, -50%);
+  cursor: crosshair;
+}
+.react-flow__handle.fkind-port[data-side="l"] {
+  left: 0;
+}
+.react-flow__handle.fkind-port[data-side="r"] {
+  right: 0;
+  left: auto;
+}
+.react-flow__handle.fkind-port:hover {
+  background: var(--c-accent);
+}
+
 /* A hovered fix, shown in grey where it would go (frame 6+.3). */
 .flow-editor .cm-flow-ghost {
   color: var(--c-text-faint);
@@ -775,7 +763,19 @@
   font: var(--font-small);
 }
 /* Why the last canvas action did nothing. */
+/* The strip's one live region (Task 11 fix round 1): always there, so an empty one takes back the gap before it. */
+.flow-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  overflow: hidden;
+}
+.flow-live:empty {
+  margin-left: calc(-1 * var(--spacing-sm));
+}
 .flow-notice {
+  min-width: 0;
   overflow: hidden;
   color: var(--c-warning-text);
   font: var(--font-small);
@@ -825,13 +825,15 @@
 
 /* A flow being drawn: dashed accent to the pointer; locked onto a node it turns solid and rings the node. */
 .react-flow__connectionline .flow-drawing-line,
+.flow-overlay-svg .flow-drawing-line,
 .flow-pending {
   fill: none;
   stroke: var(--c-accent);
   stroke-width: 1.5;
   stroke-dasharray: 5 4;
 }
-.react-flow__connectionline .flow-drawing.is-locked .flow-drawing-line {
+.react-flow__connectionline .flow-drawing.is-locked .flow-drawing-line,
+.flow-overlay-svg .flow-drawing.is-locked .flow-drawing-line {
   stroke-width: 2;
   stroke-dasharray: none;
 }
@@ -883,6 +885,30 @@
   white-space: nowrap;
   pointer-events: none;
   animation: flow-fade-in var(--motion-slow) var(--ease-enter);
+}
+/* A note with an action, "Deleted Refund." with Undo (Figma, Miro): the action is a button after the words. */
+.flow-toast.has-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.flow-toast-action {
+  all: unset;
+  padding: 0 4px;
+  border-radius: var(--rounded-sm);
+  color: var(--c-bg-surface);
+  font: var(--font-small);
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.flow-toast-action:hover {
+  background: color-mix(in srgb, var(--c-bg-surface) 20%, transparent);
+}
+.flow-toast-action:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
 }
 
 /* The flow just drawn stays in accent while its label box is open (motion design, frame 6+.3). */
@@ -1013,84 +1039,6 @@
   font: var(--font-mono-small);
   white-space: pre-wrap;
 }
-/* Step 12, item 19 (frame Diagram): the Shapes list under the tool bar, each shape with the line it writes. */
-.flow-shapes {
-  position: relative;
-  display: inline-flex;
-}
-.flow-tool-shapes.is-on {
-  background: var(--c-accent-subtle);
-}
-.flow-shape-list {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 320px;
-  max-height: 420px;
-  overflow: auto;
-  padding: 6px;
-  box-sizing: border-box;
-  transform: translateX(-50%);
-  background: var(--c-bg-raised);
-  border: 1px solid var(--c-border);
-  border-radius: var(--rounded-lg);
-  box-shadow: var(--shadow-menu);
-  animation: menu-in var(--motion-base) var(--ease-enter);
-}
-.flow-shape {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: var(--rounded-md);
-  background: transparent;
-  color: var(--c-text);
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--motion-fast) var(--ease-enter);
-}
-.flow-shape:hover,
-.flow-shape:focus-visible {
-  background: var(--c-bg-hover);
-}
-.flow-shape:focus-visible {
-  outline: var(--focus-ring-width) solid var(--c-focus);
-  outline-offset: calc(var(--focus-ring-width) * -1);
-}
-.flow-shape > .icon {
-  flex: none;
-  color: var(--c-text-muted);
-}
-.flow-shape-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-.flow-shape-label {
-  font: var(--font-body);
-}
-.flow-shape-code {
-  overflow: hidden;
-  color: var(--c-text-subtle);
-  font: var(--font-mono-micro);
-  font-variant-ligatures: contextual;
-  font-feature-settings: "calt" 1, "liga" 1;
-  white-space: pre;
-  text-overflow: ellipsis;
-}
-.flow-shape-foot {
-  margin: 4px 6px 2px;
-  color: var(--c-text-subtle);
-  font: var(--font-small);
-}
-
 /* Item 22: the name and details panel beside a double-clicked node (level 1, DN 10.12). */
 .flow-node-editor {
   position: fixed;
@@ -1482,7 +1430,7 @@
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
-  /* Room for an edge pill's focus ring inside the scroll area, as .new-diagram-kinds. */
+  /* Room for an edge pill's focus ring inside the scroll area. */
   margin: -3px;
   padding: 3px;
 }
@@ -1787,8 +1735,7 @@
   background: var(--c-bg-hover);
   outline: 1px solid var(--c-accent);
 }
-.flow-add-cell[aria-disabled="true"],
-.flow-shape.is-disabled {
+.flow-add-cell[aria-disabled="true"] {
   color: var(--c-text-faint);
   cursor: default;
 }
@@ -1970,4 +1917,136 @@
  */
 .flow-canvas .react-flow__edgelabel-renderer {
   z-index: 5;
+}
+
+/* Task 13: the code pane on the shown frame's block. A closed pane takes no room: its island is hidden and the tab
+   lays out the drawing alone. The header names the kind; the footer holds Syntax help and the kind's chips. */
+.flow-tab.is-pane-closed {
+  gap: 0;
+}
+.code-pane-head {
+  gap: 6px;
+  min-width: 0;
+}
+.code-pane-head > svg {
+  flex: none;
+  color: var(--c-text-muted);
+}
+.code-pane-line {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.code-pane-chips {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+}
+.code-pane-chip {
+  height: 22px;
+  padding: 0 8px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+  font: var(--font-mono-micro);
+  cursor: pointer;
+}
+.code-pane-chip:disabled {
+  color: var(--c-text-subtle);
+  cursor: default;
+}
+.code-pane-chip:hover:not(:disabled) {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.code-pane-chip:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+/* Task 14: Syntax Help, the shown frame's kind as a Description | Example table. A row's Copy shows while the row is
+   hovered or holds focus, so the keyboard reaches it as the pointer does. */
+.syntax-help-body {
+  padding-top: 0;
+}
+.syntax-help-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.syntax-help-table th {
+  position: sticky;
+  top: 0;
+  padding: var(--spacing-sm) var(--spacing-sm) var(--spacing-sm) 0;
+  border-bottom: var(--border-hairline) solid var(--c-border);
+  background: var(--c-bg-raised);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  text-align: left;
+}
+.syntax-help-table td {
+  padding: var(--spacing-sm) var(--spacing-sm) var(--spacing-sm) 0;
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  vertical-align: top;
+}
+.syntax-help-what {
+  width: 40%;
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.syntax-help-example {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+}
+.syntax-help-example code {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text);
+  font: var(--font-mono-small);
+  /* Examples show as typed: the mono font turns ligatures on through calt, so `-->` would draw as one arrow (C2). */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+.syntax-help-line {
+  display: block;
+  white-space: pre;
+}
+.syntax-help-copy {
+  flex: none;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-enter);
+}
+.syntax-help-table tr:hover .syntax-help-copy,
+.syntax-help-table tr:focus-within .syntax-help-copy {
+  opacity: 1;
+}
+.syntax-help-foot {
+  justify-content: flex-start;
+}
+.syntax-help-scope {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+}
+.flow-board-banner {
+  position: absolute;
+  top: 104px;
+  left: 50%;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 32px);
+  padding: 6px 10px;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-md);
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+  font: var(--font-small);
+  transform: translateX(-50%);
 }

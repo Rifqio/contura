@@ -330,7 +330,7 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  /* Room for a full-width field's focus ring inside the scroll area, as .new-diagram-kinds. */
+  /* Room for a full-width field's focus ring inside the scroll area. */
   margin: -3px;
   padding: 3px;
 }

@@ -1,7 +1,7 @@
 import type { ComponentProps, MutableRefObject } from "react";
 import type { ConnectionConfig, Group, GroupId, JobId } from "../api/types";
 import Home from "../components/Home";
-import FlowTab, { type MermaidInsert } from "../flow/FlowTab";
+import FlowTab, { type DatabaseAdd, type MermaidAdd, type MermaidInsert } from "../flow/FlowTab";
 import SchemaBuilder from "../schema/SchemaBuilder";
 import SettingsView from "../settings/SettingsView";
 import TransferTab from "../transfer/TransferTab";
@@ -47,6 +47,10 @@ interface Props {
     onMermaid?(insert: MermaidInsert): void;
     /** ADR 0030: an old ER diagram's Open as DBML: the converted DBML, unsaved, in the Schema Builder. */
     onOpenModel?(name: string, dbml: string): void;
+    /** B2 Task 10: the Shelf's From my database: its dialog, with Add into that board. */
+    onFromDatabase?(add: DatabaseAdd): void;
+    /** B2 Task 9: the Shelf's From Mermaid: the dialog in add mode, with Add into that board. */
+    onMermaidFrame?(add: MermaidAdd): void;
   };
   compare: {
     /** Every Connection and Group: a compare may span two Groups. */
@@ -93,7 +97,7 @@ export default function WindowPanes({ windowTabs, activeKey, home, settings, sch
         if (t.kind === "flow") {
           return (
             <div key={key} className="work-pane schema-main" data-flow-name={t.name} hidden={key !== activeKey}>
-              <FlowTab name={t.name} active={key === activeKey} onOpenSettings={flow.onOpenSettings} onMermaid={flow.onMermaid} onOpenModel={flow.onOpenModel} />
+              <FlowTab name={t.name} active={key === activeKey} onOpenSettings={flow.onOpenSettings} onMermaid={flow.onMermaid} onOpenModel={flow.onOpenModel} onFromDatabase={flow.onFromDatabase} onMermaidFrame={flow.onMermaidFrame} />
             </div>
           );
         }

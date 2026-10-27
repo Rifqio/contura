@@ -679,9 +679,10 @@ test("nothing_in_the_side_panel_has_hover_text", async () => {
   await reviewing();
   expect(panel.querySelector(".answer-code")).not.toBeNull();
   expect(titles()).toEqual([]);
+  // Hidden, the pane leaves no rail on a board (Decision 16), so nothing with hover text either.
   fireEvent.click(screen.getByRole("button", { name: "Hide the side panel" }));
-  const rail = s.container.querySelector('nav[aria-label="Side panel, hidden"]') as HTMLElement;
-  expect(rail.querySelectorAll("[title]")).toHaveLength(0);
+  expect(s.container.querySelector('nav[aria-label="Side panel, hidden"]')).toBeNull();
+  expect(panel.hidden).toBe(true);
 });
 
 test("a_failed_save_stops_the_send", async () => {

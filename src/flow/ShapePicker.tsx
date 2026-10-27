@@ -1,13 +1,11 @@
-// Step 12, item 19 (frame Diagram, the Shape picker), and diagram step 6, FC1 and F18 (board DiagramAddNext): every
-// shape, line and group the open diagram's kind can draw, with the .flow line it writes, and every item adds on the
-// canvas. A shape appears in a free spot near the middle of the view with its name ready; a line is drawn from the
-// next two shapes clicked (draw.io's connect mode); a group goes around the selection; a member, a subtopic or an
-// activation goes on the one picked.
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
-import Icon, { type IconName } from "../components/Icon";
-import Kbd from "../components/Kbd";
-import { useDismiss } from "../components/useDismiss";
+// Step 12, item 19 (frame Diagram), and diagram step 6, FC1 and F18 (board DiagramAddNext): every shape, line and
+// group the open diagram's kind can draw, with the .flow line it writes, listed by the Shelf's Shapes tab and Add
+// here. Every item adds on the canvas: a shape in a free spot near the middle of the view with its name ready; a line
+// from the next two shapes clicked (draw.io's connect mode); a group around the selection; a member, a subtopic or an
+// activation on the one picked.
+import type { IconName } from "../components/Icon";
 import type { DiagramKind, FlowArrow, FlowNodeKind } from "../lang/flow/model";
+import { ARROW_NAMES } from "./canvasMenus";
 import { ADD_TOOLS, type AddTool } from "./FlowToolbar";
 
 /** What a Shapes item does on the canvas. */
@@ -28,10 +26,12 @@ export interface Shape {
   /** The .flow line it writes, as shown. */
   code: string;
   act: ShapeAct;
-  /** The toolbar's own tool, for its key. */
+  /** The add tool it runs (an ER table adds through it). Its key is its kind tool's (`keyOfShape`). */
   tool?: AddTool;
   /** A key of its own where it has no tool (N for a note). */
   key?: string;
+  /** What it does, where its line does not say (Column opens a row, B3 R22): its tip and description in the Shelf. */
+  hint?: string;
 }
 
 const tool = (kind: DiagramKind, label: string) => ADD_TOOLS[kind].find((t) => t.label === label);
@@ -79,14 +79,15 @@ export function shapesOf(kind: DiagramKind): Shape[] {
       ];
     case "er":
       return [
-        // What each writes: a table and a weak table under their free names, a column at the end of the selected table.
+        // What each writes: a table and a weak table under their free names, each opening its name first; a column
+        // row opened at the end of the selected table (B3 decision 9).
         t("Table", "table", "table_1", "Add table"),
         t("Weak table", "layers", "weak_1 [weak]", "Add weak table"),
-        other("Column", "columns", "column_1 text", { kind: "member" }),
-        line("Many to one", "arrowRight", "A.b_id > B.id", ">"),
-        line("One to many", "arrowLeft", "A.id < B.a_id", "<"),
-        line("One to one", "minus", "A.id - B.a_id", "-"),
-        line("Many to many", "swap", "A.id <> B.id", "<>"),
+        { ...other("Column", "columns", "id int", { kind: "member" }), hint: "Opens a new column row on the table" },
+        line(ARROW_NAMES.er[">"]!, "arrowRight", "A.b_id > B.id", ">"),
+        line(ARROW_NAMES.er["<"]!, "arrowLeft", "A.id < B.a_id", "<"),
+        line(ARROW_NAMES.er["-"]!, "minus", "A.id - B.a_id", "-"),
+        line(ARROW_NAMES.er["<>"]!, "swap", "A.id <> B.id", "<>"),
       ];
     case "sequence":
       return [
@@ -136,82 +137,4 @@ export function shapesOf(kind: DiagramKind): Shape[] {
         other("Section", "layers", "section Name", { kind: "section" }),
       ];
   }
-}
-
-interface Props {
-  kind: DiagramKind;
-  /** Why an item cannot be used now ("Select shapes first"), shown in place of its line; null when it can. */
-  disabled?(shape: Shape): string | null;
-  onPick(shape: Shape): void;
-}
-
-/** The toolbar's Shapes button and its list. */
-export default function ShapePicker({ kind, disabled, onPick }: Props) {
-  const [open, setOpen] = useState(false);
-  const button = useRef<HTMLButtonElement>(null);
-  const list = useRef<HTMLDivElement>(null);
-  useDismiss(open, [list, button], () => setOpen(false));
-  const shapes = shapesOf(kind);
-  useEffect(() => {
-    if (open) list.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-  }, [open]);
-  const onKey = (e: KeyboardEvent) => {
-    const rows = Array.from(list.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? []);
-    const at = rows.indexOf(document.activeElement as HTMLElement);
-    const go = (i: number) => {
-      e.preventDefault();
-      rows[(i + rows.length) % rows.length]?.focus();
-    };
-    if (e.key === "ArrowDown") go(at + 1);
-    else if (e.key === "ArrowUp") go(at - 1);
-  };
-  return (
-    <span className="flow-shapes">
-      <button
-        ref={button}
-        type="button"
-        className={open ? "flow-tool flow-tool-shapes is-on" : "flow-tool flow-tool-shapes"}
-        aria-label="Shapes"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name="boxPlus" />
-        <span className="flow-hint" aria-hidden="true">
-          Every shape and line
-        </span>
-      </button>
-      {open && (
-        <div ref={list} className="flow-shape-list" role="menu" aria-label="Shapes" onKeyDown={onKey}>
-          {shapes.map((s) => {
-            const why = disabled?.(s) ?? null;
-            const key = s.tool?.key ?? s.key;
-            return (
-              <button
-                key={s.label}
-                type="button"
-                role="menuitem"
-                className={why ? "flow-shape is-disabled" : "flow-shape"}
-                aria-label={s.label}
-                aria-disabled={why ? true : undefined}
-                aria-description={why ?? `Writes ${s.code.replace("\n", " ")}`}
-                onClick={() => {
-                  setOpen(false);
-                  onPick(s);
-                }}
-              >
-                <Icon name={s.icon} size={16} />
-                <span className="flow-shape-text">
-                  <span className="flow-shape-label">{s.label}</span>
-                  <code className="flow-shape-code">{why ?? s.code.split("\n")[0]}</code>
-                </span>
-                {key && <Kbd keys={key} />}
-              </button>
-            );
-          })}
-          <p className="flow-shape-foot">Every item adds on the canvas: shapes at the middle of the view with the name ready, lines from the next two shapes you click, groups around the selection.</p>
-        </div>
-      )}
-    </span>
-  );
 }

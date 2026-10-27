@@ -1,0 +1,587 @@
+/* The layer the Shelf sits in: the canvas's size, outside `.diagram-canvas`, and a size container, so the Shelf can
+   end above the zoom control wherever the canvas's own query puts it. It takes no presses; the Shelf does. */
+.flow-shelf-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  container: flow-shelf-layer / size;
+}
+/* The Shelf (decisions 2 to 5): the board's Add panel under the toolbar, centred, as wide as the canvas allows up
+   to 920 px and at most 60% of its height. It ends 8 px above the zoom control, which sits 162 px up (over the
+   overview) and is 30 px tall: 60 + 8 + 162 + 30 = 260. Theme tokens only. */
+.flow-shelf {
+  position: absolute;
+  top: 60px;
+  right: 0;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: min(920px, calc(100% - 32px));
+  max-height: min(60cqh, calc(100cqh - 260px));
+  pointer-events: auto;
+  box-sizing: border-box;
+  margin-inline: auto;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-raised);
+  box-shadow: var(--shadow-menu);
+  color: var(--c-text);
+  animation: menu-in var(--motion-base) var(--ease-enter);
+}
+/* Miro: while a card is dragged out, the panel fades so the drop point shows, and takes no pointer events. */
+.flow-shelf[data-dragging] {
+  opacity: 0.2;
+  pointer-events: none;
+}
+/* A small canvas drops the overview and the zoom control takes the corner, 12 px up (app.css): 60 + 8 + 12 + 30. */
+@container flow-shelf-layer (max-height: 360px) or (max-width: 480px) {
+  .flow-shelf {
+    max-height: min(60cqh, calc(100cqh - 110px));
+  }
+}
+/* The New diagram catalog's pick side sits in its dialog's body. */
+.flow-shelf.is-new {
+  position: static;
+  width: auto;
+  max-height: none;
+  pointer-events: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+}
+
+/* Code text shows as typed: the mono font turns ligatures on through calt, and `-->` must not draw as one arrow (C2). */
+.flow-shelf code {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
+.flow-shelf-search {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+}
+.flow-shelf-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--spacing-sm);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--rounded-md);
+  background: transparent;
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.flow-shelf-input::placeholder {
+  color: var(--c-text-faint);
+}
+.flow-shelf-input:focus-visible {
+  border-color: var(--c-focus);
+  outline: 2px solid var(--c-focus);
+  outline-offset: 0;
+}
+
+.flow-shelf:not(.is-new) {
+  container-type: inline-size;
+}
+.flow-shelf-pick {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr) minmax(0, 300px);
+  min-height: 0;
+  flex: 1;
+}
+/* The catalog: Diagrams on the left, the templates on the right; one column under 720 px of dialog. */
+.flow-shelf.is-new .flow-shelf-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--spacing-md);
+}
+@media (max-width: 720px) {
+  .flow-shelf.is-new .flow-shelf-pick {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.dialog.new-diagram-catalog {
+  width: min(1000px, 100%);
+}
+.flow-shelf-title {
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md) 0;
+  font: var(--font-body-strong);
+}
+
+.flow-shelf-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--spacing-sm);
+  border-right: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-shelf-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  height: 30px;
+  padding: 0 var(--spacing-sm);
+  border: 0;
+  border-radius: var(--rounded-md);
+  background: transparent;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  text-align: left;
+  cursor: pointer;
+}
+.flow-shelf-tab:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.flow-shelf-tab.is-selected {
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-text);
+}
+.flow-shelf-tab-name {
+  flex: 1;
+}
+.flow-shelf-count {
+  color: var(--c-text-muted);
+  font: var(--font-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-shelf-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--spacing-sm);
+}
+
+/* Options take no focus (the search owns it), so the active one shows the focus ring while the search is focused. */
+.flow-shelf-card,
+.flow-shelf-row,
+.flow-shelf-tile {
+  border-radius: var(--rounded-md);
+  color: var(--c-text);
+  cursor: pointer;
+}
+.flow-shelf-card:hover,
+.flow-shelf-row:hover,
+.flow-shelf-tile:hover {
+  background: var(--c-bg-hover);
+}
+.flow-shelf-card.is-active,
+.flow-shelf-row.is-active,
+.flow-shelf-tile.is-active {
+  background: var(--c-accent-subtle);
+}
+.flow-shelf:focus-within .flow-shelf-card.is-active,
+.flow-shelf:focus-within .flow-shelf-row.is-active,
+.flow-shelf:focus-within .flow-shelf-tile.is-active,
+.flow-shelf-tab:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+
+.flow-shelf-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-sm);
+}
+.flow-shelf-card {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: var(--spacing-sm);
+  row-gap: 2px;
+  padding: var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-shelf-card svg {
+  grid-row: span 2;
+  color: var(--c-text-subtle);
+}
+.flow-shelf-card-name {
+  font: var(--font-body-strong);
+}
+.flow-shelf-card-line {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.flow-shelf-rows [role="group"] + [role="group"] {
+  margin-top: var(--spacing-sm);
+}
+.flow-shelf-heading {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  color: var(--c-text-muted);
+  font: var(--font-micro);
+  text-transform: uppercase;
+}
+.flow-shelf-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-height: 30px;
+  padding: 0 var(--spacing-sm);
+  font: var(--font-small);
+}
+.flow-shelf-row svg {
+  flex: none;
+  color: var(--c-text-subtle);
+}
+.flow-shelf-row-name {
+  flex: none;
+}
+.flow-shelf-row-line {
+  overflow: hidden;
+  color: var(--c-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-shelf-code {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--c-text-muted);
+  font: var(--font-mono-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A kind shape's key, after its .flow line or its reason (B1's Shapes list). */
+.flow-shelf-row .kbd {
+  flex: none;
+}
+.flow-shelf-all {
+  color: var(--c-accent-text);
+}
+/* A shape that cannot be added now (it needs a selection): dimmed, with the reason in place of its line (draw.io, Figma). */
+.flow-shelf-row.is-disabled {
+  color: var(--c-text-subtle);
+  cursor: default;
+}
+.flow-shelf-why {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-shelf-tiles {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: var(--spacing-xs);
+}
+.flow-shelf-tile {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+}
+.flow-shelf-tile-image {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+}
+.flow-shelf-tile-image img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.flow-shelf-note,
+.flow-shelf-empty {
+  margin: 0;
+  padding: var(--spacing-sm);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+
+/* The template side (decisions 12 and 14): under 720 px of canvas it stacks below the pick side. */
+.flow-shelf-templates {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--spacing-sm);
+  border-left: var(--border-hairline) solid var(--c-border-subtle);
+}
+.flow-shelf-templates .flow-shelf-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+}
+.flow-shelf-filter {
+  padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-sm);
+}
+/* Six chips are wider than the side at most canvas sizes: they wrap onto a second line (Figma's and Miro's filter
+   rows), never a sideways scrollbar. */
+.flow-shelf-filter .segmented {
+  flex-wrap: wrap;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.flow-shelf-filter .segmented-option {
+  padding: 0 var(--spacing-sm);
+}
+.flow-shelf-board {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+}
+.flow-shelf-board:hover {
+  background: var(--c-bg-hover);
+}
+.flow-shelf-board.is-active {
+  background: var(--c-accent-subtle);
+}
+.flow-shelf:focus-within .flow-shelf-board.is-active {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.flow-shelf-preview {
+  display: flex;
+  gap: var(--spacing-xs);
+  height: 56px;
+  overflow: hidden;
+}
+.flow-shelf-preview-frame {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg);
+}
+.flow-shelf-preview-frame-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.flow-shelf-board-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font: var(--font-small);
+}
+.flow-shelf-badge,
+.flow-shelf-tag {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--spacing-xs);
+  border-radius: var(--rounded-xs);
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+  font: var(--font-micro);
+}
+/* On the template side a long name gives way (an ellipsis) to its kind tag; the side never scrolls sideways. */
+.flow-shelf-templates .flow-shelf-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-shelf-board-frames {
+  overflow: hidden;
+  color: var(--c-text-muted);
+  font: var(--font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-shelf-from.is-first {
+  margin-top: var(--spacing-sm);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: 0 0 var(--rounded-md) var(--rounded-md);
+}
+
+/* Only the side that owns Up, Down and Enter shows its active option. */
+.flow-shelf[data-side="right"] .flow-shelf-list .is-active,
+.flow-shelf[data-side="left"] .flow-shelf-templates .is-active {
+  background: transparent;
+  outline: 0 !important;
+}
+.flow-shelf[data-side="right"] .flow-shelf-list .is-active:hover,
+.flow-shelf[data-side="left"] .flow-shelf-templates .is-active:hover {
+  background: var(--c-bg-hover);
+}
+
+.flow-shelf-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--spacing-xs) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+  font: var(--font-micro);
+}
+.flow-shelf-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+@container (max-width: 720px) {
+  .flow-shelf-pick {
+    grid-template-columns: 148px minmax(0, 1fr);
+    overflow-y: auto;
+  }
+  .flow-shelf-templates {
+    grid-column: 1 / -1;
+    border-top: var(--border-hairline) solid var(--c-border-subtle);
+    border-left: 0;
+    overflow-y: visible;
+  }
+}
+
+/* The Space box (decision 19): a small search at the pointer, its crosshair where the pick drops. Theme tokens only. */
+.flow-space-box {
+  position: absolute;
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  width: min(320px, 100%);
+  box-sizing: border-box;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-raised);
+  box-shadow: var(--shadow-menu);
+  color: var(--c-text);
+  animation: menu-in var(--motion-base) var(--ease-enter);
+}
+.flow-space-cross {
+  position: absolute;
+  z-index: 21;
+  width: 17px;
+  height: 17px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background:
+    linear-gradient(var(--c-accent), var(--c-accent)) center / 1px 100% no-repeat,
+    linear-gradient(var(--c-accent), var(--c-accent)) center / 100% 1px no-repeat;
+}
+.flow-space-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-bottom: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+}
+.flow-space-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 var(--spacing-xs);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--rounded-md);
+  background: transparent;
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.flow-space-input::placeholder {
+  color: var(--c-text-faint);
+}
+.flow-space-input:focus-visible {
+  border-color: var(--c-focus);
+  outline: 2px solid var(--c-focus);
+  outline-offset: 0;
+}
+/* Room for 8 rows whatever it holds, so the box's height, and so its place and its search, never change while open.
+   On a canvas shorter than that (the box's max-height), the list gives way and scrolls inside. */
+.flow-space-list {
+  box-sizing: border-box;
+  flex: 0 1 calc(8 * 30px + 2 * var(--spacing-xs));
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--spacing-xs);
+}
+.flow-space-rows {
+  display: flex;
+  flex-direction: column;
+}
+.flow-space-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-height: 30px;
+  padding: 0 var(--spacing-sm);
+  border-radius: var(--rounded-md);
+  color: var(--c-text);
+  font: var(--font-small);
+  cursor: pointer;
+}
+.flow-space-row svg {
+  flex: none;
+  color: var(--c-text-subtle);
+}
+.flow-space-row.is-active {
+  background: var(--c-accent-subtle);
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.flow-space-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-space-tag {
+  flex: none;
+  margin-left: auto;
+  color: var(--c-text-muted);
+  font: var(--font-micro);
+}
+.flow-space-image {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+.flow-space-image img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.flow-space-empty {
+  margin: 0;
+  padding: var(--spacing-md) var(--spacing-sm);
+  color: var(--c-text-muted);
+  font: var(--font-small);
+}
+.flow-space-foot {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  margin: 0;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-top: var(--border-hairline) solid var(--c-border-subtle);
+  color: var(--c-text-muted);
+  font: var(--font-micro);
+}

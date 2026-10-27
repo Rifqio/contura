@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Icon, { type IconName } from "./Icon";
 
@@ -30,6 +30,9 @@ interface Props {
   dirty?: boolean;
 }
 
+/** The open dialogs, oldest first: Escape is for the last one only (a dialog opened over another). */
+const openDialogs: object[] = [];
+
 /** A modal dialog: Escape closes it, focus moves in on open and back on close, Tab stays inside. */
 export default function Dialog({ title, onClose, children, size = "form", wide, className, badge, lead, icon, subtitle, dirty = false }: Props) {
   const width = `dialog-size-${wide ? "wide" : size}`;
@@ -59,8 +62,14 @@ export default function Dialog({ title, onClose, children, size = "form", wide, 
   close.current = onClose;
   const state = useRef({ dirty, asking });
   state.current = { dirty, asking };
-  useEffect(() => {
+  // Listening from the commit that draws the dialog (a layout effect): an Escape pressed the moment it shows, before
+  // the passive effects run, still closes it (the F29 race).
+  useLayoutEffect(() => {
+    const me = {};
+    openDialogs.push(me);
     const onKey = (e: KeyboardEvent) => {
+      // A dialog open over this one takes the Escape.
+      if (openDialogs[openDialogs.length - 1] !== me) return;
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.preventDefault();
         if (state.current.asking) setAsking(false);
@@ -69,7 +78,11 @@ export default function Dialog({ title, onClose, children, size = "form", wide, 
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      const at = openDialogs.indexOf(me);
+      if (at >= 0) openDialogs.splice(at, 1);
+    };
   }, []);
   const asked = asking && dirty;
   const requestClose = () => (dirty ? ask.current() : onClose());

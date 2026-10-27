@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { useOpenSignal } from "./useOpenSignal";
 import { loadSendsOpen, onSendsOpen, saveSendsOpen } from "./sendsFold";
 import type { ItemKind, Preview, PreviewItem, SummaryPreview } from "../api/types";
@@ -24,14 +24,16 @@ interface Props {
   now?: number;
   /** The model that writes the summary, for the line under the rows. */
   modelName?: string | null;
-  /** A slash command: each new value shows the exact text. */
+  /** A slash command: each new value opens the list and shows the exact text, for this look only (not remembered). */
   openSignal?: number;
+  /** An Ask was sent: each new value folds the list, as Copilot Chat folds "Used n references" per answer. */
+  foldSignal?: number;
   /**
    * A diagram Ask (board 11.12): every row is locked on with its reason, shown once, and the file row keeps its size;
    * no hover text, as in the diagram tab's side panel.
    */
   variant?: "diagram";
-  /** The Ask panel folds the rows into the Sends line until opened; the choice is remembered. */
+  /** The Ask panel folds the rows into the Sends line; the chevron's choice is how a new panel opens. */
   foldable?: boolean;
 }
 
@@ -77,7 +79,7 @@ function summaryLabel(s: SummaryPreview): string {
 }
 
 /** What one question would send, one row per item as the Core built it, with the exact text behind "Show exactly". */
-export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now(), modelName = null, openSignal = 0, variant, foldable = false }: Props) {
+export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now(), modelName = null, openSignal = 0, foldSignal = 0, variant, foldable = false }: Props) {
   const diagram = variant === "diagram";
   const [shown, setShown] = useState(false);
   const [open, setOpenState] = useState(() => !foldable || loadSendsOpen());
@@ -88,8 +90,22 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
   };
   useOpenSignal(openSignal, () => {
     setShown(true);
-    if (foldable) setOpen(true);
+    if (foldable) setOpenState(true);
   });
+  useOpenSignal(foldSignal, () => {
+    if (!foldable) return;
+    setOpenState(false);
+    setShown(false);
+  });
+  const foldRef = useRef<HTMLButtonElement>(null);
+  /** Esc inside the open list folds it, as the chevron does, and gives focus back to the chevron. */
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || !foldable || !open) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+    foldRef.current?.focus();
+  };
   const listId = useId();
   const id = useId();
   const tables = preview ? tablesLine(preview.tables) : null;
@@ -156,10 +172,18 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
   };
 
   return (
-    <div className="sends" role={diagram ? "group" : undefined} aria-label={diagram ? "Sends" : undefined}>
+    <div className="sends" role={diagram ? "group" : undefined} aria-label={diagram ? "Sends" : undefined} onKeyDown={foldable ? onKeyDown : undefined}>
       <div className="sends-row">
         {foldable ? (
-          <button type="button" className="sends-fold" aria-expanded={open} aria-controls={open && preview ? listId : undefined} onClick={() => setOpen(!open)}>
+          <button
+            ref={foldRef}
+            type="button"
+            className="sends-fold"
+            aria-expanded={open}
+            aria-controls={open && preview ? listId : undefined}
+            title={open ? "Hide what this Ask sends" : "Show what this Ask sends"}
+            onClick={() => setOpen(!open)}
+          >
             <Icon name={open ? "chevronDown" : "chevronRight"} size={14} />
             <span className="sends-label">Sends</span>
           </button>

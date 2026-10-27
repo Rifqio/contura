@@ -3,11 +3,11 @@
 // layout, so these hold the CSS that makes each screen fit; the real-window check at 1,024 x 480, 1,280 x 650 and
 // 1,366 x 700 is in .superpowers/sdd/release-1.0/layout-report.md.
 import { expect, test } from "vitest";
+import { askLayout, askWidthRoom } from "../assistant/askWidth";
 import appCss from "./app.css?raw";
 import guideCss from "./guide.css?raw";
 import compareCss from "./compare.css?raw";
 import transferCss from "./transfer.css?raw";
-import flowCss from "./flow.css?raw";
 import flowTabCss from "./flow-tab.css?raw";
 import tokensCss from "./tokens.css?raw";
 
@@ -68,13 +68,33 @@ test("the_query_strip_and_the_results_fit_a_narrow_work_area", () => {
   expect(rule(".answer-sql-actions")).toMatchObject({ "flex-wrap": "wrap" });
 });
 
+/** A track list split at its top-level spaces: "minmax(260px, var(--ask-width, 360px))" stays one track. */
+function tracksOf(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of list.trim()) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 test("history_and_ask_together_leave_the_work_area_at_least_320px", () => {
-  const cols = rule(".body-history.body-ai")["grid-template-columns"].split(/\s+(?![^(]*\))/);
+  const cols = tracksOf(rule(".body-history.body-ai")["grid-template-columns"]);
   expect(cols).toHaveLength(4);
   const min = (track: string) => Number(/^minmax\((\d+)px,/.exec(track)?.[1] ?? NaN);
   expect(min(cols[1])).toBeGreaterThanOrEqual(320);
+  // The Ask column is the sash's width, which useAskWidth holds to the room History leaves (AskSash.test.tsx).
+  expect(cols[3]).toBe("var(--ask-width, 360px)");
+  const ask = askLayout(360, askWidthRoom(1024, true)).width;
   // Two 6 px gaps per column boundary plus the 6 px padding each side: 1,024 px must hold every minimum.
-  const total = cols.map(min).reduce((a, b) => a + b, 0) + 3 * 6 + 2 * 6;
+  const total = cols.slice(0, 3).map(min).reduce((a, b) => a + b, 0) + ask + 3 * 6 + 2 * 6;
   expect(total).toBeLessThanOrEqual(1024);
 });
 
@@ -153,20 +173,7 @@ test("transfer_tables_step_scrolls_inside_instead_of_running_under_the_footer", 
   expect(ruleIn(transferCss, ".transfer-side")).toMatchObject({ margin: "-3px", padding: "3px" });
 });
 
-test("new_diagram_keeps_create_in_view_and_dialogs_use_a_short_window", () => {
-  // The whole body scrolled, so Create sat below the dialog's edge on most laptop windows.
-  expect(ruleIn(flowCss, ".new-diagram-body")).toMatchObject({ "grid-template-rows": "minmax(0, 1fr)", overflow: "clip" });
-  expect(ruleIn(flowCss, ".new-diagram-main")).toMatchObject({ "min-height": "0" });
-  expect(ruleIn(flowCss, ".new-diagram-main > *")).toMatchObject({ flex: "none" });
-  expect(ruleIn(flowCss, ".new-diagram-main > .new-diagram-kinds")).toMatchObject({
-    flex: "0 1 auto",
-    "overflow-y": "auto",
-    "grid-auto-rows": "max-content",
-  });
-  expect(ruleIn(flowCss, ".new-diagram-aside")).toMatchObject({ "min-height": "0", "overflow-y": "auto" });
-  // F2: room on the right for a full-width row's focus ring.
-  expect(ruleIn(flowCss, ".new-diagram-aside").margin).toMatch(/ -3px /);
-  expect(ruleIn(flowCss, ".new-diagram-aside").padding).toMatch(/ 3px /);
+test("dialogs_use_a_short_window", () => {
   expect(appCss).toMatch(/@media \(max-height: 600px\)\s*\{\s*\.dialog\s*\{\s*max-height: calc\(100vh - 2 \* var\(--spacing-lg\)\);/);
 });
 

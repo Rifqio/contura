@@ -37,7 +37,7 @@ export type NodeState = "entering" | "leaving" | "suggested" | "removed" | "airi
 const STATE_NOTE: Partial<Record<NodeState, string>> = { suggested: ", suggested by AI", removed: ", suggested by AI", airing: ", added by AI" };
 
 /** The kind's token pair as the custom properties the stylesheet reads (ADR 0008: tokens only). */
-function kindStyle(kind: DrawnKind, color?: ShapeColour): CSSProperties {
+export function kindStyle(kind: DrawnKind, color?: ShapeColour): CSSProperties {
   // A colour draws its fill, border and words in place of the kind's pair (ADR 0019).
   if (color) return colourStyle(color);
   const t = NODE_TOKENS[kind];

@@ -91,7 +91,15 @@ _Avoid_: Connection, link, relation
 
 **Foreign Key**:
 A real constraint stored in the database. A Visual Query pre-fills its Joins from Foreign Keys.
-_Avoid_: Relationship, connection
+_Avoid_: connection; a drawn line is a Relationship
+
+**ERD Column**:
+One line inside a table's braces in an ERD Frame: a name, an optional type and flags (pk, not null, unique). Not a database's column: nothing in a database changes.
+_Avoid_: field, attribute
+
+**Relationship**:
+A line between two tables of one ERD Frame, or between two of their ERD Columns, with a cardinality (`>`, `<`, `-`, `<>`). It is drawn, not a Foreign Key.
+_Avoid_: reference, foreign key
 
 **Saved Query**:
 A SQL query or Visual Query the user stored by name, so it can be reopened later.
@@ -190,8 +198,32 @@ One `.flow` file holding several Diagrams, each in its own Frame, plus loose ske
 _Avoid_: canvas, workspace, page
 
 **Frame**:
-One Diagram on a Board: its own `diagram <kind> "<title>"` block in the `.flow`, named by its title. A sequence diagram's `loop` or `alt` box is a sequence frame, always said in full.
-_Avoid_: panel, section
+One Diagram on a Board: its own `diagram <kind> "<title>"` block in the `.flow`, named by its title. Only a Diagram's frame; a box of Sketches is a Section. The selected Frame is the one live on the canvas, with its kind's tools and its code pane. Add opens the Shelf and a Space tap opens the Space box; a pick adds a Frame. A sequence diagram's `loop` or `alt` box is a sequence frame, always said in full.
+_Avoid_: panel, group
+
+**Shelf**:
+The panel Add opens on a Board: pick a Diagram kind, an icon or a shape on the left, start from a Template on the right, one search over both.
+_Avoid_: insert panel, library
+
+**Template**:
+A ready Diagram, or a Board whose Diagrams agree with each other, on the Shelf's right side.
+_Avoid_: example, sample
+
+**Space box**:
+The small add box a Space tap opens at the pointer; Enter drops the pick at its crosshair.
+_Avoid_: quick add, command box
+
+**Section**:
+A titled box on a Board that holds Sketches and moves them with it; no Diagram's code. Drawn with F.
+_Avoid_: frame, group
+
+**Sketch**:
+A shape on a Board that belongs to no Diagram: a rectangle, ellipse, diamond, line, arrow, pen stroke, text or note, saved in the layout file. The Assistant reads it as a note.
+_Avoid_: annotation, drawing
+
+**Note**:
+A Sketch of text on a Board, drawn with N. Inside a Frame whose kind has notes, it is that Diagram's note.
+_Avoid_: sticky note
 
 **Diagram**:
 A drawing the user writes and draws in a diagram tab, one of nine kinds: data flow, flowchart, cloud architecture, sequence, state, class, mind map, timeline and ER (tables, columns and relationships, for sketching; the Schema Builder is for real databases). It is a Frame of a Board: a `.flow` file plus its layout file in Contura's diagrams folder, named by the user. Publish and Save a copy as are the only ways it leaves that folder (ADR 0019, ADR 0031).

@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
-import type { AnswerRecord, LogLine, ProcessStep } from "../api/types";
+import type { AnswerRecord, LogLine, ProcessStep, SqlBlock } from "../api/types";
 import { sentRecord } from "../test/aiStream";
 import AnswerLog from "./AnswerLog";
 import { setPlatformForTests } from "../platform";
@@ -856,4 +856,121 @@ test("parity_P11_22_sent_cell_counts_the_outline_call", async () => {
   renderLog({ sent: sentRecord({ outlineCall: true, outline: OUTLINE_SENT }) });
   await user.click(screen.getByRole("tab", { name: "Steps" }));
   expect(document.querySelectorAll(".cell3")[0].textContent).toBe("Sent3,518 Bapi.groq.com");
+});
+
+// ---- Owner requests (27 Oct): the log shows the answer, the thinking and each checked statement ----
+// As a Grafana Loki or Langfuse trace opens a line's body: no new storage, read from the props the log already has.
+
+const ANSWER = "Join invoices to customers:\n\n```sql\nSELECT c.name FROM customers c;\n```";
+const CHECKED: SqlBlock[] = [
+  {
+    fence: 0,
+    label: "1 read, 2 writes",
+    statements: [
+      { text: "SELECT c.name FROM customers c", class: "read", flags: [] },
+      { text: "DELETE FROM invoices", class: "write", flags: [{ kind: "noWhere", verb: "DELETE" }] },
+      { text: "UPDATE plans SET seats = 1 WHERE id = 2", class: "write", flags: [] },
+    ],
+  },
+];
+const BODY_LOG: LogLine[] = [
+  ...LOG,
+  { atMs: 1806, level: "info", source: "answer", fields: [["chars", "214"], ["output", "486"]] },
+  { atMs: 1900, level: "info", source: "sql_check", fields: [["reads", "1"], ["writes", "2"], ["flags", "1"]] },
+];
+const lineOf = (source: string) => rows().find((r) => r.querySelector(".ls")?.textContent === source) as HTMLElement;
+
+function useClipboard() {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  return writeText;
+}
+
+/** The three verdicts read as the chat's statement cards read them. */
+function expectChecks() {
+  const list = screen.getByRole("list", { name: "Checked statements" });
+  const items = within(list).getAllByRole("listitem");
+  expect(items).toHaveLength(3);
+  expect(items[0].querySelector(".sql-block")?.textContent).toBe("SELECT c.name FROM customers c");
+  expect(items[0].querySelector(".lcheck-verdict")?.textContent).toBe("Read");
+  // A flagged write says both: it writes, and why it is flagged.
+  expect(Array.from(items[1].querySelectorAll(".lcheck-verdict")).map((v) => v.textContent)).toEqual(["Write", "Flag"]);
+  expect(items[1].textContent).toContain("DELETE without WHERE.");
+  expect(items[2].querySelector(".lcheck-verdict")?.textContent).toBe("Write");
+  // Highlighted in the editor's colours.
+  expect(items[0].querySelector(".sql-block-text span[class]")).toBeTruthy();
+}
+
+test("the_log_answer_line_shows_the_whole_answer_with_copy", async () => {
+  const user = userEvent.setup();
+  const writeText = useClipboard();
+  renderLog({ log: BODY_LOG }, { answer: ANSWER });
+  expect(screen.queryByRole("region", { name: "The answer, as returned" })).toBeNull();
+  await user.click(lineOf("answer"));
+  const body = screen.getByRole("region", { name: "The answer, as returned" });
+  expect(body.querySelector("pre")?.textContent).toBe(ANSWER);
+  // Its fields still show above it.
+  expect(lineOf("answer").parentElement!.querySelector(".ljson")?.textContent).toContain('"chars": 214');
+  const copyButton = within(body).getByRole("button", { name: "Copy the answer" });
+  expect(copyButton.getAttribute("title")).toBe("Copy the answer");
+  await user.click(copyButton);
+  expect(writeText).toHaveBeenCalledWith(ANSWER);
+});
+
+test("a_warn_answer_line_keeps_only_its_fields", async () => {
+  // A cut-off answer logs a second, warn "answer" line (finish_reason): the body shows once, under the info line.
+  const user = userEvent.setup();
+  const warn: LogLine = { atMs: 1810, level: "warn", source: "answer", fields: [["finish_reason", "length"]] };
+  renderLog({ log: [...BODY_LOG, warn] }, { answer: ANSWER });
+  const warnRow = rows().find((r) => r.classList.contains("warn") && r.querySelector(".ls")?.textContent === "answer") as HTMLElement;
+  await user.click(warnRow);
+  expect(warnRow.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.queryByRole("region", { name: "The answer, as returned" })).toBeNull();
+});
+
+test("the_log_thinking_line_shows_the_reasoning_when_it_was_kept", async () => {
+  const user = userEvent.setup();
+  renderLog({ log: BODY_LOG });
+  expect(screen.queryByRole("region", { name: "The thinking, as returned" })).toBeNull();
+  await user.click(lineOf("thinking"));
+  expect(screen.getByRole("region", { name: "The thinking, as returned" }).textContent).toContain("The user wants invoices joined to customers.");
+});
+
+test("the_log_thinking_line_without_kept_thinking_shows_only_its_fields", async () => {
+  const user = userEvent.setup();
+  renderLog({ log: BODY_LOG, thinking: null });
+  await user.click(lineOf("thinking"));
+  expect(lineOf("thinking").getAttribute("aria-expanded")).toBe("true");
+  expect(screen.queryByRole("region", { name: "The thinking, as returned" })).toBeNull();
+});
+
+test("the_log_sql_check_line_lists_each_statement_with_its_verdict", async () => {
+  const user = userEvent.setup();
+  renderLog({ log: BODY_LOG, sqlBlocks: CHECKED });
+  await user.click(lineOf("sql_check"));
+  expectChecks();
+});
+
+test("the_sql_check_body_says_when_the_answer_had_no_sql", async () => {
+  const user = userEvent.setup();
+  renderLog({ log: BODY_LOG, sqlBlocks: [] });
+  await user.click(lineOf("sql_check"));
+  expect(screen.getByText("No SQL in this answer.")).toBeTruthy();
+});
+
+test("the_steps_answer_and_sql_check_rows_show_their_bodies", async () => {
+  const user = userEvent.setup();
+  const writeText = useClipboard();
+  renderLog({ sqlBlocks: CHECKED }, { answer: ANSWER });
+  await user.click(screen.getByRole("tab", { name: "Steps" }));
+  await user.click(screen.getByRole("button", { name: /^Answer/ }));
+  const body = screen.getByRole("region", { name: "The answer, as returned" });
+  expect(body.querySelector("pre")?.textContent).toBe(ANSWER);
+  await user.click(within(body).getByRole("button", { name: "Copy the answer" }));
+  expect(writeText).toHaveBeenCalledWith(ANSWER);
+  await user.click(screen.getByRole("button", { name: /^SQL check/ }));
+  expectChecks();
+  // The Thinking row keeps the thinking as returned.
+  await user.click(screen.getByRole("button", { name: /^Thinking/ }));
+  expect(screen.getByText("The user wants invoices joined to customers.")).toBeTruthy();
 });

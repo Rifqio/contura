@@ -1,4 +1,4 @@
-// The ER table card, draw-only for now: the header, then one row per column with its key gutter, name, type and
+// The ER table card, draw-only (Plan A; the window, B3 decision 7): the header, then one row per column with its key gutter, name, type and
 // not-null mark; a weak table's border is dashed; past 20 columns the card stops growing and its rows scroll.
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
@@ -58,8 +58,11 @@ test("past_twenty_columns_the_card_scrolls", () => {
   expect(kindSize("erTable", { name: "wide", rows: many })!.h).toBe(ER_CARD_CHROME + ER_MAX_ROWS * KIND_ROW);
   expect(kindSize("erTable", { name: "small", rows: ORDERS.rows })!.h).toBe(ER_CARD_CHROME + 3 * KIND_ROW);
   render(<KindNode d={{ ...ORDERS, name: "wide", rows: many, rowFlags: undefined }} selected={false} />);
-  // Every row is in the card; the body scrolls them and takes the wheel.
-  expect(rows()).toHaveLength(25);
+  // The body scrolls them and takes the wheel; B3 decision 7: it draws only the rows in view and one past them,
+  // with a spacer for the rest.
+  // At scroll 0 the body's 446 px meet 21 rows (the last in part), and one more is drawn below.
+  expect(rows()).toHaveLength(ER_MAX_ROWS + 2);
+  expect(document.querySelector<HTMLElement>(".fkind-er-spacer")!.style.height).toBe(`${(25 - ER_MAX_ROWS - 2) * KIND_ROW}px`);
   const body = document.querySelector(".fkind-er-body")!;
   expect(body.classList.contains("is-scroll")).toBe(true);
   expect(body.classList.contains("nowheel")).toBe(true);

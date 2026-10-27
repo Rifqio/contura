@@ -98,16 +98,18 @@ export function changeMark(change: ProposedChange): "+" | "-" | "~" | "!" {
 }
 
 /**
- * The part of `text` the Assistant reads and writes: frame 0 of a board, the frame its outline was made from, and the
- * whole of a one-diagram file.
+ * The part of `text` the Assistant reads and writes: frame `frameIndex` of a board (the selected frame, Decision 24),
+ * the frame its outline was made from, and the whole of a one-diagram file.
  */
-export function askedFrame(text: string): { from: number; to: number; text: string } {
-  const f = splitFrames(text)[0];
+export function askedFrame(text: string, frameIndex = 0): { from: number; to: number; text: string } {
+  const frames = splitFrames(text);
+  const f = frames[Math.min(Math.max(frameIndex, 0), frames.length - 1)];
   return { from: f.from, to: f.to, text: text.slice(f.from, f.to) };
 }
 
 /**
- * The accepted changes, in index order, as one edit on `text` and the text it gives. They land on `askedFrame(text)`,
+ * The accepted changes, in index order, as one edit on `text` and the text it gives. They land on
+ * `askedFrame(text, frameIndex)`,
  * which `parse` is the parse of; the rest of a board is left as it is. Each change is made against
  * the text the ones before it left, so a line found by its index is the right one. Null when nothing is accepted,
  * an accepted change is not Ok, or one does not apply (the whole set is refused).
@@ -118,10 +120,11 @@ export function planLanding(
   changes: ProposedChange[],
   accepted: ReadonlySet<number>,
   kind: DiagramKind | null,
+  frameIndex = 0,
 ): { edits: TextEdit[]; text: string } | null {
   const list = changes.filter((c) => accepted.has(c.index)).sort((a, b) => a.index - b.index);
   if (list.length === 0) return null;
-  const frame = askedFrame(text);
+  const frame = askedFrame(text, frameIndex);
   const r = applyFlowSteps(frame.text, parse, list.length, (p, i) => changeEditOp(list[i], p, kind));
   if (r.edits.length === 0 || r.text === undefined) return null;
   return { edits: shiftEdits(r.edits, frame.from), text: text.slice(0, frame.from) + r.text + text.slice(frame.to) };

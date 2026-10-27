@@ -144,6 +144,25 @@ const PATHS = {
   // A light bulb for thinking and a bolt for prompt caching, as drawn on board 11.1.
   think: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.3 1.1 2.2h5c0-.9.5-1.7 1.1-2.2A6 6 0 0 0 12 3z",
   bolt: "M13 3 5 13.5h6L10 21l8-10.5h-6z",
+  // A board frame's kind on its title tab (Plan B Task 6): drawn here in the same 24 px grid and stroke.
+  cloud: "M7 18.5h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.2 9.6 4.5 4.5 0 0 0 7 18.5z",
+  sequence: "M6 4v16M18 4v16M6 9h12M15 6l3 3-3 3M18 15H6M9 12l-3 3 3 3",
+  state: `${rect(2.5, 7, 9, 10, 3)}M11.5 12h9M17.5 9l3 3-3 3`,
+  mindmap: `${circle(12, 12, 3)}M9.5 10.5 5 7.5M14.5 10.5 19 7.5M9.5 13.5 5 16.5M14.5 13.5 19 16.5`,
+  timeline: `M3 12h18${circle(7, 12, 1.5)}${circle(17, 12, 1.5)}M7 10.5V6M17 10.5V6M12 12v6`,
+  // The board toolbar (Plan B Task 7): hand, pencil, type, sparkles, shapes, sticky note and rotate-ccw follow Lucide
+  // (ISC); the ellipse, line and section tools are drawn on the same grid.
+  hand: "M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15",
+  circle: circle(12, 12, 8),
+  slash: "M5 19 19 5",
+  pen: "M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5zM15 5l4 4",
+  type: "M4 7V4h16v3M9 20h6M12 4v16",
+  section: `M3 4h7${rect(3, 7, 18, 13, 2)}`,
+  sparkles:
+    "M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0zM20 3v4M22 5h-4M4 17v2M5 18H3",
+  shapes: `M8.3 10a.7.7 0 0 1-.63-1.08L11.4 3a.7.7 0 0 1 1.2-.04L16.3 8.9a.7.7 0 0 1-.57 1.1z${rect(3, 14, 7, 7, 1)}${circle(17.5, 17.5, 3.5)}`,
+  stickyNote: "M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8zM15 3v4a2 2 0 0 0 2 2h4",
+  rotateCcw: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5",
 } as const;
 
 export type IconName = keyof typeof PATHS;

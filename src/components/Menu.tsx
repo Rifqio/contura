@@ -100,6 +100,8 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
     }
   }
 
+  // A menu with nothing in it would be an empty shadowed box that no outside press or resize can explain.
+  if (items.length === 0) return null;
   const classes = ["menu", compact ? "menu-compact" : "", className ?? ""].filter(Boolean).join(" ");
   return (
     <div ref={list} className={classes} role="menu" aria-label={label} style={style} onKeyDown={onKey}>
@@ -114,11 +116,11 @@ export function MenuList({ items, label, onClose, style, className, compact, onB
         }
         const open = sub?.key === item.key;
         const right = item.submenu ? (
-          <>
+          <span className="menu-right">
             {/* What the submenu has chosen (a colour's name), before its chevron. */}
             {item.hint && <span className="menu-hint">{item.hint}</span>}
             <Icon name="chevronRight" size={14} className="menu-chevron" />
-          </>
+          </span>
         ) : item.shortcut ? (
           <span className="menu-shortcut">{item.shortcut}</span>
         ) : item.hint ? (

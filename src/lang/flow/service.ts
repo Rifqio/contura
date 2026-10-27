@@ -7,7 +7,7 @@ import { type BoardParse, type FrameParse, parseBoard, shiftEdits, shiftSpan, sp
 import { completeFlow, type FlowCompletionResult, kindItems } from "./complete";
 import type { TextEdit } from "../protocol";
 import { pasteLines } from "./clip";
-import { addFrame, deleteFrame, renameFrame } from "./boardEdits";
+import { addFrame, appendFrames, deleteFrame, duplicateFrame, renameFrame } from "./boardEdits";
 import { applyFlowEdit, type FlowEditOp, type FlowEditResult } from "./edits";
 import { type DiagramKind, type FlowDoc, MAX_BOARD_SHAPES } from "./model";
 import { flowOutline } from "./outline";
@@ -27,6 +27,10 @@ export type FrameResult = {
   doc: FlowDoc | null;
   /** The frame's most recent good doc (kept by its title), sent only while `doc` is null. */
   lastValid: FlowDoc | null;
+  /** The doc's wire id (Decision 13); null while `doc` is null. */
+  docId: number | null;
+  /** `lastValid`'s wire id; null when there is none. */
+  lastValidId: number | null;
   /** Set (true) only on an ER frame still in the old form, whose edits wait for "Rewrite as table blocks". */
   oldEr?: true;
 };
@@ -73,11 +77,16 @@ export type FlowPasteOp = { op: "paste"; text: string; under?: string; after?: s
  */
 export type FlowInsertOp = { op: "insert"; text: string; at?: number };
 
-/** A board's own edit: add, rename or delete a frame. It runs on the whole text, so a request's `frameIndex` is ignored. */
+/**
+ * A board's own edit: add, rename, duplicate or delete a frame, or append whole frames from text (the Shelf). It runs on
+ * the whole text, so a request's `frameIndex` is ignored.
+ */
 export type FlowBoardOp =
   | { op: "addFrame"; kind: DiagramKind; title: string }
+  | { op: "appendFrames"; frames: string[] }
   | { op: "renameFrame"; frameIndex: number; title: string }
-  | { op: "deleteFrame"; frameIndex: number };
+  | { op: "deleteFrame"; frameIndex: number }
+  | { op: "duplicateFrame"; frameIndex: number };
 
 /** What a canvas action asks the worker for. */
 export type FlowRequestOp = FlowEditOp | FlowBatchOp | FlowPasteOp | FlowInsertOp | FlowBoardOp;
@@ -181,11 +190,32 @@ function lastFor(board: BoardParse, i: number, old: Cached | undefined, titles: 
  */
 export const CLOSED_KEPT = 64;
 
+/**
+ * `row:<table>:<index>`: that ER table's column line, its `index`-th row (B3 decision 13, Show in the text for a
+ * column); null when the table has no such row.
+ */
+function rowSpan(parse: FlowParse, key: string): FlowSpan | null {
+  const cut = key.lastIndexOf(":");
+  const index = Number(key.slice(cut + 1));
+  const line = Number.isInteger(index) && index >= 0 ? parse.rowsOf(key.slice("row:".length, cut))[index]?.line : undefined;
+  return line ? { from: line.from, to: line.to } : null;
+}
+
 /** An ER table's column names, read off the parse's row spans (the parse's own resolution of the table). */
 function columnsOf(parse: FlowParse, text: string, table: string): string[] | null {
   const kind = parse.kindOf(table);
   if (kind !== "entity" && kind !== "weak") return null;
   return parse.rowsOf(table).flatMap((r) => (r.column ? [text.slice(r.column.from, r.column.to)] : []));
+}
+
+const docIds = new WeakMap<FlowDoc, number>();
+let nextDocId = 1;
+/** One id per doc object for as long as it lives, so an unchanged frame's doc is the same id parse after parse. */
+function idOf(doc: FlowDoc | null): number | null {
+  if (!doc) return null;
+  let id = docIds.get(doc);
+  if (id === undefined) docIds.set(doc, (id = nextDocId++));
+  return id;
 }
 
 export function createFlowService() {
@@ -223,7 +253,11 @@ export function createFlowService() {
       docs.delete(docId);
     },
 
-    parse(docId: string, text: string): FlowResult {
+    /** The text of the cached parse, for a resend; undefined when nothing is cached. */
+    cachedText: (docId: string) => docs.get(docId)?.text,
+
+    /** `keepVersion` re-parses the cached text under its own version (a resend must not look newer than a later parse). */
+    parse(docId: string, text: string, keepVersion = false): FlowResult {
       const old = docs.get(docId);
       const board = parseBoard(text, { icons: iconSet, iconNear }, old && old.icons === iconsSeen ? old.board : null);
       const lastValid = new Map<string, FlowDoc>();
@@ -233,9 +267,9 @@ export function createFlowService() {
         const p = f.parse;
         const last = lasts[i];
         if (last && p.title !== "" && !lastValid.has(p.title)) lastValid.set(p.title, last);
-        return { index: f.index, kind: p.kind, title: p.title, from: f.from, to: f.to, line: f.line, doc: p.doc, lastValid: p.doc ? null : last, ...(p.oldEr ? { oldEr: true as const } : {}) };
+        return { index: f.index, kind: p.kind, title: p.title, from: f.from, to: f.to, line: f.line, doc: p.doc, lastValid: p.doc ? null : last, docId: idOf(p.doc), lastValidId: p.doc ? null : idOf(last), ...(p.oldEr ? { oldEr: true as const } : {}) };
       });
-      const version = nextVersion++;
+      const version = keepVersion && old ? old.version : nextVersion++;
       docs.set(docId, { version, text, board, lastValid, lasts, icons: iconsSeen });
       const top = frames[0];
       return { kind: top.kind, doc: top.doc, problems: board.problems, lastValid: top.lastValid, frames, version, ...(top.oldEr ? { oldEr: true as const } : {}) };
@@ -247,7 +281,7 @@ export function createFlowService() {
       const f = c.board.frames[frameIndex];
       // No prototype, so a name such as __proto__ is a plain key.
       const spans = Object.create(null) as Record<string, FlowSpan | null>;
-      for (const k of keys) spans[k] = f ? shiftSpan(f.parse.span(k), f.from) : null;
+      for (const k of keys) spans[k] = f ? shiftSpan(k.startsWith("row:") ? rowSpan(f.parse, k) : f.parse.span(k), f.from) : null;
       const lineOf = Object.create(null) as Record<string, number | null>;
       for (const n of names) {
         const line = f?.parse.defined.get(n);
@@ -281,8 +315,10 @@ export function createFlowService() {
       const c = current(docId, version);
       if (!c) return { stale: true };
       if (edit.op === "addFrame") return { stale: false, ...addFrame(c.text, c.board, edit.kind, edit.title) };
+      if (edit.op === "appendFrames") return { stale: false, ...appendFrames(c.text, c.board, edit.frames) };
       if (edit.op === "renameFrame") return { stale: false, ...renameFrame(c.text, c.board, edit.frameIndex, edit.title) };
       if (edit.op === "deleteFrame") return { stale: false, ...deleteFrame(c.text, c.board, edit.frameIndex) };
+      if (edit.op === "duplicateFrame") return { stale: false, ...duplicateFrame(c.text, c.board, edit.frameIndex) };
       const f = c.board.frames[frameIndex];
       if (!f) return { stale: false, edits: [] };
       const r = editFrame(f, edit);

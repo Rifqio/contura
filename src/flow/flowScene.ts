@@ -15,6 +15,7 @@ import { iconOutline, loadIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import { drawnColour } from "./palette";
 import type { NodeLook } from "./nodes/parts";
+import type { ErNotation } from "./board/boardLayout";
 
 /** The kind in words, as the Modern card's second line says it (the step 12 shapes name theirs in KIND_WORD). */
 const WORDS: Partial<Record<DrawnKind, string>> = {
@@ -159,13 +160,19 @@ export function flowScene(
   icons: ReadonlyMap<string, SceneIcon>,
   axes?: Readonly<Record<string, "v" | "h">>,
   folded?: ReadonlySet<string>,
+  /**
+   * The frame's text size as a label scale (`TEXT_SCALE`), as the canvas sizes its nodes and labels; an ER frame's
+   * notation, as the canvas ends its lines (flowNodes `markers`).
+   */
+  opts?: { textScale?: number; notation?: ErNotation },
 ): Scene {
+  const scale = opts?.textScale ?? 1;
   const placed = new Map<string, { x: number; y: number; w: number; h: number }>();
   const types = new Map<string, string>();
   const nodes: SceneNode[] = [];
   // A sequence, mind map or timeline is placed from its text, as the canvas places it.
   // A folded topic's subtopics are left out, as the canvas leaves them out (M3).
-  const fixed = fixedLayout(doc, (n) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n), folded?.size ? { folded } : {});
+  const fixed = fixedLayout(doc, (n) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n, scale), folded?.size ? { folded } : {});
   const positions = fixed ? fixed.positions : given;
   // A participant's activation bars run from the top of its first message row to the bottom of its last (fixedGraph).
   const bars = new Map<string, { top: number; height: number }[]>();
@@ -178,7 +185,7 @@ export function flowScene(
     if (!own(positions, n.name)) continue;
     const kind = drawnKind(n.kind, doc.kind, n.name);
     const p = positions[n.name];
-    const size = fixed?.sizes.get(n.name) ?? nodeSize(kind, look, shownName(n), n.attrs.id, n);
+    const size = fixed?.sizes.get(n.name) ?? nodeSize(kind, look, shownName(n), n.attrs.id, n, scale);
     placed.set(n.name, { x: p.x, y: p.y, ...size });
     types.set(n.name, familyOf(kind));
     if (CARD_KINDS.has(kind)) {
@@ -278,11 +285,13 @@ export function flowScene(
       l.fromColumn !== undefined || l.toColumn !== undefined
         ? routeRows(ab, erRowY(ab.y, ab.h, erColumnRow(rowsOf.get(l.from) ?? [], l.fromColumn)), bb, erRowY(bb.y, bb.h, erColumnRow(rowsOf.get(l.to) ?? [], l.toColumn)), l.from === l.to)
         : routeOrthogonal(ab, bb, axes?.[axisKey(l.from, l.to)] ? { axis: axes[axisKey(l.from, l.to)] } : {});
-    const edge: SceneEdge = { id: `edge:${i}`, kind: "flow", points: route.points, heads: doc.kind === "er" ? "none" : HEADS[l.arrow] };
+    // An ER frame in Arrows: a plain line with a head at its second end, no crow's feet (Decision 22).
+    const arrows = doc.kind === "er" && opts?.notation === "arrow";
+    const edge: SceneEdge = { id: `edge:${i}`, kind: "flow", points: route.points, heads: arrows ? "end" : doc.kind === "er" ? "none" : HEADS[l.arrow] };
     // A line between topics of a mind map is dashed on the canvas (fixedGraph).
     const line = fixed ? "dashed" : lineOf(l.arrow, doc.kind);
     if (line) edge.line = line;
-    const marks = marksOf(l.arrow, doc.kind);
+    const marks = arrows ? undefined : marksOf(l.arrow, doc.kind);
     if (marks) edge.marks = marks;
     if (l.label) edge.label = l.label;
     const colour = drawnColour(l.color);
@@ -290,6 +299,7 @@ export function flowScene(
     edges.push(edge);
   });
   const scene: Scene = { nodes, edges, areas };
+  if (scale !== 1) scene.textScale = scale;
   if (fixed?.frames?.length) scene.frames = fixed.frames.map((f) => ({ label: f.label, depth: f.depth, ...f.box }));
   if (fixed?.sections?.length) scene.sections = fixed.sections.map((sec) => ({ name: sec.name, ...sec.box }));
   if (fixed?.axis) {

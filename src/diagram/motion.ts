@@ -63,3 +63,8 @@ export function reducedMotion(): boolean {
 export function motionMs(key: MotionKey): number {
   return reducedMotion() ? 0 : MOTION[key];
 }
+
+/** The one option every view move on the board reads (zoom to frame, fit, Add's glide, the pane's glide): `duration: 0` under reduced motion. */
+export function glideOptions(): { duration: number } {
+  return { duration: motionMs("fit") };
+}

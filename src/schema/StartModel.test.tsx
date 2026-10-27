@@ -286,3 +286,10 @@ test("from_connection_needs_an_open_connection", () => {
   setup([]);
   expect(screen.getByText("Open a Connection to read its schema.")).toBeTruthy();
 });
+
+test("the_table_count_has_grouping_commas", async () => {
+  routeInvoke({ recent_items: () => [], list_databases: () => DATABASES, list_objects: () => Array.from({ length: 1234 }, () => ({ kind: "table" })) });
+  setup(["c1"]);
+  await chooseConnection();
+  await screen.findByText("1,234 tables");
+});

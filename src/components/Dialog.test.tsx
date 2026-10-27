@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { expect, test, vi } from "vitest";
 import appCss from "../styles/app.css?raw";
 import Dialog from "./Dialog";
@@ -19,6 +20,36 @@ test("Escape closes it, even when focus has left the dialog", async () => {
   expect(document.activeElement).toBe(document.body);
   await userEvent.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalledTimes(2);
+});
+
+test("escape_pressed_the_moment_it_shows_closes_it", async () => {
+  // Opened by an update outside React's act (an awaited load, as Publish image is): its passive effects run a task
+  // later than the commit that draws it, and an Escape may land in between (the canvasShell F29 flake).
+  const onClose = vi.fn();
+  let show: () => void = () => {};
+  function Host() {
+    const [open, setOpen] = useState(false);
+    show = () => setOpen(true);
+    return open ? (
+      <Dialog title="Publish image" onClose={onClose}>
+        <p>Body</p>
+      </Dialog>
+    ) : null;
+  }
+  render(<Host />);
+  const drawn = new Promise<void>((resolve) => {
+    const mo = new MutationObserver(() => {
+      if (!document.querySelector("[role=dialog]")) return;
+      mo.disconnect();
+      // At once, in the microtask after the commit that drew the dialog.
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      resolve();
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+  });
+  setTimeout(() => show(), 0);
+  await drawn;
+  expect(onClose).toHaveBeenCalledTimes(1);
 });
 
 test("closing_returns_focus_to_the_opener_even_when_a_child_has_autofocus", () => {
@@ -221,4 +252,39 @@ test("J2: an untouched dialog still closes on a click outside and on Escape", as
   expect(onClose).toHaveBeenCalledTimes(1);
   await userEvent.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalledTimes(2);
+});
+
+test("escape_closes_only_the_dialog_on_top", async () => {
+  // A dialog opened over another (a confirm over a form): Escape closes the top one, then the one under it.
+  const closed: string[] = [];
+  function Host() {
+    const [top, setTop] = useState(false);
+    const [under, setUnder] = useState(true);
+    return (
+      <>
+        {under && (
+          <Dialog title="Under" onClose={() => (closed.push("under"), setUnder(false))}>
+            <button type="button" onClick={() => setTop(true)}>
+              Open
+            </button>
+          </Dialog>
+        )}
+        {top && (
+          <Dialog title="Top" size="confirm" onClose={() => (closed.push("top"), setTop(false))}>
+            <p>Sure?</p>
+          </Dialog>
+        )}
+      </>
+    );
+  }
+  render(<Host />);
+  fireEvent.click(screen.getByRole("button", { name: "Open" }));
+  expect(screen.getAllByRole("dialog")).toHaveLength(2);
+  await userEvent.keyboard("{Escape}");
+  expect(closed).toEqual(["top"]);
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(screen.getByRole("dialog", { name: "Under" })).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  expect(closed).toEqual(["top", "under"]);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

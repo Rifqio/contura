@@ -205,6 +205,61 @@ test("the shape menu has Cut, Copy and Duplicate; the canvas menu pastes where i
   await waitFor(() => expect(s.text()).toBe(FLOW.replace("Done [end]\n", "Done [end]\nCheck 2 [decision]\n")));
 });
 
+test("ER: a table is copied with its columns and keys, and the relationship between copied tables comes along", async () => {
+  const er = lines('diagram er "Billing"', "customers {", "  id int pk", "}", "invoices {", "  id int pk", "  customer_id int", "}", "", "invoices.customer_id > customers.id");
+  const s = setup(er, "er-clip");
+  await drawn(s, "Table customers");
+  s.pick("customers", "invoices");
+  s.press("d", { ctrlKey: true });
+  const after = lines(
+    'diagram er "Billing"',
+    "customers {",
+    "  id int pk",
+    "}",
+    "invoices {",
+    "  id int pk",
+    "  customer_id int",
+    "}",
+    "customers_2 {",
+    "  id int pk",
+    "}",
+    "invoices_2 {",
+    "  id int pk",
+    "  customer_id int",
+    "}",
+    "",
+    "invoices.customer_id > customers.id",
+    "invoices_2.customer_id > customers_2.id",
+  );
+  await waitFor(() => expect(s.text()).toBe(after));
+  await waitFor(() => expect(s.node("Table customers_2")).not.toBeNull());
+  oneUndo(s, er);
+});
+
+test("ER: a cut of a table or a column takes the relationship lines on it, and one undo brings them all back", async () => {
+  const er = lines('diagram er "Billing"', "customers {", "  id int pk", "}", "invoices {", "  id int pk", "  customer_id int", "}", "", "invoices.customer_id > customers.id");
+  // A table: its block and the line to it go (the blank line that set them apart stays); the clipboard holds the block.
+  const s = setup(er, "er-cut-table");
+  await drawn(s, "Table customers");
+  s.pick("customers");
+  s.press("x", { ctrlKey: true });
+  await waitFor(() => expect(s.text()).toBe(`${lines('diagram er "Billing"', "invoices {", "  id int pk", "  customer_id int", "}")}\n`));
+  await waitFor(() => expect(board.text).toContain("customers {"));
+  // Only lines between copied tables are copied.
+  expect(board.text).not.toContain("invoices.customer_id");
+  oneUndo(s, er);
+  cleanup();
+  // A column: its row and the lines that end on it go with it.
+  const c = setup(er, "er-cut-column");
+  await drawn(c, "Table invoices");
+  const row = c.node("Table invoices")!.querySelectorAll<HTMLElement>(".fkind-er-row")[1];
+  fireEvent.click(row);
+  c.press("x", { ctrlKey: true });
+  await waitFor(() => expect(c.text()).toBe(`${lines('diagram er "Billing"', "customers {", "  id int pk", "}", "invoices {", "  id int pk", "}")}\n`));
+  await waitFor(() => expect(board.text).toContain("customer_id int"));
+  oneUndo(c, er);
+});
+
 test("data flow: a duplicated process takes the next free id", async () => {
   const dfd = lines('diagram dfd "D"', "Customer [entity]", "Checkout [process, id: 1.0]", "", "Customer > Checkout: order");
   const s = setup(dfd, "dfd-clip");

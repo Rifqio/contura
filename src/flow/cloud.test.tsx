@@ -210,7 +210,8 @@ test("choose_icon_from_the_strip_sets_the_icon_in_the_text", async () => {
 test("add_a_service_opens_the_picker_for_it", async () => {
   const s = setup();
   await drawn(s);
-  s.press("n");
+  s.press("r");
+  s.press("Enter");
   // The name opens first (diagram step 6); kept, the service has the board's default icon and its picker opens.
   fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new service" }), { key: "Enter" });
   await waitFor(() => expect(s.text()).toContain("Service [icon: aws-lambda]\n"));
@@ -219,7 +220,8 @@ test("add_a_service_opens_the_picker_for_it", async () => {
   await userEvent.keyboard("{Enter}");
   await waitFor(() => expect(s.text()).toContain("Service [icon: database]\n"));
   // Esc on the picker leaves the new service as it is.
-  s.press("n");
+  s.press("r");
+  s.press("Enter");
   fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new service" }), { key: "Enter" });
   await waitFor(() => expect(s.text()).toContain("Service 2 [icon: aws-lambda]\n"));
   const again = await screen.findByRole("dialog", { name: "Choose an icon" });
@@ -228,7 +230,8 @@ test("add_a_service_opens_the_picker_for_it", async () => {
   expect(s.text()).toContain("Service 2 [icon: aws-lambda]\n");
   // Focus is back on the canvas, so its keys work at once.
   expect(document.activeElement).toBe(s.container.querySelector(".flow-canvas"));
-  fireEvent.keyDown(document.activeElement!, { key: "n" });
+  fireEvent.keyDown(document.activeElement!, { key: "r" });
+  fireEvent.keyDown(document.activeElement!, { key: "Enter" });
   fireEvent.keyDown(await screen.findByRole("textbox", { name: "Name the new service" }), { key: "Enter" });
   await waitFor(() => expect(s.text()).toContain("Service 3 [icon: aws-lambda]\n"));
 });
@@ -268,6 +271,7 @@ test("group_that_cannot_be_written_says_why", async () => {
   });
   await waitFor(() => expect(s.container.querySelector(".flow-canvas.is-stale")).not.toBeNull());
   s.press("g");
+  s.press("Enter");
   expect(await within(s.strip()).findByText("Couldn't group these services. Fix the text first.")).toBeTruthy();
 });
 
@@ -278,6 +282,7 @@ test("group_puts_the_selected_services_in_a_new_group_as_one_undo", async () => 
   fireEvent.keyDown(s.node("Service Gateway")!, { key: "Enter" });
   await waitFor(() => expect(within(s.strip()).getByText("Gateway")).toBeTruthy());
   await userEvent.click(screen.getByRole("button", { name: "Group" }));
+  s.press("Enter");
   // C1: the new group's name opens in edit; Enter keeps it (diagram step 3).
   await userEvent.type(await screen.findByRole("textbox", { name: "Group name" }), "{Enter}");
   await waitFor(() => expect(s.text()).toContain("Group [icon: aws-vpc] {\n  Gateway [icon: aws-api-gateway]\n}\n"));
@@ -294,6 +299,7 @@ test("group_with_nothing_selected_says_what_it_needs", async () => {
   const s = setup();
   await drawn(s);
   s.press("g");
+  s.press("Enter");
   expect(await within(s.strip()).findByText("Select the services to group first.")).toBeTruthy();
   expect(s.text()).toBe(PLATFORM);
 });

@@ -126,18 +126,19 @@ function flowTab(stored: unknown = DEFAULT_UI_PREFS) {
 }
 
 test("choice_is_remembered", async () => {
+  // Decision 16: the tab shown is remembered for every tab and the next start; open or closed is each tab's own and
+  // never written, so the stored hidden stays as it was.
   const a = flowTab();
   await waitFor(() => expect(a.container.querySelector(".cm-editor")).not.toBeNull());
   await userEvent.click(tab("Assistant"));
   await userEvent.click(screen.getByRole("button", { name: "Hide the side panel" }));
   const saved = callsTo("save_ui_prefs").slice(-1)[0].prefs as typeof DEFAULT_UI_PREFS;
-  expect(saved.flowSidePanel).toEqual({ hidden: true, tab: "assistant" });
-  // The next tab and the next start read it back.
+  expect(saved.flowSidePanel).toEqual({ hidden: false, tab: "assistant" });
+  // The next tab reads the tab back, and opens with its pane open (owner answer 6), whatever the stored hidden says.
   cleanup();
   flowTab({ ...DEFAULT_UI_PREFS, flowSidePanel: { hidden: true, tab: "assistant" } });
-  await screen.findByRole("navigation", { name: "Side panel, hidden" });
-  await userEvent.click(screen.getByRole("button", { name: "Show the side panel" }));
-  expect(tab("Assistant").getAttribute("aria-selected")).toBe("true");
+  await waitFor(() => expect(tab("Assistant").getAttribute("aria-selected")).toBe("true"));
+  expect(screen.queryByRole("navigation", { name: "Side panel, hidden" })).toBeNull();
   expect(screen.getByText("Ask for a change to orders")).toBeTruthy();
   expect(screen.getByText("The assistant edits the text and the drawing together. While it works, the text is read-only.")).toBeTruthy();
 });
@@ -151,11 +152,16 @@ test("a_stored_choice_without_the_field_keeps_the_default", async () => {
 test("ctrl_b_toggles_the_panel_from_the_tab", async () => {
   const s = flowTab();
   await waitFor(() => expect(s.container.querySelector(".cm-editor")).not.toBeNull());
+  const panel = s.container.querySelector('section[aria-label="Side panel"]') as HTMLElement;
   const content = s.container.querySelector(".cm-content") as HTMLElement;
+  content.focus();
   fireEvent.keyDown(content, { key: "b", ctrlKey: true });
-  expect(screen.getByRole("navigation", { name: "Side panel, hidden" })).toBeTruthy();
-  fireEvent.keyDown(document.activeElement!, { key: "b", ctrlKey: true });
+  // A board's pane hides to nothing: no rail, and the keys go on from the canvas.
+  expect(panel.hidden).toBe(true);
   expect(screen.queryByRole("navigation", { name: "Side panel, hidden" })).toBeNull();
+  expect(s.container.querySelector(".flow-canvas")!.contains(document.activeElement)).toBe(true);
+  fireEvent.keyDown(document.activeElement!, { key: "b", ctrlKey: true });
+  expect(panel.hidden).toBe(false);
   expect(screen.getByRole("region", { name: "Side panel" })).toBeTruthy();
 });
 
@@ -167,7 +173,8 @@ test("editor_keeps_its_text_and_undo", async () => {
   const typed = before.state.doc.toString();
   await userEvent.click(tab("Assistant"));
   await userEvent.click(screen.getByRole("button", { name: "Hide the side panel" }));
-  await userEvent.click(screen.getByRole("button", { name: "Show the Editor" }));
+  fireEvent.keyDown(document.activeElement!, { key: "b", ctrlKey: true });
+  await userEvent.click(tab("Editor"));
   expect(s.view()).toBe(before);
   expect(s.view().state.doc.toString()).toBe(typed);
   act(() => {

@@ -101,17 +101,118 @@ pub fn body(req: &ChatRequest) -> Value {
     Value::Object(body)
 }
 
-/// The running stream: the finish reason so far and the tool calls being gathered, by
-/// `index`, each as its name and the arguments text so far.
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+/// The most leading whitespace held back while waiting to see whether `<think>` follows.
+const LEAD_BYTES: usize = 1024;
+
+/// Where the `content` deltas are: GLM, DeepSeek-R1 distills, QwQ and similar models write
+/// their reasoning as a leading `<think>...</think>` block in `content` (read as Open WebUI
+/// and LM Studio do). Only a block at the very start counts; one later in the answer is text.
+#[derive(Default)]
+enum Content {
+    /// Nothing but whitespace and a prefix of `<think>` so far, held in the buffer.
+    #[default]
+    Start,
+    /// Inside the block; the buffer holds a tail that may begin `</think>`.
+    InThink,
+    /// Just past `</think>`: the newlines after it are dropped.
+    AfterThink,
+    /// The answer: every delta is text as it comes.
+    Body,
+}
+
+/// Splits `content` deltas into thinking and answer text. Deltas are `&str`, so every cut is
+/// on a char boundary; the tags are ASCII and found across any chunk split.
+#[derive(Default)]
+struct ContentSplit {
+    at: Content,
+    buf: String,
+}
+
+impl ContentSplit {
+    fn push(&mut self, text: &str, sink: &mut (dyn FnMut(ProviderEvent) + Send)) {
+        match self.at {
+            Content::Start => {
+                self.buf.push_str(text);
+                let lead = self.buf.trim_start();
+                if let Some(rest) = lead.strip_prefix(THINK_OPEN) {
+                    let rest = rest.to_string();
+                    self.buf.clear();
+                    self.at = Content::InThink;
+                    self.push(&rest, sink);
+                } else if !THINK_OPEN.starts_with(lead) || self.buf.len() > LEAD_BYTES {
+                    self.at = Content::Body;
+                    sink(ProviderEvent::Text(std::mem::take(&mut self.buf)));
+                }
+            }
+            Content::InThink => {
+                self.buf.push_str(text);
+                if let Some(i) = self.buf.find(THINK_CLOSE) {
+                    let rest = self.buf.split_off(i + THINK_CLOSE.len());
+                    self.buf.truncate(i);
+                    self.emit_thinking(sink);
+                    self.at = Content::AfterThink;
+                    self.push(&rest, sink);
+                } else {
+                    // Keep the longest tail that could still open `</think>`; it starts at
+                    // an ASCII '<', so the cut is on a char boundary.
+                    let keep = (1..THINK_CLOSE.len().min(self.buf.len() + 1))
+                        .rev()
+                        .find(|&n| {
+                            self.buf.is_char_boundary(self.buf.len() - n)
+                                && THINK_CLOSE.starts_with(&self.buf[self.buf.len() - n..])
+                        })
+                        .unwrap_or(0);
+                    let tail = self.buf.split_off(self.buf.len() - keep);
+                    self.emit_thinking(sink);
+                    self.buf = tail;
+                }
+            }
+            Content::AfterThink => {
+                let rest = text.trim_start_matches(['\r', '\n']);
+                if !rest.is_empty() {
+                    self.at = Content::Body;
+                    sink(ProviderEvent::Text(rest.to_string()));
+                }
+            }
+            Content::Body => sink(ProviderEvent::Text(text.to_string())),
+        }
+    }
+
+    /// Sends what is held back: in Start it was never a tag, so it is text; in an unclosed
+    /// block it stays thinking and the answer is empty.
+    fn end(&mut self, sink: &mut (dyn FnMut(ProviderEvent) + Send)) {
+        match self.at {
+            Content::Start if !self.buf.is_empty() => {
+                sink(ProviderEvent::Text(std::mem::take(&mut self.buf)));
+            }
+            Content::InThink => self.emit_thinking(sink),
+            _ => {}
+        }
+        self.at = Content::Body;
+    }
+
+    fn emit_thinking(&mut self, sink: &mut (dyn FnMut(ProviderEvent) + Send)) {
+        if !self.buf.is_empty() {
+            sink(ProviderEvent::Thinking(std::mem::take(&mut self.buf)));
+        }
+    }
+}
+
+/// The running stream: the finish reason so far, the tool calls being gathered, by
+/// `index`, each as its name and the arguments text so far, and the `content` split.
 #[derive(Default)]
 struct State {
     stop: Option<StopReason>,
     tools: BTreeMap<u64, (String, String)>,
+    content: ContentSplit,
 }
 
 impl State {
-    /// Hands each gathered call to `sink`, in index order.
+    /// Sends the held-back content, then each gathered call, in index order.
     fn flush_tools(&mut self, sink: &mut (dyn FnMut(ProviderEvent) + Send)) {
+        self.content.end(sink);
         for (name, input) in std::mem::take(&mut self.tools).into_values() {
             sink(ProviderEvent::ToolCall { name, input });
         }
@@ -234,7 +335,7 @@ impl OpenAi {
                 }
             }
             if let Some(text) = delta["content"].as_str().filter(|t| !t.is_empty()) {
-                sink(ProviderEvent::Text(text.to_string()));
+                state.content.push(text, sink);
             }
             for call in delta["tool_calls"].as_array().into_iter().flatten() {
                 let index = call["index"].as_u64().unwrap_or(0);
@@ -353,6 +454,8 @@ impl AiProvider for OpenAi {
         if !done && let Some(ev) = parser.finish().map_err(Error::Ai)? {
             done = self.on_event(&ev, &req.model, &mut state, log, sink)?;
         }
+        // A body cut off with content still held back.
+        state.content.end(sink);
         sink(ProviderEvent::Stop(final_stop(state.stop, done)));
         Ok(())
     }
@@ -462,6 +565,7 @@ mod tests {
             }
         }
         if result.is_ok() {
+            state.content.end(&mut sink);
             sink(ProviderEvent::Stop(final_stop(state.stop, done)));
         }
         (got, result)
@@ -840,6 +944,135 @@ mod tests {
             "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\"}}]}\n\ndata: [DONE]\n\n",
         );
         assert_eq!(got[0], ProviderEvent::Thinking("hmm".into()));
+    }
+
+    /// One SSE event holding one `content` delta.
+    fn content(text: &str) -> String {
+        format!(
+            "data: {}\n\n",
+            json!({"choices": [{"delta": {"content": text}}]})
+        )
+    }
+
+    /// A stream of `content` deltas, then `[DONE]`.
+    fn contents(parts: &[&str]) -> String {
+        parts.iter().map(|p| content(p)).collect::<String>() + "data: [DONE]\n\n"
+    }
+
+    /// The thinking and the answer text, each joined across its events.
+    fn joined(got: &[ProviderEvent]) -> (String, String) {
+        let (mut thinking, mut text) = (String::new(), String::new());
+        for e in got {
+            match e {
+                ProviderEvent::Thinking(t) => thinking.push_str(t),
+                ProviderEvent::Text(t) => text.push_str(t),
+                _ => {}
+            }
+        }
+        (thinking, text)
+    }
+
+    #[test]
+    fn a_leading_think_block_becomes_thinking() {
+        let (got, result) = play(include_str!(
+            "../../../tests/fixtures/ai/openai_think_tag.sse"
+        ));
+        result.unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ProviderEvent::Thinking("The user is asking for a count.".into()),
+                ProviderEvent::Text("SELECT count(*) FROM users;".into()),
+                ProviderEvent::Stop(StopReason::End),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_think_tag_split_across_chunks_is_still_found() {
+        let whole = "<think>Zählen: 用户 🙂</think>\n\nSELECT 'é';";
+        // One byte per delta for ASCII; a multibyte char cannot be cut, so it goes whole.
+        let parts: Vec<String> = whole.chars().map(String::from).collect();
+        let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+        let (got, result) = play(&contents(&parts));
+        result.unwrap();
+        assert_eq!(
+            joined(&got),
+            ("Zählen: 用户 🙂".into(), "SELECT 'é';".into())
+        );
+        // No event holds a piece of either tag.
+        assert!(got.iter().all(|e| match e {
+            ProviderEvent::Thinking(t) | ProviderEvent::Text(t) => !t.contains('<'),
+            _ => true,
+        }));
+    }
+
+    #[test]
+    fn leading_whitespace_before_think_is_allowed() {
+        let (got, result) = play(&contents(&[
+            "\n ",
+            " <th",
+            "ink>why</think>",
+            "\nSELECT 1;",
+        ]));
+        result.unwrap();
+        assert_eq!(joined(&got), ("why".into(), "SELECT 1;".into()));
+    }
+
+    #[test]
+    fn a_think_tag_later_in_the_answer_stays_text() {
+        let answer = "Use <think> as a tag: <think>x</think> stays.";
+        let (got, result) = play(&contents(&[
+            "Use ",
+            "<think> as a tag: ",
+            "<think>x</think> stays.",
+        ]));
+        result.unwrap();
+        assert_eq!(joined(&got), (String::new(), answer.into()));
+        // A stream that ends on what could still have been the tag sends it as text.
+        let (got, _) = play(&contents(&[" <thi"]));
+        assert_eq!(joined(&got), (String::new(), " <thi".into()));
+    }
+
+    #[test]
+    fn an_unclosed_think_block_stays_thinking() {
+        let (got, result) = play(&contents(&["<think>still ", "thinking </thi"]));
+        result.unwrap();
+        assert_eq!(joined(&got), ("still thinking </thi".into(), String::new()));
+        assert_eq!(got.last(), Some(&ProviderEvent::Stop(StopReason::End)));
+    }
+
+    #[test]
+    fn content_without_think_is_unchanged_and_not_delayed() {
+        // Each delta goes through `on_event` alone; the events it gave are read after it.
+        let p = provider();
+        let mut state = State::default();
+        let mut log = Log::new();
+        let mut step = |text: &str| {
+            let mut got = Vec::new();
+            let ev = SseEvent {
+                event: None,
+                data: json!({"choices": [{"delta": {"content": text}}]}).to_string(),
+            };
+            p.on_event(&ev, "m", &mut state, &mut log, &mut |e| got.push(e))
+                .unwrap();
+            got
+        };
+        // "<" could still open the tag; "<b" cannot, so both go out at once.
+        assert_eq!(step("<"), vec![]);
+        assert_eq!(step("b>"), vec![ProviderEvent::Text("<b>".into())]);
+        assert_eq!(step("SELECT"), vec![ProviderEvent::Text("SELECT".into())]);
+
+        // Plain text goes out on its first delta, unchanged.
+        let mut state = State::default();
+        let mut got = Vec::new();
+        let ev = SseEvent {
+            event: None,
+            data: json!({"choices": [{"delta": {"content": "SELECT 1;"}}]}).to_string(),
+        };
+        p.on_event(&ev, "m", &mut state, &mut log, &mut |e| got.push(e))
+            .unwrap();
+        assert_eq!(got, vec![ProviderEvent::Text("SELECT 1;".into())]);
     }
 
     #[test]

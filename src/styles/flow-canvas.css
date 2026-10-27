@@ -140,9 +140,9 @@
   background: var(--fnode-fill);
 }
 .fnode-box .fnode-name {
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale, 1));
   font-weight: 600;
-  line-height: 20px;
+  line-height: calc(20px * var(--text-scale, 1));
 }
 
 /* Data flow, Modern: an 8 px pastel card. A store has a dashed right edge; an outside party a double edge. */
@@ -497,8 +497,9 @@
   font-style: italic;
 }
 /*
-  ER table card, draw-only (Plan A): the rows scroll inside the card past 20, and each row has a key gutter and a
-  not-null mark.
+  ER table card (Plan A; ER build A restored in B3 Task 2): the rows scroll inside the card past 20, and each row has
+  a key gutter and a not-null mark. On the live frame it is edited in place: the selected column is marked and
+  "+ column" shows on hover. Only the rows in view are drawn; spacers stand for the rest.
 */
 .fkind-er-body {
   flex: 1;
@@ -521,6 +522,35 @@
   padding: 0 10px 0 10px;
   white-space: nowrap;
 }
+/* A tint of the hover token over the card, so the italic type text keeps 4.5:1 (4.82 light, 9.05 dark; the bare token read 4.43 in light). */
+.fkind-er-row:hover {
+  background: color-mix(in srgb, var(--c-bg-hover) 70%, transparent);
+}
+/*
+  The tints keep the italic type text at 4.5:1 in the light theme (4.58 selected, 4.70 aimed; checked with a WCAG
+  script, both themes): at 22% and 18% it read 4.17 and 4.43. The accent bar and ring stay above 3:1 on them.
+*/
+.fkind-er-row.is-selected {
+  background: color-mix(in srgb, var(--c-accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--c-accent);
+}
+/*
+  The column or header the keyboard aims at while "Make a relationship from here" picks, and the row or header a
+  Relationship drag would join: a tinted fill and a 2 px accent ring drawn inside it, clear of the card's own
+  selection border (fix round 3). Theme tokens only, so both themes draw it.
+*/
+.fkind-er-row.is-pick,
+.fkind-head.is-pick {
+  background: color-mix(in srgb, var(--c-accent) 14%, transparent);
+  box-shadow: inset 0 0 0 2px var(--c-accent);
+}
+.fkind-er-row.is-new {
+  background: color-mix(in srgb, var(--c-accent) 10%, transparent);
+}
+/* The rows above and below the window: empty, so the body scrolls as if every row were drawn. */
+.fkind-er-spacer {
+  padding: 0;
+}
 .fkind-gut {
   display: flex;
   flex: none;
@@ -529,6 +559,31 @@
   width: 18px;
   height: 18px;
   color: var(--c-text-subtle);
+}
+/* On the live card the gutter is the key's button. */
+button.fkind-gut {
+  all: unset;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border-radius: 3px;
+  color: var(--c-text-subtle);
+  cursor: pointer;
+}
+button.fkind-gut:hover:not(:disabled) {
+  background: var(--c-bg-active);
+  color: var(--c-text);
+}
+button.fkind-gut:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+button.fkind-gut:disabled {
+  cursor: default;
 }
 .fkind-er-row .fkind-type {
   flex: none;
@@ -551,6 +606,45 @@
 .fkind-nn.is-nn {
   background: var(--c-text-subtle);
 }
+.fkind-addcol {
+  all: unset;
+  position: absolute;
+  top: 100%;
+  right: -1px;
+  left: -1px;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  margin-top: -1px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 1px dashed var(--fnode-stroke);
+  border-radius: 0 0 6px 6px;
+  background: var(--c-bg-surface);
+  color: var(--c-accent-text);
+  font: var(--font-small);
+  cursor: pointer;
+}
+/* Hidden off-hover by opacity, so it stays in the tab order: a selected card, or one holding focus, shows it. */
+.react-flow__node:hover .fkind-addcol,
+.react-flow__node.selected .fkind-addcol,
+.react-flow__node:focus-within .fkind-addcol {
+  opacity: 1;
+  pointer-events: auto;
+}
+.fkind-addcol:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.fkind-addcol:hover {
+  background: var(--c-bg-hover);
+}
+.is-ai-working .fkind-addcol {
+  display: none;
+}
 /* A weak table: its border dashed. */
 .fnode-erWeak {
   border-style: dashed;
@@ -561,10 +655,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* A class getting a new member row grows to it on the motion token (0 under reduced motion). */
-.react-flow__node.is-growing {
-  transition: height var(--motion-base) var(--ease-enter);
 }
 /* The picked class member. */
 .fkind-row.is-picked {
@@ -611,6 +701,23 @@
   color: var(--c-text);
   font: var(--font-small);
   white-space: normal;
+}
+/* The ER card's fields: the header's name in its weight, the type in the type colour and its own column. */
+.fkind-ed-head {
+  font: inherit;
+  font-weight: 600;
+}
+.fkind-ed-type {
+  font-style: italic;
+  color: var(--c-syn-type);
+}
+.fkind-ed:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.fkind-er-row > .inline-edit-wrap:has(.fkind-ed-type) {
+  flex: 0 0 96px;
+  margin-left: auto;
 }
 .flow-rename-inline {
   position: absolute;

@@ -238,7 +238,8 @@ test("a shape added with a taken name is written with a free name and label:, pl
   try {
     const s = setup(text, layout);
     await waitFor(() => expect(s.title("Dispatch")).not.toBeNull(), { timeout: 4000 });
-    s.press("s");
+    s.press("r");
+    s.press("Enter");
     const box = await s.field("Name the new step");
     await userEvent.clear(box);
     await userEvent.type(box, "Retry{Enter}");

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { afterEach, beforeAll, expect, onTestFinished, test, vi } from "vitest";
 import { mockReactFlowDom } from "../test/reactFlow";
 import CardFrame, { Ports } from "./CardFrame";
-import DiagramCanvas from "./DiagramCanvas";
+import DiagramCanvas, { SKETCH_LAYER } from "./DiagramCanvas";
 import { detailFor } from "./detail";
 import { JoinBadge, OrthogonalEdge } from "./edges";
 import { setReducedMotionPref } from "./motion";
@@ -93,6 +93,15 @@ test("a_small_diagram_fits_at_100_percent", async () => {
   renderCanvas([card("stores", 0)]);
   await waitFor(() => expect(percent()).toBe("100%"));
   expect(document.querySelectorAll(".table-card-column")).toHaveLength(5);
+});
+
+test("the_fit_takes_sketches_at_their_board_place_not_their_layer", async () => {
+  // A board's sketch layer sits at -origin with no size; its sketches are drawn from it at their board places.
+  const layer: Node = { id: "\u0000sketches", position: { x: -3000, y: 0 }, width: 0, height: 0, style: { width: 0, height: 0, pointerEvents: "none" }, data: {} };
+  const sketch: Node = { id: "\u0000sketch:s1", parentId: "\u0000sketches", position: { x: 3000, y: 0 }, initialWidth: 100, initialHeight: 60, data: {} };
+  renderCanvas([layer, sketch, card("stores", 0)]);
+  // Everything drawn is near the origin: the fit stays at 100 percent.
+  await waitFor(() => expect(percent()).toBe("100%"));
 });
 
 test("zoomed_out_a_card_is_a_name_box_without_rows", async () => {
@@ -571,6 +580,28 @@ test("F7 a dragged card lands where it is let go, on no grid, unless an edge or 
   expect(container.querySelectorAll(".diagram-guides line")).toHaveLength(0);
 });
 
+test("a_sketch_drag_snaps_and_guides_in_board_coordinates", async () => {
+  // A board's sketch is a child of the layer at -origin (Plan B Task 11): its position is on the board, its place on
+  // the canvas the layer's plus its own. With the live frame at (600, 300) the guides and the snap use the canvas place.
+  const onMove = vi.fn();
+  const layer: Node = { id: SKETCH_LAYER, type: "card", position: { x: -600, y: -300 }, width: 0, height: 0, data: { name: "", cols: [] }, selectable: false, draggable: false };
+  const sketch: Node = { ...card("sk", 637, 353), parentId: SKETCH_LAYER };
+  const { container } = renderCanvas([layer, sketch, card("stores", 450, 200)], { onMove });
+  await waitFor(() => expect(percent()).toBe("100%"));
+  const el = [...container.querySelectorAll<HTMLElement>(".react-flow__node")].find((e) => e.getAttribute("data-id") === "sk")!;
+  mouse("mousedown", el, { clientX: 10, clientY: 10, button: 0 });
+  mouse("mousemove", window, { clientX: 12, clientY: 10 });
+  // Its top edge goes to 197 on the canvas, 3 px from stores' 200: a guide at y 200, and it snaps there.
+  mouse("mousemove", window, { clientX: 15, clientY: 154 });
+  const lines = [...container.querySelectorAll(".diagram-guides line")];
+  expect(lines.length).toBeGreaterThan(0);
+  expect(lines.some((l) => l.getAttribute("y1") === "200" && l.getAttribute("y2") === "200")).toBe(true);
+  mouse("mouseup", window, { clientX: 15, clientY: 154 });
+  await waitFor(() => expect(onMove).toHaveBeenCalledTimes(1));
+  // Reported on the board, as the layer's child: 300 + 200.
+  expect(onMove.mock.calls[0].slice(0, 3)).toEqual(["sk", 640, 500]);
+});
+
 test("F7 Alt moves freely with no guides; Shift keeps the axis moved furthest along", async () => {
   const onMove = vi.fn();
   const { container } = renderCanvas([card("orders", 0, 0), card("stores", 450, 200)], { onMove });
@@ -656,4 +687,25 @@ test("N1 Ctrl, Alt or Meta with an arrow on a focused card moves nothing, inside
   dragBy(container, "orders", 30, 20, { altKey: true });
   await waitFor(() => expect(onMove).toHaveBeenCalledTimes(1));
   expect(onMove.mock.calls[0].slice(0, 3)).toEqual(["orders", 30, 20]);
+});
+
+test("an_unchanged_node_keeps_its_object_when_another_changes", async () => {
+  // Task 18b: a board's switch hands the canvas 1,000 unchanged sketches and 49 unchanged frames; React Flow skips a
+  // node whose object is the one it has, so only what changed draws again.
+  let inst: ReactFlowInstance | null = null;
+  const a = card("a", 0);
+  const b = card("b", 400);
+  const ui = (nodes: Node[]) => (
+    <div style={{ width: 800, height: 600 }}>
+      <DiagramCanvas nodes={nodes} edges={[]} nodeTypes={nodeTypes} onInit={(i) => (inst = i)} />
+    </div>
+  );
+  const { rerender } = render(ui([a, b]));
+  await waitFor(() => expect(inst?.getNode("a")?.measured).toBeTruthy());
+  const was = inst!.getNode("a");
+  const wasB = inst!.getNode("b");
+  rerender(ui([a, { ...b, data: { name: "b", cols: ["id"] } }]));
+  await waitFor(() => expect((inst!.getNode("b")!.data as CardData).cols).toEqual(["id"]));
+  expect(inst!.getNode("a")).toBe(was);
+  expect(inst!.getNode("b")).not.toBe(wasB);
 });

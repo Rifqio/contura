@@ -233,20 +233,29 @@ export function columnTypeText(type: string): string {
   return type;
 }
 
+/** An ER column row's name and type: "customer_id int" is customer_id and int; a row with no type has none. */
+export function splitRow(row: string): { name: string; type: string } {
+  const at = row.search(/\s/);
+  return at < 0 ? { name: row, type: "" } : { name: row.slice(0, at), type: row.slice(at + 1).trim() };
+}
+
+/**
+ * An ER table's column `i` as one block line without its indent: `name type flags // comment`. `tableText` writes each
+ * column with it and Ctrl+C copies it (`comment: false` leaves the row comment out), so the two never quote differently.
+ */
+export function columnLine(n: FlowNode, i: number, o: { comment?: boolean } = {}): string {
+  const { name, type } = splitRow(n.rows?.[i] ?? "");
+  const note = o.comment === false ? undefined : n.rowComments?.[i];
+  // A comment ends at the line end, so a line break inside one becomes a space.
+  const comment = note === undefined ? "" : note ? ` // ${note.replace(/[\r\n]+/g, " ")}` : " //";
+  return `${name}${type ? ` ${columnTypeText(type)}` : ""}${columnFlagsText(n.rowFlags?.[i] ?? [])}${comment}`;
+}
+
 /** An ER table: its statement alone, or with its columns as a block, one `  name type flags` line each. */
 export function tableText(n: FlowNode): string {
   const own = nodeStatement("er", n);
   if (!n.rows?.length) return own;
-  const columns = n.rows.map((row, i) => {
-    const space = row.search(/\s/);
-    const name = space < 0 ? row : row.slice(0, space);
-    const type = space < 0 ? "" : row.slice(space + 1);
-    const note = n.rowComments?.[i];
-    // A comment ends at the line end, so a line break inside one becomes a space.
-    const comment = note === undefined ? "" : note ? ` // ${note.replace(/[\r\n]+/g, " ")}` : " //";
-    return `  ${name}${type ? ` ${columnTypeText(type)}` : ""}${columnFlagsText(n.rowFlags?.[i] ?? [])}${comment}`;
-  });
-  return [`${own} {`, ...columns, "}"].join("\n");
+  return [`${own} {`, ...n.rows.map((_, i) => `  ${columnLine(n, i)}`), "}"].join("\n");
 }
 
 /** An ER column name the canvas writes: letters, digits and _ (board ER interactions). */

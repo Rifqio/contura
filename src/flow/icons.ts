@@ -264,6 +264,54 @@ export async function iconNames(): Promise<string[]> {
   return (await iconEntries()).map((e) => e.name);
 }
 
+/** The index's titles by name, built once from `iconEntries()`; null until it is read. */
+let titles: Map<string, string> | null = null;
+let titlesLoad: Promise<Map<string, string>> | null = null;
+
+/** The one name-to-title map, built once from `iconEntries()`; a failed read is tried again by the next caller. */
+function loadTitles(): Promise<Map<string, string>> {
+  if (titles) return Promise.resolve(titles);
+  if (!titlesLoad) {
+    const load = iconEntries().then((list) => {
+      const m = new Map<string, string>();
+      for (const e of list) m.set(e.name, e.title);
+      titles = m;
+      return m;
+    });
+    titlesLoad = load;
+    load.catch(() => {
+      if (titlesLoad === load) titlesLoad = null;
+    });
+  }
+  return titlesLoad;
+}
+
+/** Icon `name`'s title from the pack index (an add names its node by it); the name itself when the index cannot be read. */
+export function iconTitleOf(name: string): Promise<string> {
+  return loadTitles().then(
+    (m) => m.get(name) || name,
+    () => name,
+  );
+}
+
+/** Icon `name`'s title from the pack index, read once for every caller; `name` itself until the index is loaded; null reads nothing. */
+export function useIconTitle(name: string | null): string {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    if (titles || name === null) return;
+    let live = true;
+    loadTitles().then(
+      () => live && bump((n) => n + 1),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+    // No deps: a failed load is tried again by the next render, not by a timer.
+  });
+  return name === null ? "" : (titles?.get(name) ?? name);
+}
+
 /** Forgets every loaded icon and the index (tests). */
 export function resetIcons() {
   cache.clear();
@@ -272,5 +320,7 @@ export function resetIcons() {
   index = null;
   byName = null;
   logos = null;
+  titles = null;
+  titlesLoad = null;
   theme = "light";
 }

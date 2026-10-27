@@ -8,6 +8,7 @@ import { mermaidToFlow } from "../flow/mermaid";
 import { inspectDbml } from "./dbml/inspect";
 import { parseDbml } from "./dbml/parse";
 import { createFlowService } from "./flow/service";
+import { toWire } from "./flow/wire";
 import type { FromWorker, ToWorker } from "./protocol";
 import { createSqlService } from "./sql/service";
 
@@ -17,6 +18,8 @@ type Debounced = Extract<ToWorker, { type: "update" } | { type: "sqlAnalyze" } |
 export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, sqlDebounceMs = debounceMs === 0 ? 0 : 150): (m: ToWorker) => void {
   const lastValid = new Map<string, SchemaModel>();
   const flow = createFlowService();
+  /** The doc ids of the last result posted, per document: the next post leaves those docs out. */
+  const sentFlow = new Map<string, Set<number>>();
   /** The newest flowParse waiting out its debounce, per document. */
   const waitingFlow = new Map<string, Extract<ToWorker, { type: "flowParse" }>>();
   const pending = new Map<string, { ids: number[]; timer: ReturnType<typeof setTimeout> | null }>();
@@ -24,12 +27,19 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
 
   const fail = (ids: number[], e: unknown) => post({ type: "failed", ids, message: e instanceof Error ? e.message : String(e) });
 
+  /** Parses `text` and posts the docs the editor side does not hold (all of them when `sent` is empty). */
+  function postFlow(docId: string, text: string, ids: number[], keepVersion = false) {
+    let sent = sentFlow.get(docId);
+    if (!sent) sentFlow.set(docId, (sent = new Set()));
+    post({ type: "flowResult", ids, docId, result: toWire(flow.parse(docId, text, keepVersion), sent) });
+  }
+
   function run(m: Debounced, ids: number[]) {
     try {
       if (m.type === "flowParse") {
         pending.delete(`flow:${m.docId}`);
         waitingFlow.delete(m.docId);
-        post({ type: "flowResult", ids, docId: m.docId, result: flow.parse(m.docId, m.text) });
+        postFlow(m.docId, m.text, ids);
         return;
       }
       if (m.type === "sqlShape") {
@@ -89,7 +99,20 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         if (flow.isClosed(m.docId)) return fail([m.id], new Error("This diagram is closed."));
         return debounce(m, `flow:${m.docId}`, debounceMs);
       case "flowOpen":
+        sentFlow.delete(m.docId);
         return flow.open(m.docId);
+      case "flowResend": {
+        // The editor side lost docs this worker thought it held: parse the cached text again, post everything.
+        sentFlow.delete(m.docId);
+        const text = flow.cachedText(m.docId);
+        if (text === undefined) return fail(m.ids, new Error("This diagram is closed."));
+        try {
+          postFlow(m.docId, text, m.ids, true);
+        } catch (e) {
+          fail(m.ids, e);
+        }
+        return;
+      }
       case "flowSpans":
         // A newer text still waiting out its debounce makes any version stale (ruling P8). Parsing it now means
         // the caller's next try is current.
@@ -139,6 +162,7 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         // A parse still waiting is answered now, so its caller never hangs; then the doc is forgotten.
         flushFlow(m.docId);
         flow.close(m.docId);
+        sentFlow.delete(m.docId);
         return;
       case "sqlSchema":
         return sql.setSchema(m.key, m.schema);

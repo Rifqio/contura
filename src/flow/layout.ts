@@ -46,7 +46,7 @@ export function emptyPositions(): Positions {
   return Object.create(null) as Positions;
 }
 
-const isPoint = (v: unknown): v is { x: number; y: number } =>
+export const isPoint = (v: unknown): v is { x: number; y: number } =>
   typeof v === "object" && v !== null && Number.isFinite((v as { x: unknown }).x) && Number.isFinite((v as { y: unknown }).y);
 
 /** Never throws: a missing or unreadable file, or a missing field, takes the default. */
@@ -62,6 +62,11 @@ export function parseFlowLayout(json: string | null, kind: DiagramKind | null): 
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
   if (r.version !== 1) return out;
+  return readFlowParts(r, out);
+}
+
+/** The fields of one layout object (a version 1 file, or one frame of a version 2 file) read onto `out`; never throws. */
+export function readFlowParts(r: Record<string, unknown>, out: FlowLayout): FlowLayout {
   if (typeof r.nodes === "object" && r.nodes !== null) {
     for (const [k, v] of Object.entries(r.nodes)) if (isPoint(v)) out.nodes[k] = { x: v.x, y: v.y };
   }
@@ -88,23 +93,38 @@ export function parseFlowLayout(json: string | null, kind: DiagramKind | null): 
 
 /** Stable key order, sorted positions and 2-space JSON with a final line break, so the file diffs well in git. */
 export function serializeFlowLayout(l: FlowLayout): string {
-  const nodes = emptyPositions();
-  for (const k of Object.keys(l.nodes).sort()) nodes[k] = { x: l.nodes[k].x, y: l.nodes[k].y };
-  const out: Record<string, unknown> = { version: 1, nodes };
+  const out: Record<string, unknown> = { version: 1, nodes: sortedNodes(l.nodes) };
   if (l.viewport) out.viewport = l.viewport;
   out.style = l.style;
   out.direction = l.direction;
-  if (l.sizes && Object.keys(l.sizes).length) {
-    const sizes: Record<string, { w: number; h: number }> = {};
-    for (const k of Object.keys(l.sizes).sort()) sizes[k] = { w: Math.round(l.sizes[k].w), h: Math.round(l.sizes[k].h) };
-    out.sizes = sizes;
-  }
-  if (l.axes && Object.keys(l.axes).length) {
-    const axes: Record<string, "v" | "h"> = {};
-    for (const k of Object.keys(l.axes).sort()) axes[k] = l.axes[k];
-    out.axes = axes;
-  }
+  const sizes = sortedSizes(l.sizes);
+  if (sizes) out.sizes = sizes;
+  const axes = sortedAxes(l.axes);
+  if (axes) out.axes = axes;
   return `${JSON.stringify(out, null, 2)}\n`;
+}
+
+/** Positions in key order, as the writer lays them out. */
+export function sortedNodes(nodes: Positions): Positions {
+  const out = emptyPositions();
+  for (const k of Object.keys(nodes).sort()) out[k] = { x: nodes[k].x, y: nodes[k].y };
+  return out;
+}
+
+/** Sizes rounded and in key order; undefined when there are none. */
+export function sortedSizes(sizes: FlowLayout["sizes"]): Record<string, { w: number; h: number }> | undefined {
+  if (!sizes || !Object.keys(sizes).length) return undefined;
+  const out: Record<string, { w: number; h: number }> = {};
+  for (const k of Object.keys(sizes).sort()) out[k] = { w: Math.round(sizes[k].w), h: Math.round(sizes[k].h) };
+  return out;
+}
+
+/** Axes in key order; undefined when there are none. */
+export function sortedAxes(axes: FlowLayout["axes"]): Record<string, "v" | "h"> | undefined {
+  if (!axes || !Object.keys(axes).length) return undefined;
+  const out: Record<string, "v" | "h"> = {};
+  for (const k of Object.keys(axes).sort()) out[k] = axes[k];
+  return out;
 }
 
 /**

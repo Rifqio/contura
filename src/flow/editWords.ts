@@ -92,6 +92,8 @@ export const EDIT_MESSAGES = {
   changed: "The text changed meanwhile. Try again.",
   stale: "Fix the text first: the drawing is from the last text that worked.",
   locked: "The Assistant is working on the text. Your edit is kept until it finishes.",
+  /** A frame switch while the Assistant holds the text (Task 13): its changes are for the frame shown. */
+  lockedSwitch: "The Assistant is working on this diagram. Switch to another once it finishes.",
 };
 
 /** Step 11 (board DiagramColourLabels): why Colour is off. The kinds written with a word or a date take no brackets. */

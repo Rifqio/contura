@@ -1,4 +1,4 @@
-import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aiContextChanged,
   errorText,
@@ -21,8 +21,9 @@ import { useJobsGuard } from "./app/useJobsGuard";
 import { useDiagramFileActions } from "./flow/diagramFileActions";
 import { focusFlowText } from "./flow/focusFlowText";
 import MermaidImportDialog from "./flow/MermaidImportDialog";
-import NewDiagramSheet, { type SheetState } from "./flow/NewDiagramSheet";
-import type { MermaidInsert } from "./flow/FlowTab";
+import NewDiagramDialog from "./flow/NewDiagramDialog";
+import type { DatabaseAdd, MermaidAdd, MermaidInsert } from "./flow/FlowTab";
+import FromDatabaseDialog from "./flow/board/catalog/FromDatabaseDialog";
 import ExportDialog from "./jobs/ExportDialog";
 import { type ExportOrigin, originFromJob } from "./jobs/exportText";
 import ImportTab from "./jobs/ImportTab";
@@ -70,6 +71,7 @@ import TabStrip from "./components/TabStrip";
 import TitleBar from "./components/TitleBar";
 import WorkEmpty from "./components/WorkEmpty";
 import AssistantPanel from "./assistant/AssistantPanel";
+import { askLayout, useAskWidth } from "./assistant/askWidth";
 import type { InsertTarget } from "./assistant/insertPlan";
 import TableDesigner from "./design/TableDesigner";
 import { appLang } from "./lang/appLang";
@@ -143,6 +145,8 @@ export default function App() {
 }
 
 function Workspace() {
+  /** The Ask panel's width, dragged from its left edge and remembered. */
+  const askWidth = useAskWidth();
   const { label: ungroupedLabel } = useUngroupedLabel();
   const toast = useToast();
   /** The tab an "Asked in" link just showed: it flashes once (A7, M6). */
@@ -455,9 +459,12 @@ function Workspace() {
    * The Mermaid dialog (step 10): from New diagram with what the sheet was left at, for its Back; from a diagram's
    * canvas with that diagram to insert into; or on its own.
    */
-  const [mermaidOpen, setMermaidOpen] = useState<false | { back?: SheetState; insert?: MermaidInsert }>(false);
-  /** New diagram as it was left, when Back from the Mermaid dialog opens it again. */
-  const [sheetBack, setSheetBack] = useState<SheetState | undefined>(undefined);
+  const [fromDatabase, setFromDatabase] = useState<DatabaseAdd | null>(null);
+  /** From my database opened from the New diagram catalog: it writes a new file; Back reopens the catalog with `query`. */
+  const [databaseFile, setDatabaseFile] = useState<{ query: string } | null>(null);
+  const [mermaidOpen, setMermaidOpen] = useState<false | { back?: { query: string }; insert?: MermaidInsert; add?: MermaidAdd }>(false);
+  /** The New diagram catalog's search as it was left, when Back from the Mermaid or database dialog opens it again. */
+  const [sheetBack, setSheetBack] = useState<{ query: string } | undefined>(undefined);
   /** The open Backup or Restore dialog (step 9), from the tree's menus. */
   const [backingUp, setBackingUp] = useState<{ connectionId: ConnectionId; database: string; schema: string | null } | null>(null);
   const [restoring, setRestoring] = useState<{ target: RestoreTarget; attach?: { id: JobId; run: RestoreRun }; seq: number } | null>(null);
@@ -1386,6 +1393,11 @@ function Workspace() {
   const historyAllShown = historyOpen && historyAll && current?.kind === "query";
 
   const assistantShown = assistantOpen && activeWindow?.kind !== "flow";
+  /** History draws only beside a query tab; its column is in the body grid only then (and never under a window tab). */
+  const historyShown = (historyAllShown || !!historyFor) && current?.kind === "query";
+  const historyColumn = !activeWindow && historyShown;
+  /** The Ask column's width in the room this window leaves; with no room for 300 px, no sash. */
+  const askLayoutNow = askLayout(askWidth.wanted, historyColumn ? askWidth.roomHistory : askWidth.roomPlain);
   // An answer's SQL goes into the active query tab, through the Insert diff.
   const answerTarget: InsertTarget | null =
     current?.kind === "query" ? { editor: () => refs.editor(current.doc.id), name: current.doc.name } : null;
@@ -1490,8 +1502,9 @@ function Workspace() {
         className={
           activeWindow
             ? `body body-home${assistantShown ? " body-ai" : ""}`
-            : `body${historyFor || historyAllShown ? " body-history" : ""}${assistantShown ? " body-ai" : ""}`
+            : `body${historyColumn ? " body-history" : ""}${assistantShown ? " body-ai" : ""}`
         }
+        style={assistantShown ? ({ "--ask-width": `${askLayoutNow.width}px` } as CSSProperties) : undefined}
       >
         <div className="place-wrap">
           {/* The place's sidebar stays mounted under a window tab, so its tree keeps where you were. */}
@@ -1630,6 +1643,8 @@ function Workspace() {
               flow={{
                 onOpenSettings: () => openSettings("ai", "tools"),
                 onMermaid: (insert) => setMermaidOpen({ insert }),
+                onFromDatabase: setFromDatabase,
+                onMermaidFrame: (add) => setMermaidOpen({ add }),
                 // ADR 0030: an old ER diagram's DBML opens unsaved under its name, once its Dialect is chosen.
                 onOpenModel: (name, dbml) => setModelStart({ file: { path: null, name, dbml, layout: null } }),
               }}
@@ -1886,7 +1901,7 @@ function Workspace() {
               />
             )}
           </main>
-          {(historyAllShown || historyFor) && current?.kind === "query" && (
+          {historyShown && (
             <HistoryPanel
               key={historyAllShown ? "all" : "connection"}
               connections={connections}
@@ -1903,6 +1918,9 @@ function Workspace() {
           )}
           {assistantShown && (
             <AssistantPanel
+              width={askLayoutNow.width}
+              widthMax={askLayoutNow.max}
+              onWidth={askLayoutNow.resizable ? askWidth.set : undefined}
               place={placeKey(place)}
               placeName={placeName}
               groupId={workspaceGroupId}
@@ -2022,6 +2040,35 @@ function Workspace() {
             />
           );
         })()}
+      {fromDatabase && (
+        <FromDatabaseDialog
+          connections={connections}
+          openIds={openIds}
+          target={{ kind: "frame", add: fromDatabase }}
+          onClose={() => setFromDatabase(null)}
+        />
+      )}
+      {databaseFile && (
+        <FromDatabaseDialog
+          connections={connections}
+          openIds={openIds}
+          target={{
+            kind: "file",
+            onCreated: (name) => {
+              setDatabaseFile(null);
+              openFlowTab(name);
+              focusFlowText(name);
+              loadDiagrams();
+            },
+          }}
+          onBack={() => {
+            setSheetBack({ query: databaseFile.query });
+            setDatabaseFile(null);
+            setNewDiagramOpen(true);
+          }}
+          onClose={() => setDatabaseFile(null)}
+        />
+      )}
       {mermaidOpen && (
         <MermaidImportDialog
           groups={groups}
@@ -2030,6 +2077,7 @@ function Workspace() {
           onClose={() => setMermaidOpen(false)}
           beforeReplace={diagramFiles.beforeReplace}
           insert={mermaidOpen.insert}
+          add={mermaidOpen.add}
           onBack={
             mermaidOpen.back
               ? () => {
@@ -2048,13 +2096,12 @@ function Workspace() {
         />
       )}
       {newDiagramOpen && (
-        <NewDiagramSheet
-          initial={sheetBack}
+        <NewDiagramDialog
+          initialQuery={sheetBack?.query ?? ""}
           onClose={() => {
             setNewDiagramOpen(false);
             setSheetBack(undefined);
           }}
-          beforeReplace={diagramFiles.beforeReplace}
           onCreated={(name) => {
             setNewDiagramOpen(false);
             setSheetBack(undefined);
@@ -2062,15 +2109,15 @@ function Workspace() {
             focusFlowText(name);
             loadDiagrams();
           }}
-          onMermaid={(state) => {
+          onMermaid={(query) => {
             setNewDiagramOpen(false);
             setSheetBack(undefined);
-            setMermaidOpen({ back: state });
+            setMermaidOpen({ back: { query } });
           }}
-          onOpenDiagram={(name) => {
+          onDatabase={(query) => {
             setNewDiagramOpen(false);
             setSheetBack(undefined);
-            openFlowTab(name);
+            setDatabaseFile({ query });
           }}
         />
       )}

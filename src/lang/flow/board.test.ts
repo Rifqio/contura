@@ -79,14 +79,14 @@ test("an_unclosed_group_stays_in_its_frame", () => {
 test("a_repeated_title_is_an_error_with_a_rename", () => {
   const t = 'diagram flow "Checkout"\nA\n\ndiagram state "Checkout"\nB\n';
   const p = parseBoard(t).problems.find((x) => x.severity === "error")!;
-  expect(p.message).toBe("Two diagrams on this board are called Checkout (lines 1 and 4).");
+  expect(p.message).toBe("Two diagrams on this board are called Checkout.");
   expect(applyEdits(t, p.fixes[0].edits)).toContain('diagram state "Checkout 2"');
 });
 
 test("an_untitled_repeat_gets_a_title", () => {
   const t = 'diagram flow\nA\n\ndiagram state "Untitled 2"\nB\n\ndiagram state\nC\n';
   const p = parseBoard(t).problems.find((x) => x.severity === "error")!;
-  expect(p.message).toBe("Two diagrams on this board are called Untitled (lines 1 and 7).");
+  expect(p.message).toBe("Two diagrams on this board are called Untitled.");
   expect(p.line).toBe(7);
   expect(applyEdits(t, p.fixes[0].edits)).toContain('diagram state "Untitled 3"\nC');
 });
@@ -146,7 +146,7 @@ test("board_problems_are_never_cut_by_the_problem_cap", () => {
   const b = parseBoard(t);
   expect(b.frames.map((f) => f.parse.problems.length)).toEqual([150, 100, 0]);
   expect(b.problems).toHaveLength(200);
-  expect(b.problems.filter((p) => p.message === MESSAGES.frameTwice("Same", 1, b.frames[2].line))).toHaveLength(1);
+  expect(b.problems.filter((p) => p.message === MESSAGES.frameTwice("Same"))).toHaveLength(1);
 });
 
 test("the_worker_keeps_one_parse_per_frame", () => {
@@ -189,4 +189,11 @@ test("a_header_with_no_known_kind_is_one_problem_in_the_frame_before_it", () => 
   expect(b.frames).toHaveLength(1);
   expect(b.problems.map((p) => [p.message, p.line, t.slice(p.from, p.to)])).toEqual([["flowchart is not a diagram kind. Use flow.", 4, "flowchart"]]);
   expect(b.problems[0].fixes[0].edits).toEqual([{ from: t.indexOf("flowchart"), to: t.indexOf("flowchart") + 9, insert: "flow" }]);
+});
+
+test("frame_twice_names_no_lines", () => {
+  const b = parseBoard('diagram flow "Same"\nA\n\ndiagram flow "Same"\nB\n\ndiagram flow\nC\n\ndiagram flow\nD\n');
+  const twice = b.problems.filter((p) => p.message.startsWith("Two diagrams"));
+  expect(twice.map((p) => p.message)).toEqual(["Two diagrams on this board are called Same.", "Two diagrams on this board are called Untitled."]);
+  expect(MESSAGES.frameTwice("")).toBe("Two diagrams on this board are called Untitled.");
 });

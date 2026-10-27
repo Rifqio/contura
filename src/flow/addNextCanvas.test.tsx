@@ -196,16 +196,20 @@ test("F13 a line drawn in a flowchart, state or class asks for no label", async 
   expect(screen.queryByRole("textbox", { name: "Flow label" })).toBeNull();
 });
 
+/** The selected frame's shapes in the Shelf that More shapes opens on Shapes (B2 Task 8); a Shelf still open is used as it is. */
 async function openShapes(_s: Setup) {
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  return screen.findByRole("menu", { name: "Shapes" });
+  if (!screen.queryByRole("dialog", { name: "Add to the board" })) await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
+  const shelf = await screen.findByRole("dialog", { name: "Add to the board" });
+  return within(shelf).getAllByRole("group")[0];
 }
+/** A Shelf refusal, said in the canvas toast with no Undo (B2 R10). */
+const toastText = (s: Setup) => s.container.querySelector(".flow-toast")?.textContent ?? "";
 
 test("F18 every flowchart Shapes item adds on the canvas: a Database ghost with its name ready, Group disabled without a selection", async () => {
   const s = setup(FLOW, FLOW_AT);
   await shown(s, "Step Check stock");
   const menu = await openShapes(s);
-  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+  expect(within(menu).getAllByRole("option").map((m) => m.getAttribute("aria-label"))).toEqual([
     "Start or end",
     "Step",
     "Decision",
@@ -217,10 +221,13 @@ test("F18 every flowchart Shapes item adds on the canvas: a Database ghost with 
     "Line",
     "Group",
   ]);
-  const group = within(menu).getByRole("menuitem", { name: "Group" });
+  // Group needs a selection: it shows disabled with why; a click says so and the Shelf stays open.
+  const group = within(menu).getByRole("option", { name: "Group" });
   expect(group.getAttribute("aria-disabled")).toBe("true");
   expect(group.textContent).toContain("Select shapes first");
-  await userEvent.click(within(menu).getByRole("menuitem", { name: "Database" }));
+  await userEvent.click(group);
+  await waitFor(() => expect(toastText(s)).toBe("Group: select shapes first."));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Database" }));
   const name = await s.field("Name the new database");
   await userEvent.type(name, "Stock{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 8 });
   await waitFor(() => expect(s.doc()).toBe(FLOW.replace("Check stock\n", "Check stock\nStock [database]\n")));
@@ -235,7 +242,7 @@ test("F18 every flowchart Shapes item adds on the canvas: a Database ghost with 
 test("F18 a Line item is drawn from the next two shapes clicked; Esc leaves the mode", async () => {
   const s = setup(FLOW, FLOW_AT);
   await shown(s, "Step Check stock");
-  await userEvent.click(within(await openShapes(s)).getByRole("menuitem", { name: "Line" }));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Line" }));
   await waitFor(() => expect(s.strip().textContent).toContain("Click the shape the line starts from, then the one it goes to."));
   act(() => canvas.props!.onSelect!(["Check stock"]));
   await waitFor(() => expect(s.strip().textContent).toContain("Now click the shape the line goes to."));
@@ -248,7 +255,7 @@ test("F18 class Inheritance is drawn from the child to the parent, written paren
   const s = setup(CLASS);
   await shown(s, "Class Customer");
   act(() => canvas.props!.onSelect!(["Customer"]));
-  await userEvent.click(within(await openShapes(s)).getByRole("menuitem", { name: "Inheritance" }));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Inheritance" }));
   await waitFor(() => expect(s.strip().textContent).toContain("Click the class Customer inherits from."));
   act(() => canvas.props!.onSelect!(["Payable"]));
   await waitFor(() => expect(s.doc()).toBe(`${CLASS}\nPayable <|-- Customer\n`));
@@ -288,11 +295,11 @@ test("ST1 Shapes > Start joins the selected state; End asks for a state, then jo
   const s = setup(STATE);
   await shown(s, "State Draft");
   act(() => canvas.props!.onSelect!(["Draft"]));
-  await userEvent.click(within(await openShapes(s)).getByRole("menuitem", { name: "Start" }));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Start" }));
   await waitFor(() => expect(s.doc()).toBe(`${STATE}[*] > Draft\n`));
   await oneUndo(s, STATE);
   act(() => canvas.props!.onSelect!([]));
-  await userEvent.click(within(await openShapes(s)).getByRole("menuitem", { name: "End" }));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "End" }));
   await waitFor(() => expect(s.strip().textContent).toContain("Click the last state: the end goes after it."));
   act(() => canvas.props!.onSelect!(["Sent"]));
   await waitFor(() => expect(s.doc()).toBe(`${STATE}Sent > [*]\n`));
@@ -330,13 +337,13 @@ test("F18 sequence: Loop goes around the selected message, its label ready; Acti
   const SEQ = lines('diagram sequence "Pay"', "participant App", "participant Api", "", "App -> Api: charge", "Api --> App: ok");
   const s = setup(SEQ);
   await shown(s, "Participant App");
-  await userEvent.click(within(await openShapes(s)).getByRole("menuitem", { name: "Loop" }));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Loop" }));
   const label = await s.field("Loop label");
   expect(label.value).toBe("every item");
   await userEvent.type(label, "{Enter}");
   await waitFor(() => expect(s.doc()).toBe(SEQ.replace("Api --> App: ok\n", "loop every item {\n  Api --> App: ok\n}\n")));
   await oneUndo(s, SEQ);
-  await userEvent.click(within(await openShapes(s)).getByRole("menuitem", { name: "Activation" }));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Activation" }));
   await waitFor(() => expect(s.strip().textContent).toContain("Click the participant that becomes active."));
   act(() => canvas.props!.onSelect!(["Api"]));
   await waitFor(() => expect(s.doc()).toBe(`${SEQ}activate Api\n`));
@@ -347,9 +354,10 @@ test("F18 mind map: Central idea is disabled once the map has one; Subtopic goes
   const s = setup(MIND);
   await shown(s, "Topic Docs");
   act(() => canvas.props!.onSelect!(["Docs"]));
-  const menu = await openShapes(s);
-  expect(within(menu).getByRole("menuitem", { name: "Central idea" }).getAttribute("aria-disabled")).toBe("true");
-  await userEvent.click(within(menu).getByRole("menuitem", { name: "Subtopic" }));
+  expect(within(await openShapes(s)).getByRole("option", { name: "Central idea" }).getAttribute("aria-disabled")).toBe("true");
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Central idea" }));
+  await waitFor(() => expect(toastText(s)).toMatch(/^Central idea: /));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Subtopic" }));
   const name = await s.field("Name the new topic");
   await userEvent.type(name, "Guide{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 5 });
   await waitFor(() => expect(s.doc()).toBe(`${MIND}    Guide\n`));
@@ -359,10 +367,11 @@ test("F18 timeline: Section takes the selected events, its name ready", async ()
   const TL = lines('diagram timeline "Launch"', "2026-10-01: Kickoff", "2026-10-05: Build");
   const s = setup(TL);
   await shown(s, "Event Kickoff");
-  expect(within(await openShapes(s)).getByRole("menuitem", { name: "Section" }).getAttribute("aria-disabled")).toBe("true");
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
+  expect(within(await openShapes(s)).getByRole("option", { name: "Section" }).getAttribute("aria-disabled")).toBe("true");
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Section" }));
+  await waitFor(() => expect(toastText(s)).toMatch(/^Section: /));
   act(() => canvas.props!.onSelect!(["Kickoff", "Build"]));
-  await userEvent.click(within(await openShapes(s)).getByRole("menuitem", { name: "Section" }));
+  await userEvent.click(within(await openShapes(s)).getByRole("option", { name: "Section" }));
   const name = await s.field("Section name");
   await userEvent.type(name, "Phase 1{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 7 });
   await waitFor(() => expect(s.doc()).toBe(lines('diagram timeline "Launch"', "section Phase 1", "  2026-10-01: Kickoff", "  2026-10-05: Build")));

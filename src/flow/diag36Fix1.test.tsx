@@ -170,8 +170,8 @@ test("M1 a new field replacing an open one starts with its own name, selected", 
   await userEvent.clear(note);
   await userEvent.type(note, "{Enter}");
   await screen.findByRole("alert");
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(await screen.findByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Database" }));
+  await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
+  await userEvent.click(within(within(await screen.findByRole("dialog", { name: "Add to the board" })).getAllByRole("group")[0]).getByRole("option", { name: "Database" }));
   const db = await s.field("Name the new database");
   expect([db.value, db.selectionStart, db.selectionEnd]).toEqual(["Database", 0, 8]);
 });
@@ -207,12 +207,14 @@ const ADDED = lines('diagram flow "Orders"', "Order in [start]", "Check stock", 
 test("letter keys and toolbar buttons open the new shape with its name ready, as N and the Shapes list do", async () => {
   const s = setup(ADDED, FLOW_AT);
   await shown(s, "Step Check stock");
-  s.press("s");
+  s.press("r");
+  s.press("Enter");
   const box = await s.field("Name the new step");
   expect(s.doc()).toBe(ADDED);
   await userEvent.type(box, "Pack{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 4 });
   await waitFor(() => expect(s.doc()).toBe(ADDED.replace("Done [end]\n", "Done [end]\nPack [step]\n")));
-  await userEvent.click(screen.getByRole("button", { name: "Add decision" }));
+  await userEvent.click(screen.getByRole("button", { name: "Decision" }));
+  s.press("Enter");
   const d = await s.field("Name the new decision");
   fireEvent.keyDown(d, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("textbox", { name: "Name the new decision" })).toBeNull());
@@ -223,7 +225,8 @@ test("a cloud service from its key is written with the board's default icon", as
   const CLOUD = lines('diagram cloud "App"', "Users [icon: users]");
   const s = setup(CLOUD);
   await shown(s, "Service Users");
-  s.press("n");
+  s.press("r");
+  s.press("Enter");
   const box = await s.field("Name the new service");
   await userEvent.type(box, "Api{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 7 });
   await waitFor(() => expect(s.doc()).toBe(`${CLOUD}Api [icon: aws-lambda]\n`));
@@ -288,8 +291,8 @@ test("Shapes > Activation uses the selected participant", async () => {
   const s = setup(SEQ);
   await shown(s, "Participant Api");
   act(() => canvas.props!.onSelect!(["Api"]));
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(await screen.findByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Activation" }));
+  await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
+  await userEvent.click(within(within(await screen.findByRole("dialog", { name: "Add to the board" })).getAllByRole("group")[0]).getByRole("option", { name: "Activation" }));
   await waitFor(() => expect(s.doc()).toBe(`${SEQ}activate Api\n`));
 });
 
@@ -298,7 +301,8 @@ test("mind map Topic adds a sibling of the selected topic; Subtopic a child", as
   const s = setup(MIND);
   await shown(s, "Topic Docs");
   act(() => canvas.props!.onSelect!(["Docs"]));
-  s.press("t");
+  s.press("r");
+  s.press("Enter");
   await userEvent.type(await s.field("Name the new topic"), "Ops{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 5 });
   await waitFor(() => expect(s.doc()).toBe(`${MIND}  Ops\n`));
 });
@@ -309,8 +313,8 @@ test("a state's start marker is placed clear of the lines too", async () => {
   const s = setup(STATE, at);
   await shown(s, "State Draft");
   act(() => canvas.props!.onSelect!(["Draft"]));
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(await screen.findByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Start" }));
+  await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
+  await userEvent.click(within(within(await screen.findByRole("dialog", { name: "Add to the board" })).getAllByRole("group")[0]).getByRole("option", { name: "Start" }));
   await waitFor(() => expect(canvas.props!.nodes.find((n) => n.id === "[*] start")).toBeTruthy());
   const m = canvas.props!.nodes.find((n) => n.id === "[*] start")!;
   const sent = canvas.props!.nodes.find((n) => n.id === "Sent")!;
@@ -325,8 +329,8 @@ test("the loop's label field opens on the loop, at its message's row", async () 
   const SEQ = lines('diagram sequence "Pay"', "participant App", "participant Api", "", "App -> Api: charge", "Api --> App: ok");
   const s = setup(SEQ);
   await shown(s, "Participant App");
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(await screen.findByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Loop" }));
+  await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
+  await userEvent.click(within(within(await screen.findByRole("dialog", { name: "Add to the board" })).getAllByRole("group")[0]).getByRole("option", { name: "Loop" }));
   const label = await s.field("Loop label");
   const top = parseFloat((label.closest(".inline-edit-wrap") as HTMLElement).style.top);
   const app = canvas.props!.nodes.find((n) => n.id === "App")!;

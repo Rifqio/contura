@@ -6,6 +6,7 @@ import { type KeyboardEvent, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import Icon from "../../components/Icon";
 import type { DiagramKind } from "../../lang/flow/model";
+import { keyOfShape } from "../board/kindTools";
 import { type Shape, shapesOf } from "../ShapePicker";
 
 const COLS = 3;
@@ -87,7 +88,7 @@ export default function AddHere({ kind, at, inside, disabled, onPick, onCancel }
                 role="menuitem"
                 className="flow-add-cell"
                 aria-disabled={why ? true : undefined}
-                aria-keyshortcuts={s.tool?.key}
+                aria-keyshortcuts={keyOfShape(kind, s)}
                 title={why ?? s.code.split("\n")[0]}
                 onClick={() => {
                   if (!why) onPick(s);

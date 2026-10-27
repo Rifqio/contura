@@ -124,9 +124,40 @@ function select(s: Setup, label: string) {
 
 const banded = (c: HTMLElement) => [...c.querySelectorAll(".cm-line.cm-flow-band")].map((e) => e.textContent);
 
+/** The selected frame's shapes in the Shelf that More shapes opens on Shapes (B2 Task 8); a Shelf still open is used as it is. */
+async function moreShapes() {
+  if (!screen.queryByRole("dialog", { name: "Add to the board" })) await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
+  const shelf = await screen.findByRole("dialog", { name: "Add to the board" });
+  return within(shelf).getAllByRole("group")[0];
+}
+
+/** Picks one of the selected frame's shapes from the Shelf. */
+async function moreShape(label: string) {
+  await userEvent.click(within(await moreShapes()).getByRole("option", { name: label }));
+}
+
 /** Keeps a new shape's name as it opened: a key or a tool opens the name, written once kept (diagram step 6). */
 async function keepNew() {
   fireEvent.keyDown(await screen.findByRole("textbox", { name: /^(Name the new|Note text)/ }), { key: "Enter" });
+}
+
+
+/** The frame bar's Look list (Task 9): what it shows, and a pick in it. */
+const lookShown = () => (document.querySelector(".frame-bar [role=combobox][aria-label='Look'] .select-value") as HTMLElement | null)?.textContent;
+async function chooseLook(look: "Modern" | "Classic") {
+  fireEvent.click(document.querySelector(".frame-bar [role=combobox][aria-label='Look']") as HTMLElement, { detail: 1 });
+  fireEvent.click(await screen.findByRole("option", { name: new RegExp(`^${look}`) }));
+}
+/** The frame bar's Direction list: what it shows, and a pick in it. */
+const directionShown = () => (document.querySelector(".frame-bar [role=combobox][aria-label='Direction'] .select-value") as HTMLElement | null)?.textContent;
+async function chooseDirection(d: "Top to bottom" | "Left to right") {
+  fireEvent.click(document.querySelector(".frame-bar [role=combobox][aria-label='Direction']") as HTMLElement, { detail: 1 });
+  fireEvent.click(await screen.findByRole("option", { name: d }));
+}
+/** A row of the frame bar's More menu, opened. */
+async function moreItem(label: string) {
+  fireEvent.click(within(document.querySelector(".frame-bar") as HTMLElement).getByRole("button", { name: "More" }));
+  return await screen.findByRole("menuitem", { name: label });
 }
 
 test("opening_renders_text_and_canvas", async () => {
@@ -197,8 +228,9 @@ test("a_move_writes_only_the_layout", async () => {
 test("add_connect_rename_and_delete_from_the_canvas_each_rewrite_the_text", async () => {
   const s = setup();
   await drawn(s);
-  // Add: P adds a process with the next free id.
-  s.press("p");
+  // Add: R arms Process and Enter adds one with the next free id.
+  s.press("r");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
   expect(s.text().split("\n").slice(0, 6)).toEqual(['diagram dfd "Checkout"', "", "Customer [entity]", "Checkout [process, id: 1.0]", "Orders [store, id: D1, table: shop.orders]", "Process [process, id: 3.0]"]);
@@ -229,7 +261,8 @@ test("add_connect_rename_and_delete_from_the_canvas_each_rewrite_the_text", asyn
 test("undo_after_a_canvas_add_removes_the_line", async () => {
   const s = setup();
   await drawn(s);
-  await userEvent.click(screen.getByRole("button", { name: "Add data store" }));
+  await userEvent.click(screen.getByRole("button", { name: "Data store" }));
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.text()).toContain("Data store [store, id: D2]\n"));
   act(() => void undo(s.view()));
@@ -241,6 +274,7 @@ test("canvas_edits_while_text_has_error", async () => {
   const s = setup({ text: BROKEN, layout: null });
   await waitFor(() => expect(screen.getByText("Refunds is not defined.")).toBeTruthy());
   s.press("e");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.text()).toContain("Outside party [entity]\n"));
   expect(s.text()).toContain("Checkout > Refunds: reversal\n");
@@ -252,7 +286,8 @@ test("canvas_edits_while_text_has_error", async () => {
   fresh.type("Refunds: reversal", at, at + "Charge card: amount".length);
   await waitFor(() => expect(fresh.container.querySelector(".flow-canvas.is-stale")).not.toBeNull());
   // Add: a new line, while the error stays.
-  fresh.press("p");
+  fresh.press("r");
+  fresh.press("Enter");
   await keepNew();
   await waitFor(() => expect(fresh.text()).toContain("Process [process, id: 3.0]\n"));
   expect(fresh.text()).toContain("Checkout > Refunds: reversal\n");
@@ -315,22 +350,37 @@ test("an_error_shows_the_faded_last_drawing_and_the_banner_text", async () => {
 });
 
 test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
-  const tools = (c: HTMLElement) => {
-    const bar = c.querySelector(".flow-toolbar") as HTMLElement;
-    return within(bar)
-      .getAllByRole("button")
-      .map((b) => [b.getAttribute("aria-label"), b.getAttribute("aria-keyshortcuts") ?? "", b.querySelector(".flow-hint")?.textContent ?? ""]);
+  // The board's toolbar (Task 7) and the frame bar (Task 9).
+  const row = (b: HTMLElement) => [b.getAttribute("aria-label"), b.getAttribute("aria-keyshortcuts") ?? "", b.querySelector(".flow-hint")?.textContent ?? ""];
+  const tools = (c: HTMLElement) => within(within(c).getByRole("toolbar", { name: "Board tools" })).getAllByRole("button").map(row);
+  const settings = (c: HTMLElement) => {
+    const bar = c.querySelector(".frame-bar") as HTMLElement;
+    return [...bar.querySelectorAll<HTMLElement>("button, input")].map(row);
   };
   const dfd = setup();
   await drawn(dfd);
   expect(tools(dfd.container)).toEqual([
-    ["Add process", "P", "Add processP"],
-    ["Add data store", "S", "Add data storeS"],
-    ["Add outside party", "E", "Add outside partyE"],
-    ["Shapes", "", "Every shape and line"],
-    ["Modern", "", "Modern"],
-    ["Textbook shapes (Gane-Sarson)", "", "Textbook shapes (Gane-Sarson)"],
-    ["Tidy", "", "Tidy"],
+    ["Select", "V", "SelectV"],
+    ["Hand", "H", "HandH"],
+    ["Process", "R", "ProcessR"],
+    ["Data store", "S", "Data storeS"],
+    ["Outside party", "E", "Outside partyE"],
+    ["Arrow", "A", "ArrowA"],
+    ["Section", "F", "SectionF"],
+    ["Note", "N", "NoteN"],
+    ["More shapes", "", "More shapes"],
+    ["Add", "/", "Add a diagram/"],
+    ["Ask", "Control+J", "Ask the assistantCtrl+J"],
+  ]);
+  // Each control with its key and its hint: the tools say their name above the bar; Colour is off with no shape selected.
+  expect(settings(dfd.container)).toEqual([
+    ["Reset layout", "", "Reset layout"],
+    ["Frame name", "", ""],
+    ["Direction", "", ""],
+    ["Look", "", ""],
+    ["Text size", "", ""],
+    ["Colour", "", ""],
+    ["More", "", "More"],
   ]);
   const strip = () => dfd.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   expect(within(strip()).getByText("Nothing selected")).toBeTruthy();
@@ -340,7 +390,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
   cleanup();
   const empty = setup({ text: 'diagram dfd "New"\n', layout: null }, "new");
   expect(await screen.findByText("Add the first node")).toBeTruthy();
-  expect(screen.getByText("Press P, S or E, or click here")).toBeTruthy();
+  expect(screen.getByText("Press R, S or E and click where it goes, or click here")).toBeTruthy();
   expect(empty.container.querySelector(".flow-first-node-line")?.textContent).toBe("Or type Customer [entity] on line 2");
   await userEvent.click(screen.getByRole("button", { name: /Add the first node/ }));
   await keepNew();
@@ -350,12 +400,27 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
   const flow = setup({ text: FLOWCHART, layout: null }, "refund-policy");
   await drawn(flow, "Start Request in");
   expect(tools(flow.container)).toEqual([
-    ["Add step", "S", "Add stepS"],
-    ["Add decision", "D", "Add decisionD"],
-    ["Add input or output", "I", "Add input or outputI"],
-    ["Add start or end", "T", "Add start or endT"],
-    ["Shapes", "", "Every shape and line"],
-    ["Tidy", "", "Tidy"],
+    ["Select", "V", "SelectV"],
+    ["Hand", "H", "HandH"],
+    ["Start or end", "O", "Start or endO"],
+    ["Step", "R", "StepR"],
+    ["Decision", "D", "DecisionD"],
+    ["Input or output", "P", "Input or outputP"],
+    ["Arrow", "A", "ArrowA"],
+    ["Group", "G", "GroupG"],
+    ["Section", "F", "SectionF"],
+    ["Note", "N", "NoteN"],
+    ["More shapes", "", "More shapes"],
+    ["Add", "/", "Add a diagram/"],
+    ["Ask", "Control+J", "Ask the assistantCtrl+J"],
+  ]);
+  expect(settings(flow.container)).toEqual([
+    ["Reset layout", "", "Reset layout"],
+    ["Frame name", "", ""],
+    ["Direction", "", ""],
+    ["Text size", "", ""],
+    ["Colour", "", ""],
+    ["More", "", "More"],
   ]);
   expect(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByText("Flowchart")).toBeTruthy();
   expect(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByText("3 shapes, 2 lines")).toBeTruthy();
@@ -364,16 +429,31 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
   const cloud = setup({ text: CLOUD, layout: null }, "platform");
   await drawn(cloud, "Service Users");
   expect(tools(cloud.container)).toEqual([
-    ["Add a service", "N", "Add a serviceN"],
+    ["Select", "V", "SelectV"],
+    ["Hand", "H", "HandH"],
+    ["Service", "R", "ServiceR"],
+    ["Arrow", "A", "ArrowA"],
     ["Group", "G", "GroupG"],
-    ["Shapes", "", "Every shape and line"],
-    ["Tidy", "", "Tidy"],
+    ["Section", "F", "SectionF"],
+    ["Note", "N", "NoteN"],
+    ["More shapes", "", "More shapes"],
+    ["Add", "/", "Add a diagram/"],
+    ["Ask", "Control+J", "Ask the assistantCtrl+J"],
+  ]);
+  expect(settings(cloud.container)).toEqual([
+    ["Reset layout", "", "Reset layout"],
+    ["Frame name", "", ""],
+    ["Direction", "", ""],
+    ["Text size", "", ""],
+    ["Colour", "", ""],
+    ["More", "", "More"],
   ]);
   const cloudStrip = cloud.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   expect(within(cloudStrip).getByRole("button", { name: "Icon credits" })).toBeTruthy();
-  expect(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByText("Cloud")).toBeTruthy();
+  expect(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByText("Cloud architecture")).toBeTruthy();
   expect(within(cloud.container.querySelector(".flow-pane-text") as HTMLElement).getByText("2 services")).toBeTruthy();
-  cloud.press("n");
+  cloud.press("r");
+  cloud.press("Enter");
   await keepNew();
   await waitFor(() => expect(cloud.text()).toContain("Service [icon: aws-lambda]\n"));
 });
@@ -381,13 +461,11 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
 test("classic_toggles_and_is_kept_in_the_layout", async () => {
   const s = setup();
   await drawn(s);
-  const modern = screen.getByRole("button", { name: "Modern" });
-  const classic = screen.getByRole("button", { name: "Textbook shapes (Gane-Sarson)" });
-  expect(modern.getAttribute("aria-pressed")).toBe("true");
-  expect(classic.getAttribute("aria-pressed")).toBe("false");
-  await userEvent.click(classic);
+  // The frame bar's Look (Task 9).
+  expect(lookShown()).toBe("Modern");
+  await chooseLook("Classic");
   await waitFor(() => expect(s.node("Process Checkout")!.querySelector(".fnode-classic")).not.toBeNull());
-  expect(classic.getAttribute("aria-pressed")).toBe("true");
+  expect(lookShown()).toBe("Classic");
   await waitFor(() => expect(s.saves()).toHaveLength(1));
   expect(JSON.parse(s.lastSave().layout).style).toBe("classic");
   expect(s.lastSave()).toMatchObject({ cmd: "write_diagram_layout" });
@@ -397,31 +475,32 @@ test("classic_toggles_and_is_kept_in_the_layout", async () => {
   // Opened again, the diagram keeps Classic.
   const again = setup({ text: DFD, layout });
   await drawn(again);
-  expect(screen.getByRole("button", { name: "Textbook shapes (Gane-Sarson)" }).getAttribute("aria-pressed")).toBe("true");
+  expect(lookShown()).toBe("Classic");
   expect(again.node("Process Checkout")!.querySelector(".fnode-classic")).not.toBeNull();
 });
 
 test("a_flowchart_is_top_to_bottom_by_default_and_the_left_to_right_switch_is_kept_in_the_layout", async () => {
   const s = setup({ text: FLOWCHART, layout: null }, "refund-policy");
   await drawn(s, "Start Request in");
+  // Direction lives in the frame bar only (Task 9); the strip has none.
   const strip = s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
-  const tb = within(strip).getByRole("button", { name: "Top to bottom" });
-  const lr = within(strip).getByRole("button", { name: "Left to right" });
-  expect(tb.getAttribute("aria-pressed")).toBe("true");
-  expect(lr.getAttribute("aria-pressed")).toBe("false");
-  await userEvent.click(lr);
-  expect(lr.getAttribute("aria-pressed")).toBe("true");
+  expect(within(strip).queryByRole("button", { name: "Left to right" })).toBeNull();
+  expect(within(strip).queryByRole("group", { name: "Direction" })).toBeNull();
+  expect(directionShown()).toBe("Top to bottom");
+  await chooseDirection("Left to right");
+  await waitFor(() => expect(directionShown()).toBe("Left to right"));
   await waitFor(() => expect(s.saves()).toHaveLength(1));
   expect(JSON.parse(s.lastSave().layout).direction).toBe("LR");
   // The text does not change, and is not written.
   expect(s.lastSave()).toMatchObject({ cmd: "write_diagram_layout" });
   expect(callsTo("write_diagram")).toHaveLength(0);
   expect(s.text()).toBe(FLOWCHART);
-  // A data flow has no direction switch.
+  // A data flow has its Direction in the bar too (Decision 22: every kind laid out by hand).
   cleanup();
   const dfd = setup();
   await drawn(dfd);
   expect(screen.queryByRole("button", { name: "Left to right" })).toBeNull();
+  expect(directionShown()).toBe("Left to right");
 });
 
 test("closing_the_tab_frees_its_worker_state_and_saves_what_is_waiting", async () => {
@@ -447,7 +526,7 @@ test("a_crlf_file_is_never_rewritten_by_moves_classic_and_direction", async () =
   act(() => canvas.props!.onMove!("Checkout", 400, 208));
   await waitFor(() => expect(s.saves()).toHaveLength(1));
   expect(s.lastSave().cmd).toBe("write_diagram_layout");
-  await userEvent.click(screen.getByRole("button", { name: "Textbook shapes (Gane-Sarson)" }));
+  await chooseLook("Classic");
   await waitFor(() => expect(s.saves()).toHaveLength(2));
   expect(s.lastSave().cmd).toBe("write_diagram_layout");
   expect(callsTo("write_diagram")).toHaveLength(0);
@@ -455,7 +534,7 @@ test("a_crlf_file_is_never_rewritten_by_moves_classic_and_direction", async () =
   const f = setup({ text: crlf(FLOWCHART), layout: null }, "refund-policy");
   await drawn(f, "Start Request in");
   const before = f.saves().length;
-  await userEvent.click(screen.getByRole("button", { name: "Left to right" }));
+  await chooseDirection("Left to right");
   await waitFor(() => expect(f.saves()).toHaveLength(before + 1));
   expect(f.lastSave().cmd).toBe("write_diagram_layout");
   expect(callsTo("write_diagram")).toHaveLength(0);
@@ -475,7 +554,8 @@ test("a_broken_crlf_file_moved_is_left_as_it_is", async () => {
 test("an_edit_to_a_crlf_file_saves_crlf", async () => {
   const s = setup({ text: crlf(DFD), layout: null });
   await drawn(s);
-  s.press("p");
+  s.press("r");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.lastSave()?.text).toContain("Process [process, id: 3.0]\r\n"));
   expect(s.lastSave().text).toBe(crlf(s.text()));
@@ -495,7 +575,8 @@ test("after_a_worker_restart_the_tab_still_updates_and_takes_actions", async () 
   const at = s.text().indexOf("Charge card: amount");
   s.type("Refunds: reversal", at, at + "Charge card: amount".length);
   await waitFor(() => expect(screen.getByText("Refunds is not defined.")).toBeTruthy());
-  s.press("p");
+  s.press("r");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
 });
@@ -526,7 +607,8 @@ test("a_new_or_renamed_node_is_selected_on_the_canvas_and_in_the_strip", async (
   const strip = () => s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   select(s, "Process Checkout");
   await waitFor(() => expect(s.node("Process Checkout")!.classList.contains("selected")).toBe(true));
-  s.press("p");
+  s.press("r");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.node("Process Process")?.classList.contains("selected")).toBe(true));
   expect(s.node("Process Checkout")!.classList.contains("selected")).toBe(false);
@@ -566,7 +648,8 @@ test("nodes_named_constructor_and___proto___are_drawn_and_placed_once", async ()
 test("ctrl_z_and_ctrl_y_on_the_canvas_run_the_one_history", async () => {
   const s = setup();
   await drawn(s);
-  s.press("p");
+  s.press("r");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
   s.press("z", { ctrlKey: true });
@@ -716,7 +799,8 @@ test("a_node_that_is_not_drawn_keeps_no_selection", async () => {
   s.type("Refunds: reversal", at, at + "Charge card: amount".length);
   await waitFor(() => expect(s.container.querySelector(".flow-canvas.is-stale")).not.toBeNull());
   // An add on the broken text writes its line, but the faded drawing cannot show it: nothing stays selected.
-  s.press("p");
+  s.press("r");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.text()).toContain("Process [process, id: 3.0]\n"));
   const strip = s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
@@ -754,7 +838,7 @@ test("an_outside_edit_survives_a_move_classic_and_the_direction", async () => {
   f.disk.text = 'diagram dfd "checkout"\n// edited outside\n';
   act(() => canvas.props!.onMove!("Checkout", 400, 208));
   await waitFor(() => expect(s.saves()).toHaveLength(1));
-  await userEvent.click(screen.getByRole("button", { name: "Textbook shapes (Gane-Sarson)" }));
+  await chooseLook("Classic");
   await waitFor(() => expect(s.saves()).toHaveLength(2));
   expect(f.disk.text).toBe('diagram dfd "checkout"\n// edited outside\n');
   expect(JSON.parse(f.disk.layout!).nodes.Checkout).toEqual({ x: 400, y: 208 });
@@ -764,7 +848,8 @@ test("an_outside_edit_survives_a_move_classic_and_the_direction", async () => {
 test("the_text_is_written_only_after_a_text_edit", async () => {
   const s = setup();
   await drawn(s);
-  s.press("p");
+  s.press("r");
+  s.press("Enter");
   await keepNew();
   await waitFor(() => expect(s.lastSave()?.cmd).toBe("write_diagram"));
   expect(s.lastSave().text).toBe(s.text());
@@ -821,6 +906,7 @@ test("item_20_right_click_on_the_canvas_and_on_a_node_opens_contura_menus", asyn
 // ---- Step 12, item 19: the newer kinds draw ----
 
 const KIND_TEXTS: Record<string, string> = {
+  er: ['diagram er "Billing"', "customers {", "  id int", "  email text", "}", "invoices {", "  id int", "}", "", "invoices.id > customers.id"].join("\n"),
   sequence: ['diagram sequence "Pay"', "actor Customer", "participant App", "Customer -> App : Pay invoice", "loop retry {", "  App -> App : check", "}", "App --> Customer : done"].join("\n"),
   state: ['diagram state "Invoice"', "Draft", "Sent", "Paid in full? [choice]", "[*] > Draft", "Draft > Sent : send", "Sent > [*]"].join("\n"),
   class: ['diagram class "Types"', "interface Payable", "Payable : pay(amount)", "class Invoice", "Invoice : + total: numeric", "Payable <|-- Invoice"].join("\n"),
@@ -830,6 +916,7 @@ const KIND_TEXTS: Record<string, string> = {
 
 test("item_19_each_newer_kind_draws_its_shapes", async () => {
   const expected: Record<string, string[]> = {
+    er: ["Table customers", "Table invoices"],
     sequence: ["Actor Customer", "Participant App"],
     state: ["Start", "End", "State Draft", "Choice Paid in full?"],
     class: ["Interface Payable", "Class Invoice"],
@@ -844,6 +931,10 @@ test("item_19_each_newer_kind_draws_its_shapes", async () => {
 });
 
 test("item_19_cards_show_their_rows_and_fixed_kinds_are_laid_out_without_a_layout_file", async () => {
+  const er = setup({ text: `${KIND_TEXTS.er}\n`, layout: null }, "k-er-rows");
+  await waitFor(() => expect(er.node("Table customers")).not.toBeNull(), { timeout: 4000 });
+  expect([...er.node("Table customers")!.querySelectorAll(".fkind-col")].map((e) => e.textContent)).toEqual(["id", "email"]);
+  cleanup();
   const s = setup({ text: `${KIND_TEXTS.class}\n`, layout: null }, "k-class-rows");
   await waitFor(() => expect(s.node("Class Invoice")).not.toBeNull(), { timeout: 4000 });
   expect([...s.node("Class Invoice")!.querySelectorAll(".fkind-col")].map((e) => e.textContent)).toEqual(["+ total: numeric"]);
@@ -861,9 +952,8 @@ test("item_19_cards_show_their_rows_and_fixed_kinds_are_laid_out_without_a_layou
 test("item_19_the_shapes_list_names_the_open_kinds_shapes_and_every_item_adds_on_the_canvas", async () => {
   const s = setup({ text: `${KIND_TEXTS.state}\n`, layout: null }, "k-shapes");
   await waitFor(() => expect(s.node("State Draft")).not.toBeNull(), { timeout: 4000 });
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  const list = screen.getByRole("menu", { name: "Shapes" });
-  expect(within(list).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual([
+  const list = await moreShapes();
+  expect(within(list).getAllByRole("option").map((m) => m.getAttribute("aria-label"))).toEqual([
     "State",
     "Start",
     "End",
@@ -875,11 +965,10 @@ test("item_19_the_shapes_list_names_the_open_kinds_shapes_and_every_item_adds_on
   ]);
   // A line item waits for the two shapes it joins (diagram step 6, F18): nothing is written into the text.
   const before = s.text();
-  await userEvent.click(within(list).getByRole("menuitem", { name: "Transition" }));
+  await userEvent.click(within(list).getByRole("option", { name: "Transition" }));
   expect(s.text()).toBe(before);
   // A shape is added on the canvas with its name ready, written once it is kept.
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "State" }));
+  await moreShape("State");
   await userEvent.type(await screen.findByRole("textbox", { name: "Name the new state" }), "{Enter}");
   await waitFor(() => expect(s.text()).toMatch(/^State$/m));
 });
@@ -925,46 +1014,58 @@ test("item_21_51_a_selected_node_resizes_live_from_its_zones_and_a_kept_size_dra
 });
 
 test("item_51_a_node_laid_out_past_the_caps_keeps_its_size_on_a_1px_drag", async () => {
-  // A class with ten fields is 32 + 10 x 22 + 11 (its empty methods part) + 16 = 279 px tall, past the 200 px cap.
-  const rows = Array.from({ length: 10 }, (_, i) => `ledger : + column_${i}: int`);
-  const text = ['diagram class "Big"', "class ledger", ...rows, ""].join("\n");
-  // jsdom has no layout: each box measures at the size its style gives it, as a browser would here.
-  const protoH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
-  const protoW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
-  Object.defineProperties(HTMLElement.prototype, {
-    offsetHeight: { configurable: true, get(this: HTMLElement) { return parseFloat(this.style.height) || 600; } },
-    offsetWidth: { configurable: true, get(this: HTMLElement) { return parseFloat(this.style.width) || 800; } },
-  });
-  onTestFinished(() => {
-    if (protoH) Object.defineProperty(HTMLElement.prototype, "offsetHeight", protoH);
-    if (protoW) Object.defineProperty(HTMLElement.prototype, "offsetWidth", protoW);
-  });
-  const s = setup({ text, layout: null }, "big-class");
-  await drawn(s, "Class ledger");
-  const wrap = s.node("Class ledger")!;
-  const laid = { w: parseFloat(wrap.style.width), h: parseFloat(wrap.style.height) };
-  expect(laid.h).toBe(279);
-  select(s, "Class ledger");
-  const zone = await waitFor(() => {
-    const z = s.node("Class ledger")!.querySelector('.rz-zone[data-dir="s"]') as HTMLElement;
-    expect(z).toBeTruthy();
-    return z;
-  });
-  fireEvent.pointerDown(zone, { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
-  fireEvent.pointerMove(zone, { clientX: 100, clientY: 101, pointerId: 1 });
-  await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
-  // Live, the node does not snap to the 200 px cap: no row is cut.
-  expect(parseFloat(wrap.style.height)).toBeGreaterThanOrEqual(laid.h);
-  expect(parseFloat(wrap.style.width)).toBe(laid.w);
-  fireEvent.pointerUp(zone, { clientX: 100, clientY: 101, pointerId: 1 });
-  await new Promise((r) => setTimeout(r, 50));
-  // Nothing smaller is kept: either no size (the move rounded away) or one at least as tall.
-  const kept = JSON.parse(s.lastSave()?.layout ?? "{}").sizes?.ledger;
-  if (kept) {
-    expect(kept.w).toBe(laid.w);
-    expect(kept.h).toBeGreaterThanOrEqual(laid.h);
+  // A class with ten fields is 32 + 10 x 22 + 11 (its empty methods part) + 16 = 279 px tall, past the 200 px cap; an ER
+  // table with ten columns is 2 + 32 + 6 + 10 x 22 = 260 px, under its own 20 row cap (decision 7), and keeps its size too.
+  const cases: [string, string, string, number][] = [
+    ["Class ledger", ['diagram class "Big"', "class ledger", ...Array.from({ length: 10 }, (_, i) => `ledger : + column_${i}: int`), ""].join("\n"), "class", 279],
+    ["Table ledger", ['diagram er "Big"', "ledger {", ...Array.from({ length: 10 }, (_, i) => `  column_${i} int`), "}", ""].join("\n"), "er", 260],
+  ];
+  for (const [label, text, id, h] of cases) {
+    // jsdom has no layout: each box measures at the size its style gives it, as a browser would here.
+    const protoH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    const protoW = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+    Object.defineProperties(HTMLElement.prototype, {
+      offsetHeight: { configurable: true, get(this: HTMLElement) { return parseFloat(this.style.height) || 600; } },
+      offsetWidth: { configurable: true, get(this: HTMLElement) { return parseFloat(this.style.width) || 800; } },
+    });
+    const restore = () => {
+      if (protoH) Object.defineProperty(HTMLElement.prototype, "offsetHeight", protoH);
+      if (protoW) Object.defineProperty(HTMLElement.prototype, "offsetWidth", protoW);
+    };
+    onTestFinished(restore);
+    const s = setup({ text, layout: null }, `big-${id}`);
+    await drawn(s, label);
+    const wrap = s.node(label)!;
+    const laid = { w: parseFloat(wrap.style.width), h: parseFloat(wrap.style.height) };
+    expect(laid.h).toBe(h);
+    select(s, label);
+    const zone = await waitFor(() => {
+      const z = s.node(label)!.querySelector('.rz-zone[data-dir="s"]') as HTMLElement;
+      expect(z).toBeTruthy();
+      return z;
+    });
+    fireEvent.pointerDown(zone, { button: 0, clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(zone, { clientX: 100, clientY: 101, pointerId: 1 });
+    await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    // Live, the node does not snap to the 200 px cap: no row is cut.
+    expect(parseFloat(wrap.style.height)).toBeGreaterThanOrEqual(laid.h);
+    expect(parseFloat(wrap.style.width)).toBe(laid.w);
+    fireEvent.pointerUp(zone, { clientX: 100, clientY: 101, pointerId: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    // Nothing smaller is kept: either no size (the move rounded away) or one at least as tall.
+    const kept = JSON.parse(s.lastSave()?.layout ?? "{}").sizes?.ledger;
+    if (kept) {
+      expect(kept.w).toBe(laid.w);
+      expect(kept.h).toBeGreaterThanOrEqual(laid.h);
+    }
+    // The board's fitted zoom makes one screen pixel several canvas pixels, so a drag can keep a size (jsdom draws no style
+    // for it, as nothing is measured): the node's own size, or else its laid-out style, is at least what it was.
+    const node = canvas.props!.nodes.find((n) => n.id === "ledger")!;
+    const sized = (node.data as { sized?: { h: number } }).sized;
+    expect(sized?.h ?? parseFloat(s.node(label)!.style.height)).toBeGreaterThanOrEqual(laid.h);
+    restore();
+    cleanup();
   }
-  expect(parseFloat(s.node("Class ledger")!.style.height)).toBeGreaterThanOrEqual(laid.h);
 });
 
 /** The name and details panel, from the shape's menu (a double-click edits the name on the shape, diagram step 3). */
@@ -1089,7 +1190,8 @@ test("an_old_er_file_opens_editable_with_the_rewrite_fix", async () => {
 test("the_rewrite_notice_goes_once_the_old_er_frame_is_rewritten", async () => {
   const s = setup({ text: README_BILLING, layout: null }, "billing");
   await waitFor(() => expect(s.container.querySelector(".flow-problems")).not.toBeNull(), { timeout: 4000 });
-  s.press("t");
+  s.press("r");
+  s.press("Enter");
   expect(await screen.findByText(ER_NOTES.oldForm)).toBeTruthy();
   const problems = s.container.querySelector(".flow-problems") as HTMLElement;
   await userEvent.click(within(problems).getAllByRole("button", { name: "Rewrite as table blocks" })[0]);
@@ -1116,7 +1218,7 @@ test("open_as_dbml_sends_the_converted_model", async () => {
   const onOpenModel = vi.fn();
   const s = setup({ text: ER_BLOCKS, layout: null }, "billing", { onOpenModel });
   await drawn(s, "Table customers");
-  const button = within(s.container.querySelector(".flow-toolbar") as HTMLElement).getByRole("button", { name: "Open as DBML" });
+  const button = await moreItem("Open as DBML");
   expect(button.getAttribute("title")).toBeNull();
   await userEvent.click(button);
   expect(onOpenModel).toHaveBeenCalledTimes(1);
@@ -1127,7 +1229,7 @@ test("open_as_dbml_sends_the_converted_model", async () => {
   // With an error in the text there is nothing to convert: the strip says why and nothing opens.
   s.type(ER_BLOCKS.replace("orders.customer_id > customers.id", "orders.customer_id >"));
   await waitFor(() => expect(s.container.querySelector(".flow-stale")).not.toBeNull(), { timeout: 4000 });
-  await userEvent.click(within(s.container.querySelector(".flow-toolbar") as HTMLElement).getByRole("button", { name: "Open as DBML" }));
+  await userEvent.click(await moreItem("Open as DBML"));
   expect(onOpenModel).toHaveBeenCalledTimes(1);
   expect(await screen.findByText("Fix the text first: the drawing is from the last text that worked.")).toBeTruthy();
 });
@@ -1135,18 +1237,34 @@ test("open_as_dbml_sends_the_converted_model", async () => {
 test("open_as_dbml_is_only_on_an_er_diagram", async () => {
   const s = setup();
   await drawn(s);
-  expect(within(s.container.querySelector(".flow-toolbar") as HTMLElement).queryByRole("button", { name: "Open as DBML" })).toBeNull();
+  await userEvent.click(within(s.container.querySelector(".frame-bar") as HTMLElement).getByRole("button", { name: "More" }));
+  expect(await screen.findByRole("menu")).toBeTruthy();
+  expect(screen.queryByRole("menuitem", { name: "Open as DBML" })).toBeNull();
 });
 
 test("add_table_writes_a_free_name", async () => {
+  // B3 decision 9 (R13): R plus Enter opens the new table's field with its free name; it is written once kept.
   const s = setup({ text: ER_BLOCKS, layout: null }, "billing");
   await drawn(s, "Table customers");
-  s.press("t");
+  const keepTable = async (name: string) => {
+    const box = (await screen.findByLabelText("Table name", { selector: "input" })) as HTMLInputElement;
+    expect(box.value).toBe(name);
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("group", { name: "New table" })).toBeNull());
+    // Enter goes on to its first column: left empty, Esc closes it.
+    fireEvent.keyDown(await screen.findByLabelText("Column name", { selector: "input" }), { key: "Escape" });
+  };
+  s.press("r");
+  s.press("Enter");
+  await keepTable("table_1");
   await waitFor(() => expect(s.text()).toContain("\ntable_1\n"));
   await waitFor(() => expect(s.node("Table table_1")).not.toBeNull());
-  s.press("t");
+  s.press("r");
+  s.press("Enter");
+  await keepTable("table_2");
   await waitFor(() => expect(s.text()).toContain("\ntable_2\n"));
-  s.press("w");
+  await moreShape("Weak table");
+  await keepTable("weak_1");
   await waitFor(() => expect(s.text()).toContain("\nweak_1 [weak]\n"));
   await waitFor(() => expect(s.node("Weak table weak_1")).not.toBeNull());
 });
@@ -1154,22 +1272,34 @@ test("add_table_writes_a_free_name", async () => {
 test("er_shapes_write_what_their_samples_show", async () => {
   const s = setup({ text: ER_BLOCKS, layout: null }, "billing");
   await drawn(s, "Table customers");
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  const list = screen.getByRole("menu", { name: "Shapes" });
-  const said = (label: string) => within(list).getByRole("menuitem", { name: label }).getAttribute("aria-description");
-  expect([said("Table"), said("Weak table"), said("Column")]).toEqual(["Writes table_1", "Writes weak_1 [weak]", "Writes column_1 text"]);
-  await userEvent.click(within(list).getByRole("menuitem", { name: "Table" }));
-  await waitFor(() => expect(s.text()).toContain("\ntable_1\n"));
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Weak table" }));
-  await waitFor(() => expect(s.text()).toContain("\nweak_1 [weak]\n"));
-  // Column goes at the end of the selected table.
+  const list = await moreShapes();
+  const said = (label: string) => within(list).getByRole("option", { name: label }).querySelector("code")?.textContent;
+  expect([said("Table"), said("Weak table"), said("Column")]).toEqual(["table_1", "weak_1 [weak]", "id int"]);
+  // The .flow line is the option's description, and its kind tool's key shows (final review, Minor 4).
+  const table = within(list).getByRole("option", { name: "Table" });
+  const described = table.getAttribute("aria-describedby");
+  expect(described).toBeTruthy();
+  expect(document.getElementById(described!)?.textContent).toBe("table_1");
+  expect(table.querySelector("kbd.kbd")?.textContent).toBe("R");
+  // Column says what it does: its hint is its tip and its description (R22, A8).
+  const column = within(list).getByRole("option", { name: "Column" });
+  expect(column.getAttribute("title")).toBe("Opens a new column row on the table");
+  expect(column.getAttribute("aria-description")).toBe("Opens a new column row on the table");
+  // Table opens the new table's field: nothing is written until it is kept.
+  await userEvent.click(table);
+  const box = (await screen.findByLabelText("Table name", { selector: "input" })) as HTMLInputElement;
+  expect(box.value).toBe("table_1");
+  expect(s.text()).toBe(ER_BLOCKS);
+  fireEvent.keyDown(box, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByLabelText("Table name")).toBeNull());
+  // Column opens the draft row at the end of the selected table.
   await waitFor(() => expect(s.node("Table customers")).not.toBeNull());
   select(s, "Table customers");
   await waitFor(() => expect(s.node("Table customers")!.classList.contains("selected")).toBe(true));
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Column" }));
-  await waitFor(() => expect(s.text()).toContain("customers {\n  id int pk\n  email text not null\n  column_1 text\n}\n"));
+  await moreShape("Column");
+  const draft = await screen.findByLabelText("Column name", { selector: "input" });
+  expect(s.node("Table customers")!.contains(draft)).toBe(true);
+  expect(s.text()).toBe(ER_BLOCKS);
 });
 
 test("add_table_and_column_on_an_old_er_file_say_to_rewrite_first_and_write_nothing", async () => {
@@ -1177,15 +1307,23 @@ test("add_table_and_column_on_an_old_er_file_say_to_rewrite_first_and_write_noth
   await waitFor(() => expect(s.container.querySelector(".flow-problems")).not.toBeNull(), { timeout: 4000 });
   const strip = () => s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   const note = "Rewrite this diagram as table blocks first: its first problem has the fix.";
-  s.press("t");
+  s.press("r");
+  s.press("Enter");
   await waitFor(() => expect(strip().textContent).toContain(note));
+  expect(screen.queryByLabelText("Table name")).toBeNull();
   act(() => s.press("Escape"));
-  s.press("w");
+  // The Shelf shows every ER shape disabled with the note (A13); a press still says it in the strip.
+  const list = await moreShapes();
+  for (const label of ["Table", "Weak table", "Column"]) {
+    const o = within(list).getByRole("option", { name: label });
+    expect(o.getAttribute("aria-disabled")).toBe("true");
+    expect(o.getAttribute("aria-description")).toBe(note);
+  }
+  await moreShape("Weak table");
   await waitFor(() => expect(strip().textContent).toContain(note));
-  // Nothing is drawn to pick, so Column says the same at once rather than wait for a table.
-  act(() => s.press("Escape"));
-  await userEvent.click(screen.getByRole("button", { name: "Shapes" }));
-  await userEvent.click(within(screen.getByRole("menu", { name: "Shapes" })).getByRole("menuitem", { name: "Column" }));
+  // Nothing is drawn to pick, so Column says the same at once rather than wait for a table. (No Esc first: with nothing
+  // armed or selected it would let the only frame go, final review F2.)
+  await moreShape("Column");
   await waitFor(() => expect(strip().textContent).toContain(note));
   expect(strip().textContent).not.toContain("Click the table");
   expect(s.text()).toBe(README_BILLING);

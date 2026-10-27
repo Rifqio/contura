@@ -97,10 +97,11 @@ const rule = (css: string, selector: string) => {
   return at < 0 ? "" : css.slice(at, css.indexOf("}", at));
 };
 
-test("live 1: on an empty map T opens the central idea, written `root <name>` and sized to its words", async () => {
+test("live 1: on an empty map R then Enter opens the central idea, written `root <name>` and sized to its words", async () => {
   const s = setup(lines('diagram mindmap "x"'));
   await waitFor(() => expect(s.container.querySelector(".flow-first-node")).not.toBeNull());
-  s.press("t");
+  s.press("r");
+  s.press("Enter");
   const name = await s.field("Name the new central idea");
   await userEvent.clear(name);
   await userEvent.type(name, "Q4 plan{Enter}");

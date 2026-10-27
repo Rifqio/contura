@@ -56,7 +56,12 @@ function glyph(name: IconName, x: number, y: number, size: number, stroke: strin
 const text = (x: number, y: number, body: string, attrs = "") => `<text x="${num(x)}" y="${num(y)}"${attrs}>${esc(body)}</text>`;
 
 /** About 7 px per character of the 13 px body font, as the canvas sizes nodes before it measures them. */
-const textWidth = (s: string) => s.length * 7;
+/**
+ * The text size of the scene being drawn (`Scene.textScale`), set by `sceneToSvg` for the one synchronous draw: the
+ * widths and heights estimated from words grow with the font, so a label never runs out of its pill.
+ */
+let textK = 1;
+const textWidth = (s: string) => s.length * 7 * textK;
 
 /** A data flow node in Modern or the Classic Gane-Sarson shapes (frame 6+.2). */
 function dfdSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
@@ -426,9 +431,10 @@ function flowEdgeSvg(e: SceneEdge, given: ExportPalette): string {
     const i = Math.floor((pts.length - 1) / 2);
     const cx = (pts[i].x + pts[i + 1].x) / 2;
     const cy = (pts[i].y + pts[i + 1].y) / 2;
-    const w = Math.ceil(e.label.length * 6.5 + 12);
+    const w = Math.ceil(e.label.length * 6.5 * textK + 12);
+    const h = 20 * textK;
     parts.push(
-      `<rect data-part="chip" x="${num(cx - w / 2)}" y="${num(cy - 10)}" width="${w}" height="20" rx="6" fill="${palette.surface}" stroke="${palette.border}"/>`,
+      `<rect data-part="chip" x="${num(cx - w / 2)}" y="${num(cy - h / 2)}" width="${w}" height="${num(h)}" rx="6" fill="${palette.surface}" stroke="${palette.border}"/>`,
       text(cx, cy + 4, e.label, ` text-anchor="middle" font-size="11" fill="${given.subtle}"`),
     );
   }
@@ -452,7 +458,7 @@ function messageSvg(e: SceneEdge, palette: ExportPalette): string {
     const left = self ? pts[0].x + 48 : (pts[0].x + pts[1].x) / 2 - w / 2;
     const bottom = self ? pts[0].y : pts[0].y - 10;
     parts.push(
-      `<rect x="${num(left)}" y="${num(bottom - 16)}" width="${num(w)}" height="16" rx="3" fill="${palette.canvas}"/>`,
+      `<rect x="${num(left)}" y="${num(bottom - 16 * textK)}" width="${num(w)}" height="${num(16 * textK)}" rx="3" fill="${palette.canvas}"/>`,
       text(left + 4, bottom - 4, e.label, ` font-size="12" fill="${palette.subtle}"`),
     );
   }
@@ -473,7 +479,7 @@ const frameSvg = (f: SceneFrame, i: number, palette: ExportPalette) =>
 
 /** A frame's label in its tab at the frame's top left, drawn over the participants as the canvas draws it. */
 function frameTabSvg(f: SceneFrame, i: number, palette: ExportPalette): string {
-  const w = f.label.length * 7 + 18;
+  const w = f.label.length * 7 * textK + 18;
   const { x, y } = f;
   const d = `M${num(x)} ${num(y + 21)} V${num(y + 6)} Q${num(x)} ${num(y)} ${num(x + 6)} ${num(y)} H${num(x + w)} V${num(y + 15)} Q${num(x + w)} ${num(y + 21)} ${num(x + w - 6)} ${num(y + 21)} Z`;
   return `<g data-frame-tab="${i}"><path data-part="tab" d="${d}" fill="${palette.surface}" stroke="${palette.strongBorder}"/>${text(x + 8, y + 15, f.label, ` font-size="12" font-weight="600" fill="${palette.subtle}"`)}</g>`;
@@ -593,16 +599,31 @@ function edgeSvg(e: SceneEdge, palette: ExportPalette): string {
     const i = Math.floor((pts.length - 1) / 2);
     const cx = (pts[i].x + pts[i + 1].x) / 2;
     const cy = (pts[i].y + pts[i + 1].y) / 2;
-    const w = Math.ceil(e.label.length * 6.5 + 16);
+    const w = Math.ceil(e.label.length * 6.5 * textK + 16);
+    const h = 18 * textK;
     parts.push(
-      `<rect x="${num(cx - w / 2)}" y="${num(cy - 9)}" width="${w}" height="18" rx="9" fill="${palette.canvas}" stroke="${palette.border}"/>`,
+      `<rect data-part="label-pill" x="${num(cx - w / 2)}" y="${num(cy - h / 2)}" width="${w}" height="${num(h)}" rx="${num(h / 2)}" fill="${palette.canvas}" stroke="${palette.border}"/>`,
       `<text x="${num(cx)}" y="${num(cy + 4)}" text-anchor="middle" font-size="11" fill="${palette.subtle}">${esc(e.label)}</text>`,
     );
   }
   return `<g data-edge="${esc(e.id)}">${parts.join("")}</g>`;
 }
 
+/** Every `font-size` attribute in `svg` times `k`. Words are escaped (`esc`), so only attributes match. */
+function scaleFonts(svg: string, k: number): string {
+  return k === 1 ? svg : svg.replace(/ font-size="([\d.]+)"/g, (_, n: string) => ` font-size="${num(Number(n) * k)}"`);
+}
+
 export function sceneToSvg(scene: Scene, palette: ExportPalette, opts: SvgOptions): string {
+  textK = scene.textScale ?? 1;
+  try {
+    return drawScene(scene, palette, opts);
+  } finally {
+    textK = 1;
+  }
+}
+
+function drawScene(scene: Scene, palette: ExportPalette, opts: SvgOptions): string {
   const f = svgFrame(scene, opts);
   const background = opts.background === "theme" ? `<rect x="${f.x}" y="${f.y}" width="${f.w}" height="${f.h}" fill="${palette.canvas}"/>` : "";
   const mark = opts.mark
@@ -620,5 +641,8 @@ export function sceneToSvg(scene: Scene, palette: ExportPalette, opts: SvgOption
   // The hairline filter is defined once, and only when an outlined logo is drawn.
   const outlined = scene.nodes.some((n) => n.iconOutline && n.icon) || (scene.areas ?? []).some((a) => a.iconOutline && a.icon);
   const defs = outlined ? hairlineDefs(palette) : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="${palette.text}">${defs}${background}${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}${mark}</svg>\n`;
+  // The frame's text size scales every label of the drawing, as on the canvas; the mark keeps its own size.
+  const k = scene.textScale ?? 1;
+  const drawing = scaleFonts(`${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}`, k);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="${num(13 * k)}" fill="${palette.text}">${defs}${background}${drawing}${mark}</svg>\n`;
 }

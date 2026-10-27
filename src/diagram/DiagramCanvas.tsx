@@ -26,16 +26,17 @@ import {
   useStore,
   useStoreApi,
   ViewportPortal,
+  type ZIndexMode,
 } from "@xyflow/react";
 import { type DragEvent, type KeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Icon from "../components/Icon";
 import { ConnectableContext } from "./CardFrame";
-import { DetailContext, GRID_FROM, detailFor } from "./detail";
+import { BOX_BELOW, DetailContext, GRID_FROM, detailFor } from "./detail";
 import { EdgeMarkers, hexArrowsIn, OrthogonalEdge, StraightEdge } from "./edges";
 import { CARD_WIDTH } from "./metrics";
 import { applyLive, drawsTheSame, type LivePositions, restoreBase } from "./livePositions";
 import { liveResizes } from "./resize";
-import { motionMs } from "./motion";
+import { glideOptions } from "./motion";
 import { GUIDE_REACH_PX, GuideIndex, type GuideLine, lockAxis } from "./guides";
 import type { Port } from "./types";
 
@@ -86,11 +87,26 @@ export interface DiagramCanvasProps {
   onLineSelect?(ids: string[]): void;
   /** Something dragged in from outside the canvas (the database tree) was dropped at a flow position. */
   onDropObject?(data: DataTransfer, at: { x: number; y: number }): void;
+  /**
+   * With it set, only a drag whose `dataTransfer.types` holds this type is taken: other drags get no dragover
+   * `preventDefault`, no drop ring and no `onDropObject` (B2 R11). Without it every drag from outside is taken.
+   */
+  dropType?: string;
   onInit?(instance: ReactFlowInstance): void;
   /** Toolbar overlays and banners, drawn over the canvas. */
   children?: ReactNode;
   /** Esc stopped a card drag (F26): the cards went back and no onMove follows. */
   onMoveCancel?(): void;
+  /**
+   * The view is below BOX_BELOW, reported once the canvas has placed its first view and again at each crossing (a
+   * board draws its static frames as previews there, Task 18b).
+   */
+  onOverview?(below: boolean): void;
+  /**
+   * The owner's word that the view is below BOX_BELOW (the board, Task 18b): the canvas draws fast there, as over
+   * FAST_OVER (straight lines with no labels, name boxes or blocks by zoom, no ports), and in full again above.
+   */
+  overview?: boolean;
   /**
    * The owner moves the selection with the arrow keys itself (the drawn diagrams, with their undo history). Otherwise
    * the canvas does: 1 px, Shift 16 px, reported through onMove once the key goes up (F7, every canvas).
@@ -135,7 +151,41 @@ export interface DiagramCanvasProps {
    * coordinates, and the canvas's own zoom to fit for the menu. The browser's menu never shows.
    */
   onContextMenu?(at: CanvasMenuAt): void;
+  /**
+   * Where the canvas's flow positions start on the board (Decision 2): every node is drawn at its board position minus
+   * this. When it changes, the view moves by the same amount in the same update as the new nodes, so nothing on screen
+   * moves. (0, 0) when absent.
+   */
+  origin?: { x: number; y: number };
+  /** How React Flow orders nodes and lines; its own default ("basic") when absent. Only the board sets "manual". */
+  zIndexMode?: ZIndexMode;
+  /**
+   * The board's Hand tool (Plan B Task 7): the left button pans as the middle one does, and draws no selection box
+   * (Figma, Excalidraw).
+   */
+  hand?: boolean;
+  /** React Flow's hold-to-pan key ("Space" on a board, Decision 26); unset keeps React Flow's own. */
+  panKey?: string | null;
+  /** How many shapes the level of detail counts (a board counts only its live frame's); every node when absent. */
+  detailCount?: number;
+  /** The overview in the corner; shown unless this is false. */
+  showMiniMap?: boolean;
+  /**
+   * A board frame's node (`\u0000board:` or `\u0000clash:`) dragged by its title tab: each frame of the drag with
+   * `done` false, then once with `done` true where it was let go, or with `at` null when Esc stopped it (the frame is
+   * put back). Frames never go through onDrag or onMove.
+   */
+  onFrameDrag?(id: string, at: { x: number; y: number } | null, done: boolean): void;
 }
+
+/** A board frame's node id: its title tab drags it, through `onFrameDrag`. */
+const isFrameNode = (id: string) => id.startsWith("\u0000board:") || id.startsWith("\u0000clash:");
+/**
+ * A board's sketch layer: zero-size, its sketches drawn at their board places from it. Mirrors `SKETCH_LAYER_ID` in
+ * src/flow/board/sketches.ts (diagram/ does not import flow/); sketches.test.ts checks the two are equal.
+ */
+export const SKETCH_LAYER = "\u0000sketches";
+const NO_ORIGIN = { x: 0, y: 0 };
 
 /** Where a canvas right-click landed, for the owner's menu. */
 export interface CanvasMenuAt {
@@ -185,7 +235,21 @@ function ZoomVar() {
   return null;
 }
 
-function ViewControls({ nodes, fitRef }: { nodes: Node[]; fitRef: MutableRefObject<() => boolean> }) {
+function ViewControls({
+  nodes,
+  fitRef,
+  origin,
+  placedFor,
+  onOverview,
+}: {
+  nodes: Node[];
+  fitRef: MutableRefObject<() => boolean>;
+  /** The origin `nodes` are drawn from. */
+  origin: { x: number; y: number };
+  /** The origin the view was last placed for: a fit places it for `origin`, so the origin shift leaves it be. */
+  placedFor: MutableRefObject<{ x: number; y: number }>;
+  onOverview?: (below: boolean) => void;
+}) {
   const store = useStoreApi();
   const width = useStore((s) => s.width);
   const height = useStore((s) => s.height);
@@ -193,21 +257,48 @@ function ViewControls({ nodes, fitRef }: { nodes: Node[]; fitRef: MutableRefObje
   const zoom = useStore((s) => s.transform[2]);
   const { setViewport, getViewport, zoomIn, zoomOut } = useReactFlow();
   const fitted = useRef(false);
+  const overviewRef = useRef(onOverview);
+  overviewRef.current = onOverview;
+  /** The fit glide under way (its number), 0 with none: the levels it passes are not reported. */
+  const fitGlide = useRef(0);
 
   const fit = useCallback(() => {
     const { width: w, height: h, minZoom, maxZoom, panZoom } = store.getState();
-    if (!panZoom || !w || !h || nodes.length === 0) return false;
+    // Frame boxes alone are not a drawing yet (their shapes are still being placed): the first fit waits for one.
+    if (!panZoom || !w || !h || !nodes.some((n) => !isFrameNode(n.id) && n.id !== SKETCH_LAYER && n.parentId !== SKETCH_LAYER)) return false;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    // Sketches are part of the drawing: each at the layer's place plus its own; the zero-size layer is not.
+    const layer = nodes.find((n) => n.id === SKETCH_LAYER)?.position;
     for (const n of nodes) {
-      x0 = Math.min(x0, n.position.x);
-      y0 = Math.min(y0, n.position.y);
-      x1 = Math.max(x1, n.position.x + (n.initialWidth ?? CARD_WIDTH));
-      y1 = Math.max(y1, n.position.y + (n.initialHeight ?? 0));
+      // A child is drawn inside its parent (a board frame's shapes): its position is the parent's, not the flow's.
+      if (n.id === SKETCH_LAYER || (n.parentId && !(layer && n.parentId === SKETCH_LAYER))) continue;
+      const px = n.parentId && layer ? layer.x + n.position.x : n.position.x;
+      const py = n.parentId && layer ? layer.y + n.position.y : n.position.y;
+      x0 = Math.min(x0, px);
+      y0 = Math.min(y0, py);
+      x1 = Math.max(x1, px + (n.initialWidth ?? CARD_WIDTH));
+      y1 = Math.max(y1, py + (n.initialHeight ?? 0));
     }
+    if (x0 === Infinity) return false;
     const viewport = getViewportForBounds({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, w, h, minZoom, Math.min(1, maxZoom), 0.1);
-    void setViewport(viewport, { duration: motionMs("fit") });
+    // The view now shows these nodes as drawn from this origin. A first fit lands in the same update as the origin of
+    // a one-frame board off (0, 0): the shift must not move the fitted view on by the origin again.
+    placedFor.current = origin;
+    // The level it lands at is reported now, not as the glide passes it: a board at its fit never draws every static
+    // shape on the way out from the store's starting 100 percent (Task 18b).
+    overviewRef.current?.(viewport.zoom < BOX_BELOW);
+    const glide = ++fitGlide.current;
+    const options = glideOptions();
+    const landed = () => {
+      if (fitGlide.current !== glide) return;
+      fitGlide.current = 0;
+      overviewRef.current?.(store.getState().transform[2] < BOX_BELOW);
+    };
+    void setViewport(viewport, options).then(landed);
+    // A pan or zoom that cuts the glide short never ends it: its time is up then too.
+    setTimeout(landed, (options.duration ?? 0) + 50);
     return true;
-  }, [nodes, store, setViewport]);
+  }, [nodes, origin, placedFor, store, setViewport]);
 
   fitRef.current = fit;
 
@@ -215,6 +306,11 @@ function ViewControls({ nodes, fitRef }: { nodes: Node[]; fitRef: MutableRefObje
     if (fitted.current || !ready || !width || !height) return;
     if (fit()) fitted.current = true;
   }, [ready, width, height, fit]);
+  // Every other change of zoom is reported as it crosses BOX_BELOW (a fit reports its own, above).
+  const below = useStore((s) => s.transform[2] < BOX_BELOW);
+  useEffect(() => {
+    if (fitted.current && !fitGlide.current) overviewRef.current?.(below);
+  }, [below]);
 
   // After the first fit a resize keeps the view's centre and zoom (F16, as Figma and draw.io): the drawing moves by
   // half the change in size, so what was in the middle stays in the middle.
@@ -229,11 +325,11 @@ function ViewControls({ nodes, fitRef }: { nodes: Node[]; fitRef: MutableRefObje
 
   return (
     <Panel position="bottom-right" className="canvas-zoom" role="group" aria-label="Zoom">
-      <button type="button" className="icon-button" aria-label="Zoom out" title="Zoom out" onClick={() => void zoomOut({ duration: motionMs("fit") })}>
+      <button type="button" className="icon-button" aria-label="Zoom out" title="Zoom out" onClick={() => void zoomOut(glideOptions())}>
         <Icon name="minus" size={14} />
       </button>
       <span className="canvas-zoom-percent">{Math.round(zoom * 100)}%</span>
-      <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in" onClick={() => void zoomIn({ duration: motionMs("fit") })}>
+      <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in" onClick={() => void zoomIn(glideOptions())}>
         <Icon name="plus" size={14} />
       </button>
       <span className="canvas-zoom-divider" aria-hidden="true" />
@@ -352,11 +448,14 @@ const isTyping = (t: EventTarget | null) =>
 function Flow(props: DiagramCanvasProps) {
   const { readOnly, onConnectPorts, onDragOver, onDragCancel, connectionMode, onMove, onDrag, onSelect, onDropObject, onInit, nodeTypes, edgeTypes, children } = props;
   const { onMoveCancel, onConnectRelease, connectionLineComponent, overlay, onEdgeDoubleClick, minimapJump, boxSelect, onContextMenu, onNodeDoubleClick, onPaneDoubleClick } = props;
-  const fast = detailFor(1, props.nodes.length).fast;
-  const detail = useStore((s) => detailFor(s.transform[2], props.nodes.length).detail);
+  const counted = props.detailCount ?? props.nodes.length;
+  const overview = !!props.overview;
+  const fast = overview || detailFor(1, counted).fast;
+  // In the overview the level follows the zoom (box, then block); over FAST_OVER it stays the name box, as before.
+  const detail = useStore((s) => detailFor(s.transform[2], overview && !detailFor(1, counted).fast ? 0 : counted).detail);
   const detailValue = useMemo(() => ({ detail, fast }), [detail, fast]);
   const connectable = !readOnly && !fast && !!onConnectPorts;
-  const { zoomIn, zoomOut, zoomTo, fitBounds, screenToFlowPosition, setCenter, getZoom, getInternalNode, getViewport } = useReactFlow();
+  const { zoomIn, zoomOut, zoomTo, fitBounds, screenToFlowPosition, setCenter, getZoom, getInternalNode, getViewport, setViewport } = useReactFlow();
   const fitRef = useRef<() => boolean>(() => false);
   const viewWidth = useStore((s) => s.width);
   const viewHeight = useStore((s) => s.height);
@@ -392,26 +491,55 @@ function Flow(props: DiagramCanvasProps) {
   );
   // New nodes keep what is selected: an edit made on a card must not drop its outline. With `selection`, that
   // list is the selected set, so a node selected before it is drawn shows its ring once it arrives.
-  useEffect(
-    () =>
-      setNodes((prev) => {
+  // A new origin moves the view by the same amount in this same update (Decision 2): what stays on the board stays
+  // on screen, and nothing paints half moved.
+  const originX = props.origin?.x ?? 0;
+  const originY = props.origin?.y ?? 0;
+  // The origin the view was placed for: the shift below moves it from there, and a fit (ViewControls, whose effects
+  // run before these) places it for the origin it fitted.
+  const origin = useRef(props.origin ?? NO_ORIGIN);
+  const drawnOrigin = useMemo(() => ({ x: originX, y: originY }), [originX, originY]);
+  /** The props node each canvas node was last made from, by id: a node made from the same object again is kept. */
+  const madeFrom = useRef(new Map<string, Node>());
+  useEffect(() => {
+    const was = origin.current;
+    if (was.x !== originX || was.y !== originY) {
+      origin.current = { x: originX, y: originY };
+      if (store.getState().panZoom) {
+        const { x, y, zoom } = getViewport();
+        void setViewport({ x: x + (originX - was.x) * zoom, y: y + (originY - was.y) * zoom, zoom });
+      }
+    }
+    setNodes((prev) => {
         const outside = selectionRef.current;
         const picked = new Set(outside ?? prev.filter((p) => p.selected).map((p) => p.id));
         // A node that draws the same keeps its measured size: React Flow draws every node it has not measured,
         // so dropping the sizes on each change drew all 2,000 nodes of a large diagram for a frame instead of the
         // visible ones. A node whose content changed is measured again, so its ports are found where they are now.
         const before = new Map(prev.map((p) => [p.id, p]));
+        const resizing = liveResizes(store.getState().domNode);
+        const from = madeFrom.current;
+        const made = new Map<string, Node>();
+        madeFrom.current = made;
         return props.nodes.map((n) => {
           const p = before.get(n.id);
+          const selected = picked.has(n.id) || undefined;
+          // A node made from this very object last time, still where it put it, as selected and not being resized, is
+          // that node (its measured size kept): React Flow skips it (Task 18b: a board's switch hands over 1,000
+          // unchanged sketches and 49 unchanged frames).
+          const live = resizing.get(n.id);
+          if (p && !live && from.get(n.id) === n && p.position === n.position && p.selected === selected) {
+            made.set(n.id, n);
+            return p;
+          }
           const measured = n.measured ?? (p && drawsTheSame(p, n) ? p.measured : undefined);
           // A node being resized keeps its live box until the drag ends.
-          const live = liveResizes(store.getState().domNode).get(n.id);
           const box = live ? { position: { x: live.x, y: live.y }, width: live.w, height: live.h } : {};
-          return { ...n, ...(measured ? { measured } : {}), ...box, selected: picked.has(n.id) || undefined };
+          made.set(n.id, n);
+          return { ...n, ...(measured ? { measured } : {}), ...box, selected };
         });
-      }),
-    [props.nodes, setNodes, store],
-  );
+      });
+  }, [props.nodes, originX, originY, setNodes, store, getViewport, setViewport]);
 
   // Brings `reveal` into view once React Flow has the node; a node already wholly on screen leaves the view as it is.
   const reveal = props.reveal ?? null;
@@ -432,7 +560,7 @@ function Flow(props: DiagramCanvasProps) {
     const left = at.x * zoom + x;
     const top = at.y * zoom + y;
     if (left >= 0 && top >= 0 && left + w * zoom <= viewWidth && top + h * zoom <= viewHeight) return;
-    void setCenter(at.x + w / 2, at.y + h / 2, { zoom, duration: motionMs("fit") });
+    void setCenter(at.x + w / 2, at.y + h / 2, { zoom, ...glideOptions() });
   }, [reveal, nodes, viewWidth, viewHeight, getInternalNode, getViewport, setCenter]);
 
   // A glide: each frame replaces only the gliding nodes; at its end they are drawn from the props again.
@@ -506,16 +634,67 @@ function Flow(props: DiagramCanvasProps) {
   // ----- moving cards: smart guides, Alt and Shift, Esc (erd-ux-research 5.5; F7, F26)
   const guideStore = useMemo(() => createGuideStore(), []);
   /** The drag under way: where its cards started, the guides it can meet, and whether Esc stopped it. */
-  const moving = useRef<{ start: Map<string, { x: number; y: number }>; index: GuideIndex; zoom: number; cancelled: boolean; off(): void } | null>(null);
+  const moving = useRef<{
+    start: Map<string, { x: number; y: number }>;
+    /** Each dragged node's parent's place on the canvas: a child's position is its parent's (a board sketch's, the layer's at -origin). */
+    offset: Map<string, { x: number; y: number }>;
+    index: GuideIndex;
+    zoom: number;
+    cancelled: boolean;
+    off(): void;
+  } | null>(null);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const sizeOf = (n: Node) => ({ w: n.measured?.width ?? n.width ?? n.initialWidth ?? 0, h: n.measured?.height ?? n.height ?? n.initialHeight ?? 0 });
   const putBack = (start: Map<string, { x: number; y: number }>) =>
     setNodes((prev) => prev.map((n) => (start.has(n.id) ? { ...n, position: start.get(n.id)! } : n)));
 
+  // ----- a board frame dragged by its title tab: no guides, no onMove; Esc puts it back.
+  const frameDrag = useRef<{ id: string; start: { x: number; y: number }; cancelled: boolean; off(): void } | null>(null);
+  const onFrameDragRef = useRef(props.onFrameDrag);
+  onFrameDragRef.current = props.onFrameDrag;
+  const startFrameDrag = (frame: Node) => {
+    frameDrag.current?.off();
+    const start = { x: frame.position.x, y: frame.position.y };
+    const onKey = (ev: globalThis.KeyboardEvent) => {
+      const f = frameDrag.current;
+      if (ev.key !== "Escape" || !f || f.cancelled) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      f.cancelled = true;
+      putBack(new Map([[f.id, f.start]]));
+      onFrameDragRef.current?.(f.id, null, true);
+      const up = new MouseEvent("mouseup", { bubbles: true, cancelable: true });
+      Object.defineProperty(up, "view", { get: () => window });
+      window.dispatchEvent(up);
+    };
+    window.addEventListener("keydown", onKey, true);
+    frameDrag.current = { id: frame.id, start, cancelled: false, off: () => window.removeEventListener("keydown", onKey, true) };
+  };
+  useEffect(() => () => frameDrag.current?.off(), []);
+
   const onDragStart = (_e: unknown, _node: Node, dragged: Node[]) => {
+    const frame = dragged.find((n) => isFrameNode(n.id));
+    if (frame) {
+      startFrameDrag(frame);
+      return;
+    }
     moving.current?.off();
     const start = new Map(dragged.map((n) => [n.id, { x: n.position.x, y: n.position.y }] as const));
+    // Guides and snaps are on the canvas: a child's place is its parent's plus its own (a board's frame shapes, its
+    // sketches under the layer at -origin), so every box is taken there.
+    const byId = new Map<string, Node>();
+    for (const n of nodesRef.current) byId.set(n.id, n);
+    const parentAt = (n: Node): { x: number; y: number } => {
+      let x = 0;
+      let y = 0;
+      for (let p = n.parentId ? byId.get(n.parentId) : undefined, hops = 0; p && hops < 8; p = p.parentId ? byId.get(p.parentId) : undefined, hops++) {
+        x += p.position.x;
+        y += p.position.y;
+      }
+      return { x, y };
+    };
+    const offset = new Map(dragged.map((n) => [n.id, parentAt(n)] as const));
     // The shapes on screen (and a screen around it) that are not moving, once per drag: each frame then only searches.
     const { x: vx, y: vy, zoom } = getViewport();
     const w = viewWidth / zoom;
@@ -526,8 +705,11 @@ function Flow(props: DiagramCanvasProps) {
     for (const n of nodesRef.current) {
       if (start.has(n.id) || n.selectable === false || n.hidden) continue;
       const s = sizeOf(n);
-      if (n.position.x + s.w < x0 || n.position.y + s.h < y0 || n.position.x > x0 + 3 * w || n.position.y > y0 + 3 * h) continue;
-      boxes.push({ x: n.position.x, y: n.position.y, ...s });
+      const o = n.parentId ? parentAt(n) : { x: 0, y: 0 };
+      const px = n.position.x + o.x;
+      const py = n.position.y + o.y;
+      if (px + s.w < x0 || py + s.h < y0 || px > x0 + 3 * w || py > y0 + 3 * h) continue;
+      boxes.push({ x: px, y: py, ...s });
     }
     const onKey = (ev: globalThis.KeyboardEvent) => {
       const m = moving.current;
@@ -558,6 +740,7 @@ function Flow(props: DiagramCanvasProps) {
     window.addEventListener("touchend", onUp);
     const drag = {
       start,
+      offset,
       index: new GuideIndex(boxes),
       zoom: zoom || 1,
       cancelled: false,
@@ -588,10 +771,11 @@ function Flow(props: DiagramCanvasProps) {
         const s0 = m.start.get(n.id);
         if (!s0) continue;
         const s = sizeOf(n);
-        x0 = Math.min(x0, s0.x + dx);
-        y0 = Math.min(y0, s0.y + dy);
-        x1 = Math.max(x1, s0.x + dx + s.w);
-        y1 = Math.max(y1, s0.y + dy + s.h);
+        const o = m.offset.get(n.id) ?? { x: 0, y: 0 };
+        x0 = Math.min(x0, o.x + s0.x + dx);
+        y0 = Math.min(y0, o.y + s0.y + dy);
+        x1 = Math.max(x1, o.x + s0.x + dx + s.w);
+        y1 = Math.max(y1, o.y + s0.y + dy + s.h);
       }
       const snap = m.index.snap({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, GUIDE_REACH_PX / m.zoom, { x: axis !== "y", y: axis !== "x" });
       dx += snap.dx;
@@ -608,6 +792,12 @@ function Flow(props: DiagramCanvasProps) {
   };
 
   const onNodeDrag = (e: { altKey: boolean; shiftKey: boolean }, _node: Node, dragged: Node[]) => {
+    const f = frameDrag.current;
+    if (f) {
+      const frame = dragged.find((n) => n.id === f.id);
+      if (frame && !f.cancelled) onFrameDragRef.current?.(f.id, { x: frame.position.x, y: frame.position.y }, false);
+      return;
+    }
     const at = placeDragged(e, dragged);
     if (!at) return;
     setNodes((prev) => prev.map((n) => (at.has(n.id) ? { ...n, position: at.get(n.id)! } : n)));
@@ -615,6 +805,14 @@ function Flow(props: DiagramCanvasProps) {
   };
 
   const onDragStop = (e: { altKey: boolean; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }, _node: Node, dragged: Node[]) => {
+    const f = frameDrag.current;
+    if (f) {
+      frameDrag.current = null;
+      f.off();
+      const frame = dragged.find((n) => n.id === f.id);
+      if (!f.cancelled && frame) onFrameDragRef.current?.(f.id, { x: Math.round(frame.position.x), y: Math.round(frame.position.y) }, true);
+      return;
+    }
     const m = moving.current;
     if (!m) return;
     const placed = m.cancelled ? null : placeDragged(e, dragged);
@@ -635,6 +833,28 @@ function Flow(props: DiagramCanvasProps) {
     if (onMove) for (const [id, p] of at) onMove(id, p.x, p.y, copy);
   };
   useEffect(() => () => moving.current?.off(), []);
+
+  // B3 live fix: a drag from a port selects no text. WebKit starts a text selection from a press even inside a
+  // `user-select: none` card, and asks again (`selectstart`) on what the drag passes over; carried over another frame's
+  // line layer it painted the ::selection wash over the board, which stayed after the drop. React Flow does not stop
+  // the press's default (that would also keep focus where it was), so every `selectstart` is refused until the button
+  // is up.
+  const portPress = useRef<(() => void) | null>(null);
+  const onPortPress = (e: { button: number; target: EventTarget }) => {
+    if (e.button !== 0 || portPress.current || !(e.target instanceof Element) || !e.target.closest(".react-flow__handle")) return;
+    const refuse = (ev: Event) => ev.preventDefault();
+    const end = () => {
+      document.removeEventListener("selectstart", refuse, true);
+      window.removeEventListener("mouseup", end, true);
+      window.removeEventListener("blur", end);
+      portPress.current = null;
+    };
+    document.addEventListener("selectstart", refuse, true);
+    window.addEventListener("mouseup", end, true);
+    window.addEventListener("blur", end);
+    portPress.current = end;
+  };
+  useEffect(() => () => portPress.current?.(), []);
 
   const cancelled = useRef(false);
   const onConnectStart = useCallback(() => {
@@ -674,7 +894,7 @@ function Flow(props: DiagramCanvasProps) {
       y1 = Math.max(y1, n.position.y + (n.initialHeight ?? n.measured?.height ?? 0));
     }
     if (x0 === Infinity) return;
-    void fitBounds({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, { padding: 0.1, duration: motionMs("fit") });
+    void fitBounds({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, { padding: 0.1, ...glideOptions() });
   };
 
   // ----- the arrow keys (F7, I6): 1 px, Shift 16 px; a held key's repeats are one move, reported when it goes up.
@@ -714,16 +934,16 @@ function Flow(props: DiagramCanvasProps) {
     } else if (shiftOnly && (e.code === "Digit0" || e.key === ")" || e.key === "0")) {
       // Shift+0: 100 percent, around the middle of the view (Figma).
       e.preventDefault();
-      void zoomTo(1, { duration: motionMs("fit") });
+      void zoomTo(1, glideOptions());
     } else if (shiftOnly && (e.code === "Digit2" || e.key === "@" || e.key === "2")) {
       e.preventDefault();
       zoomToSelection();
     } else if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=" || e.code === "NumpadAdd")) {
       e.preventDefault();
-      void zoomIn({ duration: motionMs("fit") });
+      void zoomIn(glideOptions());
     } else if ((e.ctrlKey || e.metaKey) && (e.key === "-" || e.code === "NumpadSubtract")) {
       e.preventDefault();
-      void zoomOut({ duration: motionMs("fit") });
+      void zoomOut(glideOptions());
     }
   };
 
@@ -742,8 +962,11 @@ function Flow(props: DiagramCanvasProps) {
   // The DOM dragover of a drop from outside (the tree), not the `onDragOver` prop of a column drag.
   // Item 24: while something from outside is over the canvas, the canvas rings so the drop is expected.
   const [dropping, setDropping] = useState(false);
+  const dropType = props.dropType;
+  const takes = (e: DragEvent) => dropType === undefined || Array.from(e.dataTransfer.types).includes(dropType);
   const onDragOverPane = onDropObject
     ? (e: DragEvent) => {
+        if (!takes(e)) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
         if (!dropping) setDropping(true);
@@ -756,8 +979,9 @@ function Flow(props: DiagramCanvasProps) {
     : undefined;
   const onDropPane = onDropObject
     ? (e: DragEvent) => {
-        e.preventDefault();
         setDropping(false);
+        if (!takes(e)) return;
+        e.preventDefault();
         onDropObject(e.dataTransfer, screenToFlowPosition({ x: e.clientX, y: e.clientY }));
       }
     : undefined;
@@ -777,6 +1001,7 @@ function Flow(props: DiagramCanvasProps) {
         else nudge(e);
       }}
       onKeyDown={onKeyDown}
+      onMouseDownCapture={onPortPress}
       onKeyUp={(e) => {
         if (e.key in ARROWS) endNudge();
       }}
@@ -816,7 +1041,8 @@ function Flow(props: DiagramCanvasProps) {
             onEdgesChange={linesControlled ? onEdgesChange : undefined}
             // Shift or Ctrl + click adds a card or line to the selection (draw.io, Figma, Miro); a drag on empty canvas still draws a box.
             multiSelectionKeyCode={MULTI_SELECT_KEYS}
-            nodesDraggable={!readOnly}
+            // The Hand moves the view, never a shape: a press on a shape pans too.
+            nodesDraggable={!readOnly && !props.hand}
             nodesConnectable={connectable}
             onlyRenderVisibleElements
             connectionLineComponent={connectionLineComponent}
@@ -827,23 +1053,27 @@ function Flow(props: DiagramCanvasProps) {
             onNodeContextMenu={onContextMenu && ((e, node) => menuAt(e, node.id))}
             onEdgeContextMenu={onContextMenu && ((e, edge) => menuAt(e, null, edge.id))}
             onSelectionContextMenu={onContextMenu && ((e) => menuAt(e, null, null, true))}
-            {...(boxSelect ? { selectionOnDrag: true, selectionMode: SelectionMode.Partial, panOnDrag: [1], panOnScroll: true } : {})}
+            {...(boxSelect ? { selectionOnDrag: !props.hand, selectionMode: SelectionMode.Partial, panOnDrag: props.hand ? [0, 1] : [1], panOnScroll: true } : props.hand ? { panOnDrag: [0, 1] } : {})}
+            {...(props.panKey !== undefined ? { panActivationKeyCode: props.panKey } : {})}
             minZoom={MIN_ZOOM}
             maxZoom={MAX_ZOOM}
+            zIndexMode={props.zIndexMode}
             proOptions={{ hideAttribution: true }}
           >
-            <ViewControls nodes={props.nodes} fitRef={fitRef} />
+            <ViewControls nodes={props.nodes} fitRef={fitRef} origin={drawnOrigin} placedFor={origin} onOverview={props.onOverview} />
             <ZoomVar />
             <SnapGrid />
             <GuideLayer store={guideStore} />
             <ColumnDrag onDragOver={onDragOver} onDragCancel={onDragCancel} cancelled={cancelled} />
-            <MiniMap
-              pannable
-              zoomable
-              ariaLabel="Overview"
-              style={{ width: 200, height: 140 }}
-              onClick={minimapJump ? (_, at) => void setCenter(at.x, at.y, { zoom: getZoom(), duration: motionMs("fit") }) : undefined}
-            />
+            {props.showMiniMap !== false && (
+              <MiniMap
+                pannable
+                zoomable
+                ariaLabel="Overview"
+                style={{ width: 200, height: 140 }}
+                onClick={minimapJump ? (_, at) => void setCenter(at.x, at.y, { zoom: getZoom(), ...glideOptions() }) : undefined}
+              />
+            )}
             {overlay}
           </ReactFlow>
         </ConnectableContext.Provider>

@@ -6,12 +6,16 @@ import { BaseEdge, type Edge, type EdgeProps, type EdgeTypes, EdgeLabelRenderer,
 import { createContext, memo, type PointerEvent as ReactPointerEvent, useContext, useEffect, useRef, useState } from "react";
 import { ARROW_MARKER, colourArrow, colourEnd, DIAMOND_MARKER, MANY_MARKER, ONE_MARKER, OPEN_ARROW_MARKER, TRIANGLE_MARKER } from "../diagram/edges";
 import type { Positions } from "../diagram/layout";
+import { EASE_IN, motionMs } from "../diagram/motion";
 import { axisKey } from "./layout";
 import { type Rect, routeOrthogonal, routeRows } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
 import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, type FlowNodeKind, isStateEnd, isStateMarker, isStateStart, shownName } from "../lang/flow/model";
 import { colourClass, colourStroke, colourVars, drawnColour } from "./palette";
-import { erColumnRow, erRowY, fixedLayout, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { ER_CARD_CHROME, ER_MAX_ROWS, erColumnRow, erRowY, fixedLayout, KIND_ROW, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { inStaticFrame } from "./kindEdit";
+import { isStaticId } from "./board/staticIds";
+import { useErScroll } from "./erScroll";
 import { KindNode, type KindNodeData, MindEdge, SeqEdge, SeqFrame, SeqFrameTab, TimeAxis, TimeSection } from "./kindNodes";
 import DfdNode, { type DfdNodeKind } from "./nodes/DfdNode";
 import FlowchartNode, { type FlowchartNodeKind } from "./nodes/FlowchartNode";
@@ -20,6 +24,8 @@ import { liveResizes, ResizeZones } from "../diagram/resize";
 import { useIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
 import type { NodeLook, NodeState, ShapeColour } from "./nodes/parts";
+import type { ErNotation } from "./board/boardLayout";
+import { labelScale, TEXT_SCALED } from "./textScale";
 import ServiceNode from "./nodes/ServiceNode";
 
 /** What a drawn node carries on the canvas. */
@@ -43,6 +49,8 @@ export type FlowNodeData = {
   /** Step 11: the words it shows (its `label:`) when it has one, and its palette colour. */
   shows?: string;
   color?: ShapeColour;
+  /** The frame's text size as a label scale (Decision 22); unset at 1. */
+  textScale?: number;
 };
 
 /** Item 21: what a resize tells the tab (the diagram tab provides it; previews leave it out, so nothing resizes). */
@@ -74,6 +82,8 @@ export function nodeLimitsFor(kind: DrawnKind, from: { w: number; h: number }, n
 export function nodeLimits(kind: DrawnKind): typeof NODE_LIMITS {
   if (kind === "stateStart" || kind === "stateEnd") return { ...NODE_LIMITS, minW: 16, minH: 16 };
   if (kind === "fork") return { ...NODE_LIMITS, minH: 6 };
+  // B3 decision 7 (R8): an ER card grows to 20 rows at most; past them its rows scroll.
+  if (kind === "erTable" || kind === "erWeak") return { ...NODE_LIMITS, maxH: ER_CARD_CHROME + ER_MAX_ROWS * KIND_ROW };
   return NODE_LIMITS;
 }
 
@@ -150,6 +160,8 @@ export type FlowEdgeData = {
   leaving?: boolean;
   /** Step 6: the axis a + drew this line on; it keeps that side. */
   axis?: "v" | "h";
+  /** The frame's text size as a label scale; unset at 1. */
+  textScale?: number;
 };
 
 /** The family a kind's node type draws with; `kind` is the step 12 shapes. */
@@ -202,7 +214,13 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
 const textW = (s: string) => s.length * 7;
 
 /** The size a node is laid out and fitted at, by kind and look (flow-canvas.css draws them). */
-export function nodeSize(kind: DrawnKind, look: NodeLook, name: string, id?: string, node?: Partial<FlowNode>): { w: number; h: number } {
+export function nodeSize(kind: DrawnKind, look: NodeLook, name: string, id?: string, node?: Partial<FlowNode>, scale = 1): { w: number; h: number } {
+  const s = baseSize(kind, look, name, id, node);
+  // A frame's text size (Small, Large) scales its labels and the boxes that hold them.
+  return scale === 1 ? s : { w: Math.round(s.w * scale), h: Math.round(s.h * scale) };
+}
+
+function baseSize(kind: DrawnKind, look: NodeLook, name: string, id?: string, node?: Partial<FlowNode>): { w: number; h: number } {
   const shaped = kindSize(kind, { name, rows: node?.rows, text: node?.text, depth: node?.depth });
   if (shaped) return shaped;
   switch (kind) {
@@ -317,9 +335,10 @@ export const FlowGroupSelContext = createContext<string | null>(null);
  * takes presses (step 9, F9: a click selects the group, a drag moves it, a double-click renames it); the rest of the
  * area stays canvas, as Miro and Figma frames do.
  */
-const FlowArea = memo(function FlowArea({ data }: NodeProps) {
+const FlowArea = memo(function FlowArea({ id, data }: NodeProps) {
   const d = data as FlowAreaData;
-  const on = useContext(FlowGroupSelContext) === d.name;
+  // A static frame's group of the same name is not the live frame's selected group.
+  const on = useContext(FlowGroupSelContext) === d.name && !inStaticFrame(id);
   return (
     <div
       className={`flow-area${d.depth > 0 ? " is-inner" : ""}${on ? " is-selected" : ""}${d.color ? ` ${colourClass(d.color)}` : ""}`}
@@ -402,9 +421,9 @@ function LineEnds({ id, from, to }: { id: string; from: { x: number; y: number }
   );
 }
 
-/** A relationship between columns, at each end's row (ER build C). */
-export function rowRoute(a: Rect, b: Rect, fromRow: number, toRow: number, self: boolean) {
-  return routeRows(a, erRowY(a.y, a.h, fromRow), b, erRowY(b.y, b.h, toRow), self);
+/** A relationship between columns, at each end's row as each card's rows are scrolled (ER build C, fix round 1). */
+export function rowRoute(a: Rect, b: Rect, fromRow: number, toRow: number, self: boolean, scrollA = 0, scrollB = 0) {
+  return routeRows(a, erRowY(a.y, a.h, fromRow, scrollA), b, erRowY(b.y, b.h, toRow, scrollB), self);
 }
 
 /** A flow line: square-cornered with 8 px corners from the side facing the other node, its label on a chip. */
@@ -412,10 +431,15 @@ const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
   const a = useInternalNode(p.source);
   const b = useInternalNode(p.target);
   const data = p.data as FlowEdgeData | undefined;
+  // A line at its rows follows each card's scrolled rows (fix round 1); a static frame's line (B3 decision 5: static
+  // cards do not scroll) and any other line listen to nothing.
+  const rowed = data?.fromRow !== undefined && !isStaticId(p.id);
+  const sa = useErScroll(rowed ? p.source : null);
+  const sb = useErScroll(rowed ? p.target : null);
   if (!a || !b) return null;
   const route =
     data?.fromRow !== undefined
-      ? rowRoute(rectOf(a), rectOf(b), data.fromRow, data.toRow ?? -1, p.source === p.target)
+      ? rowRoute(rectOf(a), rectOf(b), data.fromRow, data.toRow ?? -1, p.source === p.target, sa, sb)
       : routeOrthogonal(rectOf(a), rectOf(b), data?.axis ? { axis: data.axis } : {});
   const label = data?.label;
   return (
@@ -425,8 +449,8 @@ const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
       {label && (
         <EdgeLabelRenderer>
           <div
-            className={["flow-chip nodrag nopan", data?.leaving && "is-leaving"].filter(Boolean).join(" ")}
-            style={{ transform: `translate(-50%, -50%) translate(${route.mid.x}px, ${route.mid.y}px)` }}
+            className={["flow-chip nodrag nopan", data?.leaving && "is-leaving"].filter(Boolean).join(" ") + labelScale(data?.textScale).cls}
+            style={{ transform: `translate(-50%, -50%) translate(${route.mid.x}px, ${route.mid.y}px)`, ...labelScale(data?.textScale).style }}
           >
             {label}
           </div>
@@ -576,15 +600,17 @@ function dashOf(arrow: FlowArrow, diagram: DiagramKind): string {
 }
 
 /** The marker at each end of a line, by its arrow (step 12 adds the class marks); a coloured head or ER end keeps its colour (step 11). */
-function markers(arrow: FlowArrow, diagram: DiagramKind, colour?: ShapeColour): { start?: string; end?: string } {
-  const m = plainMarkers(arrow, diagram);
+function markers(arrow: FlowArrow, diagram: DiagramKind, colour?: ShapeColour, notation: ErNotation = "crow"): { start?: string; end?: string } {
+  const m = plainMarkers(arrow, diagram, notation);
   if (!colour) return m;
   // A crow's-foot end takes the line's colour too.
   const own = (id?: string) => (id === ARROW_MARKER ? colourArrow(colour) : id === MANY_MARKER || id === ONE_MARKER ? colourEnd(id, colour) : id);
   return { ...(m.start ? { start: own(m.start) } : {}), ...(m.end ? { end: own(m.end) } : {}) };
 }
 
-function plainMarkers(arrow: FlowArrow, diagram: DiagramKind): { start?: string; end?: string } {
+function plainMarkers(arrow: FlowArrow, diagram: DiagramKind, notation: ErNotation): { start?: string; end?: string } {
+  // An ER frame drawn in Arrows (Decision 22): a plain line with a head at its second end, whatever its cardinality.
+  if (diagram === "er" && notation === "arrow") return { end: ARROW_MARKER };
   // An ER relationship's ends are crow's feet: a bar at a one end, a crow's foot at a many end.
   if (diagram === "er") {
     const ends = ER_ENDS[arrow];
@@ -618,8 +644,9 @@ const ER_ENDS: Partial<Record<FlowArrow, readonly [string, string]>> = {
 };
 
 /** A node's canvas data: its words, rows and dates, whatever its family draws. */
-function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook): FlowNodeData & KindNodeData {
+function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook, textScale = 1): FlowNodeData & KindNodeData {
   const data: FlowNodeData & KindNodeData = { name: n.name, kind, look };
+  if (textScale !== 1) data.textScale = textScale;
   if (n.attrs.label !== undefined && n.kind !== "note") data.shows = n.attrs.label;
   const colour = n.kind === "note" ? undefined : drawnColour(n.attrs.color);
   if (colour) data.color = colour;
@@ -640,7 +667,8 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
   // Step 7: a new topic's ghost takes its place in the map's layout before its name is kept (board DiagramMindMap).
   const ghost = given.kind === "mindmap" ? opts.ghost : undefined;
   const doc = ghost ? withGhost(given, ghost) : given;
-  const size = (n: FlowNode) => (n.name === GHOST_ID && ghost ? ghost.size : nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n));
+  const scale = opts.textScale ?? 1;
+  const size = (n: FlowNode) => (n.name === GHOST_ID && ghost ? ghost.size : nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n, scale));
   const lay = fixedLayout(doc, size, opts.folded ? { folded: opts.folded } : {});
   if (!lay) return null;
   const acts = new Map<string, { top: number; height: number }[]>();
@@ -662,11 +690,11 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
       continue;
     }
     const kind = drawnKind(n.kind, doc.kind, n.name);
-    const data = nodeData(n, kind, look);
+    const data = nodeData(n, kind, look, scale);
     if (acts.has(n.name)) data.activations = acts.get(n.name);
     const state = opts.states?.get(n.name);
     if (state) data.state = state;
-    nodes.push({ id: n.name, type: "kind", position: p, initialWidth: s.w, initialHeight: s.h, style: { width: s.w, height: s.h }, data, draggable: false });
+    nodes.push({ id: n.name, type: "kind", position: p, initialWidth: s.w, initialHeight: s.h, style: { width: s.w, height: s.h, ...scaledStyle(scale) }, data, draggable: false, ...scaledClass(scale) });
   }
   const behind = (id: string, type: string, box: { x: number; y: number; w: number; h: number }, data: Record<string, unknown>, z: number): Node => ({
     id,
@@ -709,7 +737,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
         type: "seq",
         className: (reply ? "flow-line flow-line-dashed" : "flow-line") + cls,
         markerEnd: reply ? OPEN_ARROW_MARKER : ARROW_MARKER,
-        data: { row: i, y: lay.rows?.[i], label: l.label, reply },
+        data: { row: i, y: lay.rows?.[i], label: l.label, reply, ...(scale !== 1 && l.label ? { textScale: scale } : {}) },
       });
       return;
     }
@@ -727,7 +755,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
       className: "flow-line flow-line-dashed" + cls + (colour ? ` ${colourClass(colour)}` : ""),
       markerEnd: m.end,
       markerStart: m.start,
-      data: l.label ? { label: l.label } : {},
+      data: l.label ? { label: l.label, ...(scale !== 1 ? { textScale: scale } : {}) } : {},
       ...(colour ? { style: lineStyle(colour) } : {}),
     });
   });
@@ -751,6 +779,10 @@ export interface GraphOptions {
    *  after its sibling `after` or last, at `size`. */
   folded?: ReadonlySet<string>;
   ghost?: { parent: string; after?: string; size: { w: number; h: number } };
+  /** The frame's text size as a label scale (`TEXT_SCALE`): label font size and the node sizes that hold them. */
+  textScale?: number;
+  /** An ER frame's line ends (Decision 22): crow's feet, or a plain line with a head at its second end; "crow" when absent. */
+  notation?: ErNotation;
 }
 
 /** The id of a new topic's ghost: a NUL in it, so it never equals a topic's name. */
@@ -772,6 +804,9 @@ function withGhost(doc: FlowDoc, ghost: NonNullable<GraphOptions["ghost"]>): Flo
   return { ...doc, nodes: [...doc.nodes, node], links };
 }
 
+const scaledStyle = (scale: number): Record<string, number> => (scale !== 1 ? { "--text-scale": scale } : {});
+const scaledClass = (scale: number) => (scale !== 1 ? { className: TEXT_SCALED } : {});
+
 /** A coloured line's stroke, inline so the selected state keeps it (step 11). */
 const lineStyle = (c: ShapeColour) => ({ stroke: colourStroke(c) });
 
@@ -786,27 +821,34 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
   const fixed = fixedGraph(doc, look, opts);
   if (fixed) return fixed;
   const placed = new Map<string, Box>();
+  const scale = opts.textScale ?? 1;
   const nodes: Node[] = doc.nodes.map((n: FlowNode) => {
     const kind = drawnKind(n.kind, doc.kind, n.name);
-    const own = opts.sizes && Object.prototype.hasOwnProperty.call(opts.sizes, n.name) ? opts.sizes[n.name] : null;
+    const kept = opts.sizes && Object.prototype.hasOwnProperty.call(opts.sizes, n.name) ? opts.sizes[n.name] : null;
+    // An ER card is never drawn past 20 rows, whatever its layout says (decision 7: past them its rows scroll).
+    const erMaxH = kind === "erTable" || kind === "erWeak" ? nodeLimits(kind).maxH : Infinity;
+    const own = kept && kept.h > erMaxH ? { ...kept, h: erMaxH } : kept;
     const extra = opts.grow && Object.prototype.hasOwnProperty.call(opts.grow, n.name) ? opts.grow[n.name] : 0;
-    const s = own ?? nodeSize(kind, look, shownName(n), n.attrs.id, extra > 0 ? { ...n, rows: [...(n.rows ?? []), ...Array<string>(extra).fill("")] } : n);
+    const s = own ?? nodeSize(kind, look, shownName(n), n.attrs.id, extra > 0 ? { ...n, rows: [...(n.rows ?? []), ...Array<string>(extra).fill("")] } : n, scale);
     // Own keys only: a node named constructor or __proto__ is a plain name.
     const p = Object.prototype.hasOwnProperty.call(positions, n.name) ? positions[n.name] : { x: 0, y: 0 };
     placed.set(n.name, { x: p.x, y: p.y, w: s.w, h: s.h });
-    const data = nodeData(n, kind, look);
+    const data = nodeData(n, kind, look, scale);
     const state = opts.states?.get(n.name);
     if (state) data.state = state;
     const family = familyOf(kind);
     if (own) data.sized = { w: own.w, h: own.h };
-    const natural = own ? nodeSize(kind, look, shownName(n), n.attrs.id, n) : s;
+    const natural = own ? nodeSize(kind, look, shownName(n), n.attrs.id, n, scale) : s;
     data.naturalW = natural.w;
     data.naturalH = natural.h;
     // A step 12 shape fills the box its rows and words size; one resized by hand draws at its own size instead.
-    const style = family === "kind" && !own ? { style: { width: s.w, height: s.h } } : {};
-    // A card growing by a new column row eases to its new height (A5); only while the row is open.
-    const growing = extra > 0 ? { className: "is-growing" } : {};
-    return { id: n.name, type: family, position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, ...style, ...growing, data };
+    const box = family === "kind" && !own ? { width: s.w, height: s.h } : null;
+    // A card growing by a new row (a class's member, an ER column) eases to its new height (A5); only while the row is
+    // open. `settle` and EASE_IN are the values of --motion-base and --ease-enter, which the CSS rule this replaces
+    // used, so a class card keeps its timing; the duration is the motion table's, so reduced motion makes it 0 (D8).
+    const grows = extra > 0 ? { transition: `height ${motionMs("settle")}ms ${EASE_IN}` } : null;
+    const style = box || grows || scale !== 1 ? { style: { ...box, ...grows, ...scaledStyle(scale) } } : {};
+    return { id: n.name, type: family, position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, ...style, ...(scale !== 1 ? { className: TEXT_SCALED } : {}), data };
   });
   // A line to or from a group (a state composite, a Mermaid subgraph) ends on the group's area, as Mermaid and draw.io
   // draw lines to containers (diag-910 fix round 2, L1).
@@ -826,6 +868,7 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     if (source === null || target === null) return;
     const data: FlowEdgeData = {};
     if (l.label) data.label = l.label;
+    if (l.label && scale !== 1) data.textScale = scale;
     const axis = opts.axes?.[axisKey(l.from, l.to)];
     if (axis) data.axis = axis;
     if (l.fromColumn !== undefined || l.toColumn !== undefined) {
@@ -837,7 +880,7 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     // A dotted "assumes" line has no head (frame 6+.5): it is a permission, not data going one way.
     // Step 11: a coloured line keeps its colour and its arrowhead, selected too.
     const colour = drawnColour(l.color);
-    const m = markers(l.arrow, doc.kind, colour);
+    const m = markers(l.arrow, doc.kind, colour, opts.notation);
     edges.push({
       id: `edge:${i}`,
       source,
@@ -869,7 +912,7 @@ export function groupShapes(groups: readonly FlowGroup[], markers = false): Map<
  * The layout request for dagre: every node's size and the links between nodes. A line to or from a group ranks
  * against each shape in it, so the group sits after what points to it and before what it points to (fix round 2, L1).
  */
-export function layoutInput(doc: FlowDoc, look: NodeLook): { nodes: { id: string; w: number; h: number }[]; edges: { from: string; to: string }[]; parents?: Record<string, string> } {
+export function layoutInput(doc: FlowDoc, look: NodeLook, scale = 1): { nodes: { id: string; w: number; h: number }[]; edges: { from: string; to: string }[]; parents?: Record<string, string> } {
   const names = new Set(doc.nodes.map((n) => n.name));
   // Its own start and end too, so a group's whole block ranks after what points to it (fix round 3, L8).
   const groups = groupShapes(doc.groups, true);
@@ -886,7 +929,7 @@ export function layoutInput(doc: FlowDoc, look: NodeLook): { nodes: { id: string
   };
   for (const g of doc.groups) walk(g, null);
   return {
-    nodes: doc.nodes.map((n) => ({ id: n.name, ...nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n) })),
+    nodes: doc.nodes.map((n) => ({ id: n.name, ...nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n, scale) })),
     edges,
     ...(doc.groups.length ? { parents: { ...parents } } : {}),
   };

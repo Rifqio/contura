@@ -1,6 +1,7 @@
-import type { AnswerRecord, StepKind } from "../api/types";
+import type { AnswerRecord, DialectKind, StepKind } from "../api/types";
 import Icon from "../components/Icon";
 import { sentBytes, stepTime } from "./answerRecord";
+import { AnswerBody, ChecksBody } from "./LogBodies";
 
 export const STEP_LABEL: Record<StepKind, string> = {
   access: "Access",
@@ -83,10 +84,14 @@ interface Props {
   /** A diagram Ask (board 11.12): no database cells or line; the user's outcome closes the rows. */
   variant?: "diagram";
   onCopy?(text: string): void;
+  /** The whole answer, for the Answer row's body. */
+  answer?: string;
+  /** The Connection's dialect, for the SQL check row's highlighted statements. */
+  dialect?: DialectKind;
 }
 
 /** The Steps tab (board 11.3): the three cells, then one fixed-wording row per step with its rule and evidence. */
-export default function StepsView({ record, connection, database, open, onToggle, variant, onCopy }: Props) {
+export default function StepsView({ record, connection, database, open, onToggle, variant, onCopy, answer = "", dialect = "postgres" }: Props) {
   const diagram = variant === "diagram";
   const out = notSent(record);
   const reads = sampleReads(record);
@@ -175,6 +180,8 @@ export default function StepsView({ record, connection, database, open, onToggle
                       </pre>
                     </section>
                   )}
+                  {s.step === "answer" && answer && <AnswerBody text={answer} onCopy={onCopy} hoverText={!diagram} />}
+                  {s.step === "sqlCheck" && <ChecksBody blocks={record.sqlBlocks ?? []} dialect={dialect} />}
                   {thinking && (
                     <pre className="pthinking" aria-label="Thinking, as returned">
                       {thinking}

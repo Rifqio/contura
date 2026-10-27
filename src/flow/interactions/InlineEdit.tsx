@@ -24,6 +24,8 @@ interface Props {
   error?: string | null;
   /** Changes with each refusal, so the same reason again still brings focus back. */
   errorKey?: number;
+  /** A `<datalist>` id to suggest from. */
+  list?: string;
   /** A new item: Escape with its text untouched, or emptied, drops it (nothing written, no undo step). */
   fresh?: boolean;
   /** The name may hold a line break: Shift+Enter starts a new line (written `\n` in quotes, ADR 0019 P5). */
@@ -36,7 +38,7 @@ interface Props {
   onInput?(value: string): void;
 }
 
-export default function InlineEdit({ value, label, placeholder, className, style, wrapClassName, error, errorKey, fresh, multiline, oneLine, onCommit, onCancel, onInput }: Props) {
+export default function InlineEdit({ value, label, placeholder, className, style, wrapClassName, error, errorKey, list, fresh, multiline, oneLine, onCommit, onCancel, onInput }: Props) {
   const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   /** Left by a key: the blur that follows as the field goes is not a second commit. */
   const left = useRef(false);
@@ -140,7 +142,7 @@ export default function InlineEdit({ value, label, placeholder, className, style
   };
   return (
     <span className={wrapClassName ? `inline-edit-wrap ${wrapClassName}` : "inline-edit-wrap"} style={style}>
-      {multiline ? <textarea ref={ref} rows={rows} {...common} /> : <input ref={ref} {...common} />}
+      {multiline ? <textarea ref={ref} rows={rows} {...common} /> : <input ref={ref} list={list} {...common} />}
       {error && (
         <span className="inline-edit-error" role="alert">
           {error}

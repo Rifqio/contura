@@ -5,7 +5,7 @@
 // Plain text pastes as before.
 import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
-import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { LangClient } from "../lang/client";
 import { mockEditorDom } from "../test/editor";
@@ -127,7 +127,7 @@ test("plain text that is not Mermaid pastes as it does today", async () => {
   await waitFor(() => expect(s.doc()).toBe(`${SEQ}participant Bank\n`));
 });
 
-test("the canvas's Mermaid... opens the dialog for this diagram; Insert writes it in one undo step, the new shapes selected", async () => {
+test("the frame bar's Insert Mermaid... opens the dialog for this diagram; Insert writes it in one undo step, the new shapes selected", async () => {
   const FLOW = lines('diagram flow "Orders"', "Ship order", "Done [end]", "", "Ship order > Done");
   routeInvoke({ read_diagram: () => ({ text: FLOW, layout: null }), write_diagram: () => null, write_diagram_layout: () => null });
   const client = new LangClient(() => fakeWorker());
@@ -139,7 +139,9 @@ test("the canvas's Mermaid... opens the dialog for this diagram; Insert writes i
   );
   const view = () => EditorView.findFromDOM(utils.container.querySelector(".cm-editor") as HTMLElement)!;
   await waitFor(() => expect(utils.container.querySelector(".react-flow__node")).not.toBeNull(), { timeout: 4000 });
-  fireEvent.click(within(utils.container.querySelector(".flow-toolbar") as HTMLElement).getByRole("button", { name: "Mermaid..." }));
+  // The frame bar's More menu has it (Task 9, Decision 22).
+  fireEvent.click(within(await screen.findByRole("toolbar", { name: "Orders settings" })).getByRole("button", { name: "More" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Insert Mermaid..." }));
   expect(onMermaid).toHaveBeenCalledTimes(1);
   const target = onMermaid.mock.calls[0][0] as { kind: string; file: string; run(flow: string): Promise<string | null> };
   expect([target.kind, target.file]).toEqual(["flow", "orders"]);

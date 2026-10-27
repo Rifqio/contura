@@ -551,6 +551,7 @@ export default function InlineAsk({
             live={stream.running}
             connection={context.connection?.name ?? null}
             database={context.connection?.database ?? null}
+            dialect={context.connection?.dialect ?? "postgres"}
             providerName={record.sent ? PROVIDERS[record.sent.provider].name : providerName}
             onBack={() => setShowLog(false)}
           />

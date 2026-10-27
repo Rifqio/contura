@@ -3433,6 +3433,62 @@ async fn shared_thinking_is_a_model_row() {
 }
 
 #[tokio::test]
+async fn a_leading_think_block_is_shared_thinking() {
+    use contura_core::ai::provider::http::Http;
+    use contura_core::ai::provider::openai::OpenAi;
+    use mock_http::{MockReply, serve};
+
+    // GLM and similar models write their reasoning as a leading <think> block in `content`.
+    let sse = include_bytes!("fixtures/ai/openai_think_tag.sse");
+    let (url, server) = serve(vec![
+        MockReply::new(200, sse).header("content-type", "text/event-stream"),
+    ])
+    .await;
+    let provider = OpenAi {
+        base: url.clone(),
+        key: None,
+        kind: AiProviderKind::Custom,
+        secrets: Vec::new(),
+        http: Http::shared().unwrap(),
+    };
+    let mut settings = groq();
+    settings.base_url = url.to_string();
+    let cat = catalog(AiAccess::Schema);
+    let (events, result) =
+        stream_settings(&provider, &cat, &settings, &Secrets::default(), &ask("q")).await;
+    result.unwrap();
+    server.await.unwrap();
+
+    let reasoning = "The user is asking for a count.";
+    let chars = reasoning.chars().count();
+    let thinking = step(&events, StepKind::Thinking);
+    assert_eq!(thinking.value, format!("{chars} chars, by the model"));
+    assert!(thinking.by_model);
+    let line = log_lines(&events)
+        .into_iter()
+        .find(|l| l.source == "thinking")
+        .expect("thinking line");
+    assert_eq!(line.fields, vec![("chars".into(), chars.to_string())]);
+    let shown: String = events
+        .iter()
+        .filter_map(|e| match e {
+            AiEvent::Thinking { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, reasoning);
+    // The answer holds no tag and none of the reasoning.
+    let answer: String = events
+        .iter()
+        .filter_map(|e| match e {
+            AiEvent::Delta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answer, "SELECT count(*) FROM users;");
+}
+
+#[tokio::test]
 async fn provider_lines_arrive_live() {
     use contura_core::ai::provider::http::{Http, Limits};
     use contura_core::ai::provider::openai::OpenAi;

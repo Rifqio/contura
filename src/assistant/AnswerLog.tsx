@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AnswerRecord, StepKind } from "../api/types";
+import type { AnswerRecord, DialectKind, StepKind } from "../api/types";
 import Icon from "../components/Icon";
 import { logText } from "./answerRecord";
 import { secondsText } from "./answerStream";
@@ -39,6 +39,8 @@ interface Props {
   variant?: "diagram";
   /** The diagram's name, `<file>.flow`. */
   file?: string;
+  /** The Ask's dialect, for the checked statements' colours. */
+  dialect?: DialectKind;
 }
 
 const copy = (text: string) => void navigator.clipboard?.writeText(text).catch(() => {});
@@ -47,7 +49,7 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text).catch((
  * Show log (boards 11.3 and 11.6): the record of how one answer was made, in place of the thread. Three tabs over one
  * record: Log (opens first), Steps and Diagram.
  */
-export default function AnswerLog({ question, answer = "", record, live = false, connection = null, database = null, providerName, initialStep, onBack, variant, file }: Props) {
+export default function AnswerLog({ question, answer = "", record, live = false, connection = null, database = null, providerName, initialStep, onBack, variant, file, dialect = "postgres" }: Props) {
   const diagram = variant === "diagram";
   const first = initialStep ? record.steps.findIndex((s) => s.step === initialStep) : -1;
   const [tab, setTab] = useState<Tab>(initialStep || diagram ? "steps" : "log");
@@ -93,7 +95,12 @@ export default function AnswerLog({ question, answer = "", record, live = false,
             {record.sent?.exact != null ? <pre>{record.sent.exact}</pre> : <p className="alog-note">{NOT_KEPT}</p>}
           </section>
         ) : tab === "log" ? (
-          <LogView lines={record.log} onCopy={copy} hoverText={!diagram} />
+          <LogView
+            lines={record.log}
+            onCopy={copy}
+            hoverText={!diagram}
+            bodies={{ answer, thinking: record.thinking ?? null, sqlBlocks: record.sqlBlocks ?? [], dialect }}
+          />
         ) : tab === "steps" ? (
           <StepsView
             record={record}
@@ -103,6 +110,8 @@ export default function AnswerLog({ question, answer = "", record, live = false,
             onToggle={(s) => setOpenStep((o) => (o === s ? null : s))}
             variant={variant}
             onCopy={copy}
+            answer={answer}
+            dialect={dialect}
           />
         ) : (
           <DiagramView

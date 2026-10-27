@@ -2,7 +2,7 @@
 // tables or their columns with >, <, - and <> (DBML's operators); groups written `group Billing {`.
 import { expect, test } from "vitest";
 import { writeFlow } from "../../flow/flowModel";
-import { columnFlagsText, columnTypeText, defaultArrow, erCardinality, linkEndText, sqlFreeName } from "./model";
+import { columnFlagsText, columnLine, columnTypeText, defaultArrow, erCardinality, linkEndText, sqlFreeName, tableText } from "./model";
 import { flowOutline } from "./outline";
 import { parseFlow } from "./parse";
 import { MESSAGES } from "./problems";
@@ -324,4 +324,15 @@ test("quotes_and_a_spaced_close_inside_parentheses_stay_in_the_type", () => {
   expect(r.doc!.nodes[0].rows).toEqual(["s enum('does not apply')", "k enum(a, 'x not y')", "h set(a, pk )", `u enum("unique", 'pk')`]);
   expect(r.doc!.nodes[0].rowFlags).toEqual([[], [], [], ["not null"]]);
   expect(parseFlow(writeFlow(r.doc!)).doc).toEqual(r.doc);
+});
+
+test("table_text_and_the_column_line_agree", () => {
+  const doc = parseFlow(lines(SHOP.trimEnd(), "notes {", "  id int // a key", "  body", "  empty text //", "}")).doc!;
+  for (const t of doc.nodes.filter((n) => n.rows?.length)) {
+    const body = tableText(t).split("\n").slice(1, -1);
+    expect(body).toEqual(t.rows!.map((_, i) => `  ${columnLine(t, i)}`));
+  }
+  const notes = doc.nodes.find((n) => n.name === "notes")!;
+  expect(columnLine(notes, 0)).toBe("id int // a key");
+  expect(columnLine(notes, 0, { comment: false })).toBe("id int");
 });

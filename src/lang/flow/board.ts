@@ -1,5 +1,5 @@
 import type { TextEdit } from "../protocol";
-import { DIAGRAM_KINDS, MAX_BOARD_FRAMES, MAX_BOARD_SHAPES, quote } from "./model";
+import { DIAGRAM_KINDS, type DiagramKind, MAX_BOARD_FRAMES, MAX_BOARD_SHAPES, quote } from "./model";
 import { type FlowParse, type FlowParseOptions, type FlowRange, type FlowSpan, MAX_PROBLEMS, parseFlow } from "./parse";
 import { FIX_TITLES, type FlowProblem, MESSAGES } from "./problems";
 
@@ -168,16 +168,15 @@ function headerOf(text: string, frame: FrameSlice, parse: FlowParse | null): { f
 /** Two frames with one title: an error on the second, renaming it to the first free "<title> <n>". */
 function titleProblems(text: string, frames: FrameParse[]): FlowProblem[] {
   const out: FlowProblem[] = [];
-  const firstLine = new Map<string, number>();
+  const seen = new Set<string>();
   const taken = new Set(frames.map((f) => f.parse.title));
   for (const f of frames) {
     const title = f.parse.title;
-    const head = headerOf(text, f, f.parse);
-    const first = firstLine.get(title);
-    if (first === undefined) {
-      firstLine.set(title, head.line);
+    if (!seen.has(title)) {
+      seen.add(title);
       continue;
     }
+    const head = headerOf(text, f, f.parse);
     const base = title || "Untitled";
     let n = 2;
     while (taken.has(`${base} ${n}`)) n++;
@@ -192,7 +191,7 @@ function titleProblems(text: string, frames: FrameParse[]): FlowProblem[] {
       from: at.from,
       to: at.to,
       severity: "error",
-      message: MESSAGES.frameTwice(title, first, head.line),
+      message: MESSAGES.frameTwice(title),
       fixes: edit ? [{ title: FIX_TITLES.renameSecond, edits: [edit] }] : [],
     });
   }
@@ -248,4 +247,58 @@ export function parseBoard(text: string, opts: FlowParseOptions = {}, previous: 
     return lo;
   };
   return { text, frames, problems, shapes, frameAt };
+}
+
+const isWsCode = (c: number) => c === 32 || (c >= 9 && c <= 13) || c === 0xa0 || c === 0xfeff || c === 0x3000 || (c >= 0x2000 && c <= 0x200a);
+
+/**
+ * Each frame's kind and title, read from its header line as `parse.ts` reads it (kind null when the word is no
+ * kind, title "" when there is none or its quote never closes), without a parse. `from` is the frame's start.
+ */
+export function frameHeaders(text: string): { kind: DiagramKind | null; title: string; from: number }[] {
+  const out: { kind: DiagramKind | null; title: string; from: number }[] = [];
+  for (const f of splitFrames(text)) {
+    // The header is the frame's first statement line: past a BOM and the blank and comment lines above it.
+    let p = f.index === 0 ? boardTop(text) : f.from;
+    const nl = text.indexOf("\n", p);
+    const e = Math.min(nl === -1 ? text.length : nl, f.to);
+    const at = (i: number) => text.charCodeAt(i);
+    while (p < e && isWsCode(at(p))) p++;
+    if (!(text.startsWith("diagram", p) && (p + 7 >= e || isWsCode(at(p + 7))))) {
+      out.push({ kind: null, title: "", from: f.from });
+      continue;
+    }
+    let q = p + 7;
+    while (q < e && isWsCode(at(q))) q++;
+    let r = q;
+    while (r < e && !isWsCode(at(r)) && at(r) !== 34 && !(at(r) === 47 && r + 1 < e && at(r + 1) === 47)) r++;
+    const word = text.slice(q, r);
+    const kind = (DIAGRAM_KINDS as readonly string[]).includes(word) ? (word as DiagramKind) : null;
+    let t = r;
+    while (t < e && isWsCode(at(t))) t++;
+    let title = "";
+    if (t < e && at(t) === 34) {
+      let value = "";
+      let chunk = t + 1;
+      for (let j = t + 1; j < e; j++) {
+        const c = at(j);
+        if (c === 92 && j + 1 < e) {
+          const n = at(j + 1);
+          value += text.slice(chunk, j) + (n === 110 ? "\n" : n === 114 ? "\r" : text[j + 1]);
+          j++;
+          chunk = j + 1;
+        } else if (c === 34) {
+          title = value + text.slice(chunk, j);
+          break;
+        }
+      }
+    } else if (t < e && !(at(t) === 47 && t + 1 < e && at(t + 1) === 47)) {
+      let j = t;
+      while (j < e && !(at(j) === 47 && j + 1 < e && at(j + 1) === 47)) j++;
+      while (j > t && isWsCode(at(j - 1))) j--;
+      title = text.slice(t, j);
+    }
+    out.push({ kind, title, from: f.from });
+  }
+  return out;
 }

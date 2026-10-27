@@ -109,7 +109,7 @@ export const MESSAGES = {
   fanTooBig: "One line makes at most 100 links. Split it into several lines.",
   oneParticipant: "A message goes to one participant. Write one line per message.",
   unclosed: (group: string) => `${group} has no closing }.`,
-  frameTwice: (title: string, first: number, second: number) => `Two diagrams on this board are called ${title || "Untitled"} (lines ${first} and ${second}).`,
+  frameTwice: (title: string) => `Two diagrams on this board are called ${title || "Untitled"}.`,
   tooManyFrames: "A board holds at most 50 diagrams. This one and the ones after it are not read.",
   tooManyShapes: "This board has more than 10,000 shapes. Move some diagrams to a new board.",
   extra: (text: string) => {

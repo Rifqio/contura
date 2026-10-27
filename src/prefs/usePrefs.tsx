@@ -38,6 +38,8 @@ function withDefaults(p: Partial<UiPrefs> | null | undefined): UiPrefs {
 interface PrefsValue {
   prefs: UiPrefs;
   update(patch: Partial<UiPrefs>): void;
+  /** Each diagram tab's pane, open or closed, by file name: in memory for the session, never saved (Decision 16). */
+  flowPanes: Map<string, boolean>;
 }
 
 const PrefsContext = createContext<PrefsValue | null>(null);
@@ -119,7 +121,8 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
     } else void save(next);
   }, []);
 
-  const value = useMemo(() => ({ prefs, update }), [prefs, update]);
+  const [flowPanes] = useState(() => new Map<string, boolean>());
+  const value = useMemo(() => ({ prefs, update, flowPanes }), [prefs, update, flowPanes]);
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>;
 }
 
@@ -130,22 +133,48 @@ export function usePrefs(): PrefsValue {
 }
 
 /**
- * The diagram tab's side panel choice, kept in the prefs so it is the same across tabs and restarts. Without a
- * provider (a tab drawn on its own) it lives in the component.
+ * The diagram tab's side panel: the last tab shown (Editor or Assistant), kept in the prefs so it is the same across
+ * tabs and restarts. Only the tab is written; the stored `hidden` is left as it is, since a board keeps its open state
+ * per tab (`useFlowPaneOpen`). Without a provider (a tab drawn on its own) it lives in the component.
  */
-export function useFlowSidePanel(): [FlowSidePanelPref, (patch: Partial<FlowSidePanelPref>) => void] {
+export function useFlowSidePanel(): [FlowSidePanelPref["tab"], (tab: FlowSidePanelPref["tab"]) => void] {
   const ctx = useContext(PrefsContext);
-  const [local, setLocal] = useState<FlowSidePanelPref>(DEFAULT_UI_PREFS.flowSidePanel);
+  const [local, setLocal] = useState<FlowSidePanelPref["tab"]>(DEFAULT_UI_PREFS.flowSidePanel.tab);
   const stored = ctx?.prefs.flowSidePanel;
   const update = ctx?.update;
   const set = useCallback(
-    (patch: Partial<FlowSidePanelPref>) => {
-      if (update) update({ flowSidePanel: { ...(stored ?? DEFAULT_UI_PREFS.flowSidePanel), ...patch } });
-      else setLocal((l) => ({ ...l, ...patch }));
+    (tab: FlowSidePanelPref["tab"]) => {
+      if (update) {
+        if (stored?.tab !== tab) update({ flowSidePanel: { ...(stored ?? DEFAULT_UI_PREFS.flowSidePanel), tab } });
+      } else setLocal(tab);
     },
     [update, stored],
   );
-  return [stored ?? local, set];
+  const tab = stored?.tab === "assistant" || stored?.tab === "editor" ? stored.tab : local;
+  return [ctx ? tab : local, set];
+}
+
+/**
+ * Whether diagram tab `name` has its pane open (Decision 16): its own, remembered in memory by file name for the
+ * session; a tab opened for the first time opens with it open (owner answer 6). Without a provider it lives in the
+ * component.
+ */
+export function useFlowPaneOpen(name: string): [boolean, (open: boolean) => void] {
+  const panes = useContext(PrefsContext)?.flowPanes;
+  const [open, setOpenState] = useState(() => panes?.get(name) ?? true);
+  const [was, setWas] = useState(name);
+  if (was !== name) {
+    setWas(name);
+    setOpenState(panes?.get(name) ?? true);
+  }
+  const setOpen = useCallback(
+    (next: boolean) => {
+      panes?.set(name, next);
+      setOpenState(next);
+    },
+    [panes, name],
+  );
+  return [open, setOpen];
 }
 
 /** "Review first" or "Auto-apply" for the diagram assistant, kept in the prefs; without a provider it lives in the component. */

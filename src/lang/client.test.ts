@@ -2,6 +2,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import { CARD_WIDTH, cardHeight } from "../diagram/metrics";
 import type { LayoutRequest } from "../diagram/layout";
 import { LangClient, type WorkerLike } from "./client";
+import type { FlowDoc } from "./flow/model";
+import { docsById, fromWire } from "./flow/wire";
 import type { FromWorker, ToWorker } from "./protocol";
 import { KFC_SCHEMA } from "./sql/fixtures";
 import { applyEdits } from "./flow/service";
@@ -103,11 +105,16 @@ test("lang_client_mermaid_posts_the_message_and_resolves_with_the_result", async
   client.dispose();
 });
 
-const flowResults = (posts: FromWorker[]) =>
-  posts.map((p) => {
+/** The posts as the client reads them: each result merged with the docs held from the one before. */
+const flowResults = (posts: FromWorker[]) => {
+  const held = new Map<string, Map<number, FlowDoc>>();
+  return posts.map((p) => {
     if (p.type !== "flowResult") throw new Error(`expected a flow result, got ${p.type}`);
-    return p;
+    const result = fromWire(p.result, held.get(p.docId) ?? new Map());
+    held.set(p.docId, docsById(result));
+    return { ...p, result };
   });
+};
 
 test("flow_parse_is_answered_after_the_debounce_and_keeps_the_last_good_doc", async () => {
   vi.useFakeTimers();
@@ -134,8 +141,10 @@ test("flow_result_sends_only_the_doc_problems_and_last_good_doc", () => {
   const posts: FromWorker[] = [];
   createHandler((m) => posts.push(m), 0)({ type: "flowParse", id: 1, docId: "f", text: 'diagram flow "F"\nA\n' });
   const [r] = flowResults(posts);
-  expect(Object.keys(r.result).sort()).toEqual(["doc", "frames", "kind", "lastValid", "problems", "version"]);
-  expect(Object.keys(r.result.frames[0]).sort()).toEqual(["doc", "from", "index", "kind", "lastValid", "line", "title", "to"]);
+  const wire = posts[0].type === "flowResult" ? posts[0].result : null;
+  expect(Object.keys(wire ?? {}).sort()).toEqual(["frames", "problems", "version"]);
+  expect(Object.keys(wire?.frames[0] ?? {}).sort()).toEqual(["doc", "docId", "from", "index", "kind", "lastValid", "lastValidId", "line", "title", "to"]);
+  expect(r.result.doc).not.toBeNull();
 });
 
 test("flow_spans_come_from_the_worker_for_the_current_version_only", () => {
@@ -184,8 +193,7 @@ test("closing_a_flow_answers_the_parse_still_waiting_and_drops_later_ones", asyn
   handle({ type: "flowOpen", docId: "g" });
   handle({ type: "flowParse", id: 12, docId: "g", text: "nope" });
   await vi.advanceTimersByTimeAsync(130);
-  const after = posts[3];
-  if (after.type !== "flowResult") throw new Error("expected a flow result");
+  const after = flowResults(posts.slice(3))[0];
   expect(after.result.lastValid).toBeNull();
 });
 
@@ -394,4 +402,78 @@ test("a_batch_of_flow_edits_is_one_edit_list_all_or_nothing", () => {
   handle({ type: "flowEdit", id: 3, docId: "b", version: v, edit: { op: "batch", ops: [del("A"), del("Nobody")] } });
   const refused = posts[posts.length - 1];
   expect(refused.type === "flowEdit" && refused.result).toEqual({ stale: false, edits: [] });
+});
+
+const flowClient = () => {
+  const sent: ToWorker[] = [];
+  let handler: (m: ToWorker) => void = () => {};
+  const client = new LangClient(() => {
+    const fake: WorkerLike = {
+      onmessage: null,
+      onerror: null,
+      postMessage: (m) => {
+        sent.push(m);
+        handler(m);
+      },
+      terminate: () => {},
+    };
+    handler = createHandler((m) => fake.onmessage?.({ data: structuredClone(m) }), 0);
+    return fake;
+  });
+  return { client, sent };
+};
+
+test("the_client_keeps_one_result_per_doc", async () => {
+  const { client } = flowClient();
+  const text = (n: number) => `diagram flow "A"\nA\nB\nA > B\n\ndiagram flow "B"\nC\nD\nC > D\n// ${n}\n`;
+  for (let i = 0; i < 100; i++) await client.flow("f", text(i));
+  expect(client.heldFlow.size).toBe(1);
+  expect(client.heldFlow.get("f")!.size).toBeLessThanOrEqual(2);
+  client.closeFlow("f");
+  expect(client.heldFlow.has("f")).toBe(false);
+  client.dispose();
+});
+
+test("a_miss_asks_for_a_full_post", async () => {
+  const { client, sent } = flowClient();
+  const t = 'diagram flow "A"\nA\nB\nA > B\n\ndiagram flow "B"\nC\nD\nC > D\n';
+  await client.flow("f", t);
+  client.heldFlow.delete("f");
+  const r = await client.flow("f", `${t}// more\n`);
+  const resend = sent.filter((m) => m.type === "flowResend");
+  expect(resend).toEqual([{ type: "flowResend", docId: "f", ids: [2] }]);
+  expect(r.frames.map((f) => f.doc !== null)).toEqual([true, true]);
+  expect(r.frames.every((f) => f.doc !== null && f.docId !== null)).toBe(true);
+  expect(client.heldFlow.get("f")?.size).toBe(2);
+  client.dispose();
+});
+
+test("a_late_resend_does_not_take_a_newer_version", async () => {
+  // Worker posts are queued and delivered by hand, so call 3's post can beat the resend for call 2.
+  const queue: FromWorker[] = [];
+  let handler: (m: ToWorker) => void = () => {};
+  let deliver: (m: FromWorker) => void = () => {};
+  const client = new LangClient(() => {
+    const fake: WorkerLike = { onmessage: null, onerror: null, postMessage: (m) => handler(m), terminate: () => {} };
+    handler = createHandler((m) => queue.push(structuredClone(m)), 0);
+    deliver = (m) => fake.onmessage?.({ data: m });
+    return fake;
+  });
+  const t = (n: number) => `diagram flow "A"\nA\nB\nA > B\n\ndiagram flow "B"\nC\nD\nC > D\n// ${n}\n`;
+  const first = client.flow("f", t(1));
+  deliver(queue.shift()!);
+  await first;
+  client.heldFlow.delete("f");
+  const two = client.flow("f", t(2));
+  const three = client.flow("f", t(3));
+  const [p2, p3] = [queue.shift()!, queue.shift()!];
+  deliver(p2); // misses; the client asks for a full post, which the worker answers from text 3
+  const resend = queue.shift()!;
+  deliver(p3); // also misses, asks again
+  deliver(resend);
+  deliver(queue.shift()!);
+  const [r2, r3] = await Promise.all([two, three]);
+  expect(p3.type === "flowResult" && p3.result.version).toBe(r3.version);
+  expect(r2.version).toBe(r3.version);
+  client.dispose();
 });

@@ -54,6 +54,37 @@ export const KIND_ROW = 22;
 export const ER_MAX_ROWS = 20;
 /** An ER card's height without its rows: 2 px of border, the 32 px header and 3 px above and below the rows. */
 export const ER_CARD_CHROME = 40;
+/** B3 decision 7: rows drawn above and below the ones in view, so a wheel step never shows a gap. */
+export const ER_ROW_OVERSCAN = 1;
+/** How many rows an ER card `h` tall shows (its natural height when not resized): never more than 20. */
+export const erFits = (h: number | undefined) => (h === undefined ? ER_MAX_ROWS : Math.min(ER_MAX_ROWS, Math.floor((h - ER_CARD_CHROME) / KIND_ROW)));
+/** An ER card's height past which it never grows: 20 rows (decision 7). */
+const ER_MAX_H = ER_CARD_CHROME + ER_MAX_ROWS * KIND_ROW;
+/** The rows' top and bottom padding inside an ER card's scrolled body (`.fkind-rows`). */
+const ER_ROWS_PAD = 3;
+/**
+ * The px an ER card `h` tall (its 20-row height when not resized) shows of its scrolled rows: the card less its 2 px
+ * of border and 32 px header. A card is never drawn past 20 rows, so neither is its view.
+ */
+export const erViewH = (h: number | undefined) => Math.max(0, Math.min(h ?? ER_MAX_H, ER_MAX_H) - (ER_CARD_CHROME - 2 * ER_ROWS_PAD));
+/**
+ * B3 decision 7: the rows of `count` an ER card draws with `view` px of its body in view (`erViewH`), scrolled by
+ * `scroll`: every row even partly in view, plus `ER_ROW_OVERSCAN` either side while that stays within 22 rows, rows
+ * `from` to `to` (exclusive). Spacers stand for the rest, so the drawn rows and the spacers meet every visible pixel.
+ */
+export function erRowWindow(count: number, view: number, scroll: number): { from: number; to: number } {
+  const vf = Math.max(0, Math.min(count, Math.floor((scroll - ER_ROWS_PAD) / KIND_ROW)));
+  const vt = Math.max(vf, Math.min(count, Math.ceil((scroll + view - ER_ROWS_PAD) / KIND_ROW)));
+  let from = Math.max(0, vf - ER_ROW_OVERSCAN);
+  let to = Math.min(count, vt + ER_ROW_OVERSCAN);
+  // A view of 20 rows can meet 22 at once (part of one at each edge): the overscan gives way first.
+  while (to - from > ER_MAX_ROWS + 2 * ER_ROW_OVERSCAN) {
+    if (to > vt) to--;
+    else if (from < vf) from++;
+    else break;
+  }
+  return { from, to };
+}
 /**
  * ER build C: where a relationship meets row `row` of an ER card `top` px down a card `h` tall, its rows scrolled by
  * `scroll`: the middle of the row (1 px of border, the 32 px header, 3 px above the rows). A row scrolled out of

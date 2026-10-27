@@ -1,11 +1,8 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   DIALECT_LABEL,
   errorText,
-  listDatabases,
-  listObjects,
-  listSchemas,
   readModelFiles,
   recentItems,
   reverseEngineer,
@@ -23,10 +20,10 @@ import { recentTime } from "../home/recent";
 import { parseDbml } from "../lang/dbml/parse";
 import { autoLayout, EMPTY_LAYOUT, parseLayout } from "./layout";
 import type { ModelDoc } from "./SchemaBuilder";
+import { useSchemaSource } from "./useSchemaSource";
 
 const DIALECTS: DialectKind[] = ["mysql", "postgres", "sqlite"];
 const ID_TYPE: Record<DialectKind, string> = { mysql: "int", postgres: "integer", sqlite: "INTEGER" };
-const SYSTEM_DATABASES = new Set(["information_schema", "performance_schema", "mysql", "sys", "pg_catalog", "template0", "template1"]);
 const basename = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
 type Way = "connection" | "blank" | "file";
@@ -85,14 +82,10 @@ export default function StartModel({ connections, openIds, initial, file, onStar
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const [now] = useState(() => new Date());
   const open_ = connections.filter((c) => openIds.has(c.id));
-  const [connectionId, setConnectionId] = useState(initial?.connectionId ?? "");
-  const [databases, setDatabases] = useState<string[] | null>(null);
-  const [database, setDatabase] = useState(initial?.database ?? "");
-  const [showSystem, setShowSystem] = useState(!!initial && SYSTEM_DATABASES.has(initial.database));
-  const [schemas, setSchemas] = useState<string[] | null>(null);
-  const [schema, setSchema] = useState(initial?.schema ?? "");
-  const [tableCount, setTableCount] = useState<number | null>(null);
-  const connection = open_.find((c) => c.id === connectionId);
+  const {
+    connection, connectionId, setConnectionId, databases, visibleDatabases, database, setDatabase,
+    showSystem, setShowSystem, schemas, schema, setSchema, tableCount, error: sourceError,
+  } = useSchemaSource(connections, openIds, initial);
   const cards = useRef<(HTMLDivElement | null)[]>([]);
 
   useEffect(() => {
@@ -104,51 +97,6 @@ export default function StartModel({ connections, openIds, initial, file, onStar
       live = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!connectionId) return;
-    setDatabases(null);
-    listDatabases(connectionId)
-      .then(setDatabases)
-      .catch((e) => setError(errorText(e, connection?.dialect)));
-  }, [connectionId]);
-
-  const visibleDatabases = useMemo(
-    () => (databases ?? []).filter((d) => showSystem || !SYSTEM_DATABASES.has(d)),
-    [databases, showSystem],
-  );
-
-  // Never rest on a hidden database: take the first one shown.
-  useEffect(() => {
-    if (databases === null) return;
-    if (!visibleDatabases.includes(database)) setDatabase(visibleDatabases[0] ?? "");
-  }, [databases, visibleDatabases, database]);
-
-  useEffect(() => {
-    if (!connection || connection.dialect !== "postgres" || !database) return;
-    setSchemas(null);
-    listSchemas(connection.id, database)
-      .then((s) => {
-        const user = s.filter((x) => !x.isSystem).map((x) => x.name);
-        setSchemas(user);
-        if (!schema || !user.includes(schema)) setSchema(user.includes("public") ? "public" : (user[0] ?? ""));
-      })
-      .catch((e) => setError(errorText(e, connection.dialect)));
-  }, [connectionId, database]);
-
-  useEffect(() => {
-    setTableCount(null);
-    if (!connection || !database) return;
-    const pg = connection.dialect === "postgres";
-    if (pg && !schema) return;
-    let live = true;
-    listObjects(connection.id, database, pg ? schema : null)
-      .then((objects) => live && setTableCount(objects.filter((o) => o.kind === "table").length))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [connectionId, database, schema]);
 
   function startFile(path: string, dbml: string, layout: string | null, d: DialectKind) {
     onStart({ path, dbml, savedDbml: dbml, layout: layout ? parseLayout(layout) : EMPTY_LAYOUT, dialect: d, source: "file", connectionId: null });
@@ -318,12 +266,7 @@ export default function StartModel({ connections, openIds, initial, file, onStar
                     label="Connection"
                     value={connectionId}
                     options={connectionOptions}
-                    onChange={(id) => {
-                      setConnectionId(id);
-                      setDatabase("");
-                      setSchema("");
-                      setDatabases(null);
-                    }}
+                    onChange={setConnectionId}
                   />
                 </div>
                 {connectionId && databases === null && <p className="muted">Loading databases...</p>}
@@ -339,7 +282,7 @@ export default function StartModel({ connections, openIds, initial, file, onStar
                           options={visibleDatabases.map((d) => ({ value: d, label: d, lead: <Icon name="database" size={14} /> }))}
                           onChange={setDatabase}
                         />
-                        {tableCount !== null && <span className="model-count">{`${tableCount} ${tableCount === 1 ? "table" : "tables"}`}</span>}
+                        {tableCount !== null && <span className="model-count">{`${tableCount.toLocaleString("en-US")} ${tableCount === 1 ? "table" : "tables"}`}</span>}
                       </div>
                     </div>
                     {connection?.dialect === "postgres" && database && schemas && (
@@ -415,9 +358,9 @@ export default function StartModel({ connections, openIds, initial, file, onStar
             </>
           )}
         </div>
-        {error && (
+        {(error ?? sourceError) && (
           <p className="error-text" role="alert">
-            {error}
+            {error ?? sourceError}
           </p>
         )}
       </div>

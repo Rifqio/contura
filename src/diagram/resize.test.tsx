@@ -136,12 +136,21 @@ test("item_51_zone_css_hit_areas_and_pointers", () => {
 test("item_51_a_box_bigger_than_the_caps_never_snaps_down_when_its_own_size_is_the_limit", async () => {
   // Review fix 1: limits from the start box, as the diagram nodes and cards take them.
   const { nodeLimitsFor } = await import("../flow/flowNodes");
-  const big: Box = { x: 0, y: 0, w: 340, h: 259 };
-  const lim = nodeLimitsFor("class", big);
-  // Its own 259 px is its limit: a 1 px move down keeps it, nothing snaps to 200.
-  expect(resizeBox(big, "s", 0, 1, lim)).toEqual({ x: 0, y: 0, w: 340, h: 259 });
-  expect(resizeBox(big, "e", 1, 0, lim).w).toBe(340);
-  expect(resizeBox(big, "s", 0, -1, lim).h).toBe(258);
+  // A class past the 200 px cap and an ER card past its 20 rows (decision 7), each at its own size.
+  const erMax = nodeLimitsFor("erTable", { w: 200, h: 100 }).maxH;
+  for (const [kind, big] of [
+    ["class", { x: 0, y: 0, w: 340, h: 259 }],
+    ["erTable", { x: 0, y: 0, w: 340, h: erMax + 40 }],
+  ] as const) {
+    const lim = nodeLimitsFor(kind, { w: big.w, h: big.h });
+    // Its own height is its limit: a 1 px move down keeps it, nothing snaps to the cap.
+    expect(resizeBox(big, "s", 0, 1, lim)).toEqual(big);
+    expect(resizeBox(big, "e", 1, 0, lim).w).toBe(340);
+    expect(resizeBox(big, "s", 0, -1, lim).h).toBe(big.h - 1);
+  }
+  // An ER card inside its rows stops at 20 of them.
+  expect(erMax).toBeGreaterThan(200);
+  expect(resizeBox({ x: 0, y: 0, w: 200, h: 100 }, "s", 0, 2000, nodeLimitsFor("erTable", { w: 200, h: 100 })).h).toBe(erMax);
   // A small node keeps the board's caps.
   expect(nodeLimitsFor("process", { w: 150, h: 50 })).toMatchObject({ maxW: 320, maxH: 200 });
 });

@@ -44,6 +44,10 @@ export interface Waiting {
   proposal: DiagramProposal;
   outline: FlowOutline;
   text: string;
+  /** The frame the Ask was on: the selected one when it was sent (Decision 24); its changes land there only. */
+  frameIndex: number;
+  /** That frame's identity (`frameId`) when the Ask started: the run holds it, and only it, against a switch. */
+  frameId: number;
   version: number;
   rejected: ReadonlySet<number>;
   /** Auto-apply was on when it arrived. */
@@ -77,6 +81,8 @@ export interface Landed {
   after: string;
   /** The landing was undone: its card offers no Undo or "Show in the text" until a redo lands it again. */
   undone?: boolean;
+  /** The frame it landed in; "Show in the text" shows that frame first. */
+  frameIndex: number;
 }
 
 /** An Ask that left nothing to keep: its question, and why (null when it was stopped). */
@@ -200,20 +206,27 @@ function withNeeds(w: Waiting, index: number): Set<number> {
 const okIndexes = (p: DiagramProposal) => p.changes.filter((c) => c.status.kind === "ok").map((c) => c.index);
 const acceptedOf = (w: Waiting) => new Set(okIndexes(w.proposal).filter((i) => !w.rejected.has(i)));
 
-/** The parse of the part of `text` the Assistant works on: frame 0 of a board, as its outline was. */
-const askedParse = (text: string) => parseFlow(askedFrame(text).text);
+/** Why changes waiting for one frame do not go on while another is selected. */
+const OTHER_FRAME = "These changes are for another diagram on this board. Select it again to go on.";
+
+/** The parse of the part of `text` the Assistant works on: frame `frameIndex` of a board, as its outline was. */
+const askedParse = (text: string, frameIndex: number) => parseFlow(askedFrame(text, frameIndex).text);
 
 /** The landing of `accepted` on the text the proposal was made against; null when it does not apply. */
-function planOf(w: Waiting, accepted: ReadonlySet<number>, parse: FlowParse = askedParse(w.text)) {
-  return planLanding(w.text, parse, w.proposal.changes, accepted, parse.kind);
+function planOf(w: Waiting, accepted: ReadonlySet<number>, parse: FlowParse = askedParse(w.text, w.frameIndex)) {
+  return planLanding(w.text, parse, w.proposal.changes, accepted, parse.kind, w.frameIndex);
 }
 
-/** The parse of the text the tab holds now and the worker's outline of that same version; null when either is missing. */
-async function currentOutline(doc: FlowDocApi, client: LangClient): Promise<{ cur: Parsed; outline: FlowOutline } | null> {
+/**
+ * The parse of the text the tab holds now and the worker's outline of that same version, of the selected frame (frame 0
+ * with none, as the pane shows it); null when either is missing.
+ */
+async function currentOutline(doc: FlowDocApi, client: LangClient, frame?: number): Promise<{ cur: Parsed; outline: FlowOutline; frameIndex: number } | null> {
   let cur = await doc.current();
   for (let i = 0; cur && i < 3; i++) {
-    const o = await client.flowOutline(doc.docId, cur.result.version).catch(() => ({ stale: true as const }));
-    if (!o.stale) return { cur, outline: o.outline };
+    const frameIndex = frame ?? cur.frame?.index ?? 0;
+    const o = await client.flowOutline(doc.docId, cur.result.version, frameIndex).catch(() => ({ stale: true as const }));
+    if (!o.stale) return { cur, outline: o.outline, frameIndex };
     cur = await doc.current();
   }
   return null;
@@ -256,7 +269,9 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
     if (!holdRef.current) holdRef.current = docRef.current.hold({ readOnly: true });
   }, []);
   /** The running Ask: stopping it ends its stream at once and tells the Core once it has the Ask. */
-  const run = useRef<{ stopped: boolean; end(patch: Partial<StreamEnd>): void; started: Promise<boolean>; place: string } | null>(null);
+  /** The Ask running, and the frame it belongs to from start to end (taken when it starts, Decision 24). */
+  const run = useRef<{ stopped: boolean; end(patch: Partial<StreamEnd>): void; started: Promise<boolean>; place: string; frameIndex: number; frameId: number } | null>(null);
+  const [runFrame, setRunFrame] = useState<number | null>(null);
   /**
    * The diagram the hook is on: bumped when the tab closes or opens another diagram, so an Ask of the old one that
    * resumes afterwards changes nothing here.
@@ -387,21 +402,29 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       setWaiting(null);
       release();
       // Shapes drawn for review that did not land lose the place they were given.
-      docRef.current.settleProposed(askedParse(plan.text).defined);
+      docRef.current.settleProposed(askedParse(plan.text, w.frameIndex).defined);
       const added = w.proposal.changes.flatMap((c) => (accepted.has(c.index) && "add_node" in c.op ? [c.op.add_node.name] : []));
       clearTimeout(airTimer.current);
       setAiring(new Set(added));
       airTimer.current = setTimeout(() => setAiring(new Set()), AIRING_MS);
-      setLanded({ messageAt: w.messageAt, summary: landedSummary(w.proposal.changes, accepted), lines: addedLines(w.text, plan.text), before: w.text, after: plan.text });
+      setLanded({ messageAt: w.messageAt, summary: landedSummary(w.proposal.changes, accepted), lines: addedLines(w.text, plan.text), before: w.text, after: plan.text, frameIndex: w.frameIndex });
       record(w, accepted.size);
       return true;
     },
     [record, release, setWaiting],
   );
 
+  /** The frame `w` is for is the one selected (frame 0 with none). */
+  const onItsFrame = useCallback((w: Waiting) => docRef.current.frameIdNow() === w.frameId, []);
+
   /** Where a proposal with nothing left to pick goes: the remove question, Auto-apply's landing, or the review card. */
   const proceed = useCallback(
     (w: Waiting) => {
+      // A second guard behind the switch lock: the changes go on only on the frame they are for.
+      if (!onItsFrame(w)) {
+        setWaiting({ ...w, problem: OTHER_FRAME });
+        return;
+      }
       holdText();
       const ok = new Set(okIndexes(w.proposal));
       if (ok.size > 0 && removalCount(w.proposal.changes, ok, w.outline).shapes.length > 3) {
@@ -410,10 +433,11 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       }
       if (ok.size > 0 && w.auto) {
         // Auto-apply lands the whole set at once unless it would leave the text with a new problem.
-        const parse = askedParse(w.text);
+        const parse = askedParse(w.text, w.frameIndex);
         const plan = planOf(w, ok, parse);
         if (plan) {
-          const broke = wouldBreak(parse, askedParse(plan.text), plan.text);
+          // Lines counted in the frame, as the pane numbers them (Decision 15).
+          const broke = wouldBreak(parse, askedParse(plan.text, w.frameIndex), askedFrame(plan.text, w.frameIndex).text);
           if (broke === null) {
             // A landing that did not apply has already put the proposal up for review with why.
             land(w, ok);
@@ -427,7 +451,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       }
       setWaiting({ ...w, step: "review" });
     },
-    [land, release, holdText, setWaiting],
+    [land, release, holdText, setWaiting, onItsFrame],
   );
 
   const send = useCallback(
@@ -447,6 +471,9 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       const r = {
         stopped: false,
         place,
+        // The frame shown when Ask starts (frame 0 with none selected): the whole run is that frame's.
+        frameIndex: docRef.current.selection()?.index ?? 0,
+        frameId: docRef.current.frameIdNow(),
         started: Promise.resolve(false),
         end(patch: Partial<StreamEnd>) {
           if (ended) return;
@@ -455,6 +482,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
         },
       };
       run.current = r;
+      setRunFrame(r.frameId);
       setFailure(null);
       setLanded(null);
       setNotSaved(null);
@@ -472,7 +500,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
         return;
       }
       if (!r.stopped && current()) holdRef.current = d.hold({ readOnly: true });
-      const read = r.stopped ? null : await currentOutline(d, client);
+      const read = r.stopped ? null : await currentOutline(d, client, r.frameIndex);
       const cur = read?.cur ?? null;
       const outline = read?.outline ?? null;
       if (r.stopped || !current() || !cur || !outline) {
@@ -485,6 +513,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
         return;
       }
       const sentText = cur.text;
+      const askedIndex = read?.frameIndex ?? r.frameIndex;
       const version = cur.result.version;
       // No history: each Ask is a new one on the current text (plan ruling P7).
       const request: DiagramAskRequest = { requestId, file: name, text: sentText, outline, question: q, scope: opts.scope, threadId: null, model: opts.model, picks: opts.picks };
@@ -573,6 +602,8 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
         proposal: got,
         outline,
         text: sentText,
+        frameIndex: askedIndex,
+        frameId: r.frameId,
         version,
         rejected: new Set(),
         auto: modeRef.current === "auto",
@@ -624,16 +655,20 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
     if (!w) return;
     setWaiting(null);
     release();
-    docRef.current.settleProposed(askedParse(w.text).defined);
+    docRef.current.settleProposed(askedParse(w.text, w.frameIndex).defined);
     record(w, 0);
   }, [record, release, setWaiting]);
 
   const reviewEach = useCallback(() => {
     const w = waitingRef.current;
     if (!w) return;
+    if (!onItsFrame(w)) {
+      setWaiting({ ...w, problem: OTHER_FRAME });
+      return;
+    }
     holdText();
     setWaiting({ ...w, step: "review" });
-  }, [holdText, setWaiting]);
+  }, [holdText, setWaiting, onItsFrame]);
 
   /** The user chose `name` for the word the first unclear change holds; the set is checked again, then goes on. */
   const pick = useCallback(
@@ -661,7 +696,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       const w = waitingRef.current;
       if (!w) return;
       setWaiting(null);
-      docRef.current.settleProposed(askedParse(w.text).defined);
+      docRef.current.settleProposed(askedParse(w.text, w.frameIndex).defined);
       release();
       record(w, 0);
       void send(fixQuestion(messages), w.opts);
@@ -675,7 +710,7 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
       const w = waitingRef.current;
       if (w) {
         setWaiting(null);
-        docRef.current.settleProposed(askedParse(w.text).defined);
+        docRef.current.settleProposed(askedParse(w.text, w.frameIndex).defined);
         release();
         record(w, 0);
       }
@@ -701,11 +736,11 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
   const planned = useMemo(() => {
     // An unclear word, a refused landing and a stale text have nothing to show yet.
     if (!waiting || (waiting.step !== "review" && waiting.step !== "remove")) return null;
-    const parse = askedParse(waiting.text);
+    const parse = askedParse(waiting.text, waiting.frameIndex);
     const accepted = acceptedOf(waiting);
     const plan = accepted.size > 0 ? planOf(waiting, accepted, parse) : null;
     const after = plan?.text ?? waiting.text;
-    const proposed = plan ? askedParse(plan.text).doc : parse.doc;
+    const proposed = plan ? askedParse(plan.text, waiting.frameIndex).doc : parse.doc;
     return {
       ghost: { edits: ghostEdits(waiting.text, after), text: waiting.text },
       lines: touchedLines(waiting.text, after),
@@ -745,6 +780,21 @@ export function useDiagramAsk(name: string, doc: FlowDocApi, client: LangClient,
     pending: planned?.count ?? 0,
     /** The text is held: an Ask is running or changes wait. */
     locked: working !== null || (waiting !== null && (waiting.step === "review" || waiting.step === "remove")),
+    /**
+     * The identity (`frameId`) of the frame the Assistant's run belongs to, from Ask to the end of its changes (every
+     * waiting step but `stale`): no switch away from it from the canvas while it is set. Null when nothing runs or waits.
+     */
+    heldFrame: working !== null ? runFrame : waiting !== null && waiting.step !== "stale" ? waiting.frameId : null,
+    /**
+     * The user's own typing took the pane to another frame while changes wait (a header typed in the pick or broken
+     * step): typing wins, the changes are stale (their version no longer matches either), and the frame is let go.
+     */
+    frameLeft: useCallback(() => {
+      const w = waitingRef.current;
+      if (!w || w.step === "stale") return;
+      release();
+      setWaiting({ ...w, step: "stale", problem: null });
+    }, [release, setWaiting]),
     ghost: planned?.ghost ?? null,
     /** The lines of the text the waiting changes touch, for "Show in the text". */
     lines: planned?.lines ?? [],

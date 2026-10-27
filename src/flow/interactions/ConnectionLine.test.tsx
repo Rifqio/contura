@@ -49,6 +49,15 @@ function draw(handle: string) {
   return { onDraw, d: container.querySelector(".flow-drawing-line")!.getAttribute("d")! };
 }
 
+test("a column's drag line ends at the pointer in flow coordinates", () => {
+  // Restored from 5478210^ (B3 Task 7): from a column's port the line leaves at the row (fromY 69) and never locks
+  // onto a whole table; the drop decides the column or header it joins.
+  const { onDraw, d } = draw("col:customer_id:r");
+  expect(onDraw).toHaveBeenLastCalledWith(expect.objectContaining({ end: { x: 450, y: 200 }, lock: null }));
+  expect(d.startsWith("M 200 69")).toBe(true);
+  expect(d.endsWith("L 450 200")).toBe(true);
+});
+
 test("a shape's drag line ends at the pointer in flow coordinates", () => {
   const { onDraw, d } = draw("r");
   expect(onDraw).toHaveBeenLastCalledWith(expect.objectContaining({ end: { x: 450, y: 200 } }));

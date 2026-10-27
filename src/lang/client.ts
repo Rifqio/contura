@@ -17,6 +17,9 @@ import type {
   SqlRefactorResult,
   ToWorker,
 } from "./protocol";
+import { CLOSED_KEPT } from "./flow/service";
+import type { FlowDoc } from "./flow/model";
+import { docsById, fromWire, WireMiss } from "./flow/wire";
 import type { SqlCompletionResult } from "./sql/complete";
 import type { SchemaState } from "./sql/inspect";
 import type { QueryShape, ShapeProblem } from "./sql/queryShape";
@@ -59,6 +62,13 @@ export class LangClient {
   private schemas = new Map<string, SqlSchema>();
   /** The icon names sent, so a restarted worker gets them again. */
   private flowIcons: string[] | null = null;
+  /**
+   * The docs of each flow document's last result, by wire id: the worker leaves out what is held here. One map per
+   * document, replaced by each result and deleted on close. Public only so a test can count or drop it.
+   */
+  readonly heldFlow = new Map<string, Map<number, FlowDoc>>();
+  /** Flow documents closed since they were last opened (newest `CLOSED_KEPT`): a post for one is answered but not held. */
+  private closedFlow = new Set<string>();
   private restartListeners = new Set<() => void>();
   private disposed = false;
 
@@ -77,6 +87,7 @@ export class LangClient {
     this.worker.terminate();
     const waiting = [...this.pending.values()];
     this.pending.clear();
+    this.heldFlow.clear();
     for (const p of waiting) p.reject(new Error("engine restarted"));
     this.worker = this.start();
     for (const [key, schema] of this.schemas) this.worker.postMessage({ type: "sqlSchema", key, schema });
@@ -91,6 +102,7 @@ export class LangClient {
   }
 
   private receive(m: FromWorker) {
+    if (m.type === "flowResult") return this.receiveFlow(m);
     for (const id of m.ids) {
       const p = this.pending.get(id);
       if (!p) continue;
@@ -100,6 +112,30 @@ export class LangClient {
       else if (m.type === "sqlDiagnostics") resolve(m.diagnostics);
       else if (m.type === "layout") resolve(m.positions);
       else resolve(m.result);
+    }
+  }
+
+  /** Merges a flow post with the docs held for its document before any promise resolves; a miss asks for a full post. */
+  private receiveFlow(m: Extract<FromWorker, { type: "flowResult" }>) {
+    let merged: FlowResult;
+    try {
+      merged = fromWire(m.result, this.heldFlow.get(m.docId) ?? new Map());
+    } catch (e) {
+      if (!(e instanceof WireMiss) || this.closedFlow.has(m.docId)) return this.settle(m.ids, (p) => p.reject(e instanceof Error ? e : new Error(String(e))));
+      // The promises stay pending: the full post answers the same ids.
+      if (!this.disposed) this.worker.postMessage({ type: "flowResend", docId: m.docId, ids: m.ids });
+      return;
+    }
+    if (!this.closedFlow.has(m.docId)) this.heldFlow.set(m.docId, docsById(merged));
+    this.settle(m.ids, (p) => (p.resolve as (r: unknown) => void)(merged));
+  }
+
+  private settle(ids: number[], act: (p: Pending) => void) {
+    for (const id of ids) {
+      const p = this.pending.get(id);
+      if (!p) continue;
+      this.pending.delete(id);
+      act(p);
     }
   }
 
@@ -189,11 +225,20 @@ export class LangClient {
 
   /** A flow tab opened under an id that was closed before. */
   openFlow(docId: string) {
+    this.closedFlow.delete(docId);
     if (!this.disposed) this.worker.postMessage({ type: "flowOpen", docId });
   }
 
-  /** The flow tab closed: the worker forgets its text and last good drawing, and drops later parses for it. */
+  /**
+   * The flow tab closed: the worker forgets its text and last good drawing, and drops later parses for it. A parse still
+   * pending at close is answered by the worker, but its docs are no longer held here, so it now rejects; that is
+   * harmless, as the closed tab ignores it.
+   */
   closeFlow(docId: string) {
+    this.heldFlow.delete(docId);
+    this.closedFlow.delete(docId);
+    this.closedFlow.add(docId);
+    if (this.closedFlow.size > CLOSED_KEPT) this.closedFlow.delete(this.closedFlow.values().next().value!);
     if (!this.disposed) this.worker.postMessage({ type: "flowClose", docId });
   }
 

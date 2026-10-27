@@ -1,0 +1,591 @@
+/*
+  Board frames on the diagram canvas (Plan B Task 6): each frame's box and its title tab strip above the box's
+  top-left corner (Eraser's diagram frames). The box takes no clicks: the canvas works out which frame a click is
+  for. Only the strip does, and it drags the frame. Tokens only (ADR 0008); durations are the motion tokens, which
+  reduced motion turns into 0.
+*/
+
+.board-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.board-frame-body {
+  position: absolute;
+  inset: 0;
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-lg);
+  pointer-events: none;
+  transition: border-color var(--motion-fast) var(--ease-enter);
+}
+.board-frame.is-selected .board-frame-body {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 var(--border-hairline) var(--c-accent);
+}
+.board-frame.is-faded {
+  opacity: 0.55;
+}
+/*
+  Nothing inside a static frame takes pointer events: group titles, ports, resize zones, chips and handles included
+  (their own rules turn pointer events back on). A press anywhere on a static frame reaches the canvas, which selects
+  that frame (Decision 3).
+*/
+.react-flow__node.board-static,
+.react-flow__node.board-static *,
+.react-flow__edge.board-static,
+.react-flow__edge.board-static * {
+  pointer-events: none !important;
+}
+/* A static frame's shapes and lines drawn from its last good doc, or under a title an earlier frame has. */
+.react-flow__node.board-faded,
+.react-flow__edge.board-faded {
+  opacity: 0.55;
+}
+
+/* The title tab strip: 30 px tall (FRAME_TAB_H), outside the box above its top-left corner. */
+.board-frame-tab {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding-bottom: 4px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: grab;
+}
+.board-frame-tab:active {
+  cursor: grabbing;
+}
+.board-frame-title,
+.board-frame-pane {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border: var(--border-hairline) solid var(--c-border-strong);
+  border-radius: var(--rounded-md);
+  background: var(--c-bg-surface);
+  color: var(--c-text-muted);
+  font: var(--font-body);
+  cursor: inherit;
+  transition: background-color var(--motion-fast) var(--ease-enter), border-color var(--motion-fast) var(--ease-enter), color var(--motion-fast) var(--ease-enter);
+}
+.board-frame-pane {
+  cursor: pointer;
+}
+.board-frame-title:hover,
+.board-frame-pane:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+}
+.board-frame-title:focus-visible,
+.board-frame-pane:focus-visible,
+.board-frame-problems:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.board-frame.is-selected .board-frame-title {
+  border-color: var(--c-accent);
+  background: var(--c-accent-subtle);
+  color: var(--c-text);
+}
+.board-frame-kind {
+  color: var(--c-text-subtle);
+}
+.board-frame-name {
+  font: var(--font-body-strong);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.board-frame-pane[aria-pressed="true"] {
+  border-color: var(--c-accent);
+  color: var(--c-accent-text);
+}
+.board-frame-pending {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--rounded-full);
+  background: var(--c-accent);
+  color: var(--c-gmk-ink);
+  text-align: center;
+  font: var(--font-small);
+  font-weight: 600;
+  line-height: 16px;
+}
+.board-frame-problems {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--rounded-md);
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+  font: var(--font-body-strong);
+}
+
+/*
+  A frame switch fades the drawing in over motionMs("enter") (Decision 2); none under reduced motion. Two names, so a
+  switch soon after another starts the fade again.
+*/
+.flow-canvas.is-frame-switch.is-switch-0 .react-flow__viewport {
+  animation: board-frame-switch-0 var(--board-switch-ms, 0ms) var(--ease-enter);
+}
+.flow-canvas.is-frame-switch.is-switch-1 .react-flow__viewport {
+  animation: board-frame-switch-1 var(--board-switch-ms, 0ms) var(--ease-enter);
+}
+@keyframes board-frame-switch-0 {
+  from {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes board-frame-switch-1 {
+  from {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+  The board's top toolbar (Plan B Task 7, Decisions 18 and 24): a pill centred at the top of the canvas, with each
+  tool's key in its corner (Figma, Excalidraw), then Add in the accent and Ask with the review count.
+*/
+.board-toolbar-slot {
+  display: contents;
+}
+.board-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-full);
+  background: var(--c-bg-surface);
+  box-shadow: var(--shadow-menu);
+  transform: translateX(-50%);
+}
+.board-tool {
+  border-radius: var(--rounded-full);
+}
+.board-tool.is-on {
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-text);
+}
+.board-tool-key {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  color: var(--c-text-faint);
+  font: var(--font-micro);
+  line-height: 1;
+  pointer-events: none;
+}
+.board-tool[aria-pressed="true"] .board-tool-key {
+  color: var(--c-accent-text);
+}
+.board-add,
+.board-ask {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--rounded-full);
+  font: var(--font-small);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+.board-add {
+  background: var(--button-primary-background);
+  color: var(--button-primary-text);
+}
+.board-add:hover {
+  background: var(--button-primary-hover-background);
+  color: var(--button-primary-hover-text);
+}
+.board-add[aria-expanded="true"] {
+  background: var(--c-accent-pressed);
+}
+.board-ask {
+  background: transparent;
+  color: var(--c-text);
+}
+.board-ask:hover {
+  background: var(--c-bg-hover);
+}
+.board-ask-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--rounded-full);
+  background: var(--c-accent);
+  color: var(--button-primary-text);
+  font: var(--font-micro);
+  line-height: 16px;
+  text-align: center;
+}
+.board-add:hover .flow-hint,
+.board-add:focus-visible .flow-hint,
+.board-ask:hover .flow-hint,
+.board-ask:focus-visible .flow-hint {
+  display: inline-flex;
+}
+/*
+  The bottom of the canvas (Task 9): one stack, centred, the toast over the frame bar, so the two never overlap. The
+  stack takes no presses; the bar and the toast's Undo do.
+*/
+.board-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.board-bottom .flow-toast {
+  position: static;
+  transform: none;
+}
+.board-bottom .flow-toast button {
+  pointer-events: auto;
+}
+
+/*
+  The frame bar (Decision 22; Miro's and Figma's frame bars): the selected frame's settings in a pill at the bottom
+  centre of the canvas. Its lists and menus open upward, and its hints sit above it.
+*/
+.frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px;
+  border: var(--border-hairline) solid var(--c-border-subtle);
+  border-radius: var(--rounded-lg);
+  background: var(--c-bg-surface);
+  box-shadow: var(--shadow-menu);
+  pointer-events: auto;
+}
+.frame-bar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  background: var(--c-border-subtle);
+}
+.frame-bar-name {
+  box-sizing: border-box;
+  width: 160px;
+  height: 32px;
+  padding: 0 8px;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--rounded-md);
+  background: transparent;
+  color: var(--c-text);
+  font: var(--font-body-strong);
+  text-overflow: ellipsis;
+  transition: border-color var(--motion-fast) var(--ease-enter), background-color var(--motion-fast) var(--ease-enter);
+}
+.frame-bar-name:hover {
+  background: var(--c-bg-hover);
+}
+.frame-bar-name:focus-visible,
+.frame-bar-name:focus {
+  border-color: var(--c-accent);
+  background: var(--c-bg-surface);
+  outline: none;
+}
+.frame-bar .select {
+  min-width: 0;
+}
+.frame-bar .select-button {
+  height: 32px;
+  border-color: transparent;
+  background: transparent;
+}
+.frame-bar .select-button:hover {
+  background: var(--c-bg-hover);
+}
+.frame-bar .menu {
+  top: auto;
+  bottom: calc(100% + var(--spacing-xs));
+}
+.frame-bar .menu-end {
+  left: auto;
+  right: 0;
+}
+.frame-bar .flow-hint {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+.frame-bar .flow-hint::before {
+  top: auto;
+  bottom: -4px;
+}
+.frame-bar .flow-tool:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+
+/*
+  A frame's text size (Decision 22): its shapes and labels carry --text-scale with .is-text-scaled, and the type tokens
+  the canvas uses are sized again inside them from tokens.css's own sizes, so a token change carries through. The canvas
+  keeps each token's size under a --text-base- name first (a token cannot be set from itself), and a shorthand token
+  is set again too, since a custom property that names others is worked out where it is declared.
+*/
+.react-flow {
+  --text-base-body-size: var(--font-body-size);
+  --text-base-body-line-height: var(--font-body-line-height);
+  --text-base-body-strong-size: var(--font-body-strong-size);
+  --text-base-body-strong-line-height: var(--font-body-strong-line-height);
+  --text-base-title-size: var(--font-title-size);
+  --text-base-title-line-height: var(--font-title-line-height);
+  --text-base-small-size: var(--font-small-size);
+  --text-base-small-line-height: var(--font-small-line-height);
+  --text-base-mono-small-size: var(--font-mono-small-size);
+  --text-base-mono-small-line-height: var(--font-mono-small-line-height);
+  --text-base-mono-micro-size: var(--font-mono-micro-size);
+  --text-base-mono-micro-line-height: var(--font-mono-micro-line-height);
+}
+.is-text-scaled {
+  --font-body-size: calc(var(--text-base-body-size) * var(--text-scale, 1));
+  --font-body-line-height: calc(var(--text-base-body-line-height) * var(--text-scale, 1));
+  --font-body: var(--font-body-weight) var(--font-body-size) / var(--font-body-line-height) var(--font-body-family);
+  --font-body-strong-size: calc(var(--text-base-body-strong-size) * var(--text-scale, 1));
+  --font-body-strong-line-height: calc(var(--text-base-body-strong-line-height) * var(--text-scale, 1));
+  --font-body-strong: var(--font-body-strong-weight) var(--font-body-strong-size) / var(--font-body-strong-line-height) var(--font-body-strong-family);
+  --font-title-size: calc(var(--text-base-title-size) * var(--text-scale, 1));
+  --font-title-line-height: calc(var(--text-base-title-line-height) * var(--text-scale, 1));
+  --font-title: var(--font-title-weight) var(--font-title-size) / var(--font-title-line-height) var(--font-title-family);
+  --font-small-size: calc(var(--text-base-small-size) * var(--text-scale, 1));
+  --font-small-line-height: calc(var(--text-base-small-line-height) * var(--text-scale, 1));
+  --font-small: var(--font-small-weight) var(--font-small-size) / var(--font-small-line-height) var(--font-small-family);
+  --font-mono-small-size: calc(var(--text-base-mono-small-size) * var(--text-scale, 1));
+  --font-mono-small-line-height: calc(var(--text-base-mono-small-line-height) * var(--text-scale, 1));
+  --font-mono-small: var(--font-mono-small-weight) var(--font-mono-small-size) / var(--font-mono-small-line-height) var(--font-mono-small-family);
+  --font-mono-micro-size: calc(var(--text-base-mono-micro-size) * var(--text-scale, 1));
+  --font-mono-micro-line-height: calc(var(--text-base-mono-micro-line-height) * var(--text-scale, 1));
+  --font-mono-micro: var(--font-mono-micro-weight) var(--font-mono-micro-size) / var(--font-mono-micro-line-height) var(--font-mono-micro-family);
+}
+/* The Hand, and a held Space: the grab hand, grabbing while dragged (Figma, Miro). */
+.flow-canvas.is-hand .react-flow__pane,
+.flow-canvas.is-space-held .react-flow__pane {
+  cursor: grab;
+}
+.flow-canvas.is-hand .react-flow__pane:active,
+.flow-canvas.is-space-held .react-flow__pane:active {
+  cursor: grabbing;
+}
+
+/* A shape tool's drag (Decision 18): the box being drawn, outlined until release or Esc; it takes no presses. */
+.board-draw-outline {
+  position: fixed;
+  z-index: 5;
+  border: 1.5px dashed var(--c-accent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/*
+  Loose sketches (Plan B Task 11, Decision 21): children of one zero-size layer node. A sketch node's box takes no
+  pointer events (its node style); only what it draws does, so a pen stroke over a shape covers only its own line.
+  Sections and box sketches sit under every frame, and the canvas gives a press inside a frame to the frame (FlowTab).
+  Theme tokens only: a note is the warning tint with the theme's text, which reads in both themes.
+*/
+.board-sketch-node {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.board-sketch-svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.board-sketch-svg .is-box {
+  pointer-events: visible;
+}
+.board-sketch-svg .board-sketch-hit.is-stroke {
+  pointer-events: stroke;
+}
+.board-sketch-svg .board-sketch-shape.is-stroke,
+.board-sketch-svg .board-sketch-head {
+  pointer-events: none;
+}
+.board-sketch-words {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--c-text);
+  font: var(--font-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.board-sketch-node.is-note .board-sketch-words {
+  padding: 8px 10px;
+}
+.board-sketch-node.is-icon .board-sketch-draw {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 64px;
+  height: 64px;
+  padding-top: 2px;
+}
+.board-sketch-icon {
+  flex: none;
+  pointer-events: auto;
+}
+.board-sketch-icon-missing {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--c-text-subtle);
+  pointer-events: auto;
+}
+.board-sketch-icon-title {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--c-text-muted);
+  font: var(--font-body);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.board-sketch-title {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  max-width: 100%;
+  padding-bottom: 4px;
+  overflow: hidden;
+  color: var(--c-text-muted);
+  font: var(--font-body-strong);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+}
+
+/*
+  Drawing and editing sketches (Plan B Task 12). A Section's inside is the canvas until the Section is selected (FigJam):
+  a press there box-selects or pans, a click selects it, a double-click is "Add here"; its title always takes a press.
+  A selected sketch is outlined in the accent; boxes take the eight resize zones, lines and arrows two end handles.
+*/
+.board-sketch-draw {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.board-sketch-node.is-section .board-sketch-svg .is-box {
+  pointer-events: none;
+}
+.board-sketch-node.is-section.is-selected .board-sketch-svg .is-box {
+  pointer-events: visible;
+}
+.board-sketch-node.is-selected {
+  outline: 1.5px solid var(--c-accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.board-sketch-node.is-line.is-selected,
+.board-sketch-node.is-arrow.is-selected {
+  outline-style: dashed;
+}
+.board-sketch-node .rz-zone {
+  pointer-events: auto;
+}
+.board-sketch-end {
+  position: absolute;
+  z-index: 2;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border: 1.5px solid var(--c-accent);
+  border-radius: 50%;
+  background: var(--c-bg-surface);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: move;
+}
+.board-sketch-end:hover {
+  background: var(--c-accent-subtle);
+}
+/* The sketch being drawn: the same drawing, faded until release (Excalidraw, FigJam). */
+.board-sketch-preview {
+  position: absolute;
+  opacity: 0.7;
+  pointer-events: none;
+}
+/* A sketch's text being typed, on the sketch itself. */
+.board-sketch-field {
+  position: absolute;
+  min-width: 120px;
+}
+.board-sketch-field.is-note textarea {
+  background: var(--c-warning-subtle);
+}
+
+/*
+  A static frame below BOX_BELOW (Task 18b): one svg of boxes and straight lines. Areas and shapes in the canvas's own
+  group and step-card tokens (the pair a step, a table and a document draw in); strokes stay one screen pixel at any zoom.
+*/
+.board-preview {
+  display: block;
+  overflow: visible;
+}
+.board-preview path {
+  vector-effect: non-scaling-stroke;
+}
+.board-preview-area {
+  fill: color-mix(in srgb, var(--c-group-teal-tint) 70%, transparent);
+  stroke: var(--c-group-teal);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+.board-preview-line {
+  fill: none;
+  stroke: var(--c-text-subtle);
+  stroke-width: 1;
+}
+.board-preview-shape {
+  fill: var(--c-node-table-fill);
+  stroke: var(--c-node-table-stroke);
+  stroke-width: 1;
+}

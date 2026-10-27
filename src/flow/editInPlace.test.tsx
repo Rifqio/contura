@@ -5,7 +5,7 @@
 // opens in edit. Each kept edit is one undo step.
 import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { DiagramCanvasProps } from "../diagram/DiagramCanvas";
@@ -14,6 +14,7 @@ import { mockEditorDom } from "../test/editor";
 import { routeInvoke } from "../test/invoke";
 import { fakeWorker } from "../test/langWorker";
 import { mockReactFlowDom } from "../test/reactFlow";
+import { boardFrameId } from "./board/boardScene";
 import FlowTab from "./FlowTab";
 import { SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 
@@ -123,8 +124,11 @@ test("F3 a taken name and an empty one are refused in place; the first Esc keeps
   await userEvent.clear(box);
   await userEvent.type(box, "Customer{Enter}");
   expect((await screen.findByRole("alert")).textContent).toBe("Customer is already used.");
-  // A click away keeps the field and the typed text.
-  await s.clickAway();
+  // A click away (on the frame, so the frame stays selected: a click outside the only frame lets it go, final review
+  // F2) keeps the field and the typed text.
+  // The frame's box passes pointer events through to the canvas, which keeps the live frame on a click inside it.
+  const frameBox = [...s.container.querySelectorAll<HTMLElement>(".react-flow__node")].find((e) => e.getAttribute("data-id") === boardFrameId("Orders"))!;
+  await userEvent.setup({ pointerEventsCheck: 0 }).click(frameBox);
   expect((await s.field("Rename Order")).value).toBe("Customer");
   await userEvent.clear(box);
   await userEvent.type(box, "{Enter}");
@@ -282,11 +286,12 @@ test("T1 a period has From and Until; Tab goes from one to the other; an end bef
 
 const CLOUD = lines('diagram cloud "App"', "Users [icon: users]", "Api [icon: aws-api-gateway]", "Fn [icon: aws-lambda]", "", "Users > Api", "Api > Fn");
 
-test("C1 G on a selection draws the new group with its name selected; Enter writes it, Esc on the untouched name groups nothing", async () => {
+test("C1 G then Enter on a selection draws the new group with its name selected; Enter writes it, Esc on the untouched name groups nothing", async () => {
   const s = setup(CLOUD);
   await shown(s, "Service Api");
   act(() => canvas.props!.onSelect!(["Api", "Fn"]));
   s.press("g");
+  s.press("Enter");
   let box = await s.field("Group name");
   expect([box.value, box.selectionStart, box.selectionEnd]).toEqual(["Group", 0, 5]);
   await userEvent.type(box, "{Escape}");
@@ -294,6 +299,7 @@ test("C1 G on a selection draws the new group with its name selected; Enter writ
   expect(s.doc()).toBe(CLOUD);
   act(() => canvas.props!.onSelect!(["Api", "Fn"]));
   s.press("g");
+  s.press("Enter");
   box = await s.field("Group name");
   await userEvent.type(box, "Backend{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 5 });
   await waitFor(() => expect(s.doc()).toBe(lines('diagram cloud "App"', "Users [icon: users]", "Backend [icon: aws-vpc] {", "  Api [icon: aws-api-gateway]", "  Fn [icon: aws-lambda]", "}", "", "Users > Api", "Api > Fn")));
@@ -310,4 +316,93 @@ test("C1 a double-click on a group's title renames it", async () => {
   const box = await s.field("Group name");
   await userEvent.type(box, "Core{Enter}", { initialSelectionStart: 0, initialSelectionEnd: 7 });
   await waitFor(() => expect(s.doc()).toBe(GROUPED.replace("Backend {", "Core {")));
+});
+
+// ----- Re-review R1: a member or a date typed, then another frame picked: the edit lands in its own frame.
+
+const liveNode = (s: Setup, id: string) => [...s.container.querySelectorAll<HTMLElement>(".react-flow__node")].find((e) => e.getAttribute("data-id") === id) ?? null;
+/** A press and click on a frame's tab, as a browser sends them. */
+async function pressTab(title: string) {
+  const tab = await screen.findByRole("button", { name: new RegExp(` ${title}$`) });
+  fireEvent.pointerDown(tab, { button: 0, pointerId: 1 });
+  fireEvent.pointerUp(tab, { button: 0, pointerId: 1 });
+  fireEvent.click(tab);
+}
+const blockOf = (text: string, title: string) => {
+  const from = text.indexOf(`"${title}"`);
+  const next = text.indexOf("\ndiagram ", from);
+  return text.slice(from, next < 0 ? text.length : next);
+};
+const isLive = (s: Setup, title: string) => {
+  const el = [...s.container.querySelectorAll<HTMLElement>(".react-flow__node")].find((e) => e.getAttribute("data-id") === boardFrameId(title));
+  return !!el && within(el).queryByRole("button", { name: /^Code Editor/ }) !== null;
+};
+/** Picks a live shape first, so its card is drawn selected before a field opens on it. */
+async function picked(s: Setup, id: string) {
+  await waitFor(() => expect(liveNode(s, id)).not.toBeNull());
+  act(() => canvas.props!.onSelect!([id]));
+  await waitFor(() => expect(liveNode(s, id)!.querySelector(".fnode-selected")).not.toBeNull());
+}
+
+test("R1 a member typed, then another frame picked, lands in its own frame", async () => {
+  const BOARD = lines('diagram class "A"', "class Order", "Order : + id: int", "", 'diagram class "B"', "class Order", "Order : + id: int");
+  const s = setup(BOARD);
+  await pressTab("A");
+  await picked(s, "Order");
+  fireEvent.doubleClick(liveNode(s, "Order")!.querySelector(".fkind-inside")!);
+  const box = await s.field("Member");
+  await userEvent.type(box, "+ total: int");
+  await pressTab("B");
+  await waitFor(() => expect(isLive(s, "B")).toBe(true));
+  await waitFor(() => expect(blockOf(s.doc(), "A")).toContain("Order : + total: int"));
+  expect(blockOf(s.doc(), "B")).not.toContain("total");
+  expect(screen.queryByRole("textbox", { name: "Member" })).toBeNull();
+});
+
+test("R1 a date typed, then another frame picked, lands in its own frame", async () => {
+  const BOARD = lines('diagram timeline "A"', "2026-10-01: Kickoff", "", 'diagram timeline "B"', "2026-10-01: Kickoff");
+  const s = setup(BOARD);
+  await pressTab("A");
+  await picked(s, "Kickoff");
+  fireEvent.doubleClick(liveNode(s, "Kickoff")!.querySelector('[data-part="date"]')!);
+  const date = (await screen.findByLabelText("Date")) as HTMLInputElement;
+  fireEvent.change(date, { target: { value: "2026-10-03" } });
+  await pressTab("B");
+  await waitFor(() => expect(isLive(s, "B")).toBe(true));
+  await waitFor(() => expect(blockOf(s.doc(), "A")).toContain("2026-10-03: Kickoff"));
+  expect(blockOf(s.doc(), "B")).toContain("2026-10-01: Kickoff");
+  expect(screen.queryByLabelText("Date")).toBeNull();
+});
+
+// ----- Static frames are inert: a card of the same name in another frame never draws the live frame's edit row.
+
+test("a member row on a board where two frames have a User opens once, keeps focus and commits", async () => {
+  const BOARD = lines('diagram class "A"', "class User", "User : + id: int", "", 'diagram class "B"', "class User", "User : + id: int");
+  const s = setup(BOARD);
+  await pressTab("A");
+  await picked(s, "User");
+  fireEvent.doubleClick(liveNode(s, "User")!.querySelector(".fkind-inside")!);
+  const box = await s.field("Member");
+  expect(screen.getAllByRole("textbox", { name: "Member" })).toHaveLength(1);
+  expect(liveNode(s, "User")!.contains(box)).toBe(true);
+  expect(document.activeElement).toBe(box);
+  await userEvent.type(box, "+ email: text{Enter}");
+  await waitFor(() => expect(blockOf(s.doc(), "A")).toContain("User : + email: text"));
+  expect(blockOf(s.doc(), "B")).not.toContain("email");
+});
+
+test("a date field on a board where two frames have a Kickoff opens once, keeps focus and commits", async () => {
+  const BOARD = lines('diagram timeline "A"', "2026-10-01: Kickoff", "", 'diagram timeline "B"', "2026-10-01: Kickoff");
+  const s = setup(BOARD);
+  await pressTab("A");
+  await picked(s, "Kickoff");
+  fireEvent.doubleClick(liveNode(s, "Kickoff")!.querySelector('[data-part="date"]')!);
+  const date = (await screen.findByLabelText("Date")) as HTMLInputElement;
+  expect(screen.getAllByLabelText("Date")).toHaveLength(1);
+  expect(liveNode(s, "Kickoff")!.contains(date)).toBe(true);
+  expect(document.activeElement).toBe(date);
+  fireEvent.change(date, { target: { value: "2026-10-03" } });
+  fireEvent.keyDown(date, { key: "Enter" });
+  await waitFor(() => expect(blockOf(s.doc(), "A")).toContain("2026-10-03: Kickoff"));
+  expect(blockOf(s.doc(), "B")).toContain("2026-10-01: Kickoff");
 });

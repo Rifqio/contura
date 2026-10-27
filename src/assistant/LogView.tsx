@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import type { LogLevel, LogLine } from "../api/types";
+import type { DialectKind, LogLevel, LogLine, SqlBlock } from "../api/types";
 import Icon from "../components/Icon";
 import { fieldsText, logText, logTime } from "./answerRecord";
 import { secondsText } from "./answerStream";
+import { AnswerBody, ChecksBody, ThinkingBody } from "./LogBodies";
 
 type Filter = "all" | "info" | "warn" | "error";
 
@@ -28,10 +29,29 @@ interface Props {
   onCopy(text: string): void;
   /** False in the diagram tab's side panel, where controls have no hover text. */
   hoverText?: boolean;
+  /** What the answer, thinking and sql_check lines open to, from the record the log already holds. */
+  bodies?: LogBodiesOf;
+}
+
+export interface LogBodiesOf {
+  answer: string;
+  thinking: string | null;
+  sqlBlocks: SqlBlock[];
+  dialect: DialectKind;
+}
+
+/** A line's body under its fields: the whole answer, the thinking, or each checked statement. */
+function bodyOf(line: LogLine, b: LogBodiesOf, onCopy: (text: string) => void, hoverText: boolean) {
+  const source = line.source;
+  // Only the info line: a cut-off answer also logs a warn "answer" line, which keeps its fields alone.
+  if (source === "answer" && line.level === "info" && b.answer) return <AnswerBody text={b.answer} onCopy={onCopy} hoverText={hoverText} />;
+  if (source === "thinking" && b.thinking) return <ThinkingBody text={b.thinking} />;
+  if (source === "sql_check") return <ChecksBody blocks={b.sqlBlocks} dialect={b.dialect} />;
+  return null;
 }
 
 /** The Log tab (board 11.3): a Grafana-style view of the answer log, one monospace row per line. */
-export default function LogView({ lines, onCopy, hoverText = true }: Props) {
+export default function LogView({ lines, onCopy, hoverText = true, bodies }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [wrap, setWrap] = useState(false);
@@ -151,6 +171,7 @@ export default function LogView({ lines, onCopy, hoverText = true }: Props) {
                   })}
                 </div>
               )}
+              {isOpen && bodies && bodyOf(line, bodies, onCopy, hoverText)}
             </div>
           );
         })}

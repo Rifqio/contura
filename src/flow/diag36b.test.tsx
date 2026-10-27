@@ -242,7 +242,8 @@ test("N6 a long label that wraps opens at its full height", async () => {
 test("live: the first-node hint hides while the first shape's ghost is shown", async () => {
   const s = setup('diagram flow "New"\n');
   expect(await screen.findByText("Add the first node")).toBeTruthy();
-  s.press("s");
+  s.press("r");
+  s.press("Enter");
   await s.field("Name the new step");
   expect(screen.queryByText("Add the first node")).toBeNull();
   expect(s.container.querySelector(".flow-first-node-line")).toBeNull();
