@@ -9,10 +9,12 @@ use crate::ai::context::store::{
     StoredSavedQuery,
 };
 use crate::ai::context::tree::Area;
+use crate::ai::log::LogLine;
 use crate::ai::memory::store as mem;
-use crate::ai::memory::{Compaction, CompactionId, SummaryBy, ThreadStore, Topic};
+use crate::ai::memory::{Compaction, CompactionId, SummaryBy, ThreadStore, TitleBy, Topic};
 use crate::ai::rails::Secrets;
 use crate::ai::redaction_secrets;
+use crate::ai::sent::SummarySent;
 use crate::ai::{AiAccess, AiThread, ThreadId};
 use crate::error::{Error, Result};
 use crate::model::{AiSyncMode, ConnectionConfig, ConnectionId, DialectKind};
@@ -217,5 +219,20 @@ impl ThreadStore for ConnectionService {
     }
     fn undo_compaction(&self, thread: ThreadId, id: CompactionId) -> Result<bool> {
         mem::undo_compaction(self.store()?.conn(), thread, id)
+    }
+    fn set_title(&self, thread: ThreadId, title: &str, by: TitleBy) -> Result<bool> {
+        mem::set_thread_title(self.store()?.conn(), thread, title, by)
+    }
+    fn title_failed(&self, thread: ThreadId) -> Result<u8> {
+        mem::title_failed(self.store()?.conn(), thread)
+    }
+    fn record_title_call(
+        &self,
+        thread: ThreadId,
+        answer_at: i64,
+        sent: Option<&SummarySent>,
+        log: &[LogLine],
+    ) -> Result<()> {
+        mem::record_title_call(self.store()?.conn(), thread, answer_at, sent, log)
     }
 }

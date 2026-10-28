@@ -2,8 +2,8 @@
 
 use serde::Serialize;
 
-use super::rules::{AskFacts, EARLIER_TOPICS, RECENT_TURNS, TopicPick, rule_summary};
-use super::{Compaction, CompactionId, SummaryBy, Topic};
+use super::rules::{AskFacts, EARLIER_TOPICS, RECENT_TURNS, TopicPick};
+use super::{Compaction, CompactionId, Cover, Topic};
 use crate::ai::budget::estimate_tokens;
 use crate::ai::rails::input::{allowed, rank};
 use crate::ai::rails::retrieval::{ASKED_IN_SOURCE, framed_lines};
@@ -11,67 +11,172 @@ use crate::ai::request::{ItemKind, Switches};
 use crate::ai::{AiAccess, AiMessage, AiRole, AiThread};
 use crate::model::ConnectionId;
 
-/// The gate on history (R1.7): the same place as the Ask (the same Connection and database,
-/// or no Connection for both, as on Home), and every kind still allowed by the Connection's
-/// current AI access. A turn that sent only the conversation (the question, earlier history,
-/// the tab's kind words, Recent steps: kinds that need no access) passes at Never too: it
-/// went to the provider once already and carries nothing about the database. A missing stamp
-/// is not allowed.
-pub fn history_allowed(
+/// The access a stored message, compaction or Topic summary is gated at by its own
+/// Connection (Decision 2, ruling 1 of 27 Oct): the Ask's own Connection reads `access`,
+/// another Connection its current access in `others` (`access_now`: one not there, deleted
+/// or unreadable, is Never), and no Connection (Home) is Never. The database plays no part:
+/// the history follows the conversation across databases.
+pub fn access_of(
     connection_id: Option<ConnectionId>,
-    database: Option<&str>,
-    kinds: &[ItemKind],
     ask: &AskFacts,
     access: AiAccess,
-    switches: Switches,
-) -> bool {
-    match (connection_id, ask.connection_id) {
-        (Some(a), Some(b)) if a == b => {}
-        (None, None) => {}
-        _ => return false,
+    others: &[(ConnectionId, AiAccess)],
+) -> AiAccess {
+    match connection_id {
+        None => AiAccess::Never,
+        Some(id) if Some(id) == ask.connection_id => access,
+        Some(id) => access_now(id, others),
     }
-    database == ask.database && kinds.iter().all(|k| allowed(access, *k, switches))
 }
 
-/// The other Connections the turns of `thread` were asked across (`AskedIn::also`) and
-/// those of their stored steps on other Connections (`AskedIn::other_steps`), each once:
-/// the memory stage reads their current access before the gate runs.
+/// The gate on history (R1.7): every kind a turn or summary was stamped with is still
+/// allowed at `level`, its own Connection's (`message_access`, `access_of`). A turn that sent
+/// only the conversation (the question, earlier history, the tab's kind words, Recent steps:
+/// kinds that need no access) passes at Never too: it went to the provider once already and
+/// carries nothing about the database.
+pub fn history_allowed(kinds: &[ItemKind], level: AiAccess, switches: Switches) -> bool {
+    kinds.iter().all(|k| allowed(level, *k, switches))
+}
+
+/// Every Connection the messages of `thread` name, each once: each message's own, then the
+/// others its question was asked across (`AskedIn::also`), then those of its stored steps on
+/// other Connections (`AskedIn::other_steps`). The memory stage reads their current access
+/// before the gate runs (`others_access`).
 pub fn also_of(thread: &AiThread) -> Vec<ConnectionId> {
     let mut out: Vec<ConnectionId> = Vec::new();
-    for id in thread
-        .messages
-        .iter()
-        .filter_map(|m| m.asked_in.as_ref())
-        .flat_map(|a| {
-            a.also
-                .iter()
-                .chain(a.other_steps.iter().map(|s| &s.connection_id))
-        })
-    {
-        if !out.contains(id) {
-            out.push(*id);
+    for m in &thread.messages {
+        let asked = m.asked_in.as_ref();
+        let named = m
+            .connection_id
+            .iter()
+            .chain(asked.into_iter().flat_map(|a| a.also.iter()))
+            .chain(
+                asked
+                    .into_iter()
+                    .flat_map(|a| a.other_steps.iter().map(|s| &s.connection_id)),
+            );
+        for id in named {
+            if !out.contains(id) {
+                out.push(*id);
+            }
         }
     }
     out
 }
 
-/// The access a stored message is gated at: `access` (the Ask's own Connection's),
-/// lowered to the current access of every other Connection its question was asked across.
-/// One not in `others` (deleted) is Never, and at Never the message is held whatever it
-/// carried: a turn on a two-Connection tab goes only while both Connections still allow
-/// every kind it was stamped with, which include the highest level its tab used.
+/// The access a stored message is gated at: its own Connection's (`access_of`), lowered to
+/// the current access of every other Connection its question was asked across. One not in
+/// `others` (deleted) is Never.
 pub fn message_access(
     m: &AiMessage,
+    ask: &AskFacts,
     access: AiAccess,
     others: &[(ConnectionId, AiAccess)],
 ) -> AiAccess {
-    let Some(asked) = m.asked_in.as_ref() else {
-        return access;
-    };
-    asked.also.iter().fold(access, |low, id| {
+    let own = access_of(m.connection_id, ask, access, others);
+    match m.asked_in.as_ref() {
+        Some(asked) => lowered(own, &asked.also, others),
+        None => own,
+    }
+}
+
+/// `own` lowered to the current access of each Connection in `also`.
+fn lowered(own: AiAccess, also: &[ConnectionId], others: &[(ConnectionId, AiAccess)]) -> AiAccess {
+    also.iter().fold(own, |low, id| {
         let level = access_now(*id, others);
         if rank(level) < rank(low) { level } else { low }
     })
+}
+
+/// The gate on a stamp: a message's, or a `Cover` of a summary (`message_allowed`).
+fn stamp_parts_allowed(
+    connection_id: Option<ConnectionId>,
+    also: &[ConnectionId],
+    kinds: &[ItemKind],
+    ask: &AskFacts,
+    access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
+    switches: Switches,
+) -> bool {
+    let level = lowered(access_of(connection_id, ask, access, others), also, others);
+    !(level == AiAccess::Never && (!also.is_empty() || elsewhere(connection_id, ask)))
+        && history_allowed(kinds, level, switches)
+}
+
+/// Whether every step on another Connection is still allowed by that Connection's current
+/// access, at the level the step needed.
+fn steps_ok(
+    mut steps: impl Iterator<Item = (ConnectionId, AiAccess)>,
+    others: &[(ConnectionId, AiAccess)],
+) -> bool {
+    steps.all(|(id, level)| {
+        let now = access_now(id, others);
+        now != AiAccess::Never && rank(now) >= rank(level)
+    })
+}
+
+/// The gate on what a summary's text covers, read from its stored `Cover` and never from
+/// the thread (which may have dropped those messages): the same rule as
+/// `summary_covers_ok` on a message with that stamp.
+pub fn cover_ok(
+    c: &Cover,
+    ask: &AskFacts,
+    access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
+    switches: Switches,
+) -> bool {
+    stamp_parts_allowed(
+        c.connection_id,
+        &c.also,
+        &c.kinds,
+        ask,
+        access,
+        others,
+        switches,
+    ) && steps_ok(c.steps.iter().copied(), others)
+}
+
+/// What a compaction written before `Compaction::covers` was kept covers, when that can be
+/// known: its chain (it and every earlier compaction of its Topic) still holds every
+/// message of its span, and the thread still holds a message older than the chain's start,
+/// so no trim reached its range. It is then taken to cover every Connection the thread's
+/// messages use. `None` (unknown) holds it: it is not replayed and not folded again.
+pub fn legacy_covers(
+    c: &Compaction,
+    thread: &AiThread,
+    compactions: &[Compaction],
+) -> Option<Vec<Cover>> {
+    let stored: Vec<&AiMessage> = thread
+        .messages
+        .iter()
+        .filter(|m| m.role != AiRole::Notice)
+        .collect();
+    let oldest = stored.iter().map(|m| m.at).min()?;
+    let chain: Vec<&Compaction> = compactions
+        .iter()
+        .filter(|e| e.topic == c.topic && e.at <= c.at)
+        .chain(std::iter::once(c))
+        .collect();
+    let start = chain.iter().map(|e| e.first_at).min()?;
+    let intact = chain.iter().all(|e| {
+        let held = stored
+            .iter()
+            .filter(|m| m.topic == Some(e.topic) && e.first_at <= m.at && m.at <= e.last_at)
+            .count();
+        held >= e.messages as usize
+    });
+    (intact && oldest < start).then(|| Cover::merged(stored.iter().map(|m| Cover::of(m))))
+}
+
+/// What a compaction's text covers: its kept `covers`, else `legacy_covers`.
+pub fn covers_of(
+    c: &Compaction,
+    thread: Option<&AiThread>,
+    compactions: &[Compaction],
+) -> Option<Vec<Cover>> {
+    c.covers
+        .clone()
+        .or_else(|| thread.and_then(|t| legacy_covers(c, t, compactions)))
 }
 
 /// The current access of another Connection, as the memory stage read it into `others`
@@ -83,10 +188,12 @@ pub fn access_now(id: ConnectionId, others: &[(ConnectionId, AiAccess)]) -> AiAc
         .map_or(AiAccess::Never, |(_, a)| *a)
 }
 
-/// The gate on one stored message: `history_allowed` at `message_access`. A message asked
-/// across another Connection (`AskedIn::also`) that is now Never (or deleted) is held
-/// whatever it carried (ADR 0027); any other message at Never goes only when it sent nothing
-/// but the conversation. Steps on other Connections (`AskedIn::other_steps`) never hold the
+/// The gate on one stored message: `history_allowed` at `message_access`. A message that
+/// names a Connection other than the Ask's (its own, or one it was asked across) and is at
+/// Never by it, or deleted, is held whatever it carried (ADR 0027): a turn asked on a
+/// Connection that shares nothing never reaches another Connection's prompt. Any other
+/// message at Never (the Ask's own Connection, or Home) goes only when it sent nothing but
+/// the conversation. Steps on other Connections (`AskedIn::other_steps`) never hold the
 /// turn: each is re-gated by its own Connection when it replays (ADR 0027 rule 1).
 pub fn message_allowed(
     m: &AiMessage,
@@ -95,26 +202,37 @@ pub fn message_allowed(
     others: &[(ConnectionId, AiAccess)],
     switches: Switches,
 ) -> bool {
-    let access = message_access(m, access, others);
-    let across = m.asked_in.as_ref().is_some_and(|a| !a.also.is_empty());
-    !(access == AiAccess::Never && across)
-        && history_allowed(
-            m.connection_id,
-            m.database.as_deref(),
-            &m.kinds,
-            ask,
-            access,
-            switches,
-        )
+    let also = m.asked_in.as_ref().map_or(&[][..], |a| a.also.as_slice());
+    stamp_parts_allowed(
+        m.connection_id,
+        also,
+        &m.kinds,
+        ask,
+        access,
+        others,
+        switches,
+    )
 }
 
-/// Whether a stored question names another Connection: asked across one (`also`) or with
-/// steps on one (`other_steps`). A summary over such a question is held unless
-/// `summary_covers_ok` passes for it.
-pub fn spans_other(m: &AiMessage) -> bool {
-    m.asked_in
-        .as_ref()
-        .is_some_and(|a| !a.also.is_empty() || !a.other_steps.is_empty())
+/// Whether `connection_id` names a Connection other than the Ask's (Home names none).
+fn elsewhere(connection_id: Option<ConnectionId>, ask: &AskFacts) -> bool {
+    connection_id.is_some() && connection_id != ask.connection_id
+}
+
+/// The gate on a summary's own stamp (a compaction's or a Topic's): its kinds at its own
+/// Connection's access, held whatever it carried when that is another Connection now at
+/// Never or deleted, as a message is (`message_allowed`).
+pub fn stamp_allowed(
+    connection_id: Option<ConnectionId>,
+    kinds: &[ItemKind],
+    ask: &AskFacts,
+    access: AiAccess,
+    others: &[(ConnectionId, AiAccess)],
+    switches: Switches,
+) -> bool {
+    let level = access_of(connection_id, ask, access, others);
+    !(level == AiAccess::Never && elsewhere(connection_id, ask))
+        && history_allowed(kinds, level, switches)
 }
 
 /// The gate a summary applies to each message it covers: `message_allowed`, and every step
@@ -129,10 +247,10 @@ pub fn summary_covers_ok(
 ) -> bool {
     message_allowed(m, ask, access, others, switches)
         && m.asked_in.as_ref().is_none_or(|a| {
-            a.other_steps.iter().all(|s| {
-                let now = access_now(s.connection_id, others);
-                now != AiAccess::Never && rank(now) >= rank(s.level)
-            })
+            steps_ok(
+                a.other_steps.iter().map(|s| (s.connection_id, s.level)),
+                others,
+            )
         })
 }
 
@@ -199,37 +317,13 @@ fn hidden(compactions: &[Compaction], at: i64) -> bool {
         .any(|c| !c.undone && c.first_at <= at && at <= c.last_at)
 }
 
-/// The Topic an Ask closes, as the Ask sees it: stored it is still open with no summary
-/// (the UI's save closes it), so it gets the rule summary of its visible messages here,
-/// the one it would get once closed. A summary already stored is kept.
-pub fn closing_topic(
-    topics: &mut [Topic],
-    thread: &AiThread,
-    compactions: &[Compaction],
-    seq: u32,
-) {
-    let Some(t) = topics
-        .iter_mut()
-        .find(|t| t.seq == seq && t.summary.trim().is_empty())
-    else {
-        return;
-    };
-    let shown: Vec<&AiMessage> = thread
-        .messages
-        .iter()
-        .filter(|m| m.role != AiRole::Notice && m.topic == Some(seq) && !hidden(compactions, m.at))
-        .collect();
-    t.summary = rule_summary(&shown);
-    t.summary_by = SummaryBy::Rules;
-    t.closed = true;
-}
-
 /// The history an Ask may send: the open Topic's newest whole turns, its newest compaction
 /// summary, and the summaries of up to two earlier Topics, all behind the gate and within
 /// `share_tokens`. `others` is the current access of each Connection in `also_of(thread)`:
-/// a message asked across one is gated at the lower access (`message_allowed`), and so is
-/// a summary of a span or Topic holding such a message. `clean` runs on every text before
-/// it is measured.
+/// each message is gated at its own Connection's access, lowered to any it was asked across
+/// (`message_allowed`), and a summary goes only when every message it covers passes: those
+/// the thread still holds, and for a compaction its kept `covers` too. `clean` runs on every
+/// text before it is measured.
 #[allow(clippy::too_many_arguments)]
 pub fn select_history(
     thread: Option<&AiThread>,
@@ -245,19 +339,44 @@ pub fn select_history(
     clean: &dyn Fn(&str) -> String,
 ) -> HistoryPick {
     let mut out = HistoryPick::default();
-    let gate = |c: Option<ConnectionId>, d: Option<&str>, k: &[ItemKind]| {
-        history_allowed(c, d, k, ask, access, switches)
+    // A summary's own stamp, at its own Connection's access.
+    let gate = |c: Option<ConnectionId>, k: &[ItemKind]| {
+        stamp_allowed(c, k, ask, access, others, switches)
     };
     let msg_ok = |m: &AiMessage| message_allowed(m, ask, access, others, switches);
-    // A summary covers its messages: one asked across a Connection now lower, or with a
-    // step on a Connection that no longer allows it, holds it.
+    // A summary goes only when every message it covers that the thread still holds passes
+    // (Decision 2). A compaction is also gated on its kept `covers` (fix round 1), since the
+    // thread may have dropped what it covers. Each returns whether it passes, and whether a
+    // refusal lies on the Ask's own Connection and database (what Sends counts).
+    let here_of =
+        |c: Option<ConnectionId>, d: Option<&str>| c == ask.connection_id && d == ask.database;
     let covered_ok = |covers: &dyn Fn(&AiMessage) -> bool| {
-        thread.is_none_or(|t| {
-            t.messages
-                .iter()
-                .filter(|m| spans_other(m) && covers(m))
-                .all(|m| summary_covers_ok(m, ask, access, others, switches))
-        })
+        let mut ok = true;
+        let mut mine = false;
+        for m in thread.iter().flat_map(|t| t.messages.iter()) {
+            if m.role != AiRole::Notice
+                && covers(m)
+                && !summary_covers_ok(m, ask, access, others, switches)
+            {
+                ok = false;
+                mine |= here_of(m.connection_id, m.database.as_deref());
+            }
+        }
+        (ok, mine)
+    };
+    let kept_ok = |kept: Option<&Vec<Cover>>| match kept {
+        None => (false, false),
+        Some(cs) => {
+            let mut ok = true;
+            let mut mine = false;
+            for c in cs {
+                if !cover_ok(c, ask, access, others, switches) {
+                    ok = false;
+                    mine |= here_of(c.connection_id, c.database.as_deref());
+                }
+            }
+            (ok, mine)
+        }
     };
     let mut kinds: Vec<ItemKind> = Vec::new();
     let mut add_kinds = |ks: &[ItemKind]| {
@@ -267,7 +386,7 @@ pub fn select_history(
             }
         }
     };
-    // History of another place is not held back by AI access: Sends must not count it.
+    // Sends counts as held only what is on the Ask's own Connection and database.
     let here =
         |c: Option<ConnectionId>, d: Option<&str>| c == ask.connection_id && d == ask.database;
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
@@ -367,8 +486,15 @@ pub fn select_history(
         // Compactions chain within a Topic (each folds the summary before it), so it
         // covers every message of its Topic up to its end, not only its own span.
         let span = |m: &AiMessage| m.topic == Some(c.topic) && m.at <= c.last_at;
-        if !(gate(c.connection_id, c.database.as_deref(), &c.kinds) && covered_ok(&span)) {
-            if here(c.connection_id, c.database.as_deref()) {
+        let stamp = gate(c.connection_id, &c.kinds);
+        let (stored, stored_mine) = covered_ok(&span);
+        let (kept, kept_mine) = kept_ok(covers_of(c, thread, compactions).as_ref());
+        if !(stamp && stored && kept) {
+            // Counted only when what holds it is on the Ask's own place.
+            let mine = (!stamp && here(c.connection_id, c.database.as_deref()))
+                || stored_mine
+                || kept_mine;
+            if mine {
                 out.blocked = out.blocked.saturating_add(c.messages);
             }
         } else {
@@ -402,6 +528,22 @@ pub fn select_history(
         })
         .collect();
     earlier.sort_by_key(|t| std::cmp::Reverse(t.seq));
+    // Fix round 2: a Topic's row is rebuilt from the messages the thread still holds, but
+    // its summary text was written from all of them. A trim cuts only the oldest end, so the
+    // Topic holding the thread's oldest message may have lost turns its text still quotes
+    // (their Connections, steps and kinds no longer gate it): its summary is held. With no
+    // thread, none can be proven whole. The trim cuts by position, and a clock set back can
+    // make `at` disagree with it, so the Topic of the first message by position is held too.
+    let oldest_topic = |seq: u32| {
+        thread.is_none_or(|t| {
+            let stored = t.messages.iter().filter(|m| m.role != AiRole::Notice);
+            let first = stored.clone().next();
+            first.is_none_or(|m| m.topic == Some(seq))
+                || stored
+                    .min_by_key(|m| m.at)
+                    .is_some_and(|m| m.topic == Some(seq))
+        })
+    };
     let mut sent = 0usize;
     let mut skipped = 0usize;
     let mut held = 0usize;
@@ -410,12 +552,18 @@ pub fn select_history(
         if sent + skipped >= EARLIER_TOPICS {
             break;
         }
+        // Held, and not counted: what holds it may not be on any place now.
+        if oldest_topic(t.seq) {
+            continue;
+        }
         let of_topic = |m: &AiMessage| m.topic == Some(t.seq);
-        if !(gate(t.connection_id, t.database.as_deref(), &t.kinds) && covered_ok(&of_topic)) {
-            // Counted while it would have taken one of the two places.
-            if here(t.connection_id, t.database.as_deref())
-                && sent + skipped + held < EARLIER_TOPICS
-            {
+        let stamp = gate(t.connection_id, &t.kinds);
+        let (stored, stored_mine) = covered_ok(&of_topic);
+        if !(stamp && stored) {
+            // Counted while it would have taken one of the two places, and only when what
+            // holds it is on the Ask's own place.
+            let mine = (!stamp && here(t.connection_id, t.database.as_deref())) || stored_mine;
+            if mine && sent + skipped + held < EARLIER_TOPICS {
                 held += 1;
                 out.blocked = out.blocked.saturating_add(t.messages);
             }
@@ -494,6 +642,9 @@ mod tests {
             title: "t".into(),
             messages,
             updated_at: 1,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         }
     }
 
@@ -533,6 +684,14 @@ mod tests {
             at: 500,
             undone,
             record: AnswerRecord::default(),
+            // What it folded: questions on Connection 7's `shop`.
+            covers: Some(vec![Cover::of(&msg(
+                AiRole::User,
+                "",
+                first_at,
+                topic,
+                &[ItemKind::Question],
+            ))]),
         }
     }
 
@@ -542,7 +701,6 @@ mod tests {
             opened: false,
             reason: None,
             title: String::new(),
-            closing: None,
         }
     }
 
@@ -550,9 +708,7 @@ mod tests {
         AskFacts {
             connection_id: conn(7),
             database: Some("shop"),
-            action: "ask",
             tables,
-            now_ms: 10_000,
         }
     }
 
@@ -691,7 +847,7 @@ mod tests {
                 &|s| s.to_string(),
             )
         };
-        assert_eq!(also_of(&th), vec![other]);
+        assert_eq!(also_of(&th), vec![conn(7).unwrap(), other]);
         let r = go(AiAccess::Schema, &[(other, AiAccess::SchemaQuery)]);
         assert_eq!((r.turns.len(), r.blocked), (1, 0));
         // The other Connection lowered to Never, or deleted: held, counted as lower access.
@@ -739,6 +895,9 @@ mod tests {
             x.topic = Some(1);
         }
         m.extend(turn(2, 300, "next", "ok"));
+        // An older Topic holds the thread's oldest message, first by time and by position,
+        // so Topic 1 is whole (fix round 2; Task 3 carry b).
+        m.splice(0..0, turn(9, 1, "older", "older a"));
         let th = thread(m);
         let mut c = compaction(1, 100, 101, false);
         c.kinds = vec![ItemKind::Question];
@@ -787,6 +946,9 @@ mod tests {
             level: AiAccess::SchemaQuery,
         }];
         m.extend(turn(2, 300, "next", "ok"));
+        // An older Topic holds the thread's oldest message, first by time and by position,
+        // so Topic 1 is whole (fix round 2; Task 3 carry b).
+        m.splice(0..0, turn(9, 1, "older", "older a"));
         let th = thread(m);
         let go = |others: &[(ConnectionId, AiAccess)], p: &TopicPick| {
             select_history(
@@ -867,6 +1029,186 @@ mod tests {
         assert_eq!(held.turns.len(), 1);
     }
 
+    /// Decision 2: the memory stage reads every Connection a stored message names, its own
+    /// first, each once; a Home message names none.
+    #[test]
+    fn also_of_names_each_messages_own_connection() {
+        let (b, c, d) = (Uuid::from_u128(8), Uuid::from_u128(9), Uuid::from_u128(10));
+        let mut m = turn(1, 10, "on shop", "ok");
+        asked(&mut m[0], "", Some(c));
+        m[0].asked_in.as_mut().unwrap().other_steps = vec![crate::ai::memory::OtherStep {
+            connection_id: d,
+            text: "opened a table on another Connection".into(),
+            level: AiAccess::Schema,
+        }];
+        let mut on_b = turn(1, 20, "on b", "ok");
+        for x in &mut on_b {
+            x.connection_id = Some(b);
+        }
+        let mut home = turn(1, 30, "hello", "hi");
+        for x in &mut home {
+            x.connection_id = None;
+        }
+        m.extend(on_b);
+        m.extend(home);
+        assert_eq!(
+            also_of(&thread(m)),
+            vec![conn(7).unwrap(), c, d, b],
+            "own, also, other steps, each once"
+        );
+    }
+
+    /// Fix round 1: a compaction written before its cover was kept goes only when its whole
+    /// chain is still in the thread and something older is too; it then counts as covering
+    /// every Connection the thread uses. Anything else holds it.
+    #[test]
+    fn an_old_compaction_goes_only_when_what_it_covers_is_known() {
+        let mut m = Vec::new();
+        for i in 1..=4 {
+            m.extend(turn(1, i * 10, &format!("q{i}"), &format!("a{i}")));
+        }
+        let th = thread(m.clone());
+        let old = |first_at, last_at, messages| Compaction {
+            covers: None,
+            messages,
+            ..compaction(1, first_at, last_at, false)
+        };
+        let goes = |th: &AiThread, c: &Compaction| {
+            run(
+                th,
+                &[],
+                std::slice::from_ref(c),
+                &pick(1),
+                &facts(&[]),
+                AiAccess::Schema,
+                &[],
+                1_000,
+            )
+            .summaries
+            .len()
+                == 1
+        };
+        // Turns 2 and 3 folded, turn 1 still held before them: known, and it goes.
+        assert!(goes(&th, &old(20, 31, 4)));
+        // Its range starts at the thread's oldest message: a trim may have reached it.
+        assert!(!goes(&th, &old(10, 21, 4)));
+        // A message of its span is gone (a Retry, or a trim): unknown.
+        assert!(!goes(&th, &old(20, 31, 6)));
+        // An earlier compaction of the chain starts at the oldest message: unknown.
+        let first = old(10, 11, 2);
+        let second = Compaction {
+            at: 600,
+            ..old(20, 31, 4)
+        };
+        assert!(legacy_covers(&second, &th, &[first, second.clone()]).is_none());
+        // Known, it covers every Connection the thread uses: one deleted holds it.
+        let mut on_gone = m;
+        for x in &mut on_gone[6..] {
+            x.connection_id = conn(8);
+        }
+        let th = thread(on_gone);
+        let c = old(20, 31, 4);
+        let kept = legacy_covers(&c, &th, std::slice::from_ref(&c)).unwrap();
+        assert!(kept.iter().any(|k| k.connection_id == conn(8)));
+        assert!(!goes(&th, &c));
+    }
+
+    /// Fix round 1: a compaction's kept cover is gated even when the thread no longer holds
+    /// the message it names.
+    #[test]
+    fn a_kept_cover_holds_a_compaction_whatever_the_thread_dropped() {
+        let th = thread(turn(1, 50, "kept", "kept a"));
+        let mut c = compaction(1, 10, 21, false);
+        c.covers = Some(vec![Cover {
+            connection_id: conn(8),
+            database: Some("ledger".into()),
+            kinds: vec![ItemKind::Question, ItemKind::Names],
+            also: Vec::new(),
+            steps: Vec::new(),
+        }]);
+        let go = |others: &[(ConnectionId, AiAccess)]| {
+            select_history(
+                Some(&th),
+                &[],
+                std::slice::from_ref(&c),
+                &pick(1),
+                &facts(&[]),
+                AiAccess::Schema,
+                others,
+                Switches::default(),
+                &[],
+                1_000,
+                &|s| s.to_string(),
+            )
+        };
+        assert_eq!(
+            go(&[(conn(8).unwrap(), AiAccess::Schema)]).summaries.len(),
+            1
+        );
+        for others in [&[(conn(8).unwrap(), AiAccess::Never)][..], &[]] {
+            let r = go(others);
+            assert!(r.summaries.is_empty());
+            // Held by Connection 8, not the Ask's own: not counted.
+            assert_eq!(r.blocked, 0);
+        }
+    }
+
+    /// Fix round 2: a trim cuts only the oldest end, so a closed Topic that holds the
+    /// thread's oldest message may have lost turns its summary still quotes: held, and not
+    /// counted. Any later Topic is whole.
+    #[test]
+    fn a_topic_holding_the_oldest_message_is_held() {
+        let mut m = turn(1, 10, "q1", "a1");
+        m.extend(turn(2, 20, "q2", "a2"));
+        m.extend(turn(3, 30, "now", "ok"));
+        let th = thread(m);
+        let topics = [topic(1, "s1", &[]), topic(2, "s2", &[])];
+        let r = run(
+            &th,
+            &topics,
+            &[],
+            &pick(3),
+            &facts(&[]),
+            AiAccess::Schema,
+            &[1, 2],
+            1_000,
+        );
+        let texts: Vec<&str> = r.summaries.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["s2"]);
+        assert_eq!(r.blocked, 0);
+    }
+
+    /// Task 3 carry (b): the trim cuts by position, and a clock set back can make `at`
+    /// disagree with it. The Topic of the first stored message by position is held as well
+    /// as the one holding the smallest `at`; a Topic that is neither still goes.
+    #[test]
+    fn the_topic_first_by_position_is_held_when_at_disagrees() {
+        // Topic 1 is first by position; Topic 2's turn was stamped with an earlier clock.
+        let mut m = turn(1, 50, "q1", "a1");
+        m.extend(turn(2, 10, "q2", "a2"));
+        m.extend(turn(3, 60, "q3", "a3"));
+        m.extend(turn(4, 70, "now", "ok"));
+        let th = thread(m);
+        let topics = [
+            topic(1, "s1", &[]),
+            topic(2, "s2", &[]),
+            topic(3, "s3", &[]),
+        ];
+        let r = run(
+            &th,
+            &topics,
+            &[],
+            &pick(4),
+            &facts(&[]),
+            AiAccess::Schema,
+            &[1, 2, 3],
+            1_000,
+        );
+        let texts: Vec<&str> = r.summaries.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["s3"]);
+        assert_eq!(r.blocked, 0);
+    }
+
     #[test]
     fn share_cuts_whole_turns() {
         let mut m = Vec::new();
@@ -889,30 +1231,50 @@ mod tests {
         assert_eq!((r.tokens, r.dropped), (8, 2));
     }
 
+    /// Decision 2 (ruling 1 of 27 Oct): history on another Connection or database goes at
+    /// that Connection's own current access; a deleted one is Never and holds it. Neither is
+    /// the Ask's place, so Sends never counts it.
     #[test]
-    fn history_from_another_connection_never_sent() {
+    fn history_from_another_connection_goes_at_its_own_access() {
+        let eight = Uuid::from_u128(8);
         let mut m = turn(2, 10, "old q", "old a");
         for x in &mut m {
-            x.connection_id = conn(8);
+            x.connection_id = Some(eight);
+            x.kinds = vec![ItemKind::Question, ItemKind::Names];
         }
         let th = thread(m);
         let mut other = topic(1, "summary of the other place", &["invoices"]);
-        other.connection_id = conn(8);
+        other.connection_id = Some(eight);
         let tables = ["invoices".to_string()];
-        let r = run(
-            &th,
-            &[other],
-            &[],
-            &pick(2),
+        let go = |others: &[(ConnectionId, AiAccess)], ask: &AskFacts, access| {
+            select_history(
+                Some(&th),
+                std::slice::from_ref(&other),
+                &[],
+                &pick(2),
+                ask,
+                access,
+                others,
+                Switches::default(),
+                &[1],
+                10_000,
+                &|s| s.to_string(),
+            )
+        };
+        // Connection 8 allows schema names: both go, whatever the Ask's own access.
+        let r = go(
+            &[(eight, AiAccess::Schema)],
             &facts(&tables),
-            AiAccess::SchemaQueryRows,
-            &[1],
-            10_000,
+            AiAccess::Never,
         );
-        assert!(r.turns.is_empty() && r.summaries.is_empty());
-        // Another place's history is not "lower access": it is not counted.
-        assert_eq!(r.blocked, 0);
-        // Another database of the same Connection too.
+        assert_eq!((r.turns.len(), r.summaries.len(), r.blocked), (1, 1, 0));
+        // Lowered to Never, or deleted: held, not counted.
+        for others in [&[(eight, AiAccess::Never)][..], &[]] {
+            let r = go(others, &facts(&tables), AiAccess::SchemaQueryRows);
+            assert!(r.turns.is_empty() && r.summaries.is_empty());
+            assert_eq!(r.blocked, 0);
+        }
+        // Another database of the Ask's own Connection: its access.
         let mut same_conn = topic(1, "other database", &["invoices"]);
         same_conn.database = Some("crm".into());
         let r = run(
@@ -925,24 +1287,15 @@ mod tests {
             &[1],
             10_000,
         );
-        assert!(r.summaries.is_empty());
-        assert_eq!(r.blocked, 0);
-        // An Ask with no Connection receives nothing.
-        let none = AskFacts {
+        assert_eq!((r.summaries.len(), r.blocked), (1, 0));
+        // An Ask with no Connection reads each turn at its own Connection's access too.
+        let home = AskFacts {
             connection_id: None,
+            database: None,
             ..facts(&tables)
         };
-        let r = run(
-            &thread(turn(1, 10, "q", "a")),
-            &[],
-            &[],
-            &pick(1),
-            &none,
-            AiAccess::Schema,
-            &[],
-            100,
-        );
-        assert!(r.turns.is_empty());
+        let r = go(&[(eight, AiAccess::Schema)], &home, AiAccess::Never);
+        assert_eq!((r.turns.len(), r.blocked), (1, 0));
     }
 
     /// Live check, 25 Oct: on Home (no Connection) "call me andrew" then "remember my name"
@@ -1034,6 +1387,9 @@ mod tests {
                 &[ItemKind::Question, ItemKind::Sql],
             ),
         ]);
+        // An older Topic holds the thread's oldest message, first by time and by position,
+        // so Topic 1 is whole (fix round 2; Task 3 carry b).
+        m.splice(0..0, turn(9, 1, "older", "older a"));
         let th = thread(m);
         let r = run(
             &th,
@@ -1103,21 +1459,29 @@ mod tests {
         assert_eq!(r.blocked, 8 * 2 + 4);
     }
 
+    /// A turn with no Topic stamp is never sent. One stamped with a Topic but no Connection
+    /// is a Home turn: Never, so it goes only when it sent nothing but the conversation
+    /// (Decision 2), and it is not the Ask's place, so it is never counted.
     #[test]
-    fn unstamped_turns_never_sent() {
+    fn unstamped_turns_never_sent_and_unplaced_ones_are_home_turns() {
         let mut old = turn(1, 10, "old q", "old a");
         for m in &mut old {
             m.topic = None;
             m.connection_id = None;
             m.database = None;
         }
-        // Stamped by topic but not by Connection: fail closed.
-        let mut half = turn(1, 30, "half q", "half a");
-        for m in &mut half {
+        let mut home = turn(1, 30, "home q", "home a");
+        for m in &mut home {
             m.connection_id = None;
         }
+        let mut names = turn(1, 40, "names q", "names a");
+        for m in &mut names {
+            m.connection_id = None;
+            m.kinds = vec![ItemKind::Question, ItemKind::Names];
+        }
         let mut m = old;
-        m.extend(half);
+        m.extend(home);
+        m.extend(names);
         m.extend(turn(1, 50, "kept", "kept a"));
         let th = thread(m);
         let r = run(
@@ -1131,8 +1495,7 @@ mod tests {
             1_000,
         );
         let qs: Vec<&str> = r.turns.iter().map(|t| t.question.as_str()).collect();
-        assert_eq!(qs, ["kept"]);
-        // A turn with no Connection stamp is not on the Ask's Connection: not counted.
+        assert_eq!(qs, ["home q", "kept"]);
         assert_eq!(r.blocked, 0);
     }
 

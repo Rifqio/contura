@@ -232,10 +232,10 @@ test("memory_event_kept", async () => {
   });
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
   expect(result.current.memory).toBeNull();
-  stream.emit(memory({ topic: 2, opened: true, reason: "subject", title: "Biggest customers" }), sent(), delta("Ok."), done());
+  stream.emit(memory({ topic: 2, opened: false, reason: null, title: "Biggest customers" }), sent(), delta("Ok."), done());
   expect(result.current.memory?.title).toBe("Biggest customers");
   const ended = await end!;
-  expect(ended.stamp).toMatchObject({ topic: 2, opened: true, reason: "subject", kinds: ["question", "cards"] });
+  expect(ended.stamp).toMatchObject({ topic: 2, opened: false, reason: null, kinds: ["question", "cards"] });
 });
 
 test("text_listeners_hear_at_most_once_per_frame_and_release_lets_the_answer_go", async () => {

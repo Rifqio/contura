@@ -438,6 +438,9 @@ async fn first_turn(cat: &Catalog) -> (Uuid, TurnStamp, ChatRequest) {
             title: ASK_1.into(),
             messages: stored_turn(ASK_1, ANSWER_1, now() - 4 * MIN, &stamp),
             updated_at: now(),
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         })
         .unwrap();
     (id, stamp, chat)
@@ -897,6 +900,9 @@ async fn a_stored_step_from_another_groups_provider_is_not_replayed() {
             title: ASK_1.into(),
             messages: stored_turn(ASK_1, ANSWER_1, now() - 4 * MIN, &stamp),
             updated_at: now(),
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         })
         .unwrap();
     let req = request(ASK_2, Some(id));

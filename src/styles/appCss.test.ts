@@ -380,6 +380,62 @@ test("history_panel_is_360", () => {
   expect(bodyOf(".history-row-failed")).toMatch(/color:\s*var\(--c-danger-text\)/);
 });
 
+/** D2 Task 6 (P30): the Ask's chat history draws with its own classes, all under `.history-menu`, so it and the query History never style each other. */
+test("chat_history_rows_are_their_own_classes", () => {
+  const own = [
+    "history-find",
+    "history-items",
+    "history-group",
+    "history-item",
+    "history-chat",
+    "history-chat-title",
+    "history-chat-time",
+    "history-chat-place",
+    "history-chat-table",
+    "history-tag",
+    "history-actions",
+    "history-edit",
+    "history-rename",
+    "history-ask",
+    "history-clear-all",
+    "history-none",
+  ];
+  const all = rules(appCss).flatMap((r) => r.selector.split(",").map((s) => ({ sel: s.trim(), body: r.body })));
+  for (const name of own) {
+    const uses = all.filter((r) => new RegExp(`\\.${name}(?![\\w-])`).test(r.sel));
+    expect({ name, styled: uses.length > 0 }).toEqual({ name, styled: true });
+    for (const r of uses) expect({ name, sel: r.sel }).toEqual({ name, sel: expect.stringMatching(/^\.history-menu\s/) });
+  }
+  // The popover reuses none of the query History's classes.
+  const tsx = TSX.find(([path]) => path.endsWith("assistant/ThreadHistory.tsx"))![1];
+  for (const theirs of ["history-row", "history-day", "history-section", "history-list", "history-search", "history-empty", "history-hit"]) {
+    expect({ theirs, used: new RegExp(`["\\s]${theirs}["\\s]`).test(tsx) }).toEqual({ theirs, used: false });
+  }
+  const body = (sel: string) =>
+    all
+      .filter((r) => r.sel === sel)
+      .map((r) => r.body)
+      .join("\n");
+  expect(body(".history-menu")).toMatch(/width:\s*360px/);
+  expect(body(".history-menu .history-items")).toMatch(/max-height:\s*320px/);
+  expect(body(".history-menu .history-item")).toMatch(/height:\s*52px/);
+  expect(body(".history-menu .history-group")).toMatch(/height:\s*28px/);
+  expect(body(".history-menu .history-group")).toMatch(/font-weight:\s*600/);
+  expect(body(".history-menu .history-group")).not.toMatch(/text-transform|letter-spacing/);
+  expect(body('.history-menu .history-chat[aria-current="true"]')).toMatch(/background:\s*var\(--c-bg-active\)/);
+  expect(body('.history-menu .history-chat[aria-current="true"]')).not.toMatch(/border-left|box-shadow/);
+  expect(body(".history-menu .history-chat:focus-visible")).toMatch(/outline:\s*var\(--focus-ring-width\) solid var\(--c-focus\)/);
+  expect(body(".history-menu .history-tag")).toMatch(/border-radius:\s*4px/);
+  expect(body(".history-menu .history-tag")).toMatch(/background:\s*var\(--c-bg-raised\)/);
+  expect(body(".history-menu .history-tag")).not.toMatch(/border:\s*[^0\s]/);
+  expect(body(".history-menu .history-ask")).toMatch(/background:\s*var\(--c-danger-subtle\)/);
+  expect(body(".history-menu .history-clear-all")).toMatch(/color:\s*var\(--c-danger-text\)/);
+  // Tokens only, never a hex colour, so both themes follow.
+  for (const r of all.filter((x) => x.sel.startsWith(".history-menu"))) {
+    expect({ sel: r.sel, hex: /#[0-9a-f]{3,8}\b/i.test(r.body) }).toEqual({ sel: r.sel, hex: false });
+  }
+});
+
 /** A5: the Ask header sits on the panel with no rule under it; the composer keeps its own rule above. */
 test("ai_header_has_no_rule", () => {
   expect(bodyOf(".ai-panel-head")).not.toMatch(/border-bottom\s*:\s*(?!0|none)/);

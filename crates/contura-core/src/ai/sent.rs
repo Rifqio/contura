@@ -93,6 +93,10 @@ pub struct SentRecord {
     /// The sample rows that went, counted from the framed items; never the values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<RowsSent>,
+    /// The chat title call that followed this answer (`CallKind::Title`), once its request
+    /// left this PC; written by the Core after the turn was stored (Decision 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<SummarySent>,
     /// The exact text, only with "Keep the exact text sent" on (R7.2).
     pub exact: Option<String>,
 }
@@ -123,18 +127,21 @@ impl Default for SentRecord {
             outline: None,
             summary: None,
             rows: None,
+            title: None,
             exact: None,
         }
     }
 }
 
-/// What a summary call wrote: a closed Topic's summary, or a compaction of the open one.
+/// What a summary call wrote: a closed Topic's summary, a compaction of the open one, or
+/// the chat's title after its first answer.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CallKind {
     #[default]
     Summary,
     Compact,
+    Title,
 }
 
 /// The summary call of an Ask or of Compact now (R4.1): measured from its request, like
@@ -281,7 +288,7 @@ pub struct AnswerRecord {
 
 impl AnswerRecord {
     /// The copy a listing carries: no `log`, `steps`, `thinking`, `sent.exact`,
-    /// `sent.outline.exact` or `sent.summary.exact`, and
+    /// `sent.outline.exact`, `sent.summary.exact` or `sent.title.exact`, and
     /// `trimmed` set. Everything else is kept, `sql_blocks` included.
     pub fn trimmed_copy(&self) -> AnswerRecord {
         let mut c = self.clone();
@@ -295,6 +302,9 @@ impl AnswerRecord {
             }
             if let Some(summary) = &mut sent.summary {
                 summary.exact = None;
+            }
+            if let Some(title) = &mut sent.title {
+                title.exact = None;
             }
         }
         c.trimmed = true;
@@ -340,6 +350,14 @@ impl AnswerRecord {
             .sent
             .as_mut()
             .and_then(|s| s.summary.as_mut())
+            .and_then(|o| o.exact.as_mut())
+        {
+            cut(exact, SUMMARY_EXACT_CAP);
+        }
+        if let Some(exact) = self
+            .sent
+            .as_mut()
+            .and_then(|s| s.title.as_mut())
             .and_then(|o| o.exact.as_mut())
         {
             cut(exact, SUMMARY_EXACT_CAP);
@@ -452,6 +470,7 @@ mod tests {
                 outline: None,
                 summary: None,
                 rows: None,
+                title: None,
                 exact: None,
             }),
             usage: Some(Usage {
@@ -551,6 +570,9 @@ mod tests {
                 },
             ],
             updated_at: 2,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         };
         let json = serde_json::to_string(&thread).unwrap();
         assert_eq!(serde_json::from_str::<AiThread>(&json).unwrap(), thread);
@@ -628,6 +650,32 @@ mod tests {
         let capped = r.capped();
         let exact = capped.sent.unwrap().outline.unwrap().exact.unwrap();
         assert!(exact.len() <= OUTLINE_EXACT_CAP && exact.len() > OUTLINE_EXACT_CAP - 4);
+    }
+
+    /// P4: the title call's record round-trips, is left out when absent, loses its exact
+    /// text in a listing copy and is held to the summary cap.
+    #[test]
+    fn the_title_call_record_is_trimmed_and_capped() {
+        let none = serde_json::to_value(SentRecord::default()).unwrap();
+        assert!(none.get("title").is_none(), "{none}");
+        let mut r = record();
+        r.sent.as_mut().unwrap().title = Some(SummarySent {
+            kind: CallKind::Title,
+            messages: 2,
+            exact: Some("t".repeat(SUMMARY_EXACT_CAP + 10)),
+            ..SummarySent::default()
+        });
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["sent"]["title"]["kind"], "title");
+        let back: AnswerRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(back, r);
+        let t = r.trimmed_copy();
+        let title = t.sent.as_ref().unwrap().title.as_ref().unwrap();
+        assert_eq!(title.kind, CallKind::Title);
+        assert!(title.exact.is_none());
+        let capped = r.capped();
+        let exact = capped.sent.unwrap().title.unwrap().exact.unwrap();
+        assert_eq!(exact.len(), SUMMARY_EXACT_CAP);
     }
 
     #[test]

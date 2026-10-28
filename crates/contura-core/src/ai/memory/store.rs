@@ -6,17 +6,19 @@ use std::sync::{Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
-    Compaction, CompactionId, SummaryBy, ThreadHit, ThreadStore, ThreadSummary, Topic,
-    rule_summary, topic_title,
+    Compaction, CompactionId, LAST_WORK_SQL_BYTES, LastWork, SummaryBy, ThreadStore, ThreadSummary,
+    TitleBy, Topic, WorkInput, WorkTag, rule_summary, topic_title,
 };
 use crate::ai::request::ItemKind;
-use crate::ai::{AiMessage, AiRole, AiThread, ThreadId};
+use crate::ai::{AiAccess, AiMessage, AiRole, AiThread, ThreadId};
 use crate::error::{Error, Result};
 use crate::model::ConnectionId;
-use crate::store::AppStore;
+use crate::store::{AppStore, THREAD_LIST_INDEX};
 
 /// The most question text one Topic keeps in its search row.
 const QUESTIONS_BYTES: usize = 2048;
+/// Of those, the chat's first questions keep this many; the newest fill the rest.
+const QUESTIONS_HEAD_BYTES: usize = 512;
 
 /// Weights for `thread_id seq place title summary tables questions`.
 const BM25: &str = "bm25(ai_topic_fts, 0, 0, 0, 10.0, 4.0, 6.0, 0)";
@@ -29,7 +31,7 @@ fn json<T: serde::Serialize>(v: &T) -> Result<String> {
     serde_json::to_string(v).map_err(store_err)
 }
 
-fn cut_bytes(mut s: String, max: usize) -> String {
+pub(crate) fn cut_bytes(mut s: String, max: usize) -> String {
     if s.len() > max {
         let mut end = max;
         while !s.is_char_boundary(end) {
@@ -38,6 +40,24 @@ fn cut_bytes(mut s: String, max: usize) -> String {
         s.truncate(end);
     }
     s
+}
+
+/// `s` in at most `max` bytes: when it is longer, its first `QUESTIONS_HEAD_BYTES` and its
+/// newest end, joined by a line break, each cut on a char boundary (final review I1: under
+/// one conversation a Topic is the whole chat, so its newest questions must stay findable).
+fn head_and_tail(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut head = QUESTIONS_HEAD_BYTES.min(max / 2);
+    while !s.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = s.len() - (max - head - 1);
+    while !s.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!("{}\n{}", &s[..head], &s[tail..])
 }
 
 pub fn thread(conn: &Connection, id: ThreadId) -> Result<Option<AiThread>> {
@@ -118,7 +138,7 @@ pub fn compactions(conn: &Connection, thread: ThreadId) -> Result<Vec<Compaction
     let mut stmt = conn
         .prepare(
             "SELECT id, topic, first_at, last_at, messages, summary, summary_by, connection_id,
-                    database, kinds, before_tokens, after_tokens, at, undone, record
+                    database, kinds, before_tokens, after_tokens, at, undone, record, covers
              FROM ai_compaction WHERE thread_id = ?1 ORDER BY at, id",
         )
         .map_err(store_err)?;
@@ -140,6 +160,7 @@ pub fn compactions(conn: &Connection, thread: ThreadId) -> Result<Vec<Compaction
                 r.get::<_, i64>(12)?,
                 r.get::<_, bool>(13)?,
                 r.get::<_, String>(14)?,
+                r.get::<_, Option<String>>(15)?,
             ))
         })
         .map_err(store_err)?;
@@ -161,6 +182,7 @@ pub fn compactions(conn: &Connection, thread: ThreadId) -> Result<Vec<Compaction
             at,
             undone,
             record,
+            covers,
         ) = row.map_err(store_err)?;
         out.push(Compaction {
             id: id.parse().map_err(store_err)?,
@@ -179,6 +201,8 @@ pub fn compactions(conn: &Connection, thread: ThreadId) -> Result<Vec<Compaction
             at,
             undone,
             record: serde_json::from_str(&record).map_err(store_err)?,
+            // Unreadable is unknown: the gate then fails closed, as for an old compaction.
+            covers: covers.and_then(|c| serde_json::from_str(&c).ok()),
         });
     }
     Ok(out)
@@ -248,8 +272,9 @@ pub fn add_compaction(conn: &Connection, c: &Compaction) -> Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO ai_compaction
            (id, thread_id, topic, first_at, last_at, messages, summary, summary_by,
-            connection_id, database, kinds, before_tokens, after_tokens, at, undone, record)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            connection_id, database, kinds, before_tokens, after_tokens, at, undone, record,
+            covers)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             c.id.to_string(),
             c.thread_id.to_string(),
@@ -267,6 +292,7 @@ pub fn add_compaction(conn: &Connection, c: &Compaction) -> Result<()> {
             c.at,
             c.undone,
             json(&c.record)?,
+            c.covers.as_ref().map(json).transpose()?,
         ],
     )
     .map_err(store_err)?;
@@ -284,106 +310,446 @@ pub fn undo_compaction(conn: &Connection, thread: ThreadId, id: CompactionId) ->
     Ok(n > 0)
 }
 
-/// The place's threads without their messages, newest first, at most `limit`.
-pub fn list_summaries(conn: &Connection, place: &str, limit: i64) -> Result<Vec<ThreadSummary>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, json_extract(json, '$.title'), updated_at,
-                    json_array_length(json, '$.messages'),
-                    (SELECT COUNT(*) FROM ai_topic WHERE thread_id = ai_threads.id)
-             FROM ai_threads WHERE place = ?1
-             ORDER BY updated_at DESC, id LIMIT ?2",
-        )
-        .map_err(store_err)?;
-    let rows = stmt
-        .query_map(params![place, limit], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, u32>(3)?,
-                r.get::<_, u32>(4)?,
-            ))
-        })
-        .map_err(store_err)?;
-    let mut out = Vec::new();
-    for row in rows {
-        let (id, title, updated_at, messages, topics) = row.map_err(store_err)?;
-        out.push(ThreadSummary {
-            id: id.parse().map_err(store_err)?,
-            place: place.to_string(),
-            title: title.unwrap_or_default(),
-            updated_at,
-            messages,
-            topics,
-        });
-    }
-    Ok(out)
+/// The columns a `ThreadSummary` is read from, `ai_threads` only (never `json`).
+const SUMMARY_COLUMNS: &str = "id, place, title, title_by, updated_at, messages, work,
+     (SELECT COUNT(*) FROM ai_topic WHERE thread_id = ai_threads.id)";
+
+/// The statement `list_summaries` runs: `?1` the place, `?2` the limit.
+pub fn list_sql() -> String {
+    format!(
+        "SELECT {SUMMARY_COLUMNS} FROM ai_threads INDEXED BY {THREAD_LIST_INDEX}
+         WHERE place = ?1 ORDER BY updated_at DESC, id LIMIT ?2"
+    )
 }
 
-/// The place's Topics whose title, summary, tables or questions hold one of `terms`,
-/// best first. Each term is quoted, so FTS syntax in a term is read as words.
+/// The statement `summary` runs: `?1` the thread id.
+pub fn summary_sql() -> String {
+    format!(
+        "SELECT {SUMMARY_COLUMNS} FROM ai_threads INDEXED BY {THREAD_LIST_INDEX}
+         WHERE place = (SELECT place FROM ai_threads WHERE id = ?1) AND id = ?1"
+    )
+}
+
+/// The statement of `search_place`'s column pass for `terms` terms: `?1` the place, then
+/// one `LIKE` pattern per term.
+pub fn search_like_sql(terms: usize) -> String {
+    let fields = [
+        "title",
+        "json_extract(CASE WHEN json_valid(work) THEN work END, '$.database')",
+        "json_extract(CASE WHEN json_valid(work) THEN work END, '$.table')",
+    ];
+    let mut wheres = Vec::new();
+    for n in 2..terms + 2 {
+        for f in fields {
+            wheres.push(format!("{f} LIKE ?{n} ESCAPE '\\'"));
+        }
+    }
+    format!(
+        "SELECT id FROM ai_threads INDEXED BY {THREAD_LIST_INDEX}
+         WHERE place = ?1 AND ({})
+         ORDER BY updated_at DESC, id",
+        wheres.join(" OR ")
+    )
+}
+
+fn summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, ThreadSummary)> {
+    let work: Option<String> = r.get(6)?;
+    Ok((
+        r.get(0)?,
+        ThreadSummary {
+            id: ThreadId::nil(),
+            place: r.get(1)?,
+            title: r.get(2)?,
+            title_by: TitleBy::from_column(&r.get::<_, String>(3)?),
+            updated_at: r.get(4)?,
+            messages: r.get(5)?,
+            // A column that no longer reads shows no place.
+            work: work.and_then(|w| serde_json::from_str::<WorkTag>(&w).ok()),
+            topics: r.get(7)?,
+        },
+    ))
+}
+
+fn with_id((id, s): (String, ThreadSummary)) -> Result<ThreadSummary> {
+    Ok(ThreadSummary {
+        id: id.parse().map_err(store_err)?,
+        ..s
+    })
+}
+
+/// The place's threads without their messages, newest first, at most `limit`, from the
+/// `ai_threads` columns only: no thread's JSON is read.
+pub fn list_summaries(conn: &Connection, place: &str, limit: i64) -> Result<Vec<ThreadSummary>> {
+    // The covering index: the row's columns after `json` are never read from the table.
+    let mut stmt = conn.prepare(&list_sql()).map_err(store_err)?;
+    let rows = stmt
+        .query_map(params![place, limit], summary_row)
+        .map_err(store_err)?;
+    rows.map(|r| with_id(r.map_err(store_err)?)).collect()
+}
+
+/// One thread as the list shows it, from the covering index; `None` when it is gone.
+pub fn summary(conn: &Connection, id: ThreadId) -> Result<Option<ThreadSummary>> {
+    conn.query_row(&summary_sql(), params![id.to_string()], summary_row)
+        .optional()
+        .map_err(store_err)?
+        .map(with_id)
+        .transpose()
+}
+
+/// `term` as a `LIKE` pattern that matches it anywhere, with `%`, `_` and the backslash
+/// read as written.
+fn like_pattern(term: &str) -> String {
+    let mut out = String::from("%");
+    for c in term.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+/// The place's chats that hold one of `terms`, as summaries, at most `limit`, each once:
+/// first those whose Topic search row matches (questions, tables, Topic titles; best
+/// first), then those whose title, or the database or table they last worked in, holds a
+/// term (newest first; `LIKE` folds the case of ASCII letters only). Each term is quoted for the Topic search and
+/// escaped for `LIKE`, so its syntax is read as words. Columns only: no thread's JSON.
 pub fn search_place(
     conn: &Connection,
     place: &str,
     terms: &[String],
     limit: usize,
-) -> Result<Vec<ThreadHit>> {
-    let quoted: Vec<String> = terms
+) -> Result<Vec<ThreadSummary>> {
+    let terms: Vec<&str> = terms
         .iter()
-        .filter(|t| !t.trim().is_empty())
-        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
         .collect();
-    if quoted.is_empty() || limit == 0 {
+    if terms.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let query = quoted.join(" OR ");
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT f.thread_id, json_extract(th.json, '$.title'), f.seq, t.title, t.summary,
-                    f.questions, t.last_at
-             FROM ai_topic_fts f
-             JOIN ai_topic t ON t.thread_id = f.thread_id AND t.seq = f.seq
-             JOIN ai_threads th ON th.id = f.thread_id
-             WHERE ai_topic_fts MATCH ?1 AND f.place = ?2
-             ORDER BY {BM25}, f.thread_id, f.seq LIMIT ?3"
-        ))
-        .map_err(store_err)?;
-    let rows = stmt
-        .query_map(
-            params![query, place, i64::try_from(limit).unwrap_or(i64::MAX)],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, u32>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, String>(5)?,
-                    r.get::<_, i64>(6)?,
-                ))
-            },
-        )
-        .map_err(store_err)?;
+    let mut ids: Vec<String> = Vec::new();
+    let query = terms
+        .iter()
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    {
+        // Best Topic first; a thread is taken at its best Topic.
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT f.thread_id FROM ai_topic_fts f
+                 JOIN ai_threads th ON th.id = f.thread_id AND th.place = ?2
+                 WHERE ai_topic_fts MATCH ?1 AND f.place = ?2
+                 ORDER BY {BM25}, f.thread_id, f.seq"
+            ))
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map(params![query, place], |r| r.get::<_, String>(0))
+            .map_err(store_err)?;
+        for id in rows {
+            let id = id.map_err(store_err)?;
+            if ids.len() >= limit {
+                break;
+            }
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    if ids.len() < limit {
+        // A `work` that no longer reads matches nothing rather than failing the search.
+        let mut args: Vec<String> = vec![place.to_string()];
+        args.extend(terms.iter().map(|t| like_pattern(t)));
+        let mut stmt = conn
+            .prepare(&search_like_sql(terms.len()))
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                r.get::<_, String>(0)
+            })
+            .map_err(store_err)?;
+        for id in rows {
+            let id = id.map_err(store_err)?;
+            if ids.len() >= limit {
+                break;
+            }
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
     let mut out = Vec::new();
-    for row in rows {
-        let (thread_id, title, topic, topic_title, summary, questions, at) =
-            row.map_err(store_err)?;
-        let source = if summary.trim().is_empty() {
-            questions.lines().next().unwrap_or("").trim().to_string()
-        } else {
-            summary.trim().to_string()
-        };
-        out.push(ThreadHit {
-            thread_id: thread_id.parse().map_err(store_err)?,
-            title: title.unwrap_or_default(),
-            topic,
-            topic_title,
-            snippet: source.chars().take(120).collect(),
-            at,
-        });
+    for id in ids {
+        if let Some(s) = summary(conn, id.parse().map_err(store_err)?)? {
+            out.push(s);
+        }
     }
     Ok(out)
+}
+
+/// Sets the stored thread's title and its source, in its JSON and its columns in one
+/// statement, and leaves `updated_at` alone so the list keeps its order. False when the
+/// thread is gone, or for an AI title over one the user gave.
+pub fn set_thread_title(conn: &Connection, id: ThreadId, title: &str, by: TitleBy) -> Result<bool> {
+    let n = conn
+        .execute(
+            "UPDATE ai_threads
+             SET title = ?2, title_by = ?3,
+                 json = CASE WHEN json_valid(json)
+                        THEN json_set(json, '$.title', ?2, '$.titleBy', ?3) ELSE json END
+             WHERE id = ?1 AND NOT (?3 = 'ai' AND title_by = 'user')",
+            params![id.to_string(), title, by.to_column()],
+        )
+        .map_err(store_err)?;
+    Ok(n > 0)
+}
+
+/// Counts one failed AI title call in the thread's JSON (`titleTries`, at most 255) and
+/// returns the count; 0 when the thread is gone. `updated_at` and the columns stay.
+pub fn title_failed(conn: &Connection, id: ThreadId) -> Result<u8> {
+    let tries: Option<i64> = conn
+        .query_row(
+            "UPDATE ai_threads
+             SET json = json_set(json, '$.titleTries',
+                        MIN(COALESCE(json_extract(json, '$.titleTries'), 0) + 1, 255))
+             WHERE id = ?1 AND json_valid(json)
+             RETURNING json_extract(json, '$.titleTries')",
+            params![id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(store_err)?;
+    Ok(tries.map_or(0, |n| u8::try_from(n).unwrap_or(u8::MAX)))
+}
+
+/// Writes the title call's record and log lines into the record of the answer at
+/// `answer_at`, in one immediate transaction so a turn stored meanwhile is never lost. The
+/// record is held to its caps; no column changes. Nothing is written when the thread or
+/// the answer is gone.
+pub fn record_title_call(
+    conn: &Connection,
+    id: ThreadId,
+    answer_at: i64,
+    sent: Option<&crate::ai::sent::SummarySent>,
+    log: &[crate::ai::log::LogLine],
+) -> Result<()> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(store_err)?;
+    let Some(mut t) = thread(&tx, id)? else {
+        return Ok(());
+    };
+    let Some(answer) = t
+        .messages
+        .iter_mut()
+        .find(|m| m.role == AiRole::Assistant && m.at == answer_at)
+    else {
+        return Ok(());
+    };
+    let mut record = answer.record.take().unwrap_or_default();
+    if let Some(sent) = sent {
+        record.sent.get_or_insert_with(Default::default).title = Some(sent.clone());
+    }
+    record.log.extend(log.iter().cloned());
+    answer.record = Some(record.capped());
+    let json = serde_json::to_string(&t).map_err(store_err)?;
+    tx.execute(
+        "UPDATE ai_threads SET json = ?2 WHERE id = ?1",
+        params![id.to_string(), json],
+    )
+    .map_err(store_err)?;
+    tx.commit().map_err(store_err)
+}
+
+/// The SQL of the answer's last checked block (`record.sql_blocks`): the body of that
+/// fence in the answer's text, cut to `LAST_WORK_SQL_BYTES`. `None` when the answer
+/// checked none or the fence is not there.
+pub fn last_ai_sql(answer: &AiMessage) -> Option<String> {
+    let block = answer.record.as_ref()?.sql_blocks.last()?;
+    let fence = crate::ai::rails::output::fences(&answer.text)
+        .into_iter()
+        .nth(usize::try_from(block.fence).ok()?)?;
+    let body = fence.body.trim();
+    (!body.is_empty()).then(|| cut_bytes(body.to_string(), LAST_WORK_SQL_BYTES))
+}
+
+impl LastWork {
+    /// Where the thread last worked by its newest answer with SQL (Decision 4a): that SQL,
+    /// the turn's stamp (Connection, database, its first table) and the tab its question
+    /// was asked in. `None` when no answer holds SQL. For threads saved before D2.
+    pub fn derive(thread: &AiThread) -> Option<LastWork> {
+        let at = thread
+            .messages
+            .iter()
+            .rposition(|m| m.role == AiRole::Assistant && last_ai_sql(m).is_some())?;
+        Self::of_answer(&thread.messages, at)
+    }
+
+    /// Where the answer at `at` of `messages` worked (Decision 4a); `None` when it holds no
+    /// SQL.
+    fn of_answer(messages: &[AiMessage], at: usize) -> Option<LastWork> {
+        let answer = messages.get(at).filter(|m| m.role == AiRole::Assistant)?;
+        let ai_sql = last_ai_sql(answer)?;
+        let asked = messages[..at]
+            .iter()
+            .rev()
+            .find(|m| m.role == AiRole::User)
+            .and_then(|q| q.asked_in.as_ref());
+        Some(
+            LastWork {
+                tab_kind: asked.map(|a| a.tab.clone()).unwrap_or_default(),
+                tab_key: asked.and_then(|a| a.tab_key.clone()),
+                tab_label: asked.map(|a| a.label.clone()).filter(|l| !l.is_empty()),
+                connection_id: answer.connection_id,
+                database: answer.database.clone(),
+                table: answer.tables.first().cloned(),
+                inserted_sql: None,
+                ai_sql: Some(ai_sql),
+                at: answer.at,
+                inserted_from: None,
+                ai_from: Some(answer.at),
+            }
+            .capped(),
+        )
+    }
+
+    /// `prev` after the answer at `at` of `messages` arrived: an answer with SQL sets the
+    /// AI SQL, the place and the tab (Decision 4a); the SQL the user inserted stays while
+    /// the answer is on the same Connection and database, and goes with the old place
+    /// otherwise (4c, P12). An answer without SQL changes nothing.
+    pub fn after_answer(
+        prev: Option<LastWork>,
+        messages: &[AiMessage],
+        at: usize,
+    ) -> Option<LastWork> {
+        let Some(mut next) = Self::of_answer(messages, at) else {
+            return prev;
+        };
+        if let Some(p) = prev
+            && p.connection_id == next.connection_id
+            && p.database == next.database
+        {
+            next.inserted_sql = p.inserted_sql;
+            next.inserted_from = p.inserted_from;
+        }
+        Some(next)
+    }
+
+    /// `prev` after a Retry removed messages: SQL whose answer lies in the removed span
+    /// (`removed(at)`) goes with it. A source that only fell off the front of the thread
+    /// (`MESSAGE_LIMIT`), or was never named, keeps its SQL: `last_work` holds the SQL
+    /// itself. A removed AI SQL falls back to the newest kept answer with SQL on the same
+    /// place as a kept insert, or, with no insert, to the newest kept answer with SQL. A
+    /// removed insert falls back to the newest kept answer the user inserted or opened (its
+    /// SQL), with the newest kept AI SQL beside it when on the same place (P12); else none.
+    pub fn after_cut(
+        prev: Option<LastWork>,
+        messages: &[AiMessage],
+        removed: impl Fn(i64) -> bool,
+    ) -> Option<LastWork> {
+        let p = prev?;
+        let gone =
+            |sql: &Option<String>, at: Option<i64>| sql.is_some() && at.is_some_and(&removed);
+        let insert_gone = gone(&p.inserted_sql, p.inserted_from);
+        let ai_gone = gone(&p.ai_sql, p.ai_from);
+        if !insert_gone && !ai_gone {
+            return Some(p);
+        }
+        let same = |a: &LastWork, b: &LastWork| {
+            a.connection_id == b.connection_id && a.database == b.database
+        };
+        let ai_at = messages
+            .iter()
+            .rposition(|m| m.role == AiRole::Assistant && last_ai_sql(m).is_some());
+        let base = ai_at.and_then(|i| Self::of_answer(messages, i));
+        if !insert_gone && p.inserted_sql.is_some() {
+            // Only the AI SQL went: the insert, its tab and place stay.
+            let mut out = p;
+            let (ai_sql, ai_from) = base
+                .filter(|b| same(b, &out))
+                .map_or((None, None), |b| (b.ai_sql, b.ai_from));
+            out.ai_sql = ai_sql;
+            out.ai_from = ai_from;
+            return Some(out.capped());
+        }
+        // The newest kept answer inserted or opened.
+        let inserted = messages
+            .iter()
+            .rposition(|m| {
+                m.role == AiRole::Assistant
+                    && last_ai_sql(m).is_some()
+                    && m.record.as_ref().is_some_and(|r| !r.actions.is_empty())
+            })
+            .and_then(|i| Some((i, Self::of_answer(messages, i)?)));
+        let out = match (base, inserted) {
+            (None, None) => return None,
+            (Some(b), None) => b,
+            (b, Some((i, w))) => {
+                let mut w = w;
+                w.inserted_sql = w.ai_sql.clone();
+                w.inserted_from = w.ai_from;
+                let newer = ai_at.is_none_or(|a| i >= a);
+                match b {
+                    Some(mut b) if !newer => {
+                        if same(&b, &w) {
+                            b.inserted_sql = w.inserted_sql;
+                            b.inserted_from = w.inserted_from;
+                        }
+                        b
+                    }
+                    b => {
+                        let (ai_sql, ai_from) = b
+                            .filter(|b| same(b, &w))
+                            .map_or((None, None), |b| (b.ai_sql, b.ai_from));
+                        w.ai_sql = ai_sql;
+                        w.ai_from = ai_from;
+                        w
+                    }
+                }
+            }
+        };
+        Some(out.capped())
+    }
+
+    /// `prev` after the user put an answer's SQL into a tab (Insert, Insert commented out,
+    /// Open in new tab; Decision 4b): the tab, the place and the inserted SQL. The table
+    /// and the AI SQL stay while the place does.
+    pub fn after_insert(
+        prev: Option<LastWork>,
+        work: WorkInput,
+        message_at: i64,
+        at: i64,
+    ) -> LastWork {
+        let (table, ai_sql, ai_from) = prev
+            .filter(|p| p.connection_id == work.connection_id && p.database == work.database)
+            .map_or((None, None, None), |p| (p.table, p.ai_sql, p.ai_from));
+        LastWork {
+            tab_kind: work.tab_kind,
+            tab_key: work.tab_key,
+            tab_label: work.tab_label.filter(|l| !l.is_empty()),
+            connection_id: work.connection_id,
+            database: work.database,
+            table,
+            inserted_sql: Some(work.sql).filter(|s| !s.trim().is_empty()),
+            ai_sql,
+            at,
+            inserted_from: Some(message_at),
+            ai_from,
+        }
+        .capped()
+    }
+
+    /// The copy a resume may read under the AI access gate: no SQL for a chat whose
+    /// Connection is at Never now (`access` says Never for one that is gone) or that has
+    /// no Connection (Home).
+    pub fn gated(self, access: impl Fn(ConnectionId) -> AiAccess) -> LastWork {
+        match self.connection_id {
+            Some(id) if access(id) != AiAccess::Never => self,
+            _ => self.without_sql(),
+        }
+    }
 }
 
 /// Deletes every Topic, search row and compaction of the threads.
@@ -469,8 +835,8 @@ pub fn sync_topics(conn: &Connection, thread: &AiThread) -> Result<()> {
             summary = rule_summary(&g.messages);
             by = SummaryBy::Rules.to_column();
         }
-        let questions = cut_bytes(
-            g.messages
+        let questions = head_and_tail(
+            &g.messages
                 .iter()
                 .filter(|m| m.role == AiRole::User)
                 .map(|m| m.text.as_str())
@@ -572,6 +938,21 @@ impl ThreadStore for StoreThreads {
     fn undo_compaction(&self, t: ThreadId, id: CompactionId) -> Result<bool> {
         undo_compaction(self.lock()?.conn(), t, id)
     }
+    fn set_title(&self, t: ThreadId, title: &str, by: TitleBy) -> Result<bool> {
+        set_thread_title(self.lock()?.conn(), t, title, by)
+    }
+    fn title_failed(&self, t: ThreadId) -> Result<u8> {
+        title_failed(self.lock()?.conn(), t)
+    }
+    fn record_title_call(
+        &self,
+        t: ThreadId,
+        answer_at: i64,
+        sent: Option<&crate::ai::sent::SummarySent>,
+        log: &[crate::ai::log::LogLine],
+    ) -> Result<()> {
+        record_title_call(self.lock()?.conn(), t, answer_at, sent, log)
+    }
 }
 
 #[cfg(test)]
@@ -619,6 +1000,9 @@ mod tests {
             title: "t".into(),
             messages,
             updated_at: 1,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         }
     }
 
@@ -731,6 +1115,53 @@ mod tests {
         assert_eq!(s.match_topics(u.id, &["first".into()], 5).unwrap(), [1]);
     }
 
+    /// I1 (final review): under one conversation the open Topic is the whole chat, so its
+    /// search row keeps the newest questions as well as the first, in the same budget.
+    #[test]
+    fn search_finds_a_late_question_of_a_long_chat() {
+        let s = open();
+        let mut m = Vec::new();
+        for i in 1..=100i64 {
+            m.extend(turn(
+                1,
+                i * 10,
+                &format!("question {i} about the q{i}x column of the orders ledger"),
+                &[],
+            ));
+        }
+        let t = thread_of(m);
+        s.save_thread(&t).unwrap();
+        let store = s.lock().unwrap();
+        let find = |w: &str| {
+            search_place(store.conn(), "ungrouped", &[w.to_string()], 20)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(find("q100x"), [t.id]);
+        assert_eq!(find("q99x"), [t.id]);
+        assert_eq!(find("q1x"), [t.id]);
+        let bytes: i64 = store
+            .conn()
+            .query_row(
+                "SELECT length(CAST(questions AS BLOB)) FROM ai_topic_fts WHERE thread_id = ?1",
+                params![t.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(bytes as usize <= QUESTIONS_BYTES, "{bytes}");
+    }
+
+    #[test]
+    fn head_and_tail_cuts_on_char_boundaries() {
+        let s = "é".repeat(3000);
+        let out = head_and_tail(&s, 2048);
+        assert!(out.len() <= 2048);
+        assert!(out.starts_with('é') && out.ends_with('é'));
+        assert_eq!(head_and_tail("short", 2048), "short");
+    }
+
     #[test]
     fn match_with_fts_syntax_is_words() {
         let s = open();
@@ -742,6 +1173,51 @@ mod tests {
                 "{term:?}"
             );
         }
+    }
+
+    /// Fix round 1: a compaction's cover is kept; one written without it reads as `None`.
+    #[test]
+    fn a_compaction_keeps_its_cover() {
+        let s = open();
+        let t = two_topics();
+        s.save_thread(&t).unwrap();
+        let cover = crate::ai::memory::Cover {
+            connection_id: Some(Uuid::from_u128(8)),
+            database: Some("ledger".into()),
+            kinds: vec![ItemKind::Question, ItemKind::Names],
+            also: vec![Uuid::from_u128(9)],
+            steps: vec![(Uuid::from_u128(10), crate::ai::AiAccess::Schema)],
+        };
+        let c = Compaction {
+            id: Uuid::new_v4(),
+            thread_id: t.id,
+            topic: 1,
+            first_at: 10,
+            last_at: 21,
+            messages: 4,
+            summary: "s".into(),
+            summary_by: SummaryBy::Rules,
+            connection_id: None,
+            database: None,
+            kinds: vec![ItemKind::Question],
+            before: 900,
+            after: 80,
+            at: 99,
+            undone: false,
+            record: Default::default(),
+            covers: Some(vec![cover.clone()]),
+        };
+        s.add_compaction(&c).unwrap();
+        let old = Compaction {
+            id: Uuid::new_v4(),
+            covers: None,
+            ..c.clone()
+        };
+        s.add_compaction(&old).unwrap();
+        let back = s.compactions(t.id).unwrap();
+        let of = |id| back.iter().find(|x| x.id == id).unwrap().covers.clone();
+        assert_eq!(of(c.id), Some(vec![cover]));
+        assert_eq!(of(old.id), None);
     }
 
     #[test]
@@ -766,6 +1242,7 @@ mod tests {
             at: 99,
             undone: false,
             record: Default::default(),
+            covers: None,
         };
         s.add_compaction(&c).unwrap();
         assert_eq!(s.compactions(t.id).unwrap(), vec![c.clone()]);

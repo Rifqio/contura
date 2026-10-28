@@ -17,16 +17,18 @@ import type {
   AiThread,
   AppendTurn,
   AnswerRecord,
-  ThreadHit,
   ThreadSummary,
   ThreadView,
   TurnView,
   ToolUseRow,
   CompactRequest,
+  NameChatRequest,
   Compaction,
   AiTestOk,
   AnswerAction,
   AnswerActionKind,
+  LastWork,
+  WorkInput,
   AskRequest,
   CommandError,
   ConnectionConfig,
@@ -513,6 +515,13 @@ export async function aiCompact(request: CompactRequest, onEvent: (e: AiEvent) =
   return invoke("ai_compact", { request, events });
 }
 
+/**
+ * Names the chat once a turn is stored: one short call with the first question and answer only. Registered as
+ * `title:<place>`, so the next Ask in the place is never refused, and stopped by `aiCancel(requestId)`. Resolves to
+ * the AI's title, or null when no call went or no title came back.
+ */
+export const aiNameChat = (request: NameChatRequest): Promise<string | null> => invoke("ai_name_chat", { request });
+
 /** What a diagram Ask would send, built by the Core with the global settings (R1.6). */
 export const aiDiagramPreview = (request: DiagramAskRequest): Promise<Preview> => invoke("ai_diagram_preview", { request });
 
@@ -556,8 +565,11 @@ export const aiAnswerRecord = (threadId: string, messageAt: number): Promise<Ans
 /** The 20 newest tool uses across every thread, newest first (Settings, AI: Recent tool uses). */
 export const aiRecentToolUses = (): Promise<ToolUseRow[]> => invoke("ai_recent_tool_uses");
 
-/** The place's Topics that match `text`, best first. */
-export const aiSearchThreads = (place: string, text: string): Promise<ThreadHit[]> => invoke("ai_search_threads", { place, text });
+/** The place's chats that match `text` (questions, Topics, titles, where they last worked), best 20, best first. */
+export const aiSearchThreads = (place: string, text: string): Promise<ThreadSummary[]> => invoke("ai_search_threads", { place, text });
+
+/** Renames a chat; its title is the user's from then on and the list keeps its order. 1 to 120 characters. */
+export const renameAiThread = (id: string, title: string): Promise<ThreadSummary> => invoke("ai_rename_thread", { id, title });
 
 /** Saves a thread; `requestId` is the Ask whose answer this save adds, so the Core writes the AI Context it used. */
 export const saveAiThread = async (thread: AiThread, requestId: string | null = null): Promise<ThreadView> => {
@@ -587,9 +599,15 @@ export function withTurn(base: AiThread | null, view: TurnView, replaceFrom?: nu
   return { id: view.threadId, place: view.place, title: view.title, updatedAt: view.updatedAt, messages: [...kept, ...view.messages] };
 }
 
-/** Keeps what the user did with the SQL of the answer at `messageAt`; null for an answer kept before records were. */
-export const aiRecordAction = (threadId: string, messageAt: number, kind: AnswerActionKind): Promise<AnswerAction | null> =>
-  invoke("ai_record_action", { threadId, messageAt, kind });
+/**
+ * Keeps what the user did with the SQL of the answer at `messageAt`; null for an answer kept before records were. With
+ * `work`, the tab and SQL become where the chat last worked.
+ */
+export const aiRecordAction = (threadId: string, messageAt: number, kind: AnswerActionKind, work?: WorkInput): Promise<AnswerAction | null> =>
+  invoke("ai_record_action", { threadId, messageAt, kind, ...(work && { work }) });
+
+/** Where a chat last worked, with its SQL, read only on a resume; null for a chat that never worked anywhere. */
+export const aiThreadWork = (threadId: string): Promise<LastWork | null> => invoke("ai_thread_work", { threadId });
 
 export const deleteAiThread = (id: string): Promise<void> => invoke("delete_ai_thread", { id });
 

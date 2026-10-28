@@ -6,7 +6,7 @@ import SqlBlock from "../components/SqlBlock";
 import type { LineMark, SqlEditorApi, SuggestionEnd } from "../query/SqlEditor";
 import { leadingWord } from "./answerMarkdown";
 import { answerWrites } from "./answerState";
-import { type InsertPlan, type InsertTarget, plansFor } from "./insertPlan";
+import { type InsertPlan, type InsertTarget, type OpenedTab, plansFor } from "./insertPlan";
 
 interface Props {
   sql: string;
@@ -29,10 +29,14 @@ interface Props {
    * writes, or that the Core did not check, opens commented out. Nothing runs either way.
    */
   noEditor?: boolean;
-  onOpenInNewTab?(sql: string): void;
+  /** Opens the SQL in a new query tab; returns the tab as it opened, when one did. */
+  onOpenInNewTab?(sql: string): OpenedTab | null | void;
   onCopy(sql: string): void;
-  /** Told once an Insert went in or the SQL opened in a new tab, so the answer's record keeps it. */
-  onAction?(kind: AnswerActionKind): void;
+  /**
+   * Told once an Insert went in or the SQL opened in a new tab, so the answer's record keeps it: `sql` as it went in,
+   * and for Open in new tab the tab as it opened (null or absent when none opened).
+   */
+  onAction?(kind: AnswerActionKind, sql: string, opened?: OpenedTab | null): void;
   /** The inline box shows this block's SQL in the editor itself and offers its own actions: the block shows none. */
   bare?: boolean;
 }
@@ -157,7 +161,7 @@ export default function AnswerSql({
         if (!alive.current) return;
         if (end === "kept") {
           setState("kept");
-          onAction?.(kind);
+          onAction?.(kind, text);
         } else setState(null);
       },
     });
@@ -166,8 +170,9 @@ export default function AnswerSql({
   /** Opens the SQL in a new query tab; `commentedText` puts every line behind `-- ` first. */
   const openNew = (commentedText: boolean) => {
     if (!onOpenInNewTab) return;
-    onOpenInNewTab(commentedText ? commentedOut(answerText(sql)) : sql);
-    onAction?.("openedInNewTab");
+    const opened = commentedText ? commentedOut(answerText(sql)) : sql;
+    const tab = onOpenInNewTab(opened) || null;
+    onAction?.("openedInNewTab", opened, tab);
   };
 
   const applyLabel = plans?.apply?.over === "selection" || (editor && editor.selection().from !== editor.selection().to)
@@ -273,8 +278,8 @@ export default function AnswerSql({
                 disabled={!onOpenInNewTab}
                 onClick={() => {
                   if (!onOpenInNewTab) return;
-                  onOpenInNewTab(sql);
-                  onAction?.("openedInNewTab");
+                  const tab = onOpenInNewTab(sql) || null;
+                  onAction?.("openedInNewTab", sql, tab);
                 }}
               >
                 Open in new tab

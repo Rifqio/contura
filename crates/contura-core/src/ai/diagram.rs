@@ -278,6 +278,8 @@ pub fn diagram_preview(
         memory: None,
         stamp,
         summary: None,
+        // Board chats keep their rule titles (Plan D may name them later).
+        title: None,
         rows: None,
     })
 }

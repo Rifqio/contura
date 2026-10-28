@@ -168,6 +168,9 @@ async fn groq_compact_now_round_trip() {
         title: "t".into(),
         messages,
         updated_at: now,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
     };
     cat.threads.save_thread(&thread).unwrap();
 

@@ -6,6 +6,19 @@ import { type Stmt, statementOnLine } from "../query/statements";
 export interface InsertTarget {
   editor(): SqlEditorApi | null;
   name: string;
+  /** The tab's key (`tabKey`), so an Insert records where the chat last worked; absent, nothing is recorded (P22). */
+  key?: string;
+  connectionId?: string | null;
+  database?: string | null;
+}
+
+/** The query tab Open in new tab opened, as it opened: its key and name, the text it holds and its place. */
+export interface OpenedTab {
+  key: string;
+  name: string;
+  sql: string;
+  connectionId: string | null;
+  database: string | null;
 }
 
 type Range = { from: number; to: number };

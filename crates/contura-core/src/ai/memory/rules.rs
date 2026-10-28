@@ -1,4 +1,4 @@
-//! When a Topic breaks, Topic titles and the summary a Topic gets without a model.
+//! The open Topic, Topic titles and the summary a Topic gets without a model.
 
 use std::collections::BTreeSet;
 
@@ -7,8 +7,6 @@ use serde::Serialize;
 use crate::ai::{AiMessage, AiRole, AiThread};
 use crate::model::ConnectionId;
 
-/// A thread idle for longer than this starts a new Topic.
-pub const IDLE_MS: i64 = 30 * 60_000;
 /// Whole turns of the open Topic an Ask may carry.
 pub const RECENT_TURNS: usize = 8;
 /// Earlier Topics whose summaries an Ask may carry.
@@ -19,25 +17,21 @@ pub const TITLE_CHARS: usize = 40;
 const ASKED_CHARS: usize = 120;
 const ANSWER_CHARS: usize = 80;
 
+/// Why an Ask opened a Topic: only a thread's first Ask does (one conversation per desktop,
+/// ruling of 27 Oct).
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum BreakReason {
     First,
-    /// Another Connection or database.
-    Place,
-    Idle,
-    Subject,
 }
 
-/// What an Ask says about itself, as far as Topics go.
+/// What an Ask says about itself, for the gate on history.
 #[derive(Clone, Copy, Debug)]
 pub struct AskFacts<'a> {
     pub connection_id: Option<ConnectionId>,
     pub database: Option<&'a str>,
-    pub action: &'a str,
     /// The tables the Ask sends in full, else its focus table names.
     pub tables: &'a [String],
-    pub now_ms: i64,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -47,82 +41,32 @@ pub struct TopicPick {
     pub opened: bool,
     pub reason: Option<BreakReason>,
     pub title: String,
-    /// The Topic this Ask closes, when it opens a new one.
-    pub closing: Option<u32>,
 }
 
-/// The Topic an Ask belongs to: the open one, or a new one when a break rule fires.
-pub fn topic_for(thread: Option<&AiThread>, ask: &AskFacts, question: &str) -> TopicPick {
-    let first = || TopicPick {
-        seq: 1,
-        opened: true,
-        reason: Some(BreakReason::First),
-        title: topic_title(question),
-        closing: None,
+/// The Topic an Ask belongs to: the thread's highest stamped Topic, which stays open, or
+/// Topic 1 for a thread with none. No Ask ever closes a Topic.
+pub fn topic_for(thread: Option<&AiThread>, question: &str) -> TopicPick {
+    let open = thread.and_then(|t| t.messages.iter().filter_map(|m| m.topic).max());
+    let (Some(thread), Some(open)) = (thread, open) else {
+        return TopicPick {
+            seq: 1,
+            opened: true,
+            reason: Some(BreakReason::First),
+            title: topic_title(question),
+        };
     };
-    let Some(thread) = thread else {
-        return first();
-    };
-    let Some(open) = thread.messages.iter().filter_map(|m| m.topic).max() else {
-        return first();
-    };
-    let msgs: Vec<&AiMessage> = thread
+    let title = thread
         .messages
         .iter()
-        .filter(|m| m.topic == Some(open))
-        .collect();
-    let head = msgs[0];
-    let title = msgs
-        .iter()
-        .find(|m| m.role == AiRole::User)
+        .find(|m| m.topic == Some(open) && m.role == AiRole::User)
         .map(|m| topic_title(&m.text))
         .unwrap_or_default();
-
-    let place = head.connection_id != ask.connection_id
-        || head.database.as_deref() != ask.database
-        || msgs
-            .iter()
-            .any(|m| m.connection_id != ask.connection_id || m.database.as_deref() != ask.database);
-    let last_at = msgs.iter().map(|m| m.at).max().unwrap_or(0);
-    let reason = if place {
-        Some(BreakReason::Place)
-    } else if ask.now_ms - last_at > IDLE_MS {
-        Some(BreakReason::Idle)
-    } else if subject_changed(&msgs, ask) {
-        Some(BreakReason::Subject)
-    } else {
-        None
-    };
-    match reason {
-        Some(reason) => TopicPick {
-            seq: open + 1,
-            opened: true,
-            reason: Some(reason),
-            title: topic_title(question),
-            closing: Some(open),
-        },
-        None => TopicPick {
-            seq: open,
-            opened: false,
-            reason: None,
-            title,
-            closing: None,
-        },
+    TopicPick {
+        seq: open,
+        opened: false,
+        reason: None,
+        title,
     }
-}
-
-fn subject_changed(open: &[&AiMessage], ask: &AskFacts) -> bool {
-    if ask.action == "continue" || ask.tables.is_empty() {
-        return false;
-    }
-    let tables: BTreeSet<&str> = open
-        .iter()
-        .flat_map(|m| m.tables.iter().map(String::as_str))
-        .collect();
-    if tables.is_empty() || ask.tables.iter().any(|t| tables.contains(t.as_str())) {
-        return false;
-    }
-    !open.iter().any(|m| m.action.as_deref() == Some(ask.action))
 }
 
 fn collapse(text: &str) -> String {
@@ -233,6 +177,9 @@ mod tests {
             title: "t".into(),
             messages,
             updated_at: 1,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         }
     }
 
@@ -258,25 +205,13 @@ mod tests {
         ])
     }
 
-    fn facts<'a>(tables: &'a [String], action: &'a str, now_ms: i64) -> AskFacts<'a> {
-        AskFacts {
-            connection_id: conn(7),
-            database: Some("shop"),
-            action,
-            tables,
-            now_ms,
-        }
-    }
-
     #[test]
     fn first_ask_opens_topic_1() {
-        let t = [];
-        let ask = facts(&t, "ask", 5);
         for thread in [None, Some(&thread(Vec::new()))] {
-            let p = topic_for(thread, &ask, "How many orders?");
+            let p = topic_for(thread, "How many orders?");
             assert_eq!(
-                (p.seq, p.opened, p.reason, p.closing),
-                (1, true, Some(BreakReason::First), None)
+                (p.seq, p.opened, p.reason),
+                (1, true, Some(BreakReason::First))
             );
             assert_eq!(p.title, "How many orders?");
         }
@@ -285,124 +220,57 @@ mod tests {
         for m in &mut old.messages {
             m.topic = None;
         }
-        assert_eq!(topic_for(Some(&old), &ask, "q").seq, 1);
+        assert_eq!(topic_for(Some(&old), "q").seq, 1);
     }
 
+    /// Ruling 1 (27 Oct): no Place, Idle or Subject break. The open Topic goes on whatever
+    /// Connection, database, tables or time the next Ask has.
     #[test]
-    fn place_change_breaks() {
-        let th = base();
-        let t = [];
-        let mut ask = facts(&t, "ask", 2_000);
-        let p = topic_for(Some(&th), &ask, "q");
-        assert_eq!((p.seq, p.opened, p.closing), (1, false, None));
-        assert_eq!(p.title, "why so slow");
-        ask.connection_id = conn(8);
-        let p = topic_for(Some(&th), &ask, "q");
-        assert_eq!(
-            (p.seq, p.reason, p.closing),
-            (2, Some(BreakReason::Place), Some(1))
+    fn a_thread_never_breaks() {
+        let mut th = base();
+        let mut later = msg(
+            AiRole::User,
+            "and the shipments?",
+            1_000 + 3 * 60 * 60_000,
+            1,
+            &["shipments"],
+            "ask",
         );
-        let mut ask = facts(&t, "ask", 2_000);
-        ask.database = Some("crm");
-        let p = topic_for(Some(&th), &ask, "q");
-        assert_eq!(
-            (p.seq, p.reason, p.closing),
-            (2, Some(BreakReason::Place), Some(1))
-        );
-        ask.database = None;
-        assert_eq!(
-            topic_for(Some(&th), &ask, "q").reason,
-            Some(BreakReason::Place)
-        );
-    }
-
-    #[test]
-    fn idle_breaks_after_30_minutes() {
-        let th = base();
-        let t = [];
-        let stay = facts(&t, "ask", 1_001 + IDLE_MS);
-        assert!(!topic_for(Some(&th), &stay, "q").opened, "30m00s stays");
-        let stay = facts(&t, "ask", 1_001 + 29 * 60_000 + 59_000);
-        assert!(!topic_for(Some(&th), &stay, "q").opened);
-        let brk = facts(&t, "ask", 1_001 + 30 * 60_000 + 1_000);
-        let p = topic_for(Some(&th), &brk, "q");
-        assert_eq!(
-            (p.seq, p.reason, p.closing),
-            (2, Some(BreakReason::Idle), Some(1))
-        );
-    }
-
-    #[test]
-    fn subject_breaks_only_without_overlap_and_new_action() {
-        let th = base();
-        let other = ["shipments".to_string()];
-        let p = topic_for(Some(&th), &facts(&other, "ask", 2_000), "q");
-        assert_eq!((p.seq, p.reason), (2, Some(BreakReason::Subject)));
-        let same = ["shipments".to_string(), "invoices".to_string()];
-        assert!(
-            !topic_for(Some(&th), &facts(&same, "ask", 2_000), "q").opened,
-            "overlap"
-        );
-        assert!(
-            !topic_for(Some(&th), &facts(&other, "explain", 2_000), "q").opened,
-            "same action"
-        );
-        assert!(
-            !topic_for(Some(&th), &facts(&[], "ask", 2_000), "q").opened,
-            "no ask tables"
-        );
-        let mut bare = base();
-        for m in &mut bare.messages {
-            m.tables.clear();
-        }
-        assert!(
-            !topic_for(Some(&bare), &facts(&other, "ask", 2_000), "q").opened,
-            "no topic tables"
-        );
-    }
-
-    /// Spec 6.3 and 7.5: the tables of the Recent steps that went are the Ask's tables
-    /// here (`gather` widens `g.tables` with them), so a move to another tab after work on
-    /// the same table keeps one Topic, whatever the action.
-    #[test]
-    fn steps_tables_keep_the_topic() {
-        let th = thread(vec![
-            msg(
-                AiRole::User,
-                "find orders over 1M",
-                1_000,
-                1,
-                &["orders"],
-                "ask",
-            ),
-            msg(
-                AiRole::Assistant,
-                "filter on total",
-                1_001,
-                1,
-                &["orders"],
-                "ask",
-            ),
-        ]);
-        // The question names no table; a step ticked `orders`.
-        let from_steps = ["orders".to_string()];
-        let p = topic_for(
-            Some(&th),
-            &facts(&from_steps, "explain", 2_000),
-            "make a pivot",
-        );
+        later.connection_id = conn(8);
+        later.database = Some("crm".into());
+        th.messages.push(later.clone());
+        th.messages.push(AiMessage {
+            role: AiRole::Assistant,
+            text: "two late".into(),
+            ..later
+        });
+        let p = topic_for(Some(&th), "something else entirely");
         assert_eq!((p.seq, p.opened, p.reason), (1, false, None));
-        // Without the step hint a new subject on a new action still breaks.
-        let other = ["monthly_totals".to_string()];
-        let p = topic_for(Some(&th), &facts(&other, "explain", 2_000), "make a pivot");
-        assert_eq!((p.seq, p.reason), (2, Some(BreakReason::Subject)));
+        assert_eq!(p.title, "why so slow");
     }
 
     #[test]
-    fn continue_never_breaks_by_subject() {
-        let th = base();
-        let other = ["shipments".to_string()];
-        assert!(!topic_for(Some(&th), &facts(&other, "continue", 2_000), "q").opened);
+    fn an_old_thread_continues_its_highest_topic() {
+        let mut th = base();
+        th.messages.push(msg(
+            AiRole::User,
+            "late shipments by carrier",
+            5_000,
+            2,
+            &["shipments"],
+            "ask",
+        ));
+        th.messages.push(msg(
+            AiRole::Assistant,
+            "carrier 3",
+            5_001,
+            2,
+            &["shipments"],
+            "ask",
+        ));
+        let p = topic_for(Some(&th), "q");
+        assert_eq!((p.seq, p.opened, p.reason), (2, false, None));
+        assert_eq!(p.title, "late shipments by carrier");
     }
 
     #[test]

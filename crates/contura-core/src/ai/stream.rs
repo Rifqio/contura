@@ -10,7 +10,7 @@ use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::ai::budget::estimate_tokens;
-use crate::ai::compact::{self, CompactPlan, Plan, TopicPlan, Wrote};
+use crate::ai::compact::{self, CompactPlan, Plan, Wrote};
 use crate::ai::context::outline::{
     OUTLINE_REPLY_TOKENS, OutlineRequest, PickReply, REPLY_CAP_BYTES, TablePicker,
 };
@@ -718,7 +718,7 @@ struct Ran {
     row: ProcessStep,
 }
 
-/// The Ask's summary step: a Topic summary or a compaction, over the Ask's own provider,
+/// The Ask's summary step: the compaction at 85%, over the Ask's own provider,
 /// model and key, its log and its Sent record.
 struct SummaryStep<'a> {
     provider: &'a dyn AiProvider,
@@ -741,12 +741,10 @@ impl SummaryStep<'_> {
         &self,
         chat: ChatRequest,
         kind: CallKind,
-        topic: Option<u32>,
         messages: u32,
         log: &mut Log,
     ) -> (Result<String>, Option<SummarySent>) {
         let shape = |s: &SummarySent| SummarySent {
-            topic,
             messages,
             ..s.clone()
         };
@@ -775,53 +773,6 @@ impl SummaryStep<'_> {
             Ok((text, s)) => (Ok(text), Some(shape(&s))),
             Err(f) => (Err(f.error), f.sent.as_ref().map(shape)),
         }
-    }
-
-    /// The closing Topic's summary by the model; a failure keeps its rule summary. True
-    /// when the model's summary was stored.
-    async fn topic(&self, p: TopicPlan, thread: crate::ai::ThreadId, log: &mut Log) -> (Ran, bool) {
-        log.push(
-            Level::Info,
-            "compact",
-            &[
-                ("topic", p.seq.to_string()),
-                ("kind", "summary".into()),
-                ("model", self.model.id.clone()),
-                ("sends", "topic_text_only".into()),
-            ],
-        );
-        self.pump.drain(self.emit);
-        (self.emit)(AiEvent::Status {
-            step: "Summarising the last topic".into(),
-        });
-        let chat = p.request(self.model);
-        let (out, sent) = self
-            .call(chat, CallKind::Summary, Some(p.seq), p.messages, log)
-            .await;
-        let ok = match out {
-            Ok(text) => {
-                let by = SummaryBy::Model {
-                    model: self.model.id.clone(),
-                };
-                match self
-                    .catalog
-                    .threads()
-                    .set_topic_summary(thread, p.seq, &text, &by)
-                {
-                    Ok(()) => true,
-                    Err(e) => {
-                        log.push(Level::Warn, "memory", &[("error", error_kind(&e))]);
-                        false
-                    }
-                }
-            }
-            Err(e) => {
-                log.push(Level::Warn, "compact", &[("error", error_kind(&e))]);
-                false
-            }
-        };
-        let row = compact::topic_row(log, &p, self.model, sent.as_ref(), ok);
-        (Ran { sent, row }, ok)
     }
 
     /// The compaction at 85%: by the model when every folded message passes the gate and
@@ -859,9 +810,7 @@ impl SummaryStep<'_> {
                 step: "Compacting the thread".into(),
             });
             let chat = p.request(self.model);
-            let (out, sent) = self
-                .call(chat, CallKind::Compact, None, p.messages, log)
-                .await;
+            let (out, sent) = self.call(chat, CallKind::Compact, p.messages, log).await;
             match out {
                 Ok(text) => (
                     text,
@@ -877,7 +826,7 @@ impl SummaryStep<'_> {
                     (
                         p.rules.clone(),
                         SummaryBy::Rules,
-                        p.rules_kinds.clone(),
+                        p.kinds.clone(),
                         sent,
                         Wrote::Failed,
                     )
@@ -897,7 +846,7 @@ impl SummaryStep<'_> {
             (
                 p.rules.clone(),
                 SummaryBy::Rules,
-                p.rules_kinds.clone(),
+                p.kinds.clone(),
                 None,
                 wrote,
             )
@@ -1333,55 +1282,6 @@ pub async fn ask_stream(
             }
             return fail_logged(full, line, false, read, &mut log, &pump, emit);
         }
-        Plan::TopicSkipped { seq, reason } => {
-            log.push(
-                Level::Info,
-                "compact",
-                &[
-                    ("topic", seq.to_string()),
-                    ("kind", "summary".into()),
-                    ("by", "rules".into()),
-                    ("reason", reason.into()),
-                ],
-            );
-            None
-        }
-        Plan::Topic(p) if !p.on => {
-            log.push(
-                Level::Info,
-                "compact",
-                &[
-                    ("topic", p.seq.to_string()),
-                    ("kind", "summary".into()),
-                    ("by", "rules".into()),
-                    ("reason", "setting".into()),
-                ],
-            );
-            None
-        }
-        Plan::Topic(p) => {
-            let thread = memory.source.as_ref().map(|t| t.id).unwrap_or_default();
-            let (ran, stored) = step.topic(p, thread, &mut log).await;
-            // The model's summary replaces the rule summary the history picked: pick
-            // again and assemble the turn again, as after a compaction.
-            if stored {
-                memory = recall(catalog, &gathered, &mut log, memory.others.take()).await;
-                match assemble_with(
-                    &gathered,
-                    &memory.pick,
-                    memory.memory.clone(),
-                    &mut log,
-                    false,
-                ) {
-                    Ok(again) => {
-                        preview = again;
-                        (tokens, needed) = compact::measure(&preview, req, settings, model);
-                    }
-                    Err(e) => return fail_build(e, read, &mut log, &pump, emit),
-                }
-            }
-            Some(ran)
-        }
         Plan::Compact(p) => match step.compact(p, req, &gathered, &mut memory, &mut log).await {
             Ok((ran, again)) => {
                 if let Some(again) = again {
@@ -1537,6 +1437,8 @@ pub async fn ask_stream(
         outline,
         summary,
         rows: preview.rows.clone(),
+        // The title call is made after the turn is stored, and written into it then.
+        title: None,
         // Never stored: the kept text shows where rows went without holding them.
         exact: settings
             .keep_exact_text

@@ -13,6 +13,10 @@ import {
   aiAnswerRecord,
   aiModels,
   aiSearchThreads,
+  aiRecordAction,
+  aiNameChat,
+  aiThreadWork,
+  renameAiThread,
   getAiThread,
   listAiThreads,
   saveAiThread,
@@ -618,10 +622,43 @@ test("thread_commands_pass_camel_case_arguments", async () => {
   ]);
 });
 
+test("chat_record_functions_invoke_their_commands", async () => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValue(null);
+  await renameAiThread("a", "x");
+  await aiSearchThreads("ungrouped", "orders");
+  expect(vi.mocked(invoke).mock.calls).toEqual([
+    ["ai_rename_thread", { id: "a", title: "x" }],
+    ["ai_search_threads", { place: "ungrouped", text: "orders" }],
+  ]);
+});
+
+test("work_functions_invoke_their_commands", async () => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValue(null);
+  await aiThreadWork("a");
+  await aiRecordAction("a", 5, "inserted");
+  const work = { tabKind: "query", tabKey: "query:q1", tabLabel: "Query 1", connectionId: "c1", database: "shop", sql: "select 1" };
+  await aiRecordAction("a", 5, "openedInNewTab", work);
+  expect(vi.mocked(invoke).mock.calls).toEqual([
+    ["ai_thread_work", { threadId: "a" }],
+    ["ai_record_action", { threadId: "a", messageAt: 5, kind: "inserted" }],
+    ["ai_record_action", { threadId: "a", messageAt: 5, kind: "openedInNewTab", work }],
+  ]);
+});
+
+test("ai_name_chat_invokes_its_command", async () => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValue("Unpaid clients to date");
+  const request = { requestId: "r1", place: "ungrouped", groupId: null, threadId: "t1", model: "m", off: ["title" as const] };
+  expect(await aiNameChat(request)).toBe("Unpaid clients to date");
+  expect(vi.mocked(invoke).mock.calls).toEqual([["ai_name_chat", { request }]]);
+});
+
 test("with_turn_puts_the_stored_turn_after_the_open_copy", () => {
   const m = (at: number, text = `m${at}`) => ({ role: (at % 2 ? "assistant" : "user") as "user" | "assistant", text, context: [], at });
   const base = { id: "t1", place: "p", title: "x", updatedAt: 1, messages: [m(2), m(3), m(4), m(5)] };
-  const view = (over: Partial<TurnView>): TurnView => ({ threadId: "t1", place: "p", title: "x", updatedAt: 9, messages: [m(6), m(7)], keptFrom: 2, messageCount: 6, topics: [], compactions: [], ...over });
+  const view = (over: Partial<TurnView>): TurnView => ({ threadId: "t1", place: "p", title: "x", updatedAt: 9, messages: [m(6), m(7)], titleBy: "rule", titleTries: 0, keptFrom: 2, messageCount: 6, topics: [], compactions: [], ...over });
   expect(withTurn(base, view({})).messages.map((x) => x.at)).toEqual([2, 3, 4, 5, 6, 7]);
   // Over the cap: the oldest turn went.
   expect(withTurn(base, view({ keptFrom: 4 })).messages.map((x) => x.at)).toEqual([4, 5, 6, 7]);

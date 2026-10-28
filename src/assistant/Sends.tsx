@@ -22,8 +22,6 @@ interface Props {
   /** Shows the AI Context tip; the inline box shows only the header age. */
   withTip?: boolean;
   now?: number;
-  /** The model that writes the summary, for the line under the rows. */
-  modelName?: string | null;
   /** A slash command: each new value opens the list and shows the exact text, for this look only (not remembered). */
   openSignal?: number;
   /** An Ask was sent: each new value folds the list, as Copilot Chat folds "Used n references" per answer. */
@@ -54,6 +52,7 @@ const ICON: Record<ItemKind, IconName> = {
   diagram: "flow",
   tab: "layers",
   steps: "history",
+  title: "edit",
 };
 
 /**
@@ -73,13 +72,13 @@ function pillTitle(i: PreviewItem): string | undefined {
   return undefined;
 }
 
-/** "Summary step · last topic" or "Summary step · 14 older messages". */
+/** "Summary step · 14 older messages": the compaction, the only summary step an Ask makes. */
 function summaryLabel(s: SummaryPreview): string {
-  return s.kind === "summary" ? "Summary step · last topic" : `Summary step · ${s.messages.toLocaleString("en-US")} older ${s.messages === 1 ? "message" : "messages"}`;
+  return `Summary step · ${s.messages.toLocaleString("en-US")} older ${s.messages === 1 ? "message" : "messages"}`;
 }
 
 /** What one question would send, one row per item as the Core built it, with the exact text behind "Show exactly". */
-export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now(), modelName = null, openSignal = 0, foldSignal = 0, variant, foldable = false }: Props) {
+export default function Sends({ preview, error = null, header, onToggle, labelOf, connection = null, withTip = true, now = Date.now(), openSignal = 0, foldSignal = 0, variant, foldable = false }: Props) {
   const diagram = variant === "diagram";
   const [shown, setShown] = useState(false);
   const [open, setOpenState] = useState(() => !foldable || loadSendsOpen());
@@ -112,6 +111,8 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
   const context = preview?.context ?? null;
   const outline = preview?.items.find((i) => i.kind === "outline");
   const summary = preview?.summary ?? null;
+  /** The chat title call that follows the answer: one row, its size an estimate. */
+  const title = preview?.title ?? null;
   const blocked = preview?.memory?.blocked ?? 0;
   const age = sendsAge(context, now);
   const tip = withTip && preview ? contextTip(context, connection, now) : null;
@@ -240,13 +241,28 @@ export default function Sends({ preview, error = null, header, onToggle, labelOf
               )}
             </li>
           )}
+          {title && (
+            <li className="sends-item">
+              <button
+                type="button"
+                className="send-pill"
+                aria-pressed={title.on}
+                title={title.on ? "After the first answer, one short call writes this chat's title. Click to leave it out." : "Left out. Click to let the AI name this chat."}
+                onClick={() => onToggle("title")}
+              >
+                <Icon name={ICON.title} size={14} />
+                <span className="send-pill-label">
+                  {`Chat title, ${tokensText(title.tokens)}`}
+                  {title.on ? "" : " · off"}
+                </span>
+              </button>
+            </li>
+          )}
         </ul>
       )}
       {open && summary?.on && (
         <p className="sends-note">
-          {summary.kind === "summary"
-            ? `+ 1 step: the last topic is summarised by ${modelName ?? "the model"} first.`
-            : `+ 1 step: ${summary.messages.toLocaleString("en-US")} older ${summary.messages === 1 ? "message" : "messages"} become one summary first.`}
+          {`+ 1 step: ${summary.messages.toLocaleString("en-US")} older ${summary.messages === 1 ? "message becomes" : "messages become"} one summary first.`}
         </p>
       )}
       {open && tables && <p className="sends-note">{tables}</p>}

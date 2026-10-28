@@ -148,8 +148,12 @@ The stamp on a question saying where it was asked, with a short summary of that 
 _Avoid_: Origin, source tab
 
 **Topic**:
-A stretch of a chat thread about one subject, with a short summary. A new Topic starts after a long pause, in a new place, or when the subject changes.
+A stretch of a chat thread with a short summary. Chats saved before 27 Oct 2026 may hold several; a chat now keeps one until New chat.
 _Avoid_: Session, conversation, chapter
+
+**Chat title**:
+The short name of a chat in the history list. It starts as the first question, then the AI writes a better one after the first answer, from the question and the start of the answer only. A title the user typed is never replaced.
+_Avoid_: Subject, name, summary
 
 **Sent record**:
 What one Ask sent to the provider, kept with the answer: sizes, the items sent, and a hash of the text. It keeps the exact text only when the privacy switch for that is on.

@@ -25,3 +25,13 @@ test("radiogroup_names_the_options", () => {
   expect(group).toBeTruthy();
   expect(screen.getAllByRole("radio").map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
 });
+
+test("an_option_title_is_on_its_radio", () => {
+  const options = [
+    { value: "a", label: "Alpha" },
+    { value: "b", label: "Beta", disabled: true, title: "Select a beta first." },
+  ];
+  render(<Segmented value="a" options={options} onChange={() => {}} label="Letter" />);
+  expect(screen.getByRole("radio", { name: "Beta" }).getAttribute("title")).toBe("Select a beta first.");
+  expect(screen.getByRole("radio", { name: "Alpha" }).hasAttribute("title")).toBe(false);
+});

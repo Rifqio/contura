@@ -150,6 +150,17 @@ test("summary_step_line_and_kept_text", () => {
   expect(screen.getByText("Compaction step: 1,204 B, about 344 tokens, 14 messages")).toBeTruthy();
 });
 
+test("the_chat_title_step_line_and_kept_text", () => {
+  const title = { ...SUMMARY, kind: "title" as const, messages: 2, bytes: 1_150, tokens: 300 };
+  const { unmount } = render(<SentRecord sent={sentRecord({ title })} usage={null} onClose={vi.fn()} />);
+  expect(screen.getByText("Chat title step: 1,150 B, about 300 tokens, 2 messages")).toBeTruthy();
+  expect(screen.queryByLabelText("Exactly what the chat title step sent")).toBeNull();
+  unmount();
+  render(<SentRecord sent={sentRecord({ title: { ...title, exact: "title text" } })} usage={null} onClose={vi.fn()} />);
+  expect(screen.getByText("Chat title step", { selector: ".sent-pop-exact-head" })).toBeTruthy();
+  expect(screen.getByLabelText("Exactly what the chat title step sent").textContent).toBe("title text");
+});
+
 test("a_record_where_only_the_summary_left_says_so", () => {
   render(<SentRecord sent={sentRecord({ bytes: 0, summaryCall: true, summary: SUMMARY })} usage={null} notSent onClose={vi.fn()} />);
   expect(screen.getByText("Only the summary step left your computer. The main request did not.")).toBeTruthy();

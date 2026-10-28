@@ -27,6 +27,7 @@ const KIND_WORDS: Record<ItemKind, string> = {
   diagram: "the diagram text",
   tab: "This tab",
   steps: "Recent steps",
+  title: "the chat title call",
 };
 
 const plural = (count: number, word: string) => `${n(count)} ${word}${count === 1 ? "" : "s"}`;
@@ -39,7 +40,7 @@ function outlineLine(o: OutlineSent): string {
 }
 
 /** "Summary step: 1,204 B, about 344 tokens, 4 messages"; "Compaction step: ..." for Compact now and auto-compact. */
-const stepName = (c: SummarySent) => (c.kind === "compact" ? "Compaction step" : "Summary step");
+const stepName = (c: SummarySent) => (c.kind === "compact" ? "Compaction step" : c.kind === "title" ? "Chat title step" : "Summary step");
 function summaryLine(c: SummarySent): string {
   return `${stepName(c)}: ${n(c.bytes)} B, about ${n(c.tokens)} tokens, ${plural(c.messages, "message")}`;
 }
@@ -146,6 +147,7 @@ export default function SentRecord({ sent, usage, notSent = false, onClose, hove
       )}
       {sent.outline && <p className="sent-pop-line">{outlineLine(sent.outline)}</p>}
       {sent.summary && <p className="sent-pop-line">{summaryLine(sent.summary)}</p>}
+      {sent.title && <p className="sent-pop-line">{summaryLine(sent.title)}</p>}
       {sent.exact != null ? (
         <pre className="sent-pop-exact" aria-label="Exactly what was sent">
           {sent.exact}
@@ -167,6 +169,14 @@ export default function SentRecord({ sent, usage, notSent = false, onClose, hove
           <p className="sent-pop-exact-head">{stepName(sent.summary)}</p>
           <pre className="sent-pop-exact" aria-label={`Exactly what the ${stepName(sent.summary).toLowerCase()} sent`}>
             {sent.summary.exact}
+          </pre>
+        </>
+      )}
+      {sent.title?.exact != null && (
+        <>
+          <p className="sent-pop-exact-head">{stepName(sent.title)}</p>
+          <pre className="sent-pop-exact" aria-label="Exactly what the chat title step sent">
+            {sent.title.exact}
           </pre>
         </>
       )}

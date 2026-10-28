@@ -142,11 +142,26 @@ export type FlowEditAnswer = { stale: true } | ({ stale: false } & FlowEditResul
 /** Completion items; `stale` when a newer text was still waiting to be parsed (it has been parsed now, so ask again). */
 export type FlowCompleteAnswer = FlowCompletionResult & { stale?: true };
 
+/** A frame that left the board in a shrink, with its last good doc, its place and its kind and title. */
+type Gone = { pair: string; index: number; doc: FlowDoc };
+
 /**
- * `lastValid` holds each titled frame's last good doc by its title, and `lasts` each frame's own by index; both are
- * rebuilt from the current frames on each parse.
+ * The frames that left in the latest shrink, when that shrink only took frames away (as many kinds and titles went
+ * as frames): a later frame whose kind word is being retyped is no header for a keystroke or two (its text joins the
+ * frame above), and takes its own doc back when it is a frame again at its place, at the old `count`. A new shrink
+ * replaces it, and it is dropped by the first parse at another count and after `GONE_PARSES` parses, so it never
+ * holds more than the frames of one shrink, nor for long (B4 Task 2b, fix round 2).
  */
-type Cached = { version: number; text: string; board: BoardParse; lastValid: Map<string, FlowDoc>; lasts: (FlowDoc | null)[]; icons: number };
+type GoneSet = { count: number; age: number; entries: Gone[] };
+
+/** How many parses after its shrink a gone frame can still come back. */
+export const GONE_PARSES = 3;
+
+/**
+ * `lasts` holds each current frame's own last good doc by index, and `gone` the frames of the latest shrink; both are
+ * rebuilt on each parse.
+ */
+type Cached = { version: number; text: string; board: BoardParse; lasts: (FlowDoc | null)[]; gone: GoneSet | null; icons: number };
 
 /** A paste or insert refused because the board would be over MAX_BOARD_SHAPES. */
 export const BOARD_FULL = "This board would have more than 10,000 shapes, so nothing was added.";
@@ -165,23 +180,76 @@ function editFrame(f: FrameParse, edit: Exclude<FlowRequestOp, FlowBoardOp>): Fl
   return applyFlowEdit(f.text, f.parse, edit);
 }
 
+/** The kind and title of a frame, one string: a frame's identity in the worker, while no other frame shares it. */
+const kindTitle = (p: { kind: string | null; title: string }) => `${p.kind ?? ""}\u0000${p.title}`;
+
+/** Each kind and title held by exactly one of `frames`, to that frame's index. */
+function soleKindTitles(frames: readonly { parse: { kind: string | null; title: string } }[]): Map<string, number> {
+  const at = new Map<string, number>();
+  frames.forEach((f, i) => {
+    const k = kindTitle(f.parse);
+    at.set(k, at.has(k) ? -1 : i);
+  });
+  return at;
+}
+
+/** What `lastFor` reads about the board and the parse before it, made once per parse. */
+type LastContext = { board: BoardParse; old: Cached | undefined; titles: ReadonlySet<string>; now: Map<string, number>; before: Map<string, number> };
+
 /**
- * The last good doc for frame `i` of `board`: its own doc, else the one kept under its title (never ""), else the
- * one of the frame at its place before, only when that frame was this one renamed: the same kind, and either the
- * same title or a title no frame has now (a moved frame keeps its title, so it is never taken for this one).
+ * The last good doc for frame `i` of the board, only ever its own (B4 Task 2b): its own doc, else the last good one
+ * of the frame it was before. That is the one frame of its kind and title, when exactly one frame had them before and
+ * one has them now (a moved frame); else, when that pair was on no frame before, the frame that left at this place in
+ * the latest shrink, now that the board has its count again (a later frame's kind word retyped, `GoneSet`); else the
+ * frame at its place, when the count is the same and the title is the same or one no frame has now (a frame renamed
+ * where it is). The doc must be of the frame's kind; a frame whose kind word is half typed (no kind) keeps only the
+ * doc of its own last known kind, under the same title. Never a doc kept for a title another frame holds; with none,
+ * the frame draws nothing.
  */
-function lastFor(board: BoardParse, i: number, old: Cached | undefined, titles: ReadonlySet<string>): FlowDoc | null {
-  const p = board.frames[i].parse;
+function lastFor(c: LastContext, i: number): FlowDoc | null {
+  const p = c.board.frames[i].parse;
   if (p.doc) return p.doc;
+  const old = c.old;
   if (!old) return null;
-  if (p.title !== "") {
-    const kept = old.lastValid.get(p.title);
-    if (kept) return kept;
+  /** `d` when it is of this frame's kind, or of `known` (the source frame's last known kind) while this one has none. */
+  const fits = (d: FlowDoc | null | undefined, known: string | null) => (d && (p.kind !== null ? d.kind === p.kind : known !== null && d.kind === known) ? d : null);
+  const knownAt = (j: number) => old.board.frames[j].parse.kind ?? old.lasts[j]?.kind ?? null;
+  const n = c.board.frames.length;
+  const k = kindTitle(p);
+  if (p.title !== "" && c.now.get(k) === i) {
+    const j = c.before.get(k);
+    if (j !== undefined && j >= 0) return fits(old.lasts[j], knownAt(j));
+    const g = j === undefined && old.gone?.count === n ? old.gone.entries.find((x) => x.pair === k && x.index === i) : undefined;
+    if (g) return fits(g.doc, g.doc.kind);
   }
-  if (old.board.frames.length !== board.frames.length) return null;
+  if (old.board.frames.length !== n) return null;
   const was = old.board.frames[i].parse;
-  if (was.kind !== p.kind || (was.title !== p.title && titles.has(was.title))) return null;
-  return old.lasts[i];
+  if (was.title !== p.title && (p.kind === null || c.titles.has(was.title))) return null;
+  return fits(old.lasts[i], knownAt(i));
+}
+
+/**
+ * The gone frames after this parse (`GoneSet`): a shrink that only took frames away keeps those that had a last good
+ * doc; else the latest shrink's are kept while the count stays as the shrink left it, for `GONE_PARSES` parses.
+ */
+function goneAfter(c: LastContext): GoneSet | null {
+  const old = c.old;
+  if (!old) return null;
+  const n = c.board.frames.length;
+  const was = old.board.frames.length;
+  if (n < was) {
+    const here = new Set(c.board.frames.map((f) => kindTitle(f.parse)));
+    const left = old.board.frames.filter((f) => !here.has(kindTitle(f.parse))).length;
+    if (left !== was - n) return null;
+    const entries: Gone[] = [];
+    for (const [pair, j] of c.before) {
+      const doc = old.lasts[j];
+      if (j >= 0 && doc && !here.has(pair)) entries.push({ pair, index: j, doc });
+    }
+    return entries.length > 0 ? { count: was, age: 1, entries } : null;
+  }
+  const g = old.gone;
+  return g && n === was && g.age < GONE_PARSES ? { ...g, age: g.age + 1 } : null;
 }
 
 /**
@@ -260,17 +328,19 @@ export function createFlowService() {
     parse(docId: string, text: string, keepVersion = false): FlowResult {
       const old = docs.get(docId);
       const board = parseBoard(text, { icons: iconSet, iconNear }, old && old.icons === iconsSeen ? old.board : null);
-      const lastValid = new Map<string, FlowDoc>();
       const titles = new Set(board.frames.map((f) => f.parse.title));
-      const lasts = board.frames.map((_, i) => lastFor(board, i, old, titles));
+      const now = soleKindTitles(board.frames);
+      const before = old ? soleKindTitles(old.board.frames) : new Map<string, number>();
+      const ctx: LastContext = { board, old, titles, now, before };
+      const lasts = board.frames.map((_, i) => lastFor(ctx, i));
+      const gone = goneAfter(ctx);
       const frames: FrameResult[] = board.frames.map((f, i) => {
         const p = f.parse;
         const last = lasts[i];
-        if (last && p.title !== "" && !lastValid.has(p.title)) lastValid.set(p.title, last);
         return { index: f.index, kind: p.kind, title: p.title, from: f.from, to: f.to, line: f.line, doc: p.doc, lastValid: p.doc ? null : last, docId: idOf(p.doc), lastValidId: p.doc ? null : idOf(last), ...(p.oldEr ? { oldEr: true as const } : {}) };
       });
       const version = keepVersion && old ? old.version : nextVersion++;
-      docs.set(docId, { version, text, board, lastValid, lasts, icons: iconsSeen });
+      docs.set(docId, { version, text, board, lasts, gone, icons: iconsSeen });
       const top = frames[0];
       return { kind: top.kind, doc: top.doc, problems: board.problems, lastValid: top.lastValid, frames, version, ...(top.oldEr ? { oldEr: true as const } : {}) };
     },

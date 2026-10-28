@@ -9,13 +9,15 @@ import { parseFlow } from "../../lang/flow/parse";
 import type { FlowDoc } from "../../lang/flow/model";
 import { lineageScene } from "../../lineage/scene";
 import { exampleSvg } from "../../flow/previewScene";
-import { SEQ_HEAD } from "../../flow/kindLayout";
+import { erCardH, ER_CARD_CHROME, erMetrics, ER_ROW_MID, KIND_ROW, SEQ_HEAD } from "../../flow/kindLayout";
+import flowSceneSource from "../../flow/flowScene.ts?raw";
+import svgSource from "./svg.ts?raw";
 import { callsTo, routeInvoke } from "../../test/invoke";
 import { NODE_TOKENS } from "../types";
 import type { ExportPalette } from "./palette";
-import { snapCrop } from "./PublishDialog";
-import { sceneBounds } from "./scene";
-import { sceneToSvg } from "./svg";
+import { sceneBounds, sceneEdges } from "./scene";
+import { sceneToSvg, snapCrop } from "./svg";
+import { plainSvg } from "../../test/plainSvg";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -33,6 +35,7 @@ const PALETTE: ExportPalette = {
   groupTint: "#121212",
   strongBorder: "#131313",
   panel: "#141414",
+  muted: "#151515",
 };
 const opts = { padding: 32, background: "theme" as const, mark: false };
 
@@ -46,11 +49,6 @@ function onlyTokenColours(svg: string) {
   const used = [...svg.matchAll(/(?:fill|stroke)="([^"]+)"/g)].map((m) => m[1]).filter((c) => c !== "none");
   expect(used.length).toBeGreaterThan(0);
   expect(used.filter((c) => !allowed().has(c))).toEqual([]);
-}
-/** Only plain shapes, text and images: no foreignObject, script or style, and images only from data:image/. */
-function plainSvg(svg: string) {
-  expect(svg).not.toMatch(/<(?!\/?(svg|g|rect|text|tspan|path|image)\b)[a-z]/i);
-  for (const m of svg.matchAll(/<image\b[^>]*\bhref="([^"]*)"/g)) expect(m[1]).toMatch(/^data:image\//);
 }
 
 function doc(text: string): FlowDoc {
@@ -358,14 +356,14 @@ test("crop_snaps_to_node_and_group_edges", () => {
   const checkout = scene.nodes.find((n) => n.id === "Checkout")!;
   const right = checkout.x + checkout.w;
   const dragged = { ...crop, w: right - 3 - crop.x };
-  expect(snapCrop(dragged, "e", scene, 8)).toEqual({ ...crop, w: right - crop.x });
+  expect(snapCrop(dragged, "e", sceneEdges(scene), 8)).toEqual({ ...crop, w: right - crop.x });
   // The bottom edge lands on the group's bottom.
   const low = { ...crop, h: area.y + area.h + 5 - crop.y };
-  expect(snapCrop(low, "s", scene, 8).h).toBe(area.y + area.h - crop.y);
+  expect(snapCrop(low, "s", sceneEdges(scene), 8).h).toBe(area.y + area.h - crop.y);
   // Out of reach, nothing moves; a moved box keeps its size.
   const far = { ...crop, w: right + 40 - crop.x };
-  expect(snapCrop(far, "e", scene, 8)).toEqual(far);
-  const moved = snapCrop({ ...crop, x: crop.x + 2 }, "move", scene, 8);
+  expect(snapCrop(far, "e", sceneEdges(scene), 8)).toEqual(far);
+  const moved = snapCrop({ ...crop, x: crop.x + 2 }, "move", sceneEdges(scene), 8);
   expect(moved).toEqual(crop);
 });
 
@@ -770,8 +768,8 @@ test("publish_draws_er_cards_and_relationships", () => {
   const [cols, oneMany, oneOne, manyMany] = scene.edges;
   const orders = scene.nodes[1];
   const customers = scene.nodes[0];
-  expect(cols.points[0]).toEqual({ x: orders.x, y: orders.y + 47 + 22 });
-  expect(cols.points[cols.points.length - 1]).toEqual({ x: customers.x + customers.w, y: customers.y + 47 });
+  expect(cols.points[0]).toEqual({ x: orders.x, y: orders.y + ER_ROW_MID + KIND_ROW });
+  expect(cols.points[cols.points.length - 1]).toEqual({ x: customers.x + customers.w, y: customers.y + ER_ROW_MID });
   // Crow's-foot ends: one end a bar, many a crow's foot, read from the first end to the second.
   expect(scene.edges.map((e) => e.marks)).toEqual([
     { start: "many", end: "one" },
@@ -832,4 +830,54 @@ test("publish_keeps_an_er_tables_colour_label_weak_dash_and_nullable_marks", () 
   const edge = part(svg, "data-edge", "edge:0");
   expect(edge).toMatch(/data-marker="crow"[^>]*stroke="#cc2200"/);
   expect(edge).toMatch(/data-marker="bar"[^>]*stroke="#cc2200"/);
+});
+
+// ----- B4 A10: Publish reads the doc, never the canvas's ER state: a long table publishes every row, unscrolled.
+
+/** The y of a path's last point. */
+const endY = (d: string) => Number(/(-?[\d.]+)\s*$/.exec(d.trim())![1]);
+
+test("a_long_table_publishes_every_row", () => {
+  // At Small, Medium and Large (B4 fix round 1): the card, its rows and its line ends scale together.
+  for (const k of [0.88, 1, 1.15]) {
+    for (const n of [30, 5]) {
+      const target = Math.min(25, n - 1);
+      const cols = Array.from({ length: n }, (_, i) => `  c${i} int${i === 0 ? " pk" : ""}`);
+      const er = doc(['diagram er "Long"', "wide {", ...cols, "}", "other {", "  id int pk", "}", `other.id > wide.c${target}`].join("\n"));
+      const scene = flowScene(er, { wide: { x: 400, y: 100 }, other: { x: 0, y: 0 } }, "modern", new Map(), undefined, undefined, k === 1 ? {} : { textScale: k });
+      const at = `k ${k}, ${n} rows`;
+      const m = erMetrics(k);
+      const wide = scene.nodes.find((x) => x.id === "wide")!;
+      expect(wide.h, at).toBe(erCardH(n, k));
+      if (k === 1) expect(wide.h).toBe(ER_CARD_CHROME + n * KIND_ROW);
+      const middle = (i: number) => wide.y + m.mid + i * m.row;
+      // The last row's middle is inside the card.
+      expect(middle(n - 1), at).toBeLessThan(wide.y + wide.h);
+      // The line meets its column's row, not the card's bottom edge: in the scene and in the image.
+      const line = scene.edges[0];
+      expect(line.points[line.points.length - 1].y, at).toBeCloseTo(middle(target), 9);
+      const svg = sceneToSvg(scene, PALETTE, opts);
+      plainSvg(svg);
+      expect(endY(/<path d="([^"]+)"/.exec(part(svg, "data-edge", "edge:0"))![1]), at).toBeCloseTo(middle(target), 2);
+      const card = part(svg, "data-node", "wide");
+      const rect = /<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/.exec(card)!;
+      const [top, h] = [Number(rect[2]), Number(rect[4])];
+      expect(h).toBe(wide.h);
+      for (let i = 0; i < n; i++) {
+        const row = new RegExp(`<text x="[^"]+" y="([^"]+)">c${i}<`).exec(card);
+        expect(row, `${at}, c${i}`).not.toBeNull();
+        const y = Number(row![1]);
+        expect(y, `${at}, c${i}`).toBeGreaterThan(top + m.head);
+        expect(y, `${at}, c${i}`).toBeLessThan(top + h);
+        // On the canvas row's middle (4 px at the text size above the words), where the line meets it.
+        expect(y - 4 * k, `${at}, c${i}`).toBeCloseTo(middle(i), 2);
+      }
+    }
+  }
+});
+
+test("publish_reads_no_live_er_state", () => {
+  for (const [name, source] of [["flowScene.ts", flowSceneSource], ["svg.ts", svgSource]] as const) {
+    expect(source, name).not.toMatch(/from\s+["'][^"']*\b(erScroll|erCanvas|kindNodes)\b[^"']*["']/);
+  }
 });

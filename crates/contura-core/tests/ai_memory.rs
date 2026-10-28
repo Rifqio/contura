@@ -7,12 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use contura_core::Error;
 use contura_core::ai::budget::PAYLOAD_CAP;
-use contura_core::ai::compact::TOPIC_SUMMARY_MAX_TOKENS;
 use contura_core::ai::context::store::{ContextStore, StoreContext};
 use contura_core::ai::memory::store::StoreThreads;
-use contura_core::ai::memory::{
-    AskedIn, BreakReason, MemoryInfo, ThreadStore, TurnStamp, rule_summary,
-};
+use contura_core::ai::memory::{AskedIn, BreakReason, MemoryInfo, ThreadStore, TurnStamp};
 use contura_core::ai::models::{ModelInfo, info_for};
 use contura_core::ai::preview::{CatalogReader, Preview, PreviewItem, preview};
 use contura_core::ai::provider::scripted::ScriptedProvider;
@@ -285,6 +282,9 @@ fn save(cat: &Catalog, place: &str, messages: Vec<AiMessage>) -> Uuid {
             title: "t".into(),
             messages,
             updated_at: now(),
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         })
         .unwrap();
     id
@@ -328,18 +328,13 @@ async fn stream(provider: &ScriptedProvider, cat: &Catalog, req: &AskRequest) ->
     events.into_inner().unwrap()
 }
 
-/// The Ask's own request. An Ask that closes a Topic may first make its one summary
-/// call (`TOPIC_SUMMARY_MAX_TOKENS`); nothing else goes before it.
+/// The Ask's own request: no Ask here makes a summary call, so it is the only one.
 async fn ask_once(cat: &Catalog, req: &AskRequest) -> (ChatRequest, Vec<AiEvent>) {
     let provider = ok_script();
     let events = stream(&provider, cat, req).await;
     let seen = provider.seen.lock().unwrap();
     match seen.as_slice() {
         [ask] => (ask.clone(), events),
-        [summary, ask] => {
-            assert_eq!(summary.max_tokens, TOPIC_SUMMARY_MAX_TOKENS);
-            (ask.clone(), events)
-        }
         other => panic!("{} requests", other.len()),
     }
 }
@@ -521,22 +516,21 @@ async fn continue_without_history_is_refused() {
             AiAccess::Schema,
             Vec::new(),
         ),
-        // The history gate blocks the only turn (another database).
+        // The history gate blocks the only turn (it carried query text; the Connection is
+        // now at Schema). Another database no longer blocks it (ruling 1 of 27 Oct).
         (
             "gate blocked",
-            AskRequest {
-                database: Some("other".into()),
-                ..continue_ask(None)
-            },
-            AiAccess::Schema,
-            turn("q", "a cut", now() - MIN, &stamp(1)),
-        ),
-        // The Topic broke by Idle.
-        (
-            "idle",
             continue_ask(None),
             AiAccess::Schema,
-            turn("q", "a cut", now() - 3 * 60 * MIN, &stamp(1)),
+            turn(
+                "q",
+                "a cut",
+                now() - MIN,
+                &Stamp {
+                    kinds: &[ItemKind::Question, ItemKind::Sql],
+                    ..stamp(1)
+                },
+            ),
         ),
     ];
     for (name, mut req, access, messages) in cases {
@@ -655,9 +649,10 @@ async fn preview_refuses_a_continue_with_nothing_to_continue() {
 #[tokio::test]
 async fn continue_needs_the_last_turn_in_the_pick() {
     let t = now() - 10 * MIN;
-    // Earlier turn passes the gate, the last pair is from another database: dropped.
+    // Earlier turn passes the gate, the last pair carried query text the Connection no
+    // longer allows: dropped. (Another database no longer drops it: ruling 1 of 27 Oct.)
     let other = Stamp {
-        database: "other",
+        kinds: &[ItemKind::Question, ItemKind::Sql],
         ..stamp(1)
     };
     let mut m = turn("first", "done answer", t, &stamp(1));
@@ -1083,8 +1078,11 @@ async fn continue_stamp_takes_the_continued_kinds() {
     assert!(kinds.contains(&ItemKind::Cards), "{kinds:?}");
 }
 
+/// Ruling 1 (27 Oct): the history follows the conversation across databases. The open
+/// Topic's turns and the closed Topic's summary asked on `shop` go with an Ask on
+/// `shop_archive`, gated by the Connection's own access (Decision 2).
 #[tokio::test]
-async fn two_databases_one_thread() {
+async fn another_database_keeps_the_history() {
     let cat = catalog(AiAccess::Schema);
     let t = now() - 10 * MIN;
     // Topic 1 is closed and has a summary that names orders; Topic 2 is open.
@@ -1103,167 +1101,50 @@ async fn two_databases_one_thread() {
     req.database = Some("shop_archive".into());
 
     let (chat, events) = ask_once(&cat, &req).await;
-    assert_eq!(roles(&chat), [ChatRole::User]);
     let all = all_text(&chat);
-    assert!(!all.contains("Store 4"), "{all}");
-    assert!(!all.contains("Late orders"), "{all}");
-    assert!(!all.contains("About 40"), "{all}");
+    assert!(all.contains("How many orders today?"), "{all}");
+    assert!(all.contains("About 40."), "{all}");
     let s = memory_of(&events);
-    assert_eq!(
-        (s.topic, s.opened, s.reason),
-        (3, true, Some(BreakReason::Place))
-    );
+    // One conversation (ruling 1): the open Topic goes on on another database.
+    assert_eq!((s.topic, s.opened, s.reason), (2, false, None));
     assert_eq!(s.database.as_deref(), Some("shop_archive"));
 
     let p = show(&cat, &req).await;
-    assert!(row(&p, ItemKind::History).is_none(), "{:?}", p.items);
+    assert!(row(&p, ItemKind::History).is_some(), "{:?}", p.items);
     let m = p.memory.clone().unwrap();
-    assert_eq!((m.turns, m.summaries), (0, 0));
-    // Another database is not lower AI access: Sends must not say so.
+    assert_eq!((m.topic, m.opened, m.turns), (2, false, 1));
     assert_eq!(m.blocked, 0);
+    assert_eq!(same_boundary(&p.exact), same_boundary(&exact_of(&chat)));
 }
 
+/// Ruling 1 (27 Oct): no Idle break. Topic 1 asked 3 hours later goes on, its turns in
+/// History, and no Topic summary call is made.
 #[tokio::test]
-async fn idle_break_sends_earlier_topic_summary_on_overlap() {
+async fn an_idle_thread_continues_its_topic() {
     let cat = catalog(AiAccess::Schema);
     let t = now() - 3 * 60 * MIN;
-    // Topic 1 on orders, closed (it has a rule summary); Topic 2 on customers, open.
-    let mut messages = turn("Which orders are late?", "Orders 7 and 9.", t, &stamp(1));
-    let customers = Stamp {
-        tables: &["customers"],
-        ..stamp(2)
-    };
-    messages.extend(turn(
-        "Customers without email",
-        "Three of them.",
-        t + MIN,
-        &customers,
-    ));
-    let id = save(&cat, PLACE, messages);
-    let topics = cat.threads.topics(id).unwrap();
-    let summary = topics[0].summary.clone();
-    assert!(!summary.is_empty());
-
-    // Hours later: the open Topic is idle, so a new one opens.
-    let mut req = ask("orders late this week?", Some(id));
-    req.focus.tables = vec![TableRef {
-        schema: None,
-        name: "orders".into(),
-    }];
-    // Shown before the Ask: Topic 1, and Topic 2 (this Ask closes it) by its rule
-    // summary, since the Ask sends customers in full too.
-    let p = show(&cat, &req).await;
-    assert_eq!(
-        row(&p, ItemKind::History).unwrap().label,
-        "Thread · 2 summaries"
-    );
-    let m = p.memory.clone().unwrap();
-    assert_eq!((m.turns, m.summaries), (0, 2));
-
-    let (chat, events) = ask_once(&cat, &req).await;
-    assert_eq!(roles(&chat), [ChatRole::User], "no turns of a closed Topic");
-    let s = memory_of(&events);
-    assert_eq!(
-        (s.topic, s.opened, s.reason),
-        (3, true, Some(BreakReason::Idle))
-    );
-    let line = serde_json::to_string(&serde_json::json!({
-        "source": "history",
-        "text": format!("Earlier topic \"Which orders are late?\" ({}): {summary}", topics[0].first_at),
-    }))
-    .unwrap();
-    // Topic 2 goes by the summary the model wrote in this Ask ("ok"), newest first.
-    let closing = serde_json::to_string(&serde_json::json!({
-        "source": "history",
-        "text": format!("Earlier topic \"Customers without email\" ({}): ok", topics[1].first_at),
-    }))
-    .unwrap();
-    let turn = &chat.messages[0].text;
-    assert!(turn.contains(&line), "{turn}");
-    // The summaries go first in the framed block.
-    let block = turn.split_once('\n').unwrap().1;
-    assert!(block.starts_with(&format!("{closing}\n{line}")), "{turn}");
-    assert!(!turn.contains("Three of them"), "{turn}");
-    assert_eq!(
-        turn.matches("\"source\":\"history\"").count(),
-        2,
-        "the Ask sends as many summaries as the preview showed: {turn}"
-    );
-}
-
-#[tokio::test]
-async fn idle_break_sends_the_closing_topic_on_overlap() {
-    let cat = catalog(AiAccess::Schema);
-    let t = now() - 3 * 60 * MIN;
-    // One Topic on orders, idle for hours: the next Ask on orders closes it.
     let messages = turn("Which orders are late?", "Orders 7 and 9.", t, &stamp(1));
-    let id = save(&cat, PLACE, messages.clone());
-    assert!(
-        cat.threads.topics(id).unwrap()[0].summary.is_empty(),
-        "still open"
-    );
-    let refs: Vec<&AiMessage> = messages.iter().collect();
-    let rules = rule_summary(&refs);
-    let head = format!("Earlier topic \"Which orders are late?\" ({t})");
+    let id = save(&cat, PLACE, messages);
 
     let req = ask("orders late this week?", Some(id));
-    // The preview shows the closing Topic's rule summary.
     let p = show(&cat, &req).await;
-    assert_eq!(
-        row(&p, ItemKind::History).unwrap().label,
-        "Thread · 1 summary"
-    );
-    let shown = serde_json::to_string(&serde_json::json!({
-        "source": "history",
-        "text": format!("{head}: {rules}"),
-    }))
-    .unwrap();
-    assert!(p.exact.contains(&shown), "{}", p.exact);
+    assert_eq!(row(&p, ItemKind::History).unwrap().label, "Thread · 1 turn");
+    let m = p.memory.clone().unwrap();
+    assert_eq!((m.topic, m.opened, m.reason), (1, false, None));
+    assert_eq!((m.turns, m.summaries), (1, 0));
+    assert!(p.summary.is_none(), "no Topic summary step");
 
-    // The Ask summarises it by the model first, then sends that summary instead.
     let (chat, events) = ask_once(&cat, &req).await;
     let s = memory_of(&events);
-    assert_eq!((s.topic, s.reason), (2, Some(BreakReason::Idle)));
-    let turn = &chat.messages.last().unwrap().text;
-    let line = serde_json::to_string(&serde_json::json!({
-        "source": "history",
-        "text": format!("{head}: ok"),
-    }))
-    .unwrap();
-    assert!(turn.contains(&line), "{turn}");
-    assert!(!turn.contains(&rules), "{turn}");
+    assert_eq!((s.topic, s.opened, s.reason), (1, false, None));
     assert_eq!(
         roles(&chat),
-        [ChatRole::User],
-        "no raw turns of a closed Topic"
+        [ChatRole::User, ChatRole::Assistant, ChatRole::User]
     );
-
-    // With the Summary row off the rule summary goes, as the preview showed.
-    let mut off = req.clone();
-    off.off = vec![ItemKind::Summary];
-    let id = save(&cat, PLACE, messages.clone());
-    off.thread_id = Some(id);
-    let (chat, _) = ask_once(&cat, &off).await;
-    let turn = &chat.messages.last().unwrap().text;
-    assert!(turn.contains(&rules), "{turn}");
-
-    // The gate still holds: a closing Topic that sent query text stays at Schema.
-    let sql = Stamp {
-        kinds: &[ItemKind::Question, ItemKind::Cards, ItemKind::Sql],
-        ..stamp(1)
-    };
-    let id = save(&cat, PLACE, turn_of(&sql, t));
-    let mut req = ask("orders late this week?", Some(id));
-    req.request_id = "r3".into();
-    let p = show(&cat, &req).await;
-    assert!(row(&p, ItemKind::History).is_none(), "{:?}", p.items);
-    assert_eq!(p.memory.clone().unwrap().blocked, 2);
-    let (chat, _) = ask_once(&cat, &req).await;
-    assert!(!all_text(&chat).contains("Which orders are late?"));
-}
-
-fn turn_of(s: &Stamp, t: i64) -> Vec<AiMessage> {
-    turn("Which orders are late?", "Orders 7 and 9.", t, s)
+    assert_eq!(chat.messages[0].text, "Which orders are late?");
+    assert_eq!(chat.messages[1].text, "Orders 7 and 9.");
+    // The Topic stays open: no summary was written for it.
+    assert!(cat.threads.topics(id).unwrap()[0].summary.is_empty());
 }
 
 #[tokio::test]
@@ -1484,6 +1365,9 @@ fn context_used_takes_the_larger_figure() {
             answer(2, 4_000, 2_000),
         ],
         updated_at: t,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
     };
     // The newest answer of Topic 2 reported 6,000.
     assert_eq!(context_used(5_000, Some(&thread), 2), 6_000);
@@ -1750,8 +1634,10 @@ async fn lowered_access_holds_asked_in_turn() {
     assert_eq!((m.turns, m.blocked), (0, 2));
 }
 
+/// Ruling 1: a turn asked on another database of the Ask's Connection replays, its Asked
+/// in framed with it.
 #[tokio::test]
-async fn other_database_turn_not_replayed() {
+async fn another_database_turn_is_replayed() {
     let cat = catalog(AiAccess::SchemaQuery);
     let t = now() - 5 * MIN;
     let id = save(
@@ -1767,13 +1653,230 @@ async fn other_database_turn_not_replayed() {
     );
     let req = ask("and in shop?", Some(id));
     let (chat, _) = ask_once(&cat, &req).await;
-    assert_eq!(roles(&chat), [ChatRole::User]);
+    assert_eq!(
+        roles(&chat),
+        [ChatRole::User, ChatRole::Assistant, ChatRole::User]
+    );
     let all = all_text(&chat);
-    assert!(!all.contains("orders in staging?"), "{all}");
-    assert!(!all.contains(r#""source":"asked_in""#), "{all}");
+    assert!(all.contains("orders in staging?"), "{all}");
+    assert!(all.contains("12 orders."), "{all}");
+    assert!(
+        chat.messages[0]
+            .text
+            .contains(r#"{"source":"asked_in","text":"Visual Query in shop: tables orders; ticked orders.id"}"#),
+        "{}",
+        chat.messages[0].text
+    );
     let m = show(&cat, &req).await.memory.unwrap();
-    // Another database is not lower access.
-    assert_eq!((m.turns, m.blocked), (0, 0));
+    assert_eq!((m.turns, m.blocked), (1, 0));
+}
+
+/// A second Connection in the test catalog.
+fn kestrel(id: ConnectionId, access: AiAccess) -> ConnectionConfig {
+    ConnectionConfig {
+        id,
+        name: "Kestrel staging".into(),
+        ..shop_conn(access)
+    }
+}
+
+/// `turn`, stamped on Connection `on` (`None`: Home).
+fn turn_on(
+    q: &str,
+    a: &str,
+    at: i64,
+    on: Option<ConnectionId>,
+    kinds: &'static [ItemKind],
+) -> Vec<AiMessage> {
+    let mut m = turn(
+        q,
+        a,
+        at,
+        &Stamp {
+            kinds,
+            tables: &[],
+            ..stamp(1)
+        },
+    );
+    for x in &mut m {
+        x.connection_id = on;
+        if on.is_none() {
+            x.database = None;
+        }
+    }
+    m
+}
+
+/// Decision 2: a turn on another Connection is gated at that Connection's own current
+/// access, not the Ask's: asked from A at Never, B's turn at Schema goes.
+#[tokio::test]
+async fn another_connection_turn_goes_at_its_own_access() {
+    let b = Uuid::from_u128(43);
+    let mut cat = catalog(AiAccess::Never);
+    cat.configs.push(kestrel(b, AiAccess::Schema));
+    let id = save(
+        &cat,
+        PLACE,
+        turn_on(
+            "which tables hold invoices?",
+            "invoices and lines.",
+            now() - 5 * MIN,
+            Some(b),
+            &[ItemKind::Question, ItemKind::Cards],
+        ),
+    );
+    let req = ask("and on shop?", Some(id));
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    assert!(all.contains("which tables hold invoices?"), "{all}");
+    assert!(all.contains("invoices and lines."), "{all}");
+    let m = show(&cat, &req).await.memory.unwrap();
+    assert_eq!((m.turns, m.blocked), (1, 0));
+}
+
+/// Carried from Task 1 (it replaces `summary_gate_uses_the_closing_topics_own_connection`):
+/// a turn on another Connection in the same thread stays out of the prompt once that
+/// Connection no longer allows what it carried; the Ask's own turns still go, and Sends
+/// counts nothing as held, since B is not the Ask's place.
+#[tokio::test]
+async fn a_connection_lowered_to_never_holds_only_its_own_turns() {
+    let b = Uuid::from_u128(43);
+    let mut cat = catalog(AiAccess::Schema);
+    cat.configs.push(kestrel(b, AiAccess::SchemaQuery));
+    let t = now() - 10 * MIN;
+    let mut messages = turn("How many orders today?", "About 40.", t, &stamp(1));
+    messages.extend(turn_on(
+        "slow invoices query?",
+        "Index invoices.due.",
+        t + MIN,
+        Some(b),
+        &[ItemKind::Question, ItemKind::Cards, ItemKind::Sql],
+    ));
+    messages.extend(turn_on(
+        "call me andrew",
+        "Hi Andrew",
+        t + 2 * MIN,
+        Some(b),
+        &[ItemKind::Question],
+    ));
+    messages.extend(turn(
+        "And yesterday?",
+        "52 yesterday.",
+        t + 3 * MIN,
+        &stamp(1),
+    ));
+    let id = save(&cat, PLACE, messages);
+    let req = ask("and last week?", Some(id));
+
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    assert!(all.contains("slow invoices query?"), "{all}");
+    assert!(all.contains("call me andrew"), "{all}");
+
+    // B lowered below the query text its first turn carried: that turn is held.
+    cat.configs[1].ai_access = AiAccess::Schema;
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    assert!(!all.contains("slow invoices query?"), "{all}");
+    assert!(!all.contains("Index invoices.due."), "{all}");
+    assert!(all.contains("call me andrew"), "{all}");
+
+    // B at Never: every turn on B is held, the plain one too; A's turns go.
+    cat.configs[1].ai_access = AiAccess::Never;
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    for held in [
+        "slow invoices query?",
+        "Index invoices.due.",
+        "call me andrew",
+        "Hi Andrew",
+    ] {
+        assert!(!all.contains(held), "{held}: {all}");
+    }
+    for sent in [
+        "How many orders today?",
+        "About 40.",
+        "And yesterday?",
+        "52 yesterday.",
+    ] {
+        assert!(all.contains(sent), "{sent}: {all}");
+    }
+    let p = show(&cat, &req).await;
+    let m = p.memory.clone().unwrap();
+    assert_eq!((m.turns, m.blocked), (2, 0));
+    assert_eq!(same_boundary(&p.exact), same_boundary(&exact_of(&chat)));
+}
+
+/// Decision 2: a Home Ask (no Connection) gets each database turn its own Connection
+/// allows now, and the Home turns; Sends counts none as held.
+#[tokio::test]
+async fn a_home_ask_gets_the_database_turns_their_connection_allows() {
+    let cat = catalog(AiAccess::Schema);
+    let t = now() - 10 * MIN;
+    let mut messages = home_turn("call me andrew", "Hi Andrew", t);
+    messages.extend(turn(
+        "Which tables hold orders?",
+        "orders.",
+        t + MIN,
+        &stamp(1),
+    ));
+    messages.extend(turn(
+        "why is this select slow?",
+        "Add an index.",
+        t + 2 * MIN,
+        &Stamp {
+            kinds: &[ItemKind::Question, ItemKind::Cards, ItemKind::Sql],
+            ..stamp(1)
+        },
+    ));
+    let id = save(&cat, PLACE, messages);
+    let req = home_ask("remember my name?", Some(id));
+
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    assert!(all.contains("call me andrew"), "{all}");
+    assert!(all.contains("Which tables hold orders?"), "{all}");
+    assert!(!all.contains("select slow"), "{all}");
+    assert!(!all.contains("Add an index"), "{all}");
+    let m = show(&cat, &req).await.memory.unwrap();
+    assert_eq!((m.turns, m.blocked), (2, 0));
+}
+
+/// A deleted Connection is Never: its turns are held, a plain one too, and not counted.
+#[tokio::test]
+async fn a_deleted_connection_holds_its_turns() {
+    let gone = Uuid::from_u128(44);
+    let cat = catalog(AiAccess::Schema);
+    let t = now() - 10 * MIN;
+    let mut messages = turn_on(
+        "tables on the old server?",
+        "invoices.",
+        t,
+        Some(gone),
+        &[ItemKind::Question, ItemKind::Names],
+    );
+    messages.extend(turn_on(
+        "call me andrew",
+        "Hi Andrew",
+        t + MIN,
+        Some(gone),
+        &[ItemKind::Question],
+    ));
+    messages.extend(turn(
+        "How many orders?",
+        "About 40.",
+        t + 2 * MIN,
+        &stamp(1),
+    ));
+    let id = save(&cat, PLACE, messages);
+    let req = ask("and today?", Some(id));
+    let (chat, _) = ask_once(&cat, &req).await;
+    let all = all_text(&chat);
+    assert!(!all.contains("old server"), "{all}");
+    assert!(!all.contains("call me andrew"), "{all}");
+    assert!(all.contains("How many orders?"), "{all}");
+    let m = show(&cat, &req).await.memory.unwrap();
+    assert_eq!((m.turns, m.blocked), (1, 0));
 }
 
 #[tokio::test]
@@ -2025,4 +2128,189 @@ async fn old_asked_in_without_other_steps_replays_unchanged() {
              <</contura:context id={b}>>\n\nQuestion: How many orders today?"
         )
     );
+}
+
+// Fix round 2 (re-review Critical): a closed Topic's row is rebuilt from the messages the
+// thread still holds, but its summary text was written from all of them. Once a trim cuts
+// the Topic's first turns, its summary is held.
+
+const A_WORDS: [&str; 3] = ["zebra", "quokka", "secret_ledger"];
+
+fn no_a(text: &str) {
+    for w in A_WORDS {
+        assert!(!text.contains(w), "{w} went: {text}");
+    }
+}
+
+/// A turn of Topic `seq` on `on`'s `database`.
+#[allow(clippy::too_many_arguments)]
+fn topic_turn(
+    q: &str,
+    a: &str,
+    at: i64,
+    seq: u32,
+    on: ConnectionId,
+    database: &'static str,
+    kinds: &'static [ItemKind],
+    tables: &'static [&'static str],
+) -> Vec<AiMessage> {
+    let mut m = turn(
+        q,
+        a,
+        at,
+        &Stamp {
+            topic: seq,
+            database,
+            kinds,
+            tables,
+        },
+    );
+    for x in &mut m {
+        x.connection_id = Some(on);
+    }
+    m
+}
+
+/// A pre-D2 thread: closed Topic 1 opened by `first` then one plain turn on its place,
+/// open Topic 2 on B with `n` turns. Saved through the real write path.
+fn pre_d2(
+    cat: &Catalog,
+    first: Vec<AiMessage>,
+    place: (ConnectionId, &'static str),
+    n: usize,
+) -> Uuid {
+    let t0 = now() - 500 * MIN;
+    let mut m = first;
+    m.extend(topic_turn(
+        "plain follow up?",
+        "follow up ok.",
+        t0 + MIN,
+        1,
+        place.0,
+        place.1,
+        &[ItemKind::Question],
+        &["invoices"],
+    ));
+    let b = Uuid::from_u128(43);
+    for i in 0..n {
+        m.extend(topic_turn(
+            &format!("B question {i}?"),
+            &format!("B answer {i}."),
+            t0 + (2 + i as i64) * MIN,
+            2,
+            b,
+            "invoices",
+            ASKED,
+            &["invoices"],
+        ));
+    }
+    save(cat, PLACE, m)
+}
+
+/// Grows the stored thread by one open-Topic turn on B, past MESSAGE_LIMIT.
+fn trim_one_turn(cat: &Catalog, id: Uuid) -> AiThread {
+    let mut th = cat.threads.thread(id).unwrap().unwrap();
+    assert_eq!(th.messages.len(), contura_core::store::MESSAGE_LIMIT);
+    th.messages.extend(topic_turn(
+        "B question last?",
+        "B answer last.",
+        now() - MIN,
+        2,
+        Uuid::from_u128(43),
+        "invoices",
+        ASKED,
+        &["invoices"],
+    ));
+    cat.threads.save_thread(&th).unwrap();
+    cat.threads.thread(id).unwrap().unwrap()
+}
+
+fn b_ask(thread: Uuid) -> AskRequest {
+    AskRequest {
+        connection_id: Some(Uuid::from_u128(43)),
+        database: Some("invoices".into()),
+        focus: Focus {
+            tables: vec![TableRef {
+                schema: None,
+                name: "invoices".into(),
+            }],
+            ..Focus::default()
+        },
+        ..ask("invoices and the follow up?", Some(thread))
+    }
+}
+
+/// Every request the Ask sends and its preview: nothing of A's turn.
+async fn asks_without_a(cat: &Catalog, req: &AskRequest) {
+    let provider = ok_script();
+    stream(&provider, cat, req).await;
+    let seen = provider.seen.lock().unwrap().clone();
+    assert!(!seen.is_empty());
+    for c in &seen {
+        no_a(&all_text(c));
+    }
+    no_a(&show(cat, req).await.exact);
+}
+
+#[tokio::test]
+async fn a_trimmed_topic_opened_across_a_never_connection_stays_out() {
+    let (a, b) = (conn_id(), Uuid::from_u128(43));
+    let mut cat = catalog(AiAccess::Never);
+    cat.configs.push(kestrel(b, AiAccess::Schema));
+    // A Compare on B across A (A at Never): A's table, question and answer in its turn.
+    let mut first = topic_turn(
+        "compare the zebra ledger?",
+        "quokka differs.",
+        now() - 500 * MIN,
+        1,
+        b,
+        "invoices",
+        &[ItemKind::Question, ItemKind::Names, ItemKind::Cards],
+        &["secret_ledger", "invoices"],
+    );
+    first[0].asked_in = Some(visual_asked(vec![a]));
+    let id = pre_d2(&cat, first, (b, "invoices"), 98);
+    let summary = cat.threads.topics(id).unwrap()[0].summary.clone();
+    assert!(
+        summary.contains("zebra") && summary.contains("secret_ledger"),
+        "{summary}"
+    );
+    asks_without_a(&cat, &b_ask(id)).await;
+
+    // The Compare turn is trimmed; Topic 1 survives with its plain turn and its summary.
+    let stored = trim_one_turn(&cat, id);
+    assert!(stored.messages.iter().all(|m| !m.text.contains("zebra")));
+    let t1 = cat.threads.topics(id).unwrap()[0].clone();
+    assert!(t1.summary.contains("zebra"), "{}", t1.summary);
+    asks_without_a(&cat, &b_ask(id)).await;
+    asks_without_a(&cat, &home_ask("any plain follow up?", Some(id))).await;
+}
+
+#[tokio::test]
+async fn a_trimmed_topic_on_a_stays_out_of_b_and_home() {
+    let (a, b) = (conn_id(), Uuid::from_u128(43));
+    // A at Schema: its first turn carried query text, which A no longer allows.
+    let mut cat = catalog(AiAccess::Schema);
+    cat.configs.push(kestrel(b, AiAccess::Schema));
+    let first = topic_turn(
+        "why is the zebra query slow?",
+        "quokka index on secret_ledger.",
+        now() - 500 * MIN,
+        1,
+        a,
+        "shop",
+        &[ItemKind::Question, ItemKind::Cards, ItemKind::Sql],
+        &["secret_ledger", "invoices"],
+    );
+    let id = pre_d2(&cat, first, (a, "shop"), 98);
+    asks_without_a(&cat, &b_ask(id)).await;
+    let stored = trim_one_turn(&cat, id);
+    assert!(stored.messages.iter().all(|m| !m.text.contains("zebra")));
+    asks_without_a(&cat, &b_ask(id)).await;
+    asks_without_a(&cat, &home_ask("any plain follow up?", Some(id))).await;
+
+    // A at Never: held by its own Connection, plain first turn or not.
+    cat.configs[0].ai_access = AiAccess::Never;
+    asks_without_a(&cat, &b_ask(id)).await;
+    asks_without_a(&cat, &home_ask("any plain follow up?", Some(id))).await;
 }

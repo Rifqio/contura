@@ -9,7 +9,7 @@ import { axisKey } from "./layout";
 import type { DrawnKind } from "../diagram/types";
 import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, shownName } from "../lang/flow/model";
 import { drawnKind, familyOf, groupBoxes, nodeSize } from "./flowNodes";
-import { erColumnRow, erRowY, fixedLayout, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { erCardH, erColumnRow, erRowY, fixedLayout, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import type { ExportTheme } from "../diagram/export/palette";
 import { iconOutline, loadIcon } from "./icons";
 import { linkBox } from "./interactions/geometry";
@@ -185,7 +185,10 @@ export function flowScene(
     if (!own(positions, n.name)) continue;
     const kind = drawnKind(n.kind, doc.kind, n.name);
     const p = positions[n.name];
-    const size = fixed?.sizes.get(n.name) ?? nodeSize(kind, look, shownName(n), n.attrs.id, n, scale);
+    const sized = fixed?.sizes.get(n.name) ?? nodeSize(kind, look, shownName(n), n.attrs.id, n, scale);
+    // An ER card publishes every row (B4 A10): as tall as all its rows at the frame's text size (`erCardH`, the card's
+    // own geometry), never the canvas's 20-row window or its scroll.
+    const size = CARD_KINDS.has(kind) ? { w: sized.w, h: erCardH((n.rows ?? []).length, scale) } : sized;
     placed.set(n.name, { x: p.x, y: p.y, ...size });
     types.set(n.name, familyOf(kind));
     if (CARD_KINDS.has(kind)) {
@@ -283,7 +286,7 @@ export function flowScene(
     // A relationship between columns meets each card at its column's row, as on the canvas (ER build C).
     const route =
       l.fromColumn !== undefined || l.toColumn !== undefined
-        ? routeRows(ab, erRowY(ab.y, ab.h, erColumnRow(rowsOf.get(l.from) ?? [], l.fromColumn)), bb, erRowY(bb.y, bb.h, erColumnRow(rowsOf.get(l.to) ?? [], l.toColumn)), l.from === l.to)
+        ? routeRows(ab, erRowY(ab.y, ab.h, erColumnRow(rowsOf.get(l.from) ?? [], l.fromColumn), 0, scale), bb, erRowY(bb.y, bb.h, erColumnRow(rowsOf.get(l.to) ?? [], l.toColumn), 0, scale), l.from === l.to)
         : routeOrthogonal(ab, bb, axes?.[axisKey(l.from, l.to)] ? { axis: axes[axisKey(l.from, l.to)] } : {});
     // An ER frame in Arrows: a plain line with a head at its second end, no crow's feet (Decision 22).
     const arrows = doc.kind === "er" && opts?.notation === "arrow";

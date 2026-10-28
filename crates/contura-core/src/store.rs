@@ -9,7 +9,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
 /// The `user_version` this build writes and understands.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
+
+/// The covering index the chat list and search read (schema 8).
+pub const THREAD_LIST_INDEX: &str = "ai_threads_list";
 
 /// Chat threads returned per place.
 pub const THREAD_LIMIT: i64 = 50;
@@ -20,8 +23,123 @@ pub const MESSAGE_LIMIT: usize = 200;
 /// Query History kept per Connection.
 pub const HISTORY_LIMIT: i64 = 1000;
 
+/// Puts the stored title, its source, its tries and each answer's title call record (its
+/// `sent.title` and its `title` log lines) on `t` when the thread is stored: a whole-thread
+/// write never changes them (P3). Only the few answers that hold a title call are read.
+fn keep_stored_title(conn: &Connection, id: &str, t: &mut AiThread) -> Result<()> {
+    let stored: Option<(String, String, Option<i64>)> = conn
+        .query_row(
+            "SELECT CASE WHEN json_valid(json)
+                         THEN COALESCE(json_extract(json, '$.title'), title) ELSE title END,
+                    CASE WHEN json_valid(json)
+                         THEN COALESCE(json_extract(json, '$.titleBy'), title_by) ELSE title_by END,
+                    CASE WHEN json_valid(json) THEN json_extract(json, '$.titleTries') END
+             FROM ai_threads WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(store_err)?;
+    let Some((title, by, tries)) = stored else {
+        return Ok(());
+    };
+    t.title = title;
+    t.title_by = memory::TitleBy::from_column(&by);
+    t.title_tries = tries.map_or(0, |n| u8::try_from(n).unwrap_or(u8::MAX));
+    let mut stmt = conn
+        .prepare(
+            "SELECT json_extract(m.value, '$.at'),
+                    json_extract(m.value, '$.record.sent.title'),
+                    json_extract(m.value, '$.record.log')
+             FROM ai_threads th, json_each(th.json, '$.messages') m
+             WHERE th.id = ?1 AND json_valid(th.json)
+               AND json_extract(m.value, '$.role') = 'assistant'
+               AND (json_extract(m.value, '$.record.sent.title') IS NOT NULL
+                    OR EXISTS (SELECT 1 FROM json_each(m.value, '$.record.log') l
+                               WHERE json_extract(l.value, '$.source') = 'title'))",
+        )
+        .map_err(store_err)?;
+    let rows = stmt
+        .query_map(params![id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(store_err)?;
+    for row in rows {
+        let (at, sent, log) = row.map_err(store_err)?;
+        let Some(m) = t
+            .messages
+            .iter_mut()
+            .find(|m| m.role == AiRole::Assistant && m.at == at)
+        else {
+            continue;
+        };
+        let sent: Option<crate::ai::sent::SummarySent> =
+            sent.and_then(|j| serde_json::from_str(&j).ok());
+        let lines: Vec<crate::ai::log::LogLine> = log
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default();
+        let record = m.record.get_or_insert_with(Default::default);
+        if let Some(sent) = sent {
+            let into = record.sent.get_or_insert_with(Default::default);
+            if into.title.is_none() {
+                into.title = Some(sent);
+            } else if let Some(have) = into.title.as_mut()
+                && have.exact.is_none()
+            {
+                have.exact = sent.exact;
+            }
+        }
+        for line in lines.into_iter().filter(|l| l.source == "title") {
+            if !record.log.contains(&line) {
+                record.log.push(line);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn store_err(e: impl std::fmt::Display) -> Error {
     Error::Store(e.to_string())
+}
+
+fn has_column(db: &Connection, table: &str, column: &str) -> Result<bool> {
+    db.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        params![table, column],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .map_err(store_err)
+}
+
+/// The `work` column of `t`: where it last worked without the SQL, derived from its
+/// newest answer with SQL for a thread that has none kept (one saved before D2).
+fn work_column(t: &AiThread) -> Result<Option<String>> {
+    t.last_work
+        .clone()
+        .or_else(|| memory::LastWork::derive(t))
+        .map(|w| serde_json::to_string(&w.without_sql()).map_err(store_err))
+        .transpose()
+}
+
+/// Writes the list columns of the stored thread `id` from `t`.
+fn write_thread_columns(db: &Connection, id: &str, t: &AiThread) -> Result<()> {
+    db.execute(
+        "UPDATE ai_threads SET title = ?2, title_by = ?3, work = ?4, messages = ?5 WHERE id = ?1",
+        params![
+            id,
+            t.title,
+            t.title_by.to_column(),
+            work_column(t)?,
+            t.messages.len() as i64
+        ],
+    )
+    .map_err(store_err)?;
+    Ok(())
 }
 
 /// The `settings` row of the first start guide: `show` in a data folder made by this start
@@ -273,6 +391,68 @@ impl AppStore {
                 .map_err(store_err)?;
             tx.commit().map_err(store_err)?;
         }
+        if version < 8 {
+            // The chat record (D2): each thread's title, its source, where it last worked
+            // (no SQL) and its message count as columns, so the list never reads the JSON,
+            // filled once from the saved threads. And what a compaction's text covers
+            // (D2 Task 2), which a build in between may have added in place already. Each
+            // column is added only when missing.
+            let tx = db.unchecked_transaction().map_err(store_err)?;
+            for (table, column, ddl) in [
+                ("ai_compaction", "covers", "TEXT"),
+                ("ai_threads", "title", "TEXT NOT NULL DEFAULT ''"),
+                ("ai_threads", "title_by", "TEXT NOT NULL DEFAULT 'rule'"),
+                ("ai_threads", "work", "TEXT"),
+                ("ai_threads", "messages", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                if !has_column(&tx, table, column)? {
+                    // The names are constants, never user text.
+                    tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                        .map_err(store_err)?;
+                }
+            }
+            // One thread in memory at a time.
+            let ids: Vec<String> = {
+                let mut stmt = tx.prepare("SELECT id FROM ai_threads").map_err(store_err)?;
+                let rows = stmt
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .map_err(store_err)?;
+                rows.collect::<std::result::Result<_, _>>()
+                    .map_err(store_err)?
+            };
+            for id in ids {
+                let json: String = tx
+                    .query_row("SELECT json FROM ai_threads WHERE id = ?1", [&id], |r| {
+                        r.get(0)
+                    })
+                    .map_err(store_err)?;
+                match serde_json::from_str::<AiThread>(&json) {
+                    Ok(thread) => write_thread_columns(&tx, &id, &thread)?,
+                    // A thread that no longer reads as one keeps its title and count when
+                    // its JSON still holds them, as the list showed it before.
+                    Err(_) => {
+                        tx.execute(
+                            "UPDATE ai_threads
+                             SET title = COALESCE(json_extract(json, '$.title'), ''),
+                                 messages = COALESCE(json_array_length(json, '$.messages'), 0)
+                             WHERE id = ?1 AND json_valid(json)",
+                            [&id],
+                        )
+                        .map_err(store_err)?;
+                    }
+                }
+            }
+            // The list reads this index alone: the columns sit after `json` in the row, and
+            // reading them from the table would walk each thread's JSON pages.
+            tx.execute_batch(&format!(
+                "CREATE INDEX IF NOT EXISTS {THREAD_LIST_INDEX} ON ai_threads
+                   (place, updated_at DESC, id, title, title_by, messages, work)"
+            ))
+            .map_err(store_err)?;
+            tx.execute_batch("PRAGMA user_version = 8")
+                .map_err(store_err)?;
+            tx.commit().map_err(store_err)?;
+        }
         Ok(AppStore {
             db,
             #[cfg(test)]
@@ -367,6 +547,12 @@ impl AppStore {
 
     /// As `save_ai_thread`, taking the thread and handing back what was written (its
     /// newest `MESSAGE_LIMIT` messages), so a caller can answer without reading it again.
+    ///
+    /// A whole-thread write never changes a stored thread's title, its source, its tries or
+    /// the title call's record (P3): only `set_thread_title`, `title_failed` and
+    /// `record_title_call` do. The stored ones are read in the same immediate transaction
+    /// as the write, so a rename or an AI title committed after the caller read the thread
+    /// is never written back over.
     pub fn write_ai_thread(&self, mut t: AiThread) -> Result<AiThread> {
         let trimmed = t.messages.len() > MESSAGE_LIMIT;
         if trimmed {
@@ -376,13 +562,30 @@ impl AppStore {
             }
             t.messages.drain(..start);
         }
-        let json = serde_json::to_string(&t).map_err(store_err)?;
+        t.last_work = t.last_work.take().map(memory::LastWork::capped);
         let id = t.id.to_string();
-        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.db,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(store_err)?;
+        keep_stored_title(&tx, &id, &mut t)?;
+        let json = serde_json::to_string(&t).map_err(store_err)?;
+        // The list columns follow the thread they are written with.
         tx.execute(
-            "INSERT OR REPLACE INTO ai_threads (id, place, json, updated_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![id, t.place, json, t.updated_at],
+            "INSERT OR REPLACE INTO ai_threads
+               (id, place, json, updated_at, title, title_by, work, messages)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                t.place,
+                json,
+                t.updated_at,
+                t.title,
+                t.title_by.to_column(),
+                work_column(&t)?,
+                t.messages.len() as i64
+            ],
         )
         .map_err(store_err)?;
         if trimmed {
@@ -445,7 +648,10 @@ impl AppStore {
             params![id.to_string()],
         )
         .map_err(store_err)?;
-        tx.commit().map_err(store_err)
+        tx.commit().map_err(store_err)?;
+        // As the clears: the deleted chat's text leaves the WAL too (final review I2).
+        self.checkpoint();
+        Ok(())
     }
 
     /// Copies the WAL into app.sqlite and empties it, after a clear: with secure_delete
@@ -470,7 +676,13 @@ impl AppStore {
     }
 
     pub fn clear_ai_threads(&self, place: &str) -> Result<()> {
-        let tx = self.db.unchecked_transaction().map_err(store_err)?;
+        // Immediate, as `write_ai_thread`: a title write committed on the other connection
+        // between the read and the delete would otherwise fail the clear (final review M3).
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.db,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(store_err)?;
         let ids: Vec<String> = {
             let mut stmt = tx
                 .prepare("SELECT id FROM ai_threads WHERE place = ?1")
@@ -1339,6 +1551,9 @@ mod tests {
                 asked_in: None,
             }],
             updated_at,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         }
     }
 
@@ -1351,9 +1566,12 @@ mod tests {
         s.save_ai_thread(&b).unwrap();
         assert_eq!(s.list_ai_threads("ungrouped").unwrap(), vec![a.clone()]);
         assert_eq!(s.list_ai_threads("group:g1").unwrap(), vec![b.clone()]);
+        // A save changes the thread but never its title (P3): only a rename does.
         let mut a2 = a.clone();
         a2.title = "renamed".into();
+        a2.updated_at += 1;
         s.save_ai_thread(&a2).unwrap();
+        a2.title = a.title.clone();
         assert_eq!(s.list_ai_threads("ungrouped").unwrap(), vec![a2.clone()]);
         s.delete_ai_thread(a2.id).unwrap();
         assert!(s.list_ai_threads("ungrouped").unwrap().is_empty());
@@ -1564,6 +1782,14 @@ mod tests {
         drop(other);
         assert!(!on_disk(dir.path(), "hist-7f3a-marker").is_empty());
 
+        // I2 (final review): deleting one chat empties the WAL too.
+        let mut d = thread("ungrouped", "d", 3);
+        d.messages[0].text = "deleted chat del-4a7e-marker".into();
+        s.save_ai_thread(&d).unwrap();
+        assert!(!on_disk(dir.path(), "del-4a7e-marker").is_empty());
+        s.delete_ai_thread(d.id).unwrap();
+        assert_eq!(on_disk(dir.path(), "del-4a7e-marker"), Vec::<String>::new());
+
         s.clear_history(conn).unwrap();
         assert_eq!(
             on_disk(dir.path(), "hist-7f3a-marker"),
@@ -1611,9 +1837,12 @@ mod tests {
         s.add_history(&entry(id, "select 1", Outcome::Ok, false))
             .unwrap();
         s.save_ai_thread(&thread("ungrouped", "t", 1)).unwrap();
+        let one = thread("ungrouped", "one", 2);
+        s.save_ai_thread(&one).unwrap();
         let c = conn("gone", None);
         s.save_connection(&c).unwrap();
         s.fail_checkpoint.set(true);
+        s.delete_ai_thread(one.id).unwrap();
         s.clear_history(id).unwrap();
         s.clear_all_history().unwrap();
         s.clear_ai_threads("ungrouped").unwrap();
@@ -1999,14 +2228,14 @@ mod tests {
     }
 
     #[test]
-    fn a_store_newer_than_7_is_refused() {
-        assert_eq!(SCHEMA_VERSION, 7);
+    fn a_store_newer_than_8_is_refused() {
+        assert_eq!(SCHEMA_VERSION, 8);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
         drop(AppStore::open(&path).unwrap());
         Connection::open(&path)
             .unwrap()
-            .pragma_update(None, "user_version", 8)
+            .pragma_update(None, "user_version", 9)
             .unwrap();
         assert!(
             matches!(AppStore::open(&path), Err(Error::Store(m)) if m == "data folder was written by a newer Contura")
@@ -2059,6 +2288,7 @@ mod tests {
             at: 11,
             undone: false,
             record: Default::default(),
+            covers: None,
         }
     }
 
@@ -2082,7 +2312,7 @@ mod tests {
         let v: i64 =
             s.db.query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, SCHEMA_VERSION);
         assert_eq!(s.list_ai_threads("ungrouped").unwrap(), vec![t]);
         for table in ["ai_topic", "ai_topic_fts", "ai_compaction"] {
             let n: i64 =
@@ -2288,7 +2518,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, SCHEMA_VERSION);
         // One thread holds a tool use and an outline call, another an outline call.
         assert_eq!(count(&s, "ai_tool_use"), 3);
         let rows = tool_uses::recent(s.conn(), 10).unwrap();
@@ -2356,5 +2586,179 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows as usize, kept.messages.len() / 2);
+    }
+
+    /// An answer whose record checked one SQL fence, on `shop` with `orders`.
+    fn sql_answer(at: i64, sql: &str) -> crate::ai::AiMessage {
+        use crate::ai::rails::output::SqlBlock;
+        use crate::ai::sent::AnswerRecord;
+        crate::ai::AiMessage {
+            role: crate::ai::AiRole::Assistant,
+            text: format!("Here:\n```sql\n{sql}\n```\n"),
+            record: Some(AnswerRecord {
+                sql_blocks: vec![SqlBlock {
+                    fence: 0,
+                    label: "1 statement: 1 read".into(),
+                    statements: Vec::new(),
+                    body_sha256: String::new(),
+                }],
+                ..AnswerRecord::default()
+            }),
+            at,
+            connection_id: Some(Uuid::from_u128(7)),
+            database: Some("shop".into()),
+            ..turn(1, at, "q").remove(1)
+        }
+    }
+
+    fn columns(s: &AppStore, id: Uuid) -> (String, String, Option<String>, i64) {
+        s.conn()
+            .query_row(
+                "SELECT title, title_by, work, messages FROM ai_threads WHERE id = ?1",
+                params![id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+    }
+
+    fn has_column(s: &AppStore, table: &str, column: &str) -> bool {
+        super::has_column(s.conn(), table, column).unwrap()
+    }
+
+    #[test]
+    fn write_keeps_the_four_columns_in_step() {
+        let (_d, s) = open_tmp();
+        let mut t = thread("ungrouped", "first title", 5);
+        s.save_ai_thread(&t).unwrap();
+        assert_eq!(
+            columns(&s, t.id),
+            ("first title".into(), "rule".into(), None, 1)
+        );
+        // A turn with SQL: the work names the place, never the SQL. A save never changes
+        // the title (P3): only a rename or the AI's title call does.
+        t.title = "second".into();
+        t.messages.extend(turn(1, 10, "how many orders?"));
+        t.messages
+            .push(sql_answer(20, "select count(*) from secret_orders"));
+        s.save_ai_thread(&t).unwrap();
+        let (title, by, work, n) = columns(&s, t.id);
+        assert_eq!((title.as_str(), by.as_str(), n), ("first title", "rule", 4));
+        let work = work.expect("work");
+        assert!(work.contains("\"shop\""), "{work}");
+        assert!(!work.contains("secret_orders"), "{work}");
+        // The cap trims the stored messages; the count follows what is stored.
+        t.messages = (0..MESSAGE_LIMIT as i64 + 10)
+            .flat_map(|i| turn(1, 100 + i * 2, "q"))
+            .collect();
+        s.save_ai_thread(&t).unwrap();
+        let stored = s.get_ai_thread(t.id).unwrap().unwrap();
+        assert_eq!(columns(&s, t.id).3 as usize, stored.messages.len());
+        assert_eq!(columns(&s, t.id).2, None);
+    }
+
+    /// Task 3 carry (a): the `covers` column comes with schema 8 and only with it, from a
+    /// schema 7 store that already has it (added in place by a build in between) and from
+    /// one that does not.
+    #[test]
+    fn schema_8_folds_in_covers_with_or_without_it() {
+        for had_covers in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("app.sqlite");
+            let mut t = thread("ungrouped", "kept title", 5);
+            t.messages.push(sql_answer(6, "select 1"));
+            {
+                let s = AppStore::open(&path).unwrap();
+                s.save_ai_thread(&t).unwrap();
+                // A row whose JSON reads, but not as a thread.
+                s.conn()
+                    .execute(
+                        "INSERT INTO ai_threads (id, place, json, updated_at)
+                         VALUES ('odd', 'ungrouped', '{\"title\":\"odd one\",\"messages\":[1,2,3]}', 1)",
+                        [],
+                    )
+                    .unwrap();
+                // A compaction kept with its cover before the downgrade.
+                let mut kept = compaction_of(&t);
+                kept.covers = Some(Vec::new());
+                crate::ai::memory::store::add_compaction(s.conn(), &kept).unwrap();
+                // Back to schema 7: no list index, no thread columns; `covers` as the case
+                // says.
+                s.conn()
+                    .execute_batch(&format!("DROP INDEX {THREAD_LIST_INDEX}"))
+                    .unwrap();
+                for col in ["title", "title_by", "work", "messages"] {
+                    s.conn()
+                        .execute_batch(&format!("ALTER TABLE ai_threads DROP COLUMN {col}"))
+                        .unwrap();
+                }
+                if !had_covers {
+                    s.conn()
+                        .execute_batch("ALTER TABLE ai_compaction DROP COLUMN covers")
+                        .unwrap();
+                }
+                s.conn().pragma_update(None, "user_version", 7).unwrap();
+            }
+            let s = AppStore::open(&path).unwrap();
+            let v: i64 = s
+                .conn()
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(v, 8, "had covers: {had_covers}");
+            assert!(has_column(&s, "ai_compaction", "covers"));
+            let (title, by, work, n) = columns(&s, t.id);
+            assert_eq!((title.as_str(), by.as_str(), n), ("kept title", "rule", 2));
+            assert!(work.is_some_and(|w| w.contains("shop")));
+            let odd: (String, i64) = s
+                .conn()
+                .query_row(
+                    "SELECT title, messages FROM ai_threads WHERE id = 'odd'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(odd, ("odd one".into(), 3));
+            // A cover kept before the migration survives it; one without reads as unknown.
+            let back = crate::ai::memory::store::compactions(s.conn(), t.id).unwrap();
+            assert_eq!(back.len(), 1);
+            let want = if had_covers { Some(Vec::new()) } else { None };
+            assert_eq!(back[0].covers, want, "had covers: {had_covers}");
+            // A compaction written now keeps its cover.
+            let mut c = compaction_of(&t);
+            c.covers = Some(Vec::new());
+            crate::ai::memory::store::add_compaction(s.conn(), &c).unwrap();
+            let back = crate::ai::memory::store::compactions(s.conn(), t.id).unwrap();
+            assert_eq!(
+                back.iter().find(|x| x.id == c.id).unwrap().covers,
+                Some(Vec::new())
+            );
+            let index: i64 = s
+                .conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [THREAD_LIST_INDEX],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(index, 1);
+            drop(s);
+            // Opening again changes nothing.
+            let s = AppStore::open(&path).unwrap();
+            assert_eq!(columns(&s, t.id).0, "kept title");
+        }
+    }
+
+    /// A schema 7 store never gains `covers` without the version: a new store is at 8.
+    #[test]
+    fn a_new_store_is_at_8_with_covers() {
+        let (_d, s) = open_tmp();
+        let v: i64 = s
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 8);
+        assert!(has_column(&s, "ai_compaction", "covers"));
+        for col in ["title", "title_by", "work", "messages"] {
+            assert!(has_column(&s, "ai_threads", col), "{col}");
+        }
     }
 }

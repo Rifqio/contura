@@ -44,6 +44,7 @@ fn need(kind: ItemKind) -> u8 {
         ItemKind::Question
         | ItemKind::History
         | ItemKind::Summary
+        | ItemKind::Title
         | ItemKind::Tab
         | ItemKind::Steps => 0,
         ItemKind::Names | ItemKind::Cards | ItemKind::Outline | ItemKind::Dbml => 1,

@@ -8,7 +8,7 @@ import { BaseEdge, type EdgeProps, EdgeLabelRenderer, Handle, type NodeProps, Po
 import { type MouseEvent, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Icon from "../components/Icon";
 import type { DrawnKind } from "../diagram/types";
-import { ER_MAX_ROWS, ER_ROW_OVERSCAN, erFits, erRowWindow, erViewH, isMethod, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { ER_MAX_ROWS, ER_ROW_OVERSCAN, erFits, erMetrics, erRowWindow, erViewH, isMethod, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { type NodeLook, NodeShell, type NodeState, type ShapeColour } from "./nodes/parts";
 import InlineEdit from "./interactions/InlineEdit";
 import DateEdit from "./interactions/DateEdit";
@@ -36,6 +36,8 @@ export type KindNodeData = {
   until?: string;
   /** Item 21: resized on the canvas. */
   sized?: { w: number; h: number };
+  /** The frame's text size (Decision 22); unset at 1. An ER card's rows and header scale with it (B4 fix round 1). */
+  textScale?: number;
   /** A participant's activation bars, by message row. */
   activations?: { top: number; height: number }[];
   state?: NodeState;
@@ -199,10 +201,13 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const stored = useErScroll(shared ? d.name : null);
   const [own, setOwn] = useState(0);
   const scroll = !live ? 0 : shared ? stored : own;
-  const fits = erFits(d.sized?.h);
-  const viewH = erViewH(d.sized?.h);
+  // The card's geometry at its frame's text size: header, padding and row pitch scale with the card (B4 fix round 1).
+  const textK = d.textScale ?? 1;
+  const m = erMetrics(textK);
+  const fits = erFits(d.sized?.h, textK);
+  const viewH = erViewH(d.sized?.h, textK);
   const scrolling = live && count > fits;
-  const win = erRowWindow(count, viewH, scroll);
+  const win = erRowWindow(count, viewH, scroll, textK);
   let { from, to } = win;
   // The open field's row is drawn whatever the scroll, so what is typed in it is never unmounted (Review Focus 1); it
   // counts within the 22-row cap, the window giving up its far end for it.
@@ -211,14 +216,14 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const pin = editK >= 0 && editK < count && (editK < from || editK >= to) ? editK : -1;
   if (pin >= 0 && to - from >= ER_MAX_ROWS + 2 * ER_ROW_OVERSCAN) {
     // An overscan row goes first: the one above when the window has one there (3 px of padding above the rows).
-    if (from < Math.floor((scroll - 3) / KIND_ROW)) from++;
+    if (from < Math.floor((scroll - m.pad) / m.row)) from++;
     else to--;
   }
   const bodyRef = useRef<HTMLDivElement>(null);
   // The body follows the store: a card drawn again (a rename, the end of a tab drag, panned back into view) takes up the
   // scroll kept for it (M8, R26), and a frame switch's `clear` puts it back at its top. The store keeps no top past the
   // card's last row, so a table with fewer rows under the same name starts where its rows allow (as a browser clamps).
-  const most = Math.max(0, count * KIND_ROW + 6 - viewH);
+  const most = Math.max(0, count * m.row + 2 * m.pad - viewH);
   useLayoutEffect(() => {
     if (!shared) return;
     // Clamped in the store, not only here, so the lines to its rows read the same top (wakes this table's few listeners).
@@ -231,11 +236,11 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const aimK = shownK(view?.aim);
   useLayoutEffect(() => {
     if (!scrolling || !bodyRef.current) return;
-    for (const k of [editK, aimK, selK]) if (k >= 0 && k < count) return scrollRowIntoView(bodyRef.current, k, fits);
+    for (const k of [editK, aimK, selK]) if (k >= 0 && k < count) return scrollRowIntoView(bodyRef.current, k, fits, m.row);
     // When one of them moves or the card starts to scroll; a scroll by the wheel leaves the selected row where it put it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editK, aimK, selK, scrolling, fits]);
-  const spacer = (key: string, n: number) => n > 0 && <li key={key} className="fkind-er-spacer" aria-hidden="true" style={{ height: n * KIND_ROW }} />;
+  }, [editK, aimK, selK, scrolling, fits, m.row]);
+  const spacer = (key: string, n: number) => n > 0 && <li key={key} className="fkind-er-spacer" aria-hidden="true" style={{ height: n * m.row }} />;
   const ks: number[] = [];
   for (let k = from; k < to; k++) ks.push(k);
   if (pin >= 0 && pin < from) ks.unshift(pin);
@@ -248,7 +253,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     if (pin >= to && k === pin) drawn.push(spacer("mid", pin - to));
     if (k === at && edit?.kind === "draft") {
       drawn.push(
-        <li key="new" className="fkind-row fkind-er-row is-new" style={{ height: KIND_ROW }}>
+        <li key="new" className="fkind-row fkind-er-row is-new" style={{ height: m.row }}>
           <span className="fkind-gut" aria-hidden="true" />
           {edit.field === "name" ? field(edit, edit.name, "Column name", "fkind-ed", "column_name") : <span className="fkind-col">{edit.name}</span>}
           {edit.field === "type" ? field(edit, edit.type, "Column type", "fkind-ed fkind-ed-type", "type", ctx?.types) : <span className="fkind-type">{edit.type}</span>}
@@ -259,7 +264,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     }
     if (k === at && lost) {
       drawn.push(
-        <li key={`${lost.index}:${lost.column ?? ""}`} className="fkind-row fkind-er-row" style={{ height: KIND_ROW }}>
+        <li key={`${lost.index}:${lost.column ?? ""}`} className="fkind-row fkind-er-row" style={{ height: m.row }}>
           <span className="fkind-gut" aria-hidden="true" />
           {lost.field === "name" ? field(lost, lost.typed ?? lost.column ?? "", "Column name", "fkind-ed", "column_name") : <span className="fkind-col">{lost.column}</span>}
           {lost.field === "type" ? field(lost, lost.typed ?? "", "Column type", "fkind-ed fkind-ed-type", "type", ctx?.types) : <span className="fkind-type" />}
@@ -277,7 +282,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     const tip = `${name}${type ? ` ${type}` : ""} (${[pk ? "primary key" : "", flags.includes("unique") && !pk ? "unique" : "", nn ? "not null" : "nullable"].filter(Boolean).join(", ")})`;
     if (!er) {
       drawn.push(
-        <li key={`${i}:${name}`} className="fkind-row fkind-er-row" style={{ height: KIND_ROW }} title={tip} data-er-row={i}>
+        <li key={`${i}:${name}`} className="fkind-row fkind-er-row" style={{ height: m.row }} title={tip} data-er-row={i}>
           <span className={pk ? "fkind-gut is-pk" : "fkind-gut"} aria-hidden="true">
             {pk && <Icon name="key" size={14} className="fkind-key" />}
           </span>
@@ -302,7 +307,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
         key={`${i}:${name}`}
         className={`fkind-row fkind-er-row${picked ? " is-selected" : ""}${aimed ? " is-pick" : ""}`}
         aria-current={aimed ? true : undefined}
-        style={{ height: KIND_ROW }}
+        style={{ height: m.row }}
         title={tip}
         aria-description={tip}
         data-er-row={i}
@@ -352,6 +357,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
       <span
         // A header aimed by "Make a relationship from here" stands for its table's key (fix round 3).
         className={headAimed ? "fkind-head is-pick" : "fkind-head"}
+        style={textK !== 1 ? { height: m.head } : undefined}
         aria-current={headAimed ? true : undefined}
         onPointerEnter={enter}
         onPointerLeave={leave}
@@ -401,7 +407,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
             : undefined
         }
       >
-        <ul className="fkind-rows fkind-er-rows">
+        <ul className="fkind-rows fkind-er-rows" style={textK !== 1 ? { padding: `${m.pad}px 0` } : undefined}>
           {drawn}
           {spacer("below", count - (pin >= to ? pin + 1 : to))}
         </ul>
@@ -420,14 +426,15 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
  * Scrolls an ER card's `body` so row `row` is inside the `fits` rows it shows, only when the row is outside them, and at
  * once (no smooth scroll): to the row's top when it is above the view, to its bottom when below (WAI-ARIA listbox).
  */
-export function scrollRowIntoView(body: HTMLElement, row: number, fits: number): void {
-  // Measured from the rows' top, not the body's: the body's 3 px of padding above and below is in its view (`erViewH`
-  // is at least `fits * KIND_ROW + 6`), so the row comes fully into view either way (`erRowY` counts the padding in).
+export function scrollRowIntoView(body: HTMLElement, row: number, fits: number, pitch = KIND_ROW): void {
+  // Measured from the rows' top, not the body's: the body's padding above and below is in its view (`erViewH` is at
+  // least `fits` rows and both paddings), so the row comes fully into view either way (`erRowY` counts the padding in).
+  // `pitch` is the card's row pitch at its text size (`erMetrics(k).row`).
   const top = body.scrollTop;
-  const rowTop = row * KIND_ROW;
-  const rowEnd = (row + 1) * KIND_ROW;
+  const rowTop = row * pitch;
+  const rowEnd = (row + 1) * pitch;
   if (rowTop < top) body.scrollTop = rowTop;
-  else if (rowEnd > top + fits * KIND_ROW) body.scrollTop = rowEnd - fits * KIND_ROW;
+  else if (rowEnd > top + fits * pitch) body.scrollTop = rowEnd - fits * pitch;
 }
 
 /**

@@ -7,7 +7,7 @@
 import { ER_NOTES, type FlowEditOp } from "../lang/flow/edits";
 import { type ColumnFlag, type FlowArrow, type FlowDoc, type FlowNode, needsQuotes, splitRow, sqlFreeName } from "../lang/flow/model";
 import { EDIT_MESSAGES } from "./editWords";
-import { KIND_ROW } from "./kindLayout";
+import { erMetrics } from "./kindLayout";
 
 /** A column's port handle id names it `col:<column>:<side>`; the port string the canvas reports is `col:<column>`. */
 export const COLUMN_PORT = "col:";
@@ -58,15 +58,16 @@ export const RELATE_MESSAGES = {
 export type CardHit = { table: string; column: string | null } | null;
 
 /**
- * The part of an ER card at `y` (flow px) in a card whose top is `top`, its rows scrolled by `scroll`: its header
- * (column null), a row's column, or null below its rows.
+ * The part of an ER card at `y` (flow px) in a card whose top is `top`, its rows scrolled by `scroll`, at text size `k`:
+ * its header (column null), a row's column, or null below its rows.
  */
-export function hitRow(t: FlowNode, top: number, y: number, scroll = 0): CardHit {
+export function hitRow(t: FlowNode, top: number, y: number, scroll = 0, k = 1): CardHit {
   const dy = y - top;
   if (dy < 0) return null;
-  // The 1 px border and the 32 px header.
-  if (dy < 33) return { table: t.name, column: null };
-  const row = Math.floor((dy - 36 + scroll) / KIND_ROW);
+  const m = erMetrics(k);
+  // The 1 px border and the header.
+  if (dy < 1 + m.head) return { table: t.name, column: null };
+  const row = Math.floor((dy - (m.mid - m.row / 2) + scroll) / m.row);
   const rows = t.rows ?? [];
   if (row < 0) return { table: t.name, column: rows.length ? splitRow(rows[0]).name : null };
   return row < rows.length ? { table: t.name, column: splitRow(rows[row]).name } : null;

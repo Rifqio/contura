@@ -18,6 +18,12 @@ ADR 0010 lets a Group override the AI provider, so the Group of the place an Ask
 
 On every tab but a query tab the system prompt says the user is not in a SQL editor. That line follows the tab kind even when This tab is switched off or sends nothing (L0); it carries no database data.
 
+## One conversation, gated per message
+
+Since 27 Oct 2026 a chat is one conversation. Nothing starts a new Topic any more: a thread keeps its highest Topic open however long the pause and whichever Connection or database the next question is asked in, and the call that summed up a closed Topic is gone. Only New chat starts a thread. Topics saved before that stay as they were: closed ones still fold and still feed the earlier summaries. The 85% compaction is unchanged.
+
+History is gated by each message's own Connection, not by the Ask's. A stored message goes at that Connection's current access: the Ask's own Connection reads the Ask's access, another Connection reads its own (a deleted one is Never), and a Home message is Never, so only conversation kinds pass. `AskedIn.also` still lowers it further. The stamp's kinds are still checked against the level, but no longer against the Ask's Connection or database. A message on another Connection at Never is held whatever it carried. A Topic or compaction summary goes only when its own stamp passes and every message it covers passes. The model writes a compaction only when no covered message is at Never by its own Connection, so a Home thread compacts by rules only, as before. `blocked` in Sends still counts only messages on the Ask's own Connection and database.
+
 ## Asked in
 
 The turn stamp gains `asked_in`: the tab kind, a label (the where line as it went, else the kind words), a summary of the This tab item (400 bytes at most) and the Recent steps labels that went with it (1 KB). It is built from the items that actually went, after `off`, the gate, the rails and the 200 KB cut: a summary fact goes only when all of its lines went, cleaned as the rail cleaned them. The stamped kinds include the highest level its parts used (`names` for L1, `sql` for L2), so the unchanged history gate (`history_allowed`) holds a replay to the level the stamp was written at: lowering AI access holds the whole turn back, and Sends counts it ("2 earlier messages stay on this computer: AI access is lower now.").
@@ -70,5 +76,5 @@ On every tab but a query tab an answer's SQL block offers `Open in new query tab
 - **Re-rendering stored steps at replay from typed values.** More exact under an access change, but it keeps more per message and needs the old Connection's names; holding the whole turn back under the gate, and each other step under its own Connection's gate, is simpler and safe.
 - **Other Connections' steps sent but never stored** (the plan's first default). The user wants the trail to survive into later questions; re-gating and purging keep Never and Clear history honest instead.
 - **A trail that survives restarts.** It would write user actions to disk before anything is asked.
-- **Relaxing the history gate to the Connection.** A New table in another database of the same Connection breaks the Topic and holds earlier turns back, as before; relaxing it is a privacy change outside this decision.
+- **Keeping the history gate at the Ask's Connection and database.** It broke the Topic and held earlier turns back at every database switch. The user ruled on 27 Oct 2026 for one conversation; the gate follows each message's own Connection instead, which sends no more than the Connection allows.
 - **Proposal tools now** (filling the Table Designer grid, the Visual Query canvas, DBML edits, filters, Compare and Transfer suggestions). 1.1, each with its own board, review and security check.

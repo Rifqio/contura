@@ -6,7 +6,8 @@ import { CARD_WIDTH } from "../metrics";
 import { NODE_TOKENS } from "../types";
 import { exportPalette, type ExportPalette } from "./palette";
 import { type Scene, sceneBounds } from "./scene";
-import { sceneToSvg } from "./svg";
+import { hairlineId, iconRefs, sceneBody, sceneToSvg, type SvgOptions, svgDefs, wrapSvg } from "./svg";
+import { defsOnlyHold, plainSvg } from "../../test/plainSvg";
 
 const PALETTE: ExportPalette = {
   surface: "#010101",
@@ -28,6 +29,7 @@ const PALETTE: ExportPalette = {
   groupTint: "#121212",
   strongBorder: "#131313",
   panel: "#141414",
+  muted: "#151515",
 };
 
 const SCENE: Scene = {
@@ -155,4 +157,152 @@ test("schema_builder_export_holds_every_table_and_column_at_its_frame_size", () 
   expect(Number(attr("height"))).toBe(vh);
   expect(vx + vw).toBe(400 + CARD_WIDTH + 40);
   expect(svg).not.toContain("Made with Contura");
+});
+
+// ----- B4 Task 1: the writer in parts. The golden holds today's `sceneToSvg` for every scene fixture of this file and
+// publishKinds.test.ts, in two literal palettes and at text size 1.15, captured before the split (R17).
+
+interface Golden {
+  palettes: Record<"a" | "b", ExportPalette>;
+  entries: { name: string; palette: "a" | "b"; opts: SvgOptions; scene: Scene; svg: string }[];
+}
+const goldens = import.meta.glob("./__golden__/scenes.json", { eager: true, import: "default" }) as Record<string, Golden>;
+
+test("scene_to_svg_is_unchanged_by_the_split", () => {
+  const golden = goldens["./__golden__/scenes.json"];
+  expect(golden, "src/diagram/export/__golden__/scenes.json").toBeDefined();
+  expect(golden.entries.length).toBeGreaterThan(100);
+  for (const e of golden.entries) expect(sceneToSvg(e.scene, golden.palettes[e.palette], e.opts), e.name).toBe(e.svg);
+});
+
+test("scene_body_alone_draws_a_scaled_scene_at_its_size", () => {
+  const scaled: Scene = { ...SCENE, textScale: 1.15 };
+  const body = sceneBody(scaled, PALETTE);
+  const whole = sceneToSvg(scaled, PALETTE, { ...opts, background: "transparent" });
+  // The body is everything between the head and the end: nothing else draws it.
+  expect(whole).toBe(`${/^<svg[^>]*>/.exec(whole)![0]}${body}</svg>\n`);
+  const pills = (s: string) => [...s.matchAll(/data-part="label-pill"[^>]* width="([^"]+)"/g)].map((m) => m[1]);
+  const sizes = (s: string) => [...s.matchAll(/ font-size="([^"]+)"/g)].map((m) => m[1]);
+  expect(pills(body)).toEqual([String(Math.ceil("Inner join".length * 6.5 * 1.15 + 16))]);
+  expect(sizes(body)).toEqual(sizes(whole).slice(1));
+  expect(sizes(body)).toContain("12.65");
+  // The scale lives only for the one draw.
+  expect(pills(sceneBody(SCENE, PALETTE))).toEqual([String(Math.ceil("Inner join".length * 6.5 + 16))]);
+  expect(sizes(sceneBody(SCENE, PALETTE))).not.toContain("12.65");
+});
+
+const LOGO = `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg"/>')}`;
+const OTHER = `data:image/png;base64,${btoa("png")}`;
+const service = (id: string, x: number, icon: string, outline?: boolean): Scene["nodes"][number] => ({
+  id,
+  kind: "service",
+  look: "modern",
+  x,
+  y: 0,
+  w: 104,
+  h: 72,
+  title: id,
+  rows: [],
+  icon,
+  iconName: id,
+  ...(outline ? { iconOutline: true } : {}),
+});
+const CLOUD: Scene = { nodes: [service("Users", 0, LOGO, true), service("Admins", 200, LOGO)], edges: [] };
+
+test("refs_draw_each_icon_once_in_defs", () => {
+  const refs = iconRefs();
+  const body = sceneBody(CLOUD, PALETTE, refs);
+  const id = refs.ref(LOGO, 48);
+  expect(id).toMatch(/^icon-[0-9a-f]{8}-48$/);
+  expect([...refs.entries().keys()]).toEqual([id]);
+  const uses = [...body.matchAll(/<use [^>]*>/g)].map((m) => m[0]);
+  expect(uses).toHaveLength(2);
+  for (const u of uses) expect(u).toContain(`href="#${id}"`);
+  expect(uses.filter((u) => u.includes(`filter="url(#${hairlineId()})"`))).toHaveLength(1);
+  expect(body).not.toContain("<image");
+  const defs = svgDefs(PALETTE, { hairline: hairlineId(), icons: refs.entries() });
+  expect(defs.match(/<image /g)).toHaveLength(1);
+  expect(defs).toContain(`<image id="${id}" href="${LOGO}"`);
+  expect(defs.match(/<filter /g)).toHaveLength(1);
+  // Stable across exports, different for another picture.
+  expect(iconRefs().ref(LOGO, 48)).toBe(id);
+  expect(iconRefs().ref(OTHER, 48)).not.toBe(id);
+  expect(hairlineId()).toBe("icon-hairline");
+  expect(hairlineId("dark")).toBe("icon-hairline-dark");
+  // A named hairline is the one the uses name.
+  const dark = sceneBody(CLOUD, PALETTE, iconRefs(), hairlineId("dark"));
+  expect(dark).toContain(`filter="url(#icon-hairline-dark)"`);
+});
+
+test("a_hash_clash_takes_the_next_suffix", () => {
+  const refs = iconRefs(() => 0xabc);
+  expect(refs.ref(LOGO, 48)).toBe("icon-00000abc-48");
+  expect(refs.ref(OTHER, 48)).toBe("icon-00000abc-48-2");
+  expect(refs.ref(LOGO, 48)).toBe("icon-00000abc-48");
+  expect(refs.ref(`${OTHER}x`, 48)).toBe("icon-00000abc-48-3");
+  expect(refs.ref(OTHER, 16)).toBe("icon-00000abc-16");
+  expect([...refs.entries()]).toEqual([
+    ["icon-00000abc-48", { url: LOGO, size: 48 }],
+    ["icon-00000abc-48-2", { url: OTHER, size: 48 }],
+    ["icon-00000abc-48-3", { url: `${OTHER}x`, size: 48 }],
+    ["icon-00000abc-16", { url: OTHER, size: 16 }],
+  ]);
+});
+
+test("board_defs_hold_only_the_filter_and_data_images", () => {
+  const scene: Scene = {
+    nodes: [...CLOUD.nodes, service("Bad", 400, "javascript:alert(1)"), service("Far", 600, "https://example.com/x.svg", true)],
+    edges: [],
+    areas: [{ name: "AWS", x: -20, y: -40, w: 800, h: 140, depth: 0, icon: OTHER, iconOutline: true }],
+  };
+  const refs = iconRefs();
+  const body = sceneBody(scene, PALETTE, refs, hairlineId("light"));
+  const defs = svgDefs(PALETTE, { hairline: hairlineId("light"), icons: refs.entries() });
+  const svg = wrapSvg(defs, body, sceneBounds(scene), PALETTE, { ...opts, mark: true });
+  defsOnlyHold(svg);
+  plainSvg(svg);
+  expect(svg.match(/<defs>/g)).toHaveLength(1);
+  expect(svg).not.toContain("javascript:");
+  expect(svg).not.toContain("example.com");
+  // Two pictures: the logo (48) and the group's (16); three uses.
+  expect(defs.match(/<image /g)).toHaveLength(2);
+  expect(body.match(/<use /g)).toHaveLength(3);
+  expect(svg.indexOf("<defs>")).toBeLessThan(svg.indexOf(`fill="${PALETTE.canvas}"`));
+  expect(svg).toContain(">Made with Contura<");
+});
+
+test("defs_is_empty_with_nothing_to_share", () => {
+  expect(svgDefs(PALETTE, { hairline: null, icons: new Map() })).toBe("");
+  expect(svgDefs(PALETTE, { hairline: null, icons: iconRefs().entries() })).toBe("");
+  expect(sceneToSvg(SCENE, PALETTE, opts)).not.toContain("<defs");
+  expect(svgDefs(PALETTE, { hairline: "icon-hairline", icons: new Map() })).toMatch(/^<defs><filter id="icon-hairline" [^]*<\/filter><\/defs>$/);
+});
+
+test("plain_svg_allows_use_and_defs_only_beyond_today", () => {
+  const XL = 'xmlns:xlink="http://www.w3.org/1999/xlink"';
+  const ok = `<svg ${XL}><defs><filter id="f"><feFlood flood-color="#000"/></filter><image id="i" href="${LOGO}"/></defs><g><rect/><text><tspan>a</tspan></text><path/><use href="#i" xlink:href="#i" x="1" y="2"/><image href="${LOGO}"/></g></svg>`;
+  expect(() => plainSvg(ok)).not.toThrow();
+  expect(() => defsOnlyHold(ok)).not.toThrow();
+  for (const bad of [
+    "<marker/>",
+    "<clipPath/>",
+    "<ellipse/>",
+    "<foreignObject/>",
+    "<script/>",
+    '<use href="https://example.com/x.svg#a" xlink:href="https://example.com/x.svg#a"/>',
+    '<image href="https://example.com/x.png"/>',
+    // Final review minor 4: a <use> carries both references, to the same id; xlink:href nowhere else.
+    '<use href="#i"/>',
+    '<use href="#i" xlink:href="https://example.com/x.svg#a"/>',
+    '<use href="#i" xlink:href="#j"/>',
+    '<image href="data:image/png;base64,AA" xlink:href="https://example.com/x.png"/>',
+  ]) {
+    expect(() => plainSvg(`<svg ${XL}><g>${bad}</g></svg>`), bad).toThrow();
+  }
+  // The namespace is declared once, on the root, when a <use> is there.
+  expect(() => plainSvg('<svg><g><use href="#i" xlink:href="#i"/></g></svg>')).toThrow();
+  expect(() => plainSvg(`<svg ${XL}><g ${XL}><use href="#i" xlink:href="#i"/></g></svg>`)).toThrow();
+  for (const bad of ['<defs><script/></defs>', '<defs><image id="i" href="https://example.com/x.png"/></defs>', '<defs><linearGradient id="g"/></defs>', "<defs></defs><defs></defs>"]) {
+    expect(() => defsOnlyHold(`<svg>${bad}</svg>`), bad).toThrow();
+  }
 });

@@ -59,6 +59,7 @@ const ROW = defineRows({
   shareThinking: { label: "Ask models to share their thinking when they support it", card: "Answers" },
   caching: { label: "Use prompt caching when the model supports it", card: "Answers" },
   autoCompact: { label: "Compact the thread when the context window is nearly full", terms: "auto-compact summary Undo", card: "Answers" },
+  nameChats: { label: "Name chats with the AI", terms: "chat title rename history", card: "Answers" },
   inline: { label: "Inline suggestions", card: "Where it helps" },
   inlineAsk: { label: "Inline Ask", terms: "select SQL cells", card: "Where it helps" },
   errorAsk: { label: "Ask on errors", terms: "failed queries", card: "Where it helps" },
@@ -79,7 +80,7 @@ export const AI_PAGES: readonly AiPage[] = ["provider", "behaviour", "privacy", 
 /** Which rows each AI page holds, in their order, for search. */
 export const AI_PAGE_ROWS: Record<AiPage, readonly RowKey[]> = {
   provider: [ROW.group, ROW.provider, ROW.preset, ROW.baseUrl, ROW.model, ROW.modelList, ROW.contextWindow, ROW.key],
-  behaviour: [ROW.thinking, ROW.shareThinking, ROW.caching, ROW.autoCompact, ROW.inline, ROW.inlineAsk, ROW.errorAsk],
+  behaviour: [ROW.thinking, ROW.shareThinking, ROW.caching, ROW.autoCompact, ROW.nameChats, ROW.inline, ROW.inlineAsk, ROW.errorAsk],
   privacy: [ROW.access, ROW.newConnections, ROW.sendsOpen, ROW.keepExactText, ROW.clearAi],
   tools: [ROW.tools, ROW.diagramTool, ROW.pickTables, ROW.runSql, ROW.toolUses],
 };
@@ -795,7 +796,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
             />
           )}
         </Row>
-        {/* Share thinking, auto-compact and Keep the exact text are global: a Group's own settings leave them out. */}
+        {/* Share thinking, auto-compact, chat titles and Keep the exact text are global: a Group's own settings leave them out. */}
         {!groupOwn && (
           <SwitchRow
             {...ROW.shareThinking}
@@ -816,6 +817,14 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
             checked={s.autoCompact ?? true}
             onChange={(autoCompact) => void save({ ...s, autoCompact })}
             hint="At 85% of the model's window, older messages become a short summary written by the same model. Sends only text this thread already sent. The summary shows in the thread, and Undo brings the messages back."
+          />
+        )}
+        {!groupOwn && (
+          <SwitchRow
+            {...ROW.nameChats}
+            checked={s.nameChats ?? true}
+            onChange={(nameChats) => void save({ ...s, nameChats })}
+            hint="After the first answer, one short call writes the chat's title. Off keeps the first question as the title."
           />
         )}
       </Card>

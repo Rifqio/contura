@@ -75,8 +75,9 @@ fn source(item: &Item) -> Option<&'static str> {
         // A diagram Ask: the .flow text (labelled `<file>.flow`), or the selected names.
         ItemKind::Diagram if is_selection_label(&item.label) => Some("selection"),
         ItemKind::Diagram => Some("diagram"),
-        // Values never leave as an item; the question and the summary carry no database text.
-        ItemKind::Question | ItemKind::Values | ItemKind::Summary => None,
+        // Values never leave as an item; the question, the summary and the title calls carry
+        // no database text.
+        ItemKind::Question | ItemKind::Values | ItemKind::Summary | ItemKind::Title => None,
     }
 }
 

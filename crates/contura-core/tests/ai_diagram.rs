@@ -1588,6 +1588,9 @@ fn record_tool_result_replaces() {
             answer(20, AnswerRecord::default()),
         ],
         updated_at: 1,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
     };
     svc.save_thread(&thread).unwrap();
     assert_eq!(svc.recent_tool_uses(20).unwrap()[0].result, "4 proposed");
@@ -1639,6 +1642,9 @@ fn replaced_tool_use_keeps_no_old_outcome() {
         title: "t".into(),
         messages: vec![answer(10, tool_record(4))],
         updated_at: 1,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
     };
     svc.save_thread(&thread).unwrap();
     svc.record_tool_result(thread.id, 10, outcome(3, 1))

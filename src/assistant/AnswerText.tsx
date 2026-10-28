@@ -4,7 +4,7 @@ import Icon from "../components/Icon";
 import AnswerSql from "./AnswerSql";
 import { sha256Hex } from "./sha256";
 import { type AnswerParser, type Block, createAnswerParser, type Inline, looksLikeSql, parseAnswer } from "./answerMarkdown";
-import type { InsertTarget } from "./insertPlan";
+import type { InsertTarget, OpenedTab } from "./insertPlan";
 
 interface Props {
   text: string;
@@ -17,10 +17,10 @@ interface Props {
   target?: InsertTarget | null;
   /** The tab has no editor: SQL blocks offer Open in new query tab, never Insert (spec 8). */
   noEditor?: boolean;
-  onOpenInNewTab?(sql: string): void;
+  onOpenInNewTab?(sql: string): OpenedTab | null | void;
   onCopy(sql: string): void;
   /** What the user did with a block's SQL, for the answer's record. */
-  onAction?(kind: AnswerActionKind): void;
+  onAction?(kind: AnswerActionKind, sql: string, opened?: OpenedTab | null): void;
   /** False shows every code block as plain code, never as SQL with its actions (a diagram answer). */
   sqlBlocks?: boolean;
   /** The fence the inline box shows in the editor itself: that block shows no actions of its own. */
@@ -74,9 +74,9 @@ interface BlockProps {
   dialect: DialectKind;
   target?: InsertTarget | null;
   noEditor: boolean;
-  onOpenInNewTab?(sql: string): void;
+  onOpenInNewTab?(sql: string): OpenedTab | null | void;
   onCopy(sql: string): void;
-  onAction?(kind: AnswerActionKind): void;
+  onAction?(kind: AnswerActionKind, sql: string, opened?: OpenedTab | null): void;
   sqlBlocks: boolean;
   bare: boolean;
 }

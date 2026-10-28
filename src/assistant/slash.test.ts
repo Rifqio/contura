@@ -26,3 +26,9 @@ test("keys_move_wrap_run_close", () => {
   expect(slashKey("Enter", 0, 0)).toBeNull();
   expect(slashKey("a", 0, 3)).toBeNull();
 });
+
+test("clear_reads_delete_this_chat", () => {
+  // The name stays /clear; it deletes the open chat, as Delete on its history row does (P29).
+  const clear = SLASH_COMMANDS.find((c) => c.name === "clear");
+  expect(clear).toEqual({ name: "clear", label: "Delete this chat", hint: "Delete this chat" });
+});

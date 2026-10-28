@@ -35,7 +35,7 @@ export interface FrameLayout {
 }
 
 export type SketchKind = "rect" | "ellipse" | "diamond" | "line" | "arrow" | "pen" | "text" | "note" | "section" | "icon";
-const SKETCH_KINDS: ReadonlySet<string> = new Set<SketchKind>(["rect", "ellipse", "diamond", "line", "arrow", "pen", "text", "note", "section", "icon"]);
+export const SKETCH_KINDS: ReadonlySet<string> = new Set<SketchKind>(["rect", "ellipse", "diamond", "line", "arrow", "pen", "text", "note", "section", "icon"]);
 
 /** A drawn thing in board coordinates, whole numbers. */
 export interface Sketch {

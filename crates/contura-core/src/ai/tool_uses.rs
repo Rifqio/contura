@@ -267,6 +267,9 @@ mod tests {
             title: "t".into(),
             messages,
             updated_at: 1,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         }
     }
 

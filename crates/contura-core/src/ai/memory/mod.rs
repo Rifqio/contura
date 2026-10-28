@@ -13,13 +13,13 @@ use crate::error::Result;
 use crate::model::ConnectionId;
 
 pub use history::{
-    HistoryPick, HistorySummary, SummarySource, Turn, access_now, also_of, closing_topic,
-    history_allowed, message_access, message_allowed, select_history, spans_other,
-    summary_covers_ok,
+    HistoryPick, HistorySummary, SummarySource, Turn, access_now, access_of, also_of, cover_ok,
+    covers_of, history_allowed, legacy_covers, message_access, message_allowed, select_history,
+    stamp_allowed, summary_covers_ok,
 };
 pub use rules::{
-    AskFacts, BreakReason, EARLIER_TOPICS, IDLE_MS, RECENT_TURNS, SUMMARY_CHARS, TITLE_CHARS,
-    TopicPick, rule_summary, topic_for, topic_title,
+    AskFacts, BreakReason, EARLIER_TOPICS, RECENT_TURNS, SUMMARY_CHARS, TITLE_CHARS, TopicPick,
+    rule_summary, topic_for, topic_title,
 };
 
 pub type CompactionId = uuid::Uuid;
@@ -362,6 +362,78 @@ pub struct Compaction {
     /// The log and Sent record of a Compact now run; empty for a compaction made inside
     /// an Ask, whose record is the Ask's.
     pub record: AnswerRecord,
+    /// What its text covers, kept with it so the gate never depends on messages the thread
+    /// may have dropped since (`MESSAGE_LIMIT`, a replaced turn): every folded message's
+    /// stamp, and those the earlier summary it folded covered (Task 2 fix round 1).
+    /// `None` for a compaction written before it was kept: the gate then fails closed
+    /// (`history::legacy_covers`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covers: Option<Vec<Cover>>,
+}
+
+/// The stamp of messages a summary's text covers: the Connection (`None`: Home) and
+/// database they were asked on, the kinds they carried, the Connections they were asked
+/// across and their steps on other Connections with the level each needed. The gate on
+/// history reads a `Cover` exactly as it reads a message (`history::cover_ok`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Cover {
+    pub connection_id: Option<ConnectionId>,
+    #[serde(default)]
+    pub database: Option<String>,
+    pub kinds: Vec<ItemKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<ConnectionId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<(ConnectionId, AiAccess)>,
+}
+
+impl Cover {
+    pub fn of(m: &AiMessage) -> Cover {
+        let asked = m.asked_in.as_ref();
+        Cover {
+            connection_id: m.connection_id,
+            database: m.database.clone(),
+            kinds: m.kinds.clone(),
+            also: asked.map(|a| a.also.clone()).unwrap_or_default(),
+            steps: asked
+                .map(|a| {
+                    a.other_steps
+                        .iter()
+                        .map(|s| (s.connection_id, s.level))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// `covers` with each place (Connection, database and the Connections asked across)
+    /// once, its kinds and steps unioned: a union is never less strict than its parts.
+    pub fn merged(covers: impl IntoIterator<Item = Cover>) -> Vec<Cover> {
+        let mut out: Vec<Cover> = Vec::new();
+        for mut c in covers {
+            c.also.sort();
+            c.also.dedup();
+            match out.iter_mut().find(|o| {
+                o.connection_id == c.connection_id && o.database == c.database && o.also == c.also
+            }) {
+                Some(o) => {
+                    for k in c.kinds {
+                        if !o.kinds.contains(&k) {
+                            o.kinds.push(k);
+                        }
+                    }
+                    for s in c.steps {
+                        if !o.steps.contains(&s) {
+                            o.steps.push(s);
+                        }
+                    }
+                }
+                None => out.push(c),
+            }
+        }
+        out
+    }
 }
 
 impl Compaction {
@@ -374,16 +446,156 @@ impl Compaction {
     }
 }
 
-/// A thread as the list shows it: no messages.
+/// Who wrote a chat's title: the rule (its first question), the AI (one short call after
+/// the first answer) or the user (Rename). Stored as `rule`, `ai` or `user`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TitleBy {
+    #[default]
+    Rule,
+    Ai,
+    User,
+}
+
+impl TitleBy {
+    pub fn is_rule(&self) -> bool {
+        *self == TitleBy::Rule
+    }
+
+    pub fn to_column(self) -> &'static str {
+        match self {
+            TitleBy::Rule => "rule",
+            TitleBy::Ai => "ai",
+            TitleBy::User => "user",
+        }
+    }
+
+    /// An unknown value reads as the rule's.
+    pub fn from_column(s: &str) -> TitleBy {
+        match s {
+            "ai" => TitleBy::Ai,
+            "user" => TitleBy::User,
+            _ => TitleBy::Rule,
+        }
+    }
+}
+
+/// The most bytes of SQL `LastWork` keeps, each of its two.
+pub const LAST_WORK_SQL_BYTES: usize = 64 * 1024;
+/// The longest tab label, database or table name `LastWork` keeps, in characters.
+pub const LAST_WORK_LABEL_CHARS: usize = 120;
+
+/// Where a chat last worked: the tab, the place, and the SQL a resume puts back (the SQL
+/// the user inserted, else the newest the AI wrote). Kept in the thread JSON; the
+/// `ai_threads.work` column holds it without either SQL field.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LastWork {
+    /// The tab kind id (`AskedIn::tab`); empty when the question named none.
+    #[serde(default)]
+    pub tab_kind: String,
+    #[serde(default)]
+    pub tab_key: Option<String>,
+    #[serde(default)]
+    pub tab_label: Option<String>,
+    #[serde(default)]
+    pub connection_id: Option<ConnectionId>,
+    #[serde(default)]
+    pub database: Option<String>,
+    #[serde(default)]
+    pub table: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserted_sql: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_sql: Option<String>,
+    #[serde(default)]
+    pub at: i64,
+    /// The time of the answer `inserted_sql` came from, so a Retry that drops that answer
+    /// drops it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserted_from: Option<i64>,
+    /// The time of the answer `ai_sql` came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_from: Option<i64>,
+}
+
+impl LastWork {
+    /// Held to its caps: each SQL at `LAST_WORK_SQL_BYTES` (a character boundary), the tab
+    /// key at `TAB_KEY_CHARS`, the label and names at `LAST_WORK_LABEL_CHARS`.
+    pub fn capped(mut self) -> LastWork {
+        let chars = |s: Option<String>, n: usize| s.map(|s| s.chars().take(n).collect());
+        self.tab_kind = self.tab_kind.chars().take(TAB_ID_CHARS).collect();
+        self.tab_key = chars(self.tab_key, TAB_KEY_CHARS);
+        self.tab_label = chars(self.tab_label, LAST_WORK_LABEL_CHARS);
+        self.database = chars(self.database, LAST_WORK_LABEL_CHARS);
+        self.table = chars(self.table, LAST_WORK_LABEL_CHARS);
+        self.inserted_sql = self
+            .inserted_sql
+            .map(|s| store::cut_bytes(s, LAST_WORK_SQL_BYTES));
+        self.ai_sql = self
+            .ai_sql
+            .map(|s| store::cut_bytes(s, LAST_WORK_SQL_BYTES));
+        self
+    }
+
+    /// The copy the `work` column holds, and a gated resume reads: no SQL, and nothing
+    /// that tells there was any.
+    pub fn without_sql(&self) -> LastWork {
+        LastWork {
+            inserted_sql: None,
+            ai_sql: None,
+            inserted_from: None,
+            ai_from: None,
+            ..self.clone()
+        }
+    }
+}
+
+/// What the user did with an answer's SQL, from the webview (`record_action`): the tab it
+/// went into (the new tab for Open in new tab), its place, and the SQL as it went in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkInput {
+    #[serde(default)]
+    pub tab_kind: String,
+    #[serde(default)]
+    pub tab_key: Option<String>,
+    #[serde(default)]
+    pub tab_label: Option<String>,
+    #[serde(default)]
+    pub connection_id: Option<ConnectionId>,
+    #[serde(default)]
+    pub database: Option<String>,
+    #[serde(default)]
+    pub sql: String,
+}
+
+/// Where a chat last worked, as its list row shows it: no SQL, ever.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkTag {
+    #[serde(default)]
+    pub connection_id: Option<ConnectionId>,
+    #[serde(default)]
+    pub database: Option<String>,
+    #[serde(default)]
+    pub table: Option<String>,
+    #[serde(default)]
+    pub tab_label: Option<String>,
+}
+
+/// A thread as the list shows it: no messages, read from the `ai_threads` columns only.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
     pub id: ThreadId,
     pub place: String,
     pub title: String,
+    pub title_by: TitleBy,
     pub updated_at: i64,
     pub messages: u32,
     pub topics: u32,
+    pub work: Option<WorkTag>,
 }
 
 /// A thread with its Topics and compactions. Every record is trimmed (see
@@ -424,25 +636,16 @@ pub struct TurnView {
     pub title: String,
     pub updated_at: i64,
     pub messages: Vec<AiMessage>,
+    /// Who wrote the title, and the AI title calls that failed: the webview names a chat
+    /// whose title is still the rule's while it has tries left.
+    pub title_by: TitleBy,
+    pub title_tries: u8,
     /// The time of the oldest message kept; `None` for an empty thread.
     pub kept_from: Option<i64>,
     /// How many messages the thread holds now.
     pub message_count: u32,
     pub topics: Vec<Topic>,
     pub compactions: Vec<Compaction>,
-}
-
-/// One Topic found by a search of a place's threads.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadHit {
-    pub thread_id: ThreadId,
-    pub title: String,
-    pub topic: u32,
-    pub topic_title: String,
-    /// The Topic's summary, else its first question, cut to 120 characters.
-    pub snippet: String,
-    pub at: i64,
 }
 
 /// Where a thread's Topics and compactions are kept.
@@ -466,6 +669,23 @@ pub trait ThreadStore: Send + Sync {
     fn add_compaction(&self, c: &Compaction) -> Result<()>;
     /// False when the compaction is missing or already undone.
     fn undo_compaction(&self, thread: ThreadId, id: CompactionId) -> Result<bool>;
+    /// Sets the title and who wrote it, in the JSON and the list columns in one statement,
+    /// leaving `updated_at` alone. False when the thread is gone, or when an AI title would
+    /// replace the user's (`store::set_thread_title`).
+    fn set_title(&self, thread: ThreadId, title: &str, by: TitleBy) -> Result<bool>;
+    /// Counts one failed AI title call; returns the tries now counted (0 when the thread is
+    /// gone). `updated_at` is left alone.
+    fn title_failed(&self, thread: ThreadId) -> Result<u8>;
+    /// Writes the title call's record (`SentRecord.title`, when its request left this PC)
+    /// and its log lines into the record of the answer at `answer_at`, leaving everything
+    /// else of the thread as it is stored now.
+    fn record_title_call(
+        &self,
+        thread: ThreadId,
+        answer_at: i64,
+        sent: Option<&crate::ai::sent::SummarySent>,
+        log: &[crate::ai::log::LogLine],
+    ) -> Result<()>;
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ import { aiView, GROQ, modelInfo, modelList, renderWithProviders, settingsRoutes
 import AboutSection from "./AboutSection";
 import { onThreadsCleared } from "../../assistant/threadsCleared";
 import { SENDS_OPEN_KEY, saveSendsOpen } from "../../assistant/sendsFold";
-import AiSection, { fetchedText } from "./AiSection";
+import AiSection, { AI_PAGE_ROWS, fetchedText } from "./AiSection";
 import AppearanceSection from "./AppearanceSection";
 import { FlashContext } from "./layout";
 import DataFolderSection from "./DataFolderSection";
@@ -671,6 +671,7 @@ test("auto_compact_switch_global_only", async () => {
     within(answers).getByRole("switch", { name: "Ask models to share their thinking when they support it" }),
     within(answers).getByRole("switch", { name: "Use prompt caching when the model supports it" }),
     auto,
+    within(answers).getByRole("switch", { name: "Name chats with the AI" }),
   ]);
   expect(auto.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText(help)).toBeTruthy();
@@ -694,6 +695,39 @@ test("auto_compact_switch_global_only", async () => {
   renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
   expect(await screen.findByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
   expect(screen.queryByRole("switch", { name: label })).toBeNull();
+});
+
+test("name_chats_switch_is_global_and_on_by_default", async () => {
+  const label = "Name chats with the AI";
+  const help = "After the first answer, one short call writes the chat's title. Off keeps the first question as the title.";
+  settingsRoutes({ ai_settings: () => aiView({ settings: GROQ }) });
+  const { unmount } = renderAi();
+  const name = await screen.findByRole("switch", { name: label });
+  // In Behaviour, Answers, after auto-compact; not stored yet: the Core's default, on.
+  const answers = screen.getByRole("region", { name: "Answers" });
+  const switches = within(answers).getAllByRole("switch");
+  expect(switches[switches.length - 1]).toBe(name);
+  expect(name.getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByText(help)).toBeTruthy();
+  await userEvent.click(name);
+  await waitFor(() => expect((lastAi().settings as AiSettings).nameChats).toBe(false));
+  expect(lastAi().settings).toMatchObject({ keepExactText: false, pickTables: true, modelPrefs: GROQ.modelPrefs });
+  unmount();
+
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, nameChats: false } }) });
+  const second = renderAi();
+  expect((await screen.findByRole("switch", { name: label })).getAttribute("aria-checked")).toBe("false");
+  second.unmount();
+
+  // A Group's own settings do not show it: the switch is the same for every Group.
+  settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, nameChats: true }, groupOverride: true }) });
+  renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
+  expect(await screen.findByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: label })).toBeNull();
+});
+
+test("name_chats_is_found_by_settings_search", () => {
+  expect(AI_PAGE_ROWS.behaviour.some((r) => r.label === "Name chats with the AI")).toBe(true);
 });
 
 test("tools_page_rows_and_the_sample_rows_note", async () => {

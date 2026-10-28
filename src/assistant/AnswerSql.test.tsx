@@ -323,9 +323,10 @@ test("each_action_is_reported_once_it_happens", async () => {
   await user.click(screen.getByRole("button", { name: "Insert" }));
   expect(onAction).not.toHaveBeenCalled();
   act(() => void ed.api.keepSuggestion());
-  expect(onAction).toHaveBeenLastCalledWith("inserted");
+  // With the SQL as it went in, and for Open in new tab the new tab's key (none opened here).
+  expect(onAction).toHaveBeenLastCalledWith("inserted", "SELECT id FROM invoices;\n");
   await user.click(screen.getByRole("button", { name: "Open in new tab" }));
-  expect(onAction).toHaveBeenLastCalledWith("openedInNewTab");
+  expect(onAction).toHaveBeenLastCalledWith("openedInNewTab", "SELECT id FROM invoices", null);
 });
 
 test("a_commented_insert_is_reported_as_such", async () => {
@@ -334,7 +335,7 @@ test("a_commented_insert_is_reported_as_such", async () => {
   const { ed } = renderSql({ onAction, check: null, unchecked: true });
   await user.click(screen.getByRole("button", { name: "Insert commented out" }));
   act(() => void ed.api.keepSuggestion());
-  expect(onAction).toHaveBeenCalledWith("insertedCommented");
+  expect(onAction).toHaveBeenCalledWith("insertedCommented", expect.stringMatching(/^-- SELECT id FROM invoices;/));
 });
 
 test("non-query tab offers Open in new query tab", async () => {
@@ -344,7 +345,7 @@ test("non-query tab offers Open in new query tab", async () => {
   expect(screen.queryByRole("button", { name: /^Insert/ })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Open in new query tab" }));
   expect(onOpenInNewTab).toHaveBeenCalledWith("SELECT id FROM invoices");
-  expect(onAction).toHaveBeenCalledWith("openedInNewTab");
+  expect(onAction).toHaveBeenCalledWith("openedInNewTab", "SELECT id FROM invoices", null);
   // Nothing went into an editor and nothing ran.
   expect(ed.api.replaceRange).not.toHaveBeenCalled();
   expect(ed.api.insert).not.toHaveBeenCalled();

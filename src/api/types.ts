@@ -1038,6 +1038,8 @@ export interface AiSettings {
   autoCompact?: boolean;
   /** "Let the assistant propose diagram changes" (step 11h): privacy switch, always the global value; absent reads as on. */
   diagramTool?: boolean;
+  /** "Name chats with the AI": one short call writes a chat's title after its first answer. Always the global value; absent reads as on. */
+  nameChats?: boolean;
   /** The picks remembered per model id, already clamped by the Core. */
   modelPrefs: Record<string, ModelPicks>;
 }
@@ -1143,7 +1145,7 @@ export type AiError =
 // One Ask and its preview. Mirrors crates/contura-core/src/ai/{request,preview,budget,log}.rs.
 
 /** One kind of item an Ask can send. */
-export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline" | "history" | "summary" | "diagram" | "tab" | "steps";
+export type ItemKind = "question" | "names" | "cards" | "dbml" | "sql" | "error" | "savedQueries" | "values" | "rows" | "outline" | "history" | "summary" | "diagram" | "tab" | "steps" | "title";
 
 export interface TableRef {
   schema: string | null;
@@ -1413,10 +1415,33 @@ export interface Preview {
   memory?: MemoryInfo | null;
   /** The summary or compaction call an Ask would make first; absent or null when none would be made. */
   summary?: SummaryPreview | null;
+  /** The chat title call that would follow the answer; absent or null when none would follow. */
+  title?: TitlePreview | null;
 }
 
-/** Which call a summary step is. Mirrors `CallKind` (camelCase). */
-export type CallKind = "summary" | "compact";
+/** The chat title call as Sends shows it: an estimate, since the answer is not written yet. Mirrors `TitlePreview` in title.rs. */
+export interface TitlePreview {
+  bytes: number;
+  tokens: number;
+  /** Always false: the size is an estimate. */
+  exact: boolean;
+  /** False when the Chat title row is switched off: no call is made. */
+  on: boolean;
+}
+
+/** What the webview asks once a turn is stored: a short AI title for the chat. Mirrors `NameChatRequest` (camelCase). */
+export interface NameChatRequest {
+  requestId: string;
+  place: string;
+  groupId: GroupId | null;
+  threadId: string;
+  model: string | null;
+  /** The Ask's Sends switches: "title" here makes no call. */
+  off: ItemKind[];
+}
+
+/** Which call a summary step is: a Topic summary, a compaction, or the chat's title. Mirrors `CallKind` (camelCase). */
+export type CallKind = "summary" | "compact" | "title";
 
 /** The summary step of a preview: the call the Ask would make and its exact text. Mirrors `SummaryPreview`. */
 export interface SummaryPreview {
@@ -1456,8 +1481,8 @@ export interface CompactRequest {
   model: string | null;
 }
 
-/** Why an Ask opened a new Topic. Mirrors `BreakReason` (camelCase). */
-export type BreakReason = "first" | "place" | "idle" | "subject";
+/** Why an Ask opened a Topic: only a thread's first Ask does. Mirrors `BreakReason` (camelCase). */
+export type BreakReason = "first";
 
 /** What the thread's memory adds to an Ask. Mirrors `MemoryInfo` in crates/contura-core/src/ai/memory. */
 export interface MemoryInfo {
@@ -1562,6 +1587,8 @@ export interface SentRecord {
   summary?: SummarySent | null;
   /** The sample rows that went: how many tables and rows, and their bytes; absent or null when none went. */
   rows?: RowsSent | null;
+  /** The chat title call that followed this answer, written by the Core after the turn was stored; absent when none went. */
+  title?: SummarySent | null;
   /** The exact text, only with "Keep the exact text sent" on (R7.2). */
   exact: string | null;
 }
@@ -1734,6 +1761,50 @@ export interface AiThread {
   title: string;
   messages: AiMessage[];
   updatedAt: number;
+  /** Who wrote the title; a save never changes it on a stored chat. Absent reads as "rule". */
+  titleBy?: TitleBy;
+  /** The AI title calls that failed. */
+  titleTries?: number;
+}
+
+/** Who wrote a chat's title: the rule (its first question), the AI, or the user (Rename). */
+export type TitleBy = "rule" | "ai" | "user";
+
+/** Where a chat last worked, as its list row shows it. Never any SQL. */
+export interface WorkTag {
+  connectionId: ConnectionId | null;
+  database: string | null;
+  table: string | null;
+  tabLabel: string | null;
+}
+
+/**
+ * Where a chat last worked, with its SQL, as `aiThreadWork` reads it for a resume. Mirrors `LastWork`. A resume puts
+ * `insertedSql ?? aiSql` in the editor and never runs it; both are absent for a chat whose Connection is at Never.
+ */
+export interface LastWork {
+  tabKind: string;
+  tabKey: string | null;
+  tabLabel: string | null;
+  connectionId: ConnectionId | null;
+  database: string | null;
+  table: string | null;
+  insertedSql?: string;
+  aiSql?: string;
+  at: number;
+  /** The time of the answer each SQL came from; absent with the SQL. */
+  insertedFrom?: number;
+  aiFrom?: number;
+}
+
+/** Where an answer's SQL went (Insert, Open in new tab), for `aiRecordAction`. Mirrors `WorkInput`. */
+export interface WorkInput {
+  tabKind: string;
+  tabKey: string | null;
+  tabLabel: string | null;
+  connectionId: ConnectionId | null;
+  database: string | null;
+  sql: string;
 }
 
 /** Who wrote a summary. Mirrors `SummaryBy` (serde tag "kind"). */
@@ -1776,14 +1847,17 @@ export interface Compaction {
   record: AnswerRecord;
 }
 
-/** A thread in a place's list: no messages. */
+/** A chat in a place's list or search: no messages, read from columns. */
 export interface ThreadSummary {
   id: string;
   place: string;
   title: string;
+  titleBy: TitleBy;
   updatedAt: number;
   messages: number;
   topics: number;
+  /** Where it last worked; null when it never worked on SQL. */
+  work: WorkTag | null;
 }
 
 /** An opened thread with its Topics and compactions; its records are trimmed. */
@@ -1814,21 +1888,14 @@ export interface TurnView {
   title: string;
   updatedAt: number;
   messages: AiMessage[];
+  /** Who wrote the title, and the AI title calls that failed. */
+  titleBy: TitleBy;
+  titleTries: number;
   /** The time of the oldest message kept (older ones went over the cap); null for an empty thread. */
   keptFrom: number | null;
   messageCount: number;
   topics: Topic[];
   compactions: Compaction[];
-}
-
-/** A Topic that matched a search of a place's chats. */
-export interface ThreadHit {
-  threadId: string;
-  title: string;
-  topic: number;
-  topicTitle: string;
-  snippet: string;
-  at: number;
 }
 
 export interface AiTestOk {

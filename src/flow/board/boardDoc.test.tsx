@@ -1756,3 +1756,167 @@ test("a_template_past_the_layout_budget_still_adds", async () => {
   expect(disk.get("board")!.layout).toBe(LAYOUT);
   expect(o.doc().save).toEqual({ kind: "failed", message: "Layout not saved: the layout file would pass 5 MB. Remove some sketches." });
 });
+
+/** An ER frame titled `title` with one table per name; `broken` leaves a line that does not read. */
+const erFrame = (title: string, tables: string[], broken = false) =>
+  `diagram er "${title}"\n${tables.map((t) => `${t} {\n  id int pk\n}\n`).join("")}${broken ? "oops [\n" : ""}`;
+/** The table or node names the selected frame draws; null when it draws nothing. */
+const drawnNames = (o: Opened) => o.doc().parsed!.drawn?.nodes.map((n) => n.name) ?? null;
+
+test("a_frame_with_errors_never_takes_a_same_titled_frame_of_another_kind", async () => {
+  const o = await open(`${erFrame("Billing", ["invoices"])}\ndiagram flow "Billing"\nPay [\n`, null);
+  act(() => o.doc().select({ title: "Billing", index: 1 }));
+  expect(o.doc().parsed!.result.kind).toBe("flow");
+  expect(drawnNames(o)).toBeNull();
+  // Each edit of the ER frame leaves the flow frame with errors drawing nothing.
+  type(o, "invoices {", "payments {\n  id int pk\n}\ninvoices {");
+  await settled(o);
+  expect(o.doc().parsed!.result.frames[0].doc?.nodes.map((n) => n.name)).toEqual(["payments", "invoices"]);
+  expect(o.doc().parsed!.result.lastValid).toBeNull();
+  expect(drawnNames(o)).toBeNull();
+  type(o, "payments {", "refunds {");
+  await settled(o);
+  expect(drawnNames(o)).toBeNull();
+});
+
+test("two_same_kind_frames_with_one_title_keep_their_own_last_good", async () => {
+  // The second frame never read: it has no drawing of its own, and never takes the first's.
+  const o = await open(`${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"], true)}`, null);
+  act(() => o.doc().select({ title: "Billing", index: 1 }));
+  type(o, "invoices {", "payments {");
+  await settled(o);
+  expect(drawnNames(o)).toBeNull();
+  // Once it reads, a later error keeps its own tables.
+  type(o, "oops [\n", "", textOf(o).lastIndexOf("diagram"));
+  await settled(o);
+  expect(drawnNames(o)).toEqual(["ledger"]);
+  type(o, "ledger {\n  id int pk\n}\n", "ledger {\n  id int pk\n}\noops [\n");
+  await settled(o);
+  expect(o.doc().parsed!.result.frames[1].doc).toBeNull();
+  expect(drawnNames(o)).toEqual(["ledger"]);
+});
+
+test("a_renamed_frame_with_errors_keeps_its_own_drawing", async () => {
+  const pay = 'diagram flow "Pay"\nCard\n';
+  const o = await open(`${pay}\n${erFrame("Billing", ["invoices"])}`, null);
+  act(() => o.doc().select({ title: "Billing", index: 1 }));
+  // Renamed to the flow frame's title and broken in one edit.
+  type(o, erFrame("Billing", ["invoices"]), erFrame("Pay", ["invoices"], true));
+  await settled(o);
+  act(() => o.doc().select({ title: "Pay", index: 1 }));
+  expect(o.doc().parsed!.result.kind).toBe("er");
+  expect(drawnNames(o)).toEqual(["invoices"]);
+});
+
+test("a_moved_frame_keeps_its_own_drawing", async () => {
+  const flow = (broken: boolean) => `diagram flow "Billing"\nCard\n${broken ? "Pay [\n" : ""}`;
+  const o = await open(`${flow(false)}\n${erFrame("Billing", ["invoices"])}`, null);
+  // The ER frame moved above the flow frame, and both broken, in one edit.
+  act(() => {
+    o.view.dispatch({ changes: { from: 0, to: o.view.state.doc.length, insert: `${erFrame("Billing", ["invoices"], true)}\n${flow(true)}` }, userEvent: "input.paste" });
+  });
+  await settled(o);
+  act(() => o.doc().select({ title: "Billing", index: 0 }));
+  expect(o.doc().parsed!.result.kind).toBe("er");
+  expect(drawnNames(o)).toEqual(["invoices"]);
+  act(() => o.doc().select({ title: "Billing", index: 1 }));
+  expect(o.doc().parsed!.result.kind).toBe("flow");
+  expect(drawnNames(o)).toEqual(["Card"]);
+});
+
+/** Each frame's drawing as the canvas has it, frame by frame through the selection. */
+function canvasDrawns(o: Opened) {
+  const frames = o.doc().parsed!.result.frames;
+  return frames.map((f, i) => {
+    act(() => o.doc().select({ title: f.title, index: i }));
+    return o.doc().parsed!.drawn;
+  });
+}
+/** The canvas draws exactly what the worker sends for every frame: its doc, else its last good one. */
+function agrees(o: Opened) {
+  const frames = o.doc().parsed!.result.frames;
+  const drawns = canvasDrawns(o);
+  frames.forEach((f, i) => expect(drawns[i]).toBe(f.doc ?? f.lastValid));
+}
+/** Replaces the whole text in one edit, as a paste does. */
+function setText(o: Opened, text: string) {
+  act(() => {
+    o.view.dispatch({ changes: { from: 0, to: o.view.state.doc.length, insert: text }, userEvent: "input.paste" });
+  });
+}
+
+test("deleting_the_first_of_two_same_titled_frames_never_hands_its_drawing_on", async () => {
+  const o = await open(`${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"])}`, null);
+  setText(o, `${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"], true)}`);
+  await settled(o);
+  expect(canvasDrawns(o)[1]?.nodes.map((n) => n.name)).toEqual(["ledger"]);
+  setText(o, erFrame("Billing", ["ledger"], true));
+  await settled(o);
+  expect(o.doc().keys).toEqual(["Billing"]);
+  expect(drawnNames(o)).toBeNull();
+  agrees(o);
+});
+
+test("deleting_a_frame_by_its_op_with_a_clash_raises_nothing", async () => {
+  const o = await open(`${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"])}\n${CHECKOUT}`, null);
+  await settled(o);
+  await act(async () => {
+    await o.doc().frameOp({ op: "deleteFrame", frameIndex: 0 });
+  });
+  await settled(o);
+  await act(async () => {
+    await o.doc().frameOp({ op: "deleteFrame", frameIndex: 1 });
+  });
+  await settled(o);
+  expect(o.doc().parsed!.result.frames.map((f) => f.title)).toEqual(["Billing"]);
+  agrees(o);
+});
+
+test("the_canvas_and_the_worker_agree_on_every_frames_drawing", async () => {
+  const flow = (broken: boolean) => `diagram flow "Billing"\nCard\n${broken ? "Pay [\n" : ""}`;
+  const a = erFrame("Billing", ["invoices"]);
+  const b = erFrame("Billing", ["ledger"]);
+  const o = await open(`${a}\n${b}\n${flow(false)}`, null);
+  // Each broken, then a delete, a duplicate, an append and a reorder.
+  const steps = [
+    `${erFrame("Billing", ["invoices"], true)}\n${erFrame("Billing", ["ledger"], true)}\n${flow(true)}`,
+    `${erFrame("Billing", ["ledger"], true)}\n${flow(true)}`,
+    `${erFrame("Billing", ["ledger"], true)}\n${erFrame("Billing", ["ledger"], true)}\n${flow(true)}`,
+    `${erFrame("Billing", ["ledger"], true)}\n${erFrame("Billing", ["ledger"], true)}\n${flow(true)}\n${CHECKOUT}`,
+    `${flow(true)}\n${CHECKOUT}\n${erFrame("Billing", ["ledger"], true)}\n${erFrame("Billing", ["ledger"], true)}`,
+  ];
+  for (const t of steps) {
+    setText(o, t);
+    await settled(o);
+    agrees(o);
+  }
+});
+
+test("retyping_the_kind_word_keeps_the_frames_own_drawing_on_the_canvas", async () => {
+  for (const broken of [false, true]) {
+    for (const first of [true, false]) {
+      const er = erFrame("Billing", ["invoices"]);
+      const o = await open(first ? `${er}\n${CHECKOUT}` : `${CHECKOUT}\n${er}`, null);
+      const at = first ? 0 : 1;
+      if (broken) {
+        type(o, "invoices {\n  id int pk\n}\n", "invoices {\n  id int pk\n}\noops [\n");
+        await settled(o);
+      }
+      act(() => o.doc().select({ title: "Billing", index: at }));
+      expect(drawnNames(o)).toEqual(["invoices"]);
+      type(o, "diagram er", "diagram e");
+      await settled(o);
+      // The first frame stays a frame with no kind and keeps its drawing; a later one joins the frame above.
+      if (first) {
+        expect(o.doc().parsed!.result.kind).toBeNull();
+        expect(drawnNames(o)).toEqual(["invoices"]);
+      } else expect(o.doc().parsed!.result.frames).toHaveLength(1);
+      agrees(o);
+      type(o, "diagram e", "diagram er");
+      await settled(o);
+      act(() => o.doc().select({ title: "Billing", index: at }));
+      expect(drawnNames(o)).toEqual(["invoices"]);
+      agrees(o);
+    }
+  }
+});

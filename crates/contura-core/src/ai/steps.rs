@@ -8,13 +8,15 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::AiAccess;
-use crate::ai::memory::{IDLE_MS, OtherStep};
+use crate::ai::memory::OtherStep;
 use crate::ai::rails::input::{cap_chars, rank};
 use crate::ai::request::TableRef;
 use crate::ai::scene::{count, mask_quotes, more, name};
 use crate::common::grouped;
 use crate::model::ConnectionId;
 
+/// Steps older than this are idle: the Recent steps item leaves them out.
+pub const IDLE_MS: i64 = 30 * 60_000;
 /// The most steps one Ask sends; the oldest go first.
 pub const STEPS_MAX: usize = 10;
 /// The rendered item's cap in bytes; the oldest whole lines go first.

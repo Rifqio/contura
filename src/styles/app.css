@@ -3540,6 +3540,33 @@ textarea.input {
 .publish-error {
   color: var(--c-danger-text);
 }
+/* B4 Task 5: the part control keeps its off reasons beside it; a refused image says why where the preview would be;
+   while the drawing for a new theme is on its way the old one stays, dimmed, and the controls that use it wait. */
+.publish-parts {
+  display: flex;
+  min-width: 0;
+}
+.publish-refused {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: var(--spacing-lg);
+  color: var(--c-text-muted);
+  font: var(--font-body);
+  text-align: center;
+}
+.publish-image {
+  transition: opacity var(--motion-base) var(--ease-enter);
+}
+.publish-waiting .publish-image {
+  opacity: 0.6;
+}
+.publish-waiting .publish-crop {
+  pointer-events: none;
+}
 
 /* Schema Builder screen (step 3) */
 .schema-main {
@@ -6414,6 +6441,27 @@ button.chip[aria-pressed="true"] {
   margin: 0;
   color: var(--c-text-subtle);
   font: var(--font-small);
+}
+/* A resume whose place could not come back (Decision 9): an info bar at the top of the thread, as VS Code's, kept in
+   view while the thread scrolls. */
+.ask-strip {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--rounded-md);
+  background: var(--c-info-subtle);
+  color: var(--c-text);
+  font: var(--font-small);
+}
+.ask-strip > .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--c-text-muted);
 }
 /* R5.1: the answer's strict subset. Text stays text; inline code in the code face. */
 .answer-p {
@@ -12254,11 +12302,18 @@ button.dbox:hover,
 .ai-panel-head .menu-root {
   display: flex;
 }
+/*
+ * D2 Task 6: the Ask's chat history (spec "The list"). Every class is its own name under .history-menu (P30), so the
+ * query History panel's .history-row, .history-day, .history-section, .history-list and .history-search never style it,
+ * and it never styles them. Rows and headers have fixed heights: the window past 200 rows counts in them
+ * (historyList.ts ROW_PX, HEAD_PX, LIST_PX).
+ */
 .history-menu {
-  width: 320px;
+  width: 360px;
   max-width: calc(100vw - 24px);
+  background: var(--c-bg-panel);
 }
-.history-search {
+.history-menu .history-find {
   width: 100%;
   height: 28px;
   margin-bottom: var(--spacing-xs);
@@ -12269,29 +12324,205 @@ button.dbox:hover,
   color: var(--c-text);
   font: var(--font-body);
 }
-.history-list {
+.history-menu .history-items {
   max-height: 320px;
   overflow-y: auto;
 }
-.history-empty {
+/* The list holds the focus when the wheel scrolls the focused row out of the window. */
+.history-menu .history-items:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+.history-menu .history-none {
   margin: 0;
   padding: var(--spacing-sm) var(--spacing-md);
   color: var(--c-text-subtle);
   font: var(--font-small);
 }
-.history-hit {
-  height: auto;
-  padding-top: var(--spacing-xs);
-  padding-bottom: var(--spacing-xs);
-  white-space: normal;
+.history-menu .history-group {
+  display: flex;
+  align-items: flex-end;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 var(--spacing-sm) var(--spacing-2xs);
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-weight: 600;
 }
-.history-hit .menu-label {
+.history-menu .history-item {
+  position: relative;
+  box-sizing: border-box;
+  height: 52px;
+  border-radius: var(--rounded-sm);
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+.history-menu .history-item[data-active="true"] {
+  background: var(--c-bg-hover);
+}
+.history-menu .history-chat {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  column-gap: var(--spacing-md);
+  row-gap: 2px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-text);
+  font: var(--font-body);
+  text-align: left;
+  cursor: pointer;
 }
-.history-hit .menu-description {
+/* The current chat: a tint and aria-current, no stripe (spec). */
+.history-menu .history-chat[aria-current="true"] {
+  background: var(--c-bg-active);
+}
+.history-menu .history-chat[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.history-menu .history-chat:focus-visible {
+  outline: var(--focus-ring-width) solid var(--c-focus);
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+/* Rename and Delete sit where the time was; the text keeps clear of them. */
+.history-menu .history-item[data-active="true"] .history-chat {
+  padding-right: 72px;
+}
+.history-menu .history-chat-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.history-menu .history-chat-time {
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.history-menu .history-chat-place {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--c-text-subtle);
+  font: var(--font-small);
+  white-space: nowrap;
+}
+/* The place tag: 4 px radius, filled, no border, led by the Connection's DbMark (decision 13). */
+.history-menu .history-tag {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-width: 0;
+  padding: 0 var(--spacing-xs);
+  border: 0;
+  border-radius: 4px;
+  background: var(--c-bg-raised);
+  --c-bg-hover: var(--c-bg-raised-hover);
+  color: var(--c-text-muted);
+}
+.history-menu .history-tag > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-menu .history-tag .db-mark {
+  flex: none;
+}
+.history-menu .history-chat-table {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-menu .history-actions {
+  position: absolute;
+  top: 50%;
+  right: var(--spacing-xs);
+  display: flex;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+.history-menu .history-edit {
+  display: grid;
+  align-content: center;
+  row-gap: 2px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 8px;
+}
+.history-menu .history-rename {
+  box-sizing: border-box;
+  width: 100%;
+  height: 24px;
+  padding: 0 var(--spacing-xs);
+  border: var(--border-hairline) solid var(--c-border);
+  border-radius: var(--rounded-sm);
+  background: var(--c-bg-surface);
+  color: var(--c-text);
+  font: var(--font-body);
+}
+.history-menu .history-rename[aria-invalid="true"] {
+  border-color: var(--c-danger-text);
+}
+.history-menu .history-edit-note {
+  overflow: hidden;
+  color: var(--c-danger-text);
+  font: var(--font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Delete asks in the row: same height and radius, on the pale negative tint, never a dialog (spec). */
+.history-menu .history-ask {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--spacing-md);
+  row-gap: 2px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 8px;
+  border-radius: var(--rounded-sm);
+  background: var(--c-danger-subtle);
+}
+.history-menu .history-ask-title {
+  overflow: hidden;
+  color: var(--c-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-menu .history-ask-actions {
+  display: flex;
+  grid-row: span 2;
+  gap: var(--spacing-xs);
+}
+.history-menu .history-ask-note {
+  color: var(--c-danger-text);
+  font: var(--font-small);
+}
+/* The footer: one quiet text button. */
+.history-menu .history-clear-all {
+  height: 28px;
+  padding: 0 var(--spacing-sm);
+  border: 0;
+  border-radius: var(--rounded-sm);
+  background: transparent;
+  color: var(--c-danger-text);
+  font: var(--font-small);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+.history-menu .history-clear-all:hover:not(:disabled) {
+  background: var(--c-bg-hover);
+}
+.history-menu .history-clear-all:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .history-confirm {
   display: grid;

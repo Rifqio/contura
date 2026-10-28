@@ -350,6 +350,9 @@ async fn clear_all_ai_data() {
                 asked_in: None,
             }],
             updated_at: 1,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         })
         .unwrap();
     }

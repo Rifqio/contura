@@ -30,6 +30,9 @@ import type { Box, Point } from "./interactions/geometry";
 import { erColumnRow, erRowY } from "./kindLayout";
 import type { RunResult } from "./useFlowDoc";
 
+/** A canvas card's text size (`nodeData` sets it on a frame drawn at Small or Large), for its row geometry. */
+const scaleOf = (n: Node) => (n.data as { textScale?: number } | undefined)?.textScale ?? 1;
+
 export interface ErRelateOptions {
   /** The live frame's parse, to plan on (null while there is none). */
   doc(): FlowDoc | null;
@@ -164,7 +167,7 @@ export function useErRelate(o: ErRelateOptions) {
         const box = boxOf(n);
         if (!inside(box, at)) continue;
         const t = d?.nodes.find((x) => x.name === n.id && isErTable(x));
-        return { node: n, box, hit: t ? hitRow(t, box.y, at.y, c.scroll.get(n.id)) : null };
+        return { node: n, box, hit: t ? hitRow(t, box.y, at.y, c.scroll.get(n.id), scaleOf(n)) : null };
       }
       return null;
     };
@@ -189,7 +192,7 @@ export function useErRelate(o: ErRelateOptions) {
     const rowY = (n: Node, box: Box, column: string | null) => {
       const t = opts.current.drawn()?.nodes.find((x) => x.name === n.id && isErTable(x));
       const row = column === null || !t ? -1 : erColumnRow(t.rows ?? [], column);
-      return erRowY(box.y, box.h, row, opts.current.scroll.get(n.id));
+      return erRowY(box.y, box.h, row, opts.current.scroll.get(n.id), scaleOf(n));
     };
 
     const setLinking = (from: string | null) => {
@@ -377,7 +380,7 @@ export function useErRelate(o: ErRelateOptions) {
           return true;
         }
         const known = c.doc()!;
-        const hit = hitRow(t, card.box.y, at.y, c.scroll.get(t.name));
+        const hit = hitRow(t, card.box.y, at.y, c.scroll.get(t.name), scaleOf(card.node));
         let column: string | undefined;
         let whole: string | null = null;
         if (hit && hit.column !== null) column = hit.column;

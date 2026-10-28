@@ -66,6 +66,8 @@ export type QueryTabDoc = {
   /** The Saved Query this tab edits, if any, and its text as last saved. */
   savedId: string | null;
   savedText: string | null;
+  /** The chat this tab was opened from by a resume: the status line says so until the first edit of the text. */
+  fromChat?: string | null;
 };
 
 interface Props {
@@ -976,6 +978,7 @@ export default function QueryTab({
             </>
           )}
           {tab.database && connection.dialect !== "sqlite" && <span>{tab.database}</span>}
+          {tab.fromChat && <span>From chat: {tab.fromChat}</span>}
           {!statusSlot && <span>{DIALECT_LABEL[connection.dialect]}</span>}
           {connection.queryTimeoutSecs && <span>Timeout {connection.queryTimeoutSecs}s</span>}
           {/* On screen the window status bar already says Closed. */}
@@ -1045,7 +1048,7 @@ export default function QueryTab({
             value={tab.text}
             dialect={dialect}
             editorRef={editorRef}
-            onChange={(text) => onChange({ ...latest.current, text })}
+            onChange={(text) => onChange({ ...latest.current, text, ...(latest.current.fromChat ? { fromChat: null } : {}) })}
             onRun={(kind) => (kind === "all" ? runAll() : runCurrent())}
             onFormat={() => editorRef.current?.replaceAll(formatSql(editorText(), dialect))}
             onSave={() => void save()}

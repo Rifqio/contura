@@ -12,7 +12,7 @@ import { type Rect, routeOrthogonal, routeRows } from "../diagram/route";
 import type { DrawnKind } from "../diagram/types";
 import { type DiagramKind, type FlowArrow, type FlowDoc, type FlowGroup, type FlowNode, type FlowNodeKind, isStateEnd, isStateMarker, isStateStart, shownName } from "../lang/flow/model";
 import { colourClass, colourStroke, colourVars, drawnColour } from "./palette";
-import { ER_CARD_CHROME, ER_MAX_ROWS, erColumnRow, erRowY, fixedLayout, KIND_ROW, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { erCardH, ER_MAX_ROWS, erColumnRow, erRowY, fixedLayout, kindSize, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { inStaticFrame } from "./kindEdit";
 import { isStaticId } from "./board/staticIds";
 import { useErScroll } from "./erScroll";
@@ -83,7 +83,7 @@ export function nodeLimits(kind: DrawnKind): typeof NODE_LIMITS {
   if (kind === "stateStart" || kind === "stateEnd") return { ...NODE_LIMITS, minW: 16, minH: 16 };
   if (kind === "fork") return { ...NODE_LIMITS, minH: 6 };
   // B3 decision 7 (R8): an ER card grows to 20 rows at most; past them its rows scroll.
-  if (kind === "erTable" || kind === "erWeak") return { ...NODE_LIMITS, maxH: ER_CARD_CHROME + ER_MAX_ROWS * KIND_ROW };
+  if (kind === "erTable" || kind === "erWeak") return { ...NODE_LIMITS, maxH: erCardH(ER_MAX_ROWS) };
   return NODE_LIMITS;
 }
 
@@ -421,9 +421,12 @@ function LineEnds({ id, from, to }: { id: string; from: { x: number; y: number }
   );
 }
 
-/** A relationship between columns, at each end's row as each card's rows are scrolled (ER build C, fix round 1). */
-export function rowRoute(a: Rect, b: Rect, fromRow: number, toRow: number, self: boolean, scrollA = 0, scrollB = 0) {
-  return routeRows(a, erRowY(a.y, a.h, fromRow, scrollA), b, erRowY(b.y, b.h, toRow, scrollB), self);
+/**
+ * A relationship between columns, at each end's row as each card's rows are scrolled (ER build C, fix round 1), on the
+ * cards' row pitch at the frame's text size `k` (B4 fix round 1).
+ */
+export function rowRoute(a: Rect, b: Rect, fromRow: number, toRow: number, self: boolean, scrollA = 0, scrollB = 0, k = 1) {
+  return routeRows(a, erRowY(a.y, a.h, fromRow, scrollA, k), b, erRowY(b.y, b.h, toRow, scrollB, k), self);
 }
 
 /** A flow line: square-cornered with 8 px corners from the side facing the other node, its label on a chip. */
@@ -439,7 +442,7 @@ const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
   if (!a || !b) return null;
   const route =
     data?.fromRow !== undefined
-      ? rowRoute(rectOf(a), rectOf(b), data.fromRow, data.toRow ?? -1, p.source === p.target, sa, sb)
+      ? rowRoute(rectOf(a), rectOf(b), data.fromRow, data.toRow ?? -1, p.source === p.target, sa, sb, data.textScale)
       : routeOrthogonal(rectOf(a), rectOf(b), data?.axis ? { axis: data.axis } : {});
   const label = data?.label;
   return (
@@ -826,7 +829,7 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     const kind = drawnKind(n.kind, doc.kind, n.name);
     const kept = opts.sizes && Object.prototype.hasOwnProperty.call(opts.sizes, n.name) ? opts.sizes[n.name] : null;
     // An ER card is never drawn past 20 rows, whatever its layout says (decision 7: past them its rows scroll).
-    const erMaxH = kind === "erTable" || kind === "erWeak" ? nodeLimits(kind).maxH : Infinity;
+    const erMaxH = kind === "erTable" || kind === "erWeak" ? erCardH(ER_MAX_ROWS, scale) : Infinity;
     const own = kept && kept.h > erMaxH ? { ...kept, h: erMaxH } : kept;
     const extra = opts.grow && Object.prototype.hasOwnProperty.call(opts.grow, n.name) ? opts.grow[n.name] : 0;
     const s = own ?? nodeSize(kind, look, shownName(n), n.attrs.id, extra > 0 ? { ...n, rows: [...(n.rows ?? []), ...Array<string>(extra).fill("")] } : n, scale);
@@ -868,7 +871,8 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     if (source === null || target === null) return;
     const data: FlowEdgeData = {};
     if (l.label) data.label = l.label;
-    if (l.label && scale !== 1) data.textScale = scale;
+    // A labelled line sizes its label by it; a line to a column meets its row on the scaled row pitch.
+    if (scale !== 1 && (l.label || l.fromColumn !== undefined || l.toColumn !== undefined)) data.textScale = scale;
     const axis = opts.axes?.[axisKey(l.from, l.to)];
     if (axis) data.axis = axis;
     if (l.fromColumn !== undefined || l.toColumn !== undefined) {

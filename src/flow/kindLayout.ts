@@ -56,25 +56,46 @@ export const ER_MAX_ROWS = 20;
 export const ER_CARD_CHROME = 40;
 /** B3 decision 7: rows drawn above and below the ones in view, so a wheel step never shows a gap. */
 export const ER_ROW_OVERSCAN = 1;
-/** How many rows an ER card `h` tall shows (its natural height when not resized): never more than 20. */
-export const erFits = (h: number | undefined) => (h === undefined ? ER_MAX_ROWS : Math.min(ER_MAX_ROWS, Math.floor((h - ER_CARD_CHROME) / KIND_ROW)));
-/** An ER card's height past which it never grows: 20 rows (decision 7). */
-const ER_MAX_H = ER_CARD_CHROME + ER_MAX_ROWS * KIND_ROW;
+/** An ER card's header: its 32 px name band, under 1 px of border. */
+export const ER_HEAD = 32;
 /** The rows' top and bottom padding inside an ER card's scrolled body (`.fkind-rows`). */
 const ER_ROWS_PAD = 3;
+/** The middle of an ER card's first row below the card's top, unscrolled: 1 px of border, the header, the padding, half a row. */
+export const ER_ROW_MID = 1 + ER_HEAD + ER_ROWS_PAD + KIND_ROW / 2;
+/** Where a line to a whole ER table meets its card, below the card's top: the header's middle. */
+export const ER_HEAD_MID = 17;
+
 /**
- * The px an ER card `h` tall (its 20-row height when not resized) shows of its scrolled rows: the card less its 2 px
- * of border and 32 px header. A card is never drawn past 20 rows, so neither is its view.
+ * An ER card's geometry at text size `k` (`TEXT_SCALE`), B4 fix round 1: its height, header, padding, row pitch and
+ * row middle all scale together, so at every text size each row and each line end sits inside the card. The canvas,
+ * its line ends, its hit tests and Publish all read these, never the bare constants.
  */
-export const erViewH = (h: number | undefined) => Math.max(0, Math.min(h ?? ER_MAX_H, ER_MAX_H) - (ER_CARD_CHROME - 2 * ER_ROWS_PAD));
+export function erMetrics(k = 1): { row: number; head: number; pad: number; chrome: number; mid: number } {
+  return { row: KIND_ROW * k, head: ER_HEAD * k, pad: ER_ROWS_PAD * k, chrome: ER_CARD_CHROME * k, mid: ER_ROW_MID * k };
+}
+/** An ER card's natural height holding `rows` rows at text size `k`, on whole px (as `nodeSize` rounds a scaled size). */
+export const erCardH = (rows: number, k = 1) => Math.round((ER_CARD_CHROME + Math.max(rows, 1) * KIND_ROW) * k);
+
+/** How many rows an ER card `h` tall shows at text size `k` (its natural height when not resized): never more than 20. */
+export const erFits = (h: number | undefined, k = 1) =>
+  // A scaled height is rounded to whole px (`erCardH`), so it may sit up to half a px under its rows: allow for it.
+  h === undefined ? ER_MAX_ROWS : Math.min(ER_MAX_ROWS, Math.floor((h + (k === 1 ? 0 : 0.5) - ER_CARD_CHROME * k) / (KIND_ROW * k)));
+/** An ER card's height past which it never grows: 20 rows (decision 7), at text size `k`. */
+const erMaxH = (k: number) => erCardH(ER_MAX_ROWS, k);
+/**
+ * The px an ER card `h` tall (its 20-row height when not resized) shows of its scrolled rows at text size `k`: the card
+ * less its border and header. A card is never drawn past 20 rows, so neither is its view.
+ */
+export const erViewH = (h: number | undefined, k = 1) => Math.max(0, Math.min(h ?? erMaxH(k), erMaxH(k)) - (ER_CARD_CHROME - 2 * ER_ROWS_PAD) * k);
 /**
  * B3 decision 7: the rows of `count` an ER card draws with `view` px of its body in view (`erViewH`), scrolled by
  * `scroll`: every row even partly in view, plus `ER_ROW_OVERSCAN` either side while that stays within 22 rows, rows
  * `from` to `to` (exclusive). Spacers stand for the rest, so the drawn rows and the spacers meet every visible pixel.
  */
-export function erRowWindow(count: number, view: number, scroll: number): { from: number; to: number } {
-  const vf = Math.max(0, Math.min(count, Math.floor((scroll - ER_ROWS_PAD) / KIND_ROW)));
-  const vt = Math.max(vf, Math.min(count, Math.ceil((scroll + view - ER_ROWS_PAD) / KIND_ROW)));
+export function erRowWindow(count: number, view: number, scroll: number, k = 1): { from: number; to: number } {
+  const m = erMetrics(k);
+  const vf = Math.max(0, Math.min(count, Math.floor((scroll - m.pad) / m.row)));
+  const vt = Math.max(vf, Math.min(count, Math.ceil((scroll + view - m.pad) / m.row)));
   let from = Math.max(0, vf - ER_ROW_OVERSCAN);
   let to = Math.min(count, vt + ER_ROW_OVERSCAN);
   // A view of 20 rows can meet 22 at once (part of one at each edge): the overscan gives way first.
@@ -86,16 +107,18 @@ export function erRowWindow(count: number, view: number, scroll: number): { from
   return { from, to };
 }
 /**
- * ER build C: where a relationship meets row `row` of an ER card `top` px down a card `h` tall, its rows scrolled by
- * `scroll`: the middle of the row (1 px of border, the 32 px header, 3 px above the rows). A row scrolled out of
- * view puts the end on the card's top or bottom edge, whichever the row is past (DataGrip and
- * dbdiagram). Row -1 is the header, where a line to the whole table meets it.
+ * ER build C: where a relationship meets row `row` of an ER card `top` px down a card `h` tall at text size `k`, its
+ * rows scrolled by `scroll`: the middle of the row (`erMetrics(k).mid` on, a row pitch each). A row scrolled out of
+ * view puts the end on the card's top or bottom edge, whichever the row is past (DataGrip and dbdiagram). Row -1 is
+ * the header, where a line to the whole table meets it.
  */
-export function erRowY(top: number, h: number, row: number, scroll = 0): number {
-  if (row < 0) return top + 17;
-  const y = 47 + row * KIND_ROW - scroll;
-  if (y < 36) return top;
-  if (y > h - 4) return top + h;
+export function erRowY(top: number, h: number, row: number, scroll = 0, k = 1): number {
+  const m = erMetrics(k);
+  if (row < 0) return top + ER_HEAD_MID * k;
+  const y = m.mid + row * m.row - scroll;
+  // Past the top of the rows, or within 4 px of the card's bottom: on that edge.
+  if (y < m.mid - m.row / 2) return top;
+  if (y > h - 4 * k) return top + h;
   return top + y;
 }
 /** ER build C: the row of `column` among an ER table's rows ("customer_id int"), or -1 (the header) when absent. */
@@ -146,7 +169,7 @@ export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "t
       // its rows; past 20 columns the card stops growing and its rows scroll inside it (board ER interactions).
       return {
         w: clamp(Math.max(textW(n.name) + 48, ...rows.map(erRowWidth)), ER_MIN_W, ER_MAX_W),
-        h: ER_CARD_CHROME + Math.min(Math.max(rows.length, 1), ER_MAX_ROWS) * KIND_ROW,
+        h: erCardH(Math.min(rows.length, ER_MAX_ROWS)),
       };
     case "class":
     case "interface":

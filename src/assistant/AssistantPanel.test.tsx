@@ -122,6 +122,8 @@ let confirmKeyHost: () => void = () => {};
 let cancelPlace: (a: Record<string, unknown>) => boolean = () => true;
 /** `set_ai_model_prefs` rejects while this is set. */
 let pickFails = false;
+/** What `ai_name_chat` returns: the AI's title, or null when no call went. */
+let nameChat: (a: Record<string, unknown>) => unknown = () => null;
 
 /** Each thread an Ask saved, as the Core holds it after the save (an appended turn on top of what it had). */
 let saved: { thread: AiThread; requestId: unknown }[] = [];
@@ -146,6 +148,7 @@ beforeEach(() => {
   confirmKeyHost = () => {};
   pickFails = false;
   cancelPlace = () => true;
+  nameChat = () => null;
   routeInvoke(handlersNow());
 });
 
@@ -182,6 +185,11 @@ function handlersNow(): Record<string, (a: Record<string, unknown>) => unknown> 
     delete_ai_thread: (a) => {
       threads = threads.filter((t) => t.id !== a.id);
     },
+    // As the Core: a hand title on the stored chat, its order kept.
+    ai_rename_thread: (a) => {
+      threads = threads.map((t) => (t.id === a.id ? { ...t, title: a.title as string, titleBy: "user" as const } : t));
+      return summaryOf(threads.find((t) => t.id === a.id)!);
+    },
     save_ai_thread: (a) => {
       saved.push({ thread: a.thread as AiThread, requestId: a.requestId });
       return coreSave(a.thread as AiThread);
@@ -203,6 +211,7 @@ function handlersNow(): Record<string, (a: Record<string, unknown>) => unknown> 
     },
     ai_cancel: () => true,
     ai_cancel_place: (a) => cancelPlace(a),
+    ai_name_chat: (a) => nameChat(a),
     ai_record_action: (a: Record<string, unknown>) => ({ kind: a.kind, at: 5 }),
   };
 }
@@ -887,17 +896,85 @@ test("loads_summaries_then_the_open_thread", async () => {
   expect(callsTo("get_ai_thread")).toEqual([{ threadId: "b" }]);
 });
 
-test("clear_this_chat_deletes_the_open_thread", async () => {
+/** The list with a tag on "a": a chat that last worked on c1's hc-backend; "b" never touched a database. */
+function taggedRoutes(onWork: () => unknown) {
+  routeInvoke({
+    ...handlersNow(),
+    list_ai_threads: (a) =>
+      threads
+        .filter((t) => t.place === a.place)
+        .map((t) => ({ ...summaryOf(t), work: t.id === "a" ? { connectionId: "c1", database: "hc-backend", table: null, tabLabel: null } : null })),
+    ai_thread_work: () => onWork(),
+  });
+}
+
+test("a_row_click_resumes_with_the_chats_work_and_title", async () => {
+  const user = userEvent.setup();
+  const work = { tabKind: "query", tabKey: "query:q1", tabLabel: "Query 1", connectionId: "c1", database: "hc-backend", table: null, insertedSql: "SELECT 1", at: 1 };
+  threads = [thread("a", "ungrouped", "Unpaid clients", 1), thread("b", "ungrouped", "What is a CTE", 2)];
+  taggedRoutes(() => work);
+  const onResume = vi.fn(async () => null);
+  renderPanel({ onResume });
+  await screen.findByText("What is a CTE", { selector: ".msg-user" });
+  // A chat with no Connection only opens.
+  await openHistory(user);
+  await user.click(screen.getByRole("button", { name: /^What is a CTE/ }));
+  await openHistory(user);
+  await user.click(screen.getByRole("button", { name: /^Unpaid clients/ }));
+  expect(await screen.findByText("Unpaid clients", { selector: ".msg-user" })).toBeTruthy();
+  await waitFor(() => expect(onResume).toHaveBeenCalledTimes(1));
+  expect(callsTo("ai_thread_work")).toEqual([{ threadId: "a" }]);
+  expect(onResume).toHaveBeenCalledWith(work, "Unpaid clients", expect.any(Function));
+  expect(document.querySelector(".ask-strip")).toBeNull();
+});
+
+test("an_unavailable_resume_shows_the_strip_until_another_chat_opens", async () => {
+  const user = userEvent.setup();
+  threads = [thread("a", "ungrouped", "Unpaid clients", 1), thread("b", "ungrouped", "What is a CTE", 2)];
+  taggedRoutes(() => ({ tabKind: "query", tabKey: null, tabLabel: null, connectionId: "c1", database: "hc-backend", table: null, at: 1 }));
+  renderPanel({ onResume: async () => "hc-backend" });
+  await screen.findByText("What is a CTE", { selector: ".msg-user" });
+  await openHistory(user);
+  await user.click(screen.getByRole("button", { name: /^Unpaid clients/ }));
+  const strip = await waitFor(() => {
+    const s = document.querySelector(".ask-strip");
+    expect(s).toBeTruthy();
+    return s as HTMLElement;
+  });
+  expect(strip.textContent).toBe("hc-backend is not available. The chat is open without its tab.");
+  // The chat is open all the same.
+  expect(screen.getByText("Unpaid clients", { selector: ".msg-user" })).toBeTruthy();
+  await openHistory(user);
+  await user.click(screen.getByRole("button", { name: /^What is a CTE/ }));
+  await screen.findByText("What is a CTE", { selector: ".msg-user" });
+  expect(document.querySelector(".ask-strip")).toBeNull();
+});
+
+/** A chat's row in the open history popover. */
+const rowOf = (title: string) => screen.getByRole("button", { name: new RegExp(`^${title}`) }).closest(".history-item") as HTMLElement;
+
+/** Hovers a chat's row and presses one of its actions, "Rename" or "Delete". */
+async function rowAction(user: ReturnType<typeof userEvent.setup>, title: string, action: "Rename" | "Delete") {
+  const row = rowOf(title);
+  await user.hover(row);
+  await user.click(within(row).getByRole("button", { name: action }));
+  return row;
+}
+
+test("delete_on_the_open_chats_row_deletes_it", async () => {
   const user = userEvent.setup();
   threads = [thread("a", "ungrouped", "Old chat", 1)];
   renderPanel();
   await screen.findByText("Old chat", { selector: ".msg-user" });
   await openHistory(user);
-  await user.click(screen.getByRole("button", { name: "Clear this chat" }));
+  const row = await rowAction(user, "Old chat", "Delete");
+  // It asks first, in the row.
+  const ask = within(row).getByRole("alertdialog", { name: "Delete chat" });
+  expect(within(ask).getByText('Delete "Old chat"?')).toBeTruthy();
   expect(callsTo("delete_ai_thread")).toHaveLength(0);
-  await user.click(screen.getByRole("button", { name: "Clear" }));
+  await user.click(within(ask).getByRole("button", { name: "Delete" }));
   await waitFor(() => expect(callsTo("delete_ai_thread")).toEqual([{ id: "a" }]));
-  expect(screen.queryByText("Old chat", { selector: ".msg-user" })).toBeNull();
+  await waitFor(() => expect(screen.queryByText("Old chat", { selector: ".msg-user" })).toBeNull());
 });
 
 test("clear_all_chats_clears_the_place", async () => {
@@ -907,12 +984,159 @@ test("clear_all_chats_clears_the_place", async () => {
   renderPanel({ placeName: "Ungrouped" });
   await screen.findByText("Old chat", { selector: ".msg-user" });
   await openHistory(user);
-  await user.click(screen.getByRole("button", { name: "Clear all chats in this place..." }));
+  await user.click(screen.getByRole("button", { name: "Clear all chats..." }));
   await user.click(screen.getByRole("button", { name: "Clear" }));
   await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "ungrouped" }]));
   expect(screen.queryByText("Old chat", { selector: ".msg-user" })).toBeNull();
   // The place's Recent steps go with its chats.
   expect(stepsOf("ungrouped")).toEqual([]);
+});
+
+test("switching_database_keeps_the_open_chat", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  threads = [thread("a", "ungrouped", "Old chat", 1)];
+  const { rerender } = renderPanel();
+  await screen.findByText("Old chat", { selector: ".msg-user" });
+  const lists = callsTo("list_ai_threads").length;
+  const gets = callsTo("get_ai_thread").length;
+  // The tab moves from shop to shop_archive on the same Connection: only the schema the Ask reads changes.
+  const shop = ctx("schemaQueryRows");
+  const archive: AskContext = { ...shop, connection: { ...shop.connection!, database: "shop_archive" } };
+  rerender(<AssistantPanel place="ungrouped" groupId={null} context={archive} schema={schema} onOpenSettings={() => {}} />);
+  await waitFor(() => expect(lastPreview().database).toBe("shop_archive"));
+  expect(callsTo("list_ai_threads")).toHaveLength(lists);
+  expect(callsTo("get_ai_thread")).toHaveLength(gets);
+  expect(screen.getByText("Old chat", { selector: ".msg-user" })).toBeTruthy();
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "and in the archive?{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(askSent().threadId).toBe("a");
+  expect(askSent().database).toBe("shop_archive");
+  await screen.findByText("Use an index.");
+  expect(screen.getByText("Old chat", { selector: ".msg-user" })).toBeTruthy();
+});
+
+test("only_plus_and_new_chat_start_a_chat", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  threads = [thread("a", "ungrouped", "Old chat", 1), thread("b", "ungrouped", "Newer chat", 2), thread("c", "ungrouped", "Newest chat", 3)];
+  const { rerender } = renderPanel();
+  await screen.findByText("Newest chat", { selector: ".msg-user" });
+  // Not the newest: a reload of the place would open another chat.
+  await openHistory(user);
+  await user.click(screen.getByRole("button", { name: /^Newer chat/ }));
+  await screen.findByText("Newer chat", { selector: ".msg-user" });
+  const input = screen.getByRole("textbox", { name: "Message" });
+  // An answer, a database switch, a rename and a delete of another chat all keep the open chat.
+  await user.type(input, "first{Enter}");
+  await screen.findByText("Use an index.");
+  const shop = ctx("schemaQueryRows");
+  rerender(
+    <AssistantPanel place="ungrouped" groupId={null} context={{ ...shop, connection: { ...shop.connection!, database: "shop_archive" } }} schema={schema} onOpenSettings={() => {}} />,
+  );
+  await waitFor(() => expect(lastPreview().database).toBe("shop_archive"));
+  await openHistory(user);
+  await rowAction(user, "Old chat", "Rename");
+  const field = screen.getByRole("textbox", { name: "Chat title" });
+  await user.clear(field);
+  await user.type(field, "Renamed chat{Enter}");
+  await waitFor(() => expect(callsTo("ai_rename_thread")).toHaveLength(1));
+  const row = await rowAction(user, "Renamed chat", "Delete");
+  await user.click(within(within(row).getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(callsTo("delete_ai_thread")).toEqual([{ id: "a" }]));
+  await user.keyboard("{Escape}");
+  await user.type(input, "second{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(2));
+  const asks = () => callsTo("ai_ask_stream").map((c) => (c.request as AskRequest).threadId);
+  expect(asks()).toEqual(["b", "b"]);
+  expect(screen.getByText("Newer chat", { selector: ".msg-user" })).toBeTruthy();
+  // The + starts one.
+  await waitFor(() => expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(false));
+  await user.click(screen.getByRole("button", { name: "New chat" }));
+  expect(screen.queryByText("Newer chat", { selector: ".msg-user" })).toBeNull();
+  await user.type(input, "third{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(3));
+  expect(asks()[2]).toBeNull();
+  await screen.findByText("third", { selector: ".msg-user" });
+  // And New chat by its keys.
+  await waitFor(() => expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(false));
+  await user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
+  expect(screen.queryByText("third", { selector: ".msg-user" })).toBeNull();
+});
+
+test("renaming_updates_the_row_and_the_header", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  threads = [thread("a", "ungrouped", "Old chat", 1)];
+  // The next turn is not stored, so the row is drawn from the open chat's own copy.
+  routeInvoke({
+    ...handlersNow(),
+    ai_append_turn: () => {
+      throw "The store is locked.";
+    },
+  });
+  renderPanel();
+  await screen.findByText("Old chat", { selector: ".msg-user" });
+  await openHistory(user);
+  await rowAction(user, "Old chat", "Rename");
+  const field = screen.getByRole("textbox", { name: "Chat title" });
+  await user.clear(field);
+  await user.type(field, "Unpaid invoices{Enter}");
+  await waitFor(() => expect(callsTo("ai_rename_thread")).toEqual([{ id: "a", title: "Unpaid invoices" }]));
+  expect(await screen.findByRole("button", { name: /^Unpaid invoices/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Old chat/ })).toBeNull();
+  await user.keyboard("{Escape}");
+  // The open chat took the title too: its next answer keeps it on the row.
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "more{Enter}");
+  await screen.findByText("Use an index.");
+  await openHistory(user);
+  expect(await screen.findByRole("button", { name: /^Unpaid invoices/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Old chat/ })).toBeNull();
+});
+
+test("deleting_the_open_chat_empties_the_panel", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  threads = [thread("a", "ungrouped", "Old chat", 1), thread("b", "ungrouped", "Newer chat", 2)];
+  renderPanel();
+  await screen.findByText("Newer chat", { selector: ".msg-user" });
+  await openHistory(user);
+  const row = await rowAction(user, "Newer chat", "Delete");
+  await user.click(within(within(row).getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(callsTo("delete_ai_thread")).toEqual([{ id: "b" }]));
+  await waitFor(() => expect(screen.queryByText("Newer chat", { selector: ".msg-user" })).toBeNull());
+  // The other chat is not opened in its place: the panel is a new chat.
+  expect(screen.queryByText("Old chat", { selector: ".msg-user" })).toBeNull();
+  expect(screen.getByRole("button", { name: /^Old chat/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Newer chat/ })).toBeNull();
+  await user.keyboard("{Escape}");
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "fresh{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(askSent().threadId).toBeNull();
+});
+
+test("deleting_another_chat_keeps_the_open_one", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  threads = [thread("a", "ungrouped", "Old chat", 1), thread("b", "ungrouped", "Newer chat", 2)];
+  renderPanel();
+  await screen.findByText("Newer chat", { selector: ".msg-user" });
+  await openHistory(user);
+  const row = await rowAction(user, "Old chat", "Delete");
+  await user.click(within(within(row).getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(callsTo("delete_ai_thread")).toEqual([{ id: "a" }]));
+  await waitFor(() => expect(screen.queryByRole("button", { name: /^Old chat/ })).toBeNull());
+  expect(screen.getByText("Newer chat", { selector: ".msg-user" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /^Newer chat/ }).getAttribute("aria-current")).toBe("true");
+  await user.keyboard("{Escape}");
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "still here{Enter}");
+  await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
+  expect(askSent().threadId).toBe("b");
 });
 
 const fullRecord = (log: string): AnswerRecord => ({
@@ -1744,6 +1968,52 @@ test("insert_and_open_are_kept_with_the_answer", async () => {
   expect(screen.getByText("You: Opened in a new tab")).toBeTruthy();
 });
 
+test("insert_records_the_tab_and_sql", async () => {
+  const user = userEvent.setup();
+  const ed = fakeEditor("SELECT 1;\n");
+  const connectionId = ctx("schemaQueryRows").connection!.id;
+  const insertTarget = { editor: () => ed.api, name: "Query 1", key: "query:q1", connectionId, database: "shop" };
+  await askHeld(user, "why slow?", { insertTarget });
+  stream.emit(sent(), delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] }));
+  await waitFor(() => expect(saves()).toHaveLength(1));
+  const saved = lastSaved();
+  await user.click(await screen.findByRole("button", { name: "Insert" }));
+  act(() => void ed.api.keepSuggestion());
+  await waitFor(() => expect(callsTo("ai_record_action")).toHaveLength(1));
+  expect(callsTo("ai_record_action")[0]).toEqual({
+    threadId: saved.id,
+    messageAt: saved.messages[1].at,
+    kind: "inserted",
+    work: { tabKind: "query", tabKey: "query:q1", tabLabel: "Query 1", connectionId, database: "shop", sql: "SELECT id FROM orders;\n" },
+  });
+});
+
+test("open_in_new_tab_records_the_new_tab", async () => {
+  const user = userEvent.setup();
+  const ed = fakeEditor("SELECT 1;\n");
+  const conn = ctx("schemaQueryRows").connection!;
+  // The tab as App opened it: the text after answerText, the database after its fallback.
+  const tab = { key: "query:q9", name: "Query 2", sql: "SELECT id FROM orders;\n", connectionId: conn.id, database: "shop" };
+  const onOpenInNewTab = vi.fn((): typeof tab | null => tab);
+  await askHeld(user, "why slow?", { insertTarget: { editor: () => ed.api, name: "Query 1" }, onOpenInNewTab });
+  stream.emit(sent(), delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] }));
+  await waitFor(() => expect(saves()).toHaveLength(1));
+  const saved = lastSaved();
+  await user.click(await screen.findByRole("button", { name: "Open in new tab" }));
+  await waitFor(() => expect(callsTo("ai_record_action")).toHaveLength(1));
+  expect(callsTo("ai_record_action")[0]).toEqual({
+    threadId: saved.id,
+    messageAt: saved.messages[1].at,
+    kind: "openedInNewTab",
+    work: { tabKind: "query", tabKey: "query:q9", tabLabel: "Query 2", connectionId: conn.id, database: "shop", sql: "SELECT id FROM orders;\n" },
+  });
+  // No tab opened (null): the action is kept, no work goes.
+  onOpenInNewTab.mockReturnValue(null);
+  await user.click(screen.getByRole("button", { name: "Open in new tab" }));
+  await waitFor(() => expect(callsTo("ai_record_action")).toHaveLength(2));
+  expect(callsTo("ai_record_action")[1]).toEqual({ threadId: saved.id, messageAt: saved.messages[1].at, kind: "openedInNewTab" });
+});
+
 // ---- 11c: the answer's AI Context, and the 11b-2 carry-overs ----
 
 test("context_event_is_kept_with_the_answer", async () => {
@@ -1918,7 +2188,27 @@ test("opening_a_chat_that_is_gone_drops_its_row", async () => {
   expect(screen.queryByRole("button", { name: /Old chat/ })).toBeNull();
 });
 
-test("a_failed_clear_keeps_the_row_and_shows_why", async () => {
+test("the_row_after_an_answer_carries_where_it_worked", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  // The first answer holds SQL on shop's orders; the second holds none and leaves the place where it was.
+  reply = (_r, n) => (n === 1 ? [memory(), delta(FENCED), done({ sqlBlocks: [ORDERS_BLOCK] })] : [memory({ tables: [] }), delta("No SQL here."), done()]);
+  renderPanel();
+  const input = await screen.findByRole("textbox", { name: "Message" });
+  await user.type(input, "late orders{Enter}");
+  await screen.findByText("That is all.");
+  await user.type(input, "thanks{Enter}");
+  await screen.findByText("No SQL here.");
+  await openHistory(user);
+  const row = rowOf("late orders");
+  // No Connections are listed here, so the tag shows the database alone (R6).
+  expect(within(row).getByText("shop")).toBeTruthy();
+  expect(within(row).getByText("orders")).toBeTruthy();
+  expect(within(row).queryByText("No database")).toBeNull();
+});
+
+test("a_failed_delete_keeps_the_row_and_shows_why", async () => {
   const user = userEvent.setup();
   threads = [thread("a", "ungrouped", "Old chat", 1)];
   routeInvoke({
@@ -1930,12 +2220,12 @@ test("a_failed_clear_keeps_the_row_and_shows_why", async () => {
   renderPanel();
   await screen.findByText("Old chat", { selector: ".msg-user" });
   await openHistory(user);
-  await user.click(screen.getByRole("button", { name: "Clear this chat" }));
-  await user.click(screen.getByRole("button", { name: "Clear" }));
+  const row = await rowAction(user, "Old chat", "Delete");
+  await user.click(within(within(row).getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
   expect(await screen.findByText("The store is locked.")).toBeTruthy();
   expect(screen.getByText("Old chat", { selector: ".msg-user" })).toBeTruthy();
-  await openHistory(user);
-  expect(screen.getByRole("button", { name: /Old chat/ })).toBeTruthy();
+  // The chat is still stored, so its row stays.
+  expect(screen.getByRole("button", { name: /^Old chat/ })).toBeTruthy();
 });
 
 test("a_failed_clear_all_keeps_the_list_and_shows_why", async () => {
@@ -1950,7 +2240,7 @@ test("a_failed_clear_all_keeps_the_list_and_shows_why", async () => {
   renderPanel({ placeName: "Ungrouped" });
   await screen.findByText("Old chat", { selector: ".msg-user" });
   await openHistory(user);
-  await user.click(screen.getByRole("button", { name: "Clear all chats in this place..." }));
+  await user.click(screen.getByRole("button", { name: "Clear all chats..." }));
   await user.click(screen.getByRole("button", { name: "Clear" }));
   expect(await screen.findByText("The store is locked.")).toBeTruthy();
   // The chats are still on disk, so they stay listed.
@@ -2078,7 +2368,8 @@ test("divider_for_the_open_topic", async () => {
   expect(screen.queryByRole("button", { name: /Late invoices/ })).toBeNull();
 });
 
-test("live_memory_event_shows_divider", async () => {
+test("no_new_topic_divider_while_streaming", async () => {
+  // One conversation (ruling 1): an Ask never opens a Topic, so no live "New topic" divider.
   const user = userEvent.setup();
   const { t, topics } = topicThread();
   withTopics(t, topics);
@@ -2090,12 +2381,15 @@ test("live_memory_event_shows_divider", async () => {
   expect(document.querySelectorAll(".tdiv")).toHaveLength(1);
   await user.type(screen.getByRole("textbox", { name: "Message" }), "who owes most?{Enter}");
   await waitFor(() => expect(callsTo("ai_ask_stream")).toHaveLength(1));
-  expect(document.querySelectorAll(".tdiv")).toHaveLength(1);
-  stream.emit(memory({ topic: 3, opened: true, reason: "subject", title: "Refunds" }));
+  stream.emit(memory({ topic: 2, opened: false, reason: null, title: "Biggest customers" }));
+  await screen.findByText("who owes most?");
   const dividers = document.querySelectorAll(".tdiv");
-  expect(dividers).toHaveLength(2);
-  expect(dividers[1].textContent).toBe("New topicRefunds");
-  expect(dividers[1].nextElementSibling?.textContent).toBe("who owes most?");
+  expect(dividers).toHaveLength(1);
+  expect(dividers[0].textContent).toBe("New topicBiggest customers");
+  // Even a stamp that says it opened one draws no live divider: only stored Topics do.
+  stream.emit(memory({ topic: 3, opened: true, reason: "first", title: "Refunds" }));
+  expect(document.querySelectorAll(".tdiv")).toHaveLength(1);
+  expect(screen.queryByText("Refunds")).toBeNull();
 });
 
 test("persist_stamps_both_messages", async () => {
@@ -2236,7 +2530,7 @@ test("compacted_event_drops_the_meter", async () => {
   expect(screen.getByText("31K / 131K")).toBeTruthy();
   // The Ask is still running: its compaction cannot be undone yet.
   expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
-  stream.emit({ type: "status", step: "Summarising the last topic" });
+  stream.emit({ type: "status", step: "Reading sample rows" });
   expect(screen.queryByText("Compacting the thread")).toBeNull();
 });
 
@@ -2558,19 +2852,26 @@ test("each_command_runs_its_control", async () => {
   expect(await screen.findByText(/the full log line/)).toBeTruthy();
   cleanup();
 
-  // /clear asks first, then deletes the open chat.
+  // /clear asks first, on the open chat's history row, then deletes it.
   user = await slashPanel();
   await user.type(composer(), "/clear{Enter}");
-  expect(await screen.findByText(/Clear this chat\? Its messages are removed/)).toBeTruthy();
+  const ask = await screen.findByRole("alertdialog", { name: "Delete chat" });
+  expect(ask.closest(".history-item")).toBeTruthy();
+  expect(within(ask).getByText('Delete "Why?"?')).toBeTruthy();
   expect(callsTo("delete_ai_thread")).toHaveLength(0);
-  await user.click(screen.getByRole("button", { name: "Clear" }));
+  await user.click(within(ask).getByRole("button", { name: "Delete" }));
   await waitFor(() => expect(callsTo("delete_ai_thread")).toEqual([{ id: "a" }]));
+  await waitFor(() => expect(screen.queryByText("Why?", { selector: ".msg-user" })).toBeNull());
 });
 
 test("clear_confirmation_can_be_cancelled", async () => {
   const user = await slashPanel();
   await user.type(composer(), "/clear{Enter}");
-  await user.click(await screen.findByRole("button", { name: "Cancel" }));
+  // The open chat's row asks; Cancel keeps the chat.
+  const ask = await screen.findByRole("alertdialog", { name: "Delete chat" });
+  expect(ask.closest(".history-item")).toBeTruthy();
+  await user.click(within(ask).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(callsTo("delete_ai_thread")).toHaveLength(0);
   expect(screen.getByText("Why?", { selector: ".msg-user" })).toBeTruthy();
 });
@@ -2583,7 +2884,7 @@ test("a_click_on_a_row_runs_it", async () => {
 });
 
 test("unavailable_commands_say_why_and_do_nothing", async () => {
-  // No chat open: nothing to compact, no answer to log, nothing to clear.
+  // No chat open: nothing to compact, no answer to log, nothing to delete.
   const user = userEvent.setup();
   known = groqModels();
   settings = groq;
@@ -2593,6 +2894,7 @@ test("unavailable_commands_say_why_and_do_nothing", async () => {
   expect(screen.getByRole("option", { name: /\/compact/ }).getAttribute("aria-disabled")).toBe("true");
   expect(screen.getByText("Nothing to compact yet")).toBeTruthy();
   expect(screen.getByText("No answer yet")).toBeTruthy();
+  expect(screen.getByText("No chat to delete")).toBeTruthy();
   await user.keyboard("{Enter}");
   expect(callsTo("ai_compact")).toHaveLength(0);
   expect(composer().value).toBe("/");
@@ -2679,11 +2981,12 @@ test("no_dashes_or_cursor_words", async () => {
   await user.type(composer(), "/compact{Enter}");
   read(await screen.findByRole("alert"));
   await user.type(composer(), "/clear{Enter}");
-  read(await screen.findByText(/Clear this chat\? Its messages are removed/));
+  read(await screen.findByRole("alertdialog", { name: "Delete chat" }));
 
   const text = seen.join("\n");
   expect(text).toMatch(/Nothing to compact yet/);
   expect(text).toMatch(/Could not compact the chat\./);
+  expect(text).toMatch(/This cannot be undone\./);
   expect(text).not.toMatch(/[\u2013\u2014]/);
   expect(text).not.toMatch(/cursor|caret/i);
 });
@@ -2924,6 +3227,119 @@ test("an_ask_sends_only_its_turn_and_a_chat_whose_save_failed_goes_whole_next_ti
   await user.type(input, "third{Enter}");
   await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(2));
   expect((callsTo("ai_append_turn")[1].turn as AppendTurn).messages.map((m) => m.text)).toEqual(["third", "Use an index."]);
+});
+
+/** A promise the test settles itself. */
+function held<T>() {
+  let settle!: (v: T) => void;
+  const promise = new Promise<T>((ok) => {
+    settle = ok;
+  });
+  return { promise, settle };
+}
+
+const nameRequests = () => callsTo("ai_name_chat").map((c) => c.request as Record<string, unknown>);
+
+test("the_first_answer_calls_name_chat_and_the_row_takes_the_title", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  nameChat = () => "Unpaid clients to date";
+  renderPanel();
+  await user.type(await screen.findByRole("textbox", { name: "Message" }), "which clients have not paid?{Enter}");
+  await screen.findByText("Use an index.");
+  await waitFor(() => expect(nameRequests()).toHaveLength(1));
+  const turn = callsTo("ai_append_turn")[0].turn as AppendTurn;
+  // Called only once the turn is stored, for that chat, with the Ask's switches and model.
+  expect(callsTo("ai_append_turn")).toHaveLength(1);
+  expect(nameRequests()[0]).toMatchObject({ place: "ungrouped", groupId: null, threadId: turn.threadId, model: askSent().model, off: askSent().off });
+  expect(typeof nameRequests()[0].requestId).toBe("string");
+  await openHistory(user);
+  expect(await screen.findByRole("button", { name: /Unpaid clients to date/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /which clients have not paid/ })).toBeNull();
+});
+
+test("a_hand_title_is_not_named_again", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  nameChat = () => "AI words";
+  const mine = { ...thread("t1", "ungrouped", "My own title", 5), titleBy: "user" as const };
+  mine.messages.push({ role: "assistant", text: "earlier a", context: [], at: 6 });
+  const tried = { ...thread("t2", "ungrouped", "Tried twice", 3), titleTries: 2 };
+  tried.messages.push({ role: "assistant", text: "tried a", context: [], at: 4 });
+  threads = [mine, tried];
+  renderPanel();
+  await screen.findByText("earlier a");
+  const input = screen.getByRole("textbox", { name: "Message" });
+  await user.type(input, "one more{Enter}");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(1));
+  await screen.findByText("one more", { selector: ".msg-user" });
+  // A chat whose two tries are spent is not named either.
+  await openHistory(user);
+  await user.click(await screen.findByRole("button", { name: /Tried twice/ }));
+  await screen.findByText("tried a");
+  await user.type(screen.getByRole("textbox", { name: "Message" }), "again{Enter}");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(2));
+  await screen.findByText("again", { selector: ".msg-user" });
+  expect(nameRequests()).toHaveLength(0);
+});
+
+test("one_title_call_per_chat_at_a_time", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  const title = held<string | null>();
+  nameChat = () => title.promise;
+  renderPanel();
+  const input = await screen.findByRole("textbox", { name: "Message" });
+  await user.type(input, "first{Enter}");
+  await waitFor(() => expect(nameRequests()).toHaveLength(1));
+  // The next question goes while the title is being written, and makes no second call.
+  await user.type(input, "second{Enter}");
+  await waitFor(() => expect(callsTo("ai_append_turn")).toHaveLength(2));
+  await screen.findByText("second", { selector: ".msg-user" });
+  expect(nameRequests()).toHaveLength(1);
+  await act(async () => title.settle("Paid late"));
+  await openHistory(user);
+  expect(await screen.findByRole("button", { name: /Paid late/ })).toBeTruthy();
+});
+
+test("a_place_change_cancels_the_title_call", async () => {
+  const user = userEvent.setup();
+  settings = groq;
+  askError = null;
+  const title = held<string | null>();
+  nameChat = () => title.promise;
+  const { rerender } = renderPanel();
+  await user.type(await screen.findByRole("textbox", { name: "Message" }), "first{Enter}");
+  await waitFor(() => expect(nameRequests()).toHaveLength(1));
+  const requestId = nameRequests()[0].requestId;
+  rerender(<AssistantPanel place="group:g1" groupId="g1" context={ctx("schemaQueryRows")} schema={schema} onOpenSettings={() => {}} />);
+  await waitFor(() => expect(callsTo("ai_cancel")).toContainEqual({ requestId }));
+  // A title that lands late is dropped: no row of either place takes it.
+  await act(async () => title.settle("Late title"));
+  await openHistory(user);
+  expect(screen.queryByRole("button", { name: /Late title/ })).toBeNull();
+  await user.keyboard("{Escape}");
+  rerender(<AssistantPanel place="ungrouped" groupId={null} context={ctx("schemaQueryRows")} schema={schema} onOpenSettings={() => {}} />);
+  await openHistory(user);
+  expect(screen.queryByRole("button", { name: /Late title/ })).toBeNull();
+});
+
+test("an_answer_after_a_place_change_starts_no_title_call", async () => {
+  const user = userEvent.setup();
+  nameChat = () => "Old place title";
+  const { rerender } = await askHeld(user);
+  stream.emit(delta("Half an"));
+  rerender(<AssistantPanel place="group:g2" groupId="g2" context={null} schema={null} onOpenSettings={() => {}} />);
+  await waitFor(() => expect(saves()).toHaveLength(1));
+  expect(lastSaved().place).toBe("ungrouped");
+  // Let any call that would follow the stored turn go out.
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(nameRequests()).toHaveLength(0);
 });
 
 test("a failed append keeps the other Connections of askedIn for the next save", async () => {

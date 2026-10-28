@@ -10,6 +10,8 @@ export interface SegmentedOption<V extends string> {
   trail?: ReactNode;
   /** Shown but not choosable, such as Selected nodes with nothing selected. */
   disabled?: boolean;
+  /** Set on the option's radio, such as why an off option is off (the browser's tooltip). */
+  title?: string;
 }
 
 interface Props<V extends string> {
@@ -49,6 +51,7 @@ export default function Segmented<V extends string>({ value, options, onChange, 
           aria-label={o.ariaLabel}
           tabIndex={o.value === value ? 0 : -1}
           disabled={o.disabled}
+          title={o.title}
           className={o.value === value ? "segmented-option segmented-on" : "segmented-option"}
           onClick={() => onChange(o.value)}
         >

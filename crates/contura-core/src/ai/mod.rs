@@ -18,6 +18,7 @@ pub mod scene;
 pub mod sent;
 pub mod steps;
 pub mod stream;
+pub mod title;
 pub mod tool_uses;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -157,6 +158,11 @@ pub struct AiSettings {
     /// changes it.
     #[serde(default = "yes")]
     pub diagram_tool: bool,
+    /// "Name chats with the AI": after a chat's first answer, one short call writes its
+    /// title (Decision 5). Stored settings without it read on. Global like auto-compact: a
+    /// Group override never changes it.
+    #[serde(default = "yes")]
+    pub name_chats: bool,
     /// The picks remembered per model id, already clamped.
     pub model_prefs: BTreeMap<String, ModelPicks>,
 }
@@ -201,6 +207,7 @@ impl Default for AiSettings {
             pick_tables: true,
             auto_compact: true,
             diagram_tool: true,
+            name_chats: true,
             model_prefs: BTreeMap::new(),
         }
     }
@@ -419,6 +426,10 @@ impl AiMessage {
 
 pub type ThreadId = uuid::Uuid;
 
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
 /// One chat thread, kept per place (`ungrouped` or `group:<id>`, as the drafts' place key).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -429,6 +440,19 @@ pub struct AiThread {
     pub messages: Vec<AiMessage>,
     /// Epoch milliseconds; orders the list.
     pub updated_at: i64,
+    /// Who wrote `title`. A save never changes it, nor `title`, nor `title_tries`, on a
+    /// stored thread: only a rename, an AI title and a failed title call do.
+    /// Left out of the JSON while it is the rule's, so a thread saved before reads back
+    /// as it was written.
+    #[serde(default, skip_serializing_if = "memory::TitleBy::is_rule")]
+    pub title_by: memory::TitleBy,
+    /// The AI title calls that failed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub title_tries: u8,
+    /// Where the chat last worked, with the SQL a resume puts back. Never sent to the
+    /// webview with the thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_work: Option<memory::LastWork>,
 }
 
 /// One running Ask: its place and the handle that stops it.
@@ -465,6 +489,8 @@ pub struct AiService {
 
 /// How many Asks' AI Contexts are kept for the save of their answer.
 const ASKED_KEPT: usize = 32;
+/// The longest chat title a rename keeps, in characters.
+const RENAME_CHARS: usize = 120;
 /// How many forgotten Connections (one entry each, `None` for every Connection) are
 /// remembered for the turns of Asks still running. Past it, the Connection forgotten
 /// longest ago is dropped first: an Ask that began before that forget and is still
@@ -639,6 +665,7 @@ impl AiService {
             own.pick_tables = global.pick_tables;
             own.auto_compact = global.auto_compact;
             own.diagram_tool = global.diagram_tool;
+            own.name_chats = global.name_chats;
             return Ok((own, true));
         }
         Ok((global, false))
@@ -741,6 +768,7 @@ impl AiService {
                 settings.pick_tables = global.pick_tables;
                 settings.auto_compact = global.auto_compact;
                 settings.diagram_tool = global.diagram_tool;
+                settings.name_chats = global.name_chats;
             }
             let json = serde_json::to_string(&settings).map_err(|e| Error::Store(e.to_string()))?;
             if let Some(g) = group.filter(|_| !override_group) {
@@ -980,13 +1008,16 @@ impl AiService {
         Ok(info_in(settings, stored.as_ref(), model.trim()))
     }
 
-    /// Keeps what the user did with the SQL of the answer at `message_at` in `thread`.
-    /// `None` for an answer saved before records were kept.
+    /// Keeps what the user did with the SQL of the answer at `message_at` in `thread`, and
+    /// with `work`, where it went: the tab, the place and the SQL become where the chat
+    /// last worked (Decision 4b), also for an answer with no record. `None` for an answer
+    /// saved before records were kept.
     pub fn record_action(
         &self,
         thread: ThreadId,
         message_at: i64,
         kind: AnswerActionKind,
+        work: Option<memory::WorkInput>,
     ) -> Result<Option<AnswerAction>> {
         let store = self.store()?;
         let mut t = store
@@ -997,14 +1028,48 @@ impl AiService {
             .iter_mut()
             .find(|m| m.role == AiRole::Assistant && m.at == message_at)
             .ok_or_else(|| Error::InvalidInput("the answer is gone".into()))?;
-        let Some(mut record) = message.record.take() else {
+        let at = now_ms();
+        let action = message.record.take().map(|mut record| {
+            let action = AnswerAction { kind, at };
+            record.actions.push(action);
+            message.record = Some(record.capped());
+            action
+        });
+        if action.is_none() && work.is_none() {
+            return Ok(None);
+        }
+        if let Some(work) = work {
+            t.last_work = Some(memory::LastWork::after_insert(
+                t.last_work.take(),
+                work,
+                message_at,
+                at,
+            ));
+        }
+        store.save_ai_thread(&t)?;
+        Ok(action)
+    }
+
+    /// Where the chat last worked, with its SQL, for a resume: the stored record, or for a
+    /// chat saved before D2, the one its newest answer with SQL gives (P35). `None` for a
+    /// chat that is gone or never worked anywhere. Read only on a resume: the thread's
+    /// JSON is read whole.
+    pub fn thread_work(&self, id: ThreadId) -> Result<Option<memory::LastWork>> {
+        let Some(t) = self.store()?.get_ai_thread(id)? else {
             return Ok(None);
         };
-        let action = AnswerAction { kind, at: now_ms() };
-        record.actions.push(action);
-        message.record = Some(record.capped());
-        store.save_ai_thread(&t)?;
-        Ok(Some(action))
+        Ok(t.last_work.clone().or_else(|| memory::LastWork::derive(&t)))
+    }
+
+    /// `thread_work` under the AI access gate: `access` is each Connection's current
+    /// access (Never for one that is gone). A chat on a Connection at Never, or on none,
+    /// comes back without its SQL.
+    pub fn thread_work_for(
+        &self,
+        id: ThreadId,
+        access: impl Fn(ConnectionId) -> AiAccess,
+    ) -> Result<Option<memory::LastWork>> {
+        Ok(self.thread_work(id)?.map(|w| w.gated(access)))
     }
 
     /// Keeps what the user did with the changes a diagram answer proposed: the changes
@@ -1178,6 +1243,19 @@ impl AiService {
     /// Text matched exactly and redacted before anything goes out (R2.1): every saved
     /// provider key (a Group may use another provider) and the saved password of each
     /// of `connections`.
+    /// Whether a title call for `req` may go, from the setting and the stored thread
+    /// (`title::title_wanted`): no keyring read, so the command asks it first (final
+    /// review M1).
+    pub fn title_may_go(&self, req: &title::NameChatRequest) -> Result<bool> {
+        let (settings, _) = self.effective(req.group_id)?;
+        let thread = memory::store::thread(self.store()?.conn(), req.thread_id)?;
+        Ok(title::title_wanted(
+            settings.name_chats,
+            thread.as_ref(),
+            req,
+        ))
+    }
+
     pub fn secrets_for_redaction(&self, connections: &[ConnectionConfig]) -> Result<Secrets> {
         redaction_secrets(&*self.secrets, connections)
     }
@@ -1209,6 +1287,8 @@ impl AiService {
         let Some(mut thread) = memory::store::thread(conn, id)? else {
             return Ok(None);
         };
+        // Its SQL stays in the Core: a save that lacks it keeps the stored one.
+        thread.last_work = None;
         for m in &mut thread.messages {
             *m = m.for_view();
         }
@@ -1234,10 +1314,34 @@ impl AiService {
         }))
     }
 
-    /// The Topics of the place's threads that hold a word of `text`, best 20.
-    pub fn search_threads(&self, place: &str, text: &str) -> Result<Vec<memory::ThreadHit>> {
+    /// The place's chats that hold a word of `text` in a question, a Topic, the title or
+    /// where they last worked, as summaries, best 20 (`memory::store::search_place`).
+    pub fn search_threads(&self, place: &str, text: &str) -> Result<Vec<memory::ThreadSummary>> {
         let terms = context::retrieve::question_terms(text);
         memory::store::search_place(self.store()?.conn(), place, &terms, 20)
+    }
+
+    /// Renames the chat: the title is the user's from now on (the AI never writes over
+    /// it), and the list keeps its order (`updated_at` is not changed). The title is
+    /// trimmed, on one line, 1 to 120 characters.
+    pub fn rename_thread(&self, id: ThreadId, title: &str) -> Result<memory::ThreadSummary> {
+        let title: String = title
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > RENAME_CHARS {
+            return Err(Error::InvalidInput(
+                "A chat title has 1 to 120 characters.".into(),
+            ));
+        }
+        let store = self.store()?;
+        let conn = store.conn();
+        if !memory::store::set_thread_title(conn, id, title, memory::TitleBy::User)? {
+            return Err(Error::InvalidInput("the chat is gone".into()));
+        }
+        memory::store::summary(conn, id)?
+            .ok_or_else(|| Error::InvalidInput("the chat is gone".into()))
     }
 
     /// Keeps the AI Context the Ask `request_id` used (its `Context` event), for the save
@@ -1417,6 +1521,9 @@ impl AiService {
                 title: turn.title,
                 messages: Vec::new(),
                 updated_at: turn.updated_at,
+                title_by: Default::default(),
+                title_tries: 0,
+                last_work: None,
             });
         if let Some(from) = turn.replace_from
             && let Some(at) = thread.messages.iter().position(|m| m.at >= from)
@@ -1426,6 +1533,18 @@ impl AiService {
         let new_at = thread.messages.len();
         thread.messages.extend(add);
         thread.updated_at = turn.updated_at;
+        let end = thread.messages.len();
+        // A Retry removed the stored messages from `replace_from` on: SQL from an answer
+        // among them goes with it. One that the cap trimmed from the front stays.
+        let cut = match turn.replace_from {
+            Some(from) => memory::LastWork::after_cut(
+                thread.last_work.take(),
+                &thread.messages[..new_at],
+                |at| at >= from,
+            ),
+            None => thread.last_work.take(),
+        };
+        thread.last_work = after_answers(cut, &thread.messages, new_at..end);
         self.after_forgets(&mut thread, &|i| i >= new_at);
         let written = store.write_ai_thread(thread)?;
         self.drop_held(request_id);
@@ -1447,6 +1566,8 @@ impl AiService {
             kept_from: written.messages.first().map(|m| m.at),
             message_count: written.messages.len() as u32,
             messages,
+            title_by: written.title_by,
+            title_tries: written.title_tries,
             topics: memory::store::topics(conn, written.id)?,
             compactions,
         })
@@ -1479,6 +1600,20 @@ impl AiService {
                     .is_some_and(|b| b.messages.iter().any(|o| o.role == m.role && o.at == m.at))
             };
             let new: Vec<bool> = thread.messages.iter().map(|m| !stored(m)).collect();
+            let added = (0..new.len()).filter(|i| new[*i]);
+            // SQL from an answer the copy no longer holds goes with it (a Retry): one missing
+            // from the copy and not older than its oldest message. One older than that only
+            // fell off the front (the cap) and stays.
+            let oldest = thread.messages.first().map_or(i64::MAX, |m| m.at);
+            let cut =
+                memory::LastWork::after_cut(thread.last_work.take(), &thread.messages, |at| {
+                    at >= oldest
+                        && !thread
+                            .messages
+                            .iter()
+                            .any(|m| m.role == AiRole::Assistant && m.at == at)
+                });
+            thread.last_work = after_answers(cut, &thread.messages, added);
             self.after_forgets(&mut thread, &|i| new[i]);
             store.save_ai_thread(&thread)?;
         }
@@ -1644,6 +1779,30 @@ impl AiService {
         held: Option<Vec<memory::OtherStep>>,
     ) -> AiThread {
         let mut thread = thread.clone();
+        // A save never changes the title, its source or its tries: only a rename, an AI
+        // title and a failed title call do (P3). A new thread's title is the rule's. Where
+        // it last worked is the Core's: a copy that lacks it keeps the stored one.
+        match before {
+            Some(b) => {
+                thread.title = b.title.clone();
+                thread.title_by = b.title_by;
+                thread.title_tries = b.title_tries;
+                // The webview never holds it (P5); a copy that does wins only when it is
+                // newer than the stored one, so a stale copy never puts older work back.
+                let copy_newer = match (&thread.last_work, &b.last_work) {
+                    (Some(c), Some(s)) => c.at > s.at,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                };
+                if !copy_newer {
+                    thread.last_work = b.last_work.clone();
+                }
+            }
+            None => {
+                thread.title_by = memory::TitleBy::Rule;
+                thread.title_tries = 0;
+            }
+        }
         // The last question, when it is new to the store, takes the held steps.
         let last_new = thread
             .messages
@@ -1701,8 +1860,35 @@ impl AiService {
                                 .and_then(|s| s.summary.as_ref())
                                 .and_then(|x| x.exact.clone());
                         }
+                        if let Some(title) = &mut sent.title {
+                            title.exact = o
+                                .sent
+                                .as_ref()
+                                .and_then(|s| s.title.as_ref())
+                                .and_then(|x| x.exact.clone());
+                        }
                     }
                     r.trimmed = false;
+                } else if let Some(o) = old {
+                    // A whole copy keeps the title call's lines the Core wrote after the
+                    // turn was stored (P4).
+                    for line in o.log.iter().filter(|l| l.source == "title") {
+                        if !r.log.contains(line) {
+                            r.log.push(line.clone());
+                        }
+                    }
+                }
+                // The title call lands after the turn is stored: a copy that lacks its
+                // record keeps the stored one (P4).
+                if let Some(stored) = old
+                    .and_then(|o| o.sent.as_ref())
+                    .filter(|s| s.title.is_some())
+                {
+                    match &mut r.sent {
+                        Some(sent) if sent.title.is_none() => sent.title = stored.title.clone(),
+                        Some(_) => {}
+                        None => r.sent = Some(stored.clone()),
+                    }
                 }
                 if r.context.is_none() {
                     r.context = old.and_then(|o| o.context.clone());
@@ -1834,6 +2020,19 @@ fn scrub_thread(
         }
     }
     changed
+}
+
+/// `work` after each answer at `added` of `messages` arrived, oldest first
+/// (`LastWork::after_answer`).
+fn after_answers(
+    work: Option<memory::LastWork>,
+    messages: &[AiMessage],
+    added: impl IntoIterator<Item = usize>,
+) -> Option<memory::LastWork> {
+    added
+        .into_iter()
+        .take_while(|i| *i < messages.len())
+        .fold(work, |w, i| memory::LastWork::after_answer(w, messages, i))
 }
 
 /// An Asked in the webview sent, held to its caps: steps on other Connections are never in
@@ -2234,6 +2433,35 @@ mod tests {
         assert!(!svc.effective(None).unwrap().0.auto_compact);
     }
 
+    /// P20: "Name chats with the AI" reads on when not stored, and is global like
+    /// auto-compact: a Group's record never changes it.
+    #[test]
+    fn name_chats_defaults_on_and_is_global() {
+        let (_dir, svc) = service();
+        let s: AiSettings = serde_json::from_str("{}").unwrap();
+        assert!(s.name_chats);
+        assert!(AiSettings::default().name_chats);
+        let g = uuid::Uuid::new_v4();
+        {
+            let store = svc.store().unwrap();
+            store.set_setting(SETTINGS_KEY, r#"{"model":"m"}"#).unwrap();
+            store
+                .set_setting(&group_key(g), r#"{"model":"m","nameChats":false}"#)
+                .unwrap();
+        }
+        let (effective, own) = svc.effective(Some(g)).unwrap();
+        assert!(own);
+        assert!(effective.name_chats);
+        svc.store()
+            .unwrap()
+            .set_setting(SETTINGS_KEY, r#"{"nameChats":false}"#)
+            .unwrap();
+        assert!(!svc.effective(Some(g)).unwrap().0.name_chats);
+        assert!(!svc.effective(None).unwrap().0.name_chats);
+        let json = serde_json::to_value(AiSettings::default()).unwrap();
+        assert_eq!(json["nameChats"], true);
+    }
+
     #[test]
     fn tool_errors_serialize_camel_case() {
         let long = "x".repeat(300);
@@ -2464,6 +2692,9 @@ mod tests {
             title: turn.title.clone(),
             messages: turn.messages.iter().map(AiMessage::for_view).collect(),
             updated_at: turn.updated_at,
+            title_by: Default::default(),
+            title_tries: 0,
+            last_work: None,
         };
         let shown = copy.messages[0].asked_in.as_ref().unwrap();
         assert!(shown.summary.is_empty() && shown.steps.is_empty());
@@ -2476,15 +2707,20 @@ mod tests {
         // Gated at the lower access, held at Never.
         let q = &back.messages[0];
         let own = AiAccess::SchemaQuery;
+        let ask = memory::AskFacts {
+            connection_id: q.connection_id,
+            database: Some("shop"),
+            tables: &[],
+        };
         assert_eq!(
-            memory::message_access(q, own, &[(other, AiAccess::Schema)]),
+            memory::message_access(q, &ask, own, &[(other, AiAccess::Schema)]),
             AiAccess::Schema
         );
         assert_eq!(
-            memory::message_access(q, own, &[(other, AiAccess::Never)]),
+            memory::message_access(q, &ask, own, &[(other, AiAccess::Never)]),
             AiAccess::Never
         );
-        assert_eq!(memory::message_access(q, own, &[]), AiAccess::Never);
+        assert_eq!(memory::message_access(q, &ask, own, &[]), AiAccess::Never);
     }
 
     #[test]

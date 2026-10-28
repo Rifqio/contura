@@ -227,9 +227,9 @@ test("blocked_line", () => {
 });
 
 const SUMMARY = {
-  kind: "summary" as const,
-  topic: 1,
-  title: "Late invoices",
+  kind: "compact" as const,
+  topic: null,
+  title: null,
   messages: 4,
   bytes: 1_204,
   tokens: 344,
@@ -241,8 +241,8 @@ const withSummary = (over: Partial<NonNullable<Preview["summary"]>> = {}): Previ
 
 test("summary_row_toggles", async () => {
   const onToggle = vi.fn();
-  const { unmount } = render(<Sends preview={withSummary()} header="h" onToggle={onToggle} modelName="Claude Haiku 5.5" />);
-  const pill = screen.getByRole("button", { name: "Summary step · last topic" });
+  const { unmount } = render(<Sends preview={withSummary()} header="h" onToggle={onToggle} />);
+  const pill = screen.getByRole("button", { name: "Summary step · 4 older messages" });
   expect(pill.getAttribute("aria-pressed")).toBe("true");
   expect(pill.querySelector("path")?.getAttribute("d")).toBe(iconElement("history").querySelector("path")?.getAttribute("d"));
   expect(pill.closest("li")?.textContent).toContain("1.2 KB");
@@ -252,37 +252,64 @@ test("summary_row_toggles", async () => {
   await userEvent.click(pill);
   expect(onToggle.mock.calls).toEqual([["summary"]]);
   unmount();
-  render(<Sends preview={withSummary({ on: false })} header="h" onToggle={() => {}} modelName="Claude Haiku 5.5" />);
-  expect(screen.getByRole("button", { name: "Summary step · last topic · off" }).getAttribute("aria-pressed")).toBe("false");
+  render(<Sends preview={withSummary({ on: false })} header="h" onToggle={() => {}} />);
+  expect(screen.getByRole("button", { name: "Summary step · 4 older messages · off" }).getAttribute("aria-pressed")).toBe("false");
   expect(screen.getByText("12.1 KB")).toBeTruthy();
 });
 
 test("show_exactly_lists_the_summary_step", async () => {
   const user = userEvent.setup();
-  const { unmount } = render(<Sends preview={withSummary()} header="h" onToggle={() => {}} modelName="Claude Haiku 5.5" />);
+  const { unmount } = render(<Sends preview={withSummary()} header="h" onToggle={() => {}} />);
   await user.click(screen.getByRole("button", { name: "Show exactly" }));
   expect(screen.getByText("Summary step")).toBeTruthy();
   expect(screen.getByText("SUMMARY-STEP-TEXT")).toBeTruthy();
   unmount();
-  render(<Sends preview={withSummary({ on: false })} header="h" onToggle={() => {}} modelName="Claude Haiku 5.5" />);
+  render(<Sends preview={withSummary({ on: false })} header="h" onToggle={() => {}} />);
   await user.click(screen.getByRole("button", { name: "Show exactly" }));
   expect(screen.queryByText("Summary step")).toBeNull();
   expect(screen.queryByText("SUMMARY-STEP-TEXT")).toBeNull();
 });
 
-test("step_line_per_kind", () => {
-  const { unmount } = render(<Sends preview={withSummary()} header="h" onToggle={() => {}} modelName="Claude Haiku 5.5" />);
-  expect(screen.getByText("+ 1 step: the last topic is summarised by Claude Haiku 5.5 first.")).toBeTruthy();
-  unmount();
-  render(
-    <Sends preview={withSummary({ kind: "compact", topic: null, title: null, messages: 14 })} header="h" onToggle={() => {}} modelName="Claude Haiku 5.5" />,
+test("the_summary_pill_names_older_messages_only", () => {
+  // No Ask closes a Topic (ruling 1): the only summary step is the compaction, whatever kind
+  // an older preview carries, and nothing says "last topic".
+  const { unmount } = render(
+    <Sends preview={withSummary({ kind: "compact", messages: 14 })} header="h" onToggle={() => {}} />,
   );
   expect(screen.getByRole("button", { name: "Summary step · 14 older messages" })).toBeTruthy();
   expect(screen.getByText("+ 1 step: 14 older messages become one summary first.")).toBeTruthy();
+  expect(screen.queryByText(/last topic/)).toBeNull();
+  unmount();
+  render(<Sends preview={withSummary({ kind: "summary", topic: 1, title: "Late invoices", messages: 1 })} header="h" onToggle={() => {}} />);
+  expect(screen.getByRole("button", { name: "Summary step · 1 older message" })).toBeTruthy();
+  expect(screen.getByText("+ 1 step: 1 older message becomes one summary first.")).toBeTruthy();
+  expect(screen.queryByText(/last topic/)).toBeNull();
+});
+
+test("the_title_pill_shows_once_with_its_tokens_and_switch", async () => {
+  const onToggle = vi.fn();
+  const title = { bytes: 1_150, tokens: 300, exact: false, on: true };
+  const { unmount } = render(<Sends preview={preview({ title })} header="h" onToggle={onToggle} />);
+  const pills = screen.getAllByRole("button", { name: /^Chat title/ });
+  expect(pills).toHaveLength(1);
+  expect(pills[0].getAttribute("aria-label") ?? pills[0].textContent).toBe("Chat title, about 300 tokens");
+  expect(pills[0].getAttribute("aria-pressed")).toBe("true");
+  // An estimate: the answer is not written yet, so the Sends counter does not add it.
+  expect(screen.getByText("12.1 KB")).toBeTruthy();
+  await userEvent.click(pills[0]);
+  expect(onToggle.mock.calls).toEqual([["title"]]);
+  unmount();
+  render(<Sends preview={preview({ title: { ...title, on: false } })} header="h" onToggle={() => {}} />);
+  expect(screen.getByRole("button", { name: "Chat title, about 300 tokens · off" }).getAttribute("aria-pressed")).toBe("false");
+});
+
+test("no_title_pill_when_no_title_call_follows", () => {
+  render(<Sends preview={preview({ title: null })} header="h" onToggle={() => {}} />);
+  expect(screen.queryByRole("button", { name: /^Chat title/ })).toBeNull();
 });
 
 test("step_line_only_while_the_summary_row_is_on", () => {
-  render(<Sends preview={withSummary({ on: false })} header="h" onToggle={() => {}} modelName="Claude Haiku 5.5" />);
+  render(<Sends preview={withSummary({ on: false })} header="h" onToggle={() => {}} />);
   expect(screen.queryByText(/\+ 1 step/)).toBeNull();
 });
 

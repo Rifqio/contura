@@ -2,15 +2,20 @@
 
 use std::sync::Arc;
 
-use contura_core::ai::AiService;
 use contura_core::ai::log::{Level, LogLine, ProcessStep, StepKind};
 use contura_core::ai::memory::store::StoreThreads;
-use contura_core::ai::memory::{AppendTurn, SummaryBy, ThreadStore};
+use contura_core::ai::memory::store::{
+    list_sql, list_summaries, search_like_sql, search_place, set_thread_title, summary_sql,
+};
+use contura_core::ai::memory::{
+    AppendTurn, LAST_WORK_SQL_BYTES, LastWork, SummaryBy, ThreadStore, TitleBy, WorkInput,
+};
 use contura_core::ai::rails::output::{Flag, SqlBlock, StatementCheck};
 use contura_core::ai::request::ItemKind;
 use contura_core::ai::sent::{
     AnswerAction, AnswerActionKind, AnswerRecord, OutlineSent, SentRecord,
 };
+use contura_core::ai::{AiAccess, AiService};
 use contura_core::ai::{AiMessage, AiRole, AiThread};
 use contura_core::connections::{ConnectionInput, ConnectionService, PasswordChange};
 use contura_core::model::{DialectKind, SslMode};
@@ -32,6 +37,11 @@ fn fx() -> Fx {
 }
 
 impl Fx {
+    /// A plain SQLite handle on the store file.
+    fn db(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.dir.path().join("app.sqlite")).unwrap()
+    }
+
     /// A second handle on the same store file, for Topic summaries.
     fn threads(&self) -> StoreThreads {
         StoreThreads::new(AppStore::open(&self.dir.path().join("app.sqlite")).unwrap())
@@ -112,7 +122,57 @@ fn thread(place: &str, title: &str, messages: Vec<AiMessage>) -> AiThread {
         title: title.into(),
         messages,
         updated_at: 100,
+        title_by: TitleBy::Rule,
+        title_tries: 0,
+        last_work: None,
     }
+}
+
+/// A turn whose answer holds `sql` in its only fence, checked, on `shop` with `tables`;
+/// the question was asked in a query tab.
+fn sql_turn(at: i64, q: &str, sql: &str, tables: &[&str]) -> Vec<AiMessage> {
+    let record = AnswerRecord {
+        sql_blocks: vec![block(sql)],
+        ..AnswerRecord::default()
+    };
+    let mut m = turn(1, at, q, Some(record));
+    m[0].asked_in = Some(contura_core::ai::memory::AskedIn {
+        tab: "query".into(),
+        label: "Query 3 in shop".into(),
+        tab_key: Some("query:3".into()),
+        ..Default::default()
+    });
+    m[1].text = format!("Try this:\n```sql\n{sql}\n```\nDone.");
+    for x in &mut m {
+        x.tables = tables.iter().map(|t| t.to_string()).collect();
+    }
+    m
+}
+
+fn work(sql: &str) -> LastWork {
+    LastWork {
+        tab_kind: "query".into(),
+        tab_key: Some("query:1".into()),
+        tab_label: Some("Orders query".into()),
+        connection_id: Some(Uuid::from_u128(7)),
+        database: Some("shop".into()),
+        table: Some("orders".into()),
+        inserted_sql: Some(sql.into()),
+        ai_sql: Some(sql.into()),
+        at: 11,
+        inserted_from: None,
+        ai_from: None,
+    }
+}
+
+fn columns(f: &Fx, id: Uuid) -> (String, String, Option<String>, i64) {
+    f.db()
+        .query_row(
+            "SELECT title, title_by, work, messages FROM ai_threads WHERE id = ?1",
+            [id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
 }
 
 #[test]
@@ -207,6 +267,7 @@ fn view_trims_compaction_records() {
         at: 50,
         undone: false,
         record: heavy_record(100),
+        covers: None,
     };
     f.threads().add_compaction(&c).unwrap();
     let view = f.svc.thread_view(t.id).unwrap().unwrap();
@@ -262,7 +323,7 @@ fn stale_save_keeps_stamps_and_actions() {
     f.svc.save_thread(&t).unwrap();
     let action = f
         .svc
-        .record_action(t.id, 11, AnswerActionKind::Inserted)
+        .record_action(t.id, 11, AnswerActionKind::Inserted, None)
         .unwrap()
         .unwrap();
     // A stale copy: no action, other stamps.
@@ -318,59 +379,82 @@ fn save_for_an_ask_still_writes_its_context() {
     assert_eq!(r.context, Some(info));
 }
 
+/// Task 3 (rewritten from `search_finds_topics_by_question_and_summary`): the place's
+/// chats as summaries, found by a question or table (Topic search), by the title and by
+/// the database or table the chat last worked in (columns), each chat once.
 #[test]
-fn search_finds_topics_by_question_and_summary() {
+fn search_finds_by_title_question_database_and_table() {
     let f = fx();
     let mut m = turn(1, 10, "which zebra crossings are busiest", None);
-    m.extend(turn(2, 30, "plain follow up", None));
+    m.extend(sql_turn(
+        30,
+        "plain follow up",
+        "select * from deliveries",
+        &["deliveries"],
+    ));
     let t = thread("ungrouped", "Crossings", m);
     f.svc.save_thread(&t).unwrap();
     let other = thread("group:2", "Elsewhere", turn(1, 10, "zebra elsewhere", None));
     f.svc.save_thread(&other).unwrap();
-    f.threads()
-        .set_topic_summary(t.id, 1, "pedestrian walkways by traffic", &SummaryBy::Rules)
-        .unwrap();
+    f.svc.rename_thread(t.id, "Pedestrian report").unwrap();
 
-    let by_question = f.svc.search_threads("ungrouped", "zebra").unwrap();
-    assert_eq!(by_question.len(), 1, "{by_question:?}");
-    let hit = &by_question[0];
-    assert_eq!(
-        (hit.thread_id, hit.topic, hit.title.as_str()),
-        (t.id, 1, "Crossings")
-    );
-    assert_eq!(hit.snippet, "pedestrian walkways by traffic");
-    assert_eq!(hit.at, 11);
-    assert!(!hit.topic_title.is_empty());
-
-    let by_summary = f.svc.search_threads("ungrouped", "walkways").unwrap();
-    assert_eq!(by_summary.len(), 1);
-    // The open Topic has no summary: its first question is the snippet.
-    let open = f.svc.search_threads("ungrouped", "follow").unwrap();
-    assert_eq!(open[0].topic, 2);
-    assert_eq!(open[0].snippet, "plain follow up");
-    // Another place's thread does not show, and the other place finds its own.
-    assert_eq!(
-        f.svc.search_threads("group:2", "zebra").unwrap()[0].thread_id,
-        other.id
-    );
-    assert!(
+    let ids = |place: &str, text: &str| -> Vec<Uuid> {
         f.svc
-            .search_threads("ungrouped", "elsewhere")
+            .search_threads(place, text)
             .unwrap()
-            .is_empty()
+            .into_iter()
+            .map(|s| s.id)
+            .collect()
+    };
+    // By a question (Topic search), by the title, by the database, by the table.
+    for text in [
+        "zebra",
+        "pedestrian",
+        "shop",
+        "deliveries",
+        "zebra pedestrian",
+    ] {
+        assert_eq!(ids("ungrouped", text), [t.id], "{text}");
+    }
+    let hit = f.svc.search_threads("ungrouped", "shop").unwrap().remove(0);
+    assert_eq!(hit.title, "Pedestrian report");
+    assert_eq!(hit.title_by, TitleBy::User);
+    assert_eq!(hit.messages, 4);
+    let work = hit.work.expect("work");
+    assert_eq!(
+        (work.database.as_deref(), work.table.as_deref()),
+        (Some("shop"), Some("deliveries"))
     );
+    // Another place's chat does not show, and the other place finds its own.
+    assert_eq!(ids("group:2", "zebra"), [other.id]);
+    assert!(ids("ungrouped", "elsewhere").is_empty());
     // Syntax in the text is read as words.
     assert!(f.svc.search_threads("ungrouped", "\"zebra* AND (").is_ok());
+    // `%` and `_` in a term are matched as written, never as wildcards.
+    let db = f.db();
+    for term in ["h_p", "s%p", "%", "_"] {
+        assert!(
+            search_place(&db, "ungrouped", &[term.to_string()], 20)
+                .unwrap()
+                .is_empty(),
+            "{term}"
+        );
+    }
 }
 
+/// P17: a title the AI wrote is found though no question holds its words.
 #[test]
-fn search_snippet_is_cut_to_120() {
+fn search_finds_an_ai_title() {
     let f = fx();
-    let long = format!("zebra {}", "x".repeat(300));
-    let t = thread("ungrouped", "t", turn(1, 10, &long, None));
+    let t = thread("ungrouped", "how many?", turn(1, 10, "how many?", None));
     f.svc.save_thread(&t).unwrap();
-    let hits = f.svc.search_threads("ungrouped", "zebra").unwrap();
-    assert_eq!(hits[0].snippet.chars().count(), 120);
+    assert!(set_thread_title(&f.db(), t.id, "Quarterly revenue review", TitleBy::Ai).unwrap());
+    let found = f.svc.search_threads("ungrouped", "quarterly").unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        (found[0].id, found[0].title.as_str(), found[0].title_by),
+        (t.id, "Quarterly revenue review", TitleBy::Ai)
+    );
 }
 
 #[test]
@@ -1441,4 +1525,1204 @@ async fn overlapping_deletes_lose_no_pending_purge() {
             .unwrap()
             .is_none()
     );
+}
+
+// Task 3: the chat record and the list from columns.
+
+/// P1: the list reads columns only, so a row whose JSON no longer reads still lists.
+#[test]
+fn list_reads_no_thread_json() {
+    let f = fx();
+    let mut t = thread("ungrouped", "first", turn(1, 10, "q", None));
+    t.last_work = Some(work("select 1"));
+    f.svc.save_thread(&t).unwrap();
+    f.svc.rename_thread(t.id, "Renamed").unwrap();
+    f.db()
+        .execute(
+            "UPDATE ai_threads SET json = '{' WHERE id = ?1",
+            [t.id.to_string()],
+        )
+        .unwrap();
+    let list = f.svc.list_threads("ungrouped").unwrap();
+    assert_eq!(list.len(), 1);
+    let s = &list[0];
+    assert_eq!(
+        (s.id, s.title.as_str(), s.title_by, s.messages, s.topics),
+        (t.id, "Renamed", TitleBy::User, 2, 1)
+    );
+    let w = s.work.as_ref().expect("work");
+    assert_eq!(w.connection_id, Some(Uuid::from_u128(7)));
+    assert_eq!(
+        (
+            w.database.as_deref(),
+            w.table.as_deref(),
+            w.tab_label.as_deref()
+        ),
+        (Some("shop"), Some("orders"), Some("Orders query"))
+    );
+    let json = serde_json::to_value(&list).unwrap();
+    assert_eq!(json[0]["titleBy"], "user");
+    assert_eq!(
+        json[0]["work"],
+        serde_json::json!({
+            "connectionId": Uuid::from_u128(7).to_string(),
+            "database": "shop",
+            "table": "orders",
+            "tabLabel": "Orders query",
+        })
+    );
+}
+
+/// P35, ruling R2: a chat saved before D2 reads as a rule title with no tries, and its
+/// work is derived from its newest answer with SQL.
+#[test]
+fn a_thread_from_before_reads_rule_and_derives_its_work() {
+    let f = fx();
+    let mut m = turn(1, 10, "plain", None);
+    m.extend(sql_turn(
+        20,
+        "older sql",
+        "select 1 from invoices",
+        &["invoices"],
+    ));
+    m.extend(sql_turn(
+        30,
+        "newest sql",
+        "select 2 from orders",
+        &["orders", "items"],
+    ));
+    m.extend(turn(1, 40, "no sql after", None));
+    let mut json = serde_json::to_value(thread("ungrouped", "before", m)).unwrap();
+    for key in ["titleBy", "titleTries", "lastWork"] {
+        json.as_object_mut().unwrap().remove(key);
+    }
+    let old: AiThread = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        (old.title_by, old.title_tries, &old.last_work),
+        (TitleBy::Rule, 0, &None)
+    );
+
+    let derived = LastWork::derive(&old).expect("derived");
+    assert_eq!(derived.ai_sql.as_deref(), Some("select 2 from orders"));
+    assert_eq!(derived.inserted_sql, None);
+    assert_eq!(
+        (
+            derived.connection_id,
+            derived.database.as_deref(),
+            derived.table.as_deref()
+        ),
+        (Some(Uuid::from_u128(7)), Some("shop"), Some("orders"))
+    );
+    assert_eq!(
+        (
+            derived.tab_kind.as_str(),
+            derived.tab_key.as_deref(),
+            derived.tab_label.as_deref()
+        ),
+        ("query", Some("query:3"), Some("Query 3 in shop"))
+    );
+    assert_eq!(derived.at, 31);
+
+    f.svc.save_thread(&old).unwrap();
+    let s = f.svc.list_threads("ungrouped").unwrap().remove(0);
+    assert_eq!(s.title_by, TitleBy::Rule);
+    let w = s.work.expect("work");
+    assert_eq!(
+        (w.database.as_deref(), w.table.as_deref()),
+        (Some("shop"), Some("orders"))
+    );
+
+    // With no answer holding SQL, there is no work.
+    let plain = thread("ungrouped", "plain", turn(1, 10, "q", None));
+    assert!(LastWork::derive(&plain).is_none());
+    f.svc.save_thread(&plain).unwrap();
+    let list = f.svc.list_threads("ungrouped").unwrap();
+    let s = list.iter().find(|s| s.id == plain.id).unwrap();
+    assert!(s.work.is_none());
+    assert_eq!(
+        serde_json::to_value(s).unwrap()["work"],
+        serde_json::Value::Null
+    );
+}
+
+/// A schema 7 store opens with each chat's title, message count and work filled from its
+/// JSON, and every title from the rule.
+#[test]
+fn schema_8_fills_titles_from_json() {
+    let f = fx();
+    let mut a = thread("ungrouped", "first chat", turn(1, 10, "q", None));
+    a.updated_at = 1;
+    let mut b = thread(
+        "ungrouped",
+        "second chat",
+        sql_turn(20, "orders?", "select 1 from orders", &["orders"]),
+    );
+    b.messages.extend(turn(1, 30, "more", None));
+    b.updated_at = 2;
+    f.svc.save_thread(&a).unwrap();
+    f.svc.save_thread(&b).unwrap();
+    {
+        let db = f.db();
+        db.execute_batch("DROP INDEX ai_threads_list").unwrap();
+        for col in ["title", "title_by", "work", "messages"] {
+            db.execute_batch(&format!("ALTER TABLE ai_threads DROP COLUMN {col}"))
+                .unwrap();
+        }
+        db.pragma_update(None, "user_version", 7).unwrap();
+    }
+    let store = AppStore::open(&f.dir.path().join("app.sqlite")).unwrap();
+    let svc = AiService::new(store, Arc::new(MemorySecretStore::new()));
+    let list = svc.list_threads("ungrouped").unwrap();
+    let rows: Vec<_> = list
+        .iter()
+        .map(|s| (s.id, s.title.as_str(), s.title_by, s.messages))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (b.id, "second chat", TitleBy::Rule, 4),
+            (a.id, "first chat", TitleBy::Rule, 2)
+        ]
+    );
+    assert_eq!(
+        list[0].work.as_ref().unwrap().table.as_deref(),
+        Some("orders")
+    );
+    assert!(list[1].work.is_none());
+    for id in [a.id, b.id] {
+        assert_eq!(columns(&f, id).1, "rule");
+    }
+}
+
+/// The `work` column holds where the chat worked, never its SQL; the thread JSON keeps
+/// the SQL, each cut to `LAST_WORK_SQL_BYTES` at a character boundary.
+#[test]
+fn the_work_column_holds_no_sql() {
+    let f = fx();
+    let mut t = thread("ungrouped", "t", turn(1, 10, "q", None));
+    let long = format!(
+        "select 'secret_value' -- {}",
+        "é".repeat(LAST_WORK_SQL_BYTES)
+    );
+    t.last_work = Some(work(&long));
+    f.svc.save_thread(&t).unwrap();
+    let column = columns(&f, t.id).2.expect("work");
+    assert!(!column.contains("secret_value"), "{column}");
+    assert!(!column.to_lowercase().contains("sql"), "{column}");
+    let stored = f.threads().thread(t.id).unwrap().unwrap();
+    let w = stored.last_work.expect("kept");
+    for sql in [w.ai_sql.unwrap(), w.inserted_sql.unwrap()] {
+        assert!(sql.starts_with("select 'secret_value'"));
+        assert!(sql.len() <= LAST_WORK_SQL_BYTES && sql.len() > LAST_WORK_SQL_BYTES - 4);
+    }
+}
+
+#[test]
+fn rename_sets_user_and_keeps_it() {
+    let f = fx();
+    let t = thread("ungrouped", "rule title", turn(1, 10, "q", None));
+    f.svc.save_thread(&t).unwrap();
+    let s = f.svc.rename_thread(t.id, "  Late invoices  ").unwrap();
+    assert_eq!(
+        (s.id, s.title.as_str(), s.title_by),
+        (t.id, "Late invoices", TitleBy::User)
+    );
+    // The AI never writes over a title the user gave.
+    assert!(!set_thread_title(&f.db(), t.id, "AI words", TitleBy::Ai).unwrap());
+    assert!(!set_thread_title(&f.db(), Uuid::new_v4(), "x", TitleBy::Ai).unwrap());
+    let stored = f.threads().thread(t.id).unwrap().unwrap();
+    assert_eq!(
+        (stored.title.as_str(), stored.title_by),
+        ("Late invoices", TitleBy::User)
+    );
+    assert_eq!(columns(&f, t.id).0, "Late invoices");
+    // The user may rename again.
+    assert_eq!(f.svc.rename_thread(t.id, "Again").unwrap().title, "Again");
+}
+
+/// A webview copy saved after a rename (old title, no `titleBy`) keeps the user's title.
+#[test]
+fn a_user_title_survives_a_stale_save() {
+    let f = fx();
+    let t = thread("ungrouped", "rule title", turn(1, 10, "q", None));
+    f.svc.save_thread(&t).unwrap();
+    let mut stale = f.svc.thread_view(t.id).unwrap().unwrap().thread;
+    f.svc.rename_thread(t.id, "Mine").unwrap();
+    stale.messages.extend(turn(1, 20, "and again", None));
+    stale.title_by = TitleBy::Rule;
+    let view = f.svc.save_thread(&stale).unwrap();
+    assert_eq!(
+        (view.thread.title.as_str(), view.thread.title_by),
+        ("Mine", TitleBy::User)
+    );
+    let s = f.svc.list_threads("ungrouped").unwrap().remove(0);
+    assert_eq!(
+        (s.title.as_str(), s.title_by, s.messages),
+        ("Mine", TitleBy::User, 4)
+    );
+}
+
+/// P3: a save of a copy holding the rule title keeps the AI title and its source.
+#[test]
+fn an_ai_title_survives_a_stale_save() {
+    let f = fx();
+    let t = thread("ungrouped", "rule title", turn(1, 10, "q", None));
+    f.svc.save_thread(&t).unwrap();
+    let mut stale = f.svc.thread_view(t.id).unwrap().unwrap().thread;
+    assert!(set_thread_title(&f.db(), t.id, "Paid late", TitleBy::Ai).unwrap());
+    stale.messages.extend(turn(1, 20, "and again", None));
+    stale.title_tries = 0;
+    f.svc.save_thread(&stale).unwrap();
+    let stored = f.threads().thread(t.id).unwrap().unwrap();
+    assert_eq!(
+        (stored.title.as_str(), stored.title_by),
+        ("Paid late", TitleBy::Ai)
+    );
+    assert_eq!(columns(&f, t.id).0, "Paid late");
+    assert_eq!(columns(&f, t.id).1, "ai");
+    // A copy claiming a source of its own changes nothing either.
+    stale.title = "Webview words".into();
+    stale.title_by = TitleBy::User;
+    f.svc.save_thread(&stale).unwrap();
+    let s = f.svc.list_threads("ungrouped").unwrap().remove(0);
+    assert_eq!((s.title.as_str(), s.title_by), ("Paid late", TitleBy::Ai));
+}
+
+/// P3: a rename or an AI title keeps `updated_at`, so the list never reorders.
+#[test]
+fn rename_keeps_the_order() {
+    let f = fx();
+    let mut a = thread("ungrouped", "a", turn(1, 10, "q", None));
+    a.updated_at = 1;
+    let mut b = thread("ungrouped", "b", turn(1, 10, "q", None));
+    b.updated_at = 2;
+    f.svc.save_thread(&a).unwrap();
+    f.svc.save_thread(&b).unwrap();
+    let renamed = f.svc.rename_thread(a.id, "renamed a").unwrap();
+    assert_eq!(renamed.updated_at, 1);
+    assert!(set_thread_title(&f.db(), b.id, "AI b", TitleBy::Ai).unwrap());
+    let list = f.svc.list_threads("ungrouped").unwrap();
+    let rows: Vec<_> = list.iter().map(|s| (s.id, s.updated_at)).collect();
+    assert_eq!(rows, [(b.id, 2), (a.id, 1)]);
+    assert_eq!(f.threads().thread(a.id).unwrap().unwrap().updated_at, 1);
+}
+
+#[test]
+fn rename_refuses_empty_and_long() {
+    let f = fx();
+    let t = thread("ungrouped", "kept", turn(1, 10, "q", None));
+    f.svc.save_thread(&t).unwrap();
+    for bad in [String::new(), "   ".into(), "x".repeat(121)] {
+        match f.svc.rename_thread(t.id, &bad) {
+            Err(contura_core::error::Error::InvalidInput(m)) => {
+                assert_eq!(m, "A chat title has 1 to 120 characters.")
+            }
+            other => panic!("{bad:?}: {other:?}"),
+        }
+    }
+    assert_eq!(f.svc.list_threads("ungrouped").unwrap()[0].title, "kept");
+    // 120 characters, counted as characters.
+    let full = "é".repeat(120);
+    assert_eq!(f.svc.rename_thread(t.id, &full).unwrap().title, full);
+    assert!(f.svc.rename_thread(Uuid::new_v4(), "x").is_err());
+}
+
+/// Decision 12: a 500-thread place lists from columns in under 50 ms (best of 5), with
+/// each thread's JSON at 1 MB. The list reads the covering index alone: the columns sit
+/// after `json` in the row, so a read from the table would walk every thread's JSON pages.
+#[test]
+fn five_hundred_threads_list_under_50ms() {
+    // On disk under the target dir, not in a RAM-backed temp folder: 500 MB of rows.
+    let dir = tempfile::Builder::new()
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .unwrap();
+    let path = dir.path().join("app.sqlite");
+    drop(AppStore::open(&path).unwrap());
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    db.pragma_update(None, "synchronous", "OFF").unwrap();
+    let heavy = format!("{{\"pad\":\"{}\"}}", "x".repeat(1024 * 1024));
+    let tag = serde_json::json!({
+        "tabKind": "query",
+        "connectionId": Uuid::from_u128(7).to_string(),
+        "database": "shop",
+        "table": "orders",
+        "tabLabel": "Query 1",
+        "at": 1
+    })
+    .to_string();
+    db.execute_batch("BEGIN").unwrap();
+    for i in 0..500i64 {
+        db.execute(
+            "INSERT INTO ai_threads (id, place, json, updated_at, title, title_by, work, messages)
+             VALUES (?1, 'big', ?2, ?3, ?4, 'ai', ?5, 12)",
+            rusqlite::params![
+                Uuid::new_v4().to_string(),
+                heavy,
+                i,
+                format!("Chat number {i}"),
+                tag
+            ],
+        )
+        .unwrap();
+    }
+    db.execute_batch("COMMIT").unwrap();
+    drop(heavy);
+    // Each statement that reads the columns, exactly as the store runs it, reads the
+    // covering index, never the table row.
+    for sql in [
+        list_sql(),
+        summary_sql(),
+        search_like_sql(1),
+        search_like_sql(3),
+    ] {
+        let plan: Vec<String> = {
+            let mut stmt = db.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            // Its parameters unbound (NULL): the plan does not depend on them.
+            let unbound = vec![rusqlite::types::Null; stmt.parameter_count()];
+            stmt.query_map(rusqlite::params_from_iter(unbound), |r| {
+                r.get::<_, String>(3)
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        };
+        assert!(
+            plan.iter()
+                .any(|l| l.contains("USING COVERING INDEX ai_threads_list")),
+            "{sql}: {plan:?}"
+        );
+    }
+    let mut best = std::time::Duration::MAX;
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        let list = list_summaries(&db, "big", 500).unwrap();
+        best = best.min(start.elapsed());
+        assert_eq!(list.len(), 500);
+        assert_eq!(list[0].title, "Chat number 499");
+        assert_eq!(
+            list[0].work.as_ref().unwrap().table.as_deref(),
+            Some("orders")
+        );
+    }
+    eprintln!("500 threads of 1 MB listed in {best:?} (best of 5)");
+    assert!(best.as_millis() < 50, "best of 5: {best:?}");
+}
+
+// ---- Task 4: where a chat last worked ----
+
+/// A turn on `database` whose answer holds `sql` in its only fence, checked, with
+/// `tables`; the question was asked in the query tab `key`, labelled `label`.
+fn work_turn(
+    at: i64,
+    database: &str,
+    sql: &str,
+    tables: &[&str],
+    key: &str,
+    label: &str,
+) -> Vec<AiMessage> {
+    let mut m = sql_turn(at, "q", sql, tables);
+    m[0].asked_in = Some(contura_core::ai::memory::AskedIn {
+        tab: "query".into(),
+        label: label.into(),
+        tab_key: Some(key.into()),
+        ..Default::default()
+    });
+    for x in &mut m {
+        x.database = Some(database.into());
+    }
+    m
+}
+
+fn insert_input(sql: &str, database: &str, key: &str) -> WorkInput {
+    WorkInput {
+        tab_kind: "query".into(),
+        tab_key: Some(key.into()),
+        tab_label: Some("Query 1".into()),
+        connection_id: Some(Uuid::from_u128(7)),
+        database: Some(database.into()),
+        sql: sql.into(),
+    }
+}
+
+fn append(f: &Fx, t: &AiThread, messages: Vec<AiMessage>) -> contura_core::ai::memory::TurnView {
+    f.svc
+        .append_turn(appended(t, messages, None), None)
+        .unwrap()
+}
+
+#[test]
+fn an_answer_with_sql_sets_ai_sql_and_the_place() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    let key = format!("query:{}", Uuid::from_u128(42));
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select * from invoice",
+            &["invoice", "client"],
+            &key,
+            "Query 2",
+        ),
+    );
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(
+        w,
+        LastWork {
+            tab_kind: "query".into(),
+            tab_key: Some(key),
+            tab_label: Some("Query 2".into()),
+            connection_id: Some(Uuid::from_u128(7)),
+            database: Some("shop".into()),
+            table: Some("invoice".into()),
+            inserted_sql: None,
+            ai_sql: Some("select * from invoice".into()),
+            at: 11,
+            inserted_from: None,
+            ai_from: Some(11),
+        }
+    );
+    // It is stored with the thread, not derived on the read.
+    let stored = f.threads().thread(t.id).unwrap().unwrap();
+    assert_eq!(stored.last_work, Some(w));
+}
+
+#[test]
+fn an_answer_without_sql_keeps_the_last_work() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    let before = f.svc.thread_work(t.id).unwrap();
+    let mut plain = turn(1, 20, "and why?", None);
+    plain[0].database = Some("crm".into());
+    plain[1].database = Some("crm".into());
+    append(&f, &t, plain);
+    assert_eq!(f.svc.thread_work(t.id).unwrap(), before);
+    assert_eq!(f.threads().thread(t.id).unwrap().unwrap().last_work, before);
+}
+
+#[test]
+fn an_insert_sets_inserted_sql_and_the_tab() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    // The answer has no record: the action is not kept with it, the work is.
+    append(&f, &t, turn(1, 10, "q", None));
+    let kept = f
+        .svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 9 from orders", "shop", "query:q1")),
+        )
+        .unwrap();
+    assert_eq!(kept, None);
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.inserted_sql.as_deref(), Some("select 9 from orders"));
+    assert_eq!(w.ai_sql, None);
+    assert_eq!(
+        (
+            w.tab_kind.as_str(),
+            w.tab_key.as_deref(),
+            w.tab_label.as_deref()
+        ),
+        ("query", Some("query:q1"), Some("Query 1"))
+    );
+    assert_eq!(
+        (w.connection_id, w.database.as_deref()),
+        (Some(Uuid::from_u128(7)), Some("shop"))
+    );
+    assert!(w.at > 0);
+    // Open in new tab names the new tab; the answer with a record keeps the action too.
+    append(
+        &f,
+        &t,
+        work_turn(
+            20,
+            "shop",
+            "select 2 from orders",
+            &["orders"],
+            "query:q1",
+            "Query 1",
+        ),
+    );
+    let kept = f
+        .svc
+        .record_action(
+            t.id,
+            21,
+            AnswerActionKind::OpenedInNewTab,
+            Some(insert_input("select 2 from orders", "shop", "query:q7")),
+        )
+        .unwrap();
+    assert_eq!(kept.map(|a| a.kind), Some(AnswerActionKind::OpenedInNewTab));
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.tab_key.as_deref(), Some("query:q7"));
+    assert_eq!(w.inserted_sql.as_deref(), Some("select 2 from orders"));
+    // The table of the same place stays.
+    assert_eq!(w.table.as_deref(), Some("orders"));
+}
+
+#[test]
+fn inserted_sql_wins_over_a_newer_ai_sql() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    f.svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input(
+                "select 1 from orders -- mine",
+                "shop",
+                "query:a",
+            )),
+        )
+        .unwrap();
+    append(
+        &f,
+        &t,
+        work_turn(
+            20,
+            "shop",
+            "select 2 from items",
+            &["items"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.ai_sql.as_deref(), Some("select 2 from items"));
+    assert_eq!(
+        w.inserted_sql.as_deref(),
+        Some("select 1 from orders -- mine")
+    );
+    // What a resume puts back.
+    assert_eq!(
+        w.inserted_sql.or(w.ai_sql).as_deref(),
+        Some("select 1 from orders -- mine")
+    );
+}
+
+/// P12: an insert belongs to the place it went into.
+#[test]
+fn an_answer_on_another_database_drops_the_older_insert() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    f.svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 1 from orders", "shop", "query:a")),
+        )
+        .unwrap();
+    append(
+        &f,
+        &t,
+        work_turn(
+            20,
+            "crm",
+            "select 1 from leads",
+            &["leads"],
+            "query:b",
+            "Query 2",
+        ),
+    );
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.inserted_sql, None);
+    assert_eq!(w.ai_sql.as_deref(), Some("select 1 from leads"));
+    assert_eq!(
+        (
+            w.database.as_deref(),
+            w.table.as_deref(),
+            w.tab_key.as_deref()
+        ),
+        (Some("crm"), Some("leads"), Some("query:b"))
+    );
+    // Another Connection, same database name: dropped too.
+    f.svc
+        .record_action(
+            t.id,
+            21,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 2 from leads", "crm", "query:b")),
+        )
+        .unwrap();
+    let mut other = work_turn(
+        30,
+        "crm",
+        "select 3 from leads",
+        &["leads"],
+        "query:b",
+        "Query 2",
+    );
+    for m in &mut other {
+        m.connection_id = Some(Uuid::from_u128(8));
+    }
+    append(&f, &t, other);
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.inserted_sql, None);
+    assert_eq!(w.connection_id, Some(Uuid::from_u128(8)));
+}
+
+#[test]
+fn last_work_sql_is_capped() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    let ascii = format!("select '{}'", "x".repeat(1024 * 1024));
+    append(
+        &f,
+        &t,
+        work_turn(10, "shop", &ascii, &["orders"], "query:a", "Query 1"),
+    );
+    // 1 MB of two-byte characters, after one byte: the cut falls inside a character.
+    let wide = format!("s{}", "é".repeat(512 * 1024));
+    f.svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input(&wide, "shop", "query:a")),
+        )
+        .unwrap();
+    let w = f
+        .threads()
+        .thread(t.id)
+        .unwrap()
+        .unwrap()
+        .last_work
+        .expect("work");
+    let ai = w.ai_sql.unwrap();
+    assert_eq!(ai.len(), LAST_WORK_SQL_BYTES);
+    assert_eq!(LAST_WORK_SQL_BYTES, 65_536);
+    assert!(ascii.starts_with(&ai));
+    let ins = w.inserted_sql.unwrap();
+    assert_eq!(ins.len(), LAST_WORK_SQL_BYTES - 1);
+    assert!(wide.is_char_boundary(ins.len()) && wide.starts_with(&ins));
+}
+
+#[test]
+fn record_action_without_work_changes_no_work() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    let before = f.svc.thread_work(t.id).unwrap();
+    let kept = f
+        .svc
+        .record_action(t.id, 11, AnswerActionKind::Inserted, None)
+        .unwrap();
+    assert_eq!(kept.map(|a| a.kind), Some(AnswerActionKind::Inserted));
+    assert_eq!(f.svc.thread_work(t.id).unwrap(), before);
+}
+
+/// P5: SQL crosses IPC only through `ai_thread_work`.
+#[test]
+fn the_thread_view_carries_no_last_work() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    let tv = append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    f.svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 'inserted_marker'", "shop", "query:a")),
+        )
+        .unwrap();
+    let json = serde_json::to_value(&tv).unwrap();
+    assert!(json.get("lastWork").is_none(), "{json}");
+    let view = f.svc.thread_view(t.id).unwrap().unwrap();
+    assert_eq!(view.thread.last_work, None);
+    let json = serde_json::to_string(&view).unwrap();
+    assert!(!json.contains("lastWork") && !json.contains("inserted_marker"));
+    let saved = f.svc.save_thread(&view.thread).unwrap();
+    assert!(!serde_json::to_string(&saved).unwrap().contains("lastWork"));
+    // The save of the view kept the stored work, and `thread_work` hands it over.
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.inserted_sql.as_deref(), Some("select 'inserted_marker'"));
+    assert_eq!(w.ai_sql.as_deref(), Some("select 1 from orders"));
+}
+
+/// P35: a thread saved before D2 resumes from its newest answer with SQL.
+#[test]
+fn thread_work_derives_for_a_thread_from_before() {
+    let f = fx();
+    let mut m = sql_turn(10, "old", "select 1 from invoices", &["invoices"]);
+    m.extend(sql_turn(20, "newer", "select 2 from orders", &["orders"]));
+    m.extend(turn(1, 30, "no sql", None));
+    let t = thread("ungrouped", "before", m);
+    f.svc.save_thread(&t).unwrap();
+    // As written before D2: no `lastWork` in the JSON.
+    f.db()
+        .execute(
+            "UPDATE ai_threads SET json = json_remove(json, '$.lastWork') WHERE id = ?1",
+            [t.id.to_string()],
+        )
+        .unwrap();
+    assert_eq!(f.threads().thread(t.id).unwrap().unwrap().last_work, None);
+    let w = f.svc.thread_work(t.id).unwrap().expect("derived");
+    assert_eq!(w.ai_sql.as_deref(), Some("select 2 from orders"));
+    assert_eq!(
+        (
+            w.database.as_deref(),
+            w.table.as_deref(),
+            w.tab_key.as_deref()
+        ),
+        (Some("shop"), Some("orders"), Some("query:3"))
+    );
+    // None for a chat with no SQL, and for a chat that is gone.
+    let plain = thread("ungrouped", "plain", turn(1, 10, "q", None));
+    f.svc.save_thread(&plain).unwrap();
+    assert_eq!(f.svc.thread_work(plain.id).unwrap(), None);
+    assert_eq!(f.svc.thread_work(Uuid::new_v4()).unwrap(), None);
+}
+
+/// A webview copy that carries an older `lastWork` never puts it back over the stored one.
+#[test]
+fn a_stale_copy_never_overwrites_a_newer_last_work() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    f.svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 'newest'", "shop", "query:a")),
+        )
+        .unwrap();
+    let before = f.svc.thread_work(t.id).unwrap().expect("work");
+    let mut stale = f.threads().thread(t.id).unwrap().unwrap();
+    let mut old = work("select 'stale'");
+    old.at = before.at - 1;
+    stale.last_work = Some(old);
+    f.svc.save_thread(&stale).unwrap();
+    assert_eq!(f.svc.thread_work(t.id).unwrap(), Some(before));
+}
+
+/// A chat whose last append failed is saved whole: its new answer with SQL updates the
+/// work as an append would.
+#[test]
+fn a_save_that_adds_an_answer_with_sql_sets_the_work() {
+    let f = fx();
+    let mut t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    t.messages = f.threads().thread(t.id).unwrap().unwrap().messages;
+    t.messages.extend(work_turn(
+        20,
+        "shop",
+        "select 2 from items",
+        &["items"],
+        "query:b",
+        "Query 2",
+    ));
+    f.svc.save_thread_for(&t, None).unwrap();
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.ai_sql.as_deref(), Some("select 2 from items"));
+    assert_eq!(w.tab_key.as_deref(), Some("query:b"));
+}
+
+/// The AI access gate: a chat on a Connection at Never, or one that is gone, resumes
+/// without its SQL; the place and the tab still come back.
+#[test]
+fn thread_work_for_a_never_connection_holds_no_sql() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(
+            10,
+            "shop",
+            "select 1 from orders",
+            &["orders"],
+            "query:a",
+            "Query 1",
+        ),
+    );
+    f.svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 'mine'", "shop", "query:a")),
+        )
+        .unwrap();
+    let never = f
+        .svc
+        .thread_work_for(t.id, |_| AiAccess::Never)
+        .unwrap()
+        .expect("work");
+    assert_eq!((never.inserted_sql, never.ai_sql), (None, None));
+    assert_eq!(
+        (never.database.as_deref(), never.tab_key.as_deref()),
+        (Some("shop"), Some("query:a"))
+    );
+    let open = f
+        .svc
+        .thread_work_for(t.id, |id| {
+            if id == Uuid::from_u128(7) {
+                AiAccess::Schema
+            } else {
+                AiAccess::Never
+            }
+        })
+        .unwrap()
+        .expect("work");
+    assert_eq!(open.inserted_sql.as_deref(), Some("select 'mine'"));
+    // A Home chat (no Connection) carries no SQL either.
+    let mut home = thread("home", "h", Vec::new());
+    home.messages = work_turn(10, "shop", "select 1", &[], "query:a", "Query 1");
+    for m in &mut home.messages {
+        m.connection_id = None;
+        m.database = None;
+    }
+    f.svc.save_thread(&home).unwrap();
+    let w = f
+        .svc
+        .thread_work_for(home.id, |_| AiAccess::SchemaQueryRows)
+        .unwrap()
+        .expect("work");
+    assert_eq!(w.ai_sql, None);
+}
+
+/// A Retry whose new answer holds no SQL: the replaced answer's SQL goes with it, and the
+/// chat falls back to the newest kept answer the user inserted, else none.
+#[test]
+fn a_retry_drops_the_replaced_answers_sql() {
+    let f = fx();
+    let t = thread("ungrouped", "t", Vec::new());
+    append(
+        &f,
+        &t,
+        work_turn(10, "shop", "select 'a'", &["orders"], "query:a", "Query 1"),
+    );
+    f.svc
+        .record_action(
+            t.id,
+            11,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 'a';\n", "shop", "query:a")),
+        )
+        .unwrap();
+    append(
+        &f,
+        &t,
+        work_turn(20, "shop", "select 'b'", &["items"], "query:b", "Query 2"),
+    );
+    f.svc
+        .record_action(
+            t.id,
+            21,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 'b';\n", "shop", "query:b")),
+        )
+        .unwrap();
+    // Retry the second turn: the new answer has no SQL.
+    f.svc
+        .append_turn(appended(&t, turn(1, 30, "q again", None), Some(20)), None)
+        .unwrap();
+    let w = f.svc.thread_work(t.id).unwrap().expect("work");
+    assert_eq!(w.ai_sql.as_deref(), Some("select 'a'"));
+    assert_eq!(w.inserted_sql.as_deref(), Some("select 'a'"));
+    assert_eq!((w.inserted_from, w.ai_from), (Some(11), Some(11)));
+    assert_eq!(w.table.as_deref(), Some("orders"));
+    let stored = serde_json::to_string(&f.threads().thread(t.id).unwrap().unwrap()).unwrap();
+    assert!(!stored.contains("select 'b'"), "{stored}");
+
+    // With no kept answer holding SQL, there is no work at all.
+    let u = thread("ungrouped", "u", Vec::new());
+    append(&f, &u, turn(1, 10, "plain", None));
+    append(
+        &f,
+        &u,
+        work_turn(20, "shop", "select 'c'", &["orders"], "query:c", "Query 3"),
+    );
+    f.svc
+        .record_action(
+            u.id,
+            21,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 'c'", "shop", "query:c")),
+        )
+        .unwrap();
+    f.svc
+        .append_turn(appended(&u, turn(1, 30, "again", None), Some(20)), None)
+        .unwrap();
+    assert_eq!(f.svc.thread_work(u.id).unwrap(), None);
+
+    // A Retry whose answer holds SQL takes it as before; the insert from the gone answer goes.
+    let v = thread("ungrouped", "v", Vec::new());
+    append(
+        &f,
+        &v,
+        work_turn(20, "shop", "select 'd'", &["orders"], "query:d", "Query 4"),
+    );
+    f.svc
+        .record_action(
+            v.id,
+            21,
+            AnswerActionKind::Inserted,
+            Some(insert_input("select 'd'", "shop", "query:d")),
+        )
+        .unwrap();
+    f.svc
+        .append_turn(
+            appended(
+                &v,
+                work_turn(30, "shop", "select 'e'", &["orders"], "query:d", "Query 4"),
+                Some(20),
+            ),
+            None,
+        )
+        .unwrap();
+    let w = f.svc.thread_work(v.id).unwrap().expect("work");
+    assert_eq!(
+        (w.ai_sql.as_deref(), w.inserted_sql),
+        (Some("select 'e'"), None)
+    );
+}
+
+/// `append_turn` walks only the new messages: a turn appended at the end of a 250-turn
+/// thread (over the cap), and a Retry in its middle, each end quickly (an unbounded range
+/// once spun forever).
+#[test]
+fn append_turn_ends_on_a_long_thread() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let f = fx();
+        let mut m = Vec::new();
+        for i in 0..250 {
+            m.extend(work_turn(
+                10 + i * 10,
+                "shop",
+                "select 1",
+                &["orders"],
+                "query:a",
+                "Query 1",
+            ));
+        }
+        let t = thread("ungrouped", "long", m);
+        f.svc.save_thread(&t).unwrap();
+        let end = append(
+            &f,
+            &t,
+            work_turn(5000, "shop", "select 'end'", &[], "query:a", "Query 1"),
+        );
+        assert_eq!(end.message_count, 200);
+        let mid = f
+            .svc
+            .append_turn(appended(&t, turn(1, 6000, "mid", None), Some(2000)), None)
+            .unwrap();
+        // Turns asked at 1520 to 1990 stay (the cap kept from 1520 on), then the new one.
+        assert_eq!(mid.message_count, 98);
+        let w = f.svc.thread_work(t.id).unwrap().expect("work");
+        tx.send(w.ai_from).unwrap();
+    });
+    let got = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("append_turn did not end");
+    // The newest kept answer with SQL: the turn asked at 1990.
+    assert_eq!(got, Some(1991));
+}
+
+/// I1: an answer that only fell off the front of a long chat (`MESSAGE_LIMIT`) keeps its
+/// SQL in `last_work`; a Retry that removes the answer the work came from drops it.
+#[test]
+fn the_cap_keeps_the_last_work_and_a_retry_drops_it() {
+    for plain in [101, 250] {
+        let f = fx();
+        let mut t = thread("ungrouped", "long", Vec::new());
+        append(
+            &f,
+            &t,
+            work_turn(
+                10,
+                "shop",
+                "select 'first'",
+                &["orders"],
+                "query:a",
+                "Query 1",
+            ),
+        );
+        f.svc
+            .record_action(
+                t.id,
+                11,
+                AnswerActionKind::Inserted,
+                Some(insert_input("select 'first';\n", "shop", "query:a")),
+            )
+            .unwrap();
+        let before = f.svc.thread_work(t.id).unwrap().expect("work");
+        // A whole save that adds the plain turns: the store keeps the newest 200 messages.
+        t.messages = f.threads().thread(t.id).unwrap().unwrap().messages;
+        for i in 0..plain {
+            t.messages.extend(turn(1, 100 + i * 10, "plain", None));
+        }
+        f.svc.save_thread(&t).unwrap();
+        let stored = f.threads().thread(t.id).unwrap().unwrap();
+        assert!(
+            stored.messages.iter().all(|m| m.at != 11),
+            "{plain}: trimmed"
+        );
+        assert_eq!(
+            f.svc.thread_work(t.id).unwrap().as_ref(),
+            Some(&before),
+            "{plain}: save"
+        );
+        // An append after the trim, and a save of the trimmed copy: unchanged.
+        append(&f, &t, turn(1, 4000, "more", None));
+        assert_eq!(
+            f.svc.thread_work(t.id).unwrap().as_ref(),
+            Some(&before),
+            "{plain}: append"
+        );
+        let copy = f.svc.thread_view(t.id).unwrap().unwrap().thread;
+        f.svc.save_thread(&copy).unwrap();
+        assert_eq!(
+            f.svc.thread_work(t.id).unwrap().as_ref(),
+            Some(&before),
+            "{plain}: copy"
+        );
+        let w = f.svc.thread_work(t.id).unwrap().unwrap();
+        assert_eq!(w.inserted_sql.as_deref(), Some("select 'first';\n"));
+
+        // A kept answer the user inserted, then a newer one, retried away: the fallback runs.
+        append(
+            &f,
+            &t,
+            work_turn(
+                5000,
+                "shop",
+                "select 'kept'",
+                &["items"],
+                "query:k",
+                "Query 2",
+            ),
+        );
+        f.svc
+            .record_action(
+                t.id,
+                5001,
+                AnswerActionKind::Inserted,
+                Some(insert_input("select 'kept';\n", "shop", "query:k")),
+            )
+            .unwrap();
+        append(
+            &f,
+            &t,
+            work_turn(
+                6000,
+                "shop",
+                "select 'gone'",
+                &["items"],
+                "query:g",
+                "Query 3",
+            ),
+        );
+        f.svc
+            .record_action(
+                t.id,
+                6001,
+                AnswerActionKind::Inserted,
+                Some(insert_input("select 'gone';\n", "shop", "query:g")),
+            )
+            .unwrap();
+        f.svc
+            .append_turn(appended(&t, turn(1, 7000, "again", None), Some(6000)), None)
+            .unwrap();
+        let w = f.svc.thread_work(t.id).unwrap().expect("work");
+        assert_eq!(
+            (
+                w.inserted_sql.as_deref(),
+                w.ai_sql.as_deref(),
+                w.inserted_from
+            ),
+            (Some("select 'kept'"), Some("select 'kept'"), Some(5001)),
+            "{plain}: retry"
+        );
+    }
 }

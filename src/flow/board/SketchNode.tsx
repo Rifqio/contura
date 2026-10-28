@@ -39,12 +39,18 @@ export function snap45(from: Pt, to: Pt): Pt {
 
 export type SketchNodeData = { sketch: Sketch };
 
-const OUTLINE = 1.5;
+/** A sketch's outline width; the geometry here is shared with Publish (B4 Task 3, R26), never retyped. */
+export const OUTLINE = 1.5;
 /** How far a press may land from a stroke and still be on it. */
 const HIT = 10;
 /** An arrowhead's length and half width. */
-const HEAD = 10;
-const HEAD_HALF = 5;
+export const HEAD = 10;
+export const HEAD_HALF = 5;
+/** Corner radii: a rectangle, a Section (dashed by SECTION_DASH) and a note. */
+export const RECT_RX = 4;
+export const SECTION_RX = 8;
+export const SECTION_DASH = "6 4";
+export const NOTE_RX = 2;
 
 /** The stroke a sketch's colour draws, as a CSS value. */
 export function sketchStroke(color: string | undefined): string {
@@ -58,10 +64,11 @@ export const sketchLabel = (s: Sketch, title?: string) => {
   return words ? `${SKETCH_WORD[s.kind]} sketch: ${words}` : `${SKETCH_WORD[s.kind]} sketch`;
 };
 
-const pathOf = (points: readonly [number, number][]) => points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join("");
+/** A stroke through `points`, which are relative to the box. */
+export const pathOf = (points: readonly [number, number][]) => points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x} ${y}`).join("");
 
 /** The arrowhead at the last point, along the last segment that has a length. */
-function headOf(points: readonly [number, number][]): string | null {
+export function headOf(points: readonly [number, number][]): string | null {
   const n = points.length;
   if (n < 2) return null;
   const [x2, y2] = points[n - 1];
@@ -85,7 +92,7 @@ function SketchShape({ s, stroke }: { s: Sketch; stroke: string }) {
   const ih = Math.max(h - OUTLINE, 0);
   switch (s.kind) {
     case "rect":
-      return <rect className="board-sketch-shape is-box" x={inset} y={inset} width={iw} height={ih} rx={4} fill="none" stroke={stroke} strokeWidth={OUTLINE} />;
+      return <rect className="board-sketch-shape is-box" x={inset} y={inset} width={iw} height={ih} rx={RECT_RX} fill="none" stroke={stroke} strokeWidth={OUTLINE} />;
     case "ellipse":
       return <ellipse className="board-sketch-shape is-box" cx={w / 2} cy={h / 2} rx={iw / 2} ry={ih / 2} fill="none" stroke={stroke} strokeWidth={OUTLINE} />;
     case "diamond":
@@ -100,9 +107,9 @@ function SketchShape({ s, stroke }: { s: Sketch; stroke: string }) {
         />
       );
     case "section":
-      return <rect className="board-sketch-shape is-box" x={inset} y={inset} width={iw} height={ih} rx={8} fill="none" stroke={stroke} strokeWidth={OUTLINE} strokeDasharray="6 4" />;
+      return <rect className="board-sketch-shape is-box" x={inset} y={inset} width={iw} height={ih} rx={SECTION_RX} fill="none" stroke={stroke} strokeWidth={OUTLINE} strokeDasharray={SECTION_DASH} />;
     case "note":
-      return <rect className="board-sketch-paper is-box" x={inset} y={inset} width={iw} height={ih} rx={2} fill="var(--c-warning-subtle)" stroke="var(--c-text-subtle)" strokeWidth={1} />;
+      return <rect className="board-sketch-paper is-box" x={inset} y={inset} width={iw} height={ih} rx={NOTE_RX} fill="var(--c-warning-subtle)" stroke="var(--c-text-subtle)" strokeWidth={1} />;
     case "text":
       return <rect className="board-sketch-hit is-box" x={0} y={0} width={w} height={h} fill="none" />;
     case "line":

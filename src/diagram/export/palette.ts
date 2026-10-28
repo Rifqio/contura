@@ -24,6 +24,8 @@ export interface ExportPalette {
   strongBorder: string;
   /** The tint of a sequence frame and a timeline section. */
   panel: string;
+  /** Quieter words: a board frame's tab title, a Section's title and an icon sketch's title (B4 R4). */
+  muted: string;
   /** Step 11: the six palette colours (fill, border, words) a shape, group or line may take; uncoloured without them. */
   colours?: Record<keyof typeof PALETTE_TOKENS, { fill: string; stroke: string; text: string }>;
 }
@@ -60,6 +62,7 @@ export function exportPalette(theme: ExportTheme = "light"): ExportPalette {
       groupTint: read("--c-group-teal-tint"),
       strongBorder: read("--c-border-strong"),
       panel: read("--c-bg-panel"),
+      muted: read("--c-text-muted"),
       colours: Object.fromEntries(
         (Object.keys(PALETTE_TOKENS) as (keyof typeof PALETTE_TOKENS)[]).map((c) => [c, { fill: read(PALETTE_TOKENS[c].fill), stroke: read(PALETTE_TOKENS[c].stroke), text: read(PALETTE_TOKENS[c].text) }]),
       ) as NonNullable<ExportPalette["colours"]>,

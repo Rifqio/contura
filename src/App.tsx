@@ -13,7 +13,7 @@ import {
   setLastGroup,
   tableDesign,
 } from "./api/client";
-import type { ConnectionConfig, ConnectionId, DiagramEntry, Group, GroupId, JobId, ObjectPath, RecentItem, RestoreTarget, SavedQuery } from "./api/types";
+import type { ConnectionConfig, ConnectionId, DiagramEntry, Group, GroupId, JobId, LastWork, ObjectPath, RecentItem, RestoreTarget, SavedQuery } from "./api/types";
 import BackupDialog from "./backup/BackupDialog";
 import RestoreDialog, { type RestoreRun, restoreErrorText } from "./backup/RestoreDialog";
 import { restoreStoppedText, restoredText, runStatements } from "./backup/backupText";
@@ -72,7 +72,7 @@ import TitleBar from "./components/TitleBar";
 import WorkEmpty from "./components/WorkEmpty";
 import AssistantPanel from "./assistant/AssistantPanel";
 import { askLayout, useAskWidth } from "./assistant/askWidth";
-import type { InsertTarget } from "./assistant/insertPlan";
+import type { InsertTarget, OpenedTab } from "./assistant/insertPlan";
 import TableDesigner from "./design/TableDesigner";
 import { appLang } from "./lang/appLang";
 import { schemaKey } from "./lang/sql/schemaCache";
@@ -899,7 +899,8 @@ function Workspace() {
 
   /** Item 8: the database used last on each Connection (a tab shown, a tree row picked), for new query tabs. */
   const lastDatabase = useRef(new Map<ConnectionId, string>());
-  function newQuery(connectionId: ConnectionId | null, text = "", database?: string) {
+  /** Opens a new query tab and returns it as it opened. */
+  function newQuery(connectionId: ConnectionId | null, text = "", database?: string, opts?: { fromChat?: string }): OpenedTab {
     const c = connections.find((x) => x.id === connectionId) ?? null;
     if (database === undefined && c) database = lastDatabase.current.get(c.id);
     const doc: QueryTabDoc = {
@@ -910,9 +911,12 @@ function Workspace() {
       database: database ?? c?.database ?? null,
       savedId: null,
       savedText: null,
+      ...(opts?.fromChat ? { fromChat: opts.fromChat } : {}),
     };
+    const key = tabKey({ kind: "query", doc });
     setTabs((all) => [...all, { kind: "query", doc }]);
-    setActiveKey(tabKey({ kind: "query", doc }));
+    setActiveKey(key);
+    return { key, name: doc.name, sql: doc.text, connectionId: doc.connectionId, database: doc.database };
   }
 
   /** Opens a New Visual Query tab on the Connection and database (its default one unless given). */
@@ -1298,6 +1302,32 @@ function Workspace() {
     return visit.current === here ? "open" : "stayed";
   }
 
+  /**
+   * Resumes a chat picked in the Ask history where it ended (Decision 9): its Connection, database, tab and query.
+   * Nothing runs. Returns what to name in the not-available strip, or null when the chat's place came back. A resume
+   * overtaken while its Connection opened (`current()` false: another chat, New chat) opens no tab and shows nothing.
+   */
+  async function resumeChat(work: LastWork, title: string, current: () => boolean = () => true): Promise<string | null> {
+    const id = work.connectionId;
+    if (id === null) return null;
+    const c = connections.find((x) => x.id === id);
+    const missing = work.database ?? c?.name ?? "The Connection";
+    // Only a Connection of the shown place: one moved to another desktop is not followed there (ruling R1).
+    if (!c || c.groupId !== workspaceGroupId) return missing;
+    const opened = await openConnectionAt(id);
+    if (!current()) return null;
+    if (opened !== "open") return missing;
+    const key = work.tabKey;
+    if (key !== null && tabsRef.current.some((t) => tabKey(t) === key)) {
+      // The chat's tab is still open: it is shown as it is, its text untouched.
+      setActiveKey(key);
+      flashTab(key);
+      return null;
+    }
+    newQuery(id, work.insertedSql ?? work.aiSql ?? "", work.database ?? undefined, { fromChat: title });
+    return null;
+  }
+
   /** Opens a model in a Schema Model tab (the open one when its file is open already), recording it in Recent when it has a file. */
   function openBuilder(doc: ModelDoc) {
     if (doc.path) record({ kind: "schemaModel", file: doc.path }, doc.connectionId);
@@ -1398,9 +1428,17 @@ function Workspace() {
   const historyColumn = !activeWindow && historyShown;
   /** The Ask column's width in the room this window leaves; with no room for 300 px, no sash. */
   const askLayoutNow = askLayout(askWidth.wanted, historyColumn ? askWidth.roomHistory : askWidth.roomPlain);
-  // An answer's SQL goes into the active query tab, through the Insert diff.
+  // An answer's SQL goes into the active query tab, through the Insert diff; its key and place are where the chat last worked.
   const answerTarget: InsertTarget | null =
-    current?.kind === "query" ? { editor: () => refs.editor(current.doc.id), name: current.doc.name } : null;
+    current?.kind === "query"
+      ? {
+          editor: () => refs.editor(current.doc.id),
+          name: current.doc.name,
+          key: tabKey(current),
+          connectionId: current.doc.connectionId,
+          database: current.doc.database,
+        }
+      : null;
   // Every tab but a diagram has a target; the screen's own fields come through the tab registry (tabAsk.ts).
   const assistantTab = activeWindow ?? current;
   const assistantTarget = assistantTargetFor(assistantTab, inPlace, connections);
@@ -1933,6 +1971,7 @@ function Workspace() {
               onClose={() => setAssistantOpen(false)}
               insertTarget={answerTarget}
               onOpenInNewTab={(sql, c) => newQuery(c?.id ?? null, answerText(sql), c?.database ?? undefined)}
+              onResume={resumeChat}
               openIds={openIds}
               onShowTab={(key) => {
                 // "Asked in <tab>" (A7): shows that tab if it is still open; a closed one changes nothing.

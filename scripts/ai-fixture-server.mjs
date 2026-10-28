@@ -118,7 +118,31 @@ export const SCENARIOS = {
   "fx-long": { kind: "long", bytes: 64 * 1024, every: 50, pieces: 640 },
   "fx-compact": stream(answerChunks(SQL_ANSWER, { promptTokens: Math.floor(COMPACT_WINDOW * 0.9), cached: 0 })),
   "fx-diagram": { kind: "diagram" },
+  // Answers like fx-answer; its chat title requests fail with 500.
+  "fx-title-fail": stream(answerChunks(SQL_ANSWER)),
 };
+
+/** The chat title Contura asks for after a first answer. */
+export const TITLE = "Unpaid clients to date";
+/** A title request asks for at most this many tokens, and carries no tools. */
+const TITLE_TOKENS = 32;
+
+/** A chat title request: `max_tokens` or `max_completion_tokens` at most 32, and no tools (the Custom provider may send either field). */
+export function isTitleRequest(body) {
+  const limit = body?.max_tokens ?? body?.max_completion_tokens;
+  const tools = Array.isArray(body?.tools) && body.tools.length > 0;
+  return typeof limit === "number" && limit <= TITLE_TOKENS && !tools;
+}
+
+const titleReply = stream([...words(TITLE).map((piece) => chunk({ content: piece })), chunk({}, "stop"), chunk({}, null, { choices: [], usage: usage(310, 6, 0) })]);
+const titleFailure = failure(500, { error: { message: "Internal error", type: "server_error" } });
+
+/** The scenario a request plays: a title request answers the title, or fails for `fx-title-fail`; else the model's own. */
+function scenarioFor(model, body) {
+  if (!Object.hasOwn(SCENARIOS, model)) return null;
+  if (isTitleRequest(body)) return model === "fx-title-fail" ? titleFailure : titleReply;
+  return SCENARIOS[model];
+}
 
 function models() {
   return {
@@ -201,7 +225,7 @@ export function startServer({ host = "127.0.0.1", port = 0 } = {}) {
         } catch {
           // An unreadable body names no model.
         }
-        const scenario = Object.hasOwn(SCENARIOS, model) ? SCENARIOS[model] : null;
+        const scenario = scenarioFor(model, body);
         if (!scenario) {
           res.writeHead(404, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: { code: "model_not_found", message: `no scenario ${String(model)}` } }));

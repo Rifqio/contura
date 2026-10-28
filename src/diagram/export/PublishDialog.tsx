@@ -1,48 +1,56 @@
-// The Publish image dialog (DESIGN-NEXT 10.9): pick a part of a diagram, crop it, and save or copy
-// it as PNG or SVG in the Light or Dark colours. Any diagram client passes its scene.
+// The Publish image dialog (DESIGN-NEXT 10.9): pick a part of a diagram or a board, crop it, and save or copy it as PNG
+// or SVG in the Light or Dark colours. A client passes a source (B4 Task 5, `source.ts`), or one diagram's scene,
+// which becomes `sceneSource`. A part is drawn once per theme and Frame titles; crop, padding, background, mark and
+// scale write only the head (Decision 12). Past the size limits the dialog refuses with a note (Decision 10).
 import { save } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText, writeBinaryFile, writeTextFile } from "../../api/client";
 import Dialog from "../../components/Dialog";
 import Kbd from "../../components/Kbd";
 import Segmented from "../../components/Segmented";
 import Switch from "../../components/Switch";
+import { pngMaxScale } from "./limits";
 import { exportPalette, type ExportTheme } from "./palette";
-import { blobToBase64, exportPng, svgImageUrl } from "./png";
-import { type Box, type Scene, sceneBounds, sceneEdges } from "./scene";
-import { sceneToSvg, svgFrame } from "./svg";
+import { blobToBase64, exportPng, svgPreviewUrl } from "./png";
+import type { Box, Scene } from "./scene";
+import { type PublishDrawn, type PublishSource, sceneSource } from "./source";
+import { frameOf, type Handle, MIN_CROP, snapCrop } from "./svg";
 
-type Preset = "whole" | "screen" | "selected";
 type Aspect = "free" | "16:9" | "4:3" | "1:1";
 type Format = "png" | "svg";
-type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const RATIO: Record<Aspect, number | null> = { free: null, "16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1 };
 /** The preview's box in px: the left column of the 760 px dialog, 308 px tall. */
 const PREVIEW_W = 472;
 const PREVIEW_H = 308;
-/** The smallest crop, in scene units. */
-const MIN_CROP = 16;
 /** How near, in screen px, a crop edge must come to a node or group edge to snap onto it. */
 const SNAP_PX = 8;
 /** Bytes per output pixel a diagram PNG takes, roughly: flat colours compress well. */
 const PNG_BYTES_PER_PIXEL = 0.11;
 
-interface Props {
-  scene: Scene;
-  /** The diagram's name; the saved file is named after it. */
+interface Shared {
+  /** The diagram's or board's name; the saved file is named after it. */
   fileName: string;
-  /** The selected node ids; Selected nodes is off when there are none. */
-  selected: string[];
-  /** The part of the diagram the canvas shows, in scene units. */
-  onScreen: Box;
   onClose(): void;
   /** Called with the path after Save as writes the file; the dialog closes itself when absent. */
   onSaved?(path: string): void;
-  /** Called when the theme choice changes, for a diagram whose scene holds theme-inked icons. */
+  /** Called when the theme choice changes, for a drawing whose icons are inked per theme. */
   onTheme?(theme: ExportTheme): void;
 }
+
+/** A source (a board's), or one diagram's scene with its selected node ids and the part on screen (R10). */
+type Props = Shared & ({ source: PublishSource } | { scene: Scene; selected: string[]; onScreen: Box });
+
+/** A drawing kept for a toggle back: the current one and the one before (Decision 12). */
+interface Kept {
+  source: PublishSource;
+  part: string;
+  theme: ExportTheme;
+  titles: boolean;
+  drawn: PublishDrawn;
+}
+const KEPT = 2;
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
@@ -89,36 +97,6 @@ function dragCrop(start: Box, handle: Handle | "move", dx: number, dy: number, r
   return { x: Math.max(region.x, Math.min(x, right - w)), y: Math.max(region.y, Math.min(y, bottom - h)), w, h };
 }
 
-/**
- * The crop with its dragged edges on the nearest node or group edge within `reach` scene units, so nothing is cut
- * in half (direction spec, Publish). A moved box keeps its size and takes the smaller of its two snaps per axis.
- */
-export function snapCrop(box: Box, handle: Handle | "move", scene: Scene, reach: number): Box {
-  const { xs, ys } = sceneEdges(scene);
-  /** The shift that puts `v` on the nearest edge in reach, or null. */
-  const pull = (v: number, list: number[]): number | null => {
-    let best: number | null = null;
-    for (const t of list) if (Math.abs(t - v) <= reach && (best === null || Math.abs(t - v) < Math.abs(best))) best = t - v;
-    return best;
-  };
-  let x0 = box.x;
-  let y0 = box.y;
-  let x1 = box.x + box.w;
-  let y1 = box.y + box.h;
-  if (handle === "move") {
-    const pick = (a: number | null, b: number | null) => (a === null ? (b ?? 0) : b === null || Math.abs(a) <= Math.abs(b) ? a : b);
-    const dx = pick(pull(x0, xs), pull(x1, xs));
-    const dy = pick(pull(y0, ys), pull(y1, ys));
-    return { ...box, x: box.x + dx, y: box.y + dy };
-  }
-  if (handle.includes("w")) x0 += pull(x0, xs) ?? 0;
-  if (handle.includes("e")) x1 += pull(x1, xs) ?? 0;
-  if (handle.includes("n")) y0 += pull(y0, ys) ?? 0;
-  if (handle.includes("s")) y1 += pull(y1, ys) ?? 0;
-  if (x1 - x0 < MIN_CROP || y1 - y0 < MIN_CROP) return box;
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
-
 /** `box` kept inside `region`, keeping its size where it fits. */
 function inside(box: Box, region: Box): Box {
   const w = Math.min(box.w, region.w);
@@ -131,13 +109,18 @@ function inside(box: Box, region: Box): Box {
   };
 }
 
-export default function PublishDialog({ scene, fileName, selected: chosen, onScreen, onClose, onSaved, onTheme }: Props) {
-  // Only selected nodes the scene draws count: one selected in the text but not yet placed is not in it.
-  const selected = useMemo(() => {
-    const drawn = new Set(scene.nodes.map((n) => n.id));
-    return chosen.filter((id) => drawn.has(id));
-  }, [scene, chosen]);
-  const [preset, setPreset] = useState<Preset>("whole");
+export default function PublishDialog(props: Props) {
+  const { fileName, onClose, onSaved, onTheme } = props;
+  const given = "source" in props ? props.source : null;
+  const scene = "source" in props ? null : props.scene;
+  const chosen = "source" in props ? null : props.selected;
+  const onScreen = "source" in props ? null : props.onScreen;
+  const fromScene = useMemo(() => (scene && chosen && onScreen ? sceneSource(scene, chosen, onScreen) : null), [scene, chosen, onScreen]);
+  const source = (given ?? fromScene) as PublishSource;
+  const notes = source.notes;
+
+  const [partChoice, setPartChoice] = useState(source.initial);
+  const [titles, setTitles] = useState(source.titles ?? true);
   const [aspect, setAspect] = useState<Aspect>("free");
   const [format, setFormat] = useState<Format>("png");
   const [scale, setScale] = useState<1 | 2 | 3>(2);
@@ -148,34 +131,87 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "error" | "done"; text: string } | null>(null);
 
-  const region = useMemo<Box>(() => {
-    if (preset === "screen") return onScreen;
-    if (preset === "selected" && selected.length > 0) return sceneBounds(scene, selected);
-    return sceneBounds(scene);
-  }, [preset, scene, selected, onScreen]);
+  // A part the new source turns off falls back to the one the source opens on.
+  const part = source.parts.some((p) => p.value === partChoice && !p.disabled) ? partChoice : source.initial;
+  // Until the source inked for the chosen theme arrives, the drawing before stays and Copy and Save as wait (Decision 11).
+  const waiting = source.inkedFor !== undefined && source.inkedFor !== theme;
+  const palette = useMemo(() => exportPalette(theme), [theme]);
+
+  const kept = useRef<Kept[]>([]);
+  const shown = useRef<PublishDrawn | null>(null);
+  /** The part and Frame titles the shown drawing is of. */
+  const shownOf = useRef<{ part: string; titles: boolean } | null>(null);
+  const drawn = useMemo(() => {
+    if (waiting && shown.current) return shown.current;
+    shownOf.current = { part, titles };
+    const list = kept.current;
+    const at = list.findIndex((e) => e.source === source && e.part === part && e.theme === theme && e.titles === titles);
+    if (at >= 0) {
+      const [hit] = list.splice(at, 1);
+      list.push(hit);
+      return hit.drawn;
+    }
+    const d = source.draw(part, palette, titles);
+    list.push({ source, part, theme, titles, drawn: d });
+    while (list.length > KEPT) list.shift();
+    return d;
+  }, [source, part, theme, titles, palette, waiting]);
+  shown.current = drawn;
+  // A part or Frame titles chosen while a theme's drawing loads: the drawing shown is of another choice, so the preview
+  // shows only the loading state until the new source draws it.
+  const stale = waiting && shownOf.current !== null && (shownOf.current.part !== part || shownOf.current.titles !== titles);
+  // Closing lets every drawing go at once, not when the dialog's last render is collected (ADR 0003).
+  useEffect(
+    () => () => {
+      kept.current = [];
+      shown.current = null;
+    },
+    [],
+  );
+
+  // The region by value: a new source with the same region (a theme toggle) keeps the user's crop (Decision 12).
+  const region = drawn.bounds;
+  const regionKey = `${region.x} ${region.y} ${region.w} ${region.h}`;
   const [crop, setCrop] = useState<Box>(region);
-  // A new preset or aspect starts the crop again from the whole region.
+  // A new part or aspect starts the crop again from the whole region.
   useEffect(() => {
     const ratio = RATIO[aspect];
     setCrop(ratio === null ? region : fitRatio(region, ratio));
-  }, [region, aspect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regionKey, aspect]);
 
-  const palette = useMemo(() => exportPalette(theme), [theme]);
   const options = { padding, background, mark };
-  const svg = useMemo(() => sceneToSvg(scene, palette, { ...options, crop }), [scene, palette, crop, padding, background, mark]);
-  const preview = useMemo(() => sceneToSvg(scene, palette, { ...options, crop: region }), [scene, palette, region, padding, background, mark]);
-
-  const frame = svgFrame(scene, { crop, padding });
-  const view = svgFrame(scene, { crop: region, padding });
+  const frame = frameOf(region, { crop, padding });
+  const view = frameOf(region, { crop: region, padding });
   const k = Math.min(PREVIEW_W / Math.max(1, view.w), PREVIEW_H / Math.max(1, view.h));
   const at = (b: Box) => ({ left: Math.round((b.x - view.x) * k), top: Math.round((b.y - view.y) * k), width: Math.round(b.w * k), height: Math.round(b.h * k) });
   const offset = { left: Math.round((PREVIEW_W - view.w * k) / 2), top: Math.round((PREVIEW_H - view.h * k) / 2) };
+  // The preview is the whole region, drawn once per drawing and options; a crop moves only the box over it.
+  const preview = useMemo(
+    () => (drawn.tooLarge ? null : svgPreviewUrl(drawn.svg({ ...options, crop: region }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [drawn, regionKey, padding, background, mark],
+  );
 
-  const px = format === "png" ? scale : 1;
+  // Decision 10: the largest scale that fits; at 0 PNG is off and SVG chosen. The scale state stays 1, 2 or 3 and is
+  // lowered, never raised, on its own (draw.io).
+  const maxScale = pngMaxScale(frame.w, frame.h);
+  const pngOff = maxScale === 0;
+  const shownFormat: Format = pngOff ? "svg" : format;
+  const pngScale = (maxScale > 0 ? Math.min(scale, maxScale) : scale) as 1 | 2 | 3;
+  useEffect(() => {
+    if (pngOff && format === "png") setFormat("svg");
+  }, [pngOff, format]);
+  useEffect(() => {
+    if (maxScale > 0 && scale > maxScale) setScale(maxScale as 1 | 2 | 3);
+  }, [maxScale, scale]);
+
+  const px = shownFormat === "png" ? pngScale : 1;
   const outW = frame.w * px;
   const outH = frame.h * px;
-  const bytes = format === "png" ? frame.w * frame.h * scale * scale * PNG_BYTES_PER_PIXEL : svg.length;
+  const bytes = shownFormat === "png" ? frame.w * frame.h * pngScale * pngScale * PNG_BYTES_PER_PIXEL : drawn.bytes({ ...options, crop });
   const kb = Math.max(1, Math.round(bytes / 1024));
+  const blocked = busy || waiting || drawn.tooLarge;
 
   // Dragging a handle (or the box): the start crop and pointer, in scene units through the preview's scale.
   const drag = useRef<{ handle: Handle | "move"; x: number; y: number; start: Box; ratio: number | null } | null>(null);
@@ -192,15 +228,15 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
     const ratio = RATIO[aspect] ?? (e.shiftKey ? d.start.w / d.start.h : null);
     const next = dragCrop(d.start, d.handle, (e.clientX - d.x) / k, (e.clientY - d.y) / k, region, ratio);
     // Edges snap to nodes and groups; Alt turns it off, and a kept shape is not bent by a snap.
-    setCrop(e.altKey || ratio !== null ? next : inside(snapCrop(next, d.handle, scene, SNAP_PX / k), region));
+    setCrop(e.altKey || ratio !== null ? next : inside(snapCrop(next, d.handle, drawn.edges, SNAP_PX / k), region));
   }
   const endDrag = () => {
     drag.current = null;
   };
 
   async function saveAs() {
-    if (busy) return;
-    const ext = format;
+    if (blocked) return;
+    const ext = shownFormat;
     setBusy(true);
     setMessage(null);
     try {
@@ -209,8 +245,10 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
         defaultPath: `${fileName}.${ext}`,
       });
       if (!target) return;
+      // Written only now, and let go with this call: the dialog keeps no copy of the file (ADR 0003).
+      const svg = drawn.svg({ ...options, crop });
       if (ext === "svg") await writeTextFile(target, svg);
-      else await writeBinaryFile(target, await blobToBase64(await exportPng(svg, scale)));
+      else await writeBinaryFile(target, await blobToBase64(await exportPng(svg, pngScale)));
       if (onSaved) onSaved(target);
       else onClose();
     } catch (e) {
@@ -221,14 +259,16 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
   }
 
   async function copy() {
-    if (busy) return;
+    if (blocked) return;
+    const ext = shownFormat;
     setBusy(true);
     setMessage(null);
     try {
-      if (format === "svg") await navigator.clipboard.writeText(svg);
+      const svg = drawn.svg({ ...options, crop });
+      if (ext === "svg") await navigator.clipboard.writeText(svg);
       else {
         if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) throw new Error("this system cannot copy images");
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": exportPng(svg, scale) })]);
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": exportPng(svg, pngScale) })]);
       }
       setMessage({ kind: "done", text: "Copied the image." });
     } catch (e) {
@@ -253,36 +293,84 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
     }
   }
 
+  // A change of what is drawn clears the last "Copied" or error: the note speaks of the drawing shown.
+  function choosePart(p: string) {
+    setPartChoice(p);
+    setMessage(null);
+  }
+
+  // "Copied the image." and an error speak of the image as it was: any change to what would be written clears them.
+  const outputKey = `${crop.x} ${crop.y} ${crop.w} ${crop.h}|${padding}|${scale}|${background}|${mark}|${aspect}|${part}|${shownFormat}|${theme}|${titles}`;
+  useEffect(() => setMessage(null), [outputKey]);
+
+  // Decision 5: the Frame titles switch shows only when the part holds a frame (kept while off, so it can come back on).
+  const showSwitch = source.titles !== null && (!titles || (drawn.frames ?? 1) > 0);
+  const partsRef = useRef<HTMLDivElement>(null);
+  const hadSwitch = useRef(showSwitch);
+  // Decision 14: when the switch leaves with focus on it, focus stays on the part control, not on the page.
+  useLayoutEffect(() => {
+    if (hadSwitch.current && !showSwitch && (document.activeElement === null || document.activeElement === document.body)) {
+      partsRef.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus();
+    }
+    hadSwitch.current = showSwitch;
+  }, [showSwitch]);
+
+  const offId = useId();
+  const offReasons = source.parts.filter((p) => p.disabled && notes.offReason[p.value]).map((p) => notes.offReason[p.value]);
+  const partOptions = source.parts.map((p) => (p.disabled && notes.offReason[p.value] ? { ...p, title: notes.offReason[p.value] } : p));
+
   const cropAt = at(crop);
   const themeName = theme === "light" ? "Light" : "Dark";
+  // Decision 14: one note, the first that applies.
+  let note: ReactNode;
+  if (message?.kind === "error")
+    note = (
+      <span role="alert" className="publish-error">
+        {message.text}
+      </span>
+    );
+  else if (drawn.tooLarge) note = notes.tooLarge;
+  else if (pngOff) note = notes.pngOff;
+  else if (shownFormat === "png" && maxScale < 3) note = notes.scaleLimited(maxScale);
+  else if (message) note = message.text;
+  else if (notes.leftOut) note = notes.leftOut;
+  else note = `Uses ${themeName} theme colours. Hover and selection are left out.`;
 
   return (
     <Dialog title="Publish image" icon="image" subtitle={fileName} size="wide" className="publish-dialog" onClose={onClose}>
       <div className="publish-keys" onKeyDown={onKeyDown}>
         <div className="dialog-body publish-body">
           <div className="publish-left">
-            <Segmented
-              label="Part of the diagram"
-              value={preset}
-              onChange={setPreset}
-              options={[
-                { value: "whole", label: "Whole diagram" },
-                { value: "screen", label: "What's on screen" },
-                { value: "selected", label: "Selected nodes", disabled: selected.length === 0 },
-              ]}
-            />
-            <div className="publish-preview" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
-              <div className="publish-stage" style={{ left: offset.left, top: offset.top, width: Math.round(view.w * k), height: Math.round(view.h * k) }}>
-                <img className="publish-image" src={svgImageUrl(preview)} alt="" draggable={false} />
-                <div className="publish-crop" style={cropAt} onPointerDown={(e) => startDrag(e, "move")}>
-                  {HANDLES.map((h) => (
-                    <span key={h} className={`publish-handle publish-handle-${h}`} onPointerDown={(e) => startDrag(e, h)} />
-                  ))}
-                  <span className="publish-size">
-                    {frame.w} x {frame.h}
-                  </span>
+            <div ref={partsRef} className="publish-parts">
+              <Segmented label={notes.partLabel} value={part} onChange={choosePart} options={partOptions} describedBy={offReasons.length > 0 ? offId : undefined} />
+              {offReasons.length > 0 && (
+                <span id={offId} className="visually-hidden">
+                  {offReasons.join(" ")}
+                </span>
+              )}
+            </div>
+            <div
+              className={waiting ? "publish-preview publish-waiting" : "publish-preview"}
+              aria-busy={waiting || undefined}
+              onPointerMove={moveDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+            >
+              {stale ? null : preview === null ? (
+                <p className="publish-refused">{notes.tooLarge}</p>
+              ) : (
+                <div className="publish-stage" style={{ left: offset.left, top: offset.top, width: Math.round(view.w * k), height: Math.round(view.h * k) }}>
+                  <img className="publish-image" src={preview} alt="" draggable={false} />
+                  <div className="publish-crop" style={cropAt} onPointerDown={(e) => startDrag(e, "move")}>
+                    {HANDLES.map((h) => (
+                      <span key={h} className={`publish-handle publish-handle-${h}`} onPointerDown={(e) => startDrag(e, h)} />
+                    ))}
+                    <span className="publish-size">
+                      {frame.w} x {frame.h}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
             <div className="publish-crop-row">
               <span className="publish-hint">Drag the handles to crop. Hold Shift to keep the shape.</span>
@@ -304,15 +392,18 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
               <span className="fl">Format</span>
               <Segmented
                 label="Format"
-                value={format}
-                onChange={setFormat}
+                value={shownFormat}
+                onChange={(f) => {
+                  setFormat(f);
+                  setMessage(null);
+                }}
                 options={[
-                  { value: "png", label: "PNG" },
+                  { value: "png", label: "PNG", disabled: pngOff, title: pngOff ? notes.pngOff : undefined },
                   { value: "svg", label: "SVG" },
                 ]}
               />
             </div>
-            {format === "png" && (
+            {shownFormat === "png" && (
               <div className="field">
                 <span className="fl">Scale</span>
                 <div className="publish-range">
@@ -320,14 +411,14 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
                     type="range"
                     className="range"
                     aria-label="Scale"
-                    aria-valuetext={`${scale}x`}
+                    aria-valuetext={`${pngScale}x`}
                     min={1}
-                    max={3}
+                    max={maxScale}
                     step={1}
-                    value={scale}
+                    value={pngScale}
                     onChange={(e) => setScale(Number(e.target.value) as 1 | 2 | 3)}
                   />
-                  <span className="publish-range-value">{scale}x</span>
+                  <span className="publish-range-value">{pngScale}x</span>
                 </div>
               </div>
             )}
@@ -343,6 +434,7 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
                   value={theme}
                   onChange={(t) => {
                     setTheme(t);
+                    setMessage(null);
                     onTheme?.(t);
                   }}
                   options={[
@@ -373,34 +465,36 @@ export default function PublishDialog({ scene, fileName, selected: chosen, onScr
                 <span className="publish-range-value">{padding} px</span>
               </div>
             </div>
+            {showSwitch && (
+              <Switch
+                checked={titles}
+                onChange={(t) => {
+                  setTitles(t);
+                  setMessage(null);
+                }}
+                label="Frame titles"
+              />
+            )}
             <Switch checked={mark} onChange={setMark} label="Made with Contura mark" />
             <div className="publish-output" role="status" aria-label="Output">
               <span className="publish-output-label">Output</span>
-              <span className="publish-output-size">
-                {fmt(outW)} x {fmt(outH)} px
-              </span>
-              <span className="publish-output-file">
-                {format === "png" ? "PNG" : "SVG"}, about {fmt(kb)} KB
-              </span>
+              {/* While another part loads, the sizes of the drawing before are not said of it: blank until it arrives. A
+                  refused image is blank too: its compose stopped at the cap, so any size would be too low. */}
+              <span className="publish-output-size">{stale || drawn.tooLarge ? null : `${fmt(outW)} x ${fmt(outH)} px`}</span>
+              <span className="publish-output-file">{stale || drawn.tooLarge ? null : `${shownFormat === "png" ? "PNG" : "SVG"}, about ${fmt(kb)} KB`}</span>
             </div>
           </div>
         </div>
         <footer className="dialog-footer">
-          <span className="publish-note">
-            {message ? (
-              <span role={message.kind === "error" ? "alert" : "status"} className={message.kind === "error" ? "publish-error" : undefined}>
-                {message.text}
-              </span>
-            ) : (
-              `Uses ${themeName} theme colours. Hover and selection are left out.`
-            )}
+          <span className="publish-note" role="status">
+            {note}
           </span>
           <span className="spacer" />
-          <button type="button" className="button" disabled={busy} onClick={() => void copy()}>
+          <button type="button" className="button" disabled={blocked} onClick={() => void copy()}>
             Copy
             <Kbd keys="Ctrl+C" />
           </button>
-          <button type="button" className="button button-primary" disabled={busy} onClick={() => void saveAs()}>
+          <button type="button" className="button button-primary" disabled={blocked} onClick={() => void saveAs()}>
             Save as...
             <Kbd keys="Ctrl+S" />
           </button>

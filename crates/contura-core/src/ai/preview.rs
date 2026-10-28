@@ -20,7 +20,7 @@ use crate::ai::context::tree::{Area, areas_for};
 use crate::ai::log::{Level, Log, LogLine, ProcessStep, StepKind, error_kind};
 use crate::ai::memory::{
     ASKED_IN_ALSO, AskFacts, AskedIn, HistoryPick, HistorySummary, MemoryInfo, SummarySource,
-    ThreadStore, TopicPick, Turn, TurnStamp, also_of, closing_topic, select_history, topic_for,
+    ThreadStore, TopicPick, Turn, TurnStamp, also_of, select_history, topic_for,
 };
 use crate::ai::models::{ModelInfo, clamp};
 use crate::ai::prompt::outline_prompt;
@@ -360,6 +360,9 @@ pub struct Preview {
     /// The summary step the Ask would make (a Topic summary or a compaction), never made
     /// by a preview; `None` when the Ask would make no summary call.
     pub summary: Option<SummaryPreview>,
+    /// The chat title call that would follow the Ask's answer (Decision 5), never made by a
+    /// preview; `None` when no title call would follow.
+    pub title: Option<crate::ai::title::TitlePreview>,
     /// The sample rows the Ask would send; `None` until they are read.
     pub rows: Option<RowsSent>,
 }
@@ -1595,6 +1598,9 @@ pub async fn preview_with_log(
     preview.summary =
         crate::ai::compact::summary_preview(catalog, settings, model, &gathered, &recall, &preview)
             .await;
+    // The title call that would follow the answer; no call is made here either.
+    preview.title =
+        crate::ai::title::title_preview(settings, model, &gathered, &recall, &preview.stamp.kinds);
     if !recall.thread {
         preview.memory = None;
     }
@@ -2053,16 +2059,36 @@ pub async fn gather(
     })
 }
 
-/// The current access of each other Connection the questions of `thread` were asked
-/// across (`AskedIn::also`), each read once; one that is gone or cannot be read is Never.
-/// The gate on history lowers such a message to it (`message_access`).
+/// The current access of each Connection the messages of `thread` name (`also_of`: each
+/// message's own, those it was asked across, those of its steps) and its compactions cover
+/// (`Compaction::covers`), each read once; one that is gone or cannot be read is Never.
+/// The gate on history reads each message at its own Connection's access (`access_of`,
+/// `message_access`).
 pub(crate) async fn others_access(
     catalog: &dyn CatalogReader,
     thread: &AiThread,
     log: &mut Log,
 ) -> Vec<(ConnectionId, AiAccess)> {
     let mut out = Vec::new();
-    for id in also_of(thread) {
+    // And those the thread's compactions cover (kept with them: the thread may have dropped
+    // those messages). A store that cannot be read adds none, and sends no history either.
+    let mut ids = also_of(thread);
+    let kept = catalog.threads().compactions(thread.id).unwrap_or_default();
+    for id in kept
+        .iter()
+        .flat_map(|c| c.covers.iter().flatten())
+        .flat_map(|c| {
+            c.connection_id
+                .iter()
+                .chain(c.also.iter())
+                .chain(c.steps.iter().map(|(id, _)| id))
+        })
+    {
+        if !ids.contains(id) {
+            ids.push(*id);
+        }
+    }
+    for id in ids {
         let level = match catalog.connection_config(id).await {
             Ok(c) => c.map_or(AiAccess::Never, |c| c.ai_access),
             Err(e) => {
@@ -2085,10 +2111,10 @@ pub struct Recall {
     pub thread: bool,
     /// That thread as stored, for the 85% check and the summary step.
     pub source: Option<AiThread>,
-    /// The current access of the other Connections the thread's questions were asked
-    /// across, once read (`others_access`); an Ask reads them once and passes them on.
+    /// The current access of the Connections the thread's messages name, once read
+    /// (`others_access`); an Ask reads them once and passes them on.
     pub others: Option<Vec<(ConnectionId, AiAccess)>>,
-    /// The Topic pick: the Topic this Ask closes, when it opens a new one.
+    /// The Topic pick: the open Topic this Ask goes on in.
     pub topic: TopicPick,
 }
 
@@ -2121,11 +2147,9 @@ pub async fn recall(
     let facts = AskFacts {
         connection_id: req.connection_id,
         database: req.database.as_deref(),
-        action: &req.action,
         tables: &g.tables,
-        now_ms: now_ms(),
     };
-    let topic = topic_for(thread.as_ref(), &facts, &req.question);
+    let topic = topic_for(thread.as_ref(), &req.question);
     let picked = topic.clone();
     let mut pick = HistoryPick::default();
     let mut others = known;
@@ -2143,11 +2167,7 @@ pub async fn recall(
             Ok::<_, crate::error::Error>((topics, compactions, matches))
         })();
         match read {
-            Ok((mut topics, compactions, matches)) => {
-                // The Topic this Ask closes goes as a closed one (R1.6: the preview too).
-                if let Some(seq) = topic.closing {
-                    closing_topic(&mut topics, t, &compactions, seq);
-                }
+            Ok((topics, compactions, matches)) => {
                 let clean = cleaner(&g.secrets);
                 pick = select_history(
                     Some(t),
@@ -2702,6 +2722,7 @@ pub(crate) fn assemble_with(
         memory: Some(memory),
         stamp,
         summary: None,
+        title: None,
         rows,
     })
 }

@@ -397,6 +397,8 @@ export function groupMenuItems(g: GroupMenu): MenuItem[] {
 export interface FrameMoreMenu {
   /** Publish can draw this frame (it has a drawing). */
   drawn: boolean;
+  /** Publish can draw the board: some frame has something drawn (Decision 4). */
+  publishable: boolean;
   /** Tidy and Tidy selection apply: a kind laid out by hand, not a sequence, mind map or timeline. */
   movable: boolean;
   /** Shapes selected in this frame. */
@@ -404,6 +406,8 @@ export interface FrameMoreMenu {
   /** The board has another frame, so this one can be deleted (Decision 22). */
   deletable: boolean;
   publish(): void;
+  /** Publish opened on the whole board. */
+  publishBoard(): void;
   /** Today's Mermaid into this frame; absent where the app has no Mermaid dialog. */
   mermaid?(): void;
   tidySelection(): void;
@@ -413,10 +417,14 @@ export interface FrameMoreMenu {
   remove(): void;
 }
 
-/** The frame bar's More menu (Decision 22): Publish, Mermaid, Tidy selection, Duplicate, Open as DBML, then Delete. */
+/**
+ * The frame bar's More menu (Decision 22): Publish frame and Publish board, Mermaid, Tidy selection, Duplicate, Open as
+ * DBML, then Delete. Neither Publish row shows a key: Ctrl+Shift+E follows the selection (B4 Decision 13, R6).
+ */
 export function frameMoreItems(m: FrameMoreMenu): MenuItem[] {
   return [
-    { key: "publish", label: "Publish frame...", icon: <Icon name="image" />, shortcut: "Ctrl+Shift+E", disabled: !m.drawn, onSelect: m.publish },
+    { key: "publish", label: "Publish frame...", icon: <Icon name="image" />, disabled: !m.drawn, onSelect: m.publish },
+    { key: "publishboard", label: "Publish board...", icon: <Icon name="image" />, disabled: !m.publishable, onSelect: m.publishBoard },
     ...(m.mermaid ? [{ key: "mermaid", label: "Insert Mermaid...", icon: <Icon name="flow" />, onSelect: m.mermaid }] : []),
     {
       key: "tidy",

@@ -5,9 +5,11 @@ export const summaryOf = (t: AiThread): ThreadSummary => ({
   id: t.id,
   place: t.place,
   title: t.title,
+  titleBy: t.titleBy ?? "rule",
   updatedAt: t.updatedAt,
   messages: t.messages.length,
   topics: 1,
+  work: null,
 });
 
 /** A record as a list or view carries it: the heavy parts left out. */
@@ -34,6 +36,8 @@ export const turnViewOf = (turn: AppendTurn, stored: AiThread | null = null, top
     title: stored?.title ?? turn.title,
     updatedAt: turn.updatedAt,
     messages: turn.messages,
+    titleBy: stored?.titleBy ?? "rule",
+    titleTries: stored?.titleTries ?? 0,
     keptFrom: kept[0]?.at ?? turn.messages[0]?.at ?? null,
     messageCount: kept.length + turn.messages.length,
     topics,

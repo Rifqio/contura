@@ -143,6 +143,52 @@ test("close_resolves_promptly_during_stall_and_long", async () => {
   }
 });
 
+const titleAsk = (base, model, limit = { max_tokens: 24 }) =>
+  fetch(`${base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, stream: true, ...limit, messages: [{ role: "user", content: "name this chat" }] }),
+  });
+
+const textOf = async (res) =>
+  events(await res.text())
+    .filter((l) => l !== "[DONE]")
+    .map((l) => JSON.parse(l))
+    .map((c) => c.choices?.[0]?.delta?.content ?? "")
+    .join("");
+
+test("a_title_request_gets_a_title", async () => {
+  const base = await up();
+  // Any model: a request with at most 32 tokens and no tools is a title request.
+  for (const model of ["fx-answer", "fx-diagram", "fx-compact"]) {
+    const res = await titleAsk(base, model);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(await textOf(res)).toBe("Unpaid clients to date");
+  }
+  // The Custom provider may send either field.
+  expect(await textOf(await titleAsk(base, "fx-answer", { max_completion_tokens: 24 }))).toBe("Unpaid clients to date");
+  // Over 32 tokens, or with tools, it is an ordinary Ask.
+  expect(await textOf(await titleAsk(base, "fx-answer", { max_tokens: 33 }))).toContain("```sql");
+  const tooled = await fetch(`${base}/v1/chat/completions`, {
+    method: "POST",
+    body: JSON.stringify({ model: "fx-answer", max_tokens: 24, tools: [{ type: "function" }], messages: [] }),
+  });
+  expect(await textOf(tooled)).toContain("```sql");
+  expect((await titleAsk(base, "nope")).status).toBe(404);
+});
+
+test("fx_title_fail_fails_only_title_requests", async () => {
+  const base = await up();
+  const failed = await titleAsk(base, "fx-title-fail");
+  expect(failed.status).toBe(500);
+  const answer = await ask(base, "fx-title-fail");
+  expect(answer.status).toBe(200);
+  expect(await textOf(answer)).toContain("```sql\nSELECT carrier");
+  const body = await (await fetch(`${base}/v1/models`)).json();
+  expect(body.data.map((m) => m.id)).toContain("fx-title-fail");
+});
+
 test("oversize_body_is_413", async () => {
   const base = await up();
   const res = await fetch(`${base}/v1/chat/completions`, { method: "POST", body: "x".repeat(8 * 1024 * 1024 + 10) });

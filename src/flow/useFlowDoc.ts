@@ -371,7 +371,7 @@ const isBoardOp = (op: FlowRequestOp): op is FlowBoardOp =>
 interface Raw {
   result: FlowResult;
   text: string;
-  /** Each frame's doc, else its last good one, else the one drawn for its title before. */
+  /** Each frame's doc, else its own last good one (the worker's `lastValid`). */
   drawns: (FlowDoc | null)[];
   /** The keys when this text was sent to be parsed: they name its frames, index for index. */
   keys: readonly string[];
@@ -883,7 +883,13 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       try {
         const frames = cur.result.frames;
         // A clash layout goes once its frame's title is its own again (or the frame is gone).
-        const kept = new Map([...clashRef.current].filter(([i, c]) => isDup(keysRef.current[i]) && headsRef.current[i]?.title === c.title));
+        // A clash index past the frames now (a frame deleted) has no key: that layout goes too.
+        const kept = new Map(
+          [...clashRef.current].filter(([i, c]) => {
+            const k = keysRef.current[i];
+            return k !== undefined && isDup(k) && headsRef.current[i]?.title === c.title;
+          }),
+        );
         if (kept.size !== clashRef.current.size) setClash(kept);
         for (let i = 0; i < frames.length; i++) {
           if (!alive.current) return;
@@ -995,12 +1001,9 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
           const cur = parsedRef.current;
           // Every call waiting on one parse resolves with it: the newest of those calls holds the parsed text.
           if (cur && (result.version < cur.result.version || (result.version === cur.result.version && call < cur.call))) return;
-          // A frame drawn faded keeps what it drew under its own title, never another frame's.
-          const before = new Map<string, FlowDoc | null>();
-          cur?.result.frames.forEach((f, i) => {
-            if (!before.has(f.title)) before.set(f.title, cur.drawns[i]);
-          });
-          const drawns = result.frames.map((f) => f.doc ?? f.lastValid ?? before.get(f.title) ?? null);
+          // A frame drawn faded draws only its own last good doc, as the worker keeps it (B4 Task 2b): the canvas, the
+          // board scene and Publish all read the same one.
+          const drawns = result.frames.map((f) => f.doc ?? f.lastValid);
           const next = { result, text, drawns, call, keys: keysAt };
           parsedRef.current = next;
           setRaw(next);

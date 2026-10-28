@@ -10,6 +10,7 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { DiagramCanvasProps } from "../../diagram/DiagramCanvas";
 import { ARROW_MARKER, MANY_MARKER, ONE_MARKER } from "../../diagram/edges";
 import type { Scene } from "../../diagram/export/scene";
+import type { PublishSource } from "../../diagram/export/source";
 import { sceneToSvg } from "../../diagram/export/svg";
 import { exportPalette } from "../../diagram/export/palette";
 import { LangClient } from "../../lang/client";
@@ -48,11 +49,13 @@ vi.mock("../../diagram/DiagramCanvas", async (load) => {
   };
 });
 
-// The dialog has its own tests: here it only has to open with the frame's scene.
-const dialog = vi.hoisted(() => ({ opened: [] as Scene[] }));
+// The dialog has its own tests: here it only has to open with the frame's scene, or a board's source (R11), whose
+// initial part is drawn in Light so the image can be read.
+const dialog = vi.hoisted(() => ({ opened: [] as Scene[], sources: [] as PublishSource[] }));
 vi.mock("../../diagram/export/PublishDialog", async () => ({
-  default: (p: { scene: Scene }) => {
-    if (dialog.opened[dialog.opened.length - 1] !== p.scene) dialog.opened.push(p.scene);
+  default: (p: { scene?: Scene; source?: PublishSource }) => {
+    if (p.scene && dialog.opened[dialog.opened.length - 1] !== p.scene) dialog.opened.push(p.scene);
+    if (p.source && dialog.sources[dialog.sources.length - 1] !== p.source) dialog.sources.push(p.source);
     return <div role="dialog" aria-label="Publish image" />;
   },
 }));
@@ -67,6 +70,7 @@ afterEach(() => {
   canvas.props = null;
   canvas.instance = null;
   dialog.opened = [];
+  dialog.sources = [];
 });
 
 const CHECKOUT = 'diagram flow "Checkout"\nCart\nPay\nCart > Pay\n';
@@ -443,10 +447,24 @@ test("publish_frame_opens_publish_on_that_frame", async () => {
   const bar = await pick(s, "Flowchart", "Shipping", "Pack");
   const row = await moreRow(bar, "Publish frame...");
   expect(row.getAttribute("aria-label")).toBe("Publish frame...");
-  expect(row.textContent).toContain("Ctrl+Shift+E");
+  // No key hint: Ctrl+Shift+E follows the selection, which is not always this frame (R6).
+  expect(row.textContent).not.toContain("Ctrl+Shift+E");
   fireEvent.click(row);
-  await waitFor(() => expect(dialog.opened.length).toBeGreaterThan(0));
-  expect(dialog.opened[0].nodes.map((n) => n.id).sort()).toEqual(["Pack", "Send"]);
+  await waitFor(() => expect(dialog.sources.length).toBeGreaterThan(0));
+  // On a board, the board's source opened on Selected frame: Shipping's shapes and nothing else.
+  const src = dialog.sources[0];
+  expect(src.initial).toBe("frame");
+  const svg = src.draw("frame", exportPalette("light"), true).svg({ padding: 0, background: "theme", mark: false });
+  expect([...svg.matchAll(/data-node="([^"]+)"/g)].map((m) => m[1]).sort()).toEqual(["Pack", "Send"]);
+});
+
+test("publish_board_has_no_key_hint_either", async () => {
+  const s = setup();
+  await opened();
+  const bar = await pick(s, "Flowchart", "Shipping", "Pack");
+  const row = await moreRow(bar, "Publish board...");
+  expect(row.textContent).not.toContain("Ctrl+Shift+E");
+  expect(row.disabled).toBe(false);
 });
 
 test("large_text_scales_labels_on_the_canvas_and_in_publish", async () => {
@@ -578,7 +596,7 @@ test("the_bar_is_keyboard_reachable", async () => {
   moreButton.focus();
   await userEvent.keyboard("{Enter}");
   const menu = await screen.findByRole("menu");
-  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Publish frame...", "Tidy selection", "Duplicate frame", "Delete frame"]);
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.getAttribute("aria-label"))).toEqual(["Publish frame...", "Publish board...", "Tidy selection", "Duplicate frame", "Delete frame"]);
   await userEvent.keyboard("{Escape}");
   expect(document.activeElement).toBe(moreButton);
 });

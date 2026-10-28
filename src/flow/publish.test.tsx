@@ -1,36 +1,48 @@
 // Publish from a diagram tab (spec 6+ section 8): the step 6 dialog opens with the drawn diagram's scene, cloud
 // icons are loaded for it (only the ones the diagram uses) and embedded as images, and closing the dialog lets
 // the scene go.
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import type { Scene } from "../diagram/export/scene";
+import { exportPalette } from "../diagram/export/palette";
+import type { Box, Scene } from "../diagram/export/scene";
+import { type PublishSource, sceneSource } from "../diagram/export/source";
+import { sceneToSvg } from "../diagram/export/svg";
+import { parseFlow } from "../lang/flow/parse";
 import { LangClient } from "../lang/client";
 import { callsTo, routeInvoke } from "../test/invoke";
 import { mockEditorDom } from "../test/editor";
 import { fakeWorker } from "../test/langWorker";
 import { mockReactFlowDom } from "../test/reactFlow";
 import FlowTab from "./FlowTab";
-import { loadSceneIcons } from "./flowScene";
+import { flowScene, loadSceneIcons } from "./flowScene";
 import { resetIcons } from "./icons";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-// The dialog has its own tests; here it only has to open with the diagram's scene, and close.
-const dialog = vi.hoisted(() => ({ opened: [] as { scene: Scene; fileName: string; selected: string[] }[], mounted: 0 }));
+// The dialog has its own tests; here it only has to open with the diagram's scene, and close. A board opens it with
+// a source (R11): its initial part is drawn in Light so the image can be read.
+const dialog = vi.hoisted(() => ({
+  opened: [] as { scene?: Scene; source?: PublishSource; fileName: string; selected?: string[]; onScreen?: Box }[],
+  mounted: 0,
+}));
 vi.mock("../diagram/export/PublishDialog", async () => {
   const { useEffect } = await import("react");
+  const { exportPalette } = await import("../diagram/export/palette");
   return {
-    default: (p: { scene: Scene; fileName: string; selected: string[]; onClose(): void; onTheme?(t: "light" | "dark"): void }) => {
+    default: (p: { scene?: Scene; source?: PublishSource; fileName: string; selected?: string[]; onScreen?: Box; onClose(): void; onTheme?(t: "light" | "dark"): void }) => {
       useEffect(() => {
         dialog.mounted++;
-        dialog.opened.push({ scene: p.scene, fileName: p.fileName, selected: p.selected });
+        dialog.opened.push({ scene: p.scene, source: p.source, fileName: p.fileName, selected: p.selected, onScreen: p.onScreen });
         return () => {
           dialog.mounted--;
         };
       }, []);
+      const icon = p.scene
+        ? (p.scene.nodes.find((n) => n.icon)?.icon ?? "")
+        : (/<image [^>]*href="([^"]+)"/.exec(p.source!.draw(p.source!.initial, exportPalette("light"), true).svg({ padding: 0, background: "theme", mark: false }))?.[1] ?? "");
       return (
-        <div role="dialog" aria-label="Publish image" data-icon={p.scene.nodes.find((n) => n.icon)?.icon ?? ""}>
+        <div role="dialog" aria-label="Publish image" data-icon={icon}>
           <button type="button" onClick={() => p.onTheme?.("dark")}>
             Dark
           </button>
@@ -78,7 +90,9 @@ function setup(text: string, layout: string | null, name: string) {
   );
   const strip = () => utils.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   const publish = () => within(strip()).getByRole("button", { name: "Publish" }) as HTMLButtonElement;
-  return { ...utils, strip, publish };
+  const canvasEl = () => utils.container.querySelector(".flow-canvas") as HTMLElement;
+  const press = (key: string, init: KeyboardEventInit = {}) => fireEvent.keyDown(canvasEl(), { key, ...init });
+  return { ...utils, strip, publish, canvasEl, press };
 }
 
 test("publish_opens_with_the_drawn_diagram_in_its_look_and_closing_lets_it_go", { timeout: 20000 }, async () => {
@@ -86,7 +100,8 @@ test("publish_opens_with_the_drawn_diagram_in_its_look_and_closing_lets_it_go", 
   await waitFor(() => expect(s.publish().disabled).toBe(false), { timeout: 4000 });
   await userEvent.click(s.publish());
   await screen.findByRole("dialog", { name: "Publish image" });
-  const { scene, fileName } = dialog.opened[0];
+  const { scene: given, fileName } = dialog.opened[0];
+  const scene = given!;
   expect(fileName).toBe("checkout");
   expect(scene.nodes.map((n) => [n.id, n.kind, n.look, n.x, n.y])).toEqual([
     ["Customer", "external", "classic", 0, 0],
@@ -104,7 +119,7 @@ test("cloud_publish_loads_only_the_used_icons_and_embeds_them", { timeout: 20000
   await userEvent.click(s.publish());
   await screen.findByRole("dialog", { name: "Publish image" });
   expect([...new Set(callsTo("icon").map((c) => c.name))].sort()).toEqual(["aws-api-gateway", "users"]);
-  const { scene } = dialog.opened[0];
+  const scene = dialog.opened[0].scene!;
   const icons = scene.nodes.map((n) => n.icon);
   expect(icons).toHaveLength(2);
   for (const url of icons) expect(url).toBe(`data:image/svg+xml;base64,${btoa(ICON)}`);
@@ -160,4 +175,45 @@ test("publish_draws_a_logo_in_its_colour_for_the_chosen_theme", async () => {
   expect(light.get("brand-js")).toEqual({ url: `data:image/svg+xml;base64,${btoa(ICON)}`, outline: true });
   expect(light.get("brand-postgresql")!.outline).toBe(false);
   expect(light.get("brand-ink")!.outline).toBe(false);
+});
+
+const OPTS = { padding: 32, background: "theme" as const, mark: true };
+
+test("a_one_frame_file_publishes_byte_for_byte_as_before", { timeout: 20000 }, async () => {
+  const s = setup(DFD, LAYOUT, "checkout");
+  await waitFor(() => expect(s.publish().disabled).toBe(false), { timeout: 4000 });
+  await userEvent.click(s.publish());
+  await screen.findByRole("dialog", { name: "Publish image" });
+  // One frame and no sketch: the diagram's scene with today's parts, never a board source (Decision 6).
+  const o = dialog.opened[0];
+  expect(o.source).toBeUndefined();
+  const scene = o.scene!;
+  const doc = parseFlow(DFD).doc!;
+  const want = flowScene(doc, JSON.parse(LAYOUT).nodes, "classic", new Map());
+  expect(scene).toEqual(want);
+  const src = sceneSource(scene, o.selected ?? [], o.onScreen!);
+  expect(src.parts.map((p) => p.label)).toEqual(["Whole diagram", "What's on screen", "Selected nodes"]);
+  for (const theme of ["light", "dark"] as const) {
+    const palette = exportPalette(theme);
+    expect(src.draw("whole", palette, true).svg(OPTS)).toBe(sceneToSvg(want, palette, OPTS));
+  }
+});
+
+test("a_one_frame_board_with_nothing_selected_still_publishes", { timeout: 20000 }, async () => {
+  const s = setup(DFD, LAYOUT, "checkout");
+  await waitFor(() => expect(s.publish().disabled).toBe(false), { timeout: 4000 });
+  // Esc lets the one frame go (A7): no live frame, nothing drawn live.
+  s.press("Escape");
+  await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Checkout settings" })).toBeNull());
+  await waitFor(() => expect(s.publish().disabled).toBe(false));
+  s.press("E", { ctrlKey: true, shiftKey: true });
+  await screen.findByRole("dialog", { name: "Publish image" });
+  const o = dialog.opened[0];
+  expect(o.source).toBeUndefined();
+  // Frame 0's drawing, from its doc and its layout entry, in its look.
+  expect(o.scene!.nodes.map((n) => [n.id, n.kind, n.look, n.x, n.y])).toEqual([
+    ["Customer", "external", "classic", 0, 0],
+    ["Checkout", "process", "classic", 300, 0],
+  ]);
+  expect(o.scene).toEqual(flowScene(parseFlow(DFD).doc!, JSON.parse(LAYOUT).nodes, "classic", new Map()));
 });

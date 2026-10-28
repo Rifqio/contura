@@ -26,6 +26,7 @@ import NodeEditor, { type NodeEdit, nodeEditOps } from "./NodeEditor";
 import PublishDialog from "../diagram/export/PublishDialog";
 import type { ExportTheme } from "../diagram/export/palette";
 import type { Box as SceneBox, Scene } from "../diagram/export/scene";
+import type { PublishSource } from "../diagram/export/source";
 import { glideOptions, type MotionKey, motionMs } from "../diagram/motion";
 import { routeOrthogonal } from "../diagram/route";
 import type { Port } from "../diagram/types";
@@ -97,11 +98,13 @@ import { pasteFrame } from "../lang/flow/board";
 import { parseFlow } from "../lang/flow/parse";
 import { createOrderDragStore, drawAt, DROP, type FoldDot, foldDotsOf, laneIndex, nearestIndex, topicDropAt, type TopicDrop, type TopicIndex, topicIndex } from "./orderDrag";
 import OrderDragLayer, { FoldDots } from "./interactions/OrderDragLayer";
-import { ER_CARD_CHROME, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
+import { ER_CARD_CHROME, erMetrics, KIND_ROW, SEQ_HEAD, SEQ_ROW } from "./kindLayout";
 import { ADD_TOOLS, type AddTool } from "./FlowToolbar";
 import FrameBar, { type FrameSettingPatch } from "./board/FrameBar";
 import LineBar from "./board/LineBar";
-import { FRAME_GAP, TEXT_SCALE } from "./board/boardLayout";
+import { FRAME_GAP, frameLayoutView, TEXT_SCALE } from "./board/boardLayout";
+import { anyFrameDrawn, type BoardPart, type BoardPublishInput, boardPublishInput } from "./board/publish/boardPublish";
+import { boardIconNames, boardSource } from "./board/publish/boardSvg";
 import BoardToolbar from "./board/BoardToolbar";
 import { templateById } from "./board/catalog/templates";
 import Shelf, { type ShelfCloseReason } from "./board/shelf/Shelf";
@@ -367,7 +370,7 @@ function edgeMid(graph: { nodes: Node[]; edges: Edge[] }, id: string, scroll: (t
   const bb = lineBoxOf(b);
   // A + line keeps its axis wherever it is routed (N1).
   if (data?.fromRow === undefined) return routeOrthogonal(ab, bb, data?.axis ? { axis: data.axis } : {}).mid;
-  return rowRoute(ab, bb, data.fromRow, data.toRow ?? -1, e.source === e.target, scroll(e.source), scroll(e.target)).mid;
+  return rowRoute(ab, bb, data.fromRow, data.toRow ?? -1, e.source === e.target, scroll(e.source), scroll(e.target), data.textScale).mid;
 }
 
 const centre = (b: Box): Point => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
@@ -1152,8 +1155,18 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   const [credits, setCredits] = useState(false);
   /** Syntax Help open on this kind: the shown frame's when `<?>` was pressed (Task 14). */
   const [helpKind, setHelpKind] = useState<DiagramKind | null>(null);
-  /** The Publish dialog, open on the scene built when it was asked for; closing it lets the scene go. */
-  const [publishing, setPublishing] = useState<{ scene: Scene; onScreen: SceneBox } | null>(null);
+  /**
+   * The Publish dialog: a board's source (with the input it was built from and the source made for each theme so far,
+   * so a theme toggled back is the same source and draws nothing again), or one diagram's scene (with what a theme
+   * change rebuilds it from). Closing it sets this to null, so every source and scene goes with it.
+   */
+  const [publishing, setPublishing] = useState<
+    | { source: PublishSource; input: BoardPublishInput; part?: BoardPart; byTheme: Partial<Record<ExportTheme, PublishSource>> }
+    | { scene: Scene; onScreen: SceneBox; names: string[]; build(icons: Awaited<ReturnType<typeof loadSceneIcons>>): Scene }
+    | null
+  >(null);
+  const publishingRef = useRef(publishing);
+  publishingRef.current = publishing;
   const chooseIcon = useRef<HTMLButtonElement>(null);
   const instance = useRef<ReactFlowInstance | null>(null);
   const canvasEl = useRef<HTMLDivElement>(null);
@@ -1723,6 +1736,18 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   );
   const boardRef = useRef(board);
   boardRef.current = board;
+  /** Publish is on when some frame has something drawn (B4 Decision 4): Ctrl+Shift+E, the menus and the strip button. */
+  const publishable = useMemo(
+    () => !!parsed && anyFrameDrawn({ frames: parsed.result.frames, board: doc.board, keys: parsed.keys, frameIndex: board?.live?.index ?? null, liveLayout: board?.live ? layout : null }),
+    [parsed, doc.board, board, layout],
+  );
+  /** Publish frame... is on when the live frame itself has something drawn, by the same rule (no dead row). */
+  const liveDrawable = useMemo(
+    () => !!parsed && !!board?.live && anyFrameDrawn({ frames: parsed.result.frames, board: doc.board, keys: parsed.keys, frameIndex: board.live.index, liveLayout: layout, only: board.live.index }),
+    [parsed, doc.board, board, layout],
+  );
+  const publishableRef = useRef(publishable);
+  publishableRef.current = publishable;
   /** The live frame's box; null with nothing live (nothing selected, a title an earlier frame has, a tab drag). */
   const liveBox = board?.live ?? null;
   const liveBoxRef = useRef(liveBox);
@@ -1822,37 +1847,111 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
   const canvasEdges = useMemo(() => (liveBox ? [...(board?.edges ?? []), ...liveBase.edges] : (board?.edges ?? [])), [board, liveBase, liveBox]);
 
   /**
-   * Publish: the drawing as it is now (the last one that worked while the text has an error), in its look, with
-   * the cloud icons it uses loaded from the pack and embedded as images (ruling P9).
+   * Publish (B4 Decisions 2, 6 and 13): a board of several frames, or with sketches, opens on its source, on `part` when
+   * that part is on, else on the part the selection asks for; a board of one frame and no sketch publishes as one
+   * diagram did, from its live drawing or, with nothing selected (A7), from frame 0's doc and layout entry. Cloud icons
+   * are loaded from the pack and embedded as images (ruling P9); the icon sketches' titles are read once here (A3).
    */
-  async function openPublish() {
+  async function openPublish(part?: BoardPart) {
     // Publish is another action: a pick ends with no write (N1).
     rel.endModes(true);
-    const d = drawnRef.current;
-    if (!d) return;
-    const { nodes, style, axes } = layoutRef.current;
-    const icons = await loadSceneIcons(sceneIconNames(d), "light");
-    let onScreen: SceneBox = { x: 0, y: 0, w: 0, h: 0 };
+    const p = parsedRef.current;
+    const b = boardRef.current;
+    if (!p || !b) return;
+    const mine = ++publishInkSeq.current;
+    // The visible part of the canvas, in canvas units.
+    let screenBox: SceneBox = { x: 0, y: 0, w: 0, h: 0 };
     const r = canvasEl.current?.getBoundingClientRect();
     const f = instance.current;
     if (r && f && r.width > 0 && r.height > 0) {
       const a = f.screenToFlowPosition({ x: r.x, y: r.y });
-      const b = f.screenToFlowPosition({ x: r.x + r.width, y: r.y + r.height });
-      onScreen = { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+      const c = f.screenToFlowPosition({ x: r.x + r.width, y: r.y + r.height });
+      screenBox = { x: a.x, y: a.y, w: c.x - a.x, h: c.y - a.y };
     }
-    // A folded topic publishes folded, as the canvas shows it; the frame's text size and notation as drawn.
-    setPublishing({ scene: flowScene(d, nodes, style, icons, axes, folded, sceneOpts()), onScreen });
+    const board = doc.board;
+    const frames = p.result.frames;
+    if (frames.length > 1 || board.sketches.length > 0) {
+      const live = b.live !== null;
+      const lay = layoutRef.current;
+      const input = boardPublishInput({
+        frames,
+        board,
+        keys: p.keys,
+        boxes: b.boxes,
+        origin: b.origin,
+        frameIndex: b.live?.index ?? null,
+        live: live ? { layout: lay, folded, textScale: TEXT_SCALE[frameSettingsRef.current.textSize], notation: frameSettingsRef.current.notation } : null,
+        shapes: live ? selectedRef.current : [],
+        sketchIds: sketchSelRef.current,
+        // Canvas units to board units (Decision 7).
+        onScreen: { x: screenBox.x + b.origin.x, y: screenBox.y + b.origin.y, w: screenBox.w, h: screenBox.h },
+      });
+      if (input.frames.length === 0 && input.sketches.length === 0) return;
+      const iconSketches = [...new Set(input.sketches.flatMap((k) => (k.kind === "icon" && k.icon ? [k.icon] : [])))];
+      const [titles, icons] = await Promise.all([Promise.all(iconSketches.map(async (n) => [n, await iconTitleOf(n)] as const)), loadSceneIcons(boardIconNames(input), "light")]);
+      if (mine !== publishInkSeq.current) return;
+      const full: BoardPublishInput = { ...input, iconTitles: new Map(titles) };
+      const source = boardSource(full, icons, "light", part);
+      setPublishing({ source, input: full, ...(part ? { part } : {}), byTheme: { light: source } });
+      return;
+    }
+    // One frame and no sketch: one diagram's scene, as before boards (Decision 6).
+    const d = drawnRef.current;
+    let build: (icons: Awaited<ReturnType<typeof loadSceneIcons>>) => Scene;
+    let names: string[];
+    let onScreen = screenBox;
+    if (d && b.live) {
+      const { nodes, style, axes } = layoutRef.current;
+      const shut = folded;
+      const opts = sceneOpts();
+      // A folded topic publishes folded, as the canvas shows it; the frame's text size and notation as drawn.
+      build = (icons) => flowScene(d, nodes, style, icons, axes, shut, opts);
+      names = sceneIconNames(d);
+    } else {
+      // Nothing live (Esc or a click outside, A7): frame 0's drawing, from its doc (or its last good one) and its entry.
+      const f0 = frames[0];
+      const d0 = f0 ? (f0.doc ?? f0.lastValid) : null;
+      if (!d0) return;
+      const key = p.keys[0];
+      if (key === undefined) return;
+      const view = frameLayoutView(board, key, d0.kind);
+      const e = board.frames.get(key);
+      const k = TEXT_SCALE[e?.textSize ?? "m"];
+      const opts = { ...(k !== 1 ? { textScale: k } : {}), ...(e?.notation === "arrow" ? { notation: "arrow" as const } : {}) };
+      build = (icons) => flowScene(d0, view.nodes, view.style, icons, view.axes, undefined, opts);
+      names = sceneIconNames(d0);
+      // The scene is in the frame's own units: canvas, plus the origin, less the frame's place.
+      const at = e?.at ?? { x: 0, y: 0 };
+      onScreen = { ...screenBox, x: screenBox.x + b.origin.x - at.x, y: screenBox.y + b.origin.y - at.y };
+    }
+    const icons = await loadSceneIcons(names, "light");
+    if (mine !== publishInkSeq.current) return;
+    setPublishing({ scene: build(icons), onScreen, names, build });
   }
 
-  /** The Publish dialog's theme changed: the icons are inked again for it, and the scene is drawn with them. */
+  /**
+   * The Publish dialog's theme changed: the icons are inked again for it, and the drawing is made with them. On a board
+   * a theme already made gives its source back (a toggle back is the dialog's cached drawing); the latest choice wins.
+   */
   async function repaintPublishIcons(theme: ExportTheme) {
-    const d = drawnRef.current;
-    if (!d) return;
+    const p = publishingRef.current;
+    if (!p) return;
     const mine = ++publishInkSeq.current;
-    const { nodes, style, axes } = layoutRef.current;
-    const icons = await loadSceneIcons(sceneIconNames(d), theme);
+    if ("source" in p) {
+      const made = p.byTheme[theme];
+      if (made) {
+        setPublishing((q) => (q && "source" in q && q.input === p.input ? { ...q, source: made } : q));
+        return;
+      }
+      const icons = await loadSceneIcons(boardIconNames(p.input), theme);
+      if (mine !== publishInkSeq.current) return;
+      const source = boardSource(p.input, icons, theme, p.part);
+      setPublishing((q) => (q && "source" in q && q.input === p.input ? { ...q, source, byTheme: { ...q.byTheme, [theme]: source } } : q));
+      return;
+    }
+    const icons = await loadSceneIcons(p.names, theme);
     if (mine !== publishInkSeq.current) return;
-    setPublishing((p) => (p ? { ...p, scene: flowScene(d, nodes, style, icons, axes, folded, sceneOpts()) } : p));
+    setPublishing((q) => (q && "scene" in q && q.build === p.build ? { ...q, scene: p.build(icons) } : q));
   }
 
   /** The selected frame's text size and ER notation, for Publish (Decision 22). */
@@ -5413,10 +5512,13 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
     const top = frame.y + n.position.y;
     const h = n.initialHeight ?? 0;
     const y = p.y - top;
-    // Above the rows (the 32 px header and its border) is the table's name.
-    if (y < ER_CARD_CHROME - 4) return { frame, table, row: null, field: "head" };
+    // The card's geometry at its frame's text size (B4 fix round 1).
+    const m = erMetrics((n.data as { textScale?: number }).textScale ?? 1);
+    const rowsTop = m.mid - m.row / 2;
+    // Above the rows (the header and its border) is the table's name.
+    if (y < rowsTop) return { frame, table, row: null, field: "head" };
     const rows = (n.data as { rows?: string[] }).rows ?? [];
-    const row = Math.floor((y - (ER_CARD_CHROME - 4)) / KIND_ROW);
+    const row = Math.floor((y - rowsTop) / m.row);
     // The card's empty space below its rows adds a column there, as on the live card (row null, a new name).
     if (row < 0 || row >= rows.length || y > h) return { frame, table, row: null, field: "name" };
     // The field under the pointer, from the card as drawn (below BOX_BELOW there is none: the frame is one preview).
@@ -7499,7 +7601,30 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
       const hit = staticFrameAt(at.flow);
       if (hit) return menuInStaticFrame(hit, at.screen, at.flow);
     }
-    if (aiLock.current || !kind) return;
+    if (aiLock.current) return;
+    if (!kind) {
+      // No frame selected: the canvas's own actions, with nothing to add, select or tidy; Publish opens on the board
+      // (B4 Decision 13).
+      if (!parsedRef.current) return;
+      rel.endModes(true);
+      setMenu({
+        x: at.screen.x,
+        y: at.screen.y,
+        label: "Canvas actions",
+        items: paneMenuItems({
+          tools: [],
+          empty: true,
+          drawn: publishableRef.current,
+          add: () => {},
+          paste: () => void pasteFromMenu(at.flow),
+          selectAll: () => {},
+          tidy: () => {},
+          fit: at.fit,
+          publish: () => void openPublish(),
+        }),
+      });
+      return;
+    }
     // A menu is another action: "Make a relationship from here" and "Add relationship to..." end.
     rel.endModes(true);
     const d = drawnRef.current;
@@ -7699,7 +7824,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         tools,
         keyOf: (t) => (kind ? keyOfAddTool(kind, t.label) : undefined),
         empty: names.length === 0,
-        drawn: !!d,
+        drawn: publishableRef.current,
         add: (t) => add(t, at.flow),
         paste: () => void pasteFromMenu(at.flow),
         selectAll: () => setSelected(names),
@@ -7997,7 +8122,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
         // F29: Ctrl+Shift+E publishes the drawing as an image (draw.io, Figma and Excalidraw's export key).
         if (e.key.toLowerCase() === "e" && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && !e.defaultPrevented) {
           e.preventDefault();
-          if (drawnRef.current) void openPublish();
+          if (publishableRef.current) void openPublish();
           return;
         }
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.defaultPrevented && ai.waiting?.step === "review") {
@@ -8225,7 +8350,7 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
               Icon credits
             </button>
           )}
-          <button type="button" className="button button-small" disabled={!drawn} title="Publish image (Ctrl+Shift+E)" onClick={() => void openPublish()}>
+          <button type="button" className="button button-small" disabled={!publishable} title="Publish image (Ctrl+Shift+E)" onClick={() => void openPublish()}>
             <Icon name="image" size={14} />
             Publish
           </button>
@@ -8700,11 +8825,13 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
                 onColour={() => colourRow(selectedRef.current, [])}
                 onMore={() =>
                   frameMoreItems({
-                    drawn: !!drawn,
+                    drawn: liveDrawable,
+                    publishable,
                     movable: !FIXED_KINDS.has(kind),
                     selected: selected.length,
                     deletable: frameCount > 1,
-                    publish: () => void openPublish(),
+                    publish: () => void openPublish("frame"),
+                    publishBoard: () => void openPublish("board"),
                     ...(onMermaid ? { mermaid: () => onMermaid({ kind, file: name, run: insertMermaid }) } : {}),
                     tidySelection: () => void tidy("selection"),
                     duplicate: () => void duplicateFrame(),
@@ -8808,17 +8935,26 @@ export default function FlowTab({ name, client: given, active = true, onOpenSett
           />,
           document.body,
         )}
-      {publishing && (
-        <PublishDialog
-          scene={publishing.scene}
-          fileName={name}
-          selected={selected}
-          onScreen={publishing.onScreen}
-          onClose={() => setPublishing(null)}
-          onSaved={() => setPublishing(null)}
-          onTheme={(t) => void repaintPublishIcons(t)}
-        />
-      )}
+      {publishing &&
+        ("source" in publishing ? (
+          <PublishDialog
+            source={publishing.source}
+            fileName={name}
+            onClose={() => setPublishing(null)}
+            onSaved={() => setPublishing(null)}
+            onTheme={(t) => void repaintPublishIcons(t)}
+          />
+        ) : (
+          <PublishDialog
+            scene={publishing.scene}
+            fileName={name}
+            selected={selected}
+            onScreen={publishing.onScreen}
+            onClose={() => setPublishing(null)}
+            onSaved={() => setPublishing(null)}
+            onTheme={(t) => void repaintPublishIcons(t)}
+          />
+        ))}
     </div>
   );
 }

@@ -13,7 +13,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "model", label: "Model", hint: "Pick the model, thinking level and caching" },
   { name: "sends", label: "Sends", hint: "What the next Ask sends" },
   { name: "log", label: "Show log", hint: "Show the answer log of the last answer" },
-  { name: "clear", label: "Clear this chat", hint: "Clear this chat" },
+  { name: "clear", label: "Delete this chat", hint: "Delete this chat" },
 ];
 
 /**

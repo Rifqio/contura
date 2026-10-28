@@ -5,13 +5,14 @@ use contura_core::ai::diagram::{
     DiagramAskRequest, diagram_ask_stream, diagram_place, diagram_preview,
 };
 use contura_core::ai::memory::{
-    AppendTurn, Compaction, CompactionId, ThreadHit, ThreadSummary, ThreadView, TurnView,
+    AppendTurn, Compaction, CompactionId, LastWork, ThreadSummary, ThreadView, TurnView, WorkInput,
 };
 use contura_core::ai::models::{ModelList, ModelPicks};
 use contura_core::ai::preview::{Preview, SameProvider, preview};
 use contura_core::ai::request::AskRequest;
 use contura_core::ai::sent::{AnswerAction, AnswerActionKind, AnswerRecord, ToolOutcome};
 use contura_core::ai::stream::{AiEvent, ask_stream};
+use contura_core::ai::title::{NameChatRequest, name_chat, title_place};
 use contura_core::ai::tool_uses::ToolUseRow;
 use contura_core::ai::{
     AiAccess, AiError, AiService, AiSettings, AiSettingsView, AiTestOk, AiThread, KeyChange,
@@ -1342,6 +1343,57 @@ pub async fn ai_compact(
         .map(|c| c.trimmed_copy())
 }
 
+/// Names the chat once its first answer is stored (Decision 5): one short call to the
+/// Ask's own endpoint and model with the first question and answer only. Registered as
+/// `title:<place>`, so it never makes the place `Busy` for the next Ask, and stopped by
+/// `ai_cancel(request_id)` (P2). `None` when no call goes or no title came back.
+#[tauri::command]
+pub async fn ai_name_chat(
+    app: AppHandle,
+    request: NameChatRequest,
+) -> Result<Option<String>, Error> {
+    let group = request.group_id;
+    let reader = app.clone();
+    let wanted = request.model.clone().filter(|m| !m.trim().is_empty());
+    let checked = request.clone();
+    let read = off_runtime(move || {
+        let ai = reader.state::<AiService>();
+        // A chat that will not be named costs no keyring read (final review M1).
+        if !ai.title_may_go(&checked)? {
+            return Ok(None);
+        }
+        let (provider, settings, model) = ai.provider_for(group)?;
+        let model = ai.model_info_in(&settings, wanted.as_deref().unwrap_or(&model))?;
+        let connections = reader.state::<ConnectionService>().list()?;
+        Ok(Some((
+            provider,
+            model,
+            settings,
+            ai.secrets_for_redaction(&connections)?,
+            ai.same_provider(group, &connections)?,
+        )))
+    })
+    .await?;
+    let Some((provider, model, settings, secrets, same)) = read else {
+        return Ok(None);
+    };
+    let place = title_place(&request.place);
+    let request_id = request.request_id.clone();
+    let task_app = app.clone();
+    let work = async move {
+        let connections = task_app.state::<ConnectionService>();
+        let catalog = SameProvider::new(&*connections, same);
+        let mut log = contura_core::ai::log::Log::new();
+        name_chat(
+            &*provider, &catalog, &settings, &model, &secrets, &request, &mut log,
+        )
+        .await
+    };
+    app.state::<AiService>()
+        .run_registered(&place, &request_id, work)
+        .await
+}
+
 /// Undoes a compaction: its messages show and go again. A second Undo returns the same
 /// view.
 #[tauri::command]
@@ -1393,10 +1445,20 @@ pub fn ai_answer_record(
     ai.answer_record(thread_id, message_at)
 }
 
-/// Searches the Topics of a place's threads.
+/// Searches a place's chats: their questions, Topics, titles and where they last worked.
 #[tauri::command]
-pub fn ai_search_threads(ai: Ai<'_>, place: String, text: String) -> Result<Vec<ThreadHit>, Error> {
+pub fn ai_search_threads(
+    ai: Ai<'_>,
+    place: String,
+    text: String,
+) -> Result<Vec<ThreadSummary>, Error> {
     ai.search_threads(&place, &text)
+}
+
+/// Renames a chat; its title is the user's from then on. The list keeps its order.
+#[tauri::command]
+pub fn ai_rename_thread(ai: Ai<'_>, id: ThreadId, title: String) -> Result<ThreadSummary, Error> {
+    ai.rename_thread(id, &title)
 }
 
 /// Saves a thread and returns its view; `request_id` is the Ask whose answer this save
@@ -1422,16 +1484,34 @@ pub fn ai_append_turn(
 }
 
 /// Keeps what the user did with an answer's SQL (Insert, Insert commented out, Open in new
-/// tab) with the answer, for the Diagram's "You:" box. `None` for an answer kept before
-/// records were.
+/// tab) with the answer, for the Diagram's "You:" box, and with `work`, the tab and SQL as
+/// where the chat last worked. `None` for an answer kept before records were.
 #[tauri::command]
 pub fn ai_record_action(
     ai: Ai<'_>,
     thread_id: ThreadId,
     message_at: i64,
     kind: AnswerActionKind,
+    work: Option<WorkInput>,
 ) -> Result<Option<AnswerAction>, Error> {
-    ai.record_action(thread_id, message_at, kind)
+    ai.record_action(thread_id, message_at, kind, work)
+}
+
+/// Where a chat last worked, with its SQL, read only on a resume. Under the AI access
+/// gate: a chat on a Connection at Never now, or gone, comes back without its SQL.
+#[tauri::command]
+pub fn ai_thread_work(
+    ai: Ai<'_>,
+    service: Service<'_>,
+    thread_id: ThreadId,
+) -> Result<Option<LastWork>, Error> {
+    let connections = service.list()?;
+    ai.thread_work_for(thread_id, |id| {
+        connections
+            .iter()
+            .find(|c| c.id == id)
+            .map_or(AiAccess::Never, |c| c.ai_access)
+    })
 }
 
 #[tauri::command]
@@ -1655,11 +1735,28 @@ mod source_rules {
             "ai_diagram_ask",
             "ai_diagram_preview",
             "ai_compact",
+            "ai_name_chat",
         ] {
             let body = named(name).join("\n");
             assert!(body.contains("model_info_in("), "{name} reads twice");
             assert!(!body.contains(".model_info("), "{name} reads twice");
         }
+    }
+
+    /// P2: the title call is registered under `title:<place>`, never the place itself, so the
+    /// next Ask in the place is never refused while a chat is being named.
+    #[test]
+    fn the_title_call_never_holds_the_place() {
+        let body = named("ai_name_chat").join("\n");
+        assert!(
+            body.contains("let place = title_place(&request.place);"),
+            "{body}"
+        );
+        assert!(
+            body.contains(".run_registered(&place, &request_id, work)"),
+            "{body}"
+        );
+        assert!(!body.contains("run_registered(&request.place"), "{body}");
     }
 
     #[test]

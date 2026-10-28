@@ -26,6 +26,7 @@ const BASE: ExportPalette = {
   groupTint: "#121212",
   strongBorder: "#131313",
   panel: "#141414",
+  muted: "#151515",
   colours: {
     accent: { fill: "#a10000", stroke: "#a20000", text: "#030303" },
     info: { fill: "#a30000", stroke: "#a40000", text: "#030303" },
@@ -95,6 +96,14 @@ test("the palette is read from the theme Publish picks, light or dark", () => {
   expect(dark.colours?.danger.fill).toMatch(/^#d1/);
   expect(light.colours?.danger.fill).not.toBe(dark.colours?.danger.fill);
   expect(Object.keys(light.colours ?? {})).toEqual(["accent", "info", "success", "warning", "danger", "muted"]);
+});
+
+test("muted_is_read_from_the_theme_publish_picks", () => {
+  style = document.createElement("style");
+  style.textContent = ".theme-light{--c-text-muted:#e1e1e1}.theme-dark{--c-text-muted:#d1d1d1}";
+  document.head.appendChild(style);
+  expect(exportPalette("light").muted).toBe("#e1e1e1");
+  expect(exportPalette("dark").muted).toBe("#d1d1d1");
 });
 
 test("a_custom_colour_publishes_concrete_values", () => {

@@ -224,7 +224,7 @@ test("the_outline_of_a_frame_is_in_file_lines", () => {
   expect(o.outline.links.map((l) => l.line)).toEqual([9]);
 });
 
-test("the_last_good_doc_is_kept_per_frame_title", () => {
+test("the_last_good_doc_is_kept_per_frame", () => {
   const s = createFlowService();
   const good = s.parse("d", BOARD);
   const broken = s.parse("d", BOARD.replace("Pay > Done\n\n", "Pay > Done [\n\n"));
@@ -349,4 +349,163 @@ test("a_row_span_names_its_column_line", () => {
   expect(t.slice(sp.from, sp.to)).toBe("total numeric");
   expect(r.spans["row:orders:3"]).toBeNull();
   expect(r.spans["row:nope:0"]).toBeNull();
+});
+
+/** An ER frame titled `title` with one table per name; `broken` leaves a line that does not read. */
+const erFrame = (title: string, tables: string[], broken = false) =>
+  `diagram er "${title}"\n${tables.map((t) => `${t} {\n  id int pk\n}\n`).join("")}${broken ? "oops [\n" : ""}`;
+const names = (d: { nodes: { name: string }[] } | null) => d?.nodes.map((n) => n.name) ?? null;
+
+test("a_frame_with_errors_never_takes_a_same_titled_frame_of_another_kind", () => {
+  const s = createFlowService();
+  const flow = 'diagram flow "Billing"\nPay [\n';
+  const first = s.parse("d", `${erFrame("Billing", ["invoices"])}\n${flow}`);
+  expect(first.frames[1].doc).toBeNull();
+  expect(first.frames[1].lastValid).toBeNull();
+  // The ER frame changes: the flow frame with errors still has nothing of its own.
+  const edited = s.parse("d", `${erFrame("Billing", ["invoices", "payments"])}\n${flow}`);
+  expect(edited.frames[0].doc).not.toBeNull();
+  expect(edited.frames[1].doc).toBeNull();
+  expect(edited.frames[1].lastValid).toBeNull();
+  expect(edited.frames[1].lastValidId).toBeNull();
+});
+
+test("two_same_kind_frames_with_one_title_keep_their_own_last_good", () => {
+  const s = createFlowService();
+  const good = s.parse("d", `${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"])}`);
+  expect(names(good.frames[1].doc)).toEqual(["ledger"]);
+  const broken = s.parse("d", `${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"], true)}`);
+  expect(broken.frames[1].doc).toBeNull();
+  expect(names(broken.frames[1].lastValid)).toEqual(["ledger"]);
+});
+
+test("a_renamed_frame_with_errors_keeps_its_own_drawing", () => {
+  const s = createFlowService();
+  const pay = 'diagram flow "Pay"\nCard\n';
+  s.parse("d", `${pay}\n${erFrame("Billing", ["invoices"])}`);
+  // Renamed to a title the flow frame holds, and broken, in one edit.
+  const r = s.parse("d", `${pay}\n${erFrame("Pay", ["invoices"], true)}`);
+  expect(r.frames[1].doc).toBeNull();
+  expect(names(r.frames[1].lastValid)).toEqual(["invoices"]);
+});
+
+test("a_moved_frame_keeps_its_own_drawing", () => {
+  const s = createFlowService();
+  const flow = (broken: boolean) => `diagram flow "Billing"\nCard\n${broken ? "Pay [\n" : ""}`;
+  s.parse("d", `${flow(false)}\n${erFrame("Billing", ["invoices"])}`);
+  // The ER frame moved above the flow frame, and both broken, in one edit.
+  const r = s.parse("d", `${erFrame("Billing", ["invoices"], true)}\n${flow(true)}`);
+  expect(r.frames.map((f) => [f.kind, f.doc])).toEqual([
+    ["er", null],
+    ["flow", null],
+  ]);
+  expect(names(r.frames[0].lastValid)).toEqual(["invoices"]);
+  expect(names(r.frames[1].lastValid)).toEqual(["Card"]);
+});
+
+test("deleting_one_of_two_same_titled_frames_never_hands_its_drawing_to_the_other", () => {
+  const s = createFlowService();
+  s.parse("d", `${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"])}`);
+  const broken = s.parse("d", `${erFrame("Billing", ["invoices"])}\n${erFrame("Billing", ["ledger"], true)}`);
+  expect(names(broken.frames[1].lastValid)).toEqual(["ledger"]);
+  // The first goes: the survivor's pair was held by two frames before, so it draws its own empty box.
+  const r = s.parse("d", erFrame("Billing", ["ledger"], true));
+  expect(r.frames[0].lastValid).toBeNull();
+});
+
+test("retyping_the_kind_word_keeps_a_frames_own_drawing", () => {
+  const pay = 'diagram flow "Pay"\nCard\n';
+  for (const broken of [false, true]) {
+    const body = erFrame("Billing", ["invoices"], broken);
+    // The first frame: its kind word mid-edit reads as no kind, and it keeps its own drawing through it.
+    const s = createFlowService();
+    s.parse("d", `${erFrame("Billing", ["invoices"])}\n${pay}`);
+    s.parse("d", `${body}\n${pay}`);
+    const mid = s.parse("d", `${body.replace("diagram er", "diagram e")}\n${pay}`);
+    expect(mid.frames[0].kind).toBeNull();
+    expect(names(mid.frames[0].doc ?? mid.frames[0].lastValid)).toEqual(["invoices"]);
+    const back = s.parse("d", `${body}\n${pay}`);
+    expect(names(back.frames[0].doc ?? back.frames[0].lastValid)).toEqual(["invoices"]);
+    // A later frame: mid-edit its header is no header (it joins the frame above), and it comes back with its own.
+    const t = createFlowService();
+    t.parse("d", `${pay}\n${erFrame("Billing", ["invoices"])}`);
+    t.parse("d", `${pay}\n${body}`);
+    const mid2 = t.parse("d", `${pay}\n${body.replace("diagram er", "diagram e")}`);
+    expect(mid2.frames).toHaveLength(1);
+    // The frame above keeps its own drawing while the header joins it.
+    expect(names(mid2.frames[0].doc ?? mid2.frames[0].lastValid)).toEqual(["Card"]);
+    expect(t.parse("d", `${pay}\n${body.replace("diagram er", "diagram ")}`).frames).toHaveLength(1);
+    const again = t.parse("d", `${pay}\n${body}`);
+    expect(names(again.frames[0].doc ?? again.frames[0].lastValid)).toEqual(["Card"]);
+    expect(names(again.frames[1].doc ?? again.frames[1].lastValid)).toEqual(["invoices"]);
+  }
+  // A known other kind still drops it.
+  const s = createFlowService();
+  s.parse("d", erFrame("Billing", ["invoices"]));
+  s.parse("d", erFrame("Billing", ["invoices"]).replace("diagram er", "diagram e"));
+  expect(s.parse("d", 'diagram flow "Billing"\nPay [\n').frames[0].lastValid).toBeNull();
+});
+
+test("a_frame_deleted_and_added_elsewhere_never_takes_the_drawing", () => {
+  const s = createFlowService();
+  const pay = 'diagram flow "Pay"\nCard\n';
+  const ship = 'diagram flow "Ship"\nBox\n';
+  s.parse("d", `${erFrame("Billing", ["invoices"])}\n${pay}\n${ship}`);
+  s.parse("d", `${pay}\n${ship}`);
+  // A new broken ER frame with the gone title, at another place.
+  expect(s.parse("d", `${pay}\n${ship}\n${erFrame("Billing", [], true)}`).frames[2].lastValid).toBeNull();
+});
+
+test("a_frame_written_long_after_a_delete_takes_nothing", () => {
+  const s = createFlowService();
+  const pay = (n: number) => `diagram flow "Pay"\nCard ${n}\n`;
+  s.parse("d", `${pay(0)}\n${erFrame("Billing", ["invoices"])}`);
+  s.parse("d", pay(0));
+  for (let n = 1; n <= 500; n++) s.parse("d", pay(n));
+  const r = s.parse("d", `${pay(500)}\n${erFrame("Billing", ["fresh"], true)}`);
+  expect(r.frames[1].doc).toBeNull();
+  expect(r.frames[1].lastValid).toBeNull();
+  // Even a few parses on, a frame back at the place takes nothing once the store's three parses are over.
+  const t = createFlowService();
+  t.parse("d", `${pay(0)}\n${erFrame("Billing", ["invoices"])}`);
+  for (let n = 0; n < 4; n++) t.parse("d", pay(n));
+  expect(t.parse("d", `${pay(4)}\n${erFrame("Billing", [], true)}`).frames[1].lastValid).toBeNull();
+});
+
+test("shrinking_pastes_keep_one_generation_of_gone_frames", () => {
+  /** How many gone frames the worker keeps after parsing `text`. */
+  const goneAfter = (s: ReturnType<typeof createFlowService>, text: string) => s.current("d", s.parse("d", text).version)!.gone?.entries.length ?? 0;
+  const board = (n: number, gen: number) => Array.from({ length: n }, (_, i) => erFrame(`T${gen}-${i}`, [`t${gen}_${i}`])).join("\n");
+  const s = createFlowService();
+  s.parse("d", board(6, 0));
+  // Replace-all pastes with new titles: no frame merely left, so nothing is kept.
+  for (let gen = 1; gen <= 5; gen++) expect(goneAfter(s, board(6 - gen, gen))).toBe(0);
+  // Deletes in a row: only the latest one's frame is kept, and for three parses at most.
+  const keep = (n: number, extra = "") => Array.from({ length: n }, (_, i) => erFrame(`T0-${i}`, [`t0_${i}`, ...(extra ? [extra] : [])])).join("\n");
+  const t = createFlowService();
+  t.parse("d", keep(4));
+  expect(goneAfter(t, keep(3))).toBe(1);
+  expect(goneAfter(t, keep(2))).toBe(1);
+  expect(goneAfter(t, keep(2, "x1"))).toBe(1);
+  expect(goneAfter(t, keep(2, "x2"))).toBe(1);
+  expect(goneAfter(t, keep(2, "x3"))).toBe(0);
+});
+
+test("a_half_typed_kind_on_frame_zero_takes_only_its_own_kinds_doc", () => {
+  const s = createFlowService();
+  const pay = 'diagram flow "Pay"\nCard\n';
+  s.parse("d", `${erFrame("Billing", ["invoices"])}\n${pay}`);
+  // In one paste frame 0 becomes another frame with no kind yet: it takes nothing.
+  const r = s.parse("d", `diagram e "Ledger"\nrows {\n\n${pay}`);
+  expect(r.frames[0].kind).toBeNull();
+  expect(r.frames[0].lastValid).toBeNull();
+  // Its own half-typed kind word keeps its own, through several keystrokes.
+  const t = createFlowService();
+  t.parse("d", `${erFrame("Billing", ["invoices"])}\n${pay}`);
+  for (const w of ["diagram e", "diagram ", "diagram e"]) {
+    const mid = t.parse("d", `${erFrame("Billing", ["invoices"], true).replace("diagram er", w)}\n${pay}`);
+    expect(names(mid.frames[0].lastValid)).toEqual(["invoices"]);
+  }
+  // A known other kind then drops it.
+  expect(t.parse("d", `${erFrame("Billing", ["invoices"], true).replace("diagram er", "diagram flow")}\n${pay}`).frames[0].lastValid).toBeNull();
 });

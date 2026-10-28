@@ -46,6 +46,9 @@ pub enum ItemKind {
     /// Recent steps: what the user did since their last question, rendered by the Core
     /// from `AskRequest.steps`. Each step is gated where it is built (`steps::render_steps`).
     Steps,
+    /// The chat title call after the first answer (Decision 5). Never an `Item` of the main
+    /// Ask; switched off through `off`, no title call is made.
+    Title,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

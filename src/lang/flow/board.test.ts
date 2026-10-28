@@ -162,8 +162,8 @@ test("the_worker_keeps_one_parse_per_frame", () => {
   const c = flow.current("board", version)!;
   expect(c.board.frames.map((f) => f.text)).toEqual(splitFrames(text(30)).map((f) => text(30).slice(f.from, f.to)));
   expect(c.lasts).toHaveLength(4);
-  expect(c.lastValid.size).toBeLessThanOrEqual(4);
-  expect([...c.lastValid.keys()]).toEqual(["A", "B 30", "C", "D"]);
+  // One last good doc per current frame, no title map (B4 Task 2b): the broken frame 2 holds its own.
+  expect(c.lasts.map((d) => d?.title ?? null)).toEqual(["A", "B 30", "C", "D"]);
   expect(c.board.frames[2].parse.doc).toBeNull();
   expect(c.board.frames[0].parse).toBe(kept[0]);
   expect(c.board.frames[3].parse).toBe(kept[1]);

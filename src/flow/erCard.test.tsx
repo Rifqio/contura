@@ -379,3 +379,15 @@ test("cards_at_the_limit_leave_no_listener_in_any_store", () => {
   expect(added.n - before).toBe(0);
   vi.restoreAllMocks();
 });
+
+test("an_er_card_scales_its_rows_header_and_padding_with_the_text_size", () => {
+  const { container } = render(<KindNode d={{ ...DATA, textScale: 0.88 }} selected={false} />);
+  expect(rows().map((r) => parseFloat(r.style.height))).toEqual([22 * 0.88, 22 * 0.88, 22 * 0.88]);
+  expect(parseFloat(container.querySelector<HTMLElement>(".fkind-head")!.style.height)).toBeCloseTo(32 * 0.88, 9);
+  expect(container.querySelector<HTMLElement>(".fkind-er-rows")!.style.padding).toBe(`${3 * 0.88}px 0px`);
+  cleanup();
+  // At Medium the stylesheet's own sizes hold: no inline header or padding.
+  const plain = render(<KindNode d={DATA} selected={false} />);
+  expect(rows().map((r) => parseFloat(r.style.height))).toEqual([22, 22, 22]);
+  expect(plain.container.querySelector<HTMLElement>(".fkind-head")!.style.height).toBe("");
+});

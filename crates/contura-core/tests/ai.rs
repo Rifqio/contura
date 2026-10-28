@@ -4551,6 +4551,9 @@ async fn e2e_stored_answers_are_registered_on_load() {
             asked_in: None,
         }],
         updated_at: 2,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
     };
     ai.save_thread(&thread).unwrap();
     // A fresh service: its register starts empty, as after a restart.
@@ -4889,6 +4892,9 @@ fn answered_thread(id: u128) -> AiThread {
             },
         ],
         updated_at: 2,
+        title_by: Default::default(),
+        title_tries: 0,
+        last_work: None,
     }
 }
 
@@ -4947,11 +4953,11 @@ fn answer_actions_are_recorded_and_kept() {
     let thread = answered_thread(31);
     ai.save_thread(&thread).unwrap();
     let action = ai
-        .record_action(thread.id, 2, AnswerActionKind::Inserted)
+        .record_action(thread.id, 2, AnswerActionKind::Inserted, None)
         .unwrap()
         .expect("an answer with a record");
     assert_eq!(action.kind, AnswerActionKind::Inserted);
-    ai.record_action(thread.id, 2, AnswerActionKind::OpenedInNewTab)
+    ai.record_action(thread.id, 2, AnswerActionKind::OpenedInNewTab, None)
         .unwrap();
     let kinds = |t: &AiThread| -> Vec<AnswerActionKind> {
         t.messages[1]
@@ -4976,16 +4982,16 @@ fn answer_actions_are_recorded_and_kept() {
     assert_eq!(kinds(&stored).len(), 2);
     // A question is not an answer, and an unknown thread is refused.
     assert!(
-        ai.record_action(thread.id, 1, AnswerActionKind::Inserted)
+        ai.record_action(thread.id, 1, AnswerActionKind::Inserted, None)
             .is_err()
     );
     assert!(
-        ai.record_action(Uuid::from_u128(99), 2, AnswerActionKind::Inserted)
+        ai.record_action(Uuid::from_u128(99), 2, AnswerActionKind::Inserted, None)
             .is_err()
     );
     // Kept to the latest 50.
     for _ in 0..60 {
-        ai.record_action(thread.id, 2, AnswerActionKind::InsertedCommented)
+        ai.record_action(thread.id, 2, AnswerActionKind::InsertedCommented, None)
             .unwrap();
     }
     let stored = ai.thread_view(thread.id).unwrap().unwrap().thread;

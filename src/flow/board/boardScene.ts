@@ -19,6 +19,16 @@ export { TEXT_SCALE, type ClashLayout };
 
 /** The height of a frame's title tab strip, drawn above the box's top-left corner (Decision 4). */
 export const FRAME_TAB_H = 30;
+/** The title pill inside the tab strip (flow-board.css `.board-frame-title`): its height, side padding and gap. */
+export const TAB_PILL_H = 26;
+export const TAB_PAD_X = 8;
+export const TAB_GAP = 6;
+/** The kind icon's size in the pill. */
+export const TAB_ICON = 14;
+/** The title's widest (`.board-frame-name` max-width), cut with dots past it. */
+export const TAB_TITLE_MAX = 240;
+/** About 7 px per character of the 13 px body font: the estimate the export sizes words by. */
+export const TAB_CHAR_W = 7;
 /** Each static frame's z band (Decision 5, 30 wide as measured in the Task 0 spike). */
 export const Z_BAND = 30;
 export const Z_LIVE_BOX = 1_995;

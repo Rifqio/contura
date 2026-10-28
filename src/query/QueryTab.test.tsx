@@ -429,6 +429,27 @@ test("status_bar_shows_tag", () => {
   expect(status.textContent).toContain("PROD");
 });
 
+test("from_chat_shows_until_the_first_edit", async () => {
+  routes();
+  const { view, onChange, rerenderCurrent } = setup(doc("SELECT 1", { fromChat: "Unpaid clients to date" }));
+  const spans = () => Array.from(document.querySelectorAll(".query-status > span")).map((s) => s.textContent);
+  // After the database, in the tab's info line.
+  const shown = spans();
+  expect(shown).toContain("From chat: Unpaid clients to date");
+  expect(shown.indexOf("From chat: Unpaid clients to date")).toBe(shown.indexOf("kfc_shop") + 1);
+  // A draw without an edit keeps it.
+  rerenderCurrent();
+  expect(spans()).toContain("From chat: Unpaid clients to date");
+  // The first edit of the text clears it.
+  act(() => view().dispatch({ changes: { from: 8, insert: " AS n" } }));
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  const edited = onChange.mock.calls[onChange.mock.calls.length - 1][0] as QueryTabDoc;
+  expect(edited.text).toBe("SELECT 1 AS n");
+  expect(edited.fromChat).toBeNull();
+  rerenderCurrent();
+  expect(spans().some((t) => t?.startsWith("From chat"))).toBe(false);
+});
+
 test("visible_tab_renders_its_status_into_the_window_status_bar", () => {
   routes();
   const slot = document.createElement("span");

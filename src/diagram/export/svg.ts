@@ -1,12 +1,17 @@
-// A scene as plain SVG: rect, text, path and (for cloud icons) image elements only, no foreignObject and no web
-// fonts, so other tools open it cleanly. Each kind is drawn as the canvas draws it (flow-canvas.css, kindNodes.tsx). Every colour comes from the palette, read from the tokens. A cloud icon
-// is an <image> of the pack's own bytes as a data: URL, never inline markup (ruling P9); a pale logo on light also
-// takes the one hairline filter, made of filter primitives only.
+// A scene as plain SVG: g, rect, text, tspan, path and (for cloud icons) image and use elements only, plus one <defs>, no
+// foreignObject and no web fonts, so other tools open it cleanly. Each kind is drawn as the canvas draws it
+// (flow-canvas.css, kindNodes.tsx). Every colour comes from the palette, read from the tokens. A cloud icon is an <image>
+// of the pack's own bytes as a data: URL, never inline markup (ruling P9); a pale logo on light also takes the one
+// hairline filter. The <defs> appears at most once and holds only that filter, made of filter primitives only, and
+// each shared icon image once (`<image id href="data:image/...">`, drawn by `<use href="#id">`, B4 Decision 9).
+// The writer comes in parts (B4 Task 1): `sceneBody` draws a scene, `svgDefs` the shared defs and `wrapSvg` the head,
+// background and mark round them; `sceneToSvg` is the three in a row.
 import { iconPath, type IconName } from "../../components/Icon";
+import { erMetrics } from "../../flow/kindLayout";
 import { CARD_HEADER, CARD_ROW } from "../metrics";
 import { roundedPath } from "../route";
 import type { EdgeKind } from "../types";
-import { type ExportPalette, sceneColour } from "./palette";
+import { type ExportPalette, type ExportTheme, sceneColour } from "./palette";
 import { type Box, type Scene, type SceneArea, type SceneAxis, type SceneColour, type SceneEdge, type SceneFrame, type SceneMark, type SceneNode, type SceneSection, sceneBounds } from "./scene";
 
 export interface SvgOptions {
@@ -21,33 +26,148 @@ export interface SvgOptions {
 
 export const MARK_TEXT = "Made with Contura";
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/** A crop handle: a corner or a side. */
+export type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+/** The smallest crop, in scene units. */
+export const MIN_CROP = 16;
+
+export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const num = (n: number) => String(Math.round(n * 100) / 100);
 
-/** The image's frame in scene units: the crop (or the whole scene) with the padding round it, on whole units. */
-export function svgFrame(scene: Scene, opts: Pick<SvgOptions, "crop" | "padding">): Box {
-  const base = opts.crop ?? sceneBounds(scene);
+/** The image's frame in scene units: the crop (or `bounds`) with the padding round it, on whole units. */
+export function frameOf(bounds: Box, opts: Pick<SvgOptions, "crop" | "padding">): Box {
+  const base = opts.crop ?? bounds;
   const x = Math.floor(base.x - opts.padding);
   const y = Math.floor(base.y - opts.padding);
   return { x, y, w: Math.ceil(base.x + base.w + opts.padding) - x, h: Math.ceil(base.y + base.h + opts.padding) - y };
 }
 
+/** The image's frame for one scene: `frameOf` its bounds. */
+export const svgFrame = (scene: Scene, opts: Pick<SvgOptions, "crop" | "padding">): Box => frameOf(opts.crop ?? sceneBounds(scene), opts);
+
+/**
+ * The crop with its dragged edges on the nearest node or group edge within `reach` scene units, so nothing is cut
+ * in half (direction spec, Publish). A moved box keeps its size and takes the smaller of its two snaps per axis.
+ */
+export function snapCrop(box: Box, handle: Handle | "move", edges: { xs: number[]; ys: number[] }, reach: number): Box {
+  const { xs, ys } = edges;
+  /** The shift that puts `v` on the nearest edge in reach, or null. */
+  const pull = (v: number, list: number[]): number | null => {
+    let best: number | null = null;
+    for (const t of list) if (Math.abs(t - v) <= reach && (best === null || Math.abs(t - v) < Math.abs(best))) best = t - v;
+    return best;
+  };
+  let x0 = box.x;
+  let y0 = box.y;
+  let x1 = box.x + box.w;
+  let y1 = box.y + box.h;
+  if (handle === "move") {
+    const pick = (a: number | null, b: number | null) => (a === null ? (b ?? 0) : b === null || Math.abs(a) <= Math.abs(b) ? a : b);
+    const dx = pick(pull(x0, xs), pull(x1, xs));
+    const dy = pick(pull(y0, ys), pull(y1, ys));
+    return { ...box, x: box.x + dx, y: box.y + dy };
+  }
+  if (handle.includes("w")) x0 += pull(x0, xs) ?? 0;
+  if (handle.includes("e")) x1 += pull(x1, xs) ?? 0;
+  if (handle.includes("n")) y0 += pull(y0, ys) ?? 0;
+  if (handle.includes("s")) y1 += pull(y1, ys) ?? 0;
+  if (x1 - x0 < MIN_CROP || y1 - y0 < MIN_CROP) return box;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** The xlink namespace, declared once on the root of an image that holds a `<use>` (`wrapSvg`). */
+export const XLINK_NS = 'xmlns:xlink="http://www.w3.org/1999/xlink"';
+const XLINK_HREF = " xlink:href=";
+/**
+ * A `<use>`'s reference to `id`, the shared image it draws: `href` for SVG 2 readers and `xlink:href` for SVG 1.1 ones
+ * (Inkscape before 1.0, older librsvg and converters draw nothing without it). `id` is an icon id, word characters only.
+ */
+export const useHref = (id: string) => `href="#${id}"${XLINK_HREF}"#${id}"`;
+/** True when `body` holds a `<use>` reference, so its image declares the xlink namespace. */
+export const usesXlink = (body: string) => body.includes(XLINK_HREF);
+
 /** Only a data: image is ever drawn; anything else (a link, a script URL) is left out. */
-const SAFE_IMAGE = /^data:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*,[^"<>\s]*$/i;
-const imageSvg = (url: string, x: number, y: number, size: number, outline?: boolean) =>
-  SAFE_IMAGE.test(url)
-    ? `<image href="${esc(url)}" x="${num(x)}" y="${num(y)}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"${outline ? ` filter="url(#${HAIRLINE})"` : ""}/>`
-    : "";
+export const SAFE_IMAGE = /^data:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*,[^"<>\s]*$/i;
+/**
+ * An icon at x, y, `size` px square: inline as an <image>, or, while `sceneBody` draws with icon references, a <use> of
+ * the one shared image. An outlined one names the hairline filter either way.
+ */
+function imageSvg(url: string, x: number, y: number, size: number, outline?: boolean): string {
+  if (!SAFE_IMAGE.test(url)) return "";
+  const filter = outline ? ` filter="url(#${hairline})"` : "";
+  if (refsInUse) return `<use ${useHref(refsInUse.ref(url, size))} x="${num(x)}" y="${num(y)}"${filter}/>`;
+  return `<image href="${esc(url)}" x="${num(x)}" y="${num(y)}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"${filter}/>`;
+}
 
 /** The hairline a pale logo draws with on light (the canvas's `icon-hairline`): its shape grown half a unit, in the text colour, under it. */
 const HAIRLINE = "icon-hairline";
-const hairlineDefs = (palette: ExportPalette) =>
-  `<defs><filter id="${HAIRLINE}" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">` +
+/** The hairline filter's id: `icon-hairline` for one diagram, `icon-hairline-<theme>` on a board (L6). */
+export const hairlineId = (theme?: ExportTheme): string => (theme ? `${HAIRLINE}-${theme}` : HAIRLINE);
+const hairlineFilter = (palette: ExportPalette, id: string) =>
+  `<filter id="${esc(id)}" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">` +
   `<feMorphology in="SourceAlpha" operator="dilate" radius="0.5" result="grown"/><feFlood flood-color="${palette.text}"/>` +
-  `<feComposite in2="grown" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`;
+  `<feComposite in2="grown" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+
+/** Icons drawn by reference: each distinct picture and size gets one stable id, its image drawn once in `<defs>`. */
+export interface IconRefs {
+  /** The id of `url` at `size`; call it only for a URL `SAFE_IMAGE` passes. */
+  ref(url: string, size: number): string;
+  /** Every id handed out, in first-seen order, with its picture: the live map, so it grows with later `ref` calls. */
+  entries(): ReadonlyMap<string, { url: string; size: number }>;
+}
+
+/** The 32-bit FNV-1a hash of `s`'s UTF-16 code units. */
+function fnv1a(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Fresh icon references: `icon-<8-hex FNV-1a of the URL>-<size>`, the same in every export of the same picture. When
+ * another URL took an id first, the next takes `-2`, then `-3` (R24). `hash` is for tests only.
+ */
+export function iconRefs(hash: (s: string) => number = fnv1a): IconRefs {
+  const ids = new Map<string, Map<number, string>>();
+  const taken = new Map<string, string[]>();
+  const out = new Map<string, { url: string; size: number }>();
+  return {
+    ref(url, size) {
+      let sizes = ids.get(url);
+      const known = sizes?.get(size);
+      if (known !== undefined) return known;
+      const base = `icon-${(hash(url) >>> 0).toString(16).padStart(8, "0")}-${size}`;
+      const urls = taken.get(base) ?? [];
+      taken.set(base, urls);
+      urls.push(url);
+      const id = urls.length === 1 ? base : `${base}-${urls.length}`;
+      if (!sizes) ids.set(url, (sizes = new Map()));
+      sizes.set(size, id);
+      out.set(id, { url, size });
+      return id;
+    },
+    entries: () => out,
+  };
+}
+
+/**
+ * The one `<defs>`: the hairline filter when `hairline` names it, and each referenced icon image once. Empty when
+ * there is nothing to share. A URL that is not a data: image never gets in.
+ */
+export function svgDefs(palette: ExportPalette, d: { hairline: string | null; icons: ReadonlyMap<string, { url: string; size: number }> }): string {
+  let icons = "";
+  for (const [id, { url, size }] of d.icons) {
+    if (SAFE_IMAGE.test(url)) icons += `<image id="${esc(id)}" href="${esc(url)}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"/>`;
+  }
+  if (!d.hairline && !icons) return "";
+  return `<defs>${d.hairline ? hairlineFilter(palette, d.hairline) : ""}${icons}</defs>`;
+}
 
 /** One of the app's own outline icons at `size` px, top-left at x, y. */
-function glyph(name: IconName, x: number, y: number, size: number, stroke: string, part?: string): string {
+export function glyph(name: IconName, x: number, y: number, size: number, stroke: string, part?: string): string {
   const k = size / 24;
   const tag = part ? ` data-part="${part}"` : "";
   return `<path${tag} d="${iconPath(name)}" transform="translate(${num(x)} ${num(y)}) scale(${num(k)})" fill="none" stroke="${stroke}" stroke-width="${num(1.5 / k)}" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -57,10 +177,13 @@ const text = (x: number, y: number, body: string, attrs = "") => `<text x="${num
 
 /** About 7 px per character of the 13 px body font, as the canvas sizes nodes before it measures them. */
 /**
- * The text size of the scene being drawn (`Scene.textScale`), set by `sceneToSvg` for the one synchronous draw: the
+ * The text size of the scene being drawn (`Scene.textScale`), set by `sceneBody` for the one synchronous draw: the
  * widths and heights estimated from words grow with the font, so a label never runs out of its pill.
  */
 let textK = 1;
+/** The icon references and the hairline id of the draw in progress, set by `sceneBody` with `textK`. */
+let refsInUse: IconRefs | undefined;
+let hairline = HAIRLINE;
 const textWidth = (s: string) => s.length * 7 * textK;
 
 /** A data flow node in Modern or the Classic Gane-Sarson shapes (frame 6+.2). */
@@ -212,23 +335,34 @@ const MONO = ` font-family="Cascadia Mono, Consolas, Menlo, monospace"`;
 const band = (x: number, y: number, w: number, depth: number, r: number) =>
   `M${num(x)} ${num(y + depth)} V${num(y + r)} Q${num(x)} ${num(y)} ${num(x + r)} ${num(y)} H${num(x + w - r)} Q${num(x + w)} ${num(y)} ${num(x + w)} ${num(y + r)} V${num(y + depth)} Z`;
 
-/** `s` in lines of at most `max` characters, broken between words; a word longer than a line is cut. */
+/**
+ * `s` in lines of at most `max` characters, broken between words; a word longer than a line is cut. Characters are
+ * code points, so a cut never splits a surrogate pair (an emoji would be written as U+FFFD).
+ */
 export function wrapWords(s: string, max: number): string[] {
   const lines: string[] = [];
   let line = "";
+  let lineLen = 0;
   for (const word of s.split(/\s+/).filter(Boolean)) {
-    let w = word;
+    let w = [...word];
     while (w.length > max) {
       if (line) lines.push(line);
       line = "";
-      lines.push(w.slice(0, max));
+      lineLen = 0;
+      lines.push(w.slice(0, max).join(""));
       w = w.slice(max);
     }
-    if (!line) line = w;
-    else if (line.length + 1 + w.length <= max) line += ` ${w}`;
-    else {
+    const ws = w.join("");
+    if (!line) {
+      line = ws;
+      lineLen = w.length;
+    } else if (lineLen + 1 + w.length <= max) {
+      line += ` ${ws}`;
+      lineLen += 1 + w.length;
+    } else {
       lines.push(line);
-      line = w;
+      line = ws;
+      lineLen = w.length;
     }
   }
   if (line || lines.length === 0) lines.push(line);
@@ -508,28 +642,38 @@ function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   const colours = c ? { fill: c.fill, stroke: c.stroke } : palette.nodes[n.kind];
   const r = 6;
   const { x, y, w, h } = n;
-  const header = `M${x} ${y + CARD_HEADER} V${y + r} Q${x} ${y} ${x + r} ${y} H${x + w - r} Q${x + w} ${y} ${x + w} ${y + r} V${y + CARD_HEADER} Z`;
+  // An ER card (its rows carry not-null marks; only flowScene's ER cards set them) draws the canvas card's geometry at
+  // the scene's text size, where its lines meet its rows (`erMetrics`, `erRowY`; B4 A10 and fix round 1). Other cards
+  // keep the schema card's header and row pitch.
+  const er = n.rows.some((row) => row.notNull !== undefined);
+  const m = erMetrics(er ? textK : 1);
+  const at = (v: number) => (er ? num(v) : String(v));
+  const head = er ? m.head : CARD_HEADER;
+  const titleY = at(y + (er ? 21 * textK : 21));
+  const header = `M${x} ${at(y + head)} V${y + r} Q${x} ${y} ${x + r} ${y} H${x + w - r} Q${x + w} ${y} ${x + w} ${y + r} V${at(y + head)} Z`;
   const parts = [
     `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="${palette.surface}" stroke="${colours.stroke}"${n.dashed ? ` stroke-dasharray="5 4"` : ""}/>`,
     `<path d="${header}" fill="${colours.fill}"/>`,
-    `<path d="M${x} ${y + CARD_HEADER} H${x + w}" fill="none" stroke="${colours.stroke}"/>`,
-    `<text x="${x + 10}" y="${y + 21}" font-weight="600">${esc(n.title)}</text>`,
+    `<path d="M${x} ${at(y + head)} H${x + w}" fill="none" stroke="${colours.stroke}"/>`,
+    `<text x="${x + 10}" y="${titleY}" font-weight="600">${esc(n.title)}</text>`,
   ];
-  if (n.subtitle) parts.push(`<text x="${x + w - 10}" y="${y + 21}" text-anchor="end" font-size="12" fill="${palette.subtle}">${esc(n.subtitle)}</text>`);
+  if (n.subtitle) parts.push(`<text x="${x + w - 10}" y="${titleY}" text-anchor="end" font-size="12" fill="${palette.subtle}">${esc(n.subtitle)}</text>`);
   const marked = n.rows.some((row) => row.mark);
   const nameX = x + (marked ? 32 : 10);
   // An ER card's not-null marks, as the canvas draws them: a filled diamond, an outline for a nullable column (M11).
-  const nulls = n.rows.some((row) => row.notNull !== undefined);
+  const nulls = er;
   const typeX = x + w - (nulls ? 24 : 10);
   n.rows.forEach((row, i) => {
-    const ty = y + CARD_HEADER + CARD_ROW * i + 16;
+    // An ER row's words sit 4 px (at the text size) under its middle, the diamond on it; others on the card's pitch.
+    const mid = y + m.mid + m.row * i;
+    const ty = at(er ? mid + 4 * textK : y + CARD_HEADER + CARD_ROW * i + 16);
     if (row.mark) parts.push(`<text x="${x + 10}" y="${ty}" font-size="9" font-weight="600" fill="${palette.subtle}">${row.mark.toUpperCase()}</text>`);
     parts.push(`<text x="${nameX}" y="${ty}">${esc(row.left)}</text>`);
     if (row.right) parts.push(`<text x="${typeX}" y="${ty}" text-anchor="end" fill="${palette.type}">${esc(row.right)}</text>`);
     if (nulls) {
       const cx = x + w - 14;
-      const cy = ty - 4;
-      const d = `M${cx} ${cy - 4} L${cx + 4} ${cy} L${cx} ${cy + 4} L${cx - 4} ${cy} Z`;
+      const cy = mid;
+      const d = `M${cx} ${num(cy - 4)} L${cx + 4} ${num(cy)} L${cx} ${num(cy + 4)} L${cx - 4} ${num(cy)} Z`;
       parts.push(
         row.notNull
           ? `<path data-marker="not-null" d="${d}" fill="${palette.subtle}"/>`
@@ -614,35 +758,55 @@ function scaleFonts(svg: string, k: number): string {
   return k === 1 ? svg : svg.replace(/ font-size="([\d.]+)"/g, (_, n: string) => ` font-size="${num(Number(n) * k)}"`);
 }
 
-export function sceneToSvg(scene: Scene, palette: ExportPalette, opts: SvgOptions): string {
+/** Whether the scene draws a pale logo that takes the hairline filter (an outlined icon on a node or a group). */
+export function sceneOutlined(scene: Scene): boolean {
+  return scene.nodes.some((n) => n.iconOutline && n.icon) || (scene.areas ?? []).some((a) => a.iconOutline && a.icon);
+}
+
+/**
+ * Everything a scene draws between the background and the mark, at its own text size (`Scene.textScale`, R1). With
+ * `refs`, icons are `<use>`s of shared images (`svgDefs` draws them); an outlined one names `hairline`.
+ */
+export function sceneBody(scene: Scene, palette: ExportPalette, refs?: IconRefs, hairlineName: string = hairlineId()): string {
   textK = scene.textScale ?? 1;
+  refsInUse = refs;
+  hairline = hairlineName;
   try {
-    return drawScene(scene, palette, opts);
+    const sections = (scene.sections ?? []).map((sec) => sectionSvg(sec, palette)).join("");
+    const areas = (scene.areas ?? []).map((a) => areaSvg(a, palette)).join("");
+    const frames = (scene.frames ?? []).map((fr, i) => frameSvg(fr, i, palette)).join("");
+    const axis = scene.axis ? axisSvg(scene.axis, palette) : "";
+    // Messages go over the lifelines and activation bars, and a frame's tab over everything, as on the canvas.
+    const edges = scene.edges.filter((e) => e.kind !== "message").map((e) => edgeSvg(e, palette)).join("");
+    const nodes = scene.nodes.map((n) => nodeSvg(n, palette)).join("");
+    const messages = scene.edges.filter((e) => e.kind === "message").map((e) => edgeSvg(e, palette)).join("");
+    const tabs = (scene.frames ?? []).map((fr, i) => frameTabSvg(fr, i, palette)).join("");
+    // The frame's text size scales every label of the drawing, as on the canvas.
+    return scaleFonts(`${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}`, textK);
   } finally {
     textK = 1;
+    refsInUse = undefined;
+    hairline = HAIRLINE;
   }
 }
 
-function drawScene(scene: Scene, palette: ExportPalette, opts: SvgOptions): string {
-  const f = svgFrame(scene, opts);
+/**
+ * The image round a drawn body: the head (its root `font-size` 13 times `textScale`), `defs`, the background, the body
+ * and the mark, which keeps its own size. A board passes 1 and puts each frame's size on its group (R1).
+ */
+export function wrapSvg(defs: string, body: string, bounds: Box, palette: ExportPalette, opts: SvgOptions, textScale = 1, xlink = usesXlink(body)): string {
+  const f = frameOf(bounds, opts);
   const background = opts.background === "theme" ? `<rect x="${f.x}" y="${f.y}" width="${f.w}" height="${f.h}" fill="${palette.canvas}"/>` : "";
   const mark = opts.mark
     ? `<text x="${f.x + f.w - 8}" y="${f.y + f.h - 8}" text-anchor="end" font-size="11" fill="${palette.subtle}">${MARK_TEXT}</text>`
     : "";
-  const sections = (scene.sections ?? []).map((sec) => sectionSvg(sec, palette)).join("");
-  const areas = (scene.areas ?? []).map((a) => areaSvg(a, palette)).join("");
-  const frames = (scene.frames ?? []).map((fr, i) => frameSvg(fr, i, palette)).join("");
-  const axis = scene.axis ? axisSvg(scene.axis, palette) : "";
-  // Messages go over the lifelines and activation bars, and a frame's tab over everything, as on the canvas.
-  const edges = scene.edges.filter((e) => e.kind !== "message").map((e) => edgeSvg(e, palette)).join("");
-  const nodes = scene.nodes.map((n) => nodeSvg(n, palette)).join("");
-  const messages = scene.edges.filter((e) => e.kind === "message").map((e) => edgeSvg(e, palette)).join("");
-  const tabs = (scene.frames ?? []).map((fr, i) => frameTabSvg(fr, i, palette)).join("");
-  // The hairline filter is defined once, and only when an outlined logo is drawn.
-  const outlined = scene.nodes.some((n) => n.iconOutline && n.icon) || (scene.areas ?? []).some((a) => a.iconOutline && a.icon);
-  const defs = outlined ? hairlineDefs(palette) : "";
-  // The frame's text size scales every label of the drawing, as on the canvas; the mark keeps its own size.
-  const k = scene.textScale ?? 1;
-  const drawing = scaleFonts(`${sections}${areas}${frames}${axis}${edges}${nodes}${messages}${tabs}`, k);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="${num(13 * k)}" fill="${palette.text}">${defs}${background}${drawing}${mark}</svg>\n`;
+  return `<svg xmlns="http://www.w3.org/2000/svg"${xlink ? ` ${XLINK_NS}` : ""} width="${f.w}" height="${f.h}" viewBox="${f.x} ${f.y} ${f.w} ${f.h}" font-family="Segoe UI, Arial, sans-serif" font-size="${num(13 * textScale)}" fill="${palette.text}">${defs}${background}${body}${mark}</svg>\n`;
+}
+
+const NO_ICONS: ReadonlyMap<string, { url: string; size: number }> = new Map();
+
+/** One scene as an SVG image; the hairline filter is defined once, and only when an outlined logo is drawn. */
+export function sceneToSvg(scene: Scene, palette: ExportPalette, opts: SvgOptions): string {
+  const defs = svgDefs(palette, { hairline: sceneOutlined(scene) ? hairlineId() : null, icons: NO_ICONS });
+  return wrapSvg(defs, sceneBody(scene, palette), opts.crop ?? sceneBounds(scene), palette, opts, scene.textScale ?? 1);
 }

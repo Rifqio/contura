@@ -5,16 +5,20 @@ import {
   aiConfirmKeyHost,
   aiKnownModels,
   aiRecordAction,
+  aiThreadWork,
   aiResync,
   aiSettings,
   aiUndoCompact,
   aiAnswerRecord,
+  aiCancel,
   aiCancelPlace,
+  aiNameChat,
   clearAiThreads,
   deleteAiThread,
   errorText,
   getAiThread,
   listAiThreads,
+  renameAiThread,
   saveAiSettings,
   saveAiThread,
   setAiModelPrefs,
@@ -27,20 +31,24 @@ import type {
   AiSettingsView,
   AiThread,
   AnswerActionKind,
+  WorkInput,
   AnswerRecord,
   Compaction,
   ConnectionConfig,
   ContextInfo,
   DialectKind,
   ItemKind,
+  LastWork,
   ModelList,
   ModelPicks,
   Preview,
   PreviewItem,
   SqlSchema,
   ThreadSummary,
+  TitleBy,
   Topic,
   TurnStamp,
+  WorkTag,
 } from "../api/types";
 import Icon from "../components/Icon";
 import Kbd from "../components/Kbd";
@@ -69,7 +77,7 @@ import TopicFold, { TopicDivider } from "./TopicFold";
 import { groupByTopic } from "./topics";
 import { earlierLabel, SHOWN_TURNS, turnWindow } from "./turnWindow";
 import AnswerText from "./AnswerText";
-import type { InsertTarget } from "./insertPlan";
+import type { InsertTarget, OpenedTab } from "./insertPlan";
 import SlashCommands, { optionId } from "./SlashCommands";
 import { matchSlash, type SlashCommand, slashKey } from "./slash";
 import { useTabAsk } from "./tabAsk";
@@ -101,11 +109,18 @@ interface Props {
   /** The query tab an answer's SQL is inserted into, through a diff; nothing runs from the panel (R6.1). */
   insertTarget?: InsertTarget | null;
   /** Opens an answer's SQL in a new query tab on the Ask's Connection. */
-  onOpenInNewTab?(sql: string, connection: AskContext["connection"]): void;
+  /** Opens the SQL in a new query tab; returns the tab as it opened, so the chat records where it last worked. */
+  onOpenInNewTab?(sql: string, connection: AskContext["connection"]): OpenedTab | null | void;
   /** The open Connections: Re-sync reads a closed one's catalog only once it is open. All are taken as open when absent. */
   openIds?: ReadonlySet<string>;
   /** Shows the tab with this key (A7); false when it is closed. */
   onShowTab?(key: string): boolean;
+  /**
+   * Brings back where a chat picked in the history ended (Decision 9): its Connection, database, tab and query, never
+   * running it. Resolves to the database or Connection name that is not available, or null. `current` turns false once
+   * another chat opens, New chat is pressed or the place changes: an overtaken resume then opens nothing.
+   */
+  onResume?(work: LastWork, title: string, current: () => boolean): Promise<string | null>;
 }
 
 /** The access chip in the header, in the words of the Connection's AI access setting. */
@@ -122,6 +137,9 @@ const newId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `t${Date.now()}${Math.random().toString(36).slice(2)}`;
+
+/** The AI title calls a chat gets: the first, and one retry on the next answer. Mirrors `title::TITLE_TRIES`. */
+const TITLE_TRIES = 2;
 
 /** The items a turn records as its context: what was on, without the question and the switches. */
 const RECORDED: ReadonlySet<ItemKind> = new Set(["names", "cards", "dbml", "sql", "error", "savedQueries", "tab", "steps"]);
@@ -295,6 +313,7 @@ export default function AssistantPanel({
   onOpenInNewTab,
   openIds,
   onShowTab,
+  onResume,
 }: Props) {
   /** The questions whose "Asked in" tab was found closed: the caption says so until it shows again (A7). */
   const [closedAsked, setClosedAsked] = useState<ReadonlySet<number>>(() => new Set());
@@ -315,6 +334,9 @@ export default function AssistantPanel({
   /** The place's chats as summaries; the open one is fetched in full. */
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  /** The open chat now, for a reply that lands after it may have changed. */
+  const currentRef = useRef(currentId);
+  currentRef.current = currentId;
   // A closed-tab note belongs to the thread it was said in.
   useEffect(() => setClosedAsked((all) => (all.size === 0 ? all : new Set())), [currentId]);
   /** The open chat, as the Core last returned it (its records are trimmed). */
@@ -414,13 +436,21 @@ export default function AssistantPanel({
   const follow = useRef(false);
   /** Counts opens, so only the last one's thread lands. */
   const openSeq = useRef(0);
+  /**
+   * The title calls going, by chat: their request ids. One per chat at a time; a place change stops them, and a title
+   * whose call is no longer here is dropped.
+   */
+  const naming = useRef(new Map<string, string>());
   /** Why a chat could not be opened or cleared, shown where the thread is. */
   const [chatError, setChatError] = useState<string | null>(null);
+  /** The place a picked chat ended in could not come back: the chat is open without its tab. */
+  const [notAvailable, setNotAvailable] = useState<string | null>(null);
 
   /** Opens a chat: the summary list has no messages, so the thread is fetched. */
   function openThread(id: string | null) {
     const seq = ++openSeq.current;
     setChatError(null);
+    setNotAvailable(null);
     const show = (thread: AiThread | null, list: Topic[] = [], compacted: Compaction[] = []) => {
       setCurrentId(thread?.id ?? null);
       setCurrent(thread);
@@ -455,10 +485,32 @@ export default function AssistantPanel({
     );
   }
 
+  /**
+   * A row picked in the history (the open chat's row too, P13): the chat opens, then, when it worked on a Connection,
+   * the place it ended in comes back. A place load never comes here, so it never resumes.
+   */
+  function pickThread(id: string) {
+    openThread(id);
+    const seq = openSeq.current;
+    const row = threads.find((t) => t.id === id);
+    if (!onResume || !row?.work?.connectionId) return;
+    const title = row.title;
+    aiThreadWork(id)
+      .then(async (work) => {
+        if (openSeq.current !== seq || !work?.connectionId) return;
+        const missing = await onResume(work, title, () => openSeq.current === seq);
+        if (missing !== null && openSeq.current === seq) setNotAvailable(missing);
+      })
+      .catch(() => {});
+  }
+
   // A Group's threads are its own: entering another place stops its answer, reloads them and starts a clean composer.
   useEffect(() => {
     let live = true;
     stopAnswer();
+    // The title calls of the place left behind stop too; a title that still lands is dropped.
+    for (const requestId of naming.current.values()) aiCancel(requestId).catch(() => {});
+    naming.current.clear();
     setPending(null);
     setLogOf(null);
     setSentOpen(null);
@@ -470,6 +522,7 @@ export default function AssistantPanel({
     setCompactions([]);
     setWorking(null);
     setChatError(null);
+    setNotAvailable(null);
     openSeq.current++;
     setFailure(null);
     setStoppedEarly(null);
@@ -673,9 +726,6 @@ export default function AssistantPanel({
   const groups = useMemo(() => groupByTopic(current?.messages ?? [], topics), [current, topics]);
   /** The newest turns are drawn; earlier ones wait behind "Show <n> earlier". */
   const shownTurns = useMemo(() => turnWindow(current?.messages ?? [], SHOWN_TURNS + more), [current, more]);
-  // A live Ask that opens a new Topic shows its divider before the question once the Core has said so.
-  const liveDivider = stream.memory?.opened === true && (current?.messages.length ?? 0) > 0;
-
   // After Send the thread keeps the new turn in view as it streams, then its card or the saved answer.
   const turnCount = current?.messages.length ?? 0;
   const followEnd = useCallback(() => {
@@ -778,7 +828,10 @@ export default function AssistantPanel({
       if (carriedUpTo > 0) takeSteps(forPlace, carriedUpTo);
       const record = buildRecord(end, end.live);
       record.millis ??= end.at - askedAt;
-      const at = await persist(forPlace, base, saved, q, included, askedAt, end.text, end.at, record, request.requestId, end.stamp ?? null, action, askedTab);
+      const { at, stored } = await persist(forPlace, base, saved, q, included, askedAt, end.text, end.at, record, request.requestId, end.stamp ?? null, action, askedTab);
+      // A chat still under the rule's title, with a try left, gets its AI title once the turn is stored. An answer
+      // that lands after a place change starts none: the place change cancels its title call (R4).
+      if (stored && placeRef.current === forPlace && stored.titleBy === "rule" && stored.titleTries < TITLE_TRIES) nameChat(stored.threadId, forPlace, request.off, request.model ?? null);
       const used = end.live.context;
       if (used) setLiveContexts((all) => new Map(all).set(at, used));
       saved = true;
@@ -790,7 +843,33 @@ export default function AssistantPanel({
     }
   }
 
-  /** Saves the turn, replacing the thread's last turn when `replace`; returns the answer's time. */
+  /**
+   * Asks the Core for the chat's AI title (Decision 5): one call per chat at a time, registered as `title:<place>`
+   * so the next question is never refused. The title lands on the row and the open chat; a place change cancels it.
+   */
+  function nameChat(threadId: string, forPlace: string, off: ItemKind[], model: string | null) {
+    if (settings?.settings.nameChats === false || naming.current.has(threadId)) return;
+    const requestId = newId();
+    naming.current.set(threadId, requestId);
+    const ours = () => naming.current.get(threadId) === requestId;
+    aiNameChat({ requestId, place: forPlace, groupId, threadId, model, off }).then(
+      (title) => {
+        if (!ours()) return;
+        naming.current.delete(threadId);
+        if (title === null || placeRef.current !== forPlace) return;
+        setThreads((all) => all.map((t) => (t.id === threadId ? { ...t, title, titleBy: "ai" } : t)));
+        setCurrent((now) => (now?.id === threadId ? { ...now, title, titleBy: "ai" } : now));
+      },
+      () => {
+        if (ours()) naming.current.delete(threadId);
+      },
+    );
+  }
+
+  /**
+   * Saves the turn, replacing the thread's last turn when `replace`; returns the answer's time and, once the Core
+   * stored it, who wrote the chat's title and its failed title calls.
+   */
   async function persist(
     forPlace: string,
     base: AiThread | null,
@@ -805,7 +884,7 @@ export default function AssistantPanel({
     stamp: TurnStamp | null,
     action?: string,
     askedTab: string | null = null,
-  ): Promise<number> {
+  ): Promise<{ at: number; stored: { threadId: string; titleBy: TitleBy; titleTries: number } | null }> {
     const at = Math.max(answeredAt, askedAt + 1);
     const stamped = (m: AiMessage): AiMessage =>
       stamp
@@ -843,32 +922,43 @@ export default function AssistantPanel({
     // both ways on each Ask). A chat whose last save failed goes whole once more: the Core may lack turns it shows.
     // The Core's copy replaces ours: it holds the memory stamps and the trimmed records.
     const replaceFrom = base && replace ? base.messages[base.messages.length - 2]?.at : undefined;
-    let returned: { thread: (now: AiThread | null) => AiThread; count: number; topics: Topic[]; compactions: Compaction[] } | null;
+    let returned: { thread: (now: AiThread | null) => AiThread; title: string; count: number; titleBy: TitleBy; titleTries: number; topics: Topic[]; compactions: Compaction[] } | null;
     if (base && unsaved.current.has(base.id)) {
       returned = await saveAiThread({ ...next, messages: [...kept, ...add] }, requestId).then(
-        (v) => ({ thread: () => v.thread, count: v.thread.messages.length, topics: v.topics, compactions: v.compactions }),
+        (v) => ({ thread: () => v.thread, title: v.thread.title, count: v.thread.messages.length, titleBy: v.thread.titleBy ?? "rule", titleTries: v.thread.titleTries ?? 0, topics: v.topics, compactions: v.compactions }),
         () => null,
       );
     } else {
       const turn = { threadId: next.id, place: next.place, title: next.title, updatedAt: askedAt, messages: add, replaceFrom };
       returned = await appendAiTurn(turn, requestId).then(
         // The open copy may have changed meanwhile (an action kept with an earlier answer): the turn goes after it.
-        (v) => ({ thread: (now: AiThread | null) => withTurn(now?.id === v.threadId ? now : base, v, replaceFrom), count: v.messageCount, topics: v.topics, compactions: v.compactions }),
+        (v) => ({ thread: (now: AiThread | null) => withTurn(now?.id === v.threadId ? now : base, v, replaceFrom), title: v.title, count: v.messageCount, titleBy: v.titleBy, titleTries: v.titleTries, topics: v.topics, compactions: v.compactions }),
         () => null,
       );
     }
     if (returned) unsaved.current.delete(next.id);
     else unsaved.current.add(next.id);
     if (placeRef.current === forPlace) {
-      const row: ThreadSummary = {
+      // Where the chat last worked, as the Core keeps it (Decision 4a): an answer with SQL moves it to the turn's place
+      // and tab, any other answer leaves it where it was.
+      const moved: WorkTag | null =
+        stamp && record.sqlBlocks.length > 0
+          ? { connectionId: stamp.connectionId, database: stamp.database, table: stamp.tables[0] ?? null, tabLabel: stamp.askedIn?.label || null }
+          : null;
+      const row: Omit<ThreadSummary, "work"> = {
         id: next.id,
         place: next.place,
-        title: next.title,
+        // The Core's title: an AI title that landed while this Ask ran is not put back to the rule's.
+        title: returned?.title ?? next.title,
+        titleBy: returned?.titleBy ?? next.titleBy ?? "rule",
         updatedAt: next.updatedAt,
         messages: returned?.count ?? next.messages.length,
         topics: returned?.topics.length ?? 0,
       };
-      setThreads((all) => [row, ...all.filter((t) => t.id !== row.id)]);
+      setThreads((all) => {
+        const work = moved ?? all.find((t) => t.id === row.id)?.work ?? null;
+        return [{ ...row, work }, ...all.filter((t) => t.id !== row.id)];
+      });
       setCurrentId(next.id);
       setCurrent((now) => (returned ? returned.thread(now) : next));
       if (returned) {
@@ -876,7 +966,7 @@ export default function AssistantPanel({
         setCompactions((known) => mergeCompactions(returned.compactions, known));
       }
     }
-    return at;
+    return { at, stored: returned && { threadId: next.id, titleBy: returned.titleBy, titleTries: returned.titleTries } };
   }
 
   /** Compact now from the full-thread card: the older messages become a summary, then the same Ask goes again. */
@@ -966,9 +1056,21 @@ export default function AssistantPanel({
     }
   }
 
-  /** Keeps what the user did with a saved answer's SQL in its record, here and in the Core (the Diagram's "You:" box). */
-  function recordAction(threadId: string, at: number, kind: AnswerActionKind) {
-    void aiRecordAction(threadId, at, kind)
+  /**
+   * Keeps what the user did with a saved answer's SQL in its record, here and in the Core (the Diagram's "You:" box).
+   * The tab it went into (the Insert target, or the new tab Open in new tab returned) and the SQL become where the chat
+   * last worked; with no tab key (an inline target, a test fixture, no tab opened) none is sent (P22).
+   */
+  function recordAction(threadId: string, at: number, kind: AnswerActionKind, sql: string, opened?: OpenedTab | null) {
+    let work: WorkInput | undefined;
+    if (kind === "openedInNewTab") {
+      // What the tab got: its text and database as `newQuery` filled them.
+      if (opened) work = { tabKind: "query", tabKey: opened.key, tabLabel: opened.name, connectionId: opened.connectionId, database: opened.database, sql: opened.sql };
+    } else if (insertTarget?.key) {
+      const t = insertTarget;
+      work = { tabKind: "query", tabKey: t.key ?? null, tabLabel: t.name, connectionId: t.connectionId ?? null, database: t.database ?? null, sql };
+    }
+    void aiRecordAction(threadId, at, kind, work)
       .then((action) => {
         if (!action) return;
         setCurrent((t) =>
@@ -999,10 +1101,8 @@ export default function AssistantPanel({
     openThread(null);
   }
 
-  /** Clear this chat: the open chat is deleted and a new one starts. */
-  async function clearThread() {
-    const id = currentId;
-    if (!id) return;
+  /** Delete a chat from its history row; deleting the open chat starts a new one. */
+  async function deleteThread(id: string) {
     try {
       await deleteAiThread(id);
     } catch (e) {
@@ -1010,7 +1110,20 @@ export default function AssistantPanel({
       return;
     }
     setThreads((all) => all.filter((t) => t.id !== id));
-    openThread(null);
+    if (id === currentRef.current) openThread(null);
+  }
+
+  /** Rename a chat from its history row: the refusal note, or null once the title is kept. */
+  async function renameThread(id: string, title: string): Promise<ThreadSummary | string> {
+    try {
+      const row = await renameAiThread(id, title);
+      setThreads((all) => all.map((t) => (t.id === id ? row : t)));
+      // The open chat takes it too, so the row its next answer draws keeps the new title.
+      setCurrent((now) => (now?.id === id ? { ...now, title: row.title, titleBy: row.titleBy } : now));
+      return row;
+    } catch (e) {
+      return errorText(e);
+    }
   }
 
   const newChat = () => {
@@ -1274,7 +1387,7 @@ export default function AssistantPanel({
   else if (stream.running || working !== null || undoing !== null) unavailable.compact = waiting;
   if (stream.running) unavailable.new = waiting;
   if (lastAnswerAt === null && !pending) unavailable.log = "No answer yet";
-  if (!currentId) unavailable.clear = "No chat to clear";
+  if (!currentId) unavailable.clear = "No chat to delete";
   else if (stream.running) unavailable.clear = waiting;
 
   const runSlash = (c: SlashCommand) => {
@@ -1414,9 +1527,11 @@ export default function AssistantPanel({
           threads={threads}
           currentId={currentId}
           busy={stream.running}
-          onOpen={openThread}
-          onNewChat={newChat}
-          onClearThread={() => void clearThread()}
+          connections={connections ?? []}
+          width={width}
+          onOpen={pickThread}
+          onRename={renameThread}
+          onDelete={(id) => void deleteThread(id)}
           onClearAll={() => void clear()}
           command={historyCommand}
         />
@@ -1428,6 +1543,12 @@ export default function AssistantPanel({
       {logView ?? (
       <>
       <div className="thread" aria-live="polite" ref={threadRef} onScroll={onThreadScroll}>
+        {notAvailable !== null && (
+          <p className="ask-strip" role="status">
+            <Icon name="info" size={14} />
+            <span>{notAvailable} is not available. The chat is open without its tab.</span>
+          </p>
+        )}
         {chatError && (
           <p className="msg-notice" role="alert">
             {chatError}
@@ -1555,7 +1676,7 @@ export default function AssistantPanel({
                           noEditor={noEditor}
                           onOpenInNewTab={openInNewTab}
                           onCopy={copySql}
-                          onAction={(kind) => recordAction(current.id, m.at, kind)}
+                          onAction={(kind, sql, opened) => recordAction(current.id, m.at, kind, sql, opened)}
                         />
                         {record && answerFoot(m, record, q, mi === current.messages.length - 1, current.messages[mi - 1]?.action)}
                       </div>
@@ -1573,7 +1694,6 @@ export default function AssistantPanel({
         })}
         {pending && (
           <>
-            {liveDivider && stream.memory && <TopicDivider title={stream.memory.title} />}
             <div className={pending.action === "continue" ? "msg-user msg-user-muted" : "msg-user"}>{pending.q}</div>
             <div className="ts">{dayClock(pending.at, Date.now(), true)}</div>
             <div className="msg-ai" aria-busy="true">
@@ -1632,7 +1752,6 @@ export default function AssistantPanel({
           onToggle={toggle}
           labelOf={(i) => sendsLabel(i, ctx, preview)}
           connection={conn}
-          modelName={model?.name ?? null}
           openSignal={sendsOpenSignal}
           foldSignal={sendsFoldSignal}
           foldable

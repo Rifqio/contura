@@ -11,7 +11,7 @@ import { summaryOf, turnViewOf, viewOf } from "./test/aiThreads";
 import { withTurn } from "./api/client";
 import { sha256Hex } from "./assistant/sha256";
 import { clearAllSteps } from "./assistant/recentSteps";
-import type { AiThread, AppendTurn, AskRequest, VisualQuery } from "./api/types";
+import type { AiThread, AppendTurn, AskRequest, LastWork, VisualQuery, WorkTag } from "./api/types";
 import { EditorView } from "@codemirror/view";
 import App from "./App";
 import { appLang } from "./lang/appLang";
@@ -2989,5 +2989,283 @@ describe("S13: a single click on a table right after switching tables is not ign
     await userEvent.click(await screen.findByRole("treeitem", { name: treeName("customers") }));
     expect(screen.getByRole("tab", { name: /customers/, selected: true })).toBeTruthy();
     release();
+  });
+});
+
+// ---- Resume where the chat ended (Plan D2 Task 8, Decision 9) ----
+describe("resume where the chat ended", () => {
+  const invoice = { ...pg, id: "c7", name: "invoice", database: "hc-backend" };
+  const TITLE = "Unpaid clients to date";
+  const INSERTED = "SELECT name FROM clients WHERE paid = false";
+  const chatOf = (id: string, place: string, title: string, at: number): AiThread => ({
+    id,
+    place,
+    title,
+    updatedAt: at,
+    messages: [
+      { role: "user", text: `${title}?`, context: [], at: at - 1 },
+      { role: "assistant", text: "```sql\nSELECT count(*) FROM clients\n```", context: [], at },
+    ],
+  });
+  const chat = chatOf("t1", "group:g1", TITLE, 5);
+  const workOf = (over: Partial<LastWork> = {}): LastWork => ({
+    tabKind: "query",
+    tabKey: "query:closed-long-ago",
+    tabLabel: "Query 4",
+    connectionId: "c7",
+    database: "hc-backend",
+    table: "clients",
+    insertedSql: INSERTED,
+    aiSql: "SELECT count(*) FROM clients",
+    at: 5,
+    ...over,
+  });
+  /** The tab the place restores: another Connection and database are shown when the chat is clicked. */
+  const shown = { id: "d1", name: "Late deliveries", text: "SELECT 1", connectionId: "c1", database: "kfc_shop", savedId: null, savedText: null };
+
+  function resumeRoutes(
+    opts: {
+      chats?: AiThread[];
+      /** The list's tag for a chat; null for a chat that never touched a database. */
+      tag?: (t: AiThread) => WorkTag | null;
+      work?: LastWork | null;
+      drafts?: unknown[];
+      connections?: unknown[];
+      over?: Record<string, (a: Record<string, unknown>) => unknown>;
+    } = {},
+  ) {
+    const chats = opts.chats ?? [chat];
+    const tag = opts.tag ?? (() => ({ connectionId: "c7", database: "hc-backend", table: "clients", tabLabel: "Query 4" }));
+    const drafts = opts.drafts ?? [shown];
+    shellRoutes({
+      list_connections: () => opts.connections ?? [pg, invoice],
+      load_query_tabs: ({ place }) => (place === "group:g1" ? JSON.stringify({ version: 1, tabs: drafts }) : null),
+      list_databases: ({ id }) => (id === "c7" ? ["hc-backend", "hc-archive"] : ["kfc_shop"]),
+      list_ai_threads: ({ place }) => chats.filter((c) => c.place === place).map((c) => ({ ...summaryOf(c), work: tag(c) })),
+      get_ai_thread: ({ threadId }) => {
+        const t = chats.find((c) => c.id === threadId);
+        return t ? viewOf(t) : null;
+      },
+      ai_thread_work: () => (opts.work === undefined ? workOf() : opts.work),
+      save_ai_thread: () => null,
+      ...opts.over,
+    });
+  }
+
+  const askPanel = () => screen.getByRole("complementary", { name: "Ask" });
+  /** Opens the Ask panel on the place's newest chat. */
+  async function openAsk(firstQuestion = `${TITLE}?`) {
+    await screen.findByRole("tab", { name: "Late deliveries", selected: true });
+    await toggleAsk();
+    await within(await screen.findByRole("complementary", { name: "Ask" })).findByText(firstQuestion, { selector: ".msg-user" });
+  }
+  async function clickRow(title = TITLE) {
+    await userEvent.click(within(askPanel()).getByRole("button", { name: "Show history" }));
+    await userEvent.click(await screen.findByRole("button", { name: new RegExp(`^${title}`) }));
+  }
+  const shownEditor = () => document.querySelector(".work-pane:not([hidden]) .cm-content")?.textContent ?? null;
+  const statusSpans = () => Array.from(document.querySelectorAll("#app-status-slot .query-status > span")).map((s) => s.textContent);
+  const strip = () => askPanel().querySelector(".ask-strip");
+  const NOT_AVAILABLE = "hc-backend is not available. The chat is open without its tab.";
+
+  test("opening_a_chat_resumes_its_connection_database_and_query", async () => {
+    resumeRoutes();
+    render(<App />);
+    await openAsk();
+    // The place load opened the chat; it resumed nothing.
+    expect(callsTo("ai_thread_work")).toEqual([]);
+    await clickRow();
+    await waitFor(() => expect(callsTo("ai_thread_work")).toEqual([{ threadId: "t1" }]));
+    // invoice opens, and a new query tab on it and hc-backend holds the SQL the user last inserted.
+    await waitFor(() => expect(callsTo("open_connection")).toEqual([{ id: "c7" }]));
+    expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+    await waitFor(() => expect(shownEditor()).toBe(INSERTED));
+    await waitFor(() => expect(statusSpans()).toContain(`From chat: ${TITLE}`));
+    expect(statusSpans()).toContain("hc-backend");
+    // The place stays; the chat stays open; no strip.
+    expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
+    expect(within(askPanel()).getByText(`${TITLE}?`, { selector: ".msg-user" })).toBeTruthy();
+    expect(strip()).toBeNull();
+  });
+
+  test("a_gated_resume_shows_from_chat_with_no_hint_of_withheld_sql", async () => {
+    // The chat's Connection is at Never now: the Core gives back the place and the tab, never the SQL.
+    resumeRoutes({ work: workOf({ insertedSql: undefined, aiSql: undefined }) });
+    render(<App />);
+    await openAsk();
+    const notesBefore = askPanel().querySelectorAll(".msg-notice, [role=alert], [role=status]").length;
+    await clickRow();
+    expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+    await waitFor(() => expect(statusSpans()).toContain(`From chat: ${TITLE}`));
+    // The tab reads as any resume: the same From chat line, an empty editor with no placeholder, no note.
+    expect(shownEditor()).toBe("");
+    expect(document.querySelector(".work-pane:not([hidden]) .cm-placeholder")).toBeNull();
+    const line = statusSpans().join(" | ");
+    expect(line).not.toMatch(/withheld|hidden|not shared|never|no sql|ai access|kept back/i);
+    expect(statusSpans().filter((t) => t?.startsWith("From chat"))).toEqual([`From chat: ${TITLE}`]);
+    // Nothing in the Ask panel says anything either.
+    expect(strip()).toBeNull();
+    expect(askPanel().querySelectorAll(".msg-notice, [role=alert], [role=status]").length).toBe(notesBefore);
+    expect(askPanel().textContent ?? "").not.toMatch(/withheld|not shared|kept back/i);
+  });
+
+  test("an_open_tab_is_focused_and_left_as_it_is", async () => {
+    const held = { id: "d2", name: "Unpaid", text: "SELECT 2 -- mine", connectionId: "c7", database: "hc-backend", savedId: null, savedText: null };
+    resumeRoutes({ drafts: [shown, held], work: workOf({ tabKey: "query:d2" }) });
+    render(<App />);
+    await screen.findByRole("tab", { name: "Unpaid" });
+    await userEvent.click(screen.getByRole("tab", { name: "Late deliveries" }));
+    await openAsk();
+    await clickRow();
+    expect(await screen.findByRole("tab", { name: "Unpaid", selected: true })).toBeTruthy();
+    await waitFor(() => expect(shownEditor()).toBe("SELECT 2 -- mine"));
+    // No new tab, and the open one is not touched: no From chat on it.
+    expect(tabNames()).toEqual(["Late deliveries", "Unpaid"]);
+    expect(statusSpans().some((t) => t?.startsWith("From chat"))).toBe(false);
+  });
+
+  test("a_gone_connection_shows_the_strip_and_opens_no_tab", async () => {
+    resumeRoutes({ work: workOf({ connectionId: "c9" }), tag: () => ({ connectionId: "c9", database: "hc-backend", table: null, tabLabel: null }) });
+    render(<App />);
+    await openAsk();
+    await clickRow();
+    await waitFor(() => expect(strip()?.textContent).toBe(NOT_AVAILABLE));
+    expect(callsTo("open_connection")).toEqual([]);
+    expect(tabNames()).toEqual(["Late deliveries"]);
+    expect(within(askPanel()).getByText(`${TITLE}?`, { selector: ".msg-user" })).toBeTruthy();
+  });
+
+  test("a_connection_in_another_desktop_is_not_available", async () => {
+    resumeRoutes({ connections: [pg, { ...invoice, groupId: "g2" }] });
+    render(<App />);
+    await openAsk();
+    await clickRow();
+    await waitFor(() => expect(strip()?.textContent).toBe(NOT_AVAILABLE));
+    // The place stays where it is: the Connection is not followed to Acme.
+    expect(screen.getByRole("button", { name: "Switch Group, current KFC" })).toBeTruthy();
+    expect(callsTo("open_connection")).toEqual([]);
+    expect(tabNames()).toEqual(["Late deliveries"]);
+  });
+
+  test("a_connection_that_fails_to_open_shows_the_strip", async () => {
+    resumeRoutes({
+      over: {
+        open_connection: () => {
+          throw { kind: "connect", message: "refused" };
+        },
+      },
+    });
+    render(<App />);
+    await openAsk();
+    await clickRow();
+    await waitFor(() => expect(strip()?.textContent).toBe(NOT_AVAILABLE));
+    expect(callsTo("open_connection")).toEqual([{ id: "c7" }]);
+    expect(tabNames()).toEqual(["Late deliveries"]);
+  });
+
+  test("a_home_chat_only_opens", async () => {
+    const home = chatOf("t2", "group:g1", "What is a CTE", 3);
+    resumeRoutes({ chats: [chat, home], tag: (t) => (t.id === "t1" ? { connectionId: "c7", database: "hc-backend", table: null, tabLabel: null } : null) });
+    render(<App />);
+    await openAsk();
+    await clickRow("What is a CTE");
+    expect(await within(askPanel()).findByText("What is a CTE?", { selector: ".msg-user" })).toBeTruthy();
+    expect(callsTo("ai_thread_work")).toEqual([]);
+    expect(callsTo("open_connection")).toEqual([]);
+    expect(tabNames()).toEqual(["Late deliveries"]);
+    expect(strip()).toBeNull();
+  });
+
+  test("resume_never_runs_the_query", async () => {
+    resumeRoutes();
+    render(<App />);
+    await openAsk();
+    await clickRow();
+    await waitFor(() => expect(shownEditor()).toBe(INSERTED));
+    await waitFor(() => expect(statusSpans()).toContain(`From chat: ${TITLE}`));
+    for (const cmd of ["run_query", "execute_sql", "prepare_run", "confirm_run", "fetch_page", "run_visual_query"]) expect(callsTo(cmd)).toEqual([]);
+  });
+
+  test("clicking_the_open_chat_resumes_it", async () => {
+    // The app reopened: the place load opens its newest chat, the one the owner then clicks.
+    resumeRoutes();
+    render(<App />);
+    await openAsk();
+    expect(callsTo("ai_thread_work")).toEqual([]);
+    expect(within(askPanel()).getByRole("button", { name: "Show history" })).toBeTruthy();
+    await userEvent.click(within(askPanel()).getByRole("button", { name: "Show history" }));
+    const row = await screen.findByRole("button", { name: new RegExp(`^${TITLE}`) });
+    expect(row.getAttribute("aria-current")).toBe("true");
+    await userEvent.click(row);
+    await waitFor(() => expect(callsTo("ai_thread_work")).toEqual([{ threadId: "t1" }]));
+    expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+    await waitFor(() => expect(shownEditor()).toBe(INSERTED));
+  });
+
+  test("a_place_change_opens_the_newest_chat_without_resuming", async () => {
+    const there = chatOf("t3", "group:g2", "Acme refunds", 9);
+    resumeRoutes({ chats: [chat, there] });
+    render(<App />);
+    await openAsk();
+    await userEvent.click(screen.getByRole("button", { name: "Switch Group, current KFC" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Acme" }));
+    await screen.findByRole("button", { name: "Switch Group, current Acme" });
+    expect(await within(askPanel()).findByText("Acme refunds?", { selector: ".msg-user" })).toBeTruthy();
+    expect(callsTo("ai_thread_work")).toEqual([]);
+    expect(callsTo("open_connection")).toEqual([]);
+    expect(screen.queryByRole("tab", { name: /^Query/ })).toBeNull();
+  });
+
+  test("an_overtaken_resume_opens_no_tab", async () => {
+    // invoice is slow to connect: the user picks another chat, then starts a new one, before it opens.
+    let release: () => void = () => {};
+    const connecting = new Promise<void>((r) => (release = r));
+    const other = chatOf("t2", "group:g1", "What is a CTE", 3);
+    resumeRoutes({
+      chats: [chat, other],
+      tag: (t) => (t.id === "t1" ? { connectionId: "c7", database: "hc-backend", table: null, tabLabel: null } : null),
+      over: { open_connection: async () => (await connecting, null) },
+    });
+    render(<App />);
+    await openAsk();
+    await clickRow();
+    await waitFor(() => expect(callsTo("open_connection")).toEqual([{ id: "c7" }]));
+    await clickRow("What is a CTE");
+    expect(await within(askPanel()).findByText("What is a CTE?", { selector: ".msg-user" })).toBeTruthy();
+    await userEvent.click(within(askPanel()).getByRole("button", { name: "New chat" }));
+    await act(async () => release());
+    // The Connection may finish opening, but no tab opens for the chat left behind, and nothing says From chat.
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(tabNames()).toEqual(["Late deliveries"]);
+    expect(screen.getByRole("tab", { name: "Late deliveries", selected: true })).toBeTruthy();
+    expect(statusSpans().some((t) => t?.startsWith("From chat"))).toBe(false);
+    expect(strip()).toBeNull();
+  });
+
+  test("a_chat_in_ungrouped_resumes_its_own_connection", async () => {
+    // Ungrouped: no desktop on either side, so the Connection is in the shown place.
+    const loosePg = { ...pg, groupId: null };
+    const looseInvoice = { ...invoice, groupId: null };
+    const loose = { ...chat, place: "ungrouped" };
+    shellRoutes({
+      last_group: () => null,
+      list_connections: () => [loosePg, looseInvoice],
+      load_query_tabs: ({ place }) => (place === "ungrouped" ? JSON.stringify({ version: 1, tabs: [shown] }) : null),
+      list_databases: ({ id }) => (id === "c7" ? ["hc-backend", "hc-archive"] : ["kfc_shop"]),
+      list_ai_threads: ({ place }) => (place === "ungrouped" ? [{ ...summaryOf(loose), work: { connectionId: "c7", database: "hc-backend", table: null, tabLabel: null } }] : []),
+      get_ai_thread: () => viewOf(loose),
+      ai_thread_work: () => workOf(),
+      save_ai_thread: () => null,
+    });
+    render(<App />);
+    // No last Group: startup opens Home in Ungrouped, over the place's restored tab.
+    await closeHome();
+    await openAsk();
+    await clickRow();
+    await waitFor(() => expect(callsTo("open_connection")).toEqual([{ id: "c7" }]));
+    expect(await screen.findByRole("tab", { name: "Query 1", selected: true })).toBeTruthy();
+    await waitFor(() => expect(shownEditor()).toBe(INSERTED));
+    await waitFor(() => expect(statusSpans()).toContain(`From chat: ${TITLE}`));
+    expect(strip()).toBeNull();
   });
 });

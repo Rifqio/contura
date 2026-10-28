@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import { hitRow, joinRefusal, pickTargets, planReference, planRelationship, singular } from "./erRelate";
 import { ER_NOTES } from "../lang/flow/edits";
 import { parseFlow } from "../lang/flow/parse";
-import { erRowY } from "./kindLayout";
+import { erCardH, erFits, ER_HEAD_MID, ER_ROW_MID, erRowY, KIND_ROW } from "./kindLayout";
 
 test("fix 2, I4 and M7: a table's name made singular by the Rails inflector's rules and irregulars", () => {
   const cases: [string, string][] = [
@@ -158,4 +158,28 @@ test("a_line_end_joined_to_a_quoted_tables_column_is_refused_with_its_note", () 
   expect(joinRefusal(d, { table: "order:lines", column: "id" }, { table: "orders", column: "line_id" })).toBe(ER_NOTES.quotedEnd("order:lines"));
   expect(joinRefusal(d, { table: "orders", column: "line_id" }, { table: "order:lines", column: "id" })).toBe(ER_NOTES.quotedEnd("order:lines"));
   expect(joinRefusal(d, { table: "orders", column: "line_id" }, { table: "orders", column: "id" })).toBeNull();
+});
+
+// B4 fix round 1: an ER card's height, header, row pitch and row middle scale together with the frame's text size, so
+// every row and every line end sits inside the card at Small, Medium and Large.
+test("er_rows_and_line_ends_stay_inside_the_card_at_every_text_size", () => {
+  const cols = Array.from({ length: 20 }, (_, i) => `c${i} int`);
+  for (const k of [0.88, 1, 1.15]) {
+    for (const n of [1, 3, 5, 20]) {
+      const h = erCardH(n, k);
+      const t = { name: "t", kind: "entity" as const, attrs: {}, rows: cols.slice(0, n) };
+      // The whole card shows without a scroll bar.
+      expect(erFits(h, k), `k ${k}, ${n} rows`).toBe(n);
+      for (let r = 0; r < n; r++) {
+        const y = erRowY(0, h, r, 0, k);
+        expect(y, `k ${k}, row ${r} of ${n}`).toBeCloseTo((ER_ROW_MID + r * KIND_ROW) * k, 9);
+        expect(y).toBeGreaterThan(0);
+        expect(y).toBeLessThan(h);
+        // A drop on the row's middle finds the row.
+        expect(hitRow(t, 0, y, 0, k)).toEqual({ table: "t", column: `c${r}` });
+      }
+      expect(erRowY(0, h, -1, 0, k)).toBeCloseTo(ER_HEAD_MID * k, 9);
+      expect(hitRow(t, 0, ER_HEAD_MID * k, 0, k)).toEqual({ table: "t", column: null });
+    }
+  }
 });
