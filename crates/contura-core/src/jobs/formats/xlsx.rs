@@ -449,6 +449,9 @@ fn entry_kind(name: &str) -> Option<Unpacked> {
 /// `caps.total`. The sizes the zip directory declares are checked first, for an exact
 /// figure in the refusal; then every entry is unpacked and counted, stopping past the
 /// cap, because a crafted directory can declare any size (L4, security audit 1.0).
+/// A workbook whose parts unpack past the sizes its own directory gives them.
+const LYING_TEXT: &str = "This workbook's parts unpack to more than it says they hold, so it was not opened. Save it again in Excel, or save it as CSV.";
+
 fn check_unpacked(file: Source, caps: Caps) -> Result<()> {
     let bad = |e: zip::result::ZipError| Error::File(format!("cannot read the workbook: {e}"));
     let mut zip = zip::ZipArchive::new(BufReader::with_capacity(BUF_BYTES, file)).map_err(bad)?;
@@ -456,7 +459,8 @@ fn check_unpacked(file: Source, caps: Caps) -> Result<()> {
     for i in 0..zip.len() {
         let entry = zip.by_index_raw(i).map_err(bad)?;
         let size = entry.size();
-        if let Some(what) = entry_kind(entry.name())
+        // zip 9 decodes entry names and fails on a name it cannot read; such a workbook is refused.
+        if let Some(what) = entry_kind(&entry.name().map_err(bad)?)
             && size > caps.entry
         {
             return Err(Error::File(unpacked_text(what, size, caps.entry)));
@@ -479,15 +483,22 @@ fn check_unpacked(file: Source, caps: Caps) -> Result<()> {
         let Ok(mut entry) = zip.by_index(i) else {
             continue;
         };
-        let what = entry_kind(entry.name());
+        let what = entry_kind(&entry.name().map_err(bad)?);
         let left = caps.total - total;
         let limit = if what.is_some() {
             caps.entry.min(left)
         } else {
             left
         };
+        // zip 9 stops a part that unpacks past the size the directory gives it.
         let read = std::io::copy(&mut Read::take(&mut entry, limit + 1), &mut std::io::sink())
-            .map_err(|e| Error::File(format!("cannot read the workbook: {e}")))?;
+            .map_err(|e| {
+                if e.to_string().contains("declared uncompressed size") {
+                    Error::File(LYING_TEXT.into())
+                } else {
+                    Error::File(format!("cannot read the workbook: {e}"))
+                }
+            })?;
         if read > limit {
             return Err(Error::File(match what {
                 Some(what) if read > caps.entry => over_text(what, caps.entry),
@@ -1231,7 +1242,7 @@ mod tests {
     #[test]
     fn unpacked_sizes_counted_not_trusted() {
         // L4 (security audit 1.0): a zip directory that says 10 bytes for parts that
-        // really unpack past the caps is refused on the bytes actually unpacked.
+        // really unpack past the caps is refused; zip 9 stops at the declared size.
         let dir = tempfile::tempdir().unwrap();
         let small = Caps {
             entry: MIB,
@@ -1248,14 +1259,14 @@ mod tests {
             &[("xl/sharedStrings.xml", 4 * MIB as usize)],
             10,
         );
-        assert_eq!(open(&p), over_text(Unpacked::SharedStrings, MIB));
+        assert_eq!(open(&p), LYING_TEXT);
         let p = lying_zip(
             dir.path(),
             "w.xlsx",
             &[("xl/worksheets/sheet1.xml", 2 * MIB as usize)],
             10,
         );
-        assert_eq!(open(&p), over_text(Unpacked::Sheet, MIB));
+        assert_eq!(open(&p), LYING_TEXT);
         let third = (MIB as usize) * 3 / 4;
         let p = lying_zip(
             dir.path(),
@@ -1267,7 +1278,7 @@ mod tests {
             ],
             10,
         );
-        assert_eq!(open(&p), over_text(Unpacked::Total, 2 * MIB));
+        assert_eq!(open(&p), LYING_TEXT);
         assert_eq!(
             over_text(Unpacked::SharedStrings, ENTRY_UNPACKED),
             "This workbook's shared text unpacks to more than 256 MB. Excel import takes up to 256 MB; save it as CSV."
