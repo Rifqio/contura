@@ -22,7 +22,7 @@ cargo clippy -j 6 --workspace --all-targets --features contura-core/test-util --
 cargo test -j 6 -p contura-core --no-fail-fast
 ```
 
-- Live database tests need MySQL on 127.0.0.1:3306 and Postgres on 5432 with the user `dbview_test` / `dbview_test` (override with `DBVIEW_TEST_MYSQL_*` and `DBVIEW_TEST_PG_*`). The MySQL user needs global grants and `log_bin_trust_function_creators=1`; the Postgres user needs `CREATEDB CREATEROLE` but must not be a superuser. Tests make and drop `dbview_test_*` databases. They fail (not skip) without a server. `.github/workflows/ci.yml` shows the exact setup.
+- Live database tests need MySQL on 127.0.0.1:3306 and Postgres on 5432 with the user `dbview_test` / `dbview_test` (override with `DBVIEW_TEST_MYSQL_*` and `DBVIEW_TEST_PG_*`). The MySQL user needs global grants and `log_bin_trust_function_creators=1`; the Postgres user needs `CREATEDB CREATEROLE` but must not be a superuser. Tests make and drop `dbview_test_*` databases. They fail (not skip) without a server. `.github/workflows/checks.yml` shows the exact setup.
 - On Linux the ~60 test binaries are large: build with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` or the disk fills.
 - Run one cargo process at a time. Live AI tests are `#[ignore]` and read `CONTURA_GROQ_KEY` at run time.
 - Before a commit: fmt, the clippy gate, the touched tests (all of `cargo test -p contura-core` for Core changes), `tsc`, and `vitest` for UI changes. CI runs all of them on every push to `main` and every PR.

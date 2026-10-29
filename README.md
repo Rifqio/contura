@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/Rifqio/contura/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Rifqio/contura?style=flat-square&label=release"></a>
   <a href="https://github.com/Rifqio/contura/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/Rifqio/contura/total?style=flat-square"></a>
-  <a href="https://github.com/Rifqio/contura/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Rifqio/contura/ci.yml?branch=main&style=flat-square&label=CI"></a>
+  <a href="https://github.com/Rifqio/contura/actions/workflows/checks.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Rifqio/contura/checks.yml?branch=main&style=flat-square&label=CI"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/Rifqio/contura?style=flat-square"></a>
   <img alt="Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational?style=flat-square">
 </p>

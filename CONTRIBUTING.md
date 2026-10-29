@@ -14,7 +14,7 @@ npm run tauri dev
 
 ## Live database tests
 
-The Core tests run against real servers: MySQL 8.4 on 127.0.0.1:3306 and Postgres on 5432, with the user `dbview_test` / `dbview_test`. The exact setup (grants and server settings) is in `.github/workflows/ci.yml`. The tests fail, not skip, without a server.
+The Core tests run against real servers: MySQL 8.4 on 127.0.0.1:3306 and Postgres on 5432, with the user `dbview_test` / `dbview_test`. The exact setup (grants and server settings) is in `.github/workflows/checks.yml`. The tests fail, not skip, without a server.
 
 ## Before a pull request
 
