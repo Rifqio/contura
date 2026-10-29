@@ -1,4 +1,4 @@
-//! The SQL file import service (Task 9): `plan_script`, `script_statements`,
+//! The SQL file import service: `plan_script`, `script_statements`,
 //! `confirm_script` and `start_script` per Dialect, with a recording sink. Live MySQL and
 //! PostgreSQL in `dbview_test_<8hex>` databases as `dbview_test`; SQLite in temp files.
 
@@ -641,7 +641,7 @@ async fn own_transactions_run_as_written(fx: &mut Fx) {
 }
 
 /// Production: no pass asks; a confirmed pass runs once; a file changed after the
-/// confirmation is refused before anything runs (Q29).
+/// confirmation is refused before anything runs.
 async fn production_script_pass_and_file_changed(fx: &mut Fx) {
     let k = fx.kind;
     let prod = fx.other(true, false).await;
@@ -723,7 +723,7 @@ async fn read_only_refused(fx: &mut Fx) {
 }
 
 /// `script_statements` pages through the file: `from: 50` gives indexes 50 to 149; a
-/// statement that runs as is shows no Skip (Q12).
+/// statement that runs as is shows no Skip.
 async fn statements_paging(fx: &mut Fx) {
     let k = fx.kind;
     let mut body = format!("{};\n", grant(k));
@@ -890,7 +890,7 @@ per_dialect!(
 
 // ---- Dialect-only checks ----
 
-/// Run as is (Q12, Q13): ANALYZE always runs; the REVOKE is skipped until Run as is is
+/// Run as is: ANALYZE always runs; the REVOKE is skipped until Run as is is
 /// ticked, then runs (on the test's own table, from its own user: no role is made).
 #[tokio::test(flavor = "multi_thread")]
 async fn pg_run_as_is_runs_revoke() {
@@ -979,10 +979,10 @@ async fn mysql_routine_bodies_and_smuggled_drop() {
     fx.end().await;
 }
 
-// ---- Fix round 1 (Q44) ----
+// ---- Fix round 1 ----
 
 /// A file that ends inside its own transaction fails, says its rows were rolled back,
-/// and reports nothing kept (Q44 I2).
+/// and reports nothing kept.
 async fn open_transaction_at_end_rolls_back(fx: &mut Fx) {
     let k = fx.kind;
     let body = [
@@ -1004,7 +1004,7 @@ async fn open_transaction_at_end_rolls_back(fx: &mut Fx) {
 }
 
 /// The start opens the file once and holds it: no other program can write it while the
-/// job runs, and it is free again after (Q44 I3).
+/// job runs, and it is free again after.
 async fn file_held_while_the_job_runs(fx: &mut Fx) {
     let k = fx.kind;
     let mut body = format!("{};\n", create(k, "h"));
@@ -1058,7 +1058,7 @@ async fn file_held_while_the_job_runs(fx: &mut Fx) {
 }
 
 /// MySQL `SET autocommit = 0`: rows wait for a COMMIT, so a failure keeps none, and a
-/// file with no COMMIT is rolled back and says so (Q44 I2).
+/// file with no COMMIT is rolled back and says so.
 #[tokio::test(flavor = "multi_thread")]
 async fn mysql_autocommit_off_counts_honestly() {
     let fx = Fx::new(DialectKind::MySql).await;
@@ -1318,7 +1318,7 @@ async fn pg_dump_shaped_file_runs() {
 }
 
 /// A second writing job refuses the start before the Production pass is spent, so the
-/// same pass starts the job once the first ends (Q44 minors).
+/// same pass starts the job once the first ends.
 #[tokio::test(flavor = "multi_thread")]
 async fn job_busy_keeps_the_production_pass() {
     let mut fx = Fx::new(DialectKind::Postgres).await;

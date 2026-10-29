@@ -1,10 +1,10 @@
-// The follow-up card (Plan D Task 16, Decision 10): the assistant asked one question about a vague request. It shows the
+// The follow-up card: the assistant asked one question about a vague request. It shows the
 // question as text, a reply box (blank: the assistant chooses), Cancel and Continue (Ctrl+Enter in the box). The pattern is
 // ChatGPT's and Claude's clarifying question: it sits in the chat under the question, and typing in the composer waits.
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import Kbd from "../../components/Kbd";
 
-/** The reply's length, as the Core takes it (Decision 10). */
+/** The reply's length, as the Core takes it. */
 export const REPLY_MAX = 2000;
 
 interface Props {

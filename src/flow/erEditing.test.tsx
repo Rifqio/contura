@@ -203,7 +203,7 @@ async function selectTable(s: Setup, table: string) {
   await waitFor(() => expect(s.nodeEl(table)!.classList.contains("selected")).toBe(true));
 }
 
-/** The selected frame's shapes in the Shelf that More shapes opens on Shapes (B2 Task 8). */
+/** The selected frame's shapes in the Shelf that More shapes opens on Shapes. */
 async function moreShapes() {
   if (!screen.queryByRole("dialog", { name: "Add to the board" })) await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
   const shelf = await screen.findByRole("dialog", { name: "Add to the board" });
@@ -435,7 +435,7 @@ test("an invalid value on a click away keeps the field open with its reason; Esc
   await s.clickAway();
   expect((await screen.findByRole("alert")).textContent).toBe(ER_MESSAGES.tableTaken("invoices"));
   expect(screen.getByLabelText("Table name")).toBe(table);
-  // Focus is back in the open field, so Esc works at once; a second click away tries again (fix round 2).
+  // Focus is back in the open field, so Esc works at once; a second click away tries again.
   await waitFor(() => expect(document.activeElement).toBe(table));
   await s.clickAway();
   await waitFor(() => expect(document.activeElement).toBe(table));
@@ -476,7 +476,7 @@ test("a flowchart name taken on a click away keeps the F2 field open with its re
   const box = await s.field("Rename Request in");
   await userEvent.clear(box);
   // Since step 11 a flowchart shape keeps a taken name as its label (labels.ts), so the refusal a click away meets in a
-  // flowchart is the emptied name; the rule under test (I1) is the same: the field stays open with its reason.
+  // flowchart is the emptied name; the rule under test is the same: the field stays open with its reason.
   await s.clickAway("Refund");
   expect((await screen.findByRole("alert")).textContent).toBe(needsName("start", "flow"));
   expect(screen.getByLabelText("Rename Request in")).toBe(box);
@@ -494,7 +494,7 @@ test("after Enter or Esc the keys work at once: focus is back on the canvas with
   await waitFor(() => expect(s.doc()).toContain("  mail text not null"));
   expect(canvasEl.contains(document.activeElement)).toBe(true);
   expect(document.activeElement?.tagName).not.toBe("INPUT");
-  // The column just edited is the selected one, so its keys (Task 4) act on it at once.
+  // The column just edited is the selected one, so its keys act on it at once.
   await waitFor(() => expect(s.row("customers", "mail").classList.contains("is-selected")).toBe(true));
   // Esc out of a field: focus back too.
   fireEvent.doubleClick(s.row("customers", "id").querySelector(".fkind-type")!);
@@ -528,7 +528,7 @@ test("long names end in an ellipsis with the full name as a tip; past 20 columns
   // 26 rows, drawn 20 high: 40 + 20 x 22; only the rows in view are drawn (decision 7).
   expect(parseFloat(s.nodeEl(long)!.style.height)).toBe(480);
   expect(s.rows(long).length).toBeLessThanOrEqual(22);
-  // The wheel over rows that scroll scrolls them, not the canvas (I3); a card that fits lets the canvas pan.
+  // The wheel over rows that scroll scrolls them, not the canvas; a card that fits lets the canvas pan.
   expect(s.card(long)!.querySelector(".fkind-er-body")!.classList.contains("nowheel")).toBe(true);
   cleanup();
   const short = setup();
@@ -550,7 +550,7 @@ test("F2 on a flowchart shape edits its label on the shape; a click away keeps i
   await userEvent.type(box, "{End}x{Escape}");
   await waitFor(() => expect(screen.queryByRole("textbox", { name: "Rename Request in" })).toBeNull());
   await waitFor(() => expect(s.doc()).toBe(FLOW.replace(/Request in/g, "Request inx")));
-  // Focus is back on the canvas: F2 works at once (I4).
+  // Focus is back on the canvas: F2 works at once.
   expect(s.canvasEl().contains(document.activeElement)).toBe(true);
   await oneUndo(s, FLOW);
   await waitFor(() => expect(s.nodeEl("Request in")).not.toBeNull());
@@ -1061,7 +1061,7 @@ test("renaming_the_frame_keeps_er_state", async () => {
   fireEvent.scroll(body);
   await waitFor(() => expect(s.rows("customers")[0].querySelector(".fkind-col")!.textContent).not.toBe("c0"));
   const first = s.rows("customers")[0].querySelector(".fkind-col")!.textContent;
-  // Renamed in the frame bar: the same frame (B1's identity key, A2), so nothing resets.
+  // Renamed in the frame bar: the same frame (B1's identity key), so nothing resets.
   const title = within(s.container.querySelector(".frame-bar") as HTMLElement).getByRole("textbox", { name: "Frame name" });
   await userEvent.clear(title);
   await userEvent.type(title, "Store{Enter}");
@@ -1395,7 +1395,7 @@ test("text_with_a_dot_pastes_as_a_dotted_table_name", async () => {
   await selectTable(s, "invoices");
   clipboardText.text = "example.com";
   s.press("v", { ctrlKey: true });
-  // Not a column of invoices (N1). Since Plan A a table name may hold dots, so the text pastes as today: as a table
+  // Not a column of invoices (N1). A table name may hold dots, so the text pastes as today: as a table
   // named example.com, not as a refusal (5478210^'s plain note was for text that read as no ER line at all).
   await waitFor(() => expect(s.doc()).toBe(replaced("}\ninvoices.customer_id", "}\nexample.com\ninvoices.customer_id")));
   expect(s.frame(0)).toContain("invoices {\n  id int pk\n  customer_id int\n}\n");

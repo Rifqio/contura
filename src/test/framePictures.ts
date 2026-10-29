@@ -1,4 +1,4 @@
-// Reading a board frame's picture (Plan F Decision 7) in tests: the SVG behind its <img>, and where it draws each shape
+// Reading a board frame's picture in tests: the SVG behind its <img>, and where it draws each shape
 // and group area on the board.
 import type { Node } from "@xyflow/react";
 import type { FramePictureData } from "../flow/board/boardScene";

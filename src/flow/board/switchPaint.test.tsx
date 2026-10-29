@@ -1,6 +1,6 @@
-// Plan F Task 5 (Decision 12, ruling 6): a frame switch in two paints. The first paint shows the picked frame
+// A frame switch in two paints. The first paint shows the picked frame
 // selected, its shapes still static; the live shapes come one paint later. Keys pressed in the gap act on the picked
-// frame, in order, never on the frame left; a switch also lets the strip's notice go (B3 L2).
+// frame, in order, never on the frame left; a switch also lets the strip's notice go.
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactFlowInstance } from "@xyflow/react";

@@ -306,7 +306,7 @@ test("card_ranges_cover_the_reference_and_its_join", () => {
   expect(texts).toContain("JOIN stores s ON s.id = o.store_id");
 });
 
-// D11 and P5: each Core golden statement, read back, gives the hand-written shape.
+// Each Core golden statement, read back, gives the hand-written shape.
 const golden = import.meta.glob("../../../crates/contura-core/src/visual_query/golden/*", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 const goldenFile = (name: string) => Object.entries(golden).find(([p]) => p.endsWith(`/${name}`))?.[1];
 const shapeFiles = Object.keys(golden).filter((p) => p.endsWith(".shape.json"));

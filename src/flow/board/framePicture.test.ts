@@ -1,4 +1,4 @@
-// Plan F Task 7 (Decision 7): a tiny frame draws as a cached picture of itself, built by the Publish writer at its local
+// A tiny frame draws as a cached picture of itself, built by the Publish writer at its local
 // box, and the store holds one picture a frame, drops them all on a theme switch and builds in time slices after open.
 import type { Node } from "@xyflow/react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -43,7 +43,7 @@ import {
 } from "./framePicture";
 import { perfStep } from "../../perf/perfRecorder";
 
-// The perf log's step sums, watched: a picture left as SVG is logged (Task 9 fix 4).
+// The perf log's step sums, watched: a picture left as SVG is logged.
 vi.mock("../../perf/perfRecorder", async (load) => {
   const real = await load<typeof import("../../perf/perfRecorder")>();
   return { ...real, perfStep: vi.fn(real.perfStep) };
@@ -143,7 +143,7 @@ const entryOf = (d: FlowDoc, at: Record<string, { x: number; y: number }>, textS
 });
 
 /**
- * Shapes resized on the canvas (fix round 1): a step made bigger and one smaller; a 30-row card made shorter (it shows
+ * Shapes resized on the canvas: a step made bigger and one smaller; a 30-row card made shorter (it shows
  * the rows its height holds) and a 1-row card made taller than 20 rows (it stops at 20 rows, as the canvas stops it).
  */
 const RESIZED: { text: string; at: Record<string, { x: number; y: number }>; sizes: FrameLayout["sizes"] }[] = [
@@ -278,7 +278,7 @@ test("a_picture_keeps_shapes_colours_and_icons", () => {
 });
 
 test("a_far_sequence_picture_has_no_words", () => {
-  // Plan E: the sequence look pictured far. Names, labels and the caption are bars, the digits go (as the canvas's far
+  // The sequence look pictured far. Names, labels and the caption are bars, the digits go (as the canvas's far
   // numbers), and the block's turned kind word, which a bar could not follow, is left out.
   const pay = doc(PAY);
   for (const size of ["s", "m", "l"] as TextSize[]) {
@@ -296,7 +296,7 @@ test("a_far_sequence_picture_has_no_words", () => {
 });
 
 test("a_sequence_picture_draws_each_style_as_one_path_where_publish_draws_it", () => {
-  // Plan E Task 9: in a frame picture a sequence's parts of one style are one path (PictureSequence): the same boxes,
+  // In a frame picture a sequence's parts of one style are one path (PictureSequence): the same boxes,
   // bars, chips and pills as Publish's elements of the same scene, in a handful of paths, no element a participant or a
   // message; far the words are bars, with words (picture-text) one group of runs a kind.
   const pay = doc(PAY);
@@ -527,7 +527,7 @@ test("a_theme_switch_keeps_each_picture_until_its_replacement", async () => {
   const dark = { f: store.url("f", kf, fa)!, c: store.url("c", kc, ca)! };
   const held0 = store.bytes();
   store.setTheme("light");
-  // Controller ruling (fix round 1): every Dark picture stays on screen until its Light one replaces it, so no frame
+  // Controller ruling: every Dark picture stays on screen until its Light one replaces it, so no frame
   // blanks; none counts as ready, and the icons and queued builds are gone.
   expect(store.ready("f")).toBe(false);
   expect(store.ready("c")).toBe(false);

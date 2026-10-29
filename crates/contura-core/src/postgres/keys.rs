@@ -1,4 +1,4 @@
-//! Lineage's catalog reads (B2, P6): every Foreign Key touching one schema in one query,
+//! Lineage's catalog reads: every Foreign Key touching one schema in one query,
 //! and the light column read of the tables lineage reached.
 
 use tokio_postgres::Client;

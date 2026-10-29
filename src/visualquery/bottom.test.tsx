@@ -1,4 +1,4 @@
-// Step 12b, board B1 (items 36, 38, 39, 40): the Visual Query's bottom panel, its resize handle, tab badges,
+// The Visual Query's bottom panel, its resize handle, tab badges,
 // one "Changed since the last run", the hint strip and the SQL tab while the SQL is being written.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";

@@ -1,4 +1,4 @@
-// Square-cornered routing for drawn diagrams (spec 6+ section 3 "Lines", the motion artifact's `route`):
+// Square-cornered routing for drawn diagrams (the motion artifact's `route`):
 // leave the side facing the other node, run square, and round each corner by up to 8 px.
 
 export interface Point {

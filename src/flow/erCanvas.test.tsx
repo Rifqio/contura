@@ -1,4 +1,4 @@
-// The ER canvas's commit rules on their own: typed text is never dropped silently (I6).
+// The ER canvas's commit rules on their own: typed text is never dropped silently.
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ER_NOTES } from "../lang/flow/edits";
@@ -80,7 +80,7 @@ test("a write the text refuses keeps the field open with the reason", async () =
   expect(s.edit()).toMatchObject({ kind: "draft", name: "email", type: "int(", error: ER_NOTES.typeReads("int(") });
   expect(s.run).toHaveBeenCalledWith({ op: "addColumn", table: "customers", at: 1, before: null, name: "email", type: "int(" }, expect.objectContaining({ frame: 7 }));
   // The write is tracked, and so is the whole commit, its refusal included, so a switch waiting for it sees the
-  // field refused (Task 9, Review Focus 2): the run's promise among them.
+  // field refused (Review Focus 2): the run's promise among them.
   const ran = s.run.mock.results.map((r) => r.value);
   expect(s.track.mock.calls.some(([p]) => ran.includes(p))).toBe(true);
 });
@@ -204,9 +204,9 @@ test("the_card_modules_import_no_scene_canvas_or_card", () => {
   // B3 Task 2: the card reads erCanvas, so erCanvas's own runtime imports (and re-exports) reach no card, no canvas and
   // no scene: only the leaf ids, the words (type imports only) and the language modules that import nothing of src/flow.
   const runtime = [...erCanvasSource.matchAll(/^(?:import|export) (?!type )[^;]*? from "([^"]+)";/gms)].map((m) => m[1]).filter((f) => f.startsWith("."));
-  // Task 4: planColumnPaste reads a copied line with parseFlow; edits already imports parse, so it reaches nothing new.
+  // PlanColumnPaste reads a copied line with parseFlow; edits already imports parse, so it reaches nothing new.
   // Final review: the one refusal chain and table predicate come from erRelate, which reaches only leaves itself.
-  // Plan F Task 9: the opt-in frame recorder is a leaf too (it imports only the API client's two perf-log calls).
+  // The opt-in frame recorder is a leaf too (it imports only the API client's two perf-log calls).
   const allowed = ["./board/staticIds", "./editWords", "./erRelate", "../lang/flow/edits", "../lang/flow/model", "../lang/flow/parse", "../perf/perfRecorder"];
   expect(runtime.filter((f) => !allowed.includes(f))).toEqual([]);
   expect(editWordsSource).not.toMatch(/^import (?!type )/m);
@@ -218,7 +218,7 @@ test("use_er_relate_reaches_no_card_canvas_or_scene", () => {
   // B3 Task 7: FlowTab's relationship hook and the planning it runs import no card, no canvas and no scene at run time,
   // so no cycle runs back through kindNodes, flowNodes or boardScene (kindNodes reads erRelate's port prefix).
   const runtime = (src: string) => [...src.matchAll(/^(?:import|export) (?!type )[^;]*? from "([^"]+)";/gms)].map((m) => m[1]).filter((f) => f.startsWith("."));
-  // Task 9: the pure language model too (`needsQuotes`, `splitRow`), as erRelate reads it.
+  // The pure language model too (`needsQuotes`, `splitRow`), as erRelate reads it.
   const allowed = ["../diagram/route", "../lang/flow/edits", "../lang/flow/model", "./board/staticIds", "./editWords", "./erRelate", "./kindLayout"];
   expect(runtime(useErRelateSource).filter((f) => !allowed.includes(f))).toEqual([]);
   expect(runtime(erRelateSource).filter((f) => !["../lang/flow/edits", "../lang/flow/model", "./editWords", "./kindLayout"].includes(f))).toEqual([]);

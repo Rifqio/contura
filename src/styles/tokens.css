@@ -2,7 +2,7 @@
   Design tokens as CSS custom properties (ADR 0008). Components use only these
   properties, so a Theme is a different set of values here.
 
-  The colour roles are DESIGN-NEXT.md section 3, copied verbatim: Alucard on
+  The colour roles are DESIGN.md section 3, copied verbatim: Alucard on
   :root (and on .theme-light, which exports read so they always use the light
   set), Dracula on :root[data-theme="dark"] (and on .theme-dark, for the
   Settings theme cards), and Dracula again for "follow
@@ -121,7 +121,7 @@
   --db-sqlite: #0f80cc;
   --win-close: #c42b1c;
   --win-close-ink: #ffffff;
-  /* elevation (DESIGN-NEXT.md 6): level 1 raised, level 2 overlay */
+  /* elevation (DESIGN.md 6): level 1 raised, level 2 overlay */
   --shadow-1: 0 4px 12px rgb(0 0 0 / .10), 0 1px 2px rgb(0 0 0 / .06);
   --shadow-2: 0 16px 40px rgb(0 0 0 / .18), 0 2px 6px rgb(0 0 0 / .08);
   --color-scrim: rgb(0 0 0 / .32);
@@ -242,7 +242,7 @@
   --db-sqlite: #63b4ec;
   --win-close: #c42b1c;
   --win-close-ink: #ffffff;
-  /* elevation (DESIGN-NEXT.md 6): level 1 raised, level 2 overlay */
+  /* elevation (DESIGN.md 6): level 1 raised, level 2 overlay */
   --shadow-1: 0 4px 12px rgb(0 0 0 / .40), 0 1px 2px rgb(0 0 0 / .30);
   --shadow-2: 0 16px 40px rgb(0 0 0 / .55), 0 2px 6px rgb(0 0 0 / .35);
   --color-scrim: rgb(0 0 0 / .5);
@@ -367,7 +367,7 @@
     --db-sqlite: #63b4ec;
     --win-close: #c42b1c;
     --win-close-ink: #ffffff;
-    /* elevation (DESIGN-NEXT.md 6): level 1 raised, level 2 overlay */
+    /* elevation (DESIGN.md 6): level 1 raised, level 2 overlay */
     --shadow-1: 0 4px 12px rgb(0 0 0 / .40), 0 1px 2px rgb(0 0 0 / .30);
     --shadow-2: 0 16px 40px rgb(0 0 0 / .55), 0 2px 6px rgb(0 0 0 / .35);
     --color-scrim: rgb(0 0 0 / .5);
@@ -400,7 +400,7 @@
 }
 
 :root {
-  /* typography: the three families of DESIGN-NEXT.md 4.1 */
+  /* typography: the three families of DESIGN.md 4.1 */
   --font-family-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --font-family-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --font-family-code: "JetBrains Mono", "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
@@ -591,7 +591,7 @@
   --status-bar-font: var(--font-small);
   --status-bar-height: 24px;
 
-  /* layout (DESIGN-NEXT.md 5.2) */
+  /* layout (DESIGN.md 5.2) */
   --layout-tree-width: 288px;
   --layout-toolbar-height: 36px;
   --layout-row-number-width: 48px;
@@ -600,12 +600,12 @@
   --focus-ring-width: 2px;
   --focus-ring-offset: 1px;
 
-  /* elevation (DESIGN-NEXT.md 6): --shadow-1 and -2 are set per theme above */
+  /* elevation (DESIGN.md 6): --shadow-1 and -2 are set per theme above */
   --shadow-menu: var(--shadow-1);
   --shadow-toast: var(--shadow-1);
   --shadow-dialog: var(--shadow-2);
 
-  /* motion (DESIGN-NEXT.md 8) */
+  /* motion (DESIGN.md 8) */
   --motion-fast: 80ms;
   --motion-base: 120ms;
   --motion-slow: 180ms;

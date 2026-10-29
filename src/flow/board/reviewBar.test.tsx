@@ -1,4 +1,4 @@
-// The review bar (Plan D Task 13, Decision 11, A8): it floats 8 px above the top right of the frames a proposal
+// The review bar: it floats 8 px above the top right of the frames a proposal
 // changes, follows pan and zoom inside the canvas, names those frames, and lands or drops the changes with Accept
 // (Ctrl+Enter) and Reject (Ctrl+Backspace). On the canvas the keys act only on an event no canvas key took: a selected
 // ER column (B3 decision 10) and a picked class member (CL1) keep their Ctrl+Enter. Each touched frame counts its own
@@ -272,7 +272,7 @@ test("the_bar_follows_pan_and_zoom_and_stays_inside", async () => {
   const boxes = canvas.props!.nodes.filter((n) => n.type === "boardFrame" && ((n.data as { pending?: number }).pending ?? 0) > 0).map((n) => (n.data as { box: FrameBox }).box);
   expect(boxes.map((b) => b.title).sort()).toEqual(["Checkout", "Refund"]);
   const right = Math.max(...boxes.map((b) => b.x + b.w));
-  // The tabs' top: the strip keeps its screen height below 100 percent (Plan F Decision 5).
+  // The tabs' top: the strip keeps its screen height below 100 percent.
   const top = (zoom: number) => Math.min(...boxes.map((b) => b.y)) - tabHeight(zoom);
   const at = () => ({ x: Number.parseFloat(bar.style.left), y: Number.parseFloat(bar.style.top) });
   // jsdom lays nothing out: the bar measures 0 by 0, so its corner is the anchor less the gap.
@@ -343,7 +343,7 @@ test("the_bar_never_sits_under_the_toolbar_and_flips_below_the_frames", async ()
     const bar = await reviewing();
     const frames = canvas.props!.nodes.filter((n) => n.type === "boardFrame" && ((n.data as { pending?: number }).pending ?? 0) > 0).map((n) => (n.data as { box: FrameBox }).box);
     const right = Math.max(...frames.map((b) => b.x + b.w));
-    // The tabs' top at the zoom these views use (Plan F Decision 5).
+    // The tabs' top at the zoom these views use.
     const top = Math.min(...frames.map((b) => b.y)) - tabHeight(0.25);
     const bottom = Math.max(...frames.map((b) => b.y + b.h));
     const at = () => ({ x: Number.parseFloat(bar.style.left), y: Number.parseFloat(bar.style.top) });
@@ -374,7 +374,7 @@ test("the_bar_never_sits_under_the_toolbar_and_flips_below_the_frames", async ()
 });
 
 test("below_100_percent_the_bar_sits_above_the_tab_strip", async () => {
-  // Final review I1: the tab strip keeps its 30 screen px below 100 percent (Plan F Decision 5), so the bar's bottom
+  // Final review I1: the tab strip keeps its 30 screen px below 100 percent, so the bar's bottom
   // sits REVIEW_GAP above the strip's top at any zoom, never over the frame's title and its AI Chat count.
   const boxes = laidOut({ bar: [240, 36] });
   try {
@@ -487,7 +487,7 @@ test("with_a_column_selected_ctrl_enter_keeps_b3s_meaning", async () => {
 });
 
 test("with_a_class_member_picked_ctrl_enter_keeps_cl1s_meaning", async () => {
-  // CL1 (A8): a picked class member takes Ctrl+Enter (FlowTab `memberKey`, copy below) before the review does.
+  // CL1: a picked class member takes Ctrl+Enter (FlowTab `memberKey`, copy below) before the review does.
   const s = await setup();
   act(() => hooked.doc!.select({ title: "Billing", index: 3 }));
   const card = () => [...s.container.querySelectorAll<HTMLElement>(".react-flow__node")].find((e) => e.getAttribute("data-id") === "Invoice") ?? null;

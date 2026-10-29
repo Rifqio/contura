@@ -1,4 +1,4 @@
-//! `InsertBuilder`: multi-row INSERT statements with per-Dialect literals (Task 4).
+//! `InsertBuilder`: multi-row INSERT statements with per-Dialect literals.
 //!
 //! The SQL export and the import write the same statements: one head
 //! (`INSERT INTO t (a, b) VALUES`), then rows of literals cut by a row and a byte limit.
@@ -20,7 +20,7 @@ pub enum Conversion {
     Binary,
     Json,
     /// A MySQL spatial column: WKT text written through `ST_GeomFromText`, with the
-    /// column's SRID (Q34 I1).
+    /// column's SRID.
     Geometry {
         srid: Option<u32>,
     },
@@ -123,7 +123,7 @@ pub fn conversion_for(kind: DialectKind, type_sql: &str) -> Conversion {
 }
 
 /// NaN or Infinity in any spelling a Dialect returns (PostgreSQL `Infinity`, SQLite
-/// `inf`, Rust `NaN`), as PostgreSQL spells it (Q34 I3).
+/// `inf`, Rust `NaN`), as PostgreSQL spells it.
 fn pg_float_word(s: &str) -> Option<&'static str> {
     let lower = s.to_ascii_lowercase();
     let (negative, word) = match lower.strip_prefix('-') {
@@ -138,7 +138,7 @@ fn pg_float_word(s: &str) -> Option<&'static str> {
     }
 }
 
-/// Whether `v` is NaN or Infinity, which only PostgreSQL floats can hold (Q32b).
+/// Whether `v` is NaN or Infinity, which only PostgreSQL floats can hold.
 pub fn is_float_word(v: &Value) -> bool {
     match v {
         Value::Number(s) | Value::Text(s) => pg_float_word(s.trim()).is_some(),
@@ -196,7 +196,7 @@ fn bool_value_literal(kind: DialectKind, conv: Conversion, b: bool) -> String {
 
 fn bytes_literal(kind: DialectKind, bytes: &[u8]) -> String {
     match kind {
-        // Q6: `decode` reads the same whatever `standard_conforming_strings` says.
+        // `decode` reads the same whatever `standard_conforming_strings` says.
         DialectKind::Postgres => format!("decode('{}', 'hex')", hex_lower(bytes)),
         DialectKind::MySql | DialectKind::Sqlite => format!("X'{}'", hex_lower(bytes)),
     }
@@ -272,7 +272,7 @@ pub fn literal(kind: DialectKind, conv: Conversion, v: &Value) -> Result<String>
     }
 }
 
-/// One value as an export writes it (Q34 I2): never refused, never coerced. A value
+/// One value as an export writes it: never refused, never coerced. A value
 /// outside its column's usual form (`2` in a `tinyint(1)`, `''` in a SQLite INTEGER,
 /// `yes` in a SQLite BOOLEAN) is written as it is stored: a number bare, anything else
 /// as text. NaN and Infinity follow Q32b on PostgreSQL; the SQL writer turns them into
@@ -559,7 +559,7 @@ mod tests {
         let v = Value::Bytes(vec![0, 0xab, 0xff]);
         assert_eq!(literal(MY, Conversion::Binary, &v).unwrap(), "X'00abff'");
         assert_eq!(literal(LITE, Conversion::Binary, &v).unwrap(), "X'00abff'");
-        // Q6: never '\x..'::bytea, which misreads when standard_conforming_strings is off.
+        // never '\x..'::bytea, which misreads when standard_conforming_strings is off.
         assert_eq!(
             literal(PG, Conversion::Binary, &v).unwrap(),
             "decode('00abff', 'hex')"
@@ -570,7 +570,7 @@ mod tests {
         );
         // Bytes keep their binary form whatever the column says.
         assert_eq!(literal(MY, Conversion::Text, &v).unwrap(), "X'00abff'");
-        // D10: text starting 0x going into a binary column is hex.
+        // text starting 0x going into a binary column is hex.
         assert_eq!(
             literal(MY, Conversion::Binary, &text("0x00ABff")).unwrap(),
             "X'00abff'"
@@ -602,7 +602,7 @@ mod tests {
             (LITE, text("true"), "1"),
             (PG, text("yes"), "TRUE"),
             (MY, text("no"), "0"),
-            // The import checks take on and off too (Task 8).
+            // The import checks take on and off too.
             (PG, text("on"), "TRUE"),
             (MY, text("OFF"), "0"),
         ];
@@ -659,7 +659,7 @@ mod tests {
                 );
             }
         }
-        // Q32b: PostgreSQL floats keep NaN and Infinity, as typed literals.
+        // PostgreSQL floats keep NaN and Infinity, as typed literals.
         assert_eq!(
             literal(PG, Conversion::Number, &num("NaN")).unwrap(),
             "'NaN'::float8"

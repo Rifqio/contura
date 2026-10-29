@@ -1,5 +1,5 @@
 // lang-sql gives a function call the same node as any other name, so "a name followed by `(`"
-// is coloured here instead (DESIGN-NEXT 3.6, the function role).
+// is coloured here instead (DESIGN.md 3.6, the function role).
 import { syntaxTree } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import {

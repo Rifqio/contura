@@ -1,6 +1,6 @@
 // What each part of a board publishes (Plan B4 Decisions 1, 2, 4 and 7), as plain data: the frames with their docs,
-// layouts and settings in board units, the sketches, and the region. No DOM and no React: the composer (Task 4) draws
-// from this, and the dialog (Task 5) reads the parts and the left-out counts.
+// layouts and settings in board units, the sketches, and the region. No DOM and no React: the composer draws
+// from this, and the dialog reads the parts and the left-out counts.
 import { type Box, type Scene, sceneBounds } from "../../../diagram/export/scene";
 import { type DiagramKind, FIXED_KINDS, type FlowDoc } from "../../../lang/flow/model";
 import type { FrameResult } from "../../../lang/flow/service";
@@ -32,9 +32,9 @@ export interface PublishFrame {
 export interface BoardPublishInput {
   /** The frames with something drawn, in text order. */
   frames: PublishFrame[];
-  /** Frames left out with nothing drawn (Decision 4). */
+  /** Frames left out with nothing drawn. */
   nothingDrawn: number;
-  /** Frames left out because an earlier frame has their title (Decision 4). */
+  /** Frames left out because an earlier frame has their title. */
   clashing: number;
   sketches: readonly Sketch[];
   iconTitles: ReadonlyMap<string, string>;
@@ -108,7 +108,7 @@ export function frameDraws(entry: FrameLayout | undefined, doc: FlowDoc): boolea
 /**
  * The publish input of a board as FlowTab holds it (R8): `frames` and `keys` are the pair FlowTab's `board` was built
  * from (`parsed.result.frames`, `parsed.keys`); `boxes` and `frameIndex` come from that `board`; `live` is the
- * live frame's layout, folds and settings. The canvas is in board units (Plan F Decision 11), so its boxes are taken
+ * live frame's layout, folds and settings. The canvas is in board units, so its boxes are taken
  * as they are.
  */
 export function boardPublishInput(a: {
@@ -178,7 +178,7 @@ export function boardPublishInput(a: {
 }
 
 /**
- * True when some frame has something drawn (Decision 4), by the same rule `boardPublishInput` leaves frames out with:
+ * True when some frame has something drawn, by the same rule `boardPublishInput` leaves frames out with:
  * Publish's entry points are on. Stops at the first frame that draws; the live frame reads its live layout. With
  * `only`, that one frame is asked about (Publish frame...), so the row and the publish input never disagree.
  */
@@ -298,7 +298,7 @@ export function frameExtent(f: PublishFrame, titles: boolean): Box {
 }
 
 /**
- * What part `p` draws (Decision 1). Whole board: every frame and sketch, the region round them all. Selected frame: the
+ * What part `p` draws. Whole board: every frame and sketch, the region round them all. Selected frame: the
  * live frame alone (an overlapping frame is left out, as Figma exports) with the sketches wholly on its box, the region
  * its extent. Selection and What's on screen: every frame and sketch that meets `region`.
  */

@@ -313,7 +313,7 @@ test("plain_svg_allows_use_and_defs_only_beyond_today", () => {
   }
 });
 
-// ----- Plan F Task 7 (Decision 7): a frame picture's soft text and its ER cards cut at the canvas's 20 rows.
+// ----- A frame picture's soft text and its ER cards cut at the canvas's 20 rows.
 
 test("soft_text_draws_bars_and_no_text", () => {
   for (const k of [1, 1.15]) {

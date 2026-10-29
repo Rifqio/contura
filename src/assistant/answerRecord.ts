@@ -168,7 +168,7 @@ export function sentLine(record: AnswerRecord, at: number, opts: { tool?: boolea
   }
   if (neverLeft(record)) return `${clock(at)} · Not sent to ${providerName(s.provider)}, no connection`;
   const parts = [`${clock(at)} · Sent ${sentBytes(s).toLocaleString("en-US")} B to ${providerName(s.provider)}`, shortModel(s.model)];
-  // A diagram Ask carries one tool (board 11.12).
+  // A diagram Ask carries one tool.
   if (opts.tool) parts.push("one tool");
   if (record.millis != null) parts.push(secondsText(record.millis));
   const cached = record.usage?.cacheRead ?? 0;

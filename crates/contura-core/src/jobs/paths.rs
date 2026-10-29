@@ -49,7 +49,7 @@ fn resolved(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The folder inside Contura's data folder that holds every `.flow` file (Q35).
+/// The folder inside Contura's data folder that holds every `.flow` file.
 pub const DIAGRAMS_DIR: &str = "diagrams";
 
 const FLOW_REFUSAL: &str = "Diagrams are kept in Contura's diagrams folder.";
@@ -70,7 +70,7 @@ fn reserved_on_windows(stem: &str) -> bool {
     }
 }
 
-/// The one refusal for a diagram name the rule does not allow (step 6+ spec, P1).
+/// The one refusal for a diagram name the rule does not allow.
 pub const DIAGRAM_NAME_REFUSAL: &str =
     r#"Use a name without \ / : * ? " < > | and under 120 characters."#;
 
@@ -78,14 +78,13 @@ pub const DIAGRAM_NAME_REFUSAL: &str =
 pub const DIAGRAM_NAME_MAX: usize = 120;
 
 /// The longest diagram name in UTF-8 bytes, so `<name>.flow.layout.json` and its partial
-/// and moved-aside spellings stay inside a file name's 255 UTF-16 units (P4).
+/// and moved-aside spellings stay inside a file name's 255 UTF-16 units.
 pub const DIAGRAM_NAME_MAX_BYTES: usize = 200;
 
 /// The file name of diagram `name` in the diagrams folder: `<name>.flow`. The Core adds
 /// the extension. An empty name, one over 120 characters or 200 UTF-8 bytes, one ending in
 /// `.flow` (any case), one with a path separator, `..`, a character Windows does not allow
-/// in a file name, or a reserved Windows name is refused with `DIAGRAM_NAME_REFUSAL`
-/// (Q35, P1, P4).
+/// in a file name, or a reserved Windows name is refused with `DIAGRAM_NAME_REFUSAL`.
 pub fn flow_file_name(name: &str) -> Result<String> {
     let bad_char = |c: char| c.is_control() || r#"\/:*?"<>|"#.contains(c);
     let has_flow_extension = name.len() >= 5
@@ -105,8 +104,7 @@ pub fn flow_file_name(name: &str) -> Result<String> {
     Ok(format!("{name}.flow"))
 }
 
-/// The folder inside `<data>\diagrams` that holds lineage's moved-card layouts (spec 6+
-/// section 5): one `<hash>.layout.json` per Connection and table.
+/// The folder inside `<data>\diagrams` that holds lineage's moved-card layouts: one `<hash>.layout.json` per Connection and table.
 pub const LINEAGE_DIR: &str = ".lineage";
 
 /// The hex digits of a lineage layout file's name, before `.layout.json`.
@@ -146,7 +144,7 @@ fn check_lineage_layout_path(parent: &Path, name: &str, data_dir: &Path) -> Resu
     }
 }
 
-/// Q35: a `.flow` file or its layout file directly in `<data>\diagrams`, with a name
+/// A `.flow` file or its layout file directly in `<data>\diagrams`, with a name
 /// `flow_file_name` accepts, or a lineage layout file in its `.lineage` folder. The folder
 /// is compared by file identity, like the data folder.
 fn check_flow_path(path: &Path, data_dir: &Path) -> Result<()> {
@@ -189,7 +187,7 @@ fn refusal(what: PathUse) -> Error {
 
 /// Refuses any path inside Contura's data folder: that folder belongs to the app (ADR 0006).
 ///
-/// It compares file identities, not path text (Q24): every existing folder on the path,
+/// It compares file identities, not path text: every existing folder on the path,
 /// resolved, is checked against the data folder's volume and file index (device and inode
 /// elsewhere), so a UNC share, a junction, a subst drive or another spelling of the same
 /// folder is caught. A relative path is refused, and so is any path when the data folder
@@ -242,7 +240,7 @@ struct Live {
 
 /// The partial files this process is writing. A `.partial` on disk that matches none of
 /// them, by path or by file identity, was left by a crash or a kill, so `create` removes
-/// it (Q24). One that matches is busy and is never removed, whatever its spelling (Q33).
+/// it. One that matches is busy and is never removed, whatever its spelling.
 static LIVE: Mutex<Vec<Live>> = Mutex::new(Vec::new());
 
 fn live() -> MutexGuard<'static, Vec<Live>> {
@@ -273,7 +271,7 @@ pub struct PartialFile {
 }
 
 impl PartialFile {
-    /// Runs the data-folder guard for `what` first, so no write can skip it (Q33). Refuses
+    /// Runs the data-folder guard for `what` first, so no write can skip it. Refuses
     /// an existing target unless `overwrite` (`FileExists`), and a partial that another
     /// export in this process is still writing. A stale partial is replaced.
     pub fn create(
@@ -599,7 +597,7 @@ pub fn read_user_text(path: &Path, max_bytes: u64) -> Result<String> {
 
 /// Opens a file the user chose for a whole import job, with other writers refused while
 /// it is open: on Windows by its share mode (read sharing only, so no writer and no
-/// rename or delete), elsewhere by an advisory shared lock (Q44, Q45).
+/// rename or delete), elsewhere by an advisory shared lock.
 pub fn open_locked(path: &Path) -> Result<File> {
     #[cfg(windows)]
     let file = {
@@ -636,7 +634,7 @@ pub fn open_locked(path: &Path) -> Result<File> {
 /// An import's file, opened once with `open_locked` and held until the job ends: the
 /// handle closes when the last clone and the last reader are dropped. Its size is read
 /// from the handle when it opens, and every reader of the job reads the handle at its
-/// own offset up to that size, so the bytes checked are the bytes that run (Q45).
+/// own offset up to that size, so the bytes checked are the bytes that run.
 #[derive(Clone)]
 pub struct HeldFile {
     file: Arc<File>,
@@ -941,7 +939,7 @@ mod tests {
             flow_file_name("Order handover").unwrap(),
             "Order handover.flow"
         );
-        // The Core adds the extension; a name that has one already is refused (P4).
+        // The Core adds the extension; a name that has one already is refused.
         assert_eq!(flow_file_name("orders.flows").unwrap(), "orders.flows.flow");
         for bad in [
             "",
@@ -1120,7 +1118,7 @@ mod tests {
         assert!(first.partial_path().exists());
     }
 
-    /// Q45: readers of one held file keep their own offsets and stop at the size the
+    /// Readers of one held file keep their own offsets and stop at the size the
     /// handle saw when it opened; on Windows the hold refuses writers until all are gone.
     #[test]
     fn held_file_readers_are_independent_and_bounded() {

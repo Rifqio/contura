@@ -1,4 +1,4 @@
-// The diagram canvas's one motion table (spec 6+ section 4, DESIGN-NEXT 8). Every timed move on the canvas
+// The diagram canvas's one motion table (DESIGN.md 8). Every timed move on the canvas
 // reads its duration here, so reduced motion turns all of them into 0 in one place. Nothing loops.
 
 /** Milliseconds per interaction: 80 hover and press, 120 small moves, 180 toasts, 240 canvas moves. */
@@ -35,9 +35,9 @@ export const MOTION = {
 
 export type MotionKey = keyof typeof MOTION;
 
-/** Enter easing (DESIGN-NEXT 8), the same curve as `--ease-enter`. */
+/** Enter easing (DESIGN.md 8), the same curve as `--ease-enter`. */
 export const EASE_IN = "cubic-bezier(.2, 0, 0, 1)";
-/** Exit easing (DESIGN-NEXT 8), the same curve as `--ease-exit`; exits are faster than enters. */
+/** Exit easing (DESIGN.md 8), the same curve as `--ease-exit`; exits are faster than enters. */
 export const EASE_OUT = "cubic-bezier(.4, 0, 1, 1)";
 
 let appPref = false;

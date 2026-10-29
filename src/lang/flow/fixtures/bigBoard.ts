@@ -29,7 +29,7 @@ export const board = (typed = "") => `${BEFORE}${frame(TYPED_FRAME, typed)}${AFT
 export const PROPOSAL_FRAMES = [0, 12, TYPED_FRAME, 37, 49];
 
 /**
- * Plan D Task 7: a 40-change proposal over the five `PROPOSAL_FRAMES`, eight in each, every one Ok: three new shapes,
+ * A 40-change proposal over the five `PROPOSAL_FRAMES`, eight in each, every one Ok: three new shapes,
  * two lines to them, a relabel, a rename and a move between the frame's groups.
  */
 export function bigProposal(): ProposedChange[] {

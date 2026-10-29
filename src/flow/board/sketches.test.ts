@@ -1,4 +1,4 @@
-// Task 11: loose sketches (Decisions 5, 20 and 21). The ops are pure and return changes; the board scene draws them as
+// Loose sketches. The ops are pure and return changes; the board scene draws them as
 // children of one zero-size layer node, Sections and boxes under every frame, the rest over the live frame.
 import { render } from "@testing-library/react";
 import type { Node } from "@xyflow/react";
@@ -193,7 +193,7 @@ test("sections_and_boxes_draw_under_frames", () => {
   const byId = new Map(out.nodes.map((n) => [n.id, n]));
   const layer = byId.get(SKETCH_LAYER_ID)!;
   expect(layer).toBeDefined();
-  // Zero-size, taking no pointer events, under everything; at the board's (0, 0) (Plan F Decision 11).
+  // Zero-size, taking no pointer events, under everything; at the board's (0, 0).
   expect(layer.width).toBe(0);
   expect(layer.height).toBe(0);
   expect(layer.style?.width).toBe(0);
@@ -221,7 +221,7 @@ test("sections_and_boxes_draw_under_frames", () => {
     expect(n.style).toMatchObject({ width: s.w, height: s.h });
     expect((n.data as { sketch: Sketch }).sketch).toBe(s);
   }
-  // With Refund live the layer stays where it is, the very same node (Plan F Decision 11: one origin for the board).
+  // With Refund live the layer stays where it is, the very same node (one origin for the board).
   const live = scene.build(r.frames, boardWith(SKETCHES), KEYS, { title: "Refund", index: 1 }, { nodes: [] }, []);
   const layer2 = live.nodes.find((n) => n.id === SKETCH_LAYER_ID)!;
   expect(layer2).toBe(layer);
@@ -348,7 +348,7 @@ test("the_canvas_names_the_same_sketch_layer", () => {
 });
 
 test("a_sketch_with_a_nan_number_is_caught_before_addSketch", () => {
-  // Task 18a: addSketch's quiet refusal ('' note) is only for a caller bug; callers check finiteSketch first.
+  // AddSketch's quiet refusal ('' note) is only for a caller bug; callers check finiteSketch first.
   const ok: NewSketch = { kind: "rect", x: 0, y: 0, w: 10, h: 10 };
   expect(finiteSketch(ok)).toBe(true);
   expect(finiteSketch({ kind: "pen", x: 0, y: 0, w: 10, h: 10, points: [[0, 0], [5, 5]] })).toBe(true);

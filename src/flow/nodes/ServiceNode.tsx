@@ -1,7 +1,7 @@
-// A cloud service: a 48 px tile showing the provider's icon unchanged, with the name under it (frame 6+.5).
+// A cloud service: a 48 px tile showing the provider's icon unchanged, with the name under it.
 // An icon is inked for the theme by the Core and draws bare at the tile's full size; a service with no icon keeps
 // the plain plate. Icons come from the pack as data: or blob: URLs and render only as an
-// <img>, so nothing inside an icon can run (ruling P7). The four ports sit on the tile.
+// <img>, so nothing inside an icon can run. The four ports sit on the tile.
 import Icon from "../../components/Icon";
 import { type NodeBaseProps, NodeShell } from "./parts";
 

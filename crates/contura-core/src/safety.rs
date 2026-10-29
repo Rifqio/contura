@@ -605,7 +605,7 @@ fn top_tokens<'a>(toks: impl IntoIterator<Item = &'a PTok>) -> Vec<Top> {
 
 /// For each `;`-separated part, whether it belongs to a real routine (its CREATE or its body).
 /// A routine whose body is still open at the end of the text is not one: its parts, and all
-/// after them, are plain statements (round 7, C1).
+/// after them, are plain statements (round 7).
 fn routine_parts<'a, I>(parts: impl IntoIterator<Item = I>) -> Vec<bool>
 where
     I: IntoIterator<Item = &'a PTok>,
@@ -2631,7 +2631,7 @@ fn set_class(dialect: DialectKind, toks: &[Tok], all: &[&str], wt: &str) -> Stat
     }
 }
 
-/// The 5a classifier case table, shared with the script splitter's tests (D2).
+/// The 5a classifier case table, shared with the script splitter's tests.
 #[cfg(test)]
 pub(crate) mod cases {
     use super::StatementClass;
@@ -3273,7 +3273,7 @@ select 1",
         );
     }
 
-    /// Q40: the byte lexer with sealing gives the same answers as the lexer before it,
+    /// The byte lexer with sealing gives the same answers as the lexer before it,
     /// on every case text in every Dialect and on seeded joins of them.
     #[test]
     fn byte_lexer_matches_the_frozen_lexer() {
@@ -4077,7 +4077,7 @@ mod no_where_tests {
         );
     }
 
-    /// Round 7 (C1, I1, I2): the shared cases in `src/query/fixtures/splitCases.json`, which
+    /// Round 7: the shared cases in `src/query/fixtures/splitCases.json`, which
     /// the editor's splitter is tested on too, so both give the same statements.
     #[test]
     fn r7_shared_split_cases() {
@@ -4347,7 +4347,7 @@ mod no_where_tests {
         assert!(checked > 1000, "{checked}");
     }
 
-    /// Round 7 (I3): code the lexer cannot see into counts as a write, so Production asks
+    /// Round 7: code the lexer cannot see into counts as a write, so Production asks
     /// and Read-only refuses.
     #[test]
     fn r7_code_that_runs_code_is_a_write() {

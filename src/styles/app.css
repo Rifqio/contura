@@ -1,6 +1,6 @@
 /*
   Component styles. Only token custom properties from tokens.css appear here:
-  no literal colours, radii or fonts (ADR 0008, ADR 0015). The design source is DESIGN-NEXT.md.
+  no literal colours, radii or fonts (ADR 0008, ADR 0015). The design source is DESIGN.md.
 */
 *,
 *::before,
@@ -764,7 +764,7 @@ ul {
   height: 22px;
 }
 
-/* A Saved Query's Connection, in subtle text after its name (D15). */
+/* A Saved Query's Connection, in subtle text after its name. */
 .tree-meta {
   flex: 0 4 auto;
   min-width: 0;
@@ -2698,7 +2698,7 @@ textarea.input {
   }
 }
 
-/* DBML editor (step 3) */
+/* DBML editor */
 .dbml-editor {
   height: 100%;
   min-height: 0;
@@ -2758,7 +2758,7 @@ textarea.input {
   font-feature-settings: "calt" 1, "liga" 1;
 }
 
-/* Diagram canvas (src/diagram, A1) and the Schema Builder canvas (step 3) */
+/* Diagram canvas (src/diagram) and the Schema Builder canvas */
 .schema-canvas {
   position: relative;
   display: flex;
@@ -2848,7 +2848,7 @@ textarea.input {
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
-/* The dot grid (DESIGN-NEXT 10.6): 16 px dots in the border colour, 80 px dots in the strong border at 50 percent. */
+/* The dot grid (DESIGN.md 10.6): 16 px dots in the border colour, 80 px dots in the strong border at 50 percent. */
 .diagram-canvas .diagram-grid-minor {
   fill: var(--c-border);
 }
@@ -3021,7 +3021,7 @@ textarea.input {
   border-radius: 6px;
   color: var(--c-text);
 }
-/* 16 / 20 600 as DESIGN-NEXT 10.6 draws it; no font token has this size, so it is set here on purpose. */
+/* 16 / 20 600 as DESIGN.md 10.6 draws it; no font token has this size, so it is set here on purpose. */
 .card-box-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3343,7 +3343,7 @@ textarea.input {
   margin: 0 0 var(--spacing-xs);
 }
 
-/* Publish image dialog (DESIGN-NEXT 10.9): body grid 1fr 240px; a 308 px preview on the canvas colour. */
+/* Publish image dialog (DESIGN.md 10.9): body grid 1fr 240px; a 308 px preview on the canvas colour. */
 .publish-keys {
   display: flex;
   flex-direction: column;
@@ -3568,7 +3568,7 @@ textarea.input {
   pointer-events: none;
 }
 
-/* Schema Builder screen (step 3) */
+/* Schema Builder screen */
 .schema-main {
   grid-column: 1 / -1;
   flex: 1;
@@ -3836,7 +3836,7 @@ textarea.input {
   }
 }
 
-/* SQL editor and results (step 4a) */
+/* SQL editor and results */
 .sql-editor {
   height: 100%;
   min-height: 0;
@@ -4270,10 +4270,10 @@ textarea.input {
   }
 }
 
-/* Query tab (step 4a) */
+/* Query tab */
 .query-tab {
   display: grid;
-  /* P11-14: one track that may shrink to nothing, so the strip's own width never widens the tab. */
+  /* One track that may shrink to nothing, so the strip's own width never widens the tab. */
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
@@ -4465,7 +4465,7 @@ button.chip[aria-pressed="true"] {
   overflow-wrap: anywhere;
 }
 
-/* The Production confirmation before a run that writes (step 5a). */
+/* The Production confirmation before a run that writes. */
 .confirm-title {
   font-weight: 400;
 }
@@ -4573,7 +4573,7 @@ button.chip[aria-pressed="true"] {
 .query-position {
   font-variant-numeric: tabular-nums;
 }
-/* DN 10.12 toast: bottom right, 360 px, at least 44 px, level 1, up to two lines (M1). */
+/* DN 10.12 toast: bottom right, 360 px, at least 44 px, level 1, up to two lines. */
 .toast {
   position: fixed;
   right: max(var(--spacing-lg), env(safe-area-inset-right, 0px));
@@ -4764,7 +4764,7 @@ button.chip[aria-pressed="true"] {
   }
 }
 
-/* Title-bar tabs (step 4a; item 48: Edge style) */
+/* Title-bar tabs (item 48: Edge style) */
 .tab-strip {
   display: flex;
   align-items: flex-end;
@@ -4917,7 +4917,7 @@ button.chip[aria-pressed="true"] {
   font: var(--font-body);
   cursor: pointer;
 }
-/* C8: the title keeps some room next to the mark and chips; it is what gives way first. */
+/* the title keeps some room next to the mark and chips; it is what gives way first. */
 .work-tab-name {
   min-width: 3ch;
   overflow: hidden;
@@ -4976,7 +4976,7 @@ button.chip[aria-pressed="true"] {
   font: var(--font-small);
 }
 
-/* Query History (frame m, Q1 to Q5): docks at 360 px; no ancestor of the "..." menu clips it. */
+/* Query History (a menu on the History tab): docks at 360 px; no ancestor of the "..." menu clips it. */
 .body-history {
   grid-template-columns: var(--layout-tree-width) minmax(0, 1fr) 360px;
 }
@@ -5981,7 +5981,7 @@ button.chip[aria-pressed="true"] {
   width: 24px;
   height: 24px;
 }
-/* The current model's facts under the Model field (board 11.4). */
+/* The current model's facts under the Model field. */
 .mfacts {
   display: flex;
   flex-wrap: wrap;
@@ -6115,7 +6115,7 @@ button.chip[aria-pressed="true"] {
 .button-danger-text {
   color: var(--c-danger-text);
 }
-/* AI access table, step 11c (board 11.4): the Sync and Context columns, then the help line. */
+/* AI access table: the Sync and Context columns, then the help line. */
 .share-table .sync-select {
   min-width: 140px;
 }
@@ -6123,7 +6123,7 @@ button.chip[aria-pressed="true"] {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-/* P11-3: board 11.4's four columns at set widths, so the table keeps to the 512px Settings column. */
+/* Board 11.4's four columns at set widths, so the table keeps to the 512px Settings column. */
 .share-table-fit {
   table-layout: fixed;
   width: 100%;
@@ -6176,7 +6176,7 @@ button.chip[aria-pressed="true"] {
   align-items: center;
   gap: 6px;
 }
-/* Recent tool uses, step 11h (board 11.4). */
+/* Recent tool uses. */
 .uses-table {
   list-style: none;
   margin: 0;
@@ -6237,7 +6237,7 @@ button.chip[aria-pressed="true"] {
   color: var(--c-prod-text);
 }
 
-/* Assistant panel (step 4c) */
+/* Assistant panel */
 /* S4, A4: the tree narrows to 264 px beside the AI panel. */
 /* The Ask column follows its sash (--ask-width, set on the body by App); 360 px until it is dragged. */
 .body-ai {
@@ -6279,7 +6279,7 @@ button.chip[aria-pressed="true"] {
   min-height: 0;
   background: var(--c-bg-panel);
 }
-/* A1, A5: 36 px strip on the panel colour, "Ask" in Title, the access chip, History and Close; no rule under it (frame d). */
+/* 36 px strip on the panel colour, "Ask" in Title, the access chip, History and Close; no rule under it (frame d). */
 /* The resize edge (VS Code's chat sash): 6 px on the panel's left edge, inside it so the x clip keeps it. */
 .ask-sash {
   position: absolute;
@@ -6327,7 +6327,7 @@ button.chip[aria-pressed="true"] {
   text-overflow: ellipsis;
 }
 /* Thread: 12 px padding, 14 px between messages. */
-/* A6: one column that never grows past the panel, so a long SQL line scrolls inside its block, never the thread. */
+/* One column that never grows past the panel, so a long SQL line scrolls inside its block, never the thread. */
 .thread {
   min-width: 0;
   display: grid;
@@ -6361,7 +6361,7 @@ button.chip[aria-pressed="true"] {
   margin: 0;
   white-space: pre-wrap;
 }
-/* D21: the answer's SQL in the editor style, no line numbers, with its own action bar. */
+/* the answer's SQL in the editor style, no line numbers, with its own action bar. */
 .answer-sql {
   min-width: 0;
   border: var(--border-hairline) solid var(--c-border);
@@ -6442,7 +6442,7 @@ button.chip[aria-pressed="true"] {
   color: var(--c-text-subtle);
   font: var(--font-small);
 }
-/* A resume whose place could not come back (Decision 9): an info bar at the top of the thread, as VS Code's, kept in
+/* A resume whose place could not come back: an info bar at the top of the thread, as VS Code's, kept in
    view while the thread scrolls. */
 .ask-strip {
   position: sticky;
@@ -6522,7 +6522,7 @@ button.chip[aria-pressed="true"] {
   flex: none;
   margin-top: 1px;
 }
-/* Under an answer's SQL block: the lines Insert and Apply touch (A3). */
+/* Under an answer's SQL block: the lines Insert and Apply touch. */
 .answer-sql-where {
   margin: 0;
   padding: 0 var(--spacing-xs) var(--spacing-xs);
@@ -6539,7 +6539,7 @@ button.chip[aria-pressed="true"] {
   opacity: 0.5;
   cursor: default;
 }
-/* A2: the Sends line above the input, 10 px 12 px 12 px, 8 px between. */
+/* The Sends line above the input, 10 px 12 px 12 px, 8 px between. */
 /* A column where only the Sends list gives way: it scrolls, while the context line and the message box keep their
    height (see .ai-panel). */
 .composer {
@@ -7016,11 +7016,11 @@ button.chip[aria-pressed="true"] {
   background: transparent;
   color: var(--c-text-muted);
   font: var(--font-small);
-  /* P11-33: a pill keeps one line ("t7-customs.flow") and may shrink; its label then ends in an ellipsis. */
+  /* A pill keeps one line ("t7-customs.flow") and may shrink; its label then ends in an ellipsis. */
   min-width: 0;
   max-width: 100%;
   white-space: nowrap;
-  /* P11-12: a button centres its text by default; a label reads from the left like the others. */
+  /* A button centres its text by default; a label reads from the left like the others. */
   text-align: left;
 }
 .send-pill-label {
@@ -7040,7 +7040,7 @@ button.send-pill:hover {
   height: 14px;
   color: var(--c-text-subtle);
 }
-/* The outline row's long label wraps (board 11.7): height grows, the icon sits 2px down at the top. */
+/* The outline row's long label wraps: height grows, the icon sits 2px down at the top. */
 .send-pill-tall {
   align-items: flex-start;
   height: auto;
@@ -7103,7 +7103,7 @@ button.send-pill:hover {
   font: var(--font-small);
   color: var(--c-text-subtle);
 }
-/* Board 11.12: every row of a diagram Ask is locked on; the lock sits at the row's end. */
+/* Every row of a diagram Ask is locked on; the lock sits at the row's end. */
 .sends-locked-on {
   display: inline-flex;
   flex: none;
@@ -7115,7 +7115,7 @@ button.send-pill:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* P11-33: the size keeps one line; the reason between takes only the room left (basis 0), so the name gives way last. */
+/* The size keeps one line; the reason between takes only the room left (basis 0), so the name gives way last. */
 .sends-item .sends-size {
   flex: none;
   white-space: nowrap;
@@ -7132,7 +7132,7 @@ button.send-pill:hover {
   font: var(--font-small);
   color: var(--c-warning-text);
 }
-/* The Context line above the composer box (board 11.1, .ctxalert): shown only when the AI Context needs attention. */
+/* The Context line above the composer box (.ctxalert): shown only when the AI Context needs attention. */
 .ctxalert {
   display: flex;
   align-items: center;
@@ -7200,7 +7200,7 @@ button.send-pill:hover {
   gap: var(--spacing-xs);
   font: var(--font-body-strong);
 }
-/* The error and answer state card (board 11.6): tone icon, title, body, optional countdown, actions with Show log on the right. */
+/* The error and answer state card: tone icon, title, body, optional countdown, actions with Show log on the right. */
 .errc {
   display: flex;
   flex-direction: column;
@@ -7234,7 +7234,7 @@ button.send-pill:hover {
 .errc.bad {
   border-color: color-mix(in srgb, var(--c-danger-solid) 55%, var(--c-border));
 }
-/* P11-27: every card names its case above the title (board 11.6's labels: Rate limited, Key refused...). */
+/* Every card names its case above the title (board 11.6's labels: Rate limited, Key refused...). */
 .errc-kick {
   display: block;
   padding: 10px 12px 0 34px;
@@ -7443,7 +7443,7 @@ button.send-pill:hover {
   overflow-wrap: anywhere;
 }
 
-/* Show log (board 11.3): the answer log in place of the thread, with Log, Steps and Diagram over one record. */
+/* Show log: the answer log in place of the thread, with Log, Steps and Diagram over one record. */
 .alog {
   display: flex;
   flex-direction: column;
@@ -7681,7 +7681,7 @@ button.send-pill:hover {
 }
 .lrow {
   display: grid;
-  /* P11-23: the source column fits the longest source ("rail.execution") instead of cutting it. */
+  /* The source column fits the longest source ("rail.execution") instead of cutting it. */
   grid-template-columns: 14px 44px 6ch 14ch minmax(0, 1fr);
   gap: 6px;
   align-items: start;
@@ -7904,7 +7904,7 @@ button.send-pill:hover {
 .pthinking {
   margin-top: 4px;
 }
-/* Board 11.12, Tool check: a dropped change in the warning colour, then the stored tool input. */
+/* Tool check: a dropped change in the warning colour, then the stored tool input. */
 .ev-row.drop > span:nth-child(n + 2) {
   color: var(--c-warning-text);
 }
@@ -7951,7 +7951,7 @@ button.send-pill:hover {
   color: var(--c-success-text);
 }
 
-/* Diagram: DOM boxes in three zones (ruling 16: not the .flow engine). */
+/* Diagram: DOM boxes in three zones (not the .flow engine). */
 .diag {
   display: flex;
   flex-direction: column;
@@ -7970,7 +7970,7 @@ button.send-pill:hover {
   font: var(--font-body-strong);
   font-size: 12px;
 }
-/* P11-23: a box too narrow for its label and detail wraps the detail under it; nothing is cut mid-word. */
+/* A box too narrow for its label and detail wraps the detail under it; nothing is cut mid-word. */
 .dbox {
   display: flex;
   flex-wrap: wrap;
@@ -8108,7 +8108,7 @@ button.dbox:hover,
   color: var(--c-danger-text);
   font: var(--font-small);
 }
-/* Board 11.12, a diagram Ask: the one tool's line in place of "No tools", and what the user did with the changes. */
+/* A diagram Ask: the one tool's line in place of "No tools", and what the user did with the changes. */
 .dnopath.dtool {
   border-top: 0;
   color: var(--c-text-muted);
@@ -8214,7 +8214,7 @@ button.dbox:hover,
   gap: var(--spacing-sm);
   padding: var(--spacing-md);
 }
-/* UX step 9: the inline answer's SQL in the editor (A2), the follow-ups (A1) and a reopened answer (A4). */
+/* UX step 9: the inline answer's SQL in the editor, the follow-ups and a reopened answer. */
 .pop-reopened,
 .pop-turns {
   margin: 0;
@@ -8357,7 +8357,7 @@ button.dbox:hover,
   display: none;
 }
 /*
- * I3: in a query tab the box sits in the editor, a block right under the statement it is about (VS Code's inline
+ * In a query tab the box sits in the editor, a block right under the statement it is about (VS Code's inline
  * chat), so it never covers the diff. It takes the UI face, not the editor's code face.
  */
 .cm-ask-zone {
@@ -8404,7 +8404,7 @@ button.dbox:hover,
   white-space: nowrap;
 }
 
-/* Safety row and switches (step 5a) */
+/* Safety row and switches */
 /* Frame g: a bare "Safety" heading over its switches, under a hairline; no box. */
 .safety {
   display: grid;
@@ -8513,7 +8513,7 @@ button.dbox:hover,
   flex: none;
 }
 
-/* ---- Pending Edits (step 5b) ---- */
+/* ---- Pending Edits ---- */
 .grid-scroll:focus {
   outline: none;
 }
@@ -8852,7 +8852,7 @@ button.dbox:hover,
   font: var(--status-bar-font);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  /* No overflow clip: the Theme menu opens upward out of the bar (C4). The query status clips itself. */
+  /* No overflow clip: the Theme menu opens upward out of the bar. The query status clips itself. */
 }
 .app-status-conn,
 .app-status-prod {
@@ -8982,7 +8982,7 @@ button.dbox:hover,
 .connection-form .field-hint {
   margin: 0;
 }
-/* The AI access row's context controls (step 11c), beside Keep context in sync. */
+/* The AI access row's context controls, beside Keep context in sync. */
 .ai-context {
   display: flex;
   flex-direction: column;
@@ -9011,7 +9011,7 @@ button.dbox:hover,
   flex: 1 1 240px;
 }
 
-/* Result tools, plan and query error (Task 17) */
+/* Result tools, plan and query error */
 .result-tools {
   display: flex;
   flex: none;
@@ -9233,7 +9233,7 @@ button.dbox:hover,
   color: var(--c-text-muted);
 }
 
-/* Task 14: Group form, Delete Group, Save query and Unsaved changes dialogs (frames 5, 6, 9). */
+/* Group form, Delete Group, Save query and Unsaved changes dialogs. */
 .save-query-body {
   display: grid;
   gap: var(--spacing-md);
@@ -9448,7 +9448,7 @@ button.dbox:hover,
   white-space: nowrap;
 }
 
-/* Task 24: empty workspace (frame 1), Saved Queries list (frame 4), closed Connection and launch (frame 10). */
+/* Empty workspace, Saved Queries list, closed Connection and launch. */
 .work-empty-box {
   display: flex;
   flex-direction: column;
@@ -10124,7 +10124,7 @@ button.dbox:hover,
   gap: var(--spacing-xs);
 }
 
-/* ---- Visual Query tab (step 6, Task 7, frame 6.1) ---- */
+/* ---- Visual Query tab ---- */
 /* Canvas on top, the hint strip under it (item 40), then the bottom panel at the user's height (item 36). */
 .vq-tab {
   display: flex;
@@ -10559,7 +10559,7 @@ button.dbox:hover,
   border-top: var(--border-hairline) solid var(--c-border-subtle);
 }
 
-/* ---- Visual Query joins and panel tabs (step 6, Task 8, frame 6.1) ---- */
+/* ---- Visual Query joins and panel tabs ---- */
 /* Joins: Foreign Key Joins solid, made here dashed, pending dashed in warning; the open one in the accent. */
 .vq-join-line {
   stroke: var(--c-text-subtle);
@@ -11038,7 +11038,7 @@ button.dbox:hover,
   display: none;
 }
 
-/* Visual Query: Run, Results and server error marks (Task 9). */
+/* Visual Query: Run, Results and server error marks. */
 .vq-status-line:has(.vq-status-ran) {
   display: flex;
   align-items: center;
@@ -11081,7 +11081,7 @@ button.dbox:hover,
   margin: 0 0 var(--spacing-sm);
 }
 
-/* Saved Visual Queries (Task 10): a closed or removed Connection fades the Joins with the cards. */
+/* Saved Visual Queries: a closed or removed Connection fades the Joins with the cards. */
 .vq-canvas-closed .react-flow__edge {
   opacity: 0.6;
 }
@@ -11089,7 +11089,7 @@ button.dbox:hover,
   flex: none;
 }
 
-/* ---- Query diagram (step 6, Task 13, frame 6.2) ---- */
+/* ---- Query diagram ---- */
 /* Beside a SQL tab: the editor keeps 580 px and the diagram fills the rest, over every row of the tab. */
 .query-tab-with-diagram {
   grid-template-columns: 580px minmax(0, 1fr);
@@ -11115,7 +11115,7 @@ button.dbox:hover,
   box-shadow: inset 0 0 0 1px var(--c-accent);
 }
 /*
- * UX step 9 (A2): an answer's suggestion as a diff in the editor's own lines. Removed lines are struck through on
+ * UX step 9: an answer's suggestion as a diff in the editor's own lines. Removed lines are struck through on
  * the line itself; added lines sit in a block after the line they follow. The text changes only on Keep.
  */
 .sql-editor .cm-line.cm-suggest-del {
@@ -11161,7 +11161,7 @@ button.dbox:hover,
   font-feature-settings: "calt" 1, "liga" 1;
   opacity: 0.8;
 }
-/* A3: the lines an action would replace, and the line an Insert goes below, while the action is hovered or focused. */
+/* The lines an action would replace, and the line an Insert goes below, while the action is hovered or focused. */
 .sql-editor .cm-line.cm-ai-target {
   background: var(--c-accent-subtle);
 }
@@ -11278,7 +11278,7 @@ button.dbox:hover,
   font: var(--font-small);
   pointer-events: none;
 }
-/* Cards: 200 px on the table tokens, the Result 268 px on the view tokens (D1); the header's count is not shown. */
+/* Cards: 200 px on the table tokens, the Result 268 px on the view tokens; the header's count is not shown. */
 .qd-card {
   position: relative;
 }
@@ -11530,7 +11530,7 @@ button.dbox:hover,
   border-radius: var(--rounded-lg);
   min-width: 0;
 }
-/* P11-36: wider fonts (no Segoe UI) can make the labelled groups wider than a 1024 px window. They clip
+/* Wider fonts (no Segoe UI) can make the labelled groups wider than a 1024 px window. They clip
    inside their own box and the ones that do not fit are listed under More; Ask and More never shrink. */
 .feature-groups {
   position: relative;
@@ -11656,7 +11656,7 @@ button.dbox:hover,
     opacity var(--motion-base) var(--ease-enter) 500ms,
     transform var(--motion-base) var(--ease-enter) 500ms;
 }
-/* P11-37: after a click, a scroll or the window losing focus the tooltip stays hidden until the pointer leaves. */
+/* After a click, a scroll or the window losing focus the tooltip stays hidden until the pointer leaves. */
 .feature-button[data-tip-off]::after {
   opacity: 0;
   transition: none;
@@ -12437,7 +12437,7 @@ button.dbox:hover,
   display: flex;
 }
 /*
- * D2 Task 6: the Ask's chat history (spec "The list"). Every class is its own name under .history-menu (P30), so the
+ * D2 Task 6: the Ask's chat history (spec "The list"). Every class is its own name under .history-menu, so the
  * query History panel's .history-row, .history-day, .history-section, .history-list and .history-search never style it,
  * and it never styles them. Rows and headers have fixed heights: the window past 200 rows counts in them
  * (historyList.ts ROW_PX, HEAD_PX, LIST_PX).
@@ -12511,7 +12511,7 @@ button.dbox:hover,
   text-align: left;
   cursor: pointer;
 }
-/* The current chat: a tint and aria-current, no stripe (spec). */
+/* The current chat: a tint and aria-current, no stripe. */
 .history-menu .history-chat[aria-current="true"] {
   background: var(--c-bg-active);
 }
@@ -12611,7 +12611,7 @@ button.dbox:hover,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Delete asks in the row: same height and radius, on the pale negative tint, never a dialog (spec). */
+/* Delete asks in the row: same height and radius, on the pale negative tint, never a dialog. */
 .history-menu .history-ask {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -12671,7 +12671,7 @@ button.dbox:hover,
   display: flex;
   gap: var(--spacing-sm);
 }
-/* Asked in <label>: above a question asked in another tab than the one before it (spec 6.2). */
+/* Asked in <label>: above a question asked in another tab than the one before it. */
 .msg-asked-in {
   justify-self: end;
   margin-bottom: calc(var(--spacing-xs) * -1);
@@ -12679,7 +12679,7 @@ button.dbox:hover,
   color: var(--c-text-muted);
   overflow-wrap: anywhere;
 }
-/* A7: the tab's name is a link that shows it; a closed one says so beside it. */
+/* The tab's name is a link that shows it; a closed one says so beside it. */
 .msg-asked-in .link-button {
   font: inherit;
 }
@@ -12695,7 +12695,7 @@ button.dbox:hover,
   font-variant-numeric: tabular-nums;
 }
 
-/* A closed Topic folded in the thread (board 11.1): chevron, bold title, summary line, start time on the right. */
+/* A closed Topic folded in the thread: chevron, bold title, summary line, start time on the right. */
 .topic {
   display: flex;
   align-items: center;
@@ -12770,7 +12770,7 @@ button.dbox:hover,
   color: var(--c-text-muted);
 }
 
-/* A compaction in the thread (board 11.6): a dashed note with the before and after figures, its links, the open summary. */
+/* A compaction in the thread: a dashed note with the before and after figures, its links, the open summary. */
 .cnote-wrap {
   display: flex;
   flex-direction: column;
@@ -12827,7 +12827,7 @@ button.dbox:hover,
   color: var(--c-text-muted);
 }
 
-/* Slash commands above the Ask composer (board 11.8): a listbox in the Menu look. */
+/* Slash commands above the Ask composer: a listbox in the Menu look. */
 .slash-menu {
   top: auto;
   bottom: calc(100% - var(--spacing-sm));
@@ -12886,7 +12886,7 @@ button.dbox:hover,
     animation: none;
   }
 }
-/* The Rows box reaches the database with its own read-only line (board 11.10). */
+/* The Rows box reaches the database with its own read-only line. */
 .dread {
   display: flex;
   align-items: center;
@@ -13603,7 +13603,7 @@ button.dbox:hover,
   }
 }
 
-/* M7: the selection's Count and Sum, beside the pager and the result's note. */
+/* the selection's Count and Sum, beside the pager and the result's note. */
 .table-selection,
 .results-selection {
   font: var(--font-small);
@@ -13640,7 +13640,7 @@ button.dbox:hover,
 .export-chooser {
   --c-bg-hover: var(--c-bg-raised-hover);
 }
-/* A7: a tab shown from an Ask's "Asked in" link flashes once, so the eye finds it. */
+/* A tab shown from an Ask's "Asked in" link flashes once, so the eye finds it. */
 .work-tab.work-tab-flash {
   animation: work-tab-flash 700ms ease-out;
 }
@@ -13744,7 +13744,7 @@ button.dbox:hover,
   margin-right: var(--spacing-sm);
   margin-left: var(--spacing-sm);
 }
-/* The overview of frame boxes (Plan F Decision 13): where the one-frame minimap sits, same size, border and shadow. The
+/* The overview of frame boxes: where the one-frame minimap sits, same size, border and shadow. The
    zoom control clears it only while it is on. */
 .diagram-canvas .react-flow__panel.canvas-zoom[data-map="off"] {
   margin-bottom: 12px;

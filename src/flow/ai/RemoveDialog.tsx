@@ -1,5 +1,5 @@
 // "Remove <n> shapes and <m> lines?" (board 11.5, ask): a proposal that removes more than 3 shapes and ER columns,
-// summed across a board's frames, always asks first, in either mode (Plan D Decision 13b). The answer row above it
+// summed across a board's frames, always asks first, in either mode. The answer row above it
 // names what goes and, on a board, the diagrams it goes from; the card says why it asks.
 import { plural } from "../../format/plural";
 

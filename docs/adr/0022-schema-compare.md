@@ -1,6 +1,6 @@
 # Schema Compare is a structural diff; the Core alone builds the Sync Script and Apply runs exactly what was shown
 
-Step 10 adds Schema Compare: the structure of two databases of the same Dialect (on PostgreSQL, one schema against one schema), or a Schema Model against a database, shown as added, removed and changed items, with a Sync Script that makes the target match the source. The Schema Builder's "Apply to Connection..." opens the same compare with the model as the source. The spec is `docs/superpowers/specs/2026-10-17-step10-schema-compare-design.md`; the screens are artifact A15Z5kepCRSAyQ8zXhSCvg, frame 10.1; the answered questions are option (a) on all six. This ADR builds on ADR 0016 (the Table Designer's planners and runner, used as a library), ADR 0013 (Production and Read-only), ADR 0018 (Jobs) and ADR 0007 (the Schema Model).
+Step 10 adds Schema Compare: the structure of two databases of the same Dialect (on PostgreSQL, one schema against one schema), or a Schema Model against a database, shown as added, removed and changed items, with a Sync Script that makes the target match the source. The Schema Builder's "Apply to Connection..." opens the same compare with the model as the source. This ADR builds on ADR 0016 (the Table Designer's planners and runner, used as a library), ADR 0013 (Production and Read-only), ADR 0018 (Jobs) and ADR 0007 (the Schema Model).
 
 ## Compare
 

@@ -29,7 +29,7 @@ function nameKey(name: string): string {
 }
 
 /**
- * Match by name (D19): one entry per file column. Each target takes one column, the first file
+ * Match by name: one entry per file column. Each target takes one column, the first file
  * column wins, and generated columns never match. `src/jobs/match_cases.json` pins the rule.
  */
 export function matchByName(file: string[], targets: PlannedColumn[]): ColumnMap[] {
@@ -63,7 +63,7 @@ export function fileHint(s: FileSummary): string {
   return `${rowsText(s.rowsEstimate.rows, s.rowsEstimate.exact)}, ${plural(s.header.length, "column", "columns")}, ${bytesText(s.bytes)}`;
 }
 
-/** The import footer line, per the Commit option, the table's engine and the Core's one-transaction flag (Q28). */
+/** The import footer line, per the Commit option, the table's engine and the Core's one-transaction flag. */
 export function footerText(
   plan: { table: string; warnings: string[]; oneTransaction?: boolean },
   opts: ImportOptions,
@@ -89,27 +89,27 @@ export function runLabel(conn: Pick<ConnectionConfig, "production">, rows: numbe
 /**
  * The Core's warning for a MyISAM (or other non-transactional) target, which keeps what was written
  * before a failure. Matched by its wording ("{table} uses MyISAM: rows written before a failure
- * stay", Task 8): a change there must change this pattern too.
+ * stay"): a change there must change this pattern too.
  */
 function nonTransactional(warnings: string[]): string | undefined {
   return warnings.find((w) => /rows written before a failure stay\.?$/.test(w));
 }
 
 /**
- * Q28: the import runs in one transaction. The current Commit option comes first, so a plan made
- * before Commit changed never claims a rollback (Q43); then the plan's flag, else no
+ * The import runs in one transaction. The current Commit option comes first, so a plan made
+ * before Commit changed never claims a rollback; then the plan's flag, else no
  * non-transactional warning.
  */
 export function oneTransactionOf(plan: { warnings: string[]; oneTransaction?: boolean }, opts: ImportOptions): boolean {
   return opts.commit.kind === "once" && (plan.oneTransaction ?? nonTransactional(plan.warnings) === undefined);
 }
 
-/** Q28 for a SQL file: the plan's flag, else neither its own transactions nor MySQL DDL. */
+/** For a SQL file: the plan's flag, else neither its own transactions nor MySQL DDL. */
 export function scriptOneTransaction(plan: ScriptPlan, dialect: DialectKind): boolean {
   return plan.oneTransaction ?? (!plan.ownTransactions && !(dialect === "mysql" && plan.hasDdl));
 }
 
-/** Q27: after a stop that kept rows, "500 rows were written before the stop and stay in menu_items." */
+/** After a stop that kept rows, "500 rows were written before the stop and stay in menu_items." */
 export function writtenText(rows: number, into: string): string {
   return rows === 1
     ? `1 row was written before the stop and stays in ${into}.`
@@ -166,7 +166,7 @@ const MYSQL_DDL = "MySQL commits each CREATE, ALTER and DROP as it runs. If a la
 
 /**
  * The SQL file footer's notes beyond its run line: own transactions, MySQL DDL, or statements the
- * Core runs apart (its one-transaction flag, Q28). The Production confirmation shows these.
+ * Core runs apart (its one-transaction flag). The Production confirmation shows these.
  */
 export function scriptNotes(plan: ScriptPlan, dialect: DialectKind): string[] {
   if (plan.ownTransactions) return [OWN_TRANSACTIONS];
@@ -179,7 +179,7 @@ export function scriptNotes(plan: ScriptPlan, dialect: DialectKind): string[] {
 export function scriptFooter(plan: ScriptPlan, dialect: DialectKind, database: string): string[] {
   if (plan.ownTransactions) return [OWN_TRANSACTIONS];
   const runs = `Runs ${plural(plan.statements, "statement", "statements")} in ${database}`;
-  // The flag first (Q28, Q43): only a one-transaction run promises a rollback.
+  // The flag first: only a one-transaction run promises a rollback.
   if (scriptOneTransaction(plan, dialect)) return [`${runs} in one transaction. Cancel rolls everything back.`];
   if (dialect === "mysql" && plan.hasDdl) return [`${runs}. If the import stops, what ran before it stays.`, MYSQL_DDL];
   return [`${runs}, each on its own. If a statement fails, the ones before it stay.`];

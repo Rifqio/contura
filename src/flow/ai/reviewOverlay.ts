@@ -202,7 +202,7 @@ export function reviewOverlay(
   const nodes = withRows.size === 0 ? proposed.nodes : proposed.nodes.map((n) => withRows.get(n.name) ?? n);
   const draw: FlowDoc = { ...proposed, nodes: [...nodes, ...removedNodes], groups, links };
   // A sequence numbering on at its end stops before the removed messages, so they take no number and their ghosted
-  // lines start on the lifeline (Plan E): only the proposed messages are numbered, as they will be once accepted.
+  // lines start on the lifeline: only the proposed messages are numbered, as they will be once accepted.
   if (left.size > 0 && numberingOnAtEnd(proposed)) draw.autonumber = [...(proposed.autonumber ?? []), { from: proposed.links.length, off: true }];
   return { draw, numbering: numberingOn(proposed), added, removed, changed, addedLinks, removedLinks, changedLinks, addedRows, removedRows, changedRows };
 }

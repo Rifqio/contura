@@ -1,6 +1,6 @@
-// Which text sizes are far on the board (Plan F Decisions 2 to 4): FlowTab provides the set, changed only when the zoom
+// Which text sizes are far on the board: FlowTab provides the set, changed only when the zoom
 // crosses a size's readable line. CSS fades shape labels and line labels by the canvas wrapper's `data-far`; only an ER
-// card's body reads this, to draw its rows as bars (Decision 3). A leaf: the cards import it without a cycle.
+// card's body reads this, to draw its rows as bars. A leaf: the cards import it without a cycle.
 import { createContext, useContext } from "react";
 import type { TextSize } from "./boardLayout";
 

@@ -33,7 +33,7 @@ pub trait JobSink: Send + Sync {
     fn send(&self, event: serde_json::Value);
 }
 
-/// The file a Production import was confirmed for (D5).
+/// The file a Production import was confirmed for.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileIdentity {
@@ -42,7 +42,7 @@ pub struct FileIdentity {
     pub sha256: String,
 }
 
-/// Four jobs at once in all (D13).
+/// Four jobs at once in all.
 const MAX_JOBS: usize = 4;
 /// Progress events are sent at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
@@ -116,9 +116,9 @@ impl JobService {
         }
     }
 
-    /// Registers job `id` (made by the client, so it can watch before the start, Q2) and
+    /// Registers job `id` (made by the client, so it can watch before the start) and
     /// hands back its context. A fifth job is refused with `InvalidInput`; a second
-    /// writing job on one Connection with `JobBusy` (D13).
+    /// writing job on one Connection with `JobBusy`.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         &self,
@@ -254,7 +254,7 @@ impl JobService {
         }
     }
 
-    /// Cancels every running job, such as when the app quits (Q22). Every flag is set
+    /// Cancels every running job, such as when the app quits. Every flag is set
     /// first, then the server cancels run side by side.
     pub async fn cancel_all(&self) {
         let cancellers: Vec<Arc<dyn Canceller>> = {
@@ -284,7 +284,7 @@ impl JobService {
         }
     }
 
-    /// Records the file a pass was confirmed for (D5).
+    /// Records the file a pass was confirmed for.
     pub fn confirm_file(&self, pass: PassId, file: FileIdentity) {
         if let Ok(mut st) = self.shared.state() {
             st.confirmed.insert(pass, file);
@@ -516,7 +516,7 @@ impl JobCtx {
         self.end(event);
     }
 
-    /// Sends `Failed` once with the rows the job left in its target (Q27), and leaves
+    /// Sends `Failed` once with the rows the job left in its target, and leaves
     /// the running list.
     pub fn fail(mut self, error: Error, rows_committed: u64) {
         self.end(JobEvent::Failed {

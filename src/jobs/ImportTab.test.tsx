@@ -545,7 +545,7 @@ test("a_sql_file_turns_the_tab_into_a_database_import_with_statements", async ()
   expect(stepNow()).toContain("Statements");
   expect(document.querySelectorAll(".script-statement")).toHaveLength(50);
   expect(screen.getByText("This file is a Contura Backup. Restore checks it against the database first.")).toBeTruthy();
-  // D25: Open in Restore waits for step 9.
+  // Open in Restore waits for step 9.
   expect(screen.queryByRole("button", { name: "Open in Restore" })).toBeNull();
   expect(screen.getByText("Runs 1,503 statements in shop in one transaction. Cancel rolls everything back.")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Show all" }));
@@ -576,7 +576,7 @@ test("the_header_names_into_the_connection_and_the_table", () => {
   expect(head.querySelector('[role="img"][aria-label="PostgreSQL"]')).toBeTruthy();
 });
 
-// Fix round 1: Q27 (what stayed), Q28 (warnings and the transaction claim), I3 (keys stay in dialogs).
+// What stayed, the warnings and the transaction claim, and keys staying in dialogs.
 
 async function startPlainRun(over: Record<string, (args: Record<string, unknown>) => unknown> = {}) {
   const sent = routes(over);
@@ -813,7 +813,7 @@ test("the_tab_reports_its_job_id_when_a_run_starts_q43", async () => {
   expect(onJob).toHaveBeenCalledWith(callsTo("start_import")[0].job);
 });
 
-// ---- What the tab tells the Ask (spec 4.8) ----
+// ---- What the tab tells the Ask ----
 
 test("the published fields carry the header and the file's base name, never its rows or folder", async () => {
   routes();

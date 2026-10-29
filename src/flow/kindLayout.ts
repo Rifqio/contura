@@ -16,7 +16,7 @@ const textW = (s: string) => s.length * 7;
 /**
  * diag-910 fix round 2 (L2): a state's name as it is drawn, in the canvas's bold 13 px UI font, so the pill is as wide as
  * its name. Measured once per name with a canvas where there is one (the app); a guess elsewhere. Tests set their own.
- * Plan E Decision 16: a sequence's message labels and captions (`message`, 400 12 px) and its block words (`word`,
+ * A sequence's message labels and captions (`message`, 400 12 px) and its block words (`word`,
  * 600 11 px) are measured the same way, one cache per font, each cleared when it holds 4,000 entries before an insert.
  */
 export type LabelFont = "state" | "message" | "word";
@@ -31,7 +31,7 @@ export function setLabelMeasure(fn: ((s: string, font: LabelFont) => number) | n
   for (const m of Object.values(measured)) m.clear();
 }
 /**
- * `s` as a string of its own (Plan E Task 9). A label the parser cut from the text is a slice of it in V8, which keeps
+ * `s` as a string of its own. A label the parser cut from the text is a slice of it in V8, which keeps
  * the whole text alive: kept as a cache key, every edited label held its whole board's text (about 250 KB a keystroke
  * on the sequence limit, up to 4,000 of them).
  */
@@ -208,7 +208,7 @@ export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "t
       return { w: clamp(Math.max(textW(n.name) + 40, ...rows.map((r) => codeW(r) + 28)), 160, 340), h: 32 + stereotype + parts };
     }
     case "state":
-      // The pill's 16 px padding each side, its border, and a little air (fix round 2, L2).
+      // The pill's 16 px padding each side, its border, and a little air (L2).
       return { w: clamp(labelW(n.name) + 44, 100, 280), h: 40 };
     case "choice":
       return { w: 64, h: 64 };
@@ -220,7 +220,7 @@ export function kindSize(kind: DrawnKind, n: Pick<FlowNode, "name" | "rows" | "t
       return { w: 26, h: 26 };
     case "participant":
     case "actor":
-      // Plan E Decision 6: 24 px more for the icon (an actor's is the user glyph).
+      // 24 px more for the icon (an actor's is the user glyph).
       return { w: clamp(textW(n.name) + 40 + (kind === "actor" || n.attrs?.icon ? 24 : 0), 120, 260), h: SEQ_HEAD };
     case "root":
       return { w: clamp(textW(n.name) + 48, 120, 300), h: 44 };
@@ -262,8 +262,8 @@ const pos = (): Positions => Object.create(null) as Positions;
 
 /**
  * Participants in a row, in the order they are written; a message row each, top to bottom; and the one drawing the
- * canvas and Publish both read (Plan E, seqGeometry.ts). Passes: rows; participant widths; the gaps grown to fit the
- * labels (Decision 8, through a Fenwick tree); centres; active ranges; messages; blocks, innermost first; notes right
+ * canvas and Publish both read (seqGeometry.ts). Passes: rows; participant widths; the gaps grown to fit the
+ * labels (through a Fenwick tree); centres; active ranges; messages; blocks, innermost first; notes right
  * of everything drawn. O((m + n) log n) for m messages and n participants, plus each block's own rows.
  */
 function* sequenceLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, scale: number): Generator<void, FixedLayout> {
@@ -355,7 +355,7 @@ function* sequenceLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; 
   };
 
   yield;
-  // Per message: its number, its start and end insets (Decision 9) and its label's width.
+  // Per message: its number, its start and end insets and its label's width.
   const numbers = messageNumbers(doc);
   const startIn = new Float64Array(m);
   const endIn = new Float64Array(m);
@@ -370,7 +370,7 @@ function* sequenceLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; 
   const loopW = (i: number) => Math.max(74, labelWs[i] / 2 + 14);
 
   yield;
-  // Decision 8: messages spanning the fewest participants first, then in text order; each grows the gap just left
+  // Messages spanning the fewest participants first, then in text order; each grows the gap just left
   // of its rightmost participant by what it is short. A self-message keeps the next box 12 px right of its chip.
   const order: number[] = [];
   const spans = new Int32Array(m);
@@ -428,7 +428,7 @@ function* sequenceLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; 
     lanes.push(lane);
   });
 
-  // Activation bars, 6 px above their first message's line to 6 px below their last one's (Decision 12).
+  // Activation bars, 6 px above their first message's line to 6 px below their last one's.
   const bars: SeqBar[] = [];
   for (const a of doc.activations ?? []) {
     const j = at.get(a.name);
@@ -467,7 +467,7 @@ function* sequenceLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; 
   });
 
   yield;
-  // Messages (Decisions 7, 9, 10, 11).
+  // Messages.
   const messages: SeqMessage[] = [];
   const byIndex: (SeqMessage | undefined)[] = new Array(m);
   for (let i = 0; i < m; i++) {
@@ -531,7 +531,7 @@ function* sequenceLayoutSteps(doc: FlowDoc, size: (n: FlowNode) => { w: number; 
   }
 
   yield;
-  // Blocks (Decisions 13, 14), in close order, so every block's inner blocks come before it: the levels nested
+  // Blocks, in close order, so every block's inner blocks come before it: the levels nested
   // inside a block are those of the blocks one deeper that closed since the last block of its own depth did.
   const endsAt = new Map<number, number[]>();
   for (const f of frameList) {
@@ -649,7 +649,7 @@ function blockTops(frames: NonNullable<FlowDoc["frames"]>, m: number, bands: Flo
 
 /**
  * The root in the middle; the first half of its topics on the right, the rest on the left, each side top to bottom
- * (step 7, board DiagramMindMap), so a topic added beside another lands beside it and at most one topic changes side.
+ * (board DiagramMindMap), so a topic added beside another lands beside it and at most one topic changes side.
  * Each subtree is stacked under the one before; a folded topic's subtopics are not placed.
  */
 function mindLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h: number }, folded?: ReadonlySet<string>): FixedLayout {
@@ -783,7 +783,7 @@ export function fixedLayout(doc: FlowDoc, size: (n: FlowNode) => { w: number; h:
 }
 
 /**
- * `fixedLayout` in steps (Plan E Task 9): a sequence's passes yield between them, so a far picture of the sequence at
+ * `fixedLayout` in steps: a sequence's passes yield between them, so a far picture of the sequence at
  * its limit (2,000 participants, 3,000 messages: about 5 ms in all) is laid out across time slices. Drained, it is
  * `fixedLayout`.
  */

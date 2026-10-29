@@ -242,7 +242,7 @@ fn decode_rows(
     Ok((rows, has_more))
 }
 
-/// Step 11f: up to `limit` rows of one base table (`r` or `p`) on `client`, which the
+/// Up to `limit` rows of one base table (`r` or `p`) on `client`, which the
 /// caller has put in a read-only transaction with its timeout. The grid's select list
 /// and cells; no ORDER BY, no OFFSET, no filter.
 pub(super) async fn sample_rows(
@@ -269,7 +269,7 @@ pub(super) async fn sample_rows(
     })
 }
 
-/// M3: the row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
+/// The row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
 /// matching the filter, on `client`, which the caller has put in a read-only transaction
 /// with its time limit. The extended protocol runs one statement only.
 pub(super) async fn locate_row(

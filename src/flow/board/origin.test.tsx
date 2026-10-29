@@ -1,4 +1,4 @@
-// Plan F Task 4 (Decision 11): one origin for the whole board. Canvas coordinates are board coordinates; the live
+// One origin for the whole board. Canvas coordinates are board coordinates; the live
 // frame's shapes hang from one zero-size anchor at its `at`, so a switch moves neither the sketch layer nor the view,
 // and every gesture in the live frame converts with `toLive` (board minus `at`). FlowTab on a two-frame board whose
 // live frame stands off the board's origin, at (-400, 120), with the fake worker.

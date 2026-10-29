@@ -9,7 +9,7 @@ interface Props {
   initial: string;
   /** The other Saved Queries' names: SQL and visual share one name space, ignoring case. */
   existing: string[];
-  /** Those of `existing` that are SQL queries, so a clash says whose name it is (V8). */
+  /** Those of `existing` that are SQL queries, so a clash says whose name it is. */
   sqlNames?: string[];
   onSave(name: string): void;
   onCancel(): void;

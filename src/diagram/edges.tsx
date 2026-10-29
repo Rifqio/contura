@@ -50,7 +50,7 @@ function CrowEnds({ many, one, stroke }: { many: string; one: string; stroke?: s
   );
 }
 
-/** Corner radius of an orthogonal edge (DESIGN-NEXT 10.6). */
+/** Corner radius of an orthogonal edge (DESIGN.md 10.6). */
 export const EDGE_RADIUS = 8;
 
 /** What an engine edge may carry: `badge` fills the Join badge at the midpoint. */

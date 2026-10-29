@@ -1,4 +1,4 @@
-// The .flow parser (A2): a hand-written line lexer with no regular expressions on the text, so a long line
+// The .flow parser: a hand-written line lexer with no regular expressions on the text, so a long line
 // costs one pass. It runs in the language worker, returns problems with fixes, and never throws on odd text.
 import type { QuickFix } from "../protocol";
 import {
@@ -47,7 +47,7 @@ export type FlowRange = { from: number; to: number };
  * - `table:<name>`: an ER table block, through its `}`; `name`, `attrs`, `open` (`{`), `close` (`}`).
  * - `group:<name>`: through its `}`; `name`, `open` (`{`), `close` (`}`), `attrs`, `values`.
  * - `link:<i>`: from its first name to its second; `fromName`, `toName`, `arrow`, `label`, `line` (the whole statement),
- *   and `attrs` (its `[color: ..]`, step 11) on the last link of a statement that has one.
+ *   and `attrs` (its `[color: ..]`) on the last link of a statement that has one.
  * - `frame:<i>`: a sequence frame by its index in the doc's frames, through its `}`; `name` (the label after the kind
  *   word, empty when it has none, ending before any brackets), `attrs` (its `[color: ..]`), `values`, `open` and `close`.
  */
@@ -94,11 +94,11 @@ export type FlowParse = {
   /** Names defined more than once (each is already a problem). */
   readonly definedTwice: ReadonlySet<string>;
   /**
-   * Step 12: the lines that belong to a node besides its own (a class's member lines, an ER table's column lines),
+   * The lines that belong to a node besides its own (a class's member lines, an ER table's column lines),
    * with the ranges a delete, a rename or a column edit reads (see RowSpan).
    */
   rowsOf(name: string): readonly RowSpan[];
-  /** Step 11: each shape's `label:` (the words it shows), by its name. */
+  /** Each shape's `label:` (the words it shows), by its name. */
   readonly labels: ReadonlyMap<string, string>;
   /** The kind of the node of that name, kept while the text has errors; undefined when no node has it. */
   kindOf(name: string): FlowNodeKind | undefined;
@@ -149,7 +149,7 @@ export type FlowParseOptions = {
 const ICON_NEAR_CAP = 2000;
 
 /**
- * Icon names one parse may compare for "Did you mean" (as P5's Send-it-to budget): about 24 lookups over the
+ * Icon names one parse may compare for "Did you mean": about 24 lookups over the
  * packed set. Names past it still get the hint, without a suggestion, until a later parse has looked them up.
  */
 export const ICON_LOOKUP_BUDGET = 100_000;
@@ -246,7 +246,7 @@ class Parser {
   private notes = 0;
   /** Where `[*]` was used: as a start, an end, or both. */
   private stateMarks = { start: false, end: false };
-  /** Step 11: each shape's `label:`, by its name, and the names that show each label (built when a line end needs it). */
+  /** Each shape's `label:`, by its name, and the names that show each label (built when a line end needs it). */
   private labels = new Map<string, string>();
   private showing: Map<string, string[]> | null = null;
   /** Fan links by index: the from and to comma lists they were written in (from, to pairs, -1 for a single name). */
@@ -1495,7 +1495,7 @@ class Parser {
     );
   }
 
-  /** Step 11: `label:` and `color:` on a shape, where its kind takes them. */
+  /** `label:` and `color:` on a shape, where its kind takes them. */
   private checkShapeAttrs(attrs: Attrs) {
     const dk = this.kind;
     for (const key of ["label", "color"]) {
@@ -1544,7 +1544,7 @@ class Parser {
 
   /** A group; `start` is where its statement starts when a word comes before its name (`group Billing {`). */
   private openGroup(t: Token, attrs: Attrs | null, brace: number, e: number, start = t.from) {
-    // A group takes an icon and a colour (step 11); its name stays unique, so no label.
+    // A group takes an icon and a colour; its name stays unique, so no label.
     if (attrs && (attrs.kind || attrs.keys.some((k) => k !== "icon" && k !== "color"))) this.error(attrs.from, attrs.to, MESSAGES.groupAttrs);
     if (attrs) this.checkColour(attrs.attrs.color, attrs.values.color);
     // Past the cap the group still pairs its braces, but stays out of the tree, so nothing after recurses deep.
@@ -1596,7 +1596,7 @@ class Parser {
     let label: string | undefined;
     let labelRange: FlowRange | null = null;
     let stop = lastList[lastList.length - 1].to;
-    // Step 11: `[color: ..]` after the label, or after the last name when there is none (eraser.io).
+    // `[color: ..]` after the label, or after the last name when there is none (eraser.io).
     let attrs: Attrs | null = null;
     const bracket = (at: number) => {
       attrs = this.attrs(at, e);
@@ -1680,7 +1680,7 @@ class Parser {
       for (const from of lists[k]) {
         for (const to of lists[k + 1]) {
           // A state diagram's [*] is the start before the arrow and the end after it.
-          // Inside a composite's braces it is that composite's own (diag-910 fix round 1, I4).
+          // Inside a composite's braces it is that composite's own (diag-910).
           const fromName = from.value === "[*]" && dk === "state" ? this.stateMark("start") : from.value;
           const toName = to.value === "[*]" && dk === "state" ? this.stateMark("end") : to.value;
           const link: FlowLink = { from: fromName, to: toName, arrow: drawn };
@@ -1706,7 +1706,7 @@ class Parser {
 
   /**
    * Where a `[..]` that ends `from..to` starts when every item in it is `key: value` with a known key, else -1: such
-   * a bracket after a line's label is its attributes, any other stays label text (step 11).
+   * a bracket after a line's label is its attributes, any other stays label text.
    */
   private trailingAttrs(from: number, to: number): number {
     const s = this.s;
@@ -1760,7 +1760,7 @@ class Parser {
     this.checkColour(attrs.attrs.color, attrs.values.color);
   }
 
-  /** A line's colour from its brackets, with a problem for what a line does not take (step 11). */
+  /** A line's colour from its brackets, with a problem for what a line does not take. */
   private lineColour(attrs: Attrs | null): string | undefined {
     if (!attrs) return undefined;
     const dk = this.kind;
@@ -1785,7 +1785,7 @@ class Parser {
     return attrs.attrs.color;
   }
 
-  /** The `[*]` marker a link line names here: the open composite's own, else the diagram's (I4). */
+  /** The `[*]` marker a link line names here: the open composite's own, else the diagram's. */
   private stateMark(end: "start" | "end"): string {
     const g = this.stack[this.stack.length - 1];
     if (!g || g.repeated) {
@@ -1862,7 +1862,7 @@ class Parser {
         const at = end === "from" ? 0 : 2;
         const list = fanList && fanList[at] >= 0 ? { from: fanList[at], to: fanList[at + 1] } : null;
         const u: Use = { name, from: p[end === "from" ? 2 : 4], to: p[end === "from" ? 3 : 5], line, end, other: end === "from" ? l.to : l.from, list };
-        // Step 11: an end that matches only a label means a shape by the words it shows; lines name it by its name.
+        // an end that matches only a label means a shape by the words it shows; lines name it by its name.
         const shows = this.namesShowing(name);
         if (shows.length > 0) {
           const fixes = () => shows.map((n) => ({ title: FIX_TITLES.use(n), edits: [{ from: u.from, to: u.to, insert: flowName(n) }] }));

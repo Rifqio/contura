@@ -1,4 +1,4 @@
-// Plan F Task 10: the frame-box minimap. An option beside the zoom control, off by default, boxes only.
+// The frame-box minimap. An option beside the zoom control, off by default, boxes only.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactFlowInstance } from "@xyflow/react";
 import userEvent from "@testing-library/user-event";

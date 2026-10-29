@@ -181,7 +181,7 @@ async function opened() {
 async function pickFrame(s: Setup, title: string) {
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(` ${title}$`) }));
   await waitFor(() => expect(s.isSelected(title)).toBe(true));
-  // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+  // Live, not only drawn selected: its box holds no static shape any more.
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId(title))).toBe(false));
 }
 
@@ -308,7 +308,7 @@ test("enter_drops_at_the_crosshair", async () => {
   expect(cross.getAttribute("aria-hidden")).toBe("true");
   expect([cross.style.left, cross.style.top]).toEqual(["420px", "330px"]);
   expect(box.textContent).toContain("Drops it at the crosshair");
-  // The canvas is the board (Plan F Decision 11).
+  // The canvas is the board.
   const at = canvas.instance!.screenToFlowPosition({ x: 420, y: 330 });
   const input = within(box).getByRole("combobox");
   type(input, "state");
@@ -321,7 +321,7 @@ test("enter_drops_at_the_crosshair", async () => {
   await waitFor(() => expect(s.layoutNow().frames.State).toBeTruthy());
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.id === boardFrameId("State"))).toBe(true));
   const node = canvas.props!.nodes.find((n) => n.id === boardFrameId("State"))!;
-  // The frame's box node is in board units, as the canvas is (Plan F Decision 11).
+  // The frame's box node is in board units, as the canvas is.
   expect(Math.abs(node.position.x + Number(node.style?.width) / 2 - at.x)).toBeLessThanOrEqual(1.5);
   expect(Math.abs(node.position.y + Number(node.style?.height) / 2 - at.y)).toBeLessThanOrEqual(1.5);
   // After an add the keys go to the canvas.

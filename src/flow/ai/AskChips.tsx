@@ -1,4 +1,4 @@
-// The board Ask's chips (Plan D Decision 7, Copilot Chat's references and Slack's chip input): the frame chip, which
+// The board Ask's chips (Copilot Chat's references and Slack's chip input): the frame chip, which
 // follows the selected frame while it is automatic; frames added by hand; a selection chip; the "create" chip of a
 // kind card; and the chip of an attached file. Chips are focus, never a lock: the AI reads the whole board.
 import { useCallback, useEffect, useMemo, useState } from "react";

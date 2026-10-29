@@ -27,7 +27,7 @@ export type DesignTabTarget =
 
 /**
  * A Visual Query tab as the app keeps it, and as its draft is saved. `connectionId` is null when
- * its Connection was removed (P10): the tab still opens and offers one of the model's Dialect.
+ * its Connection was removed: the tab still opens and offers one of the model's Dialect.
  * `savedJson` is the model as last saved, for the dirty mark.
  */
 export type VisualTabDoc = {
@@ -81,7 +81,7 @@ export type WorkTab =
       connectionId: ConnectionId;
       target: ImportTarget;
     }
-  /** A table's lineage (step 6+): read only, so never saved in place drafts. */
+  /** A table's lineage: read only, so never saved in place drafts. */
   | { kind: "lineage"; key: string; connectionId: ConnectionId; path: ObjectPath };
 
 /** Where a Data Transfer starts: the source database (and schema), and a table to tick first. */
@@ -117,12 +117,12 @@ export type WindowTab =
   /** A diagram, `<name>.flow` in Contura's diagrams folder; one tab per name. */
   | { kind: "flow"; name: string }
   /**
-   * A Data Transfer (step 8): a window tab, since it spans two Connections. `title` and `dirty`
+   * A Data Transfer: a window tab, since it spans two Connections. `title` and `dirty`
    * come from the tab ("pos_live to analytics", set up but not run); never saved.
    */
   | { kind: "transfer"; id: string; seed: TransferSeed; title: string; dirty: boolean }
   /**
-   * A Schema Compare (step 10): a window tab, since it spans two Connections. `title` ("freight-staging
+   * A Schema Compare: a window tab, since it spans two Connections. `title` ("freight-staging
    * to freight-prod") and `connectionId` (the target, for its PROD chip) come from the tab.
    */
   | { kind: "compare"; id: string; seed: CompareSeed; title: string; connectionId: ConnectionId | null };

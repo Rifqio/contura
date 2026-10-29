@@ -1,4 +1,4 @@
-// Step 12b, board B2 (items 25, 41, 51): resizing by pointer zones on the edges and corners, live, within limits.
+// Resizing by pointer zones on the edges and corners, live, within limits.
 import { act, fireEvent, render } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import appCss from "../styles/app.css?raw";
@@ -237,7 +237,7 @@ test("review_l3_live_boxes_are_kept_per_canvas_so_a_node_with_the_same_id_elsewh
   expect(liveResizes(null).size).toBe(0);
 });
 
-// ---- F26 (diagram step 5): the usual resize modifiers, Esc, and a double-click on an edge to fit.
+// ---- F26 (diagram): the usual resize modifiers, Esc, and a double-click on an edge to fit.
 
 test("F26 Shift keeps the box's proportions and Alt resizes around its centre", () => {
   // 172 x 72: a corner drag of 86 across keeps 2.39 to 1.

@@ -1,5 +1,5 @@
-// The board Ask's request (Plan D Decision 1): every frame from the worker's one `boardOutline` answer with its box on
-// the canvas, the chips, the selection and the sketches read as notes (Decision 4). Pure: the Ask hands it the worker's
+// The board Ask's request: every frame from the worker's one `boardOutline` answer with its box on
+// the canvas, the chips, the selection and the sketches read as notes. Pure: the Ask hands it the worker's
 // answer and the scene, so the request is built and tested without a canvas.
 import type { BoardInput, DiagramAskRequest, FrameSourceIn, SketchNote, TableLinkIn } from "../../api/types";
 import { type DiagramKind, MAX_BOARD_FRAMES } from "../../lang/flow/model";
@@ -22,7 +22,7 @@ export type FollowUpReply = NonNullable<BoardInput["followUp"]>;
 type Box = { x: number; y: number; w: number; h: number };
 type Point = { x: number; y: number };
 
-/** The scene's frame boxes in board units: the canvas is in board units (Plan F Decision 11), so they are its own. */
+/** The scene's frame boxes in board units: the canvas is in board units, so they are its own. */
 export function onBoard(scene: Pick<BoardSceneOut, "boxes">): FrameBox[] {
   return scene.boxes;
 }
@@ -100,7 +100,7 @@ function nearestPart(p: Point, frames: readonly PartFrame[]): { frame: string; n
 const TAIL_KINDS: ReadonlySet<Sketch["kind"]> = new Set<Sketch["kind"]>(["text", "note", "rect", "ellipse", "diamond"]);
 
 /**
- * The board's sketches as notes for the board Ask (Decision 4), in the sketches' order. An arrow or line points at the
+ * The board's sketches as notes for the board Ask, in the sketches' order. An arrow or line points at the
  * frame part nearest its head within POINT_AT_PX and comes `from` the note, text or labelled rect, ellipse or diamond
  * nearest its tail within POINT_AT_PX (by sketch id; the Core prints its text). Text, notes, labelled shapes, icons (by
  * pack name, A12) and sections (by title) are notes `on` the frame holding their centre, else `near` the nearest frame
@@ -157,7 +157,7 @@ export function sketchNotes(sketches: readonly Sketch[], boxes: readonly FrameBo
 }
 
 /**
- * The board Ask's `board` (Decision 1): every frame from the worker's answer with its box in whole board units and its
+ * The board Ask's `board`: every frame from the worker's answer with its box in whole board units and its
  * clash from the canvas; the chips kept to titles an unclashed frame has, once each, in chip order; the selection with
  * sketches as ids.
  */
@@ -194,8 +194,8 @@ export function boardInput(o: {
 }
 
 /**
- * Each frame's recorded Connection by its title, then every source kept from frames that lost their title to a clash
- * (Task 4b): each holds the diagram Ask. Shared by the one-frame and the board request.
+ * Each frame's recorded Connection by its title, then every source kept from frames that lost their title to a clash:
+ * each holds the diagram Ask. Shared by the one-frame and the board request.
  */
 export function frameSources(cur: { result: Pick<FlowResult, "frames">; keys: readonly string[] }, board: Pick<BoardLayout, "frames" | "held">): FrameSourceIn[] {
   const sources: FrameSourceIn[] = [];
@@ -209,7 +209,7 @@ export function frameSources(cur: { result: Pick<FlowResult, "frames">; keys: re
 }
 
 /**
- * What the Core gates a board Ask on (Task 4b): each frame's recorded Connection by its title and every held source,
+ * What the Core gates a board Ask on: each frame's recorded Connection by its title and every held source,
  * and the `table:` links of every frame (not only the selected one), at most MAX_TABLE_LINKS.
  */
 export function boardGateFields(cur: { result: Pick<FlowResult, "frames">; keys: readonly string[] }, board: Pick<BoardLayout, "frames" | "held">, frames: readonly Pick<BoardOutlineFrame, "title" | "outline">[]): Pick<DiagramAskRequest, "sources" | "tableLinks"> {

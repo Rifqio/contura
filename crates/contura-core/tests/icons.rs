@@ -1,4 +1,4 @@
-//! The packed icon sets (step 6+, C1b; pack v2, Plan C): every name resolves, the pack stays
+//! The packed icon sets (C1b; pack v2): every name resolves, the pack stays
 //! under 4 MB, every icon is framed 24 by 24 with its drawing byte for byte as the official
 //! file, outline and mono icons take the theme's ink, and nothing unsafe is packed.
 
@@ -90,8 +90,7 @@ fn pack_under_4mb() {
 }
 
 /// SHA-256 of everything after the root tag, as `scripts/pack-icons.mjs` prints it for each
-/// source file (`PACK_SAMPLES=...`, its `drawing-sha256`): framing rewrites only the root tag
-/// (Plan C Decision 3).
+/// source file (`PACK_SAMPLES=...`, its `drawing-sha256`): framing rewrites only the root tag.
 #[test]
 fn icon_drawing_unchanged() {
     for (name, drawing_hash) in [
@@ -171,7 +170,7 @@ struct Fixtures {
 }
 
 /// The same list `scripts/svg-check.mjs` is tested against (src/flow/svgCheck.test.ts), so
-/// the pack-time and serve-time checks give the same answer (Ruling P9).
+/// the pack-time and serve-time checks give the same answer.
 #[test]
 fn the_safety_check_refuses_what_could_run_or_reach_out() {
     let fixtures: Fixtures = serde_json::from_str(include_str!("fixtures/svg-check.json")).unwrap();
@@ -223,7 +222,7 @@ fn the_sets_carry_their_credits() {
         );
         assert!(!set.changes.is_empty(), "{} names no changes", set.id);
     }
-    // Decision 4: Lucide strokes in the ink, logos fill in it, vendor icons are never inked.
+    // Lucide strokes in the ink, logos fill in it, vendor icons are never inked.
     let styles: Vec<(&str, &str)> = sets
         .iter()
         .map(|s| (s.id.as_str(), s.style.as_str()))
@@ -350,8 +349,8 @@ fn aliases_name_their_target() {
     assert_eq!(target.alias_of, None);
 }
 
-/// Every name the pack had before Plan C (4,069, written from the committed v1 pack), so a
-/// diagram written against it still draws (Decision 7).
+/// Every name the pack had before the v2 pack (4,069, written from the committed v1 pack), so a
+/// diagram written against it still draws.
 #[test]
 fn every_name_of_the_old_pack_still_resolves() {
     let names: Vec<&str> = include_str!("fixtures/icon-names-v1.txt").lines().collect();

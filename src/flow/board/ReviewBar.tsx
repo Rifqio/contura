@@ -1,9 +1,9 @@
-// The review bar (Plan D Decision 11): one floating bar beside the frames an assistant proposal changes, as Figma's
+// The review bar: one floating bar beside the frames an assistant proposal changes, as Figma's
 // and Miro's AI results float a Keep or Discard bar by the canvas content they touch and Copilot Edits offers Keep and
 // Undo with their keys. It sits REVIEW_GAP above the top right of the touched frames (below them when there is no
 // room), follows pan and zoom, and stays inside the canvas, clear of its fixed chrome: the board toolbar at the top, the
 // overview, the zoom control and the bottom stack (Miro's and FigJam's context bars never sit under fixed chrome). A WAI-ARIA toolbar: one tab stop, the arrow keys move along it; Ctrl+Enter accepts and
-// Ctrl+Backspace rejects in it always, and elsewhere in the tab by `reviewKeys` (A8).
+// Ctrl+Backspace rejects in it always, and elsewhere in the tab by `reviewKeys`.
 import { useStore } from "@xyflow/react";
 import { type KeyboardEvent as ReactKeyboardEvent, useLayoutEffect, useRef, useState } from "react";
 import Kbd from "../../components/Kbd";
@@ -20,7 +20,7 @@ type Size = { w: number; h: number };
 type KeyLike = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey" | "defaultPrevented">;
 
 /**
- * What a key does to the waiting changes (A8): Ctrl+Enter accepts and Ctrl+Backspace rejects. In the bar it always
+ * What a key does to the waiting changes: Ctrl+Enter accepts and Ctrl+Backspace rejects. In the bar it always
  * acts; elsewhere only on an event no canvas key took (a selected ER column and a picked class member take Ctrl+Enter
  * first and prevent it) and never while typing in the composer or the code pane.
  */
@@ -207,8 +207,7 @@ export default function ReviewBar({ titles, count: k, label, at, bottom, onAccep
 
 /**
  * The bar on the canvas over the frames' union `rect` (board units, their tabs left out): it follows the view's pan and
- * zoom. The tabs are added at the live zoom, as their strip keeps its screen height below 100 percent (Plan F Decision
- * 5), so the bar never covers a frame's title and AI Chat count. Inside the canvas's React Flow.
+ * zoom. The tabs are added at the live zoom, as their strip keeps its screen height below 100 percent ), so the bar never covers a frame's title and AI Chat count. Inside the canvas's React Flow.
  */
 export function ReviewBarOnCanvas({ rect, ...bar }: Omit<Props, "at" | "bottom"> & { rect: Rect }) {
   const transform = useStore((s) => s.transform);

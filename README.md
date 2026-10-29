@@ -17,17 +17,9 @@
 
 https://github.com/user-attachments/assets/76da62f5-007a-44d4-b823-575ae181bd7f
 
-## Why I built it
+Contura is a small database client for MySQL, PostgreSQL and SQLite, with an AI assistant that writes SQL for you to read. It never runs anything on its own.
 
-My everyday database tool felt heavy. I wanted one small app with a Rust core that does what I reach for every day (browse tables, write queries, design schemas, draw diagrams, move data) and then stays out of my way.
-
-I also wanted an AI assistant I could trust near a real database. So in Contura the assistant writes SQL for me to read, and I press Run. It never runs anything on its own, and on a Production Connection the app asks before anything that writes.
-
-And I wanted my data to stay mine: no account, no cloud, no telemetry. Contura is the tool I wanted for myself, and I am sharing it in case you want it too.
-
-<p align="center">
-  <img src="docs/screenshots/hero.png" alt="Contura with a query, its results and the AI assistant answering beside it" width="900">
-</p>
+No account, no cloud, no telemetry.
 
 ## Download
 
@@ -39,117 +31,53 @@ And I wanted my data to stay mine: no account, no cloud, no telemetry. Contura i
 
 | | |
 |---|---|
-| **Windows 10/11** | `Contura_x64_portable.exe`: no installer. Put it in any folder and run it. |
-| **Ubuntu / Debian** | `Contura_amd64.deb`: `sudo apt install ./Contura_*.deb` |
-| **Other Linux** | `Contura_amd64.AppImage`: `chmod +x` it and run. |
+| **Windows 10/11** | `Contura_x64_portable.exe`, no installer |
+| **Ubuntu / Debian** | `Contura_amd64.deb` |
+| **Other Linux** | `Contura_amd64.AppImage` |
 
-The builds are not code-signed yet, so Windows SmartScreen may warn the first time you run Contura: choose More info, then Run anyway. Updates are still checked against Contura's own signature before they install.
+The builds aren't code-signed yet. If Windows SmartScreen warns you, choose More info, then Run anyway.
 
-macOS is not supported yet.
+**Databases:** MySQL 8.0+, PostgreSQL 13+ and SQLite (built in).
 
-## Supported databases
+## What it does
 
-| Database | Versions |
-|---|---|
-| <img alt="MySQL" src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white"> | 8.0 and newer. MariaDB works through the MySQL support, but I have not tested it. |
-| <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white"> | 13 and newer |
-| <img alt="SQLite" src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white"> | Built in, nothing to install. Open any `.sqlite` or `.db` file. |
+**SQL editor.** Completion from your real schema, JOINs from your Foreign Keys, and errors underlined as you type.
 
-Contura is the client: bring your own server. Local servers you can start from the app are coming in 1.1.
+<img src="docs/screenshots/query.png" alt="The SQL editor with suggestions open and results below" width="900">
 
-## A quick tour
+**Table data.** Filter, sort and edit like a spreadsheet. Changes wait until you press Save, then go in one transaction.
 
-### Write SQL that knows your database
+<img src="docs/screenshots/table-data.png" alt="billing.invoices with an edited cell, a new row and the Save bar" width="900">
 
-The editor reads your schema in the background, so completion offers real tables and columns, understands aliases, and can write a whole JOIN from your Foreign Keys. Mistakes are underlined as you type, with a quick fix on `Ctrl+.`, and each Dialect's own syntax reads as valid: `GROUP_CONCAT(... SEPARATOR ', ')`, `INTERVAL 7 DAY`, `::` casts, `ON CONFLICT`, window frames and the rest. Results load 1,000 rows at a time, and Esc cancels a running query on the server. Every statement goes into Query History, and the ones worth keeping become Saved Queries.
+**Visual Query.** Drag tables in, tick columns, and read the SQL it writes.
 
-<img src="docs/screenshots/query.png" alt="The SQL editor with column and table suggestions open, and the last results below" width="900">
+<img src="docs/screenshots/visual-query.png" alt="Visual Query with three tables joined" width="900">
 
-### Browse and edit data without writing SQL
-
-Open a table and work with it like a spreadsheet: filter it in words ("status is paid"), sort, edit a cell, add or delete a row. Date and time cells open a calendar and time fields matched to the column (a `datetime(3)` shows milliseconds), and enum cells list their allowed values; you can always type or paste the value instead. Nothing is written straight away. Changes wait as Pending Edits until you press Save, and then go in one transaction. Discard throws them all away.
-
-<img src="docs/screenshots/table-data.png" alt="billing.invoices filtered and sorted, with one edited cell, one new row and the Save bar" width="900">
-
-### Build queries by dragging
-
-Drag tables onto the Visual Query canvas and Contura joins them from their Foreign Keys. Drag one column onto another for a join of your own. Tick the columns you want, then set filters, grouping, sorting and a limit. The SQL is written as you go; open it in the editor whenever you want to take over by hand.
-
-<img src="docs/screenshots/visual-query.png" alt="Visual Query with customers, invoices and payments joined, and the Columns panel open" width="900">
-
-### Design schemas in DBML
-
-Write the schema as [DBML](https://dbml.dbdiagram.io/) on the left and the diagram follows on the right. It works both ways: add a table, rename a column or draw a Foreign Key on the canvas, and only the lines that change are rewritten. Start blank, from a `.dbml` file, or from a database you already have. When it is ready, export SQL or an image, or apply it to a Connection through a Sync Script you review first. This is where entity relationship diagrams live in Contura.
-
-<img src="docs/screenshots/schema-builder.png" alt="The billing schema written as DBML beside its diagram" width="900">
-
-### Draw diagrams from text
-
-A diagram is a short text file (`.flow`) that Contura draws, and edits on the canvas go back into the text. There are nine kinds: data flow, flowchart, cloud architecture, sequence, state, class, mind map, timeline and ER. One file can hold a whole board of several diagrams, each in its own frame, all on one canvas. Add opens the Shelf: pick a diagram kind, an icon or a shape on the left, or start from a template on the right, with one search over both. A new diagram lands in the middle of the view. Tap Space or press `/` and a small box opens at the pointer; Enter drops your pick there, and Tab grows it into the Shelf. Templates cover single diagrams and whole boards. "From my database" draws an ER diagram of one schema from a Connection, and "From Mermaid" brings a Mermaid diagram in as a new diagram. On Home, New diagram opens the same catalog in a dialog. With nothing selected, use the toolbar keys to draw (a selected frame shows its own kind's keys): `V` select, `H` hand, `F` a Section, `N` a note, and `R`, `O`, `D`, `A`, `L`, `P` and `T` for shapes, lines, pen and text. Hold Space and drag to pan. Zoom with the wheel's Ctrl key or a pinch, around the pointer, from 10 to 400 percent; every shape keeps its real form at every zoom. Text too small to read fades to soft bars and returns as you zoom in, and frame titles keep their screen size so you can always read them. Fit board is `Shift+1` and zoom to frame is `Shift+2`. On a board of several frames, the Overview button beside the zoom buttons shows a small map of the frames and your view; it is off by default, and a click on it glides there. ER diagrams on a board are for sketching tables and relationships; to design a real database, use the Schema Builder above, which writes SQL and reaches your Connection, and Open as DBML turns an ER frame into one. In an ER diagram you edit tables where they sit on the board: rename a table or a column and change a column's type in place, add a column or paste one, and draw a relationship between two columns by dragging from one to the other, with the Relationship tool, or from the keyboard. Tables, columns and relationships each have a right-click menu. Cloud diagrams come with AWS, Azure, Google Cloud and Kubernetes icons. Publish any diagram as PNG or SVG. On a board, Publish takes the whole board, one frame or just the selection, with sketches included, and opens on whichever fits what you have selected. Each frame draws with its title, and a Frame titles switch turns the titles and frame outlines off; frames with nothing drawn yet or a repeated title are left out, and the note says so. Very large images are refused instead of drawn: a PNG can be at most 16,384 px on a side and 40,000,000 pixels, and an SVG at most 24 MB, so Publish lowers the PNG scale, then turns PNG off and points you to SVG or to a smaller part.
-
-A sequence diagram draws each participant as a box in its colour with its icon, at the top and again at the bottom, over a solid lifeline in the same colour. Message labels sit on the line, which breaks around them, and blocks (`loop`, `alt`, `opt`, `par`, `critical`) carry a coloured tab down their side with the label beside it: `opt card saved [color: warning] {`. Write `autonumber` to number the messages from there on, `autonumber 10` to restart at 10 and `autonumber off` to stop; or press Numbering in the frame bar to number them all, and once more to remove the numbers (Ctrl+Z undoes either). Every colour stays readable in Light and Dark, and Publish draws the same picture as the canvas.
-
-The assistant can draw too, and it reads the whole board: describe a change ("add a Redis cache between the API and the database"), and it can change several diagrams at once or add a new one. The changes show on the canvas for you to accept or reject, all together or one diagram at a time, and one Ctrl+Z undoes the whole set. Type `/` to point it at a diagram by name. Ask a question and it answers without changing anything, with the parts it names as links that show them on the board; when a request is vague it asks first. A new chat starts on nine diagram kinds, a template or a text file of yours. It only ever edits the diagram's text, never a database, and a diagram drawn from a Connection follows that Connection's AI access.
+**Schemas and diagrams.** Design schemas in DBML. Draw ER, flowchart, sequence, state, class and cloud diagrams side by side on one board.
 
 | | |
 |---|---|
-| <img src="docs/screenshots/diagram-cloud.png" alt="A cloud architecture diagram of a freight app on AWS" width="440"> | <img src="docs/screenshots/diagram-k8s.png" alt="A Kubernetes diagram with an ingress, services, deployments and a PostgreSQL StatefulSet" width="440"> |
-| Cloud architecture on AWS | Kubernetes |
-| <img src="docs/screenshots/diagram-sequence.png" alt="A sequence diagram of paying an invoice" width="440"> | <img src="docs/screenshots/diagram-flowchart.png" alt="A flowchart of order fulfilment written as text beside its drawing" width="440"> |
-| Sequence: paying an invoice | Flowchart: order fulfilment |
+| <img src="docs/screenshots/schema-builder.png" alt="A schema written as DBML beside its diagram" width="440"> | <img src="docs/screenshots/diagram-cloud.png" alt="A cloud architecture diagram on AWS" width="440"> |
+| <img src="docs/screenshots/diagram-sequence.png" alt="A sequence diagram of paying an invoice" width="440"> | <img src="docs/screenshots/diagram-flowchart.png" alt="A flowchart written as text beside its drawing" width="440"> |
 
-### Ask the AI, keep the control
+**AI assistant.** Bring your own provider: Anthropic, OpenAI-compatible, Groq, DeepSeek or a local model. Each Connection decides what it may see, and every answer keeps a full log of what was sent.
 
-Bring your own provider: OpenAI-compatible, Anthropic, Groq, DeepSeek, or a local model through Ollama or LM Studio. Contura has no AI service of its own; your key talks to your provider directly. Each Connection decides what the assistant may see: nothing, the schema, your current query, or sample rows. Every answer shows the steps it took and a Sends line with exactly what left your computer. SQL from the assistant goes into the editor for you to read and run. A chat is one conversation that keeps going across databases; past chats are in the history list with a title the AI writes, and opening one brings back the tab and query it ended on without running anything.
+<img src="docs/screenshots/assistant.png" alt="The Ask panel showing an answer and what was sent" width="900">
 
-<img src="docs/screenshots/assistant.png" alt="The Ask panel showing each step of an answer and exactly what was sent" width="900">
-
-### Move and compare
-
-Import and export CSV, JSON, Excel and SQL. Back up a database to a script and restore it later. Data Transfer copies tables between Connections, even MySQL to PostgreSQL, and shows how each column type maps before anything is copied.
-
-Schema Compare puts two databases side by side, coloured like Git: green added, red removed, amber changed. It writes a Sync Script where anything that could lose data starts unticked, and nothing runs until you have read it and confirmed.
-
-<img src="docs/screenshots/transfer.png" alt="Data Transfer mapping MySQL types to PostgreSQL" width="900">
-
-<img src="docs/screenshots/compare.png" alt="Schema Compare with added, removed and changed objects in colour" width="900">
+**Move data.** Import, export, backup, restore, Data Transfer between databases, and Schema Compare.
 
 ## Safe by default
 
-- **Production** Connections show the exact SQL and ask before anything that writes, including what you type yourself.
-- **Read-only** Connections block every write, and the database session itself is opened read-only.
+- **Production** Connections show the exact SQL and ask before any write.
+- **Read-only** Connections block every write.
 - An UPDATE or DELETE without WHERE always asks first.
-- Passwords and AI keys live in the system keyring, never in files.
+- Passwords and AI keys stay in the system keyring.
 
-<img src="docs/screenshots/production.png" alt="Contura asking before an UPDATE written by the assistant runs on a Production Connection" width="900">
+<img src="docs/screenshots/production.png" alt="Contura asking before an UPDATE runs on Production" width="900">
 
-## Your data stays yours
+## Coming in 1.1
 
-No account, no cloud, no telemetry. Settings, Connections (without passwords), Query History and Saved Queries live in one data folder; copy it and you have moved everything.
-
-| Version | Data folder |
-|---|---|
-| Windows portable | `data` next to the exe |
-| Linux AppImage | `data` next to the AppImage, when that folder can be written to |
-| Linux .deb | `~/.local/share/contura` |
-
-Only two things ever leave your computer: what you send to an AI provider you set up yourself, and, if you turn it on, the update check.
-
-**Updates** are off until you turn them on (Contura asks once, on first start; the switch is in Settings > Updates). When on, it asks github.com once a day for the release manifest (`latest.json`), with no cookie, no token and no version number. Update and restart downloads the one new file, checks its signature and checksum, and only then replaces the program; the data folder is not touched. On Windows and in the AppImage that is one click; the .deb shows a link to the new release.
-
-## Light and dark
-
-Dark and Light, one click on the moon at the right end of the status bar. Code and data are set in JetBrains Mono.
-
-<img src="docs/screenshots/light-dark.png" alt="The same window in the Light and Dark themes" width="900">
-
-## What I'm building next
-
-1.1 comes through the built-in updater:
-
-- **Redis Connections.** A key browser with values beside the key list and edits in place, a Workbench with completion and help, a CLI and profiler, a memory report, and Pub/Sub. Production and Read-only safety apply to Redis too.
-- **Local servers.** Start PostgreSQL, MySQL, MariaDB or Redis on your own machine with one switch and nothing to install. A server is downloaded the first time you start it, checked against its checksum, listens on 127.0.0.1 only, and gets its Connection made for you. On Windows, Redis is Valkey, built by Contura's release pipeline.
-- **MCP server.** AI tools that speak the Model Context Protocol, such as Claude Desktop or Cursor, can use your Connections through Contura to read schemas and run queries, under the same rules: Read-only stays read-only, and Production asks you before anything that writes. Off until you turn it on, and you choose which Connections it sees.
+Redis, local database servers you start with one switch, and an MCP server.
 
 ## Build from source
 

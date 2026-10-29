@@ -4,7 +4,7 @@ import { topicSpan } from "./topics";
 
 interface Props {
   topic: Topic;
-  /** The Topic's own last answer as plain text; the Core's summary when it has none (P11-20). */
+  /** The Topic's own last answer as plain text; the Core's summary when it has none. */
   preview?: string;
   open: boolean;
   onToggle(): void;

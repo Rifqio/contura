@@ -1,5 +1,5 @@
 // The .flow writer. The types and the quoting rule live with the parser in src/lang/flow/model.ts;
-// the parser reads everything this writes (ruling P2).
+// the parser reads everything this writes.
 import {
   type DiagramKind,
   type FlowDoc,
@@ -43,7 +43,7 @@ function groupLines(root: FlowGroup, byName: Map<string, FlowNode>, kind: Diagra
   const lines: string[] = [];
   type Frame = { g: FlowGroup; depth: number; child: number; body: boolean };
   const open = (g: FlowGroup, depth: number): Frame => {
-    // A group takes an icon and a colour (step 11), in the attribute order.
+    // A group takes an icon and a colour, in the attribute order.
     const items = [...(g.icon !== undefined ? [`icon: ${flowValue(g.icon)}`] : []), ...(g.color !== undefined ? [`color: ${flowValue(g.color)}`] : [])];
     // An ER group says so (`group Billing {`): a block of tables would otherwise read as a table.
     lines.push(`${indentAt(depth)}${kind === "er" ? "group " : ""}${flowName(g.name)}${items.length ? ` [${items.join(", ")}]` : ""} {`);
@@ -96,7 +96,7 @@ function linkLines(links: FlowLink[]): string[] {
     // An ER relationship's ends carry their columns.
     const from = isStateMarker(l.from) ? "[*]" : linkEndText(l.from, l.fromColumn);
     const to = isStateMarker(l.to) ? "[*]" : linkEndText(l.to, l.toColumn);
-    // A coloured line is written on its own (step 11): its colour goes after it, so nothing chains on.
+    // A coloured line is written on its own: its colour goes after it, so nothing chains on.
     if (l.chained && !l.label && l.color === undefined && open === from) {
       lines[lines.length - 1] += ` ${l.arrow} ${to}`;
       open = to;

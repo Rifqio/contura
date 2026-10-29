@@ -19,7 +19,7 @@ interface Props {
   picked: number | null;
   onPick(index: number | null): void;
   onOpenInSteps(index: number): void;
-  /** A diagram Ask (board 11.12): no database, one tool, and the Tool check box opens its row in Steps. */
+  /** A diagram Ask: no database, one tool, and the Tool check box opens its row in Steps. */
   variant?: "diagram";
   /** The diagram's name, `<file>.flow`, for the one-tool line. */
   file?: string;
@@ -28,14 +28,14 @@ interface Props {
 const count = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 const bytes = (n: number) => `${n.toLocaleString("en-US")} B`;
 
-/** The "You:" box of what the user did with the answer's SQL (board 11.3). */
+/** The "You:" box of what the user did with the answer's SQL. */
 const YOU: Record<AnswerActionKind, string> = {
   inserted: "You: Inserted into the editor",
   insertedCommented: "You: Inserted commented out",
   openedInNewTab: "You: Opened in a new tab",
 };
 
-/** The failed outline call's box (board 11.7): the kind its Warn line names, in words. */
+/** The failed outline call's box: the kind its Warn line names, in words. */
 const OUTLINE_FAILURE: Record<string, string> = {
   rateLimited: "Rate limited",
   overloaded: "Busy",
@@ -82,7 +82,7 @@ function boxLabel(s: ProcessStep): string {
 }
 
 /**
- * The Diagram tab (board 11.3): the record drawn as DOM boxes in three zones, the one line that leaves the PC in the
+ * The Diagram tab: the record drawn as DOM boxes in three zones, the one line that leaves the PC in the
  * accent, the database as a store box reached only for its catalog, and no path from the model to the database.
  */
 export default function DiagramView({ record, question, answer, providerName, connection, live, picked, onPick, onOpenInSteps, variant, file = "" }: Props) {
@@ -155,7 +155,7 @@ export default function DiagramView({ record, question, answer, providerName, co
   const compact = step("compact");
   const compactIdx = at("compact");
   const summarySent = sent?.summary ?? null;
-  // The summary or compaction call crosses on its own, like the outline call (board 11.6).
+  // The summary or compaction call crosses on its own, like the outline call.
   const summaryCross = compact && summarySent;
   const out = notSent(record);
   const pcFirst: ReactNode[] = [
@@ -231,7 +231,7 @@ export default function DiagramView({ record, question, answer, providerName, co
     box("cleaning"),
     compact && !summaryCross && box("compact"),
   ];
-  // The outline call crosses to the provider on its own (board 11.7), once its request left; a failed one shows why
+  // The outline call crosses to the provider on its own, once its request left; a failed one shows why
   // it could not pick, with no picks.
   const outlineCross = outline && outlineSent;
   const outlineFailed = outline?.value.startsWith("could not pick") ?? false;
@@ -379,7 +379,7 @@ export default function DiagramView({ record, question, answer, providerName, co
 }
 
 /**
- * The Diagram tab of a diagram Ask (board 11.12): the question, the .flow text and its cleaning on this PC, the one
+ * The Diagram tab of a diagram Ask: the question, the .flow text and its cleaning on this PC, the one
  * crossing, the model's answer and its proposal, then the Tool check and what the user did. No database box: the
  * one tool can only suggest edits to the file.
  */

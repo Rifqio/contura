@@ -1,5 +1,5 @@
-// Task 6: every frame of a board on one canvas: frames are selected, moved by their title tabs and zoomed to
-// (Decisions 2, 3, 5, 28 and 29; Review Focus 5).
+// Every frame of a board on one canvas: frames are selected, moved by their title tabs and zoomed to
+// (Review Focus 5).
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Edge, Node, ReactFlowInstance } from "@xyflow/react";
@@ -133,7 +133,7 @@ function setup(text = BOARD, layout: string | null = boardLayout()) {
   /** The flow boxes of a static frame's shapes. */
   const shapesOf = (key: string) => {
     const box = boxOf(key);
-    // A pictured frame is one image: its shapes are the ones it draws (Plan F Decision 7).
+    // A pictured frame is one image: its shapes are the ones it draws.
     return nodes()
       .filter((n) => n.parentId === boardFrameId(key))
       .flatMap((n) => (n.type === FRAME_PICTURE_TYPE ? pictureShapes(n, box) : [{ x: box.x + n.position.x, y: box.y + n.position.y, w: n.initialWidth ?? 0, h: n.initialHeight ?? 0 }]));
@@ -378,7 +378,7 @@ test("dragging_a_tab_moves_the_frame_in_one_undo", async () => {
   act(() => s.props().onFrameDrag!(boardFrameId("Refund"), { x: live.x + 10, y: live.y }, false));
   await waitFor(() => expect(s.ids()).toContain(inFrameId("Refund", "Ask")));
   expect(s.ids()).not.toContain("Ask");
-  // The board's own level of detail: real shapes at every zoom and count, the dragged frame's too (Plan F Decision 1).
+  // The board's own level of detail: real shapes at every zoom and count, the dragged frame's too.
   expect(s.props().detailPolicy).toBe("board");
   const moving = s.boxOf("Refund");
   act(() => s.props().onFrameDrag!(boardFrameId("Refund"), { x: moving.x + 40, y: moving.y + 20 }, true));
@@ -401,7 +401,7 @@ test("dragging_a_tab_moves_the_frame_in_one_undo", async () => {
 
 test("every_fit_of_a_board_too_big_for_the_least_zoom_opens_at_its_start", async () => {
   // er2000.flow's shape: frames in a row and one far off, too wide to fit even at 10 percent. Shift+1 opens it at its
-  // start (Task 3); the menus' "Zoom to fit", labelled Shift+1, must land on the same view, not the empty middle.
+  // start; the menus' "Zoom to fit", labelled Shift+1, must land on the same view, not the empty middle.
   const s = setup(BOARD, boardLayout({ x: 200000, y: 0 }));
   // The far frame is off screen at the open: its tab is not drawn.
   await opened(s, ["Checkout"]);
@@ -528,7 +528,7 @@ test("a_one_frame_file_draws_as_today", async () => {
   const drawnNodes = s.nodes().filter((n) => n.id !== boardFrameId("Order handover") && n.id !== LIVE_ANCHOR_ID);
   expect(drawnNodes.map(shape)).toEqual(today.nodes.map(shape));
   expect(s.props().edges.map(line)).toEqual(today.edges.map(line));
-  // Every shape hangs from the live anchor, which sits at the board's (0, 0) for a version 1 file (Plan F Decision 11).
+  // Every shape hangs from the live anchor, which sits at the board's (0, 0) for a version 1 file.
   for (const n of drawnNodes) expect(n.parentId).toBe(LIVE_ANCHOR_ID);
   expect(s.nodeOf(LIVE_ANCHOR_ID)!.position).toEqual({ x: 0, y: 0 });
   // The only other nodes are the frame's own box, under every shape, and the anchor.
@@ -636,7 +636,7 @@ test("a_section_under_a_frame_never_takes_its_click", async () => {
   layout.sketches = [{ id: "s1", kind: "section", x: -400, y: -400, w: 3_000, h: 1_400, text: "Section" }];
   const s = setup(BOARD, JSON.stringify(layout));
   await opened(s);
-  // Readable, so the Section is a node (far out the sketch layer is pictured, Task 9 fix 2).
+  // Readable, so the Section is a node (far out the sketch layer is pictured, Task 9).
   await act(async () => {
     await s.inst().setViewport({ x: 0, y: 0, zoom: 0.5 });
   });
@@ -663,7 +663,7 @@ test("a_section_under_a_frame_never_takes_its_click", async () => {
   clickOn(freePoint([s.boxOf("Refund")], s.shapesOf("Refund")));
   await waitFor(() => expect(s.isSelected("Refund")).toBe(true));
   expect(s.isSelected("Shipping")).toBe(false);
-  // Outside every frame the click selects the Section alone (Task 12): the frames let go.
+  // Outside every frame the click selects the Section alone: the frames let go.
   expect(s.props().selection).not.toContain(sketchNodeId("s1"));
   const b = s.boxOf("Shipping");
   clickOn({ x: b.x + b.w + 200, y: b.y + 100 });
@@ -673,7 +673,7 @@ test("a_section_under_a_frame_never_takes_its_click", async () => {
 });
 
 test("a_right_click_on_the_live_frame_mid_drag_is_not_a_static_frames", async () => {
-  // Task 18a: dragged by its tab the live frame is drawn static, but a pick on it is still the live frame's, never a
+  // Dragged by its tab the live frame is drawn static, but a pick on it is still the live frame's, never a
   // switch to its own static drawing (which drops the shape selection).
   const s = setup();
   await opened(s);
@@ -778,7 +778,7 @@ test("a_details_edit_saved_by_a_press_on_another_tab_lands_in_its_own_frame", as
   expect(screen.queryByRole("dialog", { name: /^Edit / })).toBeNull();
 });
 
-// C1: a drop onto a group is an awaited commit (`trackCommit`): a tab clicked meanwhile waits for it, so the edit lands
+// a drop onto a group is an awaited commit (`trackCommit`): a tab clicked meanwhile waits for it, so the edit lands
 // in its own frame and the other frame is selected after.
 const C1_GROUPED = 'diagram flow "A"\nBox {\n  Step 1\n}\nInner {\n  Step 3\n}\nStep 2\n';
 const OTHER = 'diagram flow "B"\nStep 2\nStep 3\n';
@@ -867,7 +867,7 @@ test("a_member_drag_onto_a_group_survives_a_fast_switch", async () => {
   }
 });
 
-// C3: a right-click on a shape in a static frame selects that frame and opens that shape's menu in one go (Figma).
+// a right-click on a shape in a static frame selects that frame and opens that shape's menu in one go (Figma).
 test("a_right_click_on_a_static_shape_selects_the_frame_and_opens_its_menu", async () => {
   const s = setup();
   await opened(s);
@@ -884,7 +884,7 @@ test("a_right_click_on_a_static_shape_selects_the_frame_and_opens_its_menu", asy
 });
 
 test("a_right_click_on_a_pictured_frame_only_selects_the_frame", async () => {
-  // Controller ruling (B2 C3, Plan F Decision 7): a pictured static frame is one image, so a right-click over a shape's
+  // Controller ruling (B2 C3): a pictured static frame is one image, so a right-click over a shape's
   // spot selects the frame alone and opens no shape menu.
   const s = setup();
   await opened(s);
@@ -1032,7 +1032,7 @@ test("below_box_below_the_live_frame_draws_in_full", async () => {
   await opened(s);
   await waitFor(() => expect(s.nodes().filter((n) => n.type === FRAME_PICTURE_TYPE)).toHaveLength(3));
   await pick(s, "Refund", "Ask");
-  // Plan F ruling 1: the live frame is never fast, below BOX_BELOW too (was Task 18b's fast overview).
+  // The live frame is never fast, below BOX_BELOW too (was Task 18b's fast overview).
   const canvasRoot = () => s.container.querySelector(".diagram-canvas") as HTMLElement;
   // The view has settled below BOX_BELOW and the live frame's line is drawn.
   await waitFor(() => expect(s.inst().getViewport().zoom).toBeLessThan(BOX_BELOW));
@@ -1057,13 +1057,13 @@ test("a_switch_paints_the_canvas_before_the_pane_swaps_its_text", async () => {
   await pick(s, "Checkout", "Cart");
   const view = () => EditorView.findFromDOM(s.container.querySelector(".cm-editor") as HTMLElement)!;
   await waitFor(() => expect(shownText(view())).toContain('diagram flow "Checkout"'));
-  /** One animation frame, and with `task` the task after it (a switch's landing, Plan F Decision 12). */
+  /** One animation frame, and with `task` the task after it (a switch's landing). */
   const frame = (task: boolean) =>
     act(async () => {
       await new Promise<void>((r) => requestAnimationFrame(() => (task ? setTimeout(r, 0) : r())));
     });
   // The click draws Refund selected, its shapes still static; the landing a paint later makes them live while the
-  // pane still shows Checkout (Task 18b: the canvas paints first, the pane swaps in the frame after).
+  // pane still shows Checkout (the canvas paints first, the pane swaps in the frame after).
   fireEvent.click(screen.getByRole("button", { name: "Flowchart Refund" }));
   expect(s.ids()).not.toContain("Ask");
   await frame(true);

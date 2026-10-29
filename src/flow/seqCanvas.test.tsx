@@ -1,4 +1,4 @@
-// Plan E Task 5: participants and lifelines on the canvas. Each participant is filled in its colour at the top and
+// Participants and lifelines on the canvas. Each participant is filled in its colour at the top and
 // at the bottom, shows its icon and its label in both boxes; the lifelines and activation bars are one node under
 // the messages, in each participant's colour; blocks sit under the lanes. Colours are read from inline custom
 // properties and from flow-seq.css as text, never as computed colours (jsdom does not resolve them).
@@ -168,7 +168,7 @@ test("lanes_are_one_node_under_the_messages", async () => {
     expect(s.node(`Participant ${name}`)!.querySelector('[data-part="lifeline"], .fkind-lifeline')).toBeNull();
     expect(s.node(`Participant ${name}`)!.querySelector(".fkind-activation")).toBeNull();
   }
-  // Each lane runs from under the head to the top of the foot box, down the participant's centre (Task 4: the
+  // Each lane runs from under the head to the top of the foot box, down the participant's centre (the
   // participant node includes the foot area), so no line runs through the foot.
   const paths = [...el.querySelectorAll('[data-part="lifeline"]')];
   ["A", "B", "C"].forEach((name, i) => {
@@ -196,7 +196,7 @@ test("colour_flows_to_lane_and_bars", async () => {
   expect(bar.classList.contains("fkind-seq")).toBe(true);
   // The other lane keeps its kind's own line.
   expect(styleVar(el.querySelectorAll('[data-part="lifeline"]')[1], "--seq-col")).toBe("var(--c-node-table-stroke)");
-  // Task 4: SeqBar.x is the bar's left edge, so the bar is centred on the lane.
+  // SeqBar.x is the bar's left edge, so the bar is centred on the lane.
   const m = /^M([-\d.]+) /.exec(lane.getAttribute("d")!)!;
   expect(Number(bar.getAttribute("x")) + ACT_W / 2).toBeCloseTo(Number(m[1]));
   expect(Number(bar.getAttribute("width"))).toBe(ACT_W);
@@ -288,13 +288,13 @@ test("the_participant_rules_use_theme_tokens_only", () => {
   expect(flowSeqCss).not.toMatch(/#[0-9a-f]{3,8}\b/i);
 });
 
-// ----- Task 6: messages and blocks on the canvas.
+// ----- Messages and blocks on the canvas.
 
 /** The canvas's message edge `i` as given to it, and its drawn element. */
 const edgeData = (i: number, prefix = "") => canvas.props!.edges.find((e) => e.id === `${prefix}edge:${i}`)!.data as SeqEdgeData;
 const edgeEl = (s: Setup, id: string) => s.container.querySelector<SVGGElement>(`.react-flow__edge[data-id="${id}"]`);
 const pathOf = (s: Setup, id: string) => edgeEl(s, id)?.querySelector(".react-flow__edge-path")?.getAttribute("d") ?? null;
-/** A live node's place on the board: its frame-local place plus the live anchor's (Plan F Decision 11). */
+/** A live node's place on the board: its frame-local place plus the live anchor's. */
 function absOf(id: string) {
   const n = canvas.props!.nodes.find((x) => x.id === id)!;
   const a = n.parentId === LIVE_ANCHOR_ID ? canvas.props!.nodes.find((x) => x.id === LIVE_ANCHOR_ID)!.position : { x: 0, y: 0 };
@@ -330,7 +330,7 @@ test("a_label_sits_on_its_chip_on_a_broken_line", async () => {
 });
 
 test("far_text_fades_numbers_words_and_captions_and_keeps_the_chip", async () => {
-  // Plan F's far text (Decisions 2 and 4): the words go and bars stand in, at the frame's text size. The chip keeps its
+  // Far text: the words go and bars stand in, at the frame's text size. The chip keeps its
   // own background under the bar, so a lifeline still never shows through a message's label.
   const s = setup(seq("autonumber", "participant A", "participant B", "loop again {", "  A -> B: pay", "}"));
   await shown(s, "Participant B");
@@ -454,7 +454,7 @@ const AWAY = JSON.stringify({
 });
 
 test("a_live_frame_off_the_origin_draws_its_messages_from_the_lifelines", async () => {
-  // Plan F: live shapes hang from the anchor at the frame's `at`, in board units; the path is moved by the sender's
+  // Live shapes hang from the anchor at the frame's `at`, in board units; the path is moved by the sender's
   // place, so it must start on the sender's lifeline wherever the frame stands.
   const s = setup(`${LOGIN}\n${TALK}`, AWAY);
   fireEvent.click(await screen.findByRole("button", { name: / Login$/ }));
@@ -468,11 +468,11 @@ test("a_live_frame_off_the_origin_draws_its_messages_from_the_lifelines", async 
     expect(Number(m[2])).toBeCloseTo(p.y + edgeData(i).y);
     expect(p.x).toBeGreaterThanOrEqual(700);
   }
-  // A static frame far off draws as Plan F's picture at open; its real lines are checked on the board scene below.
+  // A static frame far off draws as one picture at open; its real lines are checked on the board scene below.
   expect(canvas.props!.nodes.some((n) => n.id === inFrameId("Talk", "\u0000picture"))).toBe(true);
 });
 
-// Review Focus 5: B1's board harness with a static sequence frame and a frame titled "0", then a Plan D review.
+// Review Focus 5: B1's board harness with a static sequence frame and a frame titled "0", then a board review.
 const BEFORE = ['diagram sequence "Talk"', "autonumber", "participant A", "participant B", "participant Gone", "loop again {", "  A -> B: hi", "}", "B --> A: ok", "A -> Gone: bye", ""].join("\n");
 const AFTER = ['diagram sequence "Talk"', "autonumber", "participant A", "participant B", "participant New", "loop again {", "  A -> B: hi", "}", "B --> A: ok", "B -> New: tell", ""].join("\n");
 const entry = (at: { x: number; y: number }, nodes: Record<string, { x: number; y: number }> = {}): FrameLayout => ({ at, nodes: Object.assign(emptyPositions(), nodes), style: "modern", direction: "TB" });

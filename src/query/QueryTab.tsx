@@ -273,7 +273,7 @@ export default function QueryTab({
   const coreNoWhere = useRef(new WeakMap<Stmt, NoWhere | null>());
   /** A short note in the status line, such as why Run found nothing; it goes when you move. */
   const [hint, setHint] = useState<string | null>(null);
-  // Opening the Connection from the result area, while it is closed (frame 10).
+  // Opening the Connection from the result area, while it is closed.
   const [opening, setOpening] = useState<{ s: "idle" } | { s: "connecting"; startedAt: number } | { s: "failed"; error: OpenFailure }>({ s: "idle" });
   const [openNow, setOpenNow] = useState(() => Date.now());
   const openToken = useRef(0);
@@ -281,7 +281,7 @@ export default function QueryTab({
   /** A cancelled open has not settled yet: Open waits for it. */
   const [stopping, setStopping] = useState(false);
   const [position, setPosition] = useState({ line: 1, column: 1 });
-  // The query diagram beside the editor (B1), and its "3 tables, 2 Joins" for the status line.
+  // The query diagram beside the editor, and its "3 tables, 2 Joins" for the status line.
   const [diagramOpen, setDiagramOpen] = useState(false);
   const [diagramCount, setDiagramCount] = useState<string | null>(null);
   const root = useRef<HTMLElement>(null);
@@ -312,7 +312,7 @@ export default function QueryTab({
       issued.current.delete(id);
     }
   };
-  /** Where the inline box is drawn: a block in the editor under its statement (I3). */
+  /** Where the inline box is drawn: a block in the editor under its statement. */
   const [askHost, setAskHost] = useState<HTMLElement | null>(null);
   const inZone = (box: ReactElement) => (askHost ? createPortal(box, askHost) : box);
   const closeAsk = () => {
@@ -409,7 +409,7 @@ export default function QueryTab({
     schemaState: !live ? ("none" as const) : schemaLoad === "loaded" ? ("loaded" as const) : schemaLoad === "loading" ? ("loading" as const) : ("none" as const),
   };
 
-  /** The database a MySQL `USE` moved this session to; null while it is still the tab's (Q43). */
+  /** The database a MySQL `USE` moved this session to; null while it is still the tab's. */
   const [sessionDb, setSessionDb] = useState<string | null>(null);
 
   // One session per tab, opened on the tab's Connection and database.
@@ -808,7 +808,7 @@ export default function QueryTab({
     setOpening({ s: "idle" });
   }
 
-  /** Q8: Run pressed during a run says so instead of doing nothing. */
+  /** Run pressed during a run says so instead of doing nothing. */
   const alreadyAt = useRef(-Infinity);
   function runAgain(): boolean {
     if (!running) return false;
@@ -826,7 +826,7 @@ export default function QueryTab({
     if (waiting()) return false;
     if (runAgain()) return true;
     const target = editorRef.current?.runTarget() ?? null;
-    // On a blank or comment-only line nothing runs, and the status line says why (I1).
+    // On a blank or comment-only line nothing runs, and the status line says why.
     if (!target && editorRef.current && editorRef.current.text().trim() !== "") {
       setHint("Nothing to run on this line.");
       return false;
@@ -839,7 +839,7 @@ export default function QueryTab({
     runRef.current = (sql) =>
       new Promise<RunOutcome>((resolve) => {
         settleExternal({ ran: false });
-        // Nothing runs while a suggestion waits in the editor, from here either (M5).
+        // Nothing runs while a suggestion waits in the editor, from here either.
         if (waiting()) {
           setHint("Keep or discard the suggestion first.");
           resolve({ ran: false });
@@ -1067,7 +1067,7 @@ export default function QueryTab({
             askButton={ask?.inlineAsk}
             onSuggestion={setSuggesting}
             onEscapeSuggestion={() => {
-              // Esc discarded the inline answer's suggestion: the box closes with it (M4).
+              // Esc discarded the inline answer's suggestion: the box closes with it.
               if (askSel) closeAsk();
             }}
             onShowInTree={(t) => {
@@ -1159,7 +1159,7 @@ export default function QueryTab({
           tabIndex={0}
           onPointerDown={startDrag}
           onDoubleClick={() => {
-            // Q7: as in the Visual Query panel, a double-click puts the split back.
+            // as in the Visual Query panel, a double-click puts the split back.
             setShare(DEFAULT_SHARE);
             saveShare(DEFAULT_SHARE);
           }}

@@ -1,9 +1,9 @@
-// The Assistant side of the diagram tab's side panel (board 11.5, scenes idle, working, review, auto and ask):
+// The Assistant side of the diagram tab's side panel (scenes idle, working, review, auto and ask):
 // the diagram's thread, the composer, "Review first" or "Auto-apply", the model and Send, and
-// each answer's proposal as its card, its remove question or what landed. Board 11.12 adds the Sends line from the
+// each answer's proposal as its card, its remove question or what landed. The assistant adds the Sends line from the
 // Core's preview, the Sent line and Show log under each answer, and the note when the tool is off in Settings. No
-// hover text: aria-labels only. The head has `+` (assistant.newChat) and the clock, D2's history of the board's chats
-// (Plan D Decision 16, A20); switching frames keeps the chat.
+// hover text: aria-labels only. The head has `+` (assistant.newChat) and the clock, D2's history of the board's chats;
+// switching frames keeps the chat.
 import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { aiSettingsChanged } from "../../api/changes";
 import { aiAnswerRecord, aiClearAttachment, aiKnownModels, aiPickAttachment, aiSettings, errorText, setAiModelPrefs } from "../../api/client";
@@ -38,19 +38,19 @@ interface Props {
   /** The diagram's name: `<name>.flow`. */
   name: string;
   kind: DiagramKind | null;
-  /** The canvas selection: the Sends line is built again when it changes (it goes with the board, Plan D Decision 7). */
+  /** The canvas selection: the Sends line is built again when it changes (it goes with the board). */
   selected: string[];
   /** The selected sketches' ids: with the shapes they make the selection chip, and the Sends line is built again when they change. */
   sketches?: string[];
   /** The board's frames in order, for the `/` list and the chips' kind words. */
   frames?: readonly BoardFrame[];
-  /** The selected frame: the automatic frame chip (Decision 7). */
+  /** The selected frame: the automatic frame chip. */
   selectedFrame?: { title: string; index: number; key?: string } | null;
   /** A frame whose AI Chat was opened without selecting it: its chip is added (a new object each time). */
   frameChip?: { title: string; index: number } | null;
   /** What each frame holds now, by frame place: the names an answer's backticks can link to. */
   parts?: readonly PartFrame[];
-  /** A part button was pressed: the frame at `link.at` is selected and the part shown (Decision 17). */
+  /** A part button was pressed: the frame at `link.at` is selected and the part shown. */
   onShowPart?(link: PartLink): void;
   mode: FlowAssistMode;
   onMode(mode: FlowAssistMode): void;
@@ -65,7 +65,7 @@ interface Props {
   active?: boolean;
   /** Open Settings on the tool-off note: the AI settings' tools table. */
   onOpenSettings?(): void;
-  /** The start screen's Template: the board Shelf opens on its templates side (Plan D A11). */
+  /** The start screen's Template: the board Shelf opens on its templates side. */
   onTemplate?(): void;
 }
 
@@ -100,8 +100,8 @@ const describeKind = (kind: DiagramKind): string => `Describe the ${KIND_NOUN[ki
 /** Lets the Core forget a file whose chip went; a failure leaves it to the next pick, which replaces it. */
 const forgetFile = (token: string) => void aiClearAttachment(token).catch(() => {});
 
-/** Board 11.12, Tool off: the assistant cannot propose anything, so there is no composer; Open Settings goes to the switch. */
-/** Under an answer given on a trimmed board: how many diagrams went as names only or were left out (Decision 8). */
+/** Tool off: the assistant cannot propose anything, so there is no composer; Open Settings goes to the switch. */
+/** Under an answer given on a trimmed board: how many diagrams went as names only or were left out. */
 function TrimmedNote({ record }: { record: AnswerRecord }) {
   const t = trimmedOf(record);
   return t ? <p className="answer-p flow-assist-trimmed">{trimmedNote(t)}</p> : null;
@@ -131,7 +131,7 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text).catch((
 
 /** An answer's text in the assistant's renderer; a diagram answer has no checked SQL. */
 function Said({ text, notes, streaming = false, parts, onShowPart }: { text: string; notes?: string[]; streaming?: boolean; parts?: readonly PartFrame[]; onShowPart?(link: PartLink): void }) {
-  // The names an answer gives that are on the board now (Decision 17). A finished answer only; a part gone since reads as plain code.
+  // The names an answer gives that are on the board now. A finished answer only; a part gone since reads as plain code.
   const links = useMemo(() => (streaming || !parts || !onShowPart ? NO_LINKS : answerRefs(text, parts)), [text, parts, streaming, onShowPart]);
   // `renderCode` keeps its identity while the links are the same, so a parse of the board that changes nothing here
   // does not draw every block of every older answer again (AnswerBlock is memoised on it).
@@ -211,8 +211,8 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
   const chat = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   /**
-   * The pane: Ctrl+Shift+N, and Ctrl+N with focus in it, start a new chat here (A19). With focus in neither this pane
-   * nor the Ask panel (on the board canvas), the board's pane on screen takes Ctrl+Shift+N (Task 19).
+   * The pane: Ctrl+Shift+N, and Ctrl+N with focus in it, start a new chat here. With focus in neither this pane
+   * nor the Ask panel (on the board canvas), the board's pane on screen takes Ctrl+Shift+N.
    */
   const root = useRef<HTMLDivElement>(null);
   useCommandKeys({ "assistant.newChat": ai.newChat }, { region: root, preferWhenShown: true });
@@ -244,7 +244,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
   /** The board's titles in text order: a reloaded proposal's rows group by them. */
   const titles = useMemo(() => frames.map((f) => f.title), [frames]);
   const messages = thread?.messages ?? [];
-  /** The follow-up's card is on screen: the composer waits for it (Decision 10). */
+  /** The follow-up's card is on screen: the composer waits for it. */
   const replying = !!asking && !working && !waiting;
   /** The turn that holds the follow-up's question: the card shows it, so the thread does not repeat it. */
   const askedBack = replying ? questionTurn(messages, asking.question) : undefined;
@@ -303,7 +303,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  // Diagram Asks use the global settings (plan ruling P7): the model list without a Group. Read again when the
+  // Diagram Asks use the global settings: the model list without a Group. Read again when the
   // settings or the current model are saved anywhere (Settings, the Ask panel), so the picker never goes stale.
   useEffect(() => {
     let live = true;
@@ -418,7 +418,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
   }, [failure]);
 
   // The Core no longer holds the attached file (a pick on another board replaced it): its chip goes, so it is never
-  // shown as going when it would not, and the Core is told (Task 4). The preview names the token it asked with; an
+  // shown as going when it would not, and the Core is told. The preview names the token it asked with; an
   // Ask's failure is about the chip it sent, as the composer is shut while it runs.
   useEffect(() => {
     if (!isFileGone(sends.error) || !sends.attachment) return;
@@ -470,7 +470,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
     el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top - pad;
   }, [turns, waiting, landed, asking, replying, toEnd]);
 
-  // No scope on a board: the chips are focus, never a lock, and the selection goes with the board (Plan D Decision 7).
+  // No scope on a board: the chips are focus, never a lock, and the selection goes with the board.
   const askOptions = (): AskOptions => {
     const create = chips.find((c) => c.kind === "create");
     const file = chips.find((c) => c.kind === "file");
@@ -519,7 +519,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
 
   /**
    * Sends with the composer's chips; once the Ask has its answer (a follow-up question is one) the kind card's and the
-   * file's chips go, so each is sent once (Task 14). A failed Ask keeps them for Retry, as the Core keeps the file.
+   * file's chips go, so each is sent once. A failed Ask keeps them for Retry, as the Core keeps the file.
    */
   function sendOnce(q: string, opts: AskOptions, how: (q: string, opts: AskOptions) => Promise<boolean | void>) {
     sentFile.current = opts.attachment;
@@ -563,7 +563,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
 
   /**
    * How many times in a row each failure shown happened, by the failure (or its turn's time): a Retry of a failure
-   * whose next one is of the same kind counts on, so a second rate limit in a row does not retry on its own (P11-24).
+   * whose next one is of the same kind counts on, so a second rate limit in a row does not retry on its own.
    */
   const triesOf = useRef(new Map<unknown, number>());
   /** The failure a Retry was sent for, until the next failure is counted. */
@@ -584,7 +584,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
     for (const id of [...triesOf.current.keys()]) if (id !== failure && !(typeof id === "number" && ats.has(id))) triesOf.current.delete(id);
   }, [messages, failure]);
 
-  // An answer that did not fail ends the run of failures: a later one, on any path, is the first again (P11-24).
+  // An answer that did not fail ends the run of failures: a later one, on any path, is the first again.
   const newest = messages[messages.length - 1];
   const newestRecord = newest?.role === "assistant" ? recordOf(newest.record) : null;
   const answered = newestRecord !== null && recordError(newestRecord) === null;
@@ -647,7 +647,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
     const live = waiting && waiting.threadId === thread?.id && waiting.messageAt === m.at ? waiting : null;
     if (live?.step === "remove" && ai.removal) {
       const r = ai.removal;
-      // The diagrams are named on a board of several (Decision 13b).
+      // The diagrams are named on a board of several.
       return <RemoveDialog shapes={r.shapes} columns={r.columns} lines={r.lines} tables={r.tables} adds={r.adds} frames={live.frames.length > 1 ? r.frames : []} onCancel={ai.rejectAll} onReview={ai.reviewEach} onRemove={ai.removeAll} />;
     }
     return (
@@ -668,7 +668,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
           />
         )}
         {live?.step === "pick" ? (
-          // The unclear word's own frame is named on a board, and only its shapes are offered (Decision 12).
+          // The unclear word's own frame is named on a board, and only its shapes are offered.
           ai.picking && <PickCard change={ai.picking.change} frame={live.frames.length > 1 ? ai.picking.frame : null} problem={live.problem} onPick={ai.pick} onCancel={ai.rejectAll} />
         ) : live?.step === "broken" && live.broke ? (
           <BrokenCard
@@ -739,7 +739,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
   }
 
   /**
-   * Under an answer (board 11.12): Show log, unless its error card carries it, and the Sent line, which opens the
+   * Under an answer: Show log, unless its error card carries it, and the Sent line, which opens the
    * Sent record.
    */
   function foot(m: AiMessage, record: AnswerRecord, failed: unknown) {
@@ -780,7 +780,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
   /** An Ask runs or changes wait: the open chat stays. */
   const busy = working !== null || waiting !== null;
 
-  /** The pane's head (the Ask panel's, board 11.1): `+` and the clock of the board's chats, at its end. */
+  /** The pane's head (the Ask panel's): `+` and the clock of the board's chats, at its end. */
   const head = (
     <div className="flow-assist-head">
       <span className="spacer" />
@@ -804,7 +804,7 @@ export default function DiagramAssistant({ ai, name, kind, selected, sketches = 
     </div>
   );
 
-  // Show log takes the place of the thread and the composer (board 11.12).
+  // Show log takes the place of the thread and the composer.
   const logMessage = logAt !== null ? messages.find((m) => m.role === "assistant" && m.at === logAt) : undefined;
   if (logMessage) {
     const record = fullRecord(logMessage);

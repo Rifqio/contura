@@ -68,7 +68,7 @@ test("the_flow_text_tab_shows_the_text_create_flow_writes", async () => {
   await waitFor(() => expect(within(dialog).getByText("Flowchart: 7 shapes, 7 lines")).toBeTruthy());
   await userEvent.click(within(dialog).getByRole("radio", { name: ".flow text" }));
   const block = within(dialog).getByRole("group", { name: "The .flow text" });
-  // The Name field's default is New diagram's, so the title is Untitled diagram (fix round 1, M8).
+  // The Name field's default is New diagram's, so the title is Untitled diagram (fix round 1).
   const lines = [...block.querySelectorAll("code")].map((c) => c.textContent);
   expect(lines.join("\n")).toBe(FLOW.replace('"Order handover"', '"Untitled diagram"').trimEnd());
 });
@@ -92,7 +92,7 @@ test("an_unreadable_line_shows_the_banner_and_disables_create_flow_until_fixed",
   paste(MMD.replace("  D --> B", "  D -> B"));
   const banner = await within(dialog).findByText("Line 5: cannot read the link D -> B. Mermaid links are -->, ---, -.-> or ==>.");
   expect(banner.closest("[role=alert]")).toBeTruthy();
-  // Step 10: the line blocks Create until it is fixed or deleted.
+  // the line blocks Create until it is fixed or deleted.
   expect(within(dialog).getByText("Fix or delete line 5 to go on.")).toBeTruthy();
   expect(within(dialog).getByText("Flowchart: 7 shapes, 6 lines read")).toBeTruthy();
   expect(create().disabled).toBe(true);
@@ -141,7 +141,7 @@ test("create_flow_saves_by_name_in_the_diagrams_folder_and_reports_the_name", as
   const { dialog, onCreated } = await readyToCreate(false);
   fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("order-handover"));
-  // Q35: no Save dialog; the Core keeps it in the diagrams folder.
+  // no Save dialog; the Core keeps it in the diagrams folder.
   expect(plugin.save).not.toHaveBeenCalled();
   // Both files in one Core call by name, through writeDiagram (step 7 finding I1).
   expect(callsTo("write_text_file")).toEqual([]);

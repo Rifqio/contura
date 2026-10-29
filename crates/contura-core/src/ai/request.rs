@@ -46,10 +46,10 @@ pub enum ItemKind {
     /// Recent steps: what the user did since their last question, rendered by the Core
     /// from `AskRequest.steps`. Each step is gated where it is built (`steps::render_steps`).
     Steps,
-    /// The chat title call after the first answer (Decision 5). Never an `Item` of the main
+    /// The chat title call after the first answer. Never an `Item` of the main
     /// Ask; switched off through `off`, no title call is made.
     Title,
-    /// A text file the user attached to a diagram Ask (Plan D, Decision 15), read by the Core
+    /// A text file the user attached to a diagram Ask, read by the Core
     /// from a path its own dialog returned. Not database data: only a diagram Ask sends it.
     Attachment,
 }

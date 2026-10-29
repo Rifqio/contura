@@ -37,7 +37,7 @@ interface Props {
   onGroupDeleted(): void;
   /** `edited`: an existing Connection was saved, so its session closed (App: markClosed). */
   onConnectionSaved(saved: ConnectionConfig, edited: boolean): void;
-  /** Before an edited Connection is saved: App asks about its running jobs (Q43); false keeps the form. */
+  /** Before an edited Connection is saved: App asks about its running jobs; false keeps the form. */
   beforeConnectionSave?(id: ConnectionId): Promise<boolean>;
   onStartModel(doc: ModelDoc): void;
   onCancelModel(): void;

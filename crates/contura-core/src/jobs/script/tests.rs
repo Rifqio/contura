@@ -551,7 +551,7 @@ fn own_transaction_control() {
         assert!(!is_transaction_control(*d, sql), "{sql}");
     }
 
-    // Q28: one transaction unless the file manages its own, or MySQL DDL commits.
+    // one transaction unless the file manages its own, or MySQL DDL commits.
     let dir = tempfile::tempdir().unwrap();
     let cases: &[(DialectKind, &str, bool, bool)] = &[
         (
@@ -763,7 +763,7 @@ fn copy_data_and_meta_commands() {
         ]
     );
     assert_eq!(lines(&got), [1, 5, 6, 7]);
-    // A backslash line is a meta line only where a statement starts (Q37); inside one it
+    // A backslash line is a meta line only where a statement starts; inside one it
     // stays part of it, and the server rejects it.
     assert_eq!(
         texts(&split(PG, "SELECT 1\n\\g\nSELECT 2;\n\\x\n")),
@@ -777,7 +777,7 @@ fn read_file(d: DialectKind, body: &str) -> Vec<ScriptStatement> {
     read_all(&mut ScriptReader::open(&p, d, false).unwrap())
 }
 
-/// Q37 I1: a statement the splitter keeps together can hold several statements the
+/// A statement the splitter keeps together can hold several statements the
 /// server runs; the lists look at every one of them, under both backslash readings.
 #[test]
 fn lists_see_every_piece() {
@@ -821,7 +821,7 @@ fn lists_see_every_piece() {
     );
 }
 
-/// Q37 I2: an INSERT that another backslash reading splits is shown exactly.
+/// An INSERT that another backslash reading splits is shown exactly.
 #[test]
 fn insert_shape_none_when_other_reading_splits() {
     let cases: &[(DialectKind, &str)] = &[
@@ -907,7 +907,7 @@ mod alloc_count {
 #[global_allocator]
 static ALLOC: alloc_count::Counting = alloc_count::Counting;
 
-/// Q39 N3: a token-dense statement at the limit, read end to end through ScriptReader
+/// A token-dense statement at the limit, read end to end through ScriptReader
 /// (splitter, lists and `safety::classify`), peaks under 4x its size.
 #[test]
 fn statement_near_limit_stays_in_budget() {
@@ -932,7 +932,7 @@ fn statement_near_limit_stays_in_budget() {
     );
 }
 
-/// Q37 I3: the checks on one statement hold a fraction of it, not a copy per character.
+/// The checks on one statement hold a fraction of it, not a copy per character.
 #[test]
 fn statement_checks_stay_in_budget() {
     let hex = "0a".repeat(8 * 1024 * 1024);
@@ -955,7 +955,7 @@ fn statement_checks_stay_in_budget() {
     );
 }
 
-/// Q37 I4: a `$` and a long word with no statement open yet still meets the limit.
+/// A `$` and a long word with no statement open yet still meets the limit.
 #[test]
 fn dollar_word_stays_bounded() {
     let dir = tempfile::tempdir().unwrap();
@@ -971,7 +971,7 @@ fn dollar_word_stays_bounded() {
     assert!(r.bytes_read() < 200_000, "read {}", r.bytes_read());
 }
 
-/// Q37 minors: statements that cannot run in a transaction, and the added refusals.
+/// Statements that cannot run in a transaction, and the added refusals.
 #[test]
 fn review_minor_lists() {
     let outside: &[(DialectKind, &str)] = &[
@@ -998,7 +998,7 @@ fn review_minor_lists() {
         (PG, "ALTER SYSTEM SET work_mem = '1GB'", "ALTER SYSTEM"),
         (SL, "VACUUM INTO '/tmp/copy.db'", "VACUUM INTO"),
         (SL, "SELECT load_extension('evil')", "load_extension"),
-        // Q39: a quoted name calls the same function.
+        // a quoted name calls the same function.
         (SL, "SELECT \"load_extension\"('evil')", "load_extension"),
         (SL, "SELECT [LOAD_EXTENSION] ('evil')", "load_extension"),
         (SL, "SELECT `load_extension`('evil')", "load_extension"),
@@ -1013,7 +1013,7 @@ fn review_minor_lists() {
     assert_eq!(statement_action(SL, "VACUUM", false), ScriptAction::Run);
 }
 
-/// Q39 N1: MySQL reads an inner `/*!` inside `/*! ... */` as code too.
+/// MySQL reads an inner `/*!` inside `/*! ... */` as code too.
 #[test]
 fn nested_executable_comment_is_read() {
     let sql = "/*!40000 SELECT 1; /*!50000 DROP DATABASE x */ */";
@@ -1031,7 +1031,7 @@ fn nested_executable_comment_is_read() {
     assert!(insert_shape(MY, "INSERT INTO t VALUES (1) /*!40000 */").is_some());
 }
 
-/// Q39 N2: the END of a routine, trigger or block body is not COMMIT.
+/// The END of a routine, trigger or block body is not COMMIT.
 #[test]
 fn routine_end_is_not_transaction_control() {
     let cases: &[(DialectKind, &str, bool)] = &[
@@ -1080,7 +1080,7 @@ impl std::io::Read for FailingRead {
     }
 }
 
-/// Q39: a read error names the file, in next_statement and in finish.
+/// A read error names the file, in next_statement and in finish.
 #[test]
 fn read_error_names_the_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -1113,7 +1113,7 @@ fn dense_select(tokens: usize) -> String {
     sql
 }
 
-/// Q40: a statement that may read is classified up to the token cap, in budget, and
+/// A statement that may read is classified up to the token cap, in budget, and
 /// refused over it without being classified; a write of any size is still checked.
 #[test]
 fn reads_past_the_token_cap_are_refused() {
@@ -1162,7 +1162,7 @@ fn reads_past_the_token_cap_are_refused() {
     assert_eq!(statement_action(MY, &insert, false), ScriptAction::Run);
 }
 
-/// Q40: a bare BEGIN after a CREATE in one MySQL DELIMITER statement opens a transaction.
+/// A bare BEGIN after a CREATE in one MySQL DELIMITER statement opens a transaction.
 #[test]
 fn bare_begin_after_create_is_transaction_control() {
     let body =
@@ -1210,7 +1210,7 @@ fn ddl_and_transaction_words() {
     }
 }
 
-/// Q44: autocommit values, LOCK TABLES, session changes, MySQL's implicit commits and
+/// Autocommit values, LOCK TABLES, session changes, MySQL's implicit commits and
 /// pg_dump's `\restrict` lines.
 #[test]
 fn q44_facts() {

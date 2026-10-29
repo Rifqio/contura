@@ -1,4 +1,4 @@
-// Plan F Task 3: far text turns to soft lines and frame titles keep their screen size (Decisions 2 to 5). The canvas
+// Far text turns to soft lines and frame titles keep their screen size. The canvas
 // wrapper says which text sizes are far (`data-far`); every shape, ER card body and line label carries its frame's
 // text size class (`board-ts-*`), and flow-board.css draws far text as bars. Only a crossing changes anything.
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -218,7 +218,7 @@ test("er_rows_are_bars_when_far", async () => {
   await waitFor(() => expect(s.far()).toContain("m"));
   const card = s.nodeEl("orders")!;
   const body = card.querySelector(".fkind-er-body")!;
-  // The row bars are drawn by the body's backgrounds, one layer a bar (Plan F milestone fix 3: WebKit gives every
+  // The row bars are drawn by the body's backgrounds, one layer a bar (WebKit gives every
   // <svg> root its own memory; main's fast box had none), and no row element.
   await waitFor(() => expect(body.querySelector(".fkind-er-bars")).not.toBeNull());
   expect(card.querySelector("svg")).toBeNull();
@@ -247,7 +247,7 @@ test("er_rows_are_bars_when_far", async () => {
   // The header with its name and the ports stay.
   expect(card.querySelector(".fkind-head .fnode-name")!.textContent).toBe("orders");
   expect(card.querySelectorAll(".fkind-port").length).toBe(2 * (to - from));
-  // So does its icon (Decision 3), with no <svg> and no element: the header's ::before, masked by the same table icon.
+  // So does its icon, with no <svg> and no element: the header's ::before, masked by the same table icon.
   expect(card.querySelector(".fkind-head")!.classList.contains("is-far")).toBe(true);
   const icon = bodyIn(boardCss, ".fkind-head.is-far::before");
   expect(icon).toContain(`d='${iconPath("table")}'`);
@@ -295,7 +295,7 @@ function tabScale(s: Setup): string | null {
   if (scale === null) return null;
   // The one form the rule takes: 1 over the zoom, never past 1.
   expect(scale).toBe("max(1, calc(1 / var(--rz-zoom, 1)))");
-  // Given to the tab itself, never to the whole canvas (Task 9 fix 2).
+  // Given to the tab itself, never to the whole canvas.
   expect(s.container.querySelector<HTMLElement>(".react-flow")!.style.getPropertyValue("--rz-zoom")).toBe("");
   const zoom = Number(s.container.querySelector<HTMLElement>(".board-frame-tab")!.style.getPropertyValue("--rz-zoom"));
   const k = Math.max(1, 1 / zoom);
@@ -329,7 +329,7 @@ test("a_click_on_a_screen_size_tab_picks_its_frame", async () => {
 });
 
 test("an_er_card_of_no_width_keeps_its_rows", () => {
-  // No size and no natural size: a picture 0 wide would draw nothing, so the rows stay (fix round 1).
+  // No size and no natural size: a picture 0 wide would draw nothing, so the rows stay.
   const d = { name: "orders", kind: "erTable" as const, look: "modern" as const, rows: ["id int"], rowFlags: [["pk" as const]] };
   render(
     <BoardFarContext.Provider value={new Set<TextSize>(["m"])}>

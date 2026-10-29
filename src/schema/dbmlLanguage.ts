@@ -3,7 +3,7 @@ import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/
 import { tags } from "@lezer/highlight";
 
 const KEYWORDS = /^(table|ref|enum|note|indexes|as|project|tablegroup|tablepartial|records)\b/i;
-/** Column settings that change what the column holds: the operator role (DESIGN-NEXT 3.6). */
+/** Column settings that change what the column holds: the operator role (DESIGN.md 3.6). */
 const MODIFIERS = /^(pk|primary\s+key|not\s+null|unique|default)\b/i;
 const SETTINGS = /^(note|ref|delete|update|cascade|restrict|set|no|action|name|type|headercolor)\b/i;
 /** A ref arrow, but not the minus of a negative number. */
@@ -116,7 +116,7 @@ export const dbmlLanguage = StreamLanguage.define<State>({
   },
 });
 
-/** Syntax colours from the DESIGN-NEXT roles (3.6), shared by the SQL and DBML editors. */
+/** Syntax colours from the DESIGN.md roles (3.6), shared by the SQL and DBML editors. */
 export const dbmlStyle = HighlightStyle.define([
     { tag: tags.keyword, color: "var(--c-syn-keyword)", fontWeight: "var(--syn-kw-weight)" },
     { tag: tags.function(tags.variableName), color: "var(--c-syn-function)" },

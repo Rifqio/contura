@@ -1,4 +1,4 @@
-// Task 7: the top toolbar, its letter keys, Space (tap and hold) and the add menu (Decisions 18, 19, 24, 25, 26).
+// Task 7: the top toolbar, its letter keys, Space (tap and hold) and the add menu.
 // B2 Task 11: a Space tap opens the Space box (B2 decision 19), not B1's kind menu.
 // React Flow's panning cannot be driven in jsdom (D3): the pan tests assert the pane's props and the menu state; the
 // real pan is Task 18's live check.
@@ -327,7 +327,7 @@ test("a_space_tap_opens_the_space_box_at_the_pointer", async () => {
   await waitFor(() => expect(s.saved.text).toContain('diagram state "State"'));
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.id === boardFrameId("State"))).toBe(true));
   const node = canvas.props!.nodes.find((n) => n.id === boardFrameId("State"))!;
-  // The frame's box node is in board units, as the canvas is (Plan F Decision 11).
+  // The frame's box node is in board units, as the canvas is.
   expect(Math.abs(node.position.x + Number(node.style?.width) / 2 - at.x)).toBeLessThanOrEqual(1.5);
   expect(Math.abs(node.position.y + Number(node.style?.height) / 2 - at.y)).toBeLessThanOrEqual(1.5);
   expect(SPACE_TAP_MS).toBe(250);
@@ -394,7 +394,7 @@ test("add_opens_the_shelf_and_a_card_adds_at_the_middle", async () => {
   const s = setup();
   await opened();
   vi.spyOn(s.canvasEl(), "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON() {} } as DOMRect);
-  // The canvas is the board (Plan F Decision 11).
+  // The canvas is the board.
   const mid = canvas.instance!.screenToFlowPosition({ x: 400, y: 300 });
   const centre = vi.spyOn(canvas.instance!, "setCenter");
   fireEvent.click(s.tool("Add"));

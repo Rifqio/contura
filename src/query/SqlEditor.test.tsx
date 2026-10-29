@@ -144,7 +144,7 @@ test("api_inserts_replaces_and_selects", () => {
   expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe("SELECT");
 });
 
-// Language intelligence (step 4b).
+// Language intelligence.
 
 function setupLang(value: string, extra: Partial<Parameters<typeof SqlEditor>[0]> = {}) {
   const client = new LangClient(() => fakeWorker());

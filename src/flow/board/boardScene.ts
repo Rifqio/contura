@@ -1,4 +1,4 @@
-// The board scene: every frame of a board on one canvas (Decisions 1, 2, 4 and 5). The selected frame is live, and
+// The board scene: every frame of a board on one canvas. The selected frame is live, and
 // FlowTab draws its shapes with bare names; here it is only a box. Every other frame is static: a frame node with its
 // shapes, group areas and lines as children, every id prefixed by the frame's key, in its own z band under the live
 // frame. A static frame keeps its node objects while its doc and layout are the same objects, so a frame switch, a
@@ -27,7 +27,7 @@ import { boardFrameId, clashInFrameId, duplicateFrameId, inFrameId } from "./sta
 
 export { TEXT_SCALE, type ClashLayout };
 
-/** The height of a frame's title tab strip, drawn above the box's top-left corner (Decision 4). */
+/** The height of a frame's title tab strip, drawn above the box's top-left corner. */
 export const FRAME_TAB_H = 30;
 /** The title pill inside the tab strip (flow-board.css `.board-frame-title`): its height, side padding and gap. */
 export const TAB_PILL_H = 26;
@@ -39,18 +39,18 @@ export const TAB_ICON = 14;
 export const TAB_TITLE_MAX = 240;
 /** About 7 px per character of the 13 px body font: the estimate the export sizes words by. */
 export const TAB_CHAR_W = 7;
-/** Each static frame's z band (Decision 5, 30 wide as measured in the Task 0 spike). */
+/** Each static frame's z band (30 wide as measured in the Task 0 spike). */
 export const Z_BAND = 30;
 export const Z_LIVE_BOX = 1_995;
 export const Z_LIVE = 2_000;
 /**
- * The live frame's anchor (Decision 11): a zero-size node at the live frame's `at` that every live shape hangs from, so
+ * The live frame's anchor: a zero-size node at the live frame's `at` that every live shape hangs from, so
  * the live graph stays frame-local while the canvas is in board units. `canvasView.ts`'s `LIVE_ANCHOR` mirrors it.
  */
 export const LIVE_ANCHOR_ID = "\u0000live";
 /** The anchor's node type: it draws nothing (SketchNode's `SketchLayerNode`). */
 export const LIVE_ANCHOR_TYPE = "liveAnchor";
-/** The sketch layer node: under every frame, so its children's own z decides (Decision 5, ruling C14). */
+/** The sketch layer node: under every frame, so its children's own z decides (ruling C14). */
 export const Z_SKETCH_UNDER = -2;
 /** Sections and box sketches: under every frame's box (frame 0's is at 0), above the layer node. */
 export const Z_SKETCH_BOX = -1;
@@ -86,7 +86,7 @@ export interface FrameBox {
   h: number;
   /** The board's problems inside the frame's text. */
   problems: number;
-  /** Its title is an earlier frame's: drawn faded, never live (Decision 9). */
+  /** Its title is an earlier frame's: drawn faded, never live. */
   clash: boolean;
 }
 
@@ -102,12 +102,12 @@ export interface BoardSceneOut {
   /** Each static frame's line count by frame node id: with its shapes, what a frame turning real mounts (`mounted`). */
   lines: ReadonlyMap<string, number>;
   /**
-   * The static frames drawn as a picture (Plan F Decision 7), by frame node id: their shapes are not drawn one by one,
-   * so a double-click or a right-click there only selects (B2 C3).
+   * The static frames drawn as a picture, by frame node id: their shapes are not drawn one by one,
+   * so a double-click or a right-click there only selects.
    */
   pictured: ReadonlySet<string>;
   /**
-   * The frames a waiting proposal adds, drawn at their proposed places (Plan D Task 8); absent when there are none.
+   * The frames a waiting proposal adds, drawn at their proposed places; absent when there are none.
    * Not in `boxes`: they are not on the board yet, so no click, pick or fit reads them as its frames.
    */
   proposed?: FrameBox[];
@@ -125,10 +125,10 @@ const sizeOf = (n: Node, side: "width" | "height", initial: number | undefined) 
 export const partName = (id: string) => (id.startsWith(GROUP_ID) ? id.slice(GROUP_ID.length) : id.startsWith("\u0000") ? null : id);
 
 /**
- * Each frame's shapes and groups in board units, by frame title (Plan D Task 6, for the board Ask's sketch notes). A
+ * Each frame's shapes and groups in board units, by frame title (for the board Ask's sketch notes). A
  * static frame's are read from `children`, which holds them drawn or not, so a frame drawn as a picture or culled (Plan
- * F Decisions 6 and 7) gives the same boxes (Decision 19, A4); the live frame's from `nodes`, which must then hold the
- * canvas's live nodes, frame-local, placed by the live anchor (Plan F Decision 11). Frames whose title an earlier frame
+ * F) gives the same boxes; the live frame's from `nodes`, which must then hold the
+ * canvas's live nodes, frame-local, placed by the live anchor. Frames whose title an earlier frame
  * has are left out: they are never a target.
  */
 export function boardNodeBoxes(scene: Pick<BoardSceneOut, "nodes" | "boxes" | "children">): Map<string, PartBox[]> {
@@ -156,7 +156,7 @@ export function boardNodeBoxes(scene: Pick<BoardSceneOut, "nodes" | "boxes" | "c
   return out;
 }
 
-/** A static frame drawn as one picture of itself (Plan F Decision 7): its node type (FramePicture.tsx). */
+/** A static frame drawn as one picture of itself: its node type (FramePicture.tsx). */
 export const FRAME_PICTURE_TYPE = "framePicture";
 type Rect = { x: number; y: number; w: number; h: number };
 /**
@@ -168,7 +168,7 @@ export interface FramePictureData extends Record<string, unknown> {
   raster?: PictureRaster;
 }
 
-/** A picture of part of the sketch layer (Task 9 fix 2): its node type (SketchNode.tsx's `SketchLayerPicture`). */
+/** A picture of part of the sketch layer: its node type (SketchNode.tsx's `SketchLayerPicture`). */
 export const SKETCH_PICTURE_TYPE = "sketchPicture";
 /** The sketch layer's pictures' class (flow-board.css): no pointer events, as a frame's picture. */
 const SKETCH_PICTURE_CLASS = "board-sketch-picture";
@@ -201,7 +201,7 @@ interface Built {
   placed: Positions;
   /** What its picture is keyed by: one object while the children are built from the same things. */
   content: object;
-  /** The waiting proposal's review drawn in place of the doc (Plan D Task 8): the children are kept while it is the same object. */
+  /** The waiting proposal's review drawn in place of the doc: the children are kept while it is the same object. */
   review: FrameReview | undefined;
   /** The children's id for a shape id. */
   idOf: (id: string) => string;
@@ -246,7 +246,7 @@ function reviewState(r: FrameReview, name: string): NodeState | undefined {
 
 /**
  * Each row's review state on table `name`, for the rows a card draws: a static card its first ER_MAX_ROWS (B3 decision
- * 7, a static card never scrolls; a changed row past them is in the frame's count and the change list only, A9), the
+ * 7, a static card never scrolls; a changed row past them is in the frame's count and the change list only), the
  * live card every row (it scrolls to the first marked one). Undefined when no drawn row is marked.
  */
 export function rowStates(r: Pick<FrameReview, "addedRows" | "removedRows" | "changedRows">, name: string, rows: readonly string[] | undefined, max = ER_MAX_ROWS): (RowState | undefined)[] | undefined {
@@ -366,7 +366,7 @@ export function createBoardScene(look: NodeLook) {
   const boxMemo = new Map<string, BuiltBox>();
   /** Each sketch's node, by sketch id, while the sketch is the same object (a change replaces it). */
   const sketchMemo = new Map<string, { sketch: Sketch; node: Node }>();
-  /** The layer node: made once, at (0, 0) for good (Decision 11). */
+  /** The layer node: made once, at (0, 0) for good. */
   let layerMemo: Node | null = null;
   /** Each sketch tile's picture node, while its image, box and layer are the same. */
   const tileMemo = new Map<string, Node>();
@@ -391,7 +391,7 @@ export function createBoardScene(look: NodeLook) {
       data: { sketch: s },
       className: under ? `${SKETCH_CLASS} ${SKETCH_UNDER_CLASS}` : SKETCH_CLASS,
       zIndex: under ? Z_SKETCH_BOX : Z_SKETCH,
-      // Select picks, drags and box-selects sketches as shapes (Task 12); FlowTab routes their ids to the layout file.
+      // Select picks, drags and box-selects sketches as shapes; FlowTab routes their ids to the layout file.
       selectable: true,
       draggable: true,
       connectable: false,
@@ -402,7 +402,7 @@ export function createBoardScene(look: NodeLook) {
     return node;
   }
 
-  /** The zero-size layer at the board's (0, 0) (Decision 21): a switch never moves it (Plan F Decision 11). */
+  /** The zero-size layer at the board's (0, 0): a switch never moves it. */
   function layerNode(): Node {
     if (layerMemo) return layerMemo;
     const node: Node = {
@@ -450,7 +450,7 @@ export function createBoardScene(look: NodeLook) {
     return node;
   }
 
-  /** The live frame's anchor at `at`: zero size, no pointer events, in the live band (Decision 11). */
+  /** The live frame's anchor at `at`: zero size, no pointer events, in the live band. */
   function anchorNode(at: { x: number; y: number }): Node {
     if (anchorMemo && anchorMemo.x === at.x && anchorMemo.y === at.y) return anchorMemo.node;
     const node: Node = {
@@ -531,9 +531,9 @@ export function createBoardScene(look: NodeLook) {
     const axes = e?.axes;
     const lk = e?.style ?? look;
     const scale = TEXT_SCALE[e?.textSize ?? "m"];
-    // Its text size on every child, so flow-board.css fades its text at that size's zoom (Plan F Decision 4).
+    // Its text size on every child, so flow-board.css fades its text at that size's zoom.
     const ts = `board-ts-${e?.textSize ?? "m"}`;
-    // Each frame's own ER line ends (Decision 22), read by `frameGraph` from its entry.
+    // Each frame's own ER line ends, read by `frameGraph` from its entry.
     const notation = e?.notation ?? "crow";
     // A frame with an error draws its last good doc faded, as does one whose title an earlier frame has.
     const faded = !f.doc || clash;
@@ -555,7 +555,7 @@ export function createBoardScene(look: NodeLook) {
     )
       return was;
     // Only its place in the text moved (a frame added or deleted above it): the same children in another z band, so
-    // a band shift of 49 frames makes no graph (Task 15: rebuilding them cost 18.6 ms).
+    // a band shift of 49 frames makes no graph (rebuilding them cost 18.6 ms).
     if (
       was &&
       !clash &&
@@ -603,7 +603,7 @@ export function createBoardScene(look: NodeLook) {
       children: [],
       edges: [],
     };
-    // Under review the frame draws the review's doc: the proposal with what it removes still in it (Plan D Task 8).
+    // Under review the frame draws the review's doc: the proposal with what it removes still in it.
     const doc = review?.draw ?? f.doc ?? f.lastValid;
     if (doc) {
       // The same graph and box `frameBounds` measures. A clash frame is never an empty box: until its layout comes
@@ -613,7 +613,7 @@ export function createBoardScene(look: NodeLook) {
         g.nodes = g.nodes.map((n) => marked(n, review));
         g.edges = g.edges.map((ed) => {
           const mark = lineMark(review, ed.id);
-          // Plan E: a sequence message's chip and number circle are drawn apart from its line, so its data takes the mark.
+          // A sequence message's chip and number circle are drawn apart from its line, so its data takes the mark.
           return mark ? withLineMark(ed, mark.slice(7) as "add" | "del" | "changed") : ed;
         });
       }
@@ -660,7 +660,7 @@ export function createBoardScene(look: NodeLook) {
     return built;
   }
 
-  /** What a static frame's picture is drawn from (Plan F Decision 7): the things its children are built from. */
+  /** What a static frame's picture is drawn from: the things its children are built from. */
   function pictureInput(built: Built, softText: boolean): PictureInput | null {
     const doc = built.doc ?? built.lastValid;
     if (!doc || built.children.length === 0) return null;
@@ -675,7 +675,7 @@ export function createBoardScene(look: NodeLook) {
   }
 
   /**
-   * A static frame as one picture of itself (Plan F Decision 7), over its box where its children would stand: the image
+   * A static frame as one picture of itself, over its box where its children would stand: the image
    * is the frame's local box on whole units (`frameOf`, as the writer frames it). Kept while the image and band are.
    */
   function pictureNode(frameId: string, built: Built, url: PictureImage): Node {
@@ -734,7 +734,7 @@ export function createBoardScene(look: NodeLook) {
     /**
      * The canvas of `frames` (the newest parse's), placed by `board` under `keys`. `keys` must be that parse's own
      * (`Parsed.keys`), never `useFlowDoc`'s header keys: those run ahead of the parse while a header edit waits for it,
-     * and would put a frame on another frame's entry and id. Everything is in board units (Decision 11): a static
+     * and would put a frame on another frame's entry and id. Everything is in board units: a static
      * frame's children and box node keep their objects across a switch, and so do the sketch layer and its sketches;
      * only the two frames that change hands and the live anchor are new. The selected frame is live unless its title is
      * an earlier frame's; `live` is its nodes as FlowTab draws them, frame-local, hanging from the anchor at its `at`.
@@ -749,25 +749,25 @@ export function createBoardScene(look: NodeLook) {
       /** `useFlowDoc`'s layouts of frames whose title an earlier frame has, by frame index; never saved. */
       clashLayouts?: ReadonlyMap<number, ClashLayout>,
       /**
-       * The static frames drawn and how (Plan F Decisions 6 and 7): a frame absent from `form` pushes its box node only,
+       * The static frames drawn and how: a frame absent from `form` pushes its box node only,
        * one turning real pushes its first `mounted` parts, children then lines (over its picture, if it has one). Null
        * before the canvas has a view: every static frame is a picture with `pictures` (none is mounted real at open),
        * real without.
        */
       drawn: DrawnForms | null = null,
-      /** Where pictures come from (Decision 7); without it a picture form draws the box alone. */
+      /** Where pictures come from; without it a picture form draws the box alone. */
       pictures?: PictureStore,
-      /** The sketch layer as pictures (Task 9 fix 2); null or absent draws every sketch real. */
+      /** The sketch layer as pictures; null or absent draws every sketch real. */
       sketchDraw: SketchLayerDraw | null = null,
       /**
-       * Plan D Task 8: the waiting proposal's review of each frame it touches, by title. A static frame with one draws
-       * its review (real, never as a picture, while it is in view: Decision 19 with Plan F Decision 7); a new frame draws at its `proposedAt` place.
+       * The waiting proposal's review of each frame it touches, by title. A static frame with one draws
+       * its review (real, never as a picture, while it is in view:); a new frame draws at its `proposedAt` place.
        */
       review?: ReadonlyMap<string, FrameReview>,
       /** Each new frame's place on the board, by title. */
       proposedAt?: ReadonlyMap<string, Point>,
       /**
-       * Plan D Task 12: the shapes a landing just added or changed and the parts an answer named, by frame layout key;
+       * The shapes a landing just added or changed and the parts an answer named, by frame layout key;
        * a static frame draws them flashing.
        */
       airing?: ReadonlyMap<string, ReadonlySet<string>>,
@@ -845,7 +845,7 @@ export function createBoardScene(look: NodeLook) {
         lines.set(frameId, built.edges.length);
         const planned: FrameForm | undefined = drawn ? drawn.form.get(i) : pictures ? "picture" : "real";
         // A frame under review or flashing draws real while it is in view, for as long as that lasts, then returns to
-        // its planned form (Plan D Decision 19): its marks and rings are on its shapes, which a picture does not draw.
+        // its planned form: its marks and rings are on its shapes, which a picture does not draw.
         const marked = !clash && (!!rv || !!airing?.get(key)?.size);
         const form: FrameForm | undefined = marked && planned !== undefined ? "real" : planned;
         const mounted = form === "real" ? 0 : (drawn?.mounted.get(i) ?? 0);
@@ -868,7 +868,7 @@ export function createBoardScene(look: NodeLook) {
         for (let c = 0; c < mounted && c < kids; c++) nodes.push(built.children[c]);
         for (let c = 0; c < mounted - kids && c < built.edges.length; c++) edges.push(built.edges[c]);
       });
-      // The frames the proposal adds, after every frame of the board: dashed at their proposed places (Decision 11).
+      // The frames the proposal adds, after every frame of the board: dashed at their proposed places.
       let proposed: FrameBox[] | undefined;
       if (review && proposedAt) {
         const titles = new Set(frames.map((f) => f.title));
@@ -894,7 +894,7 @@ export function createBoardScene(look: NodeLook) {
       return { nodes, edges, boxes, live: liveBox, children, lines, pictured, ...(proposed ? { proposed } : {}) };
     },
     /**
-     * Whether static frame `index` can be drawn as `form` now (Decision 7, `stepForms`' `ready`): its picture for its
+     * Whether static frame `index` can be drawn as `form` now (`stepForms`' `ready`): its picture for its
      * children as last built is in `pictures`, asked for here when it is not. A frame with nothing to picture is ready.
      */
     pictureReady(index: number, form: Exclude<FrameForm, "real">, pictures: PictureStore): boolean {

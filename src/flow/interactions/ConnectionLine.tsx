@@ -1,6 +1,6 @@
 // The flow being drawn from a port (motion design, "Drawing a flow"): a dashed accent line routed square to the
 // pointer; within 24 px of another node it locks onto that node's nearest port, turns solid and rings the node,
-// which lifts with a shadow (frame 6+.3). It follows the pointer live, with no easing; only the lock's ring
+// which lifts with a shadow. It follows the pointer live, with no easing; only the lock's ring
 // fades in (80 ms).
 import { type ConnectionLineComponentProps, type InternalNode, useStore } from "@xyflow/react";
 import { useEffect } from "react";

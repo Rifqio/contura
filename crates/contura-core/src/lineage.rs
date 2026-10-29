@@ -215,7 +215,7 @@ pub fn read_lineage_layout(
 ) -> Result<Option<String>> {
     let file = lineage_layout_path(data_dir, id, path);
     // The same guard as the write and the delete: a missing or linked `.lineage` folder
-    // reads as no layout (P18).
+    // reads as no layout.
     if check_user_path(&file, data_dir, PathUse::Flow).is_err() {
         return Ok(None);
     }
@@ -281,7 +281,7 @@ pub fn delete_lineage_layout(data_dir: &Path, id: uuid::Uuid, path: &ObjectPath)
     }
 }
 
-/// One Foreign Key as lineage's catalog read gives it (P6): the Dialect's `key_edges`.
+/// One Foreign Key as lineage's catalog read gives it: the Dialect's `key_edges`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyEdge {
     /// The constraint name; SQLite keys are `fk_<id>`, as in the Table Designer.
@@ -362,7 +362,7 @@ struct Graph<'a> {
     fold: bool,
     edges: Vec<KeyEdge>,
     /// Each edge kept, by its constraint and holder table: one look per edge, so the de-dupe is
-    /// linear in the edges read (P24 M9).
+    /// linear in the edges read.
     seen: HashSet<EdgeKey>,
     loaded: Vec<(Scope, Option<String>)>,
 }
@@ -371,7 +371,7 @@ struct Graph<'a> {
 type EdgeKey = (String, String, Option<String>, String);
 
 impl Graph<'_> {
-    /// The same table: SQLite resolves table names without regard to case (P6 I3).
+    /// The same table: SQLite resolves table names without regard to case.
     fn same(&self, a: &ObjectPath, b: &ObjectPath) -> bool {
         a.database == b.database
             && a.schema == b.schema
@@ -787,7 +787,7 @@ struct FrameScan {
 /// Every node with a `table:` in `text`, touched by a line or not, in text order: its frame's
 /// title (`None` when the text has one frame), its name and the value as written. A node
 /// written twice in a frame counts once, with its last value. Read line by line like
-/// `scan_flow`, with no full parse; the diagram Ask gates on it (Task 4b).
+/// `scan_flow`, with no full parse; the diagram Ask gates on it.
 pub fn flow_table_nodes(text: &str) -> Vec<(Option<String>, String, String)> {
     flow_table_nodes_upto(text, usize::MAX).unwrap_or_default()
 }
@@ -952,7 +952,7 @@ fn finish_frame(frame: FrameScan, links: &mut Vec<ScannedLink>) {
             continue;
         };
         // A step with a `table:` (a flowchart io, step or subprocess, or a data flow process)
-        // is itself what touches the table: its lines are control flow, not data flow (P18).
+        // is itself what touches the table: its lines are control flow, not data flow.
         // Only stores and service nodes look across their lines for the processes.
         let processes = if STEP_KINDS.contains(&kind.as_str()) {
             vec![FlowProcess {
@@ -1021,7 +1021,7 @@ fn quoted(s: &str) -> Option<(String, &str)> {
     while let Some((i, c)) = chars.next() {
         match c {
             '"' => return Some((out, &s[i + 2..])),
-            // `\n` and `\r` are the line breaks the writer escapes (P5); `\\`, `\"` as is.
+            // `\n` and `\r` are the line breaks the writer escapes; `\\`, `\"` as is.
             '\\' => out.push(match chars.next()?.1 {
                 'n' => '\n',
                 'r' => '\r',
@@ -1284,7 +1284,7 @@ mod tests {
             r#"say "hi" \ now"#
         );
         assert!(name("// note").is_none());
-        // A line break in a name is written `\n` or `\r` (P5); `\\n` stays a backslash and n.
+        // A line break in a name is written `\n` or `\r`; `\\n` stays a backslash and n.
         assert_eq!(name(r#""two\nlines\r" > b"#).unwrap().0, "two\nlines\r");
         assert_eq!(name(r#""a\\nb" > c"#).unwrap().0, "a\\nb");
         assert!(parse_line("G [icon: x] {").is_none());
@@ -1595,7 +1595,7 @@ mod tests {
 
     #[test]
     fn every_table_node_is_listed_touched_or_not() {
-        // A node no arrow touches is still a link to its table (Task 4b): the diagram Ask
+        // A node no arrow touches is still a link to its table: the diagram Ask
         // sends it whatever its lines are.
         let one = "diagram flow \"Handover\"\n\
                    Orders [table: shop.orders]\n\

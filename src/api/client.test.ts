@@ -226,7 +226,7 @@ test("error_text_for_job_errors", () => {
   expect(errorText({ kind: "fileChanged", message: { file: "menu-oct.csv", confirmed: true } })).toBe(
     "menu-oct.csv changed after you confirmed. Nothing was imported.",
   );
-  // Q45 M5: "after you confirmed" only when there was a confirm.
+  // "after you confirmed" only when there was a confirm.
   expect(errorText({ kind: "fileChanged", message: { file: "menu-oct.csv", confirmed: false } })).toBe(
     "menu-oct.csv changed while Contura read it. Nothing was imported.",
   );

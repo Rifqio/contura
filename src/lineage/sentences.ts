@@ -1,4 +1,4 @@
-// What each Foreign Key of a lineage does, in plain sentences (spec 6+ section 5, frame 6+.1). Every
+// What each Foreign Key of a lineage does, in plain sentences. Every
 // sentence template is in this file; the nouns come from the step 6 rules (`nounFor`).
 import type { FlowTableAccess, Lineage, LineageLink, ObjectPath } from "../api/types";
 import { article } from "../format/article";

@@ -1,4 +1,4 @@
-// Publish from a diagram tab (spec 6+ section 8): the step 6 dialog opens with the drawn diagram's scene, cloud
+// Publish from a diagram tab: the step 6 dialog opens with the drawn diagram's scene, cloud
 // icons are loaded for it (only the ones the diagram uses) and embedded as images, and closing the dialog lets
 // the scene go.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";

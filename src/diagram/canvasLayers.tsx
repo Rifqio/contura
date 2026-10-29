@@ -1,6 +1,6 @@
 // React Flow's two portal layers (the line labels' and the viewport's), each looked up once per canvas. React Flow's own
 // `EdgeLabelRenderer` and `ViewportPortal` run `domNode.querySelector` as a store selector, so each one drawn walked the
-// canvas's DOM on every view change and every measure (Plan F Task 9: with a frame's 300 labelled lines in view, 300
+// canvas's DOM on every view change and every measure (with a frame's 300 labelled lines in view, 300
 // walks a frame through a zoom, and the viewport layer is the canvas's last element, so its walk passes every node).
 import { type ReactFlowState, useStore } from "@xyflow/react";
 import type { ReactNode } from "react";

@@ -107,7 +107,7 @@ struct Catalog {
     schema: SchemaModel,
     context: StoreContext,
     threads: StoreThreads,
-    /// Step 11f: the sample reads that reached the database.
+    /// The sample reads that reached the database.
     sample_reads: std::sync::atomic::AtomicUsize,
 }
 
@@ -944,7 +944,7 @@ async fn home_remembers_the_conversation() {
     );
 }
 
-/// I2: a Home turn that carried Recent steps on a Connection keeps replaying; each step is
+/// A Home turn that carried Recent steps on a Connection keeps replaying; each step is
 /// re-gated by its own Connection (ADR 0027 rule 1) and Sends counts nothing as held.
 #[tokio::test]
 async fn home_turn_with_other_steps_replays_and_regates_them() {
@@ -985,7 +985,7 @@ async fn home_turn_with_other_steps_replays_and_regates_them() {
     assert_eq!(show(&cat, &req).await.memory.unwrap().blocked, 0);
 }
 
-/// C2: at Never the tab's table names went nowhere, so the turn does not keep them: a
+/// At Never the tab's table names went nowhere, so the turn does not keep them: a
 /// Topic summary built by rules from it can never carry them at Never.
 #[tokio::test]
 async fn never_turn_keeps_no_table_names() {
@@ -1010,7 +1010,7 @@ async fn never_turn_keeps_no_table_names() {
     );
 }
 
-/// I1: a turn is stamped with the kinds of the history it replayed, so content built on an
+/// A turn is stamped with the kinds of the history it replayed, so content built on an
 /// earlier turn's query text is held when access is lowered below it.
 #[tokio::test]
 async fn stamp_carries_the_replayed_history_kinds() {
@@ -1049,7 +1049,7 @@ async fn stamp_carries_the_replayed_history_kinds() {
     );
 }
 
-/// I1: a Continue extends an answer built on sample rows: its stamp takes the continued
+/// A Continue extends an answer built on sample rows: its stamp takes the continued
 /// turn's kinds, so it is held with that turn when access is lowered.
 #[tokio::test]
 async fn continue_stamp_takes_the_continued_kinds() {
@@ -1080,7 +1080,7 @@ async fn continue_stamp_takes_the_continued_kinds() {
 
 /// Ruling 1 (27 Oct): the history follows the conversation across databases. The open
 /// Topic's turns and the closed Topic's summary asked on `shop` go with an Ask on
-/// `shop_archive`, gated by the Connection's own access (Decision 2).
+/// `shop_archive`, gated by the Connection's own access.
 #[tokio::test]
 async fn another_database_keeps_the_history() {
     let cat = catalog(AiAccess::Schema);
@@ -1105,7 +1105,7 @@ async fn another_database_keeps_the_history() {
     assert!(all.contains("How many orders today?"), "{all}");
     assert!(all.contains("About 40."), "{all}");
     let s = memory_of(&events);
-    // One conversation (ruling 1): the open Topic goes on on another database.
+    // One conversation: the open Topic goes on on another database.
     assert_eq!((s.topic, s.opened, s.reason), (2, false, None));
     assert_eq!(s.database.as_deref(), Some("shop_archive"));
 

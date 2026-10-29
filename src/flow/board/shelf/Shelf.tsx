@@ -31,7 +31,7 @@ interface Props {
   /** Every change of the search text, for the New diagram catalog's Back (it reopens with the search kept). */
   onQuery?(query: string): void;
   initialTab?: string;
-  /** The side Up, Down and Enter act on first: "right" opens on the templates (the assistant's Template, Plan D A11). */
+  /** The side Up, Down and Enter act on first: "right" opens on the templates (the assistant's Template). */
   initialSide?: "left" | "right";
   tabs?: readonly ShelfTabDef[];
   /** The one icon source the Icons count, the Icons tab and the search read (decision 6's seam by default). */
@@ -75,7 +75,7 @@ interface GroupedProps {
   disabled?(item: ShelfItem): string | null;
 }
 
-/** The grouped list while searching with no tab pinned: it handles its own keys, as no tab body is mounted (C16). */
+/** The grouped list while searching with no tab pinned: it handles its own keys, as no tab body is mounted. */
 function GroupedList({ query, groups, registerKeys, setActiveDescendant, add, beginDrag, showAllIcons, listboxId, disabled }: GroupedProps) {
   const entries = useMemo(() => {
     const out: Entry[] = [];
@@ -340,7 +340,7 @@ export default function Shelf({
       return;
     }
     if (e.target !== search.current) return;
-    // Tab and Shift+Tab switch sides (spec); the board's panel has no other tab stop that matters while searching.
+    // Tab and Shift+Tab switch sides; the board's panel has no other tab stop that matters while searching.
     if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       // A dialog around the catalog must not also move focus with its own Tab trap.

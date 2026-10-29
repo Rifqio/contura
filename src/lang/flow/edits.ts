@@ -1,6 +1,6 @@
 // Canvas actions as text edits (spec section 2, "Edits from the canvas"). Each function reads the parse of the
 // current text, so it works while the text has errors, and returns the smallest change: untouched lines stay
-// byte for byte. In the app they run in the language worker against its cached parse (ruling P5).
+// byte for byte. In the app they run in the language worker against its cached parse.
 import type { TextEdit } from "../protocol";
 import { isColourValue } from "./colours";
 import {
@@ -257,7 +257,7 @@ export function nodeText(name: string, kind: FlowNodeKind | null, attrs: Record<
 
 // ----- the edits
 
-/** A mind map topic's words on its line: its name, and its `label:` and `color:` when it has them (step 11). */
+/** A mind map topic's words on its line: its name, and its `label:` and `color:` when it has them. */
 export function topicText(name: string, attrs: Record<string, string>): string {
   const items = attrItems(attrs);
   return `${flowName(name)}${items.length ? ` [${items.join(", ")}]` : ""}`;
@@ -570,7 +570,7 @@ export function moveToGroup(text: string, parse: FlowParse, name: string, group:
 
 /**
  * Sets an attribute of a node or group (`id`, `icon`, `label`, `color`, `table`, or `kind` for the kind word); null
- * removes it, and the brackets go with the last item. A new key goes in its place in the attribute order (step 11).
+ * removes it, and the brackets go with the last item. A new key goes in its place in the attribute order.
  */
 export function setAttr(text: string, parse: FlowParse, name: string, key: "kind" | FlowAttrKey, value: string | null): TextEdit[] {
   // Only the grammar's keys: anything else would write an attribute the parser refuses.

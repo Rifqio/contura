@@ -1,4 +1,4 @@
-// Publish for every diagram kind (spec 6+ section 8): data flow in Modern and Classic, flowcharts, cloud with
+// Publish for every diagram kind: data flow in Modern and Classic, flowcharts, cloud with
 // its icons drawn unchanged, and lineage, all through the one scene and sceneToSvg.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Lineage } from "../../api/types";
@@ -222,7 +222,7 @@ test("cloud_export_loads_only_the_icons_it_uses_and_draws_them_unchanged", async
   const svg = sceneToSvg(scene, PALETTE, opts);
   plainSvg(svg);
   onlyTokenColours(svg);
-  // Each icon is an image whose data decodes to the pack's own bytes: never inline markup (ruling P9).
+  // Each icon is an image whose data decodes to the pack's own bytes: never inline markup.
   const images = [...svg.matchAll(/<image\b[^>]*\bhref="data:image\/svg\+xml;base64,([^"]+)"/g)].map((m) =>
     new TextDecoder().decode(Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0))),
   );
@@ -376,7 +376,7 @@ test("crop_snaps_to_node_and_group_edges", () => {
   expect(moved).toEqual(crop);
 });
 
-// ----- diag-910 fix round 3, P1: a state diagram in Publish (and so in the New diagram cards and the Mermaid preview,
+// ----- diag-910 a state diagram in Publish (and so in the New diagram cards and the Mermaid preview,
 // which share sceneToSvg) is drawn as the canvas draws it.
 
 const STATES = doc(
@@ -450,7 +450,7 @@ const SEQUENCE_TEXT = [
   "note: Cards are charged once",
 ].join("\n");
 
-// Plan E Task 7: the sequence restyle in Publish, from the one drawing the canvas reads (Decision 15). A palette with the
+// The sequence restyle in Publish, from the one drawing the canvas reads. A palette with the
 // presets; the colours a sequence draws besides its raw values are exactly those `seqColours` derives from it.
 const SEQ_PALETTE: ExportPalette = {
   ...PALETTE,
@@ -530,7 +530,7 @@ test("sequence_export_draws_the_new_look", () => {
   expect(count(svg, /data-frame-tab="/g)).toBe(1);
   expect(part(svg, "data-frame-tab", "0")).toContain(">card saved<");
   expect(part(svg, "data-frame", "0")).toMatch(/<text transform="rotate\(-90 [-\d.]+ [-\d.]+\)"[^>]*>opt<\/text>/);
-  // Paint order (Decision 15): blocks, participants, messages, captions.
+  // Paint order: blocks, participants, messages, captions.
   expect(svg.indexOf('data-frame="0"')).toBeLessThan(svg.indexOf('data-node="Customer"'));
   expect(svg.indexOf('data-node="Database"')).toBeLessThan(svg.indexOf('data-edge="edge:0"'));
   expect(svg.indexOf('data-edge="edge:9"')).toBeLessThan(svg.indexOf('data-frame-tab="0"'));
@@ -1042,7 +1042,7 @@ test("publish_keeps_an_er_tables_colour_label_weak_dash_and_nullable_marks", () 
 const endY = (d: string) => Number(/(-?[\d.]+)\s*$/.exec(d.trim())![1]);
 
 test("a_long_table_publishes_every_row", () => {
-  // At Small, Medium and Large (B4 fix round 1): the card, its rows and its line ends scale together.
+  // At Small, Medium and Large: the card, its rows and its line ends scale together.
   for (const k of [0.88, 1, 1.15]) {
     for (const n of [30, 5]) {
       const target = Math.min(25, n - 1);

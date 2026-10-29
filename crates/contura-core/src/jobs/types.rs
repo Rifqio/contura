@@ -21,15 +21,15 @@ pub enum JobKind {
     Import,
     ScriptImport,
     Check,
-    /// Data Transfer (step 8).
+    /// Data Transfer.
     Transfer,
-    /// A Backup (step 9).
+    /// A Backup.
     Backup,
-    /// A Restore's check pass (step 9).
+    /// A Restore's check pass.
     RestoreCheck,
-    /// Restore of a Backup (step 9).
+    /// Restore of a Backup.
     Restore,
-    /// Applying a Sync Script (step 10).
+    /// Applying a Sync Script.
     Sync,
 }
 
@@ -228,7 +228,7 @@ pub struct ImportOptions {
     pub on_error: OnError,
     pub commit: CommitMode,
     pub sheet: Option<String>,
-    /// "Read the text NULL as NULL" (Q31), for CSV and Excel: a cell holding exactly
+    /// "Read the text NULL as NULL", for CSV and Excel: a cell holding exactly
     /// `NULL` is NULL. Off by default. Contura's exports write no header marker for it,
     /// so it is never turned on from the file.
     pub null_word: bool,
@@ -317,7 +317,7 @@ pub struct PlannedColumn {
     pub file_column: Option<usize>,
     pub note: Option<String>,
     pub blocks: Option<String>,
-    /// Filled by the database: never offered as an Into column (Q11).
+    /// Filled by the database: never offered as an Into column.
     pub generated: bool,
 }
 
@@ -373,7 +373,7 @@ pub struct ImportPlan {
     pub shape: InsertShape,
     pub warnings: Vec<String>,
     pub verdict: JobVerdict,
-    /// The whole import runs in one transaction (Q28): false for a non-transactional
+    /// The whole import runs in one transaction: false for a non-transactional
     /// table (MyISAM), for Commit every N, and when the table's storage could not be read.
     pub one_transaction: bool,
 }
@@ -407,7 +407,7 @@ pub struct ScriptStatement {
     pub class: StatementClass,
     pub kind: StatementKind,
     pub action: ScriptAction,
-    /// It would be skipped, and runs because Run as is is ticked (Q12).
+    /// It would be skipped, and runs because Run as is is ticked.
     #[serde(default)]
     pub run_as_is: bool,
 }
@@ -451,7 +451,7 @@ pub struct ScriptPlan {
     pub bytes: u64,
     pub sha256: String,
     pub verdict: JobVerdict,
-    /// The script runs in one transaction (Q28): false when the file manages its own
+    /// The script runs in one transaction: false when the file manages its own
     /// transactions, holds a statement that cannot run inside one, or is MySQL with DDL.
     #[serde(default)]
     pub one_transaction: bool,
@@ -575,7 +575,7 @@ pub enum JobEvent {
     },
     Failed {
         error: Error,
-        /// The rows a writing job left in the target (Q27): committed batches under
+        /// The rows a writing job left in the target: committed batches under
         /// Commit every N, or what a non-transactional table kept. Absent means 0.
         #[serde(skip_serializing_if = "Option::is_none")]
         rows_committed: Option<u64>,

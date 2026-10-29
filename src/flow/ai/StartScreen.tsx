@@ -1,4 +1,4 @@
-// The board assistant's start screen (Plan D Decision 15, owner answers 2 and 6): an empty chat asks what to create
+// The board assistant's start screen: an empty chat asks what to create
 // over the nine kind cards, B2's Diagrams-tab cards and roles (A17: one listbox of options, the Shelf's order, arrows
 // move and Enter picks), then offers Template (the board Shelf on its templates side) and File (one text file read by
 // the Core's own dialog). ChatGPT's, Claude's and FigJam AI's empty chats: a question over starting points.

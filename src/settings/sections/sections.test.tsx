@@ -633,7 +633,7 @@ test("pick_tables_switch_saves", async () => {
 test("pick_tables_in_a_groups_own_settings", async () => {
   settingsRoutes({ ai_settings: () => aiView({ settings: { ...GROQ, pickTables: true }, groupOverride: true }) });
   renderWithProviders(<AiSection groupId="g1" groupName="KFC" connections={[]} onConnectionSaved={() => {}} />);
-  // Ruling 13: Pick tables is a Privacy switch, the same for every Group, so a Group's own settings do not show it.
+  // Pick tables is a Privacy switch, the same for every Group, so a Group's own settings do not show it.
   expect(await screen.findByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
   expect(screen.queryByRole("switch", { name: "Let the assistant pick tables in large databases" })).toBeNull();
   expect(screen.queryByRole("switch", { name: "Keep the exact text sent with each answer" })).toBeNull();
@@ -995,7 +995,7 @@ test("a_group_override_does_not_offer_the_privacy_switches", async () => {
   expect(screen.getByText("Privacy and thinking settings are the same for every Group. Change them without a Group open.")).toBeTruthy();
 });
 
-// ---- AI Context (step 11c) ----
+// ---- AI Context ----
 
 const ctxRow = (connectionId: string, agoMs: number, stale: boolean) => ({
   connectionId,
@@ -1081,7 +1081,7 @@ test("clear_ai_history_names_the_place_and_confirms", async () => {
   await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Clear" }));
   await waitFor(() => expect(callsTo("clear_ai_threads")).toEqual([{ place: "group:g1" }]));
   expect(screen.queryByRole("dialog")).toBeNull();
-  // The diagram chats the hint names go too (Plan D Task 15 fix round 1): boards belong to no Group, so every board's.
+  // The diagram chats the hint names go too: boards belong to no Group, so every board's.
   await waitFor(() => expect(callsTo("ai_clear_diagram_chats")).toHaveLength(1));
   // An open Assistant panel of that place drops its threads, and every open board its chats.
   await waitFor(() => expect(cleared).toEqual(["group:g1", DIAGRAM_CHATS]));
@@ -1155,7 +1155,7 @@ test("production_help_line", async () => {
   expect(screen.getByText("Production Connections stay at Never: turning Production on also clears their AI Context.")).toBeTruthy();
 });
 
-// ---- Tools: Propose diagram changes and Recent tool uses (step 11h, board 11.4) ----
+// ---- Tools: Propose diagram changes and Recent tool uses ----
 
 const EMPTY_RECORD = {
   sent: null,
@@ -1320,7 +1320,7 @@ test("empty_recent_text", async () => {
   expect(document.querySelector(".urow")).toBeNull();
 });
 
-// ---- Parity with the step 11 boards (P11) ----
+// ---- Parity with the step 11 boards ----
 
 test("parity_P11_38_windows_keeps_its_wording", async () => {
   setPlatformForTests("windows");
@@ -1433,7 +1433,7 @@ test("parity_P11_3_access_table_keeps_its_columns_and_fits_its_column", async ()
   renderWithProviders(<AiSection groupId={null} groupName={null} connections={[a]} onConnectionSaved={() => {}} />);
   await openAccess();
   const table = await screen.findByRole("table", { name: "What AI can see, per Connection" });
-  // The built columns stay (P11-2: keep as built), Dialect included.
+  // The built columns stay (keep as built), Dialect included.
   expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Connection", "Dialect", "AI can see", "Sync", "Context"]);
   // Fixed layout with set column widths: the table never grows past the 512px column.
   expect(table.classList.contains("share-table-fit")).toBe(true);

@@ -505,7 +505,7 @@ async fn order_by_output_name_with_auto_group_by_runs(l: &Live) {
         .run_visual_query(l.s, query, ColumnTypes::new(), None)
         .await
         .unwrap();
-    // Ruling V2: an output without its own alias sorts by its expression.
+    // an output without its own alias sorts by its expression.
     assert!(
         run.sql.contains("GROUP BY s.name")
             && run.sql.contains("ORDER BY count(o.id) DESC, s.name"),

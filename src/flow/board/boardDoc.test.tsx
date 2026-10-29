@@ -1,5 +1,5 @@
-// Task 4: the whole .flow file is one CodeMirror document with one history, and `useFlowDoc` serves the selected
-// frame's doc, layout and ops as if it were the one diagram it knows (Decisions 8 to 12 and 21).
+// The whole .flow file is one CodeMirror document with one history, and `useFlowDoc` serves the selected
+// frame's doc, layout and ops as if it were the one diagram it knows.
 import { redo, undo, undoDepth } from "@codemirror/commands";
 import { Compartment, EditorSelection, EditorState, type Extension, StateEffect, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -804,7 +804,7 @@ test("undoing_a_setting_keeps_positions_placed_since", async () => {
 });
 
 test("proposed_places_in_any_frame_stay_out_of_the_history_and_settle_per_frame", async () => {
-  // Plan D Task 8: a board review places proposed shapes in frames that are not selected; a decision drops the ones
+  // A board review places proposed shapes in frames that are not selected; a decision drops the ones
   // the text did not take, frame by frame, and never a shape the frame already had.
   const o = await open(BOARD);
   act(() => o.doc().select({ title: "Checkout", index: 0 }));
@@ -900,7 +900,7 @@ test("a_held_title_never_replaces_a_kept_entry_while_the_board_has_an_error", as
 });
 
 test("a_frame_renamed_to_a_taken_title_keeps_its_entry_when_the_owner_is_deleted", async () => {
-  // Found by the invariant test (Task 15): Checkout renamed to Refund is held under its old key; deleting the real
+  // Found by the invariant test: Checkout renamed to Refund is held under its old key; deleting the real
   // Refund must leave it its own entry, never hand it the deleted frame's, and the file keeps it under its title.
   const o = await open(BOARD);
   type(o, '"Checkout"', '"Refund"');
@@ -1107,7 +1107,7 @@ test("edit_sequences_never_cross_or_drop_entries", async () => {
     // One frame left is written as version 1: its entry is the file, under the only frame's title.
     if (j.version === 2) return j.frames!;
     const only = /^diagram \w+ "([^"]*)"/.exec(textOf(o))?.[1] ?? "";
-    // Version 1 folds the frame's place into its positions (Decision 6): taken out again, they are the entry's own.
+    // Version 1 folds the frame's place into its positions: taken out again, they are the entry's own.
     const at = o.doc().board.frames.get(o.doc().keys[0] ?? only)?.at ?? { x: 0, y: 0 };
     const nodes = Object.fromEntries(Object.entries(j.nodes!).map(([k, p]) => [k, { x: p.x - at.x, y: p.y - at.y }]));
     return { [only]: { at, nodes, style: "modern", direction: "TB" } } as unknown as ReturnType<typeof saved>["frames"];
@@ -1474,7 +1474,7 @@ test("a_board_cut_to_one_frame_saves_its_place", async () => {
   expect(file.version).toBe(2);
   expect(Object.keys(file.frames)).toEqual(["Shipping"]);
   expect(file.frames.Shipping.at).toEqual({ x: 5200, y: 300 });
-  // With no setting, the one frame folds its place into its positions (Decision 6).
+  // With no setting, the one frame folds its place into its positions.
   const plain = JSON.parse(LAYOUT);
   plain.frames.Shipping.at = { x: 5200, y: 300 };
   const p = await open(BOARD, JSON.stringify(plain));
@@ -1994,7 +1994,7 @@ test("retyping_the_kind_word_keeps_the_frames_own_drawing_on_the_canvas", async 
   }
 });
 
-// ----- Task 4b (A25): a frame From my database drew keeps its source in its entry, by title.
+// ----- Task 4b: a frame From my database drew keeps its source in its entry, by title.
 
 const FROM_DB = { connectionId: "c1", database: "shop", schema: null };
 
@@ -2158,7 +2158,7 @@ test("deleting_a_sourced_frame_lets_the_ask_go_and_undo_holds_it_again", async (
   expect(again.doc().board.held ?? []).toEqual([]);
 });
 
-// Plan D Task 9: a landing that adds frames is one undo entry, at the place the review previewed.
+// A landing that adds frames is one undo entry, at the place the review previewed.
 const LANDED_TITLE = "Checkout flow";
 const LANDED_TEXT = SHOP[1];
 

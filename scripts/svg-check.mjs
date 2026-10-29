@@ -1,4 +1,4 @@
-// The SVG safety check for the icon pack (Rulings P7, P9, P10): an allow list. It is the
+// The SVG safety check for the icon pack: an allow list. It is the
 // Core's `icons::unsafe_reason` (crates/contura-core/src/icons.rs) step for step, and both
 // are tested against crates/contura-core/tests/fixtures/svg-check.json
 // (src/flow/svgCheck.test.ts here, tests/icons.rs there). Change one, change the other.
@@ -8,7 +8,7 @@
 
 const MAX_SVG_BYTES = 256 * 1024;
 
-/** Element names, prefix included (P10). The Inkscape/RDF ones are what the Kubernetes set uses. */
+/** Element names, prefix included. The Inkscape/RDF ones are what the Kubernetes set uses. */
 const ELEMENTS = new Set([
   "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "defs", "symbol",
   "use", "title", "desc", "metadata", "linearGradient", "radialGradient", "stop", "clipPath",
@@ -249,7 +249,7 @@ export function unsafeReason(bytes) {
       const end = text.indexOf("-->", pos + 4);
       if (end === -1) return "bad markup";
       // An HTML parser ends a comment at `<!-->`, `<!--->` or `--!>`, so a body that
-      // could end early or hold markup is refused (P13).
+      // could end early or hold markup is refused.
       const body = text.slice(pos + 4, end);
       if (/[<>]/.test(body) || body.includes("--") || body.startsWith(">") || body.startsWith("->")) {
         return "comment not allowed";

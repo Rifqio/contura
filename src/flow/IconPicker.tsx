@@ -1,7 +1,7 @@
-// The icon picker (frame 6+.5, "Choosing an icon"): one search over every packed set, provider prefix first (the
+// The icon picker ("Choosing an icon"): one search over every packed set, provider prefix first (the
 // same order as completion after `icon:`), the matches in a 4-column grid with the best one highlighted. Arrows
 // move the highlight, Enter or a click picks, Esc or a click away cancels. Only the icons the grid shows are
-// loaded, and each is an <img> from a data: URL (ruling P7).
+// loaded, and each is an <img> from a data: URL.
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { IconEntry } from "../api/types";
 import { providerOf, rankIcons } from "../lang/flow/iconRank";
@@ -68,7 +68,7 @@ export default function IconPicker({ initial = "", onPick, onCancel, style }: Pr
   const q = normalise(query);
   const matches = useMemo(() => rankIcons(names, q, PICKER_LIMIT), [names, q]);
   const shown = Math.min(active, Math.max(0, matches.length - 1));
-  // The typed provider prefix is left off the labels (frame 6+.5: "aws-dyn" shows "dynamodb").
+  // The typed provider prefix is left off the labels ("aws-dyn" shows "dynamodb").
   const typedProvider = providerOf(q);
   const label = (name: string) => (typedProvider && providerOf(name) === typedProvider ? name.slice(typedProvider.length + 1) : name);
   const optionId = (i: number) => `${id}-icon-${i}`;

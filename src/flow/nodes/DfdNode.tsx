@@ -1,5 +1,5 @@
 // A data flow node: process, data store or outside party. Modern is the pastel card with an icon tile, the
-// name, the kind in words and the id on the right; Classic is the Gane-Sarson shape (frame 6+.2).
+// name, the kind in words and the id on the right; Classic is the Gane-Sarson shape.
 import Icon, { type IconName } from "../../components/Icon";
 import { type NodeBaseProps, NodeShell } from "./parts";
 

@@ -1,4 +1,4 @@
-// Icon search order, shared by completion after `icon:` and the icon picker: provider prefix first (spec 6+ section 2).
+// Icon search order, shared by completion after `icon:` and the icon picker: provider prefix first.
 
 /** Icon names start with one of these and a dash (`aws-s3`); the rest are general icons (`users`). */
 export const ICON_PROVIDERS = ["aws", "azure", "gcp", "k8s"];

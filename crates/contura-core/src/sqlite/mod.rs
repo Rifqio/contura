@@ -141,7 +141,7 @@ pub fn create_database(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Step 11f: runs `work` on a connection of its own to `file`, opened read-only, inside
+/// Runs `work` on a connection of its own to `file`, opened read-only, inside
 /// a transaction that is rolled back, with a 5 s busy timeout. A watchdog thread
 /// interrupts the statement after 5 s (SQLite has no statement timeout).
 async fn sample_session<T, F>(file: std::path::PathBuf, work: F) -> Result<T>

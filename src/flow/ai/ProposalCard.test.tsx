@@ -188,12 +188,12 @@ test("stale_and_broken_cards", () => {
   expect([onReview, onFix].map((f) => f.mock.calls.length)).toEqual([1, 1]);
 });
 
-/** A change in frame `frame` (Plan D Decision 2: the resolved title). */
+/** A change in frame `frame` (the resolved title). */
 const inFrame = (frame: string, index: number, op: ProposedChange["op"], dependsOn: number[] = []): ProposedChange => ({ index, op, status: ok, dependsOn, frame });
 
 test("the_change_list_groups_by_frame_with_accept_frame", () => {
   const on = { onReject: vi.fn(), onAccept: vi.fn(), onRejectAll: vi.fn(), onAcceptAll: vi.fn(), onAcceptFrame: vi.fn(), onRejectFrame: vi.fn(), onAskFix: vi.fn() };
-  // Out of text order on purpose: the list follows the board, with the new frame last (Decision 12).
+  // Out of text order on purpose: the list follows the board, with the new frame last.
   const changes: ProposedChange[] = [
     inFrame("Refunds", 0, { add_frame: { title: "Refunds", kind: "flow" } }),
     inFrame("Orders ERD", 1, { add_column: { table: "orders", name: "paid_at", type: "timestamp" } }),

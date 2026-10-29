@@ -1,7 +1,6 @@
-// Plan F Task 7 (Decision 7) on the board: tiny frames draw as cached pictures of themselves. At open no static shape
+// On the board: tiny frames draw as cached pictures of themselves. At open no static shape
 // mounts; a far frame is one <img>; a theme switch redraws every picture and an edit only its own (Review Focus 4); a
-// faded or clash frame is pictured faded where it draws; a pictured frame's double-click and right-click only select
-// (B2 C3).
+// faded or clash frame is pictured faded where it draws; a pictured frame's double-click and right-click only select.
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Node, NodeProps, NodeTypes, ReactFlowInstance } from "@xyflow/react";
@@ -26,7 +25,7 @@ import { shownRange } from "./frameView";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 patientFile();
 
-// Two literal palettes (P11): jsdom has no theme stylesheet, so the canvas's palette is the theme's literal one here.
+// Two literal palettes: jsdom has no theme stylesheet, so the canvas's palette is the theme's literal one here.
 const palette = (p: string): ExportPalette => ({
   surface: `#${p}0101`,
   canvas: `#${p}0202`,
@@ -233,7 +232,7 @@ test("a_theme_switch_redraws_every_picture", async () => {
     expect(svg, id).toMatch(/#d1/);
     expect(svg, id).not.toMatch(/#e1/);
   }
-  // Controller ruling (fix round 1): no frame is ever its box alone during the switch; each Dark picture stays until its
+  // Controller ruling: no frame is ever its box alone during the switch; each Dark picture stays until its
   // Light one replaces it.
   const boxOnly = new Set<string>();
   canvas.watch = (nodes) => {

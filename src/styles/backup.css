@@ -1,7 +1,7 @@
 /* Backup and Restore (step 9, frame 9.1): the Backup form, the Restore checks, the Restore confirm
    body inside the 5a dialog, and both running views. Colours are tokens only. */
 
-/* A Production target washes the whole dialog (DESIGN-NEXT 11.1 A). */
+/* A Production target washes the whole dialog (DESIGN.md 11.1 A). */
 .dialog.backup-dialog.prod-wash,
 .dialog.restore-dialog.prod-wash {
   background: var(--c-prod-wash);

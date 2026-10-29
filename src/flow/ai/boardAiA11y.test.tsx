@@ -1,4 +1,4 @@
-// Plan D Task 19: the board assistant's accessibility pass, as Task 16's boardA11y is the board's. Every control the
+// The board assistant's accessibility pass, as Task 16's boardA11y is the board's. Every control the
 // AI added (the start screen, the chat head, the chips, the `/` list, the follow-up card, the part buttons in an
 // answer, the change card and the review bar) is named and in the tab order; its copy has no dash and no banned word;
 // reduced motion turns every AI glide into a jump and stills every AI animation.
@@ -502,7 +502,7 @@ test("reduced_motion_jumps_every_ai_glide", async () => {
   expect(fit.mock.calls[0][1]?.duration).toBe(240);
 });
 
-// ----- Contrast (Task 19 step 4): the review's marks, the new frame's box, the row states and the bar, in both themes.
+// ----- Contrast: the review's marks, the new frame's box, the row states and the bar, in both themes.
 
 /** The theme's tokens, `var()` resolved, as hex. */
 function theme(head: string): (token: string) => string {

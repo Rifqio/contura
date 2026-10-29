@@ -1,4 +1,4 @@
-// Lineage's moved cards (spec 6+ section 5): one layout file per Connection and table, kept by the Core
+// Lineage's moved cards: one layout file per Connection and table, kept by the Core
 // in Contura's diagrams folder. Moves are saved after a short pause; Reset removes the file.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteLineageLayout, readLineageLayout, writeLineageLayout } from "../api/client";

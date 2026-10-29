@@ -1,4 +1,4 @@
-// Plan D Task 6 timing and memory: the board request at the limit (50 frames, 10,000 shapes, 1,000 sketches): the
+// Timing and memory: the board request at the limit (50 frames, 10,000 shapes, 1,000 sketches): the
 // worker's outline of every frame, the parts' boxes off the built scene, the sketch notes and the request itself.
 // Run alone through `npm run test:perf`.
 import { expect, test } from "vitest";

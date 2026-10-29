@@ -1537,7 +1537,7 @@ test("meter_uses_usage_after_answer", async () => {
   await waitFor(() => expect(meter.closest("[title]")?.getAttribute("title")).toMatch(/^About [\d,]+ of 131,072 tokens in use$/));
   await user.type(screen.getByRole("textbox", { name: "Message" }), "why slow?{Enter}");
   await screen.findByText("Use an index.");
-  // What the answer measured: the input, the cache read and the answer's own output (P11-39).
+  // What the answer measured: the input, the cache read and the answer's own output.
   await waitFor(() => expect(screen.getByText("18.5K / 131K")).toBeTruthy());
   expect(screen.getByTitle("18,532 of 131,072 tokens in use")).toBeTruthy();
   // Typing the next question goes back to the estimate.
@@ -1823,7 +1823,7 @@ test("use_the_default_model_works_when_the_list_lacks_it", async () => {
   expect(await screen.findByText("Use an index.")).toBeTruthy();
 });
 
-// ---- Task 11: answer records saved with the thread, the Sent line and Show log ----
+// ---- Answer records saved with the thread, the Sent line and Show log ----
 
 /** Types `q` into the composer and sends it, then waits for its Ask. */
 async function askMore(user: ReturnType<typeof userEvent.setup>, q: string, n: number) {
@@ -2369,7 +2369,7 @@ test("divider_for_the_open_topic", async () => {
 });
 
 test("no_new_topic_divider_while_streaming", async () => {
-  // One conversation (ruling 1): an Ask never opens a Topic, so no live "New topic" divider.
+  // One conversation: an Ask never opens a Topic, so no live "New topic" divider.
   const user = userEvent.setup();
   const { t, topics } = topicThread();
   withTopics(t, topics);
@@ -2446,7 +2446,7 @@ test("meter_has_a_thread_part", () => {
 
 test("folded_summary_never_doubles_its_period", async () => {
   const { t, topics } = topicThread();
-  // The fold previews its last answer (P11-20); one that ends in a period gets no second one.
+  // The fold previews its last answer; one that ends in a period gets no second one.
   t.messages[3] = { ...t.messages[3], text: "Asked: late invoices. Tables: invoices." };
   withTopics(t, topics);
   renderPanel();
@@ -2455,7 +2455,7 @@ test("folded_summary_never_doubles_its_period", async () => {
   expect(fold.textContent).not.toContain("..");
 });
 
-// Compaction (step 11e, task 9).
+// Compaction (task 9).
 
 const RECORD: AnswerRecord = {
   sent: null,
@@ -2810,7 +2810,7 @@ test("arrows_move_and_enter_runs_the_active_command", async () => {
 });
 
 test("the_ask_panel_never_compacts_a_board_chat", async () => {
-  // Explicit, not only because App gives this panel "ungrouped" or "group:<id>" (Plan D Task 15 fix round 1).
+  // Explicit, not only because App gives this panel "ungrouped" or "group:<id>".
   const user = userEvent.setup();
   known = groqModels();
   settings = groq;
@@ -3059,7 +3059,7 @@ test("escape_in_the_list_does_not_reach_outer_handlers", async () => {
   expect(outer.mock.calls.filter(([e]) => (e as KeyboardEvent).key === "Escape")).toHaveLength(0);
 });
 
-// ---- P11 part 2 ----
+// ---- part 2 ----
 
 test("parity_P11_11_the_schema_row_counts_the_tables_the_core_sends", async () => {
   unfoldSends();
@@ -3276,7 +3276,7 @@ test("the_first_answer_calls_name_chat_and_the_row_takes_the_title", async () =>
 });
 
 test("the_ask_panel_never_names_a_board_chat", async () => {
-  // A board's chats are named only by the board's own assistant (Plan D A20): the panel's title path skips them.
+  // A board's chats are named only by the board's own assistant: the panel's title path skips them.
   const user = userEvent.setup();
   settings = groq;
   askError = null;
@@ -3757,7 +3757,7 @@ test("Asked in caption", async () => {
   expect(screen.queryByText(/^Asked in/)).toBeNull();
 });
 
-// ---- UX step 9 (A7): "Asked in <tab>" shows that tab ----
+// ---- UX step 9: "Asked in <tab>" shows that tab ----
 
 const queryTwo = { tab: "query", label: "Query 2", tabKey: "query:d2" };
 

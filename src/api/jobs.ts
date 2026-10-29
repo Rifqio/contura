@@ -34,7 +34,7 @@ function channel(onEvent: OnJobEvent): Channel<JobEvent> {
 
 /**
  * A new job id. Export, import and script jobs take theirs from the client, so `useJobs().track`
- * can watch the id before the job starts and no event is lost (Q2).
+ * can watch the id before the job starts and no event is lost.
  */
 export function newJobId(): JobId {
   return crypto.randomUUID();
@@ -80,7 +80,7 @@ export function planScript(req: ScriptRequest): Promise<ScriptPlan> {
   return invoke<ScriptPlan>("plan_script", { req });
 }
 
-/** 100 statements of the file from statement `from`, read on demand; `runAsIs` shows the statements that run as is as Run (Q12). */
+/** 100 statements of the file from statement `from`, read on demand; `runAsIs` shows the statements that run as is as Run. */
 export function scriptStatements(
   connectionId: ConnectionId,
   path: string,
@@ -95,7 +95,7 @@ export function confirmScript(req: ScriptRequest): Promise<PassId> {
   return invoke<PassId>("confirm_script", { req });
 }
 
-/** Starts script `id` (from `newJobId`, Q21); `pass` comes from `confirmScript` on Production. */
+/** Starts script `id` (from `newJobId`); `pass` comes from `confirmScript` on Production. */
 export async function startScript(id: JobId, req: ScriptRequest, pass: PassId | null, onEvent: OnJobEvent): Promise<JobId> {
   await invoke("start_script", { job: id, req, pass, events: channel(onEvent) });
   return id;

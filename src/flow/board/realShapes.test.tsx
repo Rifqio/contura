@@ -1,4 +1,4 @@
-// Plan F Task 2: real shapes at every zoom on boards (ruling 1, Decision 1). The live frame keeps its shapes, icons,
+// Real shapes at every zoom on boards. The live frame keeps its shapes, icons,
 // ports and lines at any zoom and any count; B1's fast mode and Task 18b's "live frame fast below 0.45" are gone.
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactFlowInstance } from "@xyflow/react";

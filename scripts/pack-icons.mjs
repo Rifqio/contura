@@ -1,11 +1,11 @@
-// Packs the cloud icon sets into src-tauri/icons-pack/icons.bin (step 6+, C1b; v2: Plan C).
+// Packs the cloud icon sets into src-tauri/icons-pack/icons.bin.
 //
 //   node scripts/pack-icons.mjs <source folder> [out file] [--previous <pack>] [--sheet <file.html>]
 //
 // The source folder holds each official pack, downloaded and extracted by hand into a new
-// empty folder outside the repo (Ruling P7: the downloads are untrusted data; this script
+// empty folder outside the repo (the downloads are untrusted data; this script
 // only reads files from it and never runs anything in it). Expected layout, with the
-// download each one comes from (see docs/research/2026-10-18-icon-licences.md):
+// download each one comes from (licences and sources: docs/icon-licences.md):
 //
 //   aws/           AWS Architecture Icons package zip (aws.amazon.com/architecture/icons)
 //   azure/         Azure_Public_Service_Icons_V24.zip (learn.microsoft.com/azure/architecture/icons)
@@ -17,12 +17,12 @@
 //   simple/        the simple-icons npm tarball
 //
 // A missing folder leaves that set out. Each icon's root <svg> start tag is rewritten to fit
-// one 24 by 24 frame (icon-frame.mjs, Plan C Decision 3); everything else is copied byte for
+// one 24 by 24 frame (icon-frame.mjs); everything else is copied byte for
 // byte: never recoloured, cropped, rotated or redrawn. An SVG that fails the safety check
-// (svg-check.mjs, Rulings P7, P9 and P10: an allow list), before or after framing, or that
+// (svg-check.mjs: an allow list), before or after framing, or that
 // the framer refuses, is left out and counted.
 //
-// Names (Decision 7): a general (Lucide) name may not start with a provider prefix; the first
+// Names: a general (Lucide) name may not start with a provider prefix; the first
 // set in pack order keeps a name; every name of the previous pack must still resolve, through
 // RENAMED (an alias of the new name) or DROPPED (listed with its reason), or the build fails.
 //
@@ -38,7 +38,7 @@
 //                             per call. Aliases share their target's blob and inkAt.
 //
 // `inkAt` is the UTF-8 byte offset of the root tag's `>` in the inflated icon, where the Core
-// inserts ` color="#rrggbb"` for outline and mono sets (Decision 4). `hex` is a brand logo's own
+// inserts ` color="#rrggbb"` for outline and mono sets. `hex` is a brand logo's own
 // colour, `#` and six lower-case hex digits from Simple Icons' data (CC0); only logo rows have
 // it, every other row stops at inkAt. The front end inks a logo in it where it reads on the
 // theme (owner ruling 26 Oct). Version 1 had no style, changes, aliasOf or inkAt, and its
@@ -62,7 +62,7 @@ const INK_DARK = "#f8f8f2";
 const MAGIC = "CTRICON1";
 
 /**
- * Margin on each side of the frame, as a fraction of it (Decision 2), tuned on the contact sheet
+ * Margin on each side of the frame, as a fraction of it, tuned on the contact sheet
  * so each set reads the size of Lucide's `database` (about 19.5 by 21.5 of 24 with its stroke).
  */
 export const PAD = {
@@ -79,15 +79,15 @@ export const PAD = {
   // Logos fill the 24 artboard edge to edge; at 19 of 24 a solid logo matches `database`.
   simple: 2.5 / 24,
 };
-/** Lucide's root stroke width (Decision 1). */
+/** Lucide's root stroke width. */
 export const STROKE = "1.5";
-/** Prefixes a general (unprefixed) icon may not take (Decision 7). */
+/** Prefixes a general (unprefixed) icon may not take. */
 export const RESERVED = ["aws", "azure", "gcp", "k8s", "brand", "oci", "net"];
 /** Old name -> new name: the old name stays as an alias of the new one. */
 export const RENAMED = {};
 /** Old name -> one-line reason: only for an icon upstream removed with no replacement. */
 export const DROPPED = {};
-/** What the pack changed in each set's icons, shown in Icon credits (Decision 11). */
+/** What the pack changed in each set's icons, shown in Icon credits. */
 const FITTED = "Fitted into a 24 by 24 frame with even margins; never redrawn or recoloured.";
 export const CHANGES = {
   aws: FITTED,

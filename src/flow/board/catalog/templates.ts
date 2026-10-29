@@ -1,4 +1,4 @@
-// The Shelf's catalog (Decision 12): three board templates and the single diagrams, written for developers. Each
+// The Shelf's catalog: three board templates and the single diagrams, written for developers. Each
 // frame is a full frame's text (`diagram <kind> "<title>"` first, one trailing newline), so a board's frames join with
 // `"\n"` into a file a board parse reads. Cloud icons are names from today's pack (`catalog_icons.json` and the Rust
 // test `the_catalog_icons_are_in_the_index` keep that true).

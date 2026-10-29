@@ -6,9 +6,9 @@ import { buildFlowGraph } from "../flowNodes";
 import { emptyPositions } from "../layout";
 import { glideFrames } from "./glide";
 
-// Timing test (ruling P20): runs alone through `npm run test:perf`. One glide frame on 2,000 nodes, the worst
+// Timing test: runs alone through `npm run test:perf`. One glide frame on 2,000 nodes, the worst
 // case where every node moves (a Tidy), in 20 groups: the frame's positions and group areas, then the canvas
-// applying them over its nodes. Best of three 20-run medians under 16 ms, as ruling P8.
+// applying them over its nodes. Best of three 20-run medians under 16 ms.
 test("one_glide_frame_on_2000_nodes_under_16ms", () => {
   const doc: FlowDoc = { kind: "dfd", title: "Large", comments: [], nodes: [], links: [], groups: [] };
   const from = emptyPositions();

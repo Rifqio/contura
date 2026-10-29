@@ -28,7 +28,7 @@ fn file_err(path: &Path, what: &str, e: std::io::Error) -> Error {
     Error::File(format!("cannot {what} {}: {e}", path.display()))
 }
 
-/// Reads a Schema Model the user chose; nothing in Contura's data folder (Q33).
+/// Reads a Schema Model the user chose; nothing in Contura's data folder.
 pub fn read_model_files(dbml_path: &Path, data_dir: &Path) -> Result<ModelFiles> {
     check_user_path(dbml_path, data_dir, PathUse::Open)?;
     let dbml = std::fs::read_to_string(dbml_path).map_err(|e| file_err(dbml_path, "read", e))?;
@@ -151,7 +151,7 @@ pub fn flow_exists(name: &str, data_dir: &Path) -> Result<bool> {
 }
 
 /// Writes diagram `name` as `<data>\diagrams\<name>.flow` and its `.flow.layout.json`
-/// together (D1, Q33, Q35), making the folder if it is missing, and returns the `.flow`
+/// together, making the folder if it is missing, and returns the `.flow`
 /// path. Both are written to partial files first; existing files are moved aside, both new
 /// files are put in place, and on any failure the new ones are removed and the originals
 /// restored.

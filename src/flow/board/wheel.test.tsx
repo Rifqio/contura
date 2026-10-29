@@ -1,4 +1,4 @@
-// Plan F Task 8 (Decision 9): on a board Ctrl+wheel and a pinch zoom around the pointer by one clamped step, once (React
+// On a board Ctrl+wheel and a pinch zoom around the pointer by one clamped step, once (React
 // Flow does not zoom it a second time), over a scrolling card and an open field alike; a plain wheel still pans; other
 // canvases keep React Flow's wheel. The view reports once per animation frame, with the pointer's flow point.
 import { act, cleanup, fireEvent, render } from "@testing-library/react";

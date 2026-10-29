@@ -171,7 +171,7 @@ interface Props {
   onOpenQuery?(sql: string): void;
   /** Opens the Export dialog on this table (the menu's Export..., and Ctrl+E inside the grid). */
   onExport?(origin: ExportOrigin): void;
-  /** Opens an Import tab into this table; shown on Read-only Connections too (Q15). */
+  /** Opens an Import tab into this table; shown on Read-only Connections too. */
   onImport?(): void;
   /** Opens the table's design tab (tables only, D15). */
   onDesign?(): void;
@@ -211,7 +211,7 @@ export interface GridLocation {
 }
 
 /**
- * What a table or view tab tells the Ask (spec 4.2): the sort, the row filters' column names, the hidden columns
+ * What a table or view tab tells the Ask: the sort, the row filters' column names, the hidden columns
  * and the Pending Edits count, never a value; the filter's WHERE goes as the filter text the Core masks. Lists are
  * cut at twice the Core's caps.
  */
@@ -1016,7 +1016,7 @@ export default function DataGrid({
     setNote(ds.length === 1 ? `${rowName(ds[0])} marked for deletion. Ctrl+Z undoes.` : `${plural(ds.length, "row")} marked for deletion. Ctrl+Z undoes.`);
   }
 
-  /** The toolbar's Delete row and Alt+Delete: the rows the selection spans (ruling 6). */
+  /** The toolbar's Delete row and Alt+Delete: the rows the selection spans. */
   function deleteSelected() {
     deleteRows(selectedRows());
   }

@@ -196,7 +196,7 @@ export interface CountRequest {
   filter: string | null;
 }
 
-/** M3: where the row with `key` is under a page's sort and filter (Back after a followed key). */
+/** Where the row with `key` is under a page's sort and filter (Back after a followed key). */
 export interface LocateRequest {
   table: ObjectPath;
   sort: SortSpec | null;
@@ -318,7 +318,7 @@ export type CommandError =
   | { kind: "afterCommit"; message: { sql: string; message: string } }
   /** Diagram `name` is saved already and the save did not say to replace it. */
   | { kind: "diagramExists"; message: { name: string } }
-  /** Restore will not run this file; `reason` is the sentence to show (step 9). */
+  /** Restore will not run this file; `reason` is the sentence to show. */
   | { kind: "backupRefused"; message: { reason: string } }
   /** The Sync Script rebuilt at Apply differs from the one shown: `connection` (the target) changed since the compare. */
   | { kind: "planChanged"; message: { connection: string } }
@@ -1036,11 +1036,11 @@ export interface AiSettings {
   shareThinking: boolean;
   /** "Keep the exact text sent with each answer" (R7.2). */
   keepExactText: boolean;
-  /** "Let the assistant pick tables in large databases": sends an outline of table names (step 11d). */
+  /** "Let the assistant pick tables in large databases": sends an outline of table names. */
   pickTables: boolean;
   /** "Compact long chats automatically": privacy switch, always the global value. */
   autoCompact?: boolean;
-  /** "Let the assistant propose diagram changes" (step 11h): privacy switch, always the global value; absent reads as on. */
+  /** "Let the assistant propose diagram changes": privacy switch, always the global value; absent reads as on. */
   diagramTool?: boolean;
   /** "Name chats with the AI": one short call writes a chat's title after its first answer. Always the global value; absent reads as on. */
   nameChats?: boolean;
@@ -1527,7 +1527,7 @@ export interface TurnStamp {
 }
 
 /**
- * Where a question was asked (spec 6). Mirrors `AskedIn` in crates/contura-core/src/ai/memory. The summary and steps
+ * Where a question was asked. Mirrors `AskedIn` in crates/contura-core/src/ai/memory. The summary and steps
  * arrive once, on the Memory event, and go to the Core with the turn; threads from the Core carry the tab and label only.
  */
 export interface AskedIn {
@@ -1924,7 +1924,7 @@ export interface AiTestOk {
   millis: number;
 }
 
-// Visual Query (step 6). Mirrors crates/contura-core/src/visual_query.
+// Visual Query. Mirrors crates/contura-core/src/visual_query.
 
 /** One table card. `schema` is the PostgreSQL schema, or the MySQL database or SQLite scope when it differs from the tab's database. */
 export interface VqTable {
@@ -2079,7 +2079,7 @@ export interface VqRun {
   execution: Execution;
 }
 
-// Import and export jobs (step 7). Paths are strings, u64 values are numbers, and
+// Import and export jobs. Paths are strings, u64 values are numbers, and
 // SHA-256 values travel as lowercase hex strings.
 
 export type JobId = string;
@@ -2133,7 +2133,7 @@ export type ExportSource =
     }
   /** `columns`: the output columns to keep, in order (the result panel's shown ones); empty keeps them all. */
   | { kind: "query"; database: string | null; sql: string; columns: string[] }
-  /** The rows a result already shows (D16). */
+  /** The rows a result already shows. */
   | { kind: "rows"; columns: ResultColumn[]; rows: Cell[][] };
 
 export interface ExportRequest {
@@ -2152,7 +2152,7 @@ export interface ExportPreview {
   bytesPerRow: number;
   sampleRows: number;
   notes: string[];
-  /** False when the statement does not only read (D16): offer "Rows shown" alone. */
+  /** False when the statement does not only read: offer "Rows shown" alone. */
   queryRead: boolean;
 }
 
@@ -2164,7 +2164,7 @@ export interface ImportOptions {
   onError: OnError;
   commit: CommitMode;
   sheet: string | null;
-  /** "Read the text NULL as NULL" (Q31), CSV and Excel only; off by default. */
+  /** "Read the text NULL as NULL", CSV and Excel only; off by default. */
   nullWord?: boolean;
 }
 
@@ -2260,7 +2260,7 @@ export interface ImportPlan {
   shape: InsertShape;
   warnings: string[];
   verdict: JobVerdict;
-  /** Q28: the whole import runs in one transaction (false for MyISAM and Commit every N). Absent: read from the options and warnings. */
+  /** The whole import runs in one transaction (false for MyISAM and Commit every N). Absent: read from the options and warnings. */
   oneTransaction?: boolean;
 }
 
@@ -2274,7 +2274,7 @@ export interface ScriptStatement {
   class: StatementClass;
   kind: StatementKind;
   action: ScriptAction;
-  /** Q12: it would be skipped and runs because Run as is is ticked. */
+  /** It would be skipped and runs because Run as is is ticked. */
   runAsIs?: boolean;
 }
 
@@ -2306,7 +2306,7 @@ export interface ScriptPlan {
   bytes: number;
   sha256: string;
   verdict: JobVerdict;
-  /** Q28: the script runs in one transaction (false for its own transactions and MySQL DDL). Absent: read from the plan. */
+  /** The script runs in one transaction (false for its own transactions and MySQL DDL). Absent: read from the plan. */
   oneTransaction?: boolean;
   /** Skipped statements past the 1,000 that `skipped` holds. */
   skippedMore?: number;
@@ -2375,7 +2375,7 @@ export type JobEvent =
   | { kind: "warning"; message: string }
   | { kind: "rowSkipped"; fileRow: number; column: string | null; message: string }
   | { kind: "finished"; report: JobReport }
-  /** Q27: `rowsCommitted` rows stay in the database after the stop; absent means 0. */
+  /** `rowsCommitted` rows stay in the database after the stop; absent means 0. */
   | { kind: "failed"; error: CommandError; rowsCommitted?: number };
 
 export interface JobSummary {
@@ -2396,7 +2396,7 @@ export interface JobPosition {
   statement: number | null;
 }
 
-// Data Transfer (step 8). The plan is built again from the request on every call, so
+// Data Transfer. The plan is built again from the request on every call, so
 // Review SQL, the Production pass and the run cover the same statements.
 
 export interface TransferSide {
@@ -2519,7 +2519,7 @@ export interface TransferPlan {
   frame?: ScriptFrame;
 }
 
-// Backup and Restore (step 9). Same Dialect only; the file is Contura's own plain SQL script.
+// Backup and Restore. Same Dialect only; the file is Contura's own plain SQL script.
 
 /** The five ticks of "What goes in". Tables off turns off everything that needs them. */
 export interface BackupInclude {
@@ -2725,7 +2725,7 @@ export interface RestoreOutcome {
   newFile: string | null;
 }
 
-// Schema Compare and the Sync Script (step 10). Same Dialect only; schemas, never rows. Plan,
+// Schema Compare and the Sync Script. Same Dialect only; schemas, never rows. Plan,
 // confirm and apply each rebuild the diff and the script from fresh snapshots, so the pass and
 // the hash cover exactly the shown statements.
 
@@ -2924,7 +2924,7 @@ export interface SyncOutcome {
   tables: ObjectPath[];
 }
 
-// The diagram assistant (step 11h). Mirrors crates/contura-core/src/ai/{diagram_tool,diagram,board,sent,tool_uses}.rs.
+// The diagram assistant. Mirrors crates/contura-core/src/ai/{diagram_tool,diagram,board,sent,tool_uses}.rs.
 
 /**
  * One change the model proposes, as it is on the wire: snake_case, externally tagged (`{ add_node: { ... } }`).

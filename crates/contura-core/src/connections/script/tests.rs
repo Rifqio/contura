@@ -91,7 +91,7 @@ fn lists_are_capped_and_counted() {
     assert_eq!(reasons.last().unwrap(), "2 more statements are refused.");
 }
 
-/// Q44 I1: 1 MiB statements (Contura's own SQL export cuts there) are held cut at 4 KB
+/// 1 MiB statements (Contura's own SQL export cuts there) are held cut at 4 KB
 /// in every list and page, and at 64 KB in the confirmation.
 #[test]
 fn big_statements_are_held_cut() {
@@ -154,7 +154,7 @@ fn session_statements_listed_past_200() {
     ));
 }
 
-/// Q44 I3: the run reads the held handle up to the bytes the start checked.
+/// The run reads the held handle up to the bytes the start checked.
 #[test]
 fn the_run_reader_stops_at_the_checked_size() {
     let dir = tempfile::tempdir().unwrap();
@@ -179,7 +179,7 @@ fn facts(kind: DialectKind, sql: &str) -> (ScriptStatement, Facts) {
     r.next_checked().unwrap().unwrap()
 }
 
-/// Q44 I2: the rows a file run as written keeps, statement by statement.
+/// The rows a file run as written keeps, statement by statement.
 #[test]
 fn counts_follow_autocommit_and_transactions() {
     let my = DialectKind::MySql;

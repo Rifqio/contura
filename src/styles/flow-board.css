@@ -1,5 +1,5 @@
 /*
-  Board frames on the diagram canvas (Plan B Task 6): each frame's box and its title tab strip above the box's
+  Board frames on the diagram canvas: each frame's box and its title tab strip above the box's
   top-left corner (Eraser's diagram frames). The box takes no clicks: the canvas works out which frame a click is
   for. Only the strip does, and it drags the frame. Tokens only (ADR 0008); durations are the motion tokens, which
   reduced motion turns into 0.
@@ -29,7 +29,7 @@
 /*
   Nothing inside a static frame takes pointer events: group titles, ports, resize zones, chips and handles included
   (their own rules turn pointer events back on). A press anywhere on a static frame reaches the canvas, which selects
-  that frame (Decision 3).
+  that frame.
 */
 .react-flow__node.board-static,
 .react-flow__node.board-static *,
@@ -49,7 +49,7 @@
   left: 0;
   bottom: 100%;
   /*
-    Plan F Decision 5 (Figma and Miro keep frame names at a constant size): below 100 percent the strip counter-scales by
+    Figma and Miro keep frame names at a constant size: below 100 percent the strip counter-scales by
     1 / zoom from where it meets the frame, so its title stays readable and its height on screen stays 30 px. At 100
     percent and above it is drawn as it is. --rz-zoom is the canvas zoom, set on the strip itself (zoomVar.ts).
   */
@@ -70,7 +70,7 @@
   edge to the nearest tab in its row, never less than the frame's width (--board-tab-room, FrameNode, set only when a
   tab is in the way, with has-room). Below 100 percent the strip keeps its screen size, so its CSS room is that times
   the zoom. A strip with room to spare has no max-width: one that follows the zoom laid every strip out again on every
-  zoom frame (Task 9 fix 2). Short of room FrameNode drops the kind word first, then the name ends in an ellipsis
+  zoom frame. Short of room FrameNode drops the kind word first, then the name ends in an ellipsis
   (Figma's frame label shows the frame's name); it hides AI Chat, then Code Editor, only when even they do not fit.
 */
 .board-frame-tab.has-room {
@@ -186,7 +186,7 @@
 }
 
 /*
-  A frame switch fades the drawing in over motionMs("enter") (Decision 2); none under reduced motion. Two names, so a
+  A frame switch fades the drawing in over motionMs("enter"); none under reduced motion. Two names, so a
   switch soon after another starts the fade again.
 */
 .flow-canvas.is-frame-switch.is-switch-0 .react-flow__viewport {
@@ -213,7 +213,7 @@
 }
 
 /*
-  The board's top toolbar (Plan B Task 7, Decisions 18 and 24): a pill centred at the top of the canvas, with each
+  The board's top toolbar: a pill centred at the top of the canvas, with each
   tool's key in its corner (Figma, Excalidraw), then Add in the accent and Ask with the review count.
 */
 .board-toolbar-slot {
@@ -297,7 +297,7 @@
   text-align: center;
 }
 /*
-  The review bar (Plan D Decision 11): floats above the top right of the frames a proposal changes, placed by
+  The review bar: floats above the top right of the frames a proposal changes, placed by
   ReviewBar.tsx in the canvas's own pixels, over the frames and under the board toolbar.
 */
 .board-review {
@@ -326,7 +326,7 @@
   display: inline-flex;
 }
 /*
-  The bottom of the canvas (Task 9): one stack, centred, the toast over the frame bar, so the two never overlap. The
+  The bottom of the canvas: one stack, centred, the toast over the frame bar, so the two never overlap. The
   stack takes no presses; the bar and the toast's Undo do.
 */
 .board-bottom {
@@ -351,7 +351,7 @@
 }
 
 /*
-  The frame bar (Decision 22; Miro's and Figma's frame bars): the selected frame's settings in a pill at the bottom
+  The frame bar (Miro's and Figma's frame bars): the selected frame's settings in a pill at the bottom
   centre of the canvas. Its lists and menus open upward, and its hints sit above it.
 */
 .frame-bar {
@@ -427,7 +427,7 @@
 }
 
 /*
-  A frame's text size (Decision 22): its shapes and labels carry --text-scale with .is-text-scaled, and the type tokens
+  A frame's text size: its shapes and labels carry --text-scale with .is-text-scaled, and the type tokens
   the canvas uses are sized again inside them from tokens.css's own sizes, so a token change carries through. The canvas
   keeps each token's size under a --text-base- name first (a token cannot be set from itself), and a shorthand token
   is set again too, since a custom property that names others is worked out where it is declared.
@@ -476,7 +476,7 @@
   cursor: grabbing;
 }
 
-/* A shape tool's drag (Decision 18): the box being drawn, outlined until release or Esc; it takes no presses. */
+/* A shape tool's drag: the box being drawn, outlined until release or Esc; it takes no presses. */
 .board-draw-outline {
   position: fixed;
   z-index: 5;
@@ -486,7 +486,7 @@
 }
 
 /*
-  Loose sketches (Plan B Task 11, Decision 21): children of one zero-size layer node. A sketch node's box takes no
+  Loose sketches: children of one zero-size layer node. A sketch node's box takes no
   pointer events (its node style); only what it draws does, so a pen stroke over a shape covers only its own line.
   Sections and box sketches sit under every frame, and the canvas gives a press inside a frame to the frame (FlowTab).
   Theme tokens only: a note is the warning tint with the theme's text, which reads in both themes.
@@ -573,7 +573,7 @@
 }
 
 /*
-  Drawing and editing sketches (Plan B Task 12). A Section's inside is the canvas until the Section is selected (FigJam):
+  Drawing and editing sketches. A Section's inside is the canvas until the Section is selected (FigJam):
   a press there box-selects or pans, a click selects it, a double-click is "Add here"; its title always takes a press.
   A selected sketch is outlined in the accent; boxes take the eight resize zones, lines and arrows two end handles.
 */
@@ -634,13 +634,13 @@
   background: var(--c-warning-subtle);
 }
 
-/* The sketch layer's pictures when far (Task 9 fix 2) take no pointer events: a press there is the canvas's. */
+/* The sketch layer's pictures when far take no pointer events: a press there is the canvas's. */
 .react-flow__node.board-sketch-picture,
 .react-flow__node.board-sketch-picture * {
   pointer-events: none !important;
 }
 /*
-  A static frame drawn as one picture of itself (Plan F Decision 7): an <img> of its bitmap's PNG (Task 9 fixes 2 and 3),
+  A static frame drawn as one picture of itself: an <img> of its bitmap's PNG (Task 9 fixes 2 and 3),
   or of its SVG until that is in, laid over the frame's box at the size its shapes stand in. The picture's colours are
   the theme's tokens, read when it is built; it takes no pointer events, so a click picks the frame as its box does.
 */
@@ -655,7 +655,7 @@
 }
 
 /*
-  Far text (Plan F Decisions 2 and 4; Figma and Miro draw far text as grey bars). The canvas wrapper's data-far lists
+  Far text (Figma and Miro draw far text as grey bars). The canvas wrapper's data-far lists
   the text sizes too small to read at this zoom; every shape and line label carries its frame's size as board-ts-*.
   Far text keeps its layout and its words (a screen reader still reads them): the words go transparent and each run's
   own box takes the faint text token at 45 percent, so each line of a label becomes one bar of its width. The change is
@@ -678,7 +678,7 @@
   box-decoration-break: clone;
 }
 /*
-  An ER card's rows when its text is far (Decision 3): the bars are the backgrounds of one block (kindNodes ErBars sets
+  An ER card's rows when its text is far: the bars are the backgrounds of one block (kindNodes ErBars sets
   each layer's size and place), in the faint token at 45 percent, and a key row's mark in the key's own colour.
 */
 .fkind-er-bars {
@@ -690,7 +690,7 @@
   position: relative;
 }
 /*
-  A far ER card keeps its header icon (Decision 3) with no <svg> root and no element: the header's ::before, masked by
+  A far ER card keeps its header icon with no <svg> root and no element: the header's ::before, masked by
   the same table icon (Icon.tsx's path at 14 px), in the colour the icon takes (flow-canvas.css .fkind-head .icon).
 */
 .fkind-head.is-far::before {
@@ -730,7 +730,7 @@
 }
 
 /*
-  Plan D Task 8: the assistant's waiting changes drawn on every frame they touch (Decision 11). Theme tokens only, so
+  The assistant's waiting changes drawn on every frame they touch. Theme tokens only, so
   both themes draw them. A changed shape, line or column takes a soft accent tint and no motion; new and removed rows
   take the success and danger tints the shapes use (flow-tab.css `.fnode-suggested`, `.fnode-removed`).
 */

@@ -23,7 +23,7 @@ export default function RunningFrame({ job, path, onBackground, onCancel }: Prop
   }, []);
 
   const elapsed = Math.max(0, now - job.startedAt);
-  // D8: the bar and percent only with a known row total.
+  // the bar and percent only with a known row total.
   const total = job.rowsTotal;
   const percent = total !== null ? job.percent : null;
   return (
@@ -56,7 +56,7 @@ export default function RunningFrame({ job, path, onBackground, onCancel }: Prop
       <footer className="dialog-footer">
         <span className="export-hint">Cancel deletes the unfinished file.</span>
         <span className="spacer" />
-        {/* Q25: Esc sends the export to the background; only Cancel cancels. */}
+        {/* Esc sends the export to the background; only Cancel cancels. */}
         <button type="button" className="button" data-view-focus onClick={onBackground}>
           Run in the background
           <Kbd keys="Esc" />

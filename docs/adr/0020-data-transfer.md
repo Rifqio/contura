@@ -1,6 +1,6 @@
 # Data Transfer plans once, maps types per column, and runs per target Dialect
 
-Step 8 adds Data Transfer: copy the structure, the rows, or both, for chosen tables from one database to another, on the same Connection or another one, in the same Dialect or across Dialects. Every column's target type is shown and can be changed, and the exact structure SQL and row-copy shapes are confirmed before anything runs. The spec is `docs/superpowers/specs/2026-10-17-step8-data-transfer-design.md`; the screen is artifact A15Z5kepCRSAyQ8zXhSCvg, frame 8.1; the answered questions are in the spec (option (a) on 1 to 5, (b) on 6). This ADR builds on ADR 0018 (Jobs and the Job pass), ADR 0013 (Production and Read-only) and ADR 0003 (memory budget).
+Step 8 adds Data Transfer: copy the structure, the rows, or both, for chosen tables from one database to another, on the same Connection or another one, in the same Dialect or across Dialects. Every column's target type is shown and can be changed, and the exact structure SQL and row-copy shapes are confirmed before anything runs. This ADR builds on ADR 0018 (Jobs and the Job pass), ADR 0013 (Production and Read-only) and ADR 0003 (memory budget).
 
 ## One plan, built from the request
 

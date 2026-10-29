@@ -71,7 +71,7 @@ test("ctrl_s_saves_and_discard_discards", async () => {
   expect(fns.onDiscard).toHaveBeenCalled();
 });
 
-// ---- Design tabs (step 5c, Task 11) ----
+// ---- Design tabs ----
 
 test("apply_verb_reads_apply_with_the_save_keys", async () => {
   const fns = setup({ title: "Apply changes to orders?", body: designBody(2, "orders", "shop-staging", false), verb: "Apply" });

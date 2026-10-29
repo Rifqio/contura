@@ -28,7 +28,7 @@ interface Props {
   list?: string;
   /** A new item: Escape with its text untouched, or emptied, drops it (nothing written, no undo step). */
   fresh?: boolean;
-  /** The name may hold a line break: Shift+Enter starts a new line (written `\n` in quotes, ADR 0019 P5). */
+  /** The name may hold a line break: Shift+Enter starts a new line (written `\n` in quotes, ADR 0019). */
   multiline?: boolean;
   /** For a name that stays on one line: what Shift+Enter says instead of breaking it. */
   oneLine?: string;
@@ -131,7 +131,7 @@ export default function InlineEdit({ value, label, placeholder, className, style
       if (multiline) {
         const n = Math.max(1, e.currentTarget.value.split("\n").length);
         if (n !== rows) setRows(n);
-        // Wrapped text grows the field too, not only line breaks (fix round 1, M7).
+        // Wrapped text grows the field too, not only line breaks.
         const el = e.currentTarget as unknown as HTMLElement;
         el.style.height = "auto";
         if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;

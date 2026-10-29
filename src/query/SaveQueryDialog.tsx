@@ -44,7 +44,7 @@ export default function SaveQueryDialog({ sql, existing, connections = [], conne
 
   const wanted = name.trim().toLowerCase();
   const taken = wanted ? others.find((q) => q.id !== existing?.id && q.name.toLowerCase() === wanted) : undefined;
-  // V8: a SQL query never replaces a Visual Query, which would lose its model.
+  // a SQL query never replaces a Visual Query, which would lose its model.
   const takenVisual = !!taken && taken.kind === "visual" && existing?.kind !== "visual";
   // Renaming onto another query's name is not a replace: the Core refuses it.
   const replacing = !!taken && !existing && !takenVisual;

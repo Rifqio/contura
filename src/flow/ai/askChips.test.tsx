@@ -1,4 +1,4 @@
-// The Ask's chips and the `/` list of diagrams (Plan D Task 14, Decision 7): the frame chip follows the selected frame, a
+// The Ask's chips and the `/` list of diagrams: the frame chip follows the selected frame, a
 // frame added by hand stays, `/` lists the board's frames, Backspace in an empty box takes the last chip, a ninth chip
 // is refused with a note, the selection chip counts shapes and sketches, and a board has no scope control.
 import { act as reactAct, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -358,7 +358,7 @@ function standalone(props: { selected: string[]; sketches: string[]; frames?: re
     removal: null,
     notSaved: null,
     clearFailure: () => {},
-    // Past chats (Task 15): none here.
+    // Past chats: none here.
     threads: [],
     newChat: () => {},
     openThread: async () => {},

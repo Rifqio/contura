@@ -67,7 +67,7 @@ export default function AccessTable({ connections, onSaved, labelledBy }: Props)
   // Not in a scrolling box: each row's list opens below the table without being cut off.
   return (
     <>
-      {/* The built columns at set widths: the table keeps to the 512px Settings column (P11-3). */}
+      {/* The built columns at set widths: the table keeps to the 512px Settings column. */}
       <table className="share-table share-table-fit" aria-labelledby={labelledBy}>
         <colgroup>
           <col className="share-col-conn" />

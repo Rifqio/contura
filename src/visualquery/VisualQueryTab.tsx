@@ -1,4 +1,4 @@
-// The Visual Query tab (frame 6.1): toolbar, the canvas of cards, the panel and the SQL pane.
+// The Visual Query tab: toolbar, the canvas of cards, the panel and the SQL pane.
 import type { Edge, EdgeTypes, Node, NodeTypes, ReactFlowInstance } from "@xyflow/react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -131,7 +131,7 @@ export interface VisualTabControl {
 }
 
 /**
- * What a Visual Query tab tells the Ask (spec 4.3): its model with the filter values left out, the SQL the pane
+ * What a Visual Query tab tells the Ask: its model with the filter values left out, the SQL the pane
  * shows (none while the model has problems), the problem count and the last run's count. Lists are cut at twice
  * the Core's caps.
  */
@@ -159,7 +159,7 @@ export interface VisualQueryTabProps {
   doc: VisualTabDoc;
   /** The tab's key: the tab publishes what the Ask may know of it (`tabAsk.ts`). */
   askKey?: string | null;
-  /** Null when the tab's Connection was removed (P10). */
+  /** Null when the tab's Connection was removed. */
   connection: ConnectionConfig | null;
   open: boolean;
   group: Group | null;
@@ -433,7 +433,7 @@ export function listText(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-/** Where a tree object sits in the model's addressing (D6). */
+/** Where a tree object sits in the model's addressing. */
 export function vqAddress(dialect: DialectKind, tabDb: string | null, path: ObjectPath): { schema: string | null; name: string } {
   if (dialect === "postgres") return { schema: path.schema, name: path.name };
   const home = dialect === "sqlite" ? (tabDb ?? "main") : tabDb;
@@ -568,7 +568,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const latest = useRef(doc);
   latest.current = doc;
   const recordStep = useRecordStep();
-  /** V1: the model as it was before each gesture; Ctrl+Z and Ctrl+Y walk it. */
+  /** The model as it was before each gesture; Ctrl+Z and Ctrl+Y walk it. */
   const history = useRef<History<VisualQuery>>(createHistory());
   const changeModel = useCallback(
     (f: (q: VisualQuery) => VisualQuery, merge?: string) => {
@@ -783,7 +783,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const lone = useMemo(() => new Set(crossGroups(model).flatMap((g) => (g.length === 1 ? g : []))), [model]);
   /** The database a card's schema comes from. */
   const dbOf = (t: VqTable) => (dialect === "postgres" ? tabDb : (t.schema ?? tabDb));
-  /** V6: a card not found yet waits, says its schema failed (Try again), or says the Connection is closed; never loads forever. */
+  /** A card not found yet waits, says its schema failed (Try again), or says the Connection is closed; never loads forever. */
   const cardState = (t: VqTable): QueryCardData["state"] => {
     // A closed Connection fades every card, even one whose schema is still known from before.
     if (!cid || !open) return "closed";
@@ -1062,7 +1062,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     [changeModel, toast],
   );
 
-  /** A table or view from the tree (row menu or drop); another Connection's is refused (D15). */
+  /** A table or view from the tree (row menu or drop); another Connection's is refused. */
   const addSelection = useCallback(
     (s: Selection, at?: { x: number; y: number }) => {
       if (s.connectionId !== cid) {
@@ -1105,7 +1105,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
   const panelHeight = storedPanelHeight ?? VQ_PANEL_DEFAULT;
   /** The canvas takes focus back after a menu or the diagram closes. */
   const focusCanvas = useCallback(() => canvasBox.current?.querySelector<HTMLElement>(".diagram-canvas")?.focus(), []);
-  // I2: focus never stays in a hidden tab, so its keys cannot reach it.
+  // focus never stays in a hidden tab, so its keys cannot reach it.
   useEffect(() => {
     if (visible) return;
     const el = document.activeElement;
@@ -1134,7 +1134,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     setSelected([id]);
   };
 
-  // ---- Show diagram (B1): the query diagram of the generated SQL, beside the canvas ----
+  // ---- Show diagram: the query diagram of the generated SQL, beside the canvas ----
   const [diagramOpen, setDiagramOpen] = useState(false);
   const diagramSql = useRef<string | null>(null);
   if (sql !== null) diagramSql.current = sql;
@@ -1265,7 +1265,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     sessionError,
   });
   const canRun = block === null && session !== null && !running;
-  /** D16: each set of CROSS JOIN tables this tab already asked about, in memory only. */
+  /** Each set of CROSS JOIN tables this tab already asked about, in memory only. */
   const askedCross = useRef(new Set<string>());
   const [crossAsk, setCrossAsk] = useState<{ key: string } | null>(null);
 
@@ -1304,7 +1304,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     const started = performance.now();
     dispatch({ type: "start", stmts: [{ from: 0, to: text.length, text }] });
     dispatch({ type: "begin", now: started });
-    // D12: the editor's 5a path with no pass; a generated query only reads, so nothing asks.
+    // the editor's 5a path with no pass; a generated query only reads, so nothing asks.
     runVisualQuery(s, q, t, null).then(
       (r) => {
         if (token !== runToken.current) return;
@@ -1408,13 +1408,13 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     const typing = isTypingTarget(e.target);
     const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
     const k = e.key.toLowerCase();
-    // V1: Windows undo keys; a text field keeps its own undo.
+    // Windows undo keys; a text field keeps its own undo.
     if (mod && !typing && (k === "z" || (k === "y" && !e.shiftKey))) {
       e.preventDefault();
       stepBack(k === "z" && !e.shiftKey);
       return;
     }
-    // V4: Delete and Backspace remove the whole selection as one step (draw.io, Figma). Backspace only from the canvas or
+    // Delete and Backspace remove the whole selection as one step (draw.io, Figma). Backspace only from the canvas or
     // a card itself, not from a column row inside it.
     const el = e.target as Element;
     const atCard = el.classList?.contains("diagram-canvas") || el.classList?.contains("react-flow__node");
@@ -1443,7 +1443,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     }
   };
 
-  // ---- Keys (D9): the focused tab wins ----
+  // ---- Keys: the focused tab wins ----
   const root = useRef<HTMLDivElement>(null);
   useCommandKeys(
     visible
@@ -1575,13 +1575,13 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
     }
   }
 
-  // ---- A removed Connection (P10): one of the model's Dialect takes over ----
+  // ---- A removed Connection: one of the model's Dialect takes over ----
   const choices = (props.connections ?? []).filter((c) => c.dialect === dialect);
   const [pick, setPick] = useState<string>("");
   const picked = choices.some((c) => c.id === pick) ? pick : (choices[0]?.id ?? "");
   /** The Connection Open here just rebound the tab to, until its databases are known. */
   const reboundTo = useRef<ConnectionId | null>(null);
-  // M5: once open, a picked Connection that does not reach the tab's database takes its own default
+  // once open, a picked Connection that does not reach the tab's database takes its own default
   // database, where the missing check says "Not found in {database}" for the tables it lacks.
   useEffect(() => {
     const want = reboundTo.current;
@@ -1727,7 +1727,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
           <span className="bar-label">Show diagram</span>
           {diagramKey && <Kbd keys={diagramKey} />}
         </button>
-        {/* Production keeps the plain primary "Run": a Visual Query only reads (DESIGN-NEXT 10.5). */}
+        {/* Production keeps the plain primary "Run": a Visual Query only reads (DESIGN.md 10.5). */}
         <button
           type="button"
           className="button button-small button-primary"
@@ -2138,7 +2138,7 @@ export default function VisualQueryTab(props: VisualQueryTabProps) {
       {crossAsk && (
         <CrossJoinDialog
           tables={crossGroups(model).map((g) => {
-            // D17: the tree's estimates. V7: a group joined among itself is counted by its largest table, always "about".
+            // the tree's estimates. A group joined among itself is counted by its largest table, always "about".
             let counted: { name: string; rows: number } | null = null;
             for (const id of g) {
               const t = tableOf(id);

@@ -1,4 +1,4 @@
-// The lineage tab (spec 6+ section 5, frame 6+.1): a table's Foreign Keys both ways as a read-only
+// The lineage tab: a table's Foreign Keys both ways as a read-only
 // diagram, with a panel that says what each key does. Reads catalog details only, never rows.
 import type { Edge, EdgeTypes, Node, NodeTypes, ReactFlowInstance } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";

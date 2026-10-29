@@ -1,6 +1,6 @@
-# DESIGN-NEXT is the design source; themes are `data-theme` token blocks
+# DESIGN.md is the design source; themes are `data-theme` token blocks
 
-`DESIGN-NEXT.md` replaces `DESIGN.md` as the source for how Contura looks. `DESIGN.md` is kept in `docs/archive/` for history only. The look is Alucard (light) and Dracula (dark), JetBrains Mono for code and data, Segoe UI for the interface, 28 px density, and colour only where it means something.
+`DESIGN.md` is the source for how Contura looks. It replaced an earlier design, which is retired. The look is Alucard (light) and Dracula (dark), JetBrains Mono for code and data, Segoe UI for the interface, 28 px density, and colour only where it means something.
 
 This extends ADR 0008 (themes are token sets). Components still use only tokens, now the DN roles (`--c-*`, `--db-*`, `--syn-*`, `--group`) plus scale and component tokens. A theme is a block of those tokens in `src/styles/tokens.css`, chosen by a `data-theme` attribute on `<html>`:
 
@@ -31,7 +31,7 @@ Groups now pick one of eight slots: teal, indigo, green, gold, lime, sky, violet
 
 ## Production is a wash plus a hazard
 
-The 2 px amber outline around a grid with Pending Edits is gone. Every editor and result pane of a Production Connection gets the `--c-prod-wash` background, and only a statement that writes gets the hazard: the `--c-prod-subtle` band, a 3 px gutter bar and the note "Writes on <name> (Production)". Run and Save turn into "Run on PROD" and "Save on PROD". Both still open the step 5a confirm dialog (ADR 0013), which decides nothing new.
+The 2 px amber outline around a grid with Pending Edits is gone. Every editor and result pane of a Production Connection gets the `--c-prod-wash` background, and only a statement that writes gets the hazard: the `--c-prod-subtle` band, a 3 px gutter bar and the note "Writes on <name> (Production)". Run and Save turn into "Run on PROD" and "Save on PROD". Both still open the Production confirm dialog (ADR 0013), which decides nothing new.
 
 ## Checks
 

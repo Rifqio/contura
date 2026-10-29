@@ -1,6 +1,6 @@
 // B2 Task 8: adding from the Shelf onto the board (decisions 2, 7 and 9; R9 to R11, R13, R16, R23, R24, R27, R28).
 // FlowTab on a two-frame board with the fake worker. The Shelf is the real one; its props are kept so the template
-// side's rows (Task 6), which call the same `onAdd`, can be driven before that side is on the page.
+// side's rows, which call the same `onAdd`, can be driven before that side is on the page.
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactFlowInstance } from "@xyflow/react";
 import { type ReactNode, useState } from "react";
@@ -129,7 +129,7 @@ const LAYOUT = JSON.stringify({
 
 type Pt = { x: number; y: number };
 const SHOP: ErFromModel = { title: "shop", text: 'diagram er "shop"\norders {\n  id int pk\n}\n', tables: 1, links: 0, leftOut: 0 };
-/** The Connection From my database read SHOP from (Task 4b). */
+/** The Connection From my database read SHOP from. */
 const SHOP_SOURCE = { connectionId: "c1", database: "shop", schema: null };
 
 function setup(text = BOARD, layout: string | null = LAYOUT, extra: { onFromDatabase?: (a: DatabaseAdd) => void; onMermaidFrame?: (a: MermaidAdd) => void; around?: (tab: ReactNode) => ReactNode } = {}) {
@@ -165,7 +165,7 @@ function setup(text = BOARD, layout: string | null = LAYOUT, extra: { onFromData
   const originOf = (title: string): Pt => layoutNow().frames[title]?.at ?? { x: 0, y: 0 };
   const inst = () => canvas.instance!;
   const nodeOf = (id: string) => canvas.props!.nodes.find((n) => n.id === id);
-  /** A frame's box on the canvas, in board units (Plan F Decision 11). */
+  /** A frame's box on the canvas, in board units. */
   const boxOf = (title: string) => {
     const n = nodeOf(boardFrameId(title))!;
     return { x: n.position.x, y: n.position.y, w: Number(n.style?.width), h: Number(n.style?.height) };
@@ -187,7 +187,7 @@ async function opened(titles: [string, string][] = [["Flowchart", "Checkout"], [
 async function pickFrame(s: Setup, title: string) {
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(` ${title}$`) }));
   await waitFor(() => expect(s.isSelected(title)).toBe(true));
-  // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+  // Live, not only drawn selected: its box holds no static shape any more.
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId(title))).toBe(false));
 }
 
@@ -243,7 +243,7 @@ const near = (a: number, b: number, by = 1.5) => expect(Math.abs(a - b), `${a} v
 test("frame_at_point_reads_board_boxes_and_puts_the_live_frame_first", () => {
   const box = (key: string, index: number, x: number) => ({ key, index, title: key, kind: "flow" as DiagramKind, x, y: 0, w: 200, h: 100, problems: 0, clash: false });
   const boxes = [box("A", 0, 500), box("B", 1, 600)];
-  // Board boxes (Plan F Decision 11): A spans 500 to 700 on the board.
+  // Board boxes: A spans 500 to 700 on the board.
   expect(frameAtPoint(boxes, { x: 550, y: 50 }, null)?.key).toBe("A");
   expect(frameAtPoint(boxes, { x: 50, y: 50 }, null)).toBeNull();
   // Overlap: the later in text order, unless the live one is there.
@@ -267,7 +267,7 @@ test("add_and_slash_open_the_shelf_and_add_again_closes_it", async () => {
   expect(await screen.findByRole("dialog", { name: "Add to the board" })).toBeTruthy();
   fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   await waitFor(() => expect(s.panel()).toBeNull());
-  // Over the canvas `/` opens the Space box instead (Task 11).
+  // Over the canvas `/` opens the Space box instead.
   fireEvent.pointerMove(s.canvasEl(), { clientX: 300, clientY: 200 });
   s.press("/");
   expect(await screen.findByRole("dialog", { name: "Add here" })).toBeTruthy();
@@ -437,7 +437,7 @@ test("a_board_template_adds_three_frames_in_one_undo_and_fits_them", async () =>
 });
 
 test("a_template_fitted_below_100_percent_keeps_its_tabs_in_view", async () => {
-  // Final review I1: the tab strip keeps its screen height below 100 percent (Plan F Decision 5), so the fit pads the
+  // Final review I1: the tab strip keeps its screen height below 100 percent, so the fit pads the
   // frames by the tab at the zoom it lands on, not by FRAME_TAB_H board units.
   const s = setup();
   await opened();
@@ -601,7 +601,7 @@ test("a_drop_places_it_where_released", async () => {
   await pickFrame(s, "Login");
   expect(s.originOf("Login")).toEqual({ x: 700, y: 0 });
   await openShelf(s);
-  // A board point: the canvas is the board, whichever frame is live (Plan F Decision 11).
+  // A board point: the canvas is the board, whichever frame is live.
   const flow = { x: -200, y: 900 };
   dropAt(s, carrying({ kind: "diagram", diagram: "er" }), flow);
   const title = DIAGRAM_KIND_WORD.er;
@@ -638,7 +638,7 @@ async function iconDropOnCheckout(s: Setup) {
   await pickFrame(s, "Login");
   await openShelf(s);
   const box = s.boxOf("Checkout");
-  // The canvas is the board (Plan F Decision 11).
+  // The canvas is the board.
   const board = { x: box.x + box.w / 2, y: box.y + box.h - 12 };
   dropAt(s, carrying({ kind: "icon", name: "brand-postgresql" }), board);
   await waitFor(() => expect(s.saved.text).toContain("PostgreSQL [icon: brand-postgresql]"));
@@ -664,7 +664,7 @@ test("an_icon_dropped_on_an_unselected_flowchart_lands_in_that_frame", async () 
 test("an_icon_dropped_on_a_pictured_frame_lands_the_same", async () => {
   const s = setup();
   await opened();
-  // Zoomed out where its text is far, the view change pictures Checkout (Plan F Decision 7).
+  // Zoomed out where its text is far, the view change pictures Checkout.
   await act(async () => {
     await s.inst().setViewport({ x: 0, y: 0, zoom: 0.3 });
   });
@@ -852,7 +852,7 @@ test("ctrl_z_right_after_a_tab_click_undoes_the_last_cross_frame_edit", async ()
   await waitFor(() => expect(s.saved.text).toBe(BOARD));
 });
 
-// ----- From my database and From Mermaid (Tasks 9 and 10)
+// ----- From my database and From Mermaid
 
 test("from_my_database_closes_the_shelf_and_opens_the_dialog", async () => {
   const onFromDatabase = vi.fn();
@@ -1206,7 +1206,7 @@ test("a_database_add_under_a_taken_title_toasts_the_title_it_got", async () => {
   });
   await waitFor(() => expect(s.saved.text).toContain('diagram er "shop 2"'));
   await waitFor(() => expect(s.toast()?.textContent).toContain("Added shop 2: 1 table."));
-  // The source is kept under the title the frame got, and the text names no Connection (Task 4b).
+  // The source is kept under the title the frame got, and the text names no Connection.
   await waitFor(() => expect(s.layoutNow().frames["shop 2"]?.source).toEqual(SHOP_SOURCE));
   expect(s.layoutNow().frames.shop?.source).toBeUndefined();
   expect(s.saved.text).not.toContain("c1");

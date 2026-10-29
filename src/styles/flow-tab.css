@@ -1,5 +1,5 @@
 /*
-  The diagram tab (frames 6+.2 to 6+.5): the .flow text island (420 px) beside the drawing island, the
+  The diagram tab: the .flow text island (420 px) beside the drawing island, the
   floating tool bar with its notched hints, the stale banner, the empty flow's card, group areas and the
   line chips. Tokens only (ADR 0008); durations are the motion tokens, which reduced motion turns into 0.
   Only the floating bar and menus carry a shadow here.
@@ -17,7 +17,7 @@
   flex: none;
   width: 420px;
 }
-/* The side panel (board 11.5): the Editor and Assistant switch, the hide button, and the 44 px rail. */
+/* The side panel: the Editor and Assistant switch, the hide button, and the 44 px rail. */
 .flow-side-head {
   display: flex;
   flex: none;
@@ -267,7 +267,7 @@
   transition: background-color var(--motion-base) var(--ease-enter);
 }
 
-/* Problems (frame 6+.3): what is wrong, the line chip, and the fixes. */
+/* Problems: what is wrong, the line chip, and the fixes. */
 .flow-problems {
   flex: none;
   max-height: 40%;
@@ -520,7 +520,7 @@
   font: var(--font-small);
 }
 
-/* A group: a tinted area behind its nodes, named at the top left (frames 6+.2, 6+.5). */
+/* A group: a tinted area behind its nodes, named at the top left (6+.5). */
 .flow-area {
   width: 100%;
   height: 100%;
@@ -542,7 +542,7 @@
   border-radius: 3px;
   background: var(--c-group-teal);
 }
-/* A group inside a group: a solid edge over the outer one's dashed edge (frame 6+.5). */
+/* A group inside a group: a solid edge over the outer one's dashed edge. */
 .flow-area.is-inner {
   border-style: solid;
 }
@@ -565,7 +565,7 @@
 }
 /* A group selected by its title: an accent ring on its area (Miro and Figma frames). */
 .flow-area.is-selected {
-  /* Drawn outside the border, so the area and its title do not move (fix round 1, M9). */
+  /* Drawn outside the border, so the area and its title do not move. */
   box-shadow: 0 0 0 2px var(--c-accent);
 }
 .flow-area.is-selected .flow-area-name {
@@ -747,7 +747,7 @@
   background: var(--c-accent);
 }
 
-/* A hovered fix, shown in grey where it would go (frame 6+.3). */
+/* A hovered fix, shown in grey where it would go. */
 .flow-editor .cm-flow-ghost {
   color: var(--c-text-faint);
   font-style: italic;
@@ -763,7 +763,7 @@
   font: var(--font-small);
 }
 /* Why the last canvas action did nothing. */
-/* The strip's one live region (Task 11 fix round 1): always there, so an empty one takes back the gap before it. */
+/* The strip's one live region: always there, so an empty one takes back the gap before it. */
 .flow-live {
   display: inline-flex;
   align-items: center;
@@ -843,7 +843,7 @@
   stroke-width: 2;
   animation: flow-fade-in var(--motion-fast) var(--ease-enter);
 }
-/* The live frame's overlay hangs from its place on the board (Plan F Decision 11): no size, no stacking context. */
+/* The live frame's overlay hangs from its place on the board: no size, no stacking context. */
 .flow-overlay-live {
   position: absolute;
   width: 0;
@@ -917,17 +917,17 @@
   outline-offset: 1px;
 }
 
-/* The flow just drawn stays in accent while its label box is open (motion design, frame 6+.3). */
+/* The flow just drawn stays in accent while its label box is open (motion design). */
 .flow-canvas .react-flow__edge.is-new .react-flow__edge-path {
   stroke: var(--c-accent);
   stroke-width: 2;
 }
-/* The node a drawn flow is locked onto lifts, the one thing under the drag with a shadow (frame 6+.3). */
+/* The node a drawn flow is locked onto lifts, the one thing under the drag with a shadow. */
 .flow-canvas .react-flow__node.is-drop-target .fnode {
   box-shadow: var(--shadow-menu);
 }
 
-/* The icon picker (frame 6+.5): a search over every set and the matches in a 4-column grid, the best one
+/* The icon picker: a search over every set and the matches in a 4-column grid, the best one
    highlighted. A menu-level popover, placed on the window, never inside the clipped canvas. */
 .icon-picker {
   position: fixed;
@@ -1081,7 +1081,7 @@
   gap: 8px;
 }
 
-/* The diagram assistant (board 11.5): the thread, the composer with its scope and land mode, the change card,
+/* The diagram assistant: the thread, the composer with its scope and land mode, the change card,
    the remove question, the editor's banners and the canvas marks. */
 .plock {
   display: inline-flex;
@@ -1108,8 +1108,7 @@
   flex-direction: column;
   min-height: 0;
 }
-/* The Assistant's head (the Ask panel's, board 11.1): New chat and the clock of the board's chats at its end (Plan D
-   Decision 16). */
+/* The Assistant's head (the Ask panel's): New chat and the clock of the board's chats at its end. */
 .flow-assist-head {
   display: flex;
   flex: none;
@@ -1149,7 +1148,7 @@
 .flow-chat .flow-side-empty {
   padding: 8px 2px;
 }
-/* The assistant's start screen (Plan D Decision 15): ChatGPT's and FigJam AI's empty chat, a question over starting
+/* The assistant's start screen: ChatGPT's and FigJam AI's empty chat, a question over starting
    points. The cards are the Shelf's (flow-shelf.css), flowing to the pane's width. */
 .ai-start {
   display: flex;
@@ -1385,7 +1384,7 @@
   opacity: 0.45;
   text-decoration: line-through;
 }
-/* Plan D Decision 12: on a board the rows group by frame, each under a header band with its title, its count, Reject
+/* On a board the rows group by frame, each under a header band with its title, its count, Reject
    frame and Accept frame (GitHub's review, a header per file). */
 .cgroup + .cgroup,
 .ccard-head + .cgroup {
@@ -1835,7 +1834,7 @@
   background: var(--c-success-solid);
   animation: none;
 }
-/* While the assistant works, the drawing it edits has a dashed accent outline (board 11.5, aiarea). */
+/* While the assistant works, the drawing it edits has a dashed accent outline (aiarea). */
 .flow-canvas.is-ai-working::after {
   position: absolute;
   inset: 6px;
@@ -1846,7 +1845,7 @@
   pointer-events: none;
 }
 
-/* Board 11.12: Show log takes the side panel's place, and the tool-off note stands alone in the conversation. */
+/* Show log takes the side panel's place, and the tool-off note stands alone in the conversation. */
 .flow-assist > .alog {
   flex: 1;
   border-top: 0;
@@ -1973,7 +1972,7 @@
   background: color-mix(in srgb, var(--c-accent) 8%, var(--c-bg-surface));
   pointer-events: none;
 }
-/* M4: the branch being dragged is drawn faded; the topic it would go under is outlined, its own subtopics refuse it. */
+/* the branch being dragged is drawn faded; the topic it would go under is outlined, its own subtopics refuse it. */
 .react-flow__node.is-drag-source,
 .react-flow__edge.is-drag-source {
   opacity: 0.4;
@@ -2037,7 +2036,7 @@
 .flow-drop-tag.is-refused {
   background: var(--c-danger-solid);
 }
-/* M3: the branch dot, on a topic's outer side; folded, it shows how many subtopics it hides. */
+/* the branch dot, on a topic's outer side; folded, it shows how many subtopics it hides. */
 .flow-fold-dot {
   all: unset;
   position: absolute;
@@ -2113,7 +2112,7 @@
   z-index: 5;
 }
 
-/* Task 13: the code pane on the shown frame's block. A closed pane takes no room: its island is hidden and the tab
+/* The code pane on the shown frame's block. A closed pane takes no room: its island is hidden and the tab
    lays out the drawing alone. The header names the kind; the footer holds Syntax help and the kind's chips. */
 .flow-tab.is-pane-closed {
   gap: 0;
@@ -2164,7 +2163,7 @@
   outline: 2px solid var(--c-focus);
   outline-offset: 1px;
 }
-/* Task 14: Syntax Help, the shown frame's kind as a Description | Example table. A row's Copy shows while the row is
+/* Syntax Help, the shown frame's kind as a Description | Example table. A row's Copy shows while the row is
    hovered or holds focus, so the keyboard reaches it as the pointer does. */
 .syntax-help-body {
   padding-top: 0;
@@ -2203,7 +2202,7 @@
   min-width: 0;
   color: var(--c-text);
   font: var(--font-mono-small);
-  /* Examples show as typed: the mono font turns ligatures on through calt, so `-->` would draw as one arrow (C2). */
+  /* Examples show as typed: the mono font turns ligatures on through calt, so `-->` would draw as one arrow. */
   font-variant-ligatures: none;
   font-feature-settings: "liga" 0, "calt" 0;
 }

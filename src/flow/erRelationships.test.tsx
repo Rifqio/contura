@@ -1,13 +1,13 @@
-// ER build C, in the diagram tab (erd-ux-research 5.4, 5.7, A6): relationships drawn from a column's port onto a
+// ER build C, in the diagram tab (erd-ux-research 5.4, 5.7): relationships drawn from a column's port onto a
 // column or a header, renames and deletes that carry their lines. Every gesture writes exactly its lines, as one undo
 // step.
 //
 // B3 Task 7: restored on a board (FlowTab as B1's frames.test.tsx renders it), every text in block form with the
 // board's arrows (`>` many to one, `-` one to one) and every card queried as `Table <t>` (R17). The column ports, the
 // column drags and the Relationship tool (A) come back in `useErRelate` (decisions 4, 7 and 9; R10, R11, R12). The rest
-// of the old file comes back with the tasks that own it: the relationship's menu, its label field and F2 (Task 8), the
-// end drags onto columns and "Add relationship to..." (Task 9), the table added by a double-click (Task 3, in
-// erEditing.test.tsx) and the line that follows scrolled rows (Task 5, in erScroll.test.tsx). From erFix2.test.tsx: I5,
+// of the old file comes back with the tasks that own it: the relationship's menu, its label field and F2, the
+// end drags onto columns and "Add relationship to...", the table added by a double-click (in
+// erEditing.test.tsx) and the line that follows scrolled rows (in erScroll.test.tsx). From erFix2.test.tsx: I5,
 // I6, live bug (b) and M3.
 import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
@@ -59,7 +59,7 @@ vi.mock("../diagram/DiagramCanvas", async (load) => {
   };
 });
 
-/** Counts the measures the canvas is asked for, so stale port bounds show (I6). */
+/** Counts the measures the canvas is asked for, so stale port bounds show. */
 const measures = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock("@xyflow/react", async (load) => {
   const real = await load<typeof import("@xyflow/react")>();
@@ -179,7 +179,7 @@ function setup(text = ER, layout: string | null = LAYOUT, name = "rel") {
   const press = (key: string, init: KeyboardEventInit = {}) => fireEvent.keyDown(canvasEl(), { key, ...init });
   const field = (label: string) => screen.findByLabelText(label, { selector: "input" }) as Promise<HTMLInputElement>;
   const notice = () => strip().querySelector(".flow-notice")?.textContent ?? "";
-  /** A live node's place on the board: its frame-local position plus the live anchor's (Plan F Decision 11). */
+  /** A live node's place on the board: its frame-local position plus the live anchor's. */
   const at = (table: string) => canvas.instance!.getInternalNode(table)!.internals.positionAbsolute;
   const row = (table: string, column: string) =>
     [...card(table)!.querySelectorAll<HTMLElement>(".fkind-er-row")].find((r) => r.querySelector(".fkind-col")?.textContent === column)!;
@@ -284,7 +284,7 @@ test("fix 1: a drag from a table's own port adds the singular table plus its key
   const s = setup();
   await drawn(s);
   act(() => canvas.props!.onConnectPorts!({ node: "invoices", port: "r" }, { node: "customers", port: "l" }, false, { x: 10, y: 10 }));
-  // invoices already has customer_id: the board links it and adds nothing (fix round 2, I2).
+  // invoices already has customer_id: the board links it and adds nothing.
   await waitFor(() => expect(s.doc()).toBe(LINKED));
   expect(s.notice()).toBe("Linked invoices.customer_id > customers.id. Right-click the line to change it.");
   await oneUndo(s, ER);
@@ -436,7 +436,7 @@ test("live bug (b): a column's tooltip goes on a press of its port and stays awa
   }
 });
 
-// ---- B3 Task 7: the Relationship tool (decision 9, R10, R11, A11)
+// ---- B3 Task 7: the Relationship tool (decision 9, R10, R11)
 
 const SHOP = lines('diagram er "Shop"', "customers {", "  id int pk", "  email text", "}", "orders {", "  id int pk", "  customer_id int", "}", "profiles {", "  id int pk", "  customer_id int", "}");
 const SHOP_AT = JSON.stringify({ version: 1, nodes: { customers: { x: 0, y: 0 }, orders: { x: 400, y: 0 }, profiles: { x: 400, y: 300 } }, style: "modern", direction: "TB" });
@@ -486,7 +486,7 @@ test("shapes_one_to_one_joins_two_columns_with_its_arrow", async () => {
   if (!screen.queryByRole("dialog", { name: "Add to the board" })) await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
   const shelf = await screen.findByRole("dialog", { name: "Add to the board" });
   await userEvent.click(within(within(shelf).getAllByRole("group")[0]).getByRole("option", { name: /^One to one/ }));
-  // A Shapes line arms no tool (A11): two clicks, each a press and a click on the card.
+  // A Shapes line arms no tool: two clicks, each a press and a click on the card.
   expect(s.pressed()).toEqual(["Select"]);
   pressDrag(s, s.row("profiles", "customer_id"), rowPoint(s, "profiles", 1));
   await waitFor(() => expect(s.notice()).toBe("From profiles.customer_id: click the column or table it refers to."));
@@ -496,7 +496,7 @@ test("shapes_one_to_one_joins_two_columns_with_its_arrow", async () => {
 });
 
 test("a_refused_reference_shows_the_workers_note", async () => {
-  // A dotted table name is plain in Plan A, but the column the board would add (sales.customer_id) is no column name:
+  // A dotted table name is plain, but the column the board would add (sales.customer_id) is no column name:
   // the worker refuses the addColumn with its note, and the strip says it, not EDIT_MESSAGES.changed.
   const text = lines('diagram er "Shop"', "sales.customers {", "  id int pk", "}", "orders {", "  id int pk", "}");
   const s = setup(text, JSON.stringify({ version: 1, nodes: { "sales.customers": { x: 0, y: 0 }, orders: { x: 400, y: 0 } }, style: "modern", direction: "TB" }), "shop");
@@ -520,7 +520,7 @@ const FRAMES_AT = (titles: string[], gap = { x: 800, y: 0 }) =>
 /** Selects a frame by its tab (the first of a repeated title) and waits for its table to be live. */
 async function pickFrame(s: Setup, title: string, first = "orders") {
   fireEvent.click((await screen.findAllByRole("button", { name: `ER diagram ${title}` }))[0]);
-  // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+  // Live, not only drawn selected: its box holds no static shape any more.
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId(title))).toBe(false));
   await waitFor(() => expect(s.card(first)).not.toBeNull());
 }
@@ -740,7 +740,7 @@ test("one_hovered_card_mounts_two_ports_per_drawn_row", async () => {
 
 // ---- B3 Task 7 fix round 1: a pick started afresh, and the review's test gaps
 
-/** Picks a line item in the Shelf's Shapes list (B2). */
+/** Picks a line item in the Shelf's Shapes list. */
 async function shapesLine(label: RegExp) {
   if (!screen.queryByRole("dialog", { name: "Add to the board" })) await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
   const shelf = await screen.findByRole("dialog", { name: "Add to the board" });
@@ -748,7 +748,7 @@ async function shapesLine(label: RegExp) {
 }
 
 test("pressing_a_again_starts_the_pick_afresh", async () => {
-  // I1: the first click before A was pressed again is not the first half of the next line.
+  // the first click before A was pressed again is not the first half of the next line.
   const s = setup(SHOP, SHOP_AT, "shop");
   await drawn(s, "orders");
   s.press("a");
@@ -1007,7 +1007,7 @@ test("fix 1b and 2: Add relationship to... links the singular-plus-key column th
   fireEvent.contextMenu(s.card("invoices")!.querySelector(".fkind-head")!, { clientX: 450, clientY: 20 });
   await userEvent.click(within(await screen.findByRole("menu", { name: "invoices actions" })).getByRole("menuitem", { name: "Add relationship to..." }));
   fireEvent.pointerDown(s.card("customers")!.querySelector(".fkind-head")!);
-  // The column is already there: the board links it and adds nothing (fix round 2, I2).
+  // The column is already there: the board links it and adds nothing.
   await waitFor(() => expect(s.doc()).toBe(LINKED));
   expect(s.notice()).toBe("Linked invoices.customer_id > customers.id. Right-click the line to change it.");
   await oneUndo(s, ER);
@@ -1050,7 +1050,7 @@ test("a_frame_switch_ends_every_er_mode_and_keeps_nothing", async () => {
   /** Switched to Archive: nothing of Shop's ER state is left, in the stores, the window or the strip. */
   const leftNothing = async () => {
     await waitFor(() => expect(isCurrent("Archive")).toBe(true));
-    // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+    // Live, not only drawn selected: its box holds no static shape any more.
     await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId("Archive"))).toBe(false));
     await waitFor(() => expect(s.card("orders")).not.toBeNull());
     expect(rel.opts!.store.size()).toBe(0);
@@ -1163,7 +1163,7 @@ test("a_relationship_label_the_worker_refuses_while_a_switch_waits_says_why", as
 });
 
 test("the_aim_scrolls_its_row_into_view", async () => {
-  // Decision 7: the row the pick aims is scrolled into view at once, as a selected one is.
+  // The row the pick aims is scrolled into view at once, as a selected one is.
   const many = Array.from({ length: 30 }, (_, i) => `  n${i} int`);
   const text = lines('diagram er "Shop"', "customers {", "  id int pk", "}", "orders {", "  id int pk", ...many, "}");
   const s = setup(text, JSON.stringify({ version: 1, nodes: { customers: { x: 0, y: 0 }, orders: { x: 300, y: 0 } }, style: "modern", direction: "TB" }), "shop");
@@ -1223,7 +1223,7 @@ test("a_tab_drag_waits_for_a_field_the_worker_refuses_and_moves_nothing", async 
   expect(where()).toEqual(before);
   expect(isCurrent("Shop")).toBe(true);
   await waitFor(() => expect(s.card("orders")).not.toBeNull());
-  // Live again, the field opens with what was typed, not the column's old type (Task 3's rule, fix round 2).
+  // Live again, the field opens with what was typed, not the column's old type (Task 3's rule).
   await waitFor(() => expect((screen.getByLabelText("Column type", { selector: "input" }) as HTMLInputElement).value).toBe("int("));
   expect(s.frame(0)).toBe(shop);
   expect(s.frame(1)).toBe(archive);
@@ -1232,7 +1232,7 @@ test("a_tab_drag_waits_for_a_field_the_worker_refuses_and_moves_nothing", async 
 // ---- Final whole-branch review
 
 test("a_relationship_label_the_worker_drops_without_a_note_keeps_its_text_and_the_frame", async () => {
-  // I1: the worker gone (a crash, a restart) answers no note: the field stays with what was typed, says the text
+  // the worker gone (a crash, a restart) answers no note: the field stays with what was typed, says the text
   // changed, and the switch waiting for it holds, as a card field does.
   const shop = `${FRAME("Shop")}\norders.customer_id > customers.id\n`;
   const archive = FRAME("Archive");
@@ -1306,7 +1306,7 @@ test("a_pick_ended_or_unmounted_before_its_frame_cancels_the_focus", () => {
   expect(cancel).toHaveBeenCalledWith(second);
 });
 
-// ---- Plan F Task 11: board leftovers
+// ---- Board leftovers
 
 test.each([
   ["s", 0.88],

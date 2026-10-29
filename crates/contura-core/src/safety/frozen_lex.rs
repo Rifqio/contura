@@ -1,5 +1,5 @@
 //! The 5a lexer and classifier as they were before the byte lexer (10c682b), frozen for
-//! the differential test only (Q40). Do not change it.
+//! the differential test only. Do not change it.
 
 use super::StatementClass;
 use crate::model::DialectKind;

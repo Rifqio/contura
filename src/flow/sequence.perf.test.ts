@@ -1,6 +1,6 @@
-// Plan E Task 9 (Decision 16): the sequence restyle at the sequence limit (fixtures/bigSequence.ts: 2,000
+// The sequence restyle at the sequence limit (fixtures/bigSequence.ts: 2,000
 // participants with icons and colours, 3,000 messages, 200 blocks 3 deep, 300 activations, numbering with a restart).
-// Its layout, its canvas graph, its Publish, its heap under relayout and the measure cache; and, Plan F's way, the far
+// Its layout, its canvas graph, its Publish, its heap under relayout and the measure cache; and, as a board draws it, the far
 // picture of it (pieces of PICTURE_PIECE_CHARS, slices of PICTURE_SLICE_MS, the bitmap's bytes) and the limit board it
 // sits on (40 flowchart frames and the sequence, 10,000 shapes). Run alone through `npm run test:perf` (it needs
 // --expose-gc). Every budget is provisional until Task 10 measures the release build, and is never raised.
@@ -121,7 +121,7 @@ test("layout_at_the_limit_under_40ms", () => {
 
 test("graph_at_the_limit_under_80ms", () => {
   const g = graphOf(DOC);
-  // Plan F's budget counts shapes (nodes) and parts (nodes and lines): one lanes node for every lifeline and bar, one
+  // The board's budget counts shapes (nodes) and parts (nodes and lines): one lanes node for every lifeline and bar, one
   // box and one caption a block, one node a participant; one line a message.
   expect(g.nodes.filter((n) => n.id === "\u0000lanes")).toHaveLength(1);
   expect(g.nodes).toHaveLength(SEQ_PARTICIPANTS + SEQ_BLOCKS + SEQ_BLOCKS + 1);
@@ -179,7 +179,7 @@ test("the_measure_cache_stays_bounded", () => {
   expect(labelCacheSize("message")).toBeLessThanOrEqual(4000);
 });
 
-// ----- Plan F's far picture of the sequence (rebase checkpoint 3.4).
+// ----- The far picture of the sequence.
 
 /** The sequence's picture input: what the board's picture store draws it from, at its drawn box. */
 function pictureInput(softText: boolean): PictureInput {
@@ -212,7 +212,7 @@ test("the_sequence_picture_is_few_pieces_in_short_steps", () => {
   timedSteps(pictureSvgSteps(pictureInput(true), PALETTE, ICONS));
   for (const softText of [true, false]) {
     const a = pictureInput(softText);
-    // The best of three builds' longest step (ruling P8: noise, a collection most of all, only ever adds time).
+    // The best of three builds' longest step (noise, a collection most of all, only ever adds time).
     const runs = [0, 1, 2].map(() => timedSteps(pictureSvgSteps(a, PALETTE, ICONS)));
     const svg = runs.reduce((best, r) => (r.worst < best.worst ? r : best));
     const pieces = timedSteps(svgPieceSteps(svg.value));
@@ -316,6 +316,6 @@ test("the_sequence_limit_board_builds_in_slices_one_picture_at_a_time", async ()
   expect(counting.seen.most).toBe(1);
   // The flowchart frames are one document each; the sequence alone may be cut, into at most PIECES.soft.
   expect(counting.seen.documents).toBeLessThanOrEqual(SEQ_FLOW_FRAMES + PIECES.soft);
-  // Plan F's node gate for the limit board (13 MB; 11.68 MB measured here).
+  // The node gate for the limit board (13 MB; 11.68 MB measured here).
   expect(store.bytes()).toBeLessThan(13 * MB);
 }, 60_000);

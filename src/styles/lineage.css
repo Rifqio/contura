@@ -1,4 +1,4 @@
-/* The lineage tab (spec 6+ section 5, frame 6+.1). Tokens only; the cards are the step 6 table card at 214 px. */
+/* The lineage tab. Tokens only; the cards are the step 6 table card at 214 px. */
 .lineage-tab {
   display: flex;
   flex-direction: column;

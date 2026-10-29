@@ -761,7 +761,7 @@ mod sqlite {
         .await;
     }
 
-    /// Q7: the file is in WAL mode, so the insert goes through while the read is open,
+    /// The file is in WAL mode, so the insert goes through while the read is open,
     /// and the read still sees its own snapshot.
     #[tokio::test]
     async fn snapshot_excludes_rows_inserted_meanwhile() {

@@ -81,7 +81,7 @@ const MISSING_ALSO: &str = "The other Connection";
 
 const UNREADABLE_NOTE: &str = "The AI Context could not be read, so no tables are sent.";
 
-/// Step 11f: the Sample rows Sends row with nothing to read.
+/// The Sample rows Sends row with nothing to read.
 const ROWS_LABEL: &str = "Sample rows";
 const NO_NAMED_LABEL: &str = "Sample rows · no named table";
 const NO_NAMED_NOTE: &str =
@@ -124,7 +124,7 @@ pub trait CatalogReader: Send + Sync {
     async fn saved_queries(&self) -> Result<Vec<SavedQuery>> {
         Ok(Vec::new())
     }
-    /// Step 11f: up to `limit` live rows of one base table, read only. Never opens a
+    /// Up to `limit` live rows of one base table, read only. Never opens a
     /// closed Connection.
     async fn sample_rows(&self, id: ConnectionId, path: &ObjectPath, limit: u32) -> Result<Page> {
         let _ = (id, path, limit);
@@ -364,7 +364,7 @@ pub struct Preview {
     /// The summary step the Ask would make (a Topic summary or a compaction), never made
     /// by a preview; `None` when the Ask would make no summary call.
     pub summary: Option<SummaryPreview>,
-    /// The chat title call that would follow the Ask's answer (Decision 5), never made by a
+    /// The chat title call that would follow the Ask's answer, never made by a
     /// preview; `None` when no title call would follow.
     pub title: Option<crate::ai::title::TitlePreview>,
     /// The sample rows the Ask would send; `None` until they are read.
@@ -2275,7 +2275,7 @@ pub fn stamp_continued(req: &AskRequest, recall: &Recall, stamp: &mut TurnStamp)
     if req.action != "continue" {
         return;
     }
-    // The extended answer carries what the continued turn carried (I1), whether or not
+    // The extended answer carries what the continued turn carried, whether or not
     // its history row made it through the cut.
     if let Some(t) = recall.source.as_ref() {
         let mut shown = t.messages.iter().filter(|m| m.role != AiRole::Notice);
@@ -2674,7 +2674,7 @@ pub(crate) fn assemble_with(
         .filter(|k| *k != ItemKind::History)
         .collect();
     // The answer may lean on the history that went: the turn carries what that history
-    // carried, so lowering access holds it with the turns it was built on (I1).
+    // carried, so lowering access holds it with the turns it was built on.
     if history_on && (!turns.is_empty() || summaries > 0) {
         for k in &history.kinds {
             if *k != ItemKind::History && !kinds.contains(k) {
@@ -2683,7 +2683,7 @@ pub(crate) fn assemble_with(
         }
     }
     // The highest level the This tab and Recent steps parts used, so the gate holds their
-    // replay to it (spec 6.1): names at Schema only, titles and counts at query text.
+    // replay to it: names at Schema only, titles and counts at query text.
     for (level, kind) in [(1, ItemKind::Names), (2, ItemKind::Sql)] {
         if used >= level && !kinds.contains(&kind) {
             kinds.push(kind);
@@ -2698,7 +2698,7 @@ pub(crate) fn assemble_with(
         database: req.database.clone(),
         action: req.action.clone(),
         // A turn that sent nothing about the database keeps no table names: a Topic summary
-        // made by rules from it would otherwise carry names that never went (C2).
+        // made by rules from it would otherwise carry names that never went.
         tables: if kinds.iter().any(|k| needs_access(*k)) {
             g.tables.clone()
         } else {

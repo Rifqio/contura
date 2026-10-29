@@ -1,6 +1,6 @@
-// B3 Task 5 (milestone 2): relationship lines follow a card's rows while the card scrolls. One scroll store per tab
+// B3 Task 5: relationship lines follow a card's rows while the card scrolls. One scroll store per tab
 // (`erScroll`) holds how far each live card's rows are scrolled; the card's row window and the lines to its rows read
-// it, a frame switch empties it, a tab drag of the live frame keeps it (R26), and static frames read none of it (R28, D7).
+// it, a frame switch empties it, a tab drag of the live frame keeps it (R26), and static frames read none of it (R28).
 //
 // Restored from 5478210^ (erRelationships.test.tsx "fix 1", erFix2.test.tsx "M8"), in block form with `Table <t>`
 // labels (R17). Their `invoices` table has 25 columns, not 3: a card past 20 rows is the only one whose rows scroll, and
@@ -175,7 +175,7 @@ const TWO_AT = JSON.stringify({
 async function pickFrame(s: ReturnType<typeof setup>, title: string, first = "customers") {
   // A repeated title has a tab of its own: the first is the frame's.
   fireEvent.click((await screen.findAllByRole("button", { name: `ER diagram ${title}` }))[0]);
-  // Live, not only drawn selected (Plan F Decision 12): its box holds no static shape any more.
+  // Live, not only drawn selected: its box holds no static shape any more.
   await waitFor(() => expect(canvas.props!.nodes.some((n) => n.parentId === boardFrameId(title))).toBe(false));
   await waitFor(() => expect(s.card(first)).not.toBeNull());
 }
@@ -186,7 +186,7 @@ test("static_frames_subscribe_to_no_scroll", async () => {
   const s = setup([SHOP, SALES, SHOP].join("\n"), TWO_AT, "three");
   await waitFor(() => expect(canvas.instance).not.toBeNull());
   await pickFrame(s, "Shop");
-  // Fitted, the static frames are pictures with no card DOM (Plan F Decision 7): zoomed in, every card is drawn.
+  // Fitted, the static frames are pictures with no card DOM: zoomed in, every card is drawn.
   await act(async () => void (await canvas.instance!.setViewport({ x: 0, y: 0, zoom: 0.5 })));
   await waitFor(() => expect(s.cardOf(inFrameId("Sales", "customers"), "customers")).not.toBeNull());
   await waitFor(() => expect(s.cardOf(clashInFrameId(2, "customers"), "customers")).not.toBeNull());
@@ -320,7 +320,7 @@ test("move_and_prune_leave_no_old_entry", async () => {
 });
 
 test("a_pinch_over_a_scrolling_card_zooms_the_board_and_leaves_its_rows", async () => {
-  // Plan F Task 8, Review Focus 2: Ctrl+wheel on the real 25-row card zooms the canvas around the pointer; the card's
+  // Ctrl+wheel on the real 25-row card zooms the canvas around the pointer; the card's
   // own scroll (native, no JS wheel handler) is cancelled by preventDefault, so its store entry stays.
   const s = setup(LINKED, LINKED_AT);
   await waitFor(() => expect(s.card("invoices")).not.toBeNull(), { timeout: 4000 });

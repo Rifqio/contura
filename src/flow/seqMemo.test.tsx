@@ -1,4 +1,4 @@
-// Plan E Task 9 (Task 5's parked minors): with 2,000 participants every remount and every render during a swap pays
+// With 2,000 participants every remount and every render during a swap pays
 // each participant's own work, so a participant renders again only when its data changes, and works out its icon's
 // hairline (its fill in its colour, the logo's contrast on it) only when its icon, colour, kind or theme changes.
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";

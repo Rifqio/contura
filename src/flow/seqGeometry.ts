@@ -1,7 +1,7 @@
-// Plan E: the one sequence drawing (Decision 15). `sequenceLayout` (kindLayout.ts) works out every coordinate once,
+// The one sequence drawing. `sequenceLayout` (kindLayout.ts) works out every coordinate once,
 // for the frame's text size, into a SeqDrawing: the lanes, activation bars, messages with their paths, label chips
 // and number circles, and the blocks with their side tabs and captions. The canvas and Publish both draw from it.
-// Everything here is in the sequence's own coordinates and holds numbers and short strings only (Decision 16).
+// Everything here is in the sequence's own coordinates and holds numbers and short strings only.
 import type { KindBox } from "./kindLayout";
 import type { DrawnColour } from "./palette";
 import type { SeqWho } from "./seqColour";
@@ -12,7 +12,7 @@ export const SEQ_SELF_ROW = 62;
 export const ROW_LINE = 22;
 /** A labelled line stops this far short of its label on each side. */
 export const LABEL_PAD = 7;
-/** The shortest visible run of a labelled line on each side of its label (Decision 8). */
+/** The shortest visible run of a labelled line on each side of its label. */
 export const SEG_MIN = 16;
 /** An activation bar's width. */
 export const ACT_W = 12;
@@ -102,7 +102,7 @@ export function messagePath(m: SeqMessage, dx: number, dy: number): string {
   }).trimEnd();
 }
 
-/** A number circle's width: 20, or a pill past two digits (Decision 10), times the text size. */
+/** A number circle's width: 20, or a pill past two digits, times the text size. */
 export function numberWidth(n: number, scale: number): number {
   return Math.max(20, String(n).length * 6.5 + 7) * scale;
 }
@@ -113,7 +113,7 @@ export function labelChip(x: number, y: number, w: number): KindBox {
 }
 
 /**
- * A Fenwick tree over the gaps left of each participant box (Decision 8): `add(i, by)` grows gap `i`, `sum(i)` is
+ * A Fenwick tree over the gaps left of each participant box: `add(i, by)` grows gap `i`, `sum(i)` is
  * gaps 0 to `i`, both O(log n), so the spacing pass stays O((m + n) log n).
  */
 export class GapTree {

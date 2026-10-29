@@ -8,3 +8,12 @@ data/
 # Claude Code: per-machine worktrees and settings
 .claude/worktrees/
 .claude/settings.local.json
+
+# Private notes, kept on the owner's machines and never committed
+docs/superpowers/
+docs/research/
+docs/history/
+CLAUDE.local.md
+AGENTS.local.md
+.superpowers/
+brag-output/

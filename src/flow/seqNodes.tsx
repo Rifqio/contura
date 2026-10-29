@@ -1,6 +1,6 @@
-// Plan E: a sequence on the canvas (A3). A participant's head and foot boxes, filled in its colour with its icon and
-// its words (Decisions 4 to 6), and one node under the messages with every lifeline and activation bar (Decision 15).
-// Messages with their label chips and number circles, and blocks with their side tabs and captions (Task 6), draw
+// A sequence on the canvas. A participant's head and foot boxes, filled in its colour with its icon and
+// its words, and one node under the messages with every lifeline and activation bar.
+// Messages with their label chips and number circles, and blocks with their side tabs and captions, draw
 // from the same drawing. Colours come from seqColour.ts's variables, read by flow-seq.css, on the element that sets them.
 import { BaseEdge, type EdgeProps, type NodeProps, useInternalNode } from "@xyflow/react";
 import { type CSSProperties, memo, type ReactNode, useMemo } from "react";
@@ -47,8 +47,7 @@ const SAFE_SRC = /^(?:data:image\/|blob:)/;
 /**
  * A participant or actor: the head box and, at the bottom of the same node, the foot box (hidden from the
  * accessibility tree, which reads the head). Both show the icon, at full detail only, then the words. It renders again
- * only for new data, and works out its icon's hairline only when its icon, colour, kind or theme changes (Plan E Task
- * 9: 2,000 of them at the sequence limit).
+ * only for new data, and works out its icon's hairline only when its icon, colour, kind or theme changes (2,000 of them at the sequence limit).
  */
 export const SeqParticipant = memo(function SeqParticipant({ d }: { d: KindNodeData }) {
   const { detail } = useDetail();
@@ -103,7 +102,7 @@ export interface SeqLanesData {
 
 /**
  * Every lifeline and activation bar of a sequence in one svg, under the messages; it takes no presses. Its lanes and
- * bars are made once a drawing (Plan E Task 9: 2,000 lanes at the sequence limit), each with its colour's shared
+ * bars are made once a drawing (2,000 lanes at the sequence limit), each with its colour's shared
  * variables, so a render for anything else (a move, a selection, a measure) makes none of them again.
  */
 export const SeqLanes = memo(function SeqLanes({ data }: NodeProps) {
@@ -128,7 +127,7 @@ export const SeqLanes = memo(function SeqLanes({ data }: NodeProps) {
   );
 });
 
-/** A review mark on a message (Plan D): the line, its chip and its number circle take it. */
+/** A review mark on a message: the line, its chip and its number circle take it. */
 export type SeqMark = "add" | "del" | "changed";
 
 /**
@@ -147,7 +146,7 @@ export type SeqEdgeData = {
 };
 
 /**
- * A sequence message as the drawing has it (Decisions 7, 9 to 11): its path with the gap at its label, moved to where
+ * A sequence message as the drawing has it: its path with the gap at its label, moved to where
  * the sender stands on the canvas (a live frame's anchor or a static frame's box), the number circle on the sender's
  * lifeline, and the label on its chip in the line labels' layer. A removed message under review shows no number.
  */
@@ -189,7 +188,7 @@ export const SeqEdge = memo(function SeqEdge(p: EdgeProps) {
   );
 });
 
-/** Each block kind's glyph on its side tab (Decision 13). */
+/** Each block kind's glyph on its side tab. */
 const BLOCK_GLYPH: Record<string, IconName> = { loop: "repeat", alt: "split", opt: "branch", par: "columns", critical: "warning" };
 
 /**

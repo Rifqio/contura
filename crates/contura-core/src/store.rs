@@ -25,7 +25,7 @@ pub const HISTORY_LIMIT: i64 = 1000;
 
 /// Puts the stored title, its source, its tries and each answer's title call record (its
 /// `sent.title` and its `title` log lines) on `t` when the thread is stored: a whole-thread
-/// write never changes them (P3). Only the few answers that hold a title call are read.
+/// write never changes them. Only the few answers that hold a title call are read.
 fn keep_stored_title(conn: &Connection, id: &str, t: &mut AiThread) -> Result<()> {
     let stored: Option<(String, String, Option<i64>)> = conn
         .query_row(
@@ -517,7 +517,7 @@ impl AppStore {
     /// newest `MESSAGE_LIMIT` messages), so a caller can answer without reading it again.
     ///
     /// A whole-thread write never changes a stored thread's title, its source, its tries or
-    /// the title call's record (P3): only `set_thread_title`, `title_failed` and
+    /// the title call's record: only `set_thread_title`, `title_failed` and
     /// `record_title_call` do. The stored ones are read in the same immediate transaction
     /// as the write, so a rename or an AI title committed after the caller read the thread
     /// is never written back over.
@@ -1648,7 +1648,7 @@ mod tests {
         s.save_ai_thread(&b).unwrap();
         assert_eq!(s.list_ai_threads("ungrouped").unwrap(), vec![a.clone()]);
         assert_eq!(s.list_ai_threads("group:g1").unwrap(), vec![b.clone()]);
-        // A save changes the thread but never its title (P3): only a rename does.
+        // A save changes the thread but never its title: only a rename does.
         let mut a2 = a.clone();
         a2.title = "renamed".into();
         a2.updated_at += 1;
@@ -2793,7 +2793,7 @@ mod tests {
             ("first title".into(), "rule".into(), None, 1)
         );
         // A turn with SQL: the work names the place, never the SQL. A save never changes
-        // the title (P3): only a rename or the AI's title call does.
+        // the title: only a rename or the AI's title call does.
         t.title = "second".into();
         t.messages.extend(turn(1, 10, "how many orders?"));
         t.messages

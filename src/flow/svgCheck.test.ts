@@ -3,7 +3,7 @@ import fixtures from "../../crates/contura-core/tests/fixtures/svg-check.json";
 import { unsafeReason } from "../../scripts/svg-check.mjs";
 
 // The pack script's SVG check against the list the Core's `unsafe_reason` is tested with
-// (crates/contura-core/tests/icons.rs), so both give the same answer (Ruling P9).
+// (crates/contura-core/tests/icons.rs), so both give the same answer.
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 

@@ -223,7 +223,7 @@ async function opened(s: Setup, titles = ["Checkout", "Refund", "Shipping"]) {
 /** Selects a frame by its tab and waits for the pane to show it. */
 async function pick(s: Setup, title: string) {
   fireEvent.click(await s.tab(title));
-  // The frame goes live one paint after it is drawn selected (Plan F Decision 12).
+  // The frame goes live one paint after it is drawn selected.
   await act(async () => {
     await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
   });
@@ -234,7 +234,7 @@ async function pick(s: Setup, title: string) {
 const hideButton = (s: Setup) => within(s.pane()).getByRole("button", { name: "Hide the side panel", hidden: true });
 
 test("a_new_board_opens_with_the_pane_open", async () => {
-  // The Core remembers an old hidden panel; a tab opened for the first time opens with its pane open (owner answer 6).
+  // The Core remembers an old hidden panel; a tab opened for the first time opens with its pane open.
   const s = setup({ prefs: { ...DEFAULT_UI_PREFS, flowSidePanel: { hidden: true, tab: "editor" } } });
   await opened(s);
   expect(s.pane().hidden).toBe(false);
@@ -270,7 +270,7 @@ test("ask_works_on_the_selected_frame", async () => {
   const s = setup();
   await opened(s);
   await pick(s, "Shipping");
-  // The board Ask reads the whole board in one worker call (Plan D Task 10), with the selected frame as its focus.
+  // The board Ask reads the whole board in one worker call, with the selected frame as its focus.
   const outline = vi.spyOn(s.client, "boardOutline");
   replies = [answer([{ index: 0, op: { add_node: { name: "Label", kind: "step" } }, status: ok, dependsOn: [], frame: "Shipping" }])];
   fireEvent.click(within(s.tabEl()).getByRole("button", { name: "Ask" }));
@@ -530,7 +530,7 @@ test("a_frame_switch_waits_while_the_assistant_holds_the_text", async () => {
   fireEvent.change(box, { target: { value: "Add a step" } });
   fireEvent.keyDown(box, { key: "Enter" });
   await screen.findByRole("region", { name: "Changes to review" });
-  // The proposal's glide (Plan D Task 12) fits the frame it changes; zoom out around the live frame so every frame's tab is drawn again.
+  // The proposal's glide fits the frame it changes; zoom out around the live frame so every frame's tab is drawn again.
   await act(async () => {
     await canvas.instance!.setViewport({ x: 400, y: 100, zoom: 0.25 });
   });
@@ -566,7 +566,7 @@ test("a_header_typed_in_the_pane_switches_at_once", async () => {
     const at = s.text().indexOf("Refund it\n") + "Refund it".length;
     s.type(at, '\ndiagram flow "Returns"');
     await waitFor(() => expect(renders.some((r) => r.selected.includes(boardFrameId("Returns")))).toBe(true));
-    // Typing in the pane is no canvas pick (Plan F Decision 12): the frame typed into is selected at once, never drawn
+    // Typing in the pane is no canvas pick: the frame typed into is selected at once, never drawn
     // selected while Refund is still live.
     expect(renders.filter((r) => r.selected.includes(boardFrameId("Returns")) && r.refundLive)).toEqual([]);
   } finally {
@@ -634,7 +634,7 @@ test("a_switch_during_the_pick_step_is_refused", async () => {
   await waitFor(() => expect(document.querySelectorAll(".pickrow").length).toBe(2));
   // The text is free to type in during the pick, but the run is Shipping's: a switch is refused with the note.
   expect(s.view().state.readOnly).toBe(false);
-  // The proposal's glide (Plan D Task 12) fits the frame it changes; zoom out around the live frame so every frame's tab is drawn again.
+  // The proposal's glide fits the frame it changes; zoom out around the live frame so every frame's tab is drawn again.
   await act(async () => {
     await canvas.instance!.setViewport({ x: 400, y: 100, zoom: 0.25 });
   });

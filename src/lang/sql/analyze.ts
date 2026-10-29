@@ -1379,7 +1379,7 @@ function analyzeStmt(T: Tk[], A: SqlAnalysis, hi: number): StmtScope {
     if (u === "SELECT" && nu === "FROM" && nx) prob({ from: nx.s, to: nx.e, severity: "error", kind: "syntax", message: "Expected a column list after SELECT.", fixes: [] });
     if (["WHERE", "ON", "AND", "OR"].includes(u ?? "") && t.kw && (!nx || CLAUSE.has(nu ?? "")))
       prob({ from: t.s, to: t.e, severity: "error", kind: "syntax", message: `Expected a condition after ${u}.`, fixes: [] });
-    // P15: a comparison with nothing on its right.
+    // a comparison with nothing on its right.
     // Not `ORDER BY x USING >` or `OPERATOR(pg_catalog.=)`.
     const opName = U(T[i - 1]) === "USING" || T[i - 1]?.v === ".";
     if (!opName && t.t === "p" && COMPARISON.test(t.v) && !(T[i - 1]?.t === "p" && COMPARISON.test(T[i - 1].v) && T[i - 1].e === t.s)) {

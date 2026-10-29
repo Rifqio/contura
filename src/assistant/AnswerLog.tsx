@@ -33,7 +33,7 @@ interface Props {
   /** Called by the back button; omitted when the log sits in a dialog that has its own Close, and no back button shows. */
   onBack?(): void;
   /**
-   * A diagram Ask (board 11.12): opens on Steps, with the Diagram and Tool check rows and no database; the Diagram tab
+   * A diagram Ask: opens on Steps, with the Diagram and Tool check rows and no database; the Diagram tab
    * draws the one tool. No hover text, as in the diagram tab's side panel.
    */
   variant?: "diagram";

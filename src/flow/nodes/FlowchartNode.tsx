@@ -1,4 +1,4 @@
-// A flowchart node (frame 6+.4): start and end are neutral pills, step and subprocess are the step family,
+// A flowchart node: start and end are neutral pills, step and subprocess are the step family,
 // io is a slanted step with a link icon when it names a table, and the decision is the one amber diamond.
 // Flowcharts have no textbook variant, so both looks draw the same shapes.
 import Icon from "../../components/Icon";

@@ -1,6 +1,6 @@
-// Each diagram kind's add tools (frames 6+.2, 6+.4, 6+.5): what the add menus, the Shape picker and the board's kind
-// tools add. The floating bar that drew them is gone: BoardToolbar draws the tools (Task 7) and the frame bar the
-// settings (Task 9).
+// Each diagram kind's add tools (6+.5): what the add menus, the Shape picker and the board's kind
+// tools add. The floating bar that drew them is gone: BoardToolbar draws the tools and the frame bar the
+// settings.
 import type { IconName } from "../components/Icon";
 import type { DiagramKind, FlowNodeKind } from "../lang/flow/model";
 // Never import board/kindTools here: it builds KIND_TOOLS at load from ADD_TOOLS below, across this cycle with ShapePicker.

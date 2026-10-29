@@ -31,10 +31,10 @@ fn value_rules() {
         format: Format::Json,
         ..xlsx
     };
-    // D9: a missing key is NULL whatever "An empty cell means" says.
+    // a missing key is NULL whatever "An empty cell means" says.
     assert_eq!(json.value(None), Value::Null);
-    // Q31 is for CSV and Excel only. CSV applies it in its reader, where quoting is
-    // known (Q42 I2), so the value rule keeps it for Excel alone.
+    // The text-NULL option is for CSV and Excel only. CSV applies it in its reader, where quoting is
+    // known, so the value rule keeps it for Excel alone.
     let mut req = ImportRequest {
         format: Format::Json,
         options: crate::jobs::types::ImportOptions {
@@ -73,7 +73,7 @@ fn column(name: &str, type_sql: &str) -> TargetColumn {
     }
 }
 
-/// Q42 minor: the pass binds the format and refuses a plan that cannot be written.
+/// The pass binds the format and refuses a plan that cannot be written.
 #[test]
 fn fingerprint_binds_the_format() {
     let kind = DialectKind::Postgres;
@@ -98,7 +98,7 @@ fn fingerprint_binds_the_format() {
     assert_ne!(csv, json);
 }
 
-/// Q42 minors: Commit every N below 500 cuts statements at N; a table that does not
+/// Commit every N below 500 cuts statements at N; a table that does not
 /// roll back, or whose engine could not be read, takes one row a statement.
 #[test]
 fn insert_limits_by_storage_and_commit() {
@@ -112,7 +112,7 @@ fn insert_limits_by_storage_and_commit() {
     );
     assert_eq!(insert_limits(Some(false), once, usize::MAX).rows, 1);
     assert_eq!(insert_limits(None, once, usize::MAX).rows, 1);
-    // Q10: the server's limit cuts the sample as it cuts the run.
+    // the server's limit cuts the sample as it cuts the run.
     assert_eq!(insert_limits(Some(true), once, 4_000).bytes, 4_000);
     assert_eq!(
         insert_limits(Some(true), once, usize::MAX).bytes,
@@ -120,7 +120,7 @@ fn insert_limits_by_storage_and_commit() {
     );
 }
 
-/// Q42 I1: "Nothing was imported." only when nothing stayed (Q27).
+/// "Nothing was imported." only when nothing stayed.
 #[test]
 fn too_many_says_what_stayed() {
     assert_eq!(
@@ -137,7 +137,7 @@ fn too_many_says_what_stayed() {
     );
 }
 
-/// Q45 I1: a file that changed after rows were kept says what stayed; with nothing kept
+/// A file that changed after rows were kept says what stayed; with nothing kept
 /// it stays FileChanged ("Nothing was imported.").
 #[test]
 fn file_changed_says_what_stayed() {
@@ -171,7 +171,7 @@ fn file_changed_says_what_stayed() {
     assert!(kept_end(Ok(()), 5, "menu.csv", "t").is_ok());
 }
 
-/// Q42 minor: `setval` never goes below the sequence's MINVALUE, and an empty table
+/// `setval` never goes below the sequence's MINVALUE, and an empty table
 /// leaves the next value at MINVALUE.
 #[test]
 fn setval_keeps_minvalue() {
@@ -192,7 +192,7 @@ fn setval_keeps_minvalue() {
     );
 }
 
-/// Q42 minor: a binary cell that is not valid `0x` hex goes in as text, with a warning.
+/// A binary cell that is not valid `0x` hex goes in as text, with a warning.
 #[test]
 fn binary_cells_that_are_not_hex() {
     assert_eq!(binary_warning(7, "bin", "0x0a"), None);
@@ -247,7 +247,7 @@ impl BulkWriter for Commits {
     async fn close(self: Box<Self>) {}
 }
 
-/// Q36, Q27: a batch whose COMMIT succeeded counts, even when `after` then failed;
+/// A batch whose COMMIT succeeded counts, even when `after` then failed;
 /// a failed COMMIT counts nothing.
 #[tokio::test]
 async fn after_commit_counts_the_batch() {

@@ -1,8 +1,8 @@
-//! The diagram Ask (step 11h): what the webview sends from a diagram tab, the preview of
+//! The diagram Ask: what the webview sends from a diagram tab, the preview of
 //! what it would send, and the Ask itself. A diagram is not database data, so no AI access
 //! level applies to the text and no Connection is read; but a frame From my database drew
 //! holds a Connection's names, so the Ask is refused whole while that Connection is held,
-//! and so is a node whose `table:` link resolves to one (Task 4b). Its .flow text still goes
+//! and so is a node whose `table:` link resolves to one. Its .flow text still goes
 //! through the input rail (R2.1, R2.2) and is framed (R3.1) like any outgoing text. The Ask carries one
 //! tool, checks the model's one call against the outline, and shows the proposal only if
 //! the file on disk did not change while the model worked.
@@ -86,7 +86,7 @@ pub struct DiagramAskRequest {
     /// The board the Ask was made on; each change is checked in the frame it names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board: Option<BoardInput>,
-    /// The frames From my database drew, from the layout file (Task 4b); none is not gated.
+    /// The frames From my database drew, from the layout file; none is not gated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<FrameSourceIn>,
     /// The nodes with a `table:` the webview read, at most `MAX_TABLE_LINKS`. The Core also
@@ -361,7 +361,7 @@ pub fn saved_tables(store: &dyn ContextStore) -> Result<Vec<(ContextKey, Vec<Str
 
 /// What runs before anything of a diagram Ask is read or built, in this order: the file
 /// name, the tool switch, then the Connections its frames were drawn from and its `table:`
-/// links resolve to (Task 4b), refused `DiagramHeld` with the first held one's sentence.
+/// links resolve to, refused `DiagramHeld` with the first held one's sentence.
 /// Gives the Connections the Ask draws on, each once, frames first: its Sent record names
 /// them so a later Ask can hold its turn back (`board_history_gated`).
 pub fn diagram_gate(
@@ -452,7 +452,7 @@ fn one_line(text: &str) -> String {
         .join(" ")
 }
 
-/// The question as the turn sends it (Decision 10): on a board Ask that answers a follow-up,
+/// The question as the turn sends it: on a board Ask that answers a follow-up,
 /// the question again, then "You asked: <asked>" and "The user replied: <reply>". It goes as
 /// the Question item, so the rails clean it and Sends counts it.
 fn question_text(req: &DiagramAskRequest) -> String {
@@ -481,7 +481,7 @@ fn history_label(text: &str) -> String {
     format!("Thread · {}", count_of(turns, "turn", "turns"))
 }
 
-/// The attachment as its item, within `share` tokens (Decision 5). Over the share it is cut
+/// The attachment as its item, within `share` tokens. Over the share it is cut
 /// at a line end (at a character when no line fits) and ends with a note of what was sent;
 /// the second value is the chat's line for that cut.
 fn attachment_item(a: &Attachment, share: u32) -> (Item, Option<String>) {
@@ -596,18 +596,18 @@ fn step(log: &Log, step: StepKind, value: String, rule: &str) -> ProcessStep {
 /// changes are written against the whole text) over 5,000 shapes or lines, a cleaned
 /// text over 160 KB, or a turn over the 200 KB cap.
 ///
-/// On a board the text goes as `board_items` (Decision 4): the header, each frame in full,
+/// On a board the text goes as `board_items`: the header, each frame in full,
 /// as names or left out to fit `board_budget` of the model's window, the sketch notes and the
 /// selection; the 160 KB cap applies to each of those items and 5,000 shapes to each frame.
 /// A frame range outside the text is `InvalidInput`; a reserve over the budget is `TooBig`.
 ///
-/// `history` is the chat's stored thread: `board_history` of it goes as one History item
-/// (Decision 9), only when its place is this diagram's. `attachment` is the file the user
-/// attached, as one Attachment item within a third of the budget (Decision 5), cut at a line
-/// end past it with a note. A board's follow-up reply goes in the question (Decision 10).
+/// `history` is the chat's stored thread: `board_history` of it goes as one History item,
+/// only when its place is this diagram's. `attachment` is the file the user
+/// attached, as one Attachment item within a third of the budget, cut at a line
+/// end past it with a note. A board's follow-up reply goes in the question.
 /// Every one of them goes through the input rail and is framed, and each has its Sends row.
 ///
-/// `diagram_gate` runs first (Task 4b): a frame drawn from a Connection `standing` holds,
+/// `diagram_gate` runs first: a frame drawn from a Connection `standing` holds,
 /// or a node whose `table:` resolves to one, refuses the preview `DiagramHeld` before
 /// anything is logged or built; the text is never cut to get around it. A history turn that
 /// drew on a held Connection is left out.
@@ -875,7 +875,7 @@ fn build_preview(
         memory: None,
         stamp,
         summary: None,
-        // Board chats keep their rule titles (Plan D may name them later).
+        // Board chats keep their rule titles.
         title: None,
         rows: None,
     })
@@ -1064,7 +1064,7 @@ fn check_proposal(
     (changes, row)
 }
 
-/// A follow-up call (Decision 10): the `tool` line with the op count, and one `tool.drop` line
+/// A follow-up call: the `tool` line with the op count, and one `tool.drop` line
 /// per op with `asked_first` (codes only).
 fn asked_first(input: &ProposeInput, log: &mut Log) {
     log.push(
@@ -1092,12 +1092,12 @@ fn asked_first(input: &ProposeInput, log: &mut Log) {
 pub type DiskRead<'a> =
     dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> + Send + Sync + 'a;
 
-/// `diagram_ask_stream` with the file the request's token names, from `slot` (Decision 15).
+/// `diagram_ask_stream` with the file the request's token names, from `slot`.
 /// A token the slot no longer holds is refused `AttachmentGone` before anything is read,
 /// built or sent. The file stays held while the Ask runs and after one that fails (network,
 /// `TooBig`, `FileChanged`, Stop), so Retry sends it again; an Ask that ends well empties
 /// the slot of that token only, never of a file picked meanwhile. An Ask answered with a
-/// follow-up question keeps the file for its reply only (Task 18): the reply sends the same
+/// follow-up question keeps the file for its reply only: the reply sends the same
 /// text from memory, and a new question ends that hold.
 #[allow(clippy::too_many_arguments)]
 pub async fn diagram_ask_attached(
@@ -1121,7 +1121,7 @@ pub async fn diagram_ask_attached(
         Err(_) => {
             // A refused Ask ends a hold kept for a follow-up's reply: a refused reply gets no
             // other chance to send it, and a new question means the follow-up was left. A
-            // fresh pick stays (Task 4b).
+            // fresh pick stays.
             if let Ok(mut s) = slot.lock() {
                 s.end_reply_hold();
             }
@@ -1202,7 +1202,7 @@ pub async fn diagram_ask_attached(
 /// shown. An answer with no call ends with no `Proposal`. Nothing is ever sent back to the
 /// model.
 ///
-/// A call with `follow_up` asks first (Decision 10): its ops are ignored and logged
+/// A call with `follow_up` asks first: its ops are ignored and logged
 /// `tool.drop reason=asked_first`, no proposal is shown, the file is not read again, and the
 /// question goes out as one `FollowUp` event. `history` and `attachment` go as the preview
 /// sends them.
@@ -1483,7 +1483,7 @@ async fn ask_gated(
             let (changes, row) = check_proposal(&input, req, &mut log);
             pump.drain(emit);
             emit(AiEvent::Process(row));
-            // P4: the changes are written against the text as it was; a file another
+            // the changes are written against the text as it was; a file another
             // program changed meanwhile gets none of them.
             let after = match disk().await {
                 Ok(text) => Some(text),

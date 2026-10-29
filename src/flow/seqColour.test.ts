@@ -240,14 +240,14 @@ test("a_logo_is_outlined_against_the_participant_fill", async () => {
   expect(participantIconOutline("brand-mustard", fill("dark", "warning"), "dark")).toBe(true);
   expect(participantIconOutline("brand-steel", fill("dark", "muted"), "dark")).toBe(false);
   expect(participantIconOutline("brand-mustard", fill("dark", "muted"), "dark")).toBe(false);
-  // A pale logo on Light keeps Plan C's hairline whatever it sits on.
+  // A pale logo on Light keeps the icon hairline whatever it sits on.
   expect(participantIconOutline("brand-paper", fill("light", "accent"), "light")).toBe(true);
   // A lucide icon has no colour of its own and is drawn in the theme ink.
   expect(participantIconOutline("database", fill("dark", "info"), "dark")).toBe(false);
 });
 
 test("seq_colour_vars_are_made_once_a_colour_and_kind", () => {
-  // Plan E Task 9: every lane, bar, number circle and block of a colour shares one frozen variables object, so 2,000
+  // Every lane, bar, number circle and block of a colour shares one frozen variables object, so 2,000
   // lanes and 3,000 numbers make none per render; the cache is bounded, as custom colours come and go as they are typed.
   const whos: (SeqWho | "block")[] = ["participant", "actor", "block"];
   for (const who of whos)

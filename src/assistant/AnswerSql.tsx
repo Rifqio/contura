@@ -25,7 +25,7 @@ interface Props {
   /** The query tab Insert works on; Insert is disabled without one. */
   target?: InsertTarget | null;
   /**
-   * The tab has no editor (spec 8): the primary action is Open in new query tab and there is no Insert; SQL that
+   * The tab has no editor: the primary action is Open in new query tab and there is no Insert; SQL that
    * writes, or that the Core did not check, opens commented out. Nothing runs either way.
    */
   noEditor?: boolean;
@@ -79,8 +79,8 @@ export function writesText(statements: StatementCheck[]): string {
 const lower = (where: string) => where.charAt(0).toLowerCase() + where.slice(1);
 
 /**
- * A fenced SQL block of an answer (board 11.1): a head with the Core's label and Copy, the code in the editor's
- * colours, and a foot with Insert, Apply to statement and Open in new tab (A3). Insert and Apply show the
+ * A fenced SQL block of an answer: a head with the Core's label and Copy, the code in the editor's
+ * colours, and a foot with Insert, Apply to statement and Open in new tab. Insert and Apply show the
  * SQL as a diff in the editor first, where Ctrl+Enter keeps it and Esc discards it; nothing runs.
  */
 export default function AnswerSql({
@@ -116,7 +116,7 @@ export default function AnswerSql({
   const unchecked = uncheckedBlock || /\r/.test(sql);
   const statements = check?.statements ?? [];
   const warn = statements.some((s) => s.class === "write" || s.flags.length > 0);
-  // An answer whose SQL writes goes in only commented out, whatever was asked (board 11.6, "Answer writes"; P11-30):
+  // An answer whose SQL writes goes in only commented out, whatever was asked ("Answer writes"):
   // Run finds nothing in it until the user takes the comment marks off.
   const writes = statements.some((s) => s.class === "write" || s.flags.some((f) => f.kind === "writeInReadAnswer"));
   const commented = writes || unchecked;

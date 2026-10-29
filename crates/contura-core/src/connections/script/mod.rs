@@ -1,12 +1,12 @@
-//! The SQL file import service (Task 9): `plan_script`, `script_statements`,
+//! The SQL file import service: `plan_script`, `script_statements`,
 //! `confirm_script` and `start_script`.
 //!
 //! A script import is a Write job, with the checks of a table import: Read-only refuses
 //! it before any job starts; Production needs one Job pass bound to the file's identity
-//! and the Run as is choice (D5, Q29).
+//! and the Run as is choice.
 //!
 //! The start opens the file once, with other writers refused for as long as the job
-//! runs (Q44), reads it through that handle to find any refused statement, and hands the
+//! runs, reads it through that handle to find any refused statement, and hands the
 //! same handle to the run, which reads at most the bytes the start checked. Each
 //! statement runs through its own single-statement call.
 //!
@@ -138,7 +138,7 @@ impl ConnectionService {
     }
 
     /// The Statements step: counts, the first 50 statements, the skipped and refused
-    /// statements (texts cut at 4 KB), the transaction flags (Q28), the Production
+    /// statements (texts cut at 4 KB), the transaction flags, the Production
     /// confirmation's items and the verdict: Read-only, then Blocked ("Line {n}:
     /// {reason}" for each refused statement), then the Production confirmation, then Ok.
     pub async fn plan_script(&self, req: ScriptRequest) -> Result<ScriptPlan> {
@@ -168,7 +168,7 @@ impl ConnectionService {
 
     /// Up to 100 statements of the file from index `from`, read on demand, with texts cut
     /// at 4 KB; a page stops early at 4 MB of text, and the next asks from its last index.
-    /// With `run_as_is` a statement that runs as is shows Run, not Skip (Q12).
+    /// With `run_as_is` a statement that runs as is shows Run, not Skip.
     pub async fn script_statements(
         &self,
         connection_id: ConnectionId,
@@ -197,8 +197,7 @@ impl ConnectionService {
         .map_err(blocking_err)?
     }
 
-    /// Reads the file again and issues the Job pass for it, bound to the file's identity
-    /// (D5, Q29).
+    /// Reads the file again and issues the Job pass for it, bound to the file's identity.
     pub async fn confirm_script(&self, req: ScriptRequest) -> Result<PassId> {
         let config = self.config(req.connection_id)?;
         if config.read_only {
@@ -216,13 +215,13 @@ impl ConnectionService {
         self.issue_job_pass(config.id, fp, Some(file))
     }
 
-    /// Starts script `job` (the client's id, Q21). Before anything runs, in order:
+    /// Starts script `job` (the client's id). Before anything runs, in order:
     /// Read-only refuses (`ReadOnly(0)`); the path guard; Production without a pass
-    /// (`NeedsConfirmation`); the file opens with other writers refused (Q44); the job
+    /// (`NeedsConfirmation`); the file opens with other writers refused; the job
     /// registers, which holds `JobBusy` for the Connection from here on; the file is read
     /// through that handle, with Checking progress and cancel, and a refused statement
     /// anywhere refuses the start (`InvalidInput`). Only then is the Production pass
-    /// spent: the file must be the one confirmed (`FileChanged`, Q29) and the pass must
+    /// spent: the file must be the one confirmed (`FileChanged`) and the pass must
     /// cover it. A start refused after the job registered leaves no job and no final
     /// event. The run goes on in the background and adds one history entry.
     pub async fn start_script(
@@ -336,7 +335,7 @@ impl ConnectionService {
         Ok((ctx, checked))
     }
 
-    /// The refusals, the size check, the session, then the Production pass (Q29).
+    /// The refusals, the size check, the session, then the Production pass.
     async fn start_authorized(
         &self,
         config: &ConnectionConfig,

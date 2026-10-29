@@ -134,12 +134,12 @@ test("choice_is_remembered", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Hide the side panel" }));
   const saved = callsTo("save_ui_prefs").slice(-1)[0].prefs as typeof DEFAULT_UI_PREFS;
   expect(saved.flowSidePanel).toEqual({ hidden: false, tab: "assistant" });
-  // The next tab reads the tab back, and opens with its pane open (owner answer 6), whatever the stored hidden says.
+  // The next tab reads the tab back, and opens with its pane open, whatever the stored hidden says.
   cleanup();
   flowTab({ ...DEFAULT_UI_PREFS, flowSidePanel: { hidden: true, tab: "assistant" } });
   await waitFor(() => expect(tab("Assistant").getAttribute("aria-selected")).toBe("true"));
   expect(screen.queryByRole("navigation", { name: "Side panel, hidden" })).toBeNull();
-  // An empty chat opens on the start screen (Plan D Task 18).
+  // An empty chat opens on the start screen.
   expect(await screen.findByRole("heading", { name: "What would you like to create?" })).toBeTruthy();
 });
 

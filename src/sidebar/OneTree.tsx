@@ -20,7 +20,7 @@ import type { TreeData } from "./useTreeData";
 /** The drag data type of a table or view row: JSON `{ connectionId, kind, path }` (D15). */
 export const OBJECT_DRAG_TYPE = "application/x-contura-object";
 
-/** How a Connection's last open went, when it is not plain open or closed (frames 10b, 10c). */
+/** How a Connection's last open went, when it is not plain open or closed. */
 export type ConnectionOpenStatus = { s: "connecting" } | { s: "failed"; error: string };
 
 export interface OneTreeProps {
@@ -59,19 +59,19 @@ export interface OneTreeProps {
   onNewTable?(connectionId: ConnectionId, database: string, schema: string | null): void;
   /** Opens a table's design tab. */
   onDesignTable?(s: Selection): void;
-  /** Opens a table's lineage tab (step 6+). */
+  /** Opens a table's lineage tab. */
   onShowLineage?(s: Selection): void;
   /** Starts dropping a table; the App asks first. */
   onDropTable?(connectionId: ConnectionId, path: ObjectPath): void;
   /** Opens the Export dialog on a table. */
   onExportTable?(s: Selection): void;
-  /** Opens an Import tab into a table; shown on Read-only Connections too, whose tab says so (Q15). */
+  /** Opens an Import tab into a table; shown on Read-only Connections too, whose tab says so. */
   onImportTable?(s: Selection): void;
-  /** "Transfer data..." on a database (MySQL, SQLite), schema (PostgreSQL) or table row (step 8). */
+  /** "Transfer data..." on a database (MySQL, SQLite), schema (PostgreSQL) or table row. */
   onTransfer?(seed: TransferSeed): void;
-  /** "Schema Compare" on a database or schema row: opens a compare with that side as the source (step 10). */
+  /** "Schema Compare" on a database or schema row: opens a compare with that side as the source. */
   onCompare?(source: { connectionId: ConnectionId; database: string; schema: string | null }): void;
-  /** "Back up..." on a database (MySQL, SQLite) or schema (PostgreSQL) row (step 9). */
+  /** "Back up..." on a database (MySQL, SQLite) or schema (PostgreSQL) row. */
   onBackup?(target: { connectionId: ConnectionId; database: string; schema: string | null }): void;
   /** "Restore..." on a database, schema or Connection row; `database: null` restores Into a new database. */
   onRestore?(target: RestoreTarget): void;

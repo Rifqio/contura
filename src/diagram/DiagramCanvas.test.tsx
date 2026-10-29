@@ -106,7 +106,7 @@ const probeReads = (id = "p") => {
 };
 
 test("legacy_canvases_keep_their_swaps", async () => {
-  // Ruling 4: every canvas but a board keeps detail.ts's swaps (no detailPolicy is the legacy policy).
+  // Every canvas but a board keeps detail.ts's swaps (no detailPolicy is the legacy policy).
   const { flow, unmount } = renderCanvas([card("stores", 0)]);
   await waitFor(() => expect(percent()).toBe("100%"));
   await act(async () => {
@@ -130,7 +130,7 @@ test("legacy_canvases_keep_their_swaps", async () => {
 });
 
 test("the_board_policy_is_full_at_any_count_and_zoom", async () => {
-  // Decision 1: a board draws full at every zoom and node count.
+  // A board draws full at every zoom and node count.
   const many = [probe("p", 0), ...fillers(2000)];
   const { flow } = renderCanvas(many, { nodeTypes: probeTypes, detailPolicy: "board" });
   await waitFor(() => expect(flow()).toBeTruthy());
@@ -152,7 +152,7 @@ function CountedCard({ id }: NodeProps) {
 }
 
 test("a_board_mounts_only_the_shapes_in_view", async () => {
-  // The release milestone (Plan F Task 3): React Flow draws every node it has never measured, whatever is on screen, so
+  // The release milestone: React Flow draws every node it has never measured, whatever is on screen, so
   // a live 2,000-table ERD mounted all 2,000 full cards at open. A board gives each new shape its four side handles
   // (React Flow's `handles`), so only the shapes in view mount. The fit of this grid (the ERD's: 50 a row, 260 by
   // 520 apart, 240 by 480 each) lands at the least zoom, 10 percent, where the 800 by 600 view holds at most
@@ -242,7 +242,7 @@ test("shift_1_fits_and_ctrl_plus_minus_zoom", async () => {
 });
 
 test("zoom_buttons_and_keys_jump_under_reduced_motion", async () => {
-  // The app preference alone, with the system setting off: zoom in and out are instant, as DESIGN-NEXT 8 says.
+  // The app preference alone, with the system setting off: zoom in and out are instant, as DESIGN.md 8 says.
   vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
   setReducedMotionPref(true);
   try {
@@ -711,7 +711,7 @@ test("F7 a dragged card lands where it is let go, on no grid, unless an edge or 
 });
 
 test("a_sketch_drag_snaps_and_guides_in_board_coordinates", async () => {
-  // A board's sketch is a child of the layer at -origin (Plan B Task 11): its position is on the board, its place on
+  // A board's sketch is a child of the layer at -origin: its position is on the board, its place on
   // the canvas the layer's plus its own. With the live frame at (600, 300) the guides and the snap use the canvas place.
   const onMove = vi.fn();
   const layer: Node = { id: SKETCH_LAYER, type: "card", position: { x: -600, y: -300 }, width: 0, height: 0, data: { name: "", cols: [] }, selectable: false, draggable: false };
@@ -765,7 +765,7 @@ test("F26 Esc during a drag puts the cards back and nothing is moved", async () 
   expect(node().style.transform).toBe(before);
 });
 
-// ---- Fix round 1 (I6, M1, M3): every canvas nudges 1 px and Shift 16 px, keeps whole pixels, and an aborted drag
+// ---- Fix round 1: every canvas nudges 1 px and Shift 16 px, keeps whole pixels, and an aborted drag
 // leaves no Esc trap.
 
 test("I6 arrows nudge the selected card 1 px, Shift 16 px, reported once when the key goes up", async () => {
@@ -820,7 +820,7 @@ test("N1 Ctrl, Alt or Meta with an arrow on a focused card moves nothing, inside
 });
 
 test("an_unchanged_node_keeps_its_object_when_another_changes", async () => {
-  // Task 18b: a board's switch hands the canvas 1,000 unchanged sketches and 49 unchanged frames; React Flow skips a
+  // A board's switch hands the canvas 1,000 unchanged sketches and 49 unchanged frames; React Flow skips a
   // node whose object is the one it has, so only what changed draws again.
   let inst: ReactFlowInstance | null = null;
   const a = card("a", 0);
@@ -841,7 +841,7 @@ test("an_unchanged_node_keeps_its_object_when_another_changes", async () => {
 });
 
 test("glide_view_reports_its_target_first", async () => {
-  // Plan F Decision 8: a glide reports where it lands once, before the view moves, then nothing more until it is there.
+  // A glide reports where it lands once, before the view moves, then nothing more until it is there.
   const seen: { v: CanvasView; landing: boolean; at: { x: number; y: number; zoom: number } }[] = [];
   let handle: CanvasHandle | null = null;
   let flow: () => ReactFlowInstance | null = () => null;

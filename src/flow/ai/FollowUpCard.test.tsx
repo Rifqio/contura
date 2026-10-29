@@ -1,4 +1,4 @@
-// The follow-up card (Plan D Task 16, Decision 10): the assistant's one question as text, a reply box, Cancel and Continue.
+// The follow-up card: the assistant's one question as text, a reply box, Cancel and Continue.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import FollowUpCard from "./FollowUpCard";

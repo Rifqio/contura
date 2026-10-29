@@ -1,4 +1,4 @@
-// Plan F Task 9 (Decision 14): the release WebView's zoom sweep (Fit board at 10 percent, the zoom-in button to 400
+// The release WebView's zoom sweep (Fit board at 10 percent, the zoom-in button to 400
 // percent and back, 1.2 a step), replayed in node through what FlowTab runs for it: a plan for each step's view
 // (`frameDraw`), then one `stepForms` step and one scene build an animation frame until the drawn forms are the plan,
 // picture slices between them. Over B1's limit board (50 frames, 10,000 shapes, 1,000 sketches) and B3's ER limit
@@ -73,7 +73,7 @@ interface StepReading {
  */
 async function sweep(frames: readonly FrameResult[], layout: BoardLayout, keys: readonly string[]) {
   const scene = createBoardScene("modern");
-  // The WebView's picture path (Task 9 fix 3): bitmaps kept as PNGs, and the sketch layer's tiles while body text is far.
+  // The WebView's picture path: bitmaps kept as PNGs, and the sketch layer's tiles while body text is far.
   const store = createPictureStore({ palette: () => LIGHT, loadIcons: async () => new Map(), onReady: () => {}, sync: true, rasterise: blankRasteriser, dpr: () => 1 });
   const sketchStore = createSketchPictureStore({ palette: () => LIGHT, loadIcons: async () => new Map(), onReady: () => {}, rasterise: blankRasteriser, dpr: () => 1 });
   const tiler = createSketchTiles();

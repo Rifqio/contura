@@ -118,7 +118,7 @@ impl BulkWriter for MySqlWriter {
                 done.map_err(|e| session_err(e, read_only))?;
                 Ok(rows)
             }
-            // Q42 I3: the server parses the whole text before it says it cannot prepare
+            // the server parses the whole text before it says it cannot prepare
             // it, and a second statement fails that parse (1064) first, so 1295 means one
             // statement, such as a routine or trigger whose BEGIN ... END body holds `;`
             // (which the 5a count would split).

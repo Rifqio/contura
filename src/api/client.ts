@@ -860,7 +860,7 @@ export function errorText(e: unknown, dialect?: DialectKind): string {
     case "secret":
       return `Could not use ${keyringText()}: ${e.message}`;
     case "file": {
-      // A whole sentence (a file's content, Q45) is shown as it is; a read gets read advice.
+      // A whole sentence (a file's content) is shown as it is; a read gets read advice.
       const text = `${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}`;
       if (/[.!?]$/.test(text)) return text;
       if (e.message.startsWith("cannot read")) return `${text}. Check the file exists and Contura can read it.`;

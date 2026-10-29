@@ -221,7 +221,7 @@ test("S5 a participant double-clicked between two lands between them in the text
   const x = (api.position.x + (api.initialWidth ?? 0) + bank.position.x) / 2;
   act(() => canvas.props!.onPaneDoubleClick!({ screen: { x: 500, y: 300 }, flow: { x, y: api.position.y } }));
   await userEvent.click(await screen.findByRole("menuitem", { name: /^Participant/ }));
-  // "Add here" (diagram step 6): the new participant's name is ready; Enter writes it in the gap.
+  // "Add here" (diagram): the new participant's name is ready; Enter writes it in the gap.
   await userEvent.type(await screen.findByRole("textbox", { name: "Name the new participant" }), "{Enter}");
   await waitFor(() =>
     expect(s.text()).toBe(lines('diagram sequence "Pay"', "participant App", "participant Api", "participant Participant", "participant Bank", "App -> Api : charge")),

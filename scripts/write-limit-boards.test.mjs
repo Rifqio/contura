@@ -28,7 +28,7 @@ test("the_er_board_file_is_the_perf_fixture", () => {
 });
 
 test("the_sequence_board_file_is_the_perf_fixture", () => {
-  // Plan E Task 9: the sequence limit board for Task 10's live run, equal to sequence.perf.test.ts's.
+  // The sequence limit board for Task 10's live run, equal to sequence.perf.test.ts's.
   const dir = mkdtempSync(join(tmpdir(), "contura-limit-boards-"));
   dirs.push(dir);
   const r = spawnSync(process.execPath, [script, dir], { encoding: "utf8" });

@@ -1,4 +1,4 @@
-// Plan E: the mockup's Pay sequence in the language, used by the sequence drawing's tests, Publish and the live check.
+// The mockup's Pay sequence in the language, used by the sequence drawing's tests, Publish and the live check.
 // Ten messages numbered 1 to 10, one self-message (3), two activations, one opt in warning around message 6.
 export const PAY = `diagram sequence "Pay"
 autonumber

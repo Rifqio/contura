@@ -1,5 +1,5 @@
-// Plan D Task 6: the board request built from the worker's outlines and the canvas (Decision 1): every frame with its
-// box and problems, the sketches as notes (Decision 4), the chips and the selection.
+// The board request built from the worker's outlines and the canvas: every frame with its
+// box and problems, the sketches as notes, the chips and the selection.
 import type { Node } from "@xyflow/react";
 import { expect, test } from "vitest";
 import { createFlowService, type BoardOutlineFrame } from "../../lang/flow/service";
@@ -112,7 +112,7 @@ test("a_note_inside_a_frame_is_on_it", () => {
   expect(by("a")).toMatchObject({ kind: "note", text: "check this", on: "Checkout", near: null });
   expect(by("b")).toMatchObject({ kind: "text", text: "later", on: null, near: "Refund" });
   expect(by("c")).toMatchObject({ on: null, near: null });
-  // A section by its title; an icon by its pack name (A12).
+  // A section by its title; an icon by its pack name.
   expect(by("d")).toMatchObject({ kind: "section", text: "Phase 2", on: "Refund" });
   expect(by("e")).toMatchObject({ kind: "icon", text: "aws-s3", on: "Refund" });
 });
@@ -153,7 +153,7 @@ test("pen_strokes_are_not_notes", () => {
 
 test("focus_drops_gone_and_clashing_titles", () => {
   const b = board();
-  // A third frame whose title the canvas reads as taken (it is never a target, Decision 2).
+  // A third frame whose title the canvas reads as taken (it is never a target).
   const draft: FrameBox = { ...b.boxes[1], index: 2, key: null, title: "Draft", clash: true, x: 1200.6, y: 3.4 };
   const frames: BoardOutlineFrame[] = [...b.frames, { ...b.frames[1], index: 2, title: "Draft" }];
   const out = boardInput({ frames, boxes: [...b.boxes, draft], focus: ["Gone", "Refund", "Draft", "Checkout", "Refund"], selected: { frame: null, shapes: [], sketches: [] }, notes: [], create: null, followUp: null, attachment: null });
@@ -174,10 +174,10 @@ test("overview_frames_still_give_node_boxes", () => {
   const r = svc.parse("d", TEXT);
   const b = layout();
   const full = createBoardScene("modern").build(r.frames, b, KEYS, null, null, []);
-  // Plan F draws far static frames as one picture each (Decision 7, in place of the preview below BOX_BELOW).
+  // Far static frames draw as one picture each (in place of the preview below BOX_BELOW).
   const pictures = () => createPictureStore({ palette: (t) => exportPalette(t), loadIcons: async () => new Map(), onReady: () => {}, sync: true });
   const overview = createBoardScene("modern").build(r.frames, b, KEYS, null, null, [], undefined, null, pictures());
-  // Pictured, the static frames are one node each, yet their parts are the same (A4).
+  // Pictured, the static frames are one node each, yet their parts are the same.
   expect(overview.nodes.some((n) => n.id === inFrameId("Checkout", "Pay"))).toBe(false);
   expect(overview.nodes.filter((n) => n.type === FRAME_PICTURE_TYPE)).toHaveLength(2);
   const parts = boardNodeBoxes(overview);
@@ -187,7 +187,7 @@ test("overview_frames_still_give_node_boxes", () => {
   // In board units: the frame's place plus the shape's own.
   expect(partOf(parts, "Refund", "Ask")).toMatchObject({ x: 600, y: 0 });
   expect(partOf(parts, "Checkout", "Pay")).toMatchObject({ x: 0, y: 120 });
-  // With Refund live (its anchor at its place, Plan F Decision 11), its parts come from the canvas's live nodes,
+  // With Refund live (its anchor at its place), its parts come from the canvas's live nodes,
   // frame-local, still in board units.
   const live: Node[] = buildFlowGraph(r.frames[1].doc!, b.frames.get("Refund")!.nodes, "modern").nodes;
   const withLive = createBoardScene("modern").build(r.frames, b, KEYS, { title: "Refund", index: 1 }, { nodes: live }, [], undefined, null, pictures());

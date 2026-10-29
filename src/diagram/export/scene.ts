@@ -39,7 +39,7 @@ export interface SceneNode {
   /** A dashed outline: lineage's diagram and view cards, and a table it could not read. */
   dashed?: boolean;
   /**
-   * A drawn diagram node (step 6+) and how it looks: Modern or the Classic Gane-Sarson shapes. Set for every
+   * A drawn diagram node and how it looks: Modern or the Classic Gane-Sarson shapes. Set for every
    * drawn kind (process to service); card kinds leave it out and draw as table cards.
    */
   look?: "modern" | "classic";
@@ -50,7 +50,7 @@ export interface SceneNode {
   /** A drawn node links a table: the link glyph before `sub`. */
   linked?: boolean;
   /**
-   * A cloud service's icon as a `data:image/` URL, drawn as an image, unchanged (ruling P9: never as markup).
+   * A cloud service's icon as a `data:image/` URL, drawn as an image, unchanged (never as markup).
    * Absent with `iconName` set means the pack has no such icon: the dashed cube tile.
    */
   icon?: string;
@@ -64,12 +64,12 @@ export interface SceneNode {
   bars?: { top: number; height: number }[];
   /** A sequence participant's foot box's top, from the node's top: its lane runs from the head box down to it. */
   foot?: number;
-  /** Step 11: its palette colour, in place of its kind's. */
+  /** Its palette colour, in place of its kind's. */
   color?: SceneColour;
 }
 
 /**
- * A sequence frame (`loop`, `alt`, `opt`, `par`, `critical`), a block of the drawing (Plan E Decision 13): a box over its
+ * A sequence frame (`loop`, `alt`, `opt`, `par`, `critical`), a block of the drawing: a box over its
  * message rows in its colour's wash, its side tab with its kind's glyph and, when `word`, its kind word (`wordW` wide)
  * turned a quarter; its caption (its label after the kind word) on a chip at `captionBox`, absent with no caption.
  */
@@ -119,7 +119,7 @@ export interface SceneArea {
   icon?: string;
   /** A pale logo on light: drawn with the hairline filter in the text colour. */
   iconOutline?: boolean;
-  /** Step 11: its palette colour: its border, tint and title. */
+  /** Its palette colour: its border, tint and title. */
   color?: SceneColour;
 }
 
@@ -147,10 +147,10 @@ export interface SceneEdge {
   heads?: "end" | "both" | "start" | "none";
   /** The marks at each end of a class line, an ER relationship or a message; when set they replace `heads`. */
   marks?: { start?: SceneMark; end?: SceneMark };
-  /** Step 11: its palette colour, its arrowheads too. */
+  /** Its palette colour, its arrowheads too. */
   color?: SceneColour;
   /**
-   * A sequence message (Plan E): its path from the drawing, with the gap at its label (`points` are its vertices); its
+   * A sequence message: its path from the drawing, with the gap at its label (`points` are its vertices); its
    * label `labelW` wide on `chip`, in the canvas's colour or the wash of block `chipBg` (its index in `Scene.frames`);
    * its number on the sender's lifeline, `w` wide and 20 tall (times the text size), outlined in the sender's colour.
    */
@@ -171,7 +171,7 @@ export interface Scene {
   /** A timeline's sections, behind everything, and its axis, behind the items. */
   sections?: SceneSection[];
   axis?: SceneAxis;
-  /** The frame's text size as a label scale (Decision 22): every label's font size is multiplied by it; unset at 1. */
+  /** The frame's text size as a label scale: every label's font size is multiplied by it; unset at 1. */
   textScale?: number;
 }
 

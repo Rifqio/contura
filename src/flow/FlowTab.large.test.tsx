@@ -1,4 +1,4 @@
-// A 2,000-node diagram stays responsive in the flow tab (spec 6+ section 9, the existing large.test.tsx pattern):
+// A 2,000-node diagram stays responsive in the flow tab (the existing large.test.tsx pattern):
 // only what is visible is drawn, as real shapes, and canvas actions still answer quickly.
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
@@ -88,9 +88,9 @@ test("two_thousand_node_flow_tab_draws_only_what_is_visible_and_stays_responsive
     </div>,
   );
   await waitFor(() => expect(container.querySelectorAll(".react-flow__node").length).toBeGreaterThan(0), { timeout: 30000 });
-  // Every node is on the canvas's list, beside the frame's own box (Plan B Task 6) and the zero-size live anchor the
-  // shapes hang from (Plan F Decision 11), neither a shape; only the visible ones are in the page, drawn as real shapes
-  // (Plan F Decision 1: a board is never fast and keeps its shapes at any count).
+  // Every node is on the canvas's list, beside the frame's own box and the zero-size live anchor the
+  // shapes hang from, neither a shape; only the visible ones are in the page, drawn as real shapes
+  // (a board is never fast and keeps its shapes at any count).
   const shapes = () => canvas.props!.nodes.filter((n) => n.type !== "boardFrame" && n.id !== LIVE_ANCHOR_ID);
   await waitFor(() => expect(shapes().length).toBe(N), { timeout: 30000 });
   expect(canvas.props!.nodes.length).toBe(N + 2);
@@ -115,7 +115,7 @@ test("two_thousand_node_flow_tab_draws_only_what_is_visible_and_stays_responsive
   await waitFor(() => expect(callsTo("write_diagram").length).toBeGreaterThan(0), { timeout: 15000 });
   // Still only the visible part is in the page.
   expect(container.querySelectorAll(".react-flow__node").length).toBeLessThan(300);
-  // The board's own level of detail (Plan F Decision 1): full at 2,001 shapes after the add.
+  // The board's own level of detail: full at 2,001 shapes after the add.
   await waitFor(() => expect(shapes().length).toBe(N + 1), { timeout: 15000 });
   expect(canvas.props!.detailPolicy).toBe("board");
 });

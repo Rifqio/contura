@@ -1,6 +1,6 @@
 // The Space box's rows (decision 19): the Shelf's one search, mixed and cut to the top `n`. Kinds first, then board
 // templates, then single templates, then icons from the one icon source. With nothing typed: the first three kinds,
-// the first board template and the source's top four icons (Plan C makes those the recent ones).
+// the first board template and the source's top four icons (the full icon pack makes those the recent ones).
 import type { IconName } from "../../../components/Icon";
 import { SHELF_KINDS } from "../catalog/kinds";
 import { searchKinds, searchTemplates } from "../catalog/search";

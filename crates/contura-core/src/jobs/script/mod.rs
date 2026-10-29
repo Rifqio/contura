@@ -94,7 +94,7 @@ impl ScriptReader {
 
     /// Reads the open `file` (named `path` in messages) from its start, and at most its
     /// first `limit` bytes: the import run reads the very handle the start checked, up to
-    /// the size it checked (Q44).
+    /// the size it checked.
     pub fn from_file(
         path: &Path,
         mut file: File,
@@ -259,7 +259,7 @@ impl ScriptReader {
         ScriptStatement {
             index,
             line: raw.line,
-            // Over the token cap the classifier is not run at all (Q40); it is a write.
+            // Over the token cap the classifier is not run at all; it is a write.
             class: if facts.too_large {
                 StatementClass::Write
             } else {
@@ -293,7 +293,7 @@ impl ScriptReader {
     }
 
     /// The statements read so far that run can share one transaction: none controls
-    /// transactions, and none is MySQL DDL, which commits as it runs (Q28).
+    /// transactions, and none is MySQL DDL, which commits as it runs.
     pub fn one_transaction(&self) -> bool {
         self.one_transaction
     }

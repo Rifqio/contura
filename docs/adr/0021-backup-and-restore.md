@@ -1,6 +1,6 @@
 # Backup writes Contura's own script from one snapshot; Restore checks it and runs exactly what was shown
 
-Step 9 adds Backup and Restore. A Backup writes one database (MySQL, SQLite) or one schema (PostgreSQL) to Contura's own plain SQL script, from one consistent snapshot, with no `pg_dump` or `mysqldump`. A Restore checks that file against the target, shows the exact SQL it will run, and runs it into a new database, an empty one, or over the same tables. The spec is `docs/superpowers/specs/2026-10-17-step9-backup-restore-design.md`; the screens are artifact A15Z5kepCRSAyQ8zXhSCvg, frame 9.1; the answered questions are option (a) on all six. This ADR builds on ADR 0004 (amended for step 9), ADR 0018 (Jobs and the Job pass), ADR 0013 (Production and Read-only) and ADR 0003 (memory budget).
+Step 9 adds Backup and Restore. A Backup writes one database (MySQL, SQLite) or one schema (PostgreSQL) to Contura's own plain SQL script, from one consistent snapshot, with no `pg_dump` or `mysqldump`. A Restore checks that file against the target, shows the exact SQL it will run, and runs it into a new database, an empty one, or over the same tables. This ADR builds on ADR 0004 (amended for step 9), ADR 0018 (Jobs and the Job pass), ADR 0013 (Production and Read-only) and ADR 0003 (memory budget).
 
 ## Backup
 

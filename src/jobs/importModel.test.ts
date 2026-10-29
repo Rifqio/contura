@@ -25,7 +25,7 @@ interface Case {
   expected: (string | null)[];
 }
 
-// The case file Task 1 wrote, read as text; the Core's `match_by_name` reads the same one (D19, Q11).
+// The case file Task 1 wrote, read as text; the Core's `match_by_name` reads the same one.
 const CASES = JSON.parse(casesText) as Case[];
 
 test("match_cases_json", () => {
@@ -98,7 +98,7 @@ test("footer_reads_the_cores_one_transaction_flag", () => {
 });
 
 test("script_footer_reads_the_flag_and_notes_come_apart_from_the_run_line", () => {
-  // Not its own transactions, not MySQL DDL, yet the Core says no single transaction (Q37: CONCURRENTLY).
+  // Not its own transactions, not MySQL DDL, yet the Core says no single transaction (CONCURRENTLY).
   const apart = { ...SCRIPT, hasDdl: false, oneTransaction: false };
   expect(scriptFooter(apart, "postgres", "shop")).toEqual([
     "Runs 1,503 statements in shop, each on its own. If a statement fails, the ones before it stay.",
@@ -200,7 +200,7 @@ test("script_summary_counts_the_statements_past_the_first_1000", () => {
 
 test("script_footer_lines", () => {
   expect(scriptFooter({ ...SCRIPT, hasDdl: false }, "postgres", "shop")).toEqual(["Runs 1,503 statements in shop in one transaction. Cancel rolls everything back."]);
-  // Q43 I3: MySQL with DDL is not one transaction, so no rollback claim; the lines say what stays.
+  // MySQL with DDL is not one transaction, so no rollback claim; the lines say what stays.
   expect(scriptFooter(SCRIPT, "mysql", "shop")).toEqual([
     "Runs 1,503 statements in shop. If the import stops, what ran before it stays.",
     "MySQL commits each CREATE, ALTER and DROP as it runs. If a later statement fails, those stay.",
@@ -238,10 +238,10 @@ test("fold_and_confirm_summary", () => {
 });
 
 test("fix_round_1_texts", () => {
-  // Q28: no transaction claim when the plan says the import is not one transaction.
+  // no transaction claim when the plan says the import is not one transaction.
   expect(confirmSummary("shop.menu_items", SHAPE, DEFAULT_IMPORT_OPTIONS, false)).toBe("Inserts 1,204 rows into shop.menu_items in 3 statements.");
   expect(confirmSummary("shop.menu_items", SHAPE, DEFAULT_IMPORT_OPTIONS, true)).toBe("Inserts 1,204 rows into shop.menu_items in 3 statements, in one transaction.");
-  // Q27: what stayed after a stop.
+  // what stayed after a stop.
   expect(writtenText(500, "menu_items")).toBe("500 rows were written before the stop and stay in menu_items.");
   expect(writtenText(1, "menu_items")).toBe("1 row was written before the stop and stays in menu_items.");
   // An estimate reads "about" until the check pass ends.

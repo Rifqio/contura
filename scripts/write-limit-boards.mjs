@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Writes the ER limit board as files for the release WebView milestone (Plan F Task 3, ruling 11; Task 9):
+// Writes the ER limit board as files for the release WebView milestone:
 // `er2000.flow` and `er2000.flow.layout.json`, the board erBoard.perf.test.ts builds (fixtures/erBoard.ts): 40
 // flowchart frames of A5's board and one ERD of 2,000 tables of 20 columns with 2,000 column relationships, 10,000
-// shapes. And the sequence limit board (Plan E Task 9, for Task 10's live run): `seq2000.flow` and its layout, the
+// shapes. And the sequence limit board (for Task 10's live run): `seq2000.flow` and its layout, the
 // board sequence.perf.test.ts builds (fixtures/bigSequence.ts): the same 40 flowchart frames and one sequence of 2,000
 // participants, 3,000 messages, 200 blocks and 300 activations, 10,000 shapes. write-limit-boards.test.mjs checks the
 // files equal the fixtures.

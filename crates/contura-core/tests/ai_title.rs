@@ -1,4 +1,4 @@
-//! Titles written by the AI (Decision 5): one short call after a chat's first answer, retried
+//! Titles written by the AI: one short call after a chat's first answer, retried
 //! once on the next answer, never over a title the user wrote, gated by each Connection's
 //! own AI access, and never holding the place for the next Ask.
 
@@ -430,7 +430,7 @@ async fn a_failed_title_is_tried_once_more_then_never() {
     assert_eq!(e.stored(t2.id).title_by, TitleBy::Rule);
 }
 
-/// P34: a call stopped while it runs counts no try.
+/// A call stopped while it runs counts no try.
 #[tokio::test]
 async fn a_cancelled_title_counts_no_try() {
     let e = env(vec![conn(A, AiAccess::Schema)]);
@@ -440,7 +440,7 @@ async fn a_cancelled_title_counts_no_try() {
     assert_eq!(e.stored(t.id).title_tries, 0);
 }
 
-/// P10: a chat saved before D2, already past its first answers, is never named.
+/// A chat saved before D2, already past its first answers, is never named.
 #[tokio::test]
 async fn an_older_chat_is_not_named() {
     let e = env(vec![conn(A, AiAccess::Schema)]);
@@ -551,7 +551,7 @@ async fn never_access_gets_no_call() {
     assert!(calls(&p).is_empty());
 }
 
-/// P9: the first question was asked across B; B is now at Never, so the chat gets no call.
+/// The first question was asked across B; B is now at Never, so the chat gets no call.
 #[tokio::test]
 async fn a_lowered_also_connection_gets_no_call() {
     let across = |e: &Env| {
@@ -658,7 +658,7 @@ impl AiProvider for Held {
     }
 }
 
-/// P2: the title call is registered as `title:<place>`, so an Ask in the same place starts
+/// The title call is registered as `title:<place>`, so an Ask in the same place starts
 /// while it is held, and `cancel(request_id)` would stop it.
 #[tokio::test]
 async fn the_place_is_not_busy_while_naming() {
@@ -711,7 +711,7 @@ async fn the_place_is_not_busy_while_naming() {
     assert_eq!(named.unwrap().as_deref(), Some(TITLE));
 }
 
-/// P4: a webview save of its copy, which never holds the title call's record, keeps it.
+/// A webview save of its copy, which never holds the title call's record, keeps it.
 #[tokio::test]
 async fn a_save_keeps_the_title_call_record() {
     let e = env(vec![conn(A, AiAccess::Schema)]);
@@ -772,7 +772,7 @@ async fn no_schema_or_rows_are_sent() {
     assert_eq!(e.cat.reads.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-/// P3, follow-up: a whole-thread write (an Ask's append, a save, an action) that read the
+/// A whole-thread write (an Ask's append, a save, an action) that read the
 /// thread before a rename, an AI title, a failed title call or the title call's record were
 /// committed never writes the older ones back. The append is simulated by its two store
 /// steps (read, then write) with the title change committed between them.
@@ -993,7 +993,7 @@ fn a_chat_that_will_not_be_named_reads_no_key() {
     assert_eq!(secrets.reads.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-/// Final review M2: the Sends "Chat title" row applies the call's own gate (P9), so a chat
+/// Final review M2: the Sends "Chat title" row applies the call's own gate, so a chat
 /// whose first question was asked on a Connection now at Never shows no row.
 #[tokio::test]
 async fn the_chat_title_row_follows_the_first_questions_connection() {

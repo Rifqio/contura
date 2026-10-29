@@ -1,12 +1,12 @@
 // The Shelf's icon seam (decision 6): one source the Icons tab, the search's Icons group and the Space box read.
-// It loads the pack's index once and holds that one array; Plan C swaps the `makeShelfIconSource({...})` call below
+// It loads the pack's index once and holds that one array; the full icon pack swaps the `makeShelfIconSource({...})` call below
 // for its own ranking and recents, and nothing else changes.
 import { createContext } from "react";
 import type { IconEntry } from "../../../api/types";
 import { providerOf, rankIcons } from "../../../lang/flow/iconRank";
 import { iconEntries } from "../../icons";
 
-/** One icon as the Shelf lists it. Plan C's `IconTile` satisfies it. */
+/** One icon as the Shelf lists it. The full pack's `IconTile` satisfies it. */
 export interface ShelfIconHit {
   name: string;
   title: string;
@@ -20,13 +20,13 @@ export interface ShelfIconSource {
   count(query: string): number | null;
   /** The best `n` matches; empty until loaded. */
   results(query: string, n: number): readonly ShelfIconHit[];
-  /** `results`, kept by name for Plan C's recents-first answer to the Space box. */
+  /** `results`, kept by name for the full pack's recents-first answer to the Space box. */
   top(query: string, n: number): readonly ShelfIconHit[];
   /** Called on every icon add from the Shelf or the Space box. */
   remember(name: string): void;
 }
 
-/** The Icons tab shows at most this many tiles before Plan C windows it (decision 5). */
+/** The Icons tab shows at most this many tiles before the full pack windows it. */
 export const SHELF_ICON_LIMIT = 48;
 /** The search's Icons group shows at most this many hits, then "Show all" (decision 4). */
 export const SHELF_GROUP_ICONS = 24;
@@ -77,7 +77,7 @@ interface Prepared {
   byName: Map<string, IconEntry>;
 }
 
-/** One name list and one name-to-entry map per loaded array (M28); a new array (Plan C, a test) gets its own. */
+/** One name list and one name-to-entry map per loaded array; a new array gets its own. */
 const prepared = new WeakMap<readonly IconEntry[], Prepared>();
 
 function prepare(entries: readonly IconEntry[]): Prepared {
@@ -118,7 +118,7 @@ export function basicResults(entries: readonly IconEntry[], query: string, n: nu
   });
 }
 
-/** The app's icon source: today's pack, ranked by name. Plan C replaces this one call. */
+/** The app's icon source: today's pack, ranked by name. The full icon pack replaces this one call. */
 export const shelfIconSource = makeShelfIconSource({ entries: iconEntries, count: basicCount, results: basicResults, remember: () => {} });
 
 /** The source the open Shelf reads: its `source` prop, so the Icons count, the Icons tab and the search agree. */

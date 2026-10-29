@@ -1,5 +1,5 @@
-// New flow from Mermaid (frame 7.3): paste or open a Mermaid flowchart, see the flow it becomes, and save
-// it as an ordinary .flow file with its layout file (ruling D1) in Contura's diagrams folder, by name (Q35).
+// New flow from Mermaid: paste or open a Mermaid flowchart, see the flow it becomes, and save
+// it as an ordinary .flow file with its layout file (ruling D1) in Contura's diagrams folder, by name.
 // The Mermaid text is not kept.
 import { useUngroupedLabel } from "../prefs/usePrefs";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -35,7 +35,7 @@ interface Props {
   onClose(): void;
   /** Called with the saved diagram's name; it is kept in the diagrams folder. */
   onCreated(name: string): void;
-  /** Runs before a Replace writes over diagram `name`: its open tab goes first (ruling P19). */
+  /** Runs before a Replace writes over diagram `name`: its open tab goes first. */
   beforeReplace?(name: string): void | Promise<void>;
   /** Step 10: opened from New diagram, Back returns to it (VS Code's multi-step Back); there is no Insert then. */
   onBack?(): void;
@@ -309,7 +309,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
   const count = result?.count ? `${result.count}${errors.length ? " read" : ""}` : "";
   const createWord = KIND_SHORT[result && result.nodes > 0 ? result.kind : "flow"];
 
-  /** Insert (step 10): the converted text into the open diagram, as one undo step; the dialog closes once it is in. */
+  /** Insert: the converted text into the open diagram, as one undo step; the dialog closes once it is in. */
   async function insertFlow() {
     if (!insert || !canInsert || running.current) return;
     running.current = true;
@@ -412,7 +412,7 @@ export default function MermaidImportDialog({ groups, defaultGroup, lang, onClos
           </section>
         </div>
         {errors.length > 0 ? (
-          // Only the rows: nothing under them, so no empty band (board fix).
+          // Only the rows: nothing under them, so no empty band.
           <div className="mermaid-problems">
             {errors.map((e, i) => (
               <div key={i} className="flow-banner flow-banner-danger" role="alert">

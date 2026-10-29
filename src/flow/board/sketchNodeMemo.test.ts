@@ -1,5 +1,5 @@
-// Task 18b: a sketch draws from its data and selection alone: a new place on the board (a glide, a Section dragged
-// with its sketches) draws nothing again, only the node moves. Plan F Decision 11: a switch no longer moves the sketch
+// A sketch draws from its data and selection alone: a new place on the board (a glide, a Section dragged
+// with its sketches) draws nothing again, only the node moves. A switch no longer moves the sketch
 // layer, which stays at the board's (0, 0); the place a node is handed is in board units.
 import type { NodeProps } from "@xyflow/react";
 import { expect, test } from "vitest";
@@ -26,7 +26,7 @@ test("an_icon_sketch_does_not_redraw_when_another_sketch_changes", () => {
 });
 
 test("a_picture_moved_on_the_board_draws_nothing_again", () => {
-  // Plan F Decision 7: a frame's picture draws from its data alone; a move or a switch hands it the same data.
+  // A frame's picture draws from its data alone; a move or a switch hands it the same data.
   const same = (FramePicture as unknown as Memo).compare;
   expect(same(props, { ...props, positionAbsoluteX: 5200 })).toBe(true);
   expect(same(props, { ...props, data: {} })).toBe(false);

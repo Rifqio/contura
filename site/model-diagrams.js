@@ -1162,7 +1162,7 @@
 
   /* ---- the window ---- */
   const tabId = (i) => 'ar-tab-' + TABS[i].kind;
-  /* the left pane: Editor and Assistant on one sliding switch (board 11.5, .pswitch) */
+  /* the left pane: Editor and Assistant on one sliding switch (.pswitch) */
   const SV = (d, s, cls) => '<svg class="ai-ic' + (cls ? ' ' + cls : '') + '" viewBox="0 0 24 24" width="' + (s || 16) + '" height="' + (s || 16) + '" aria-hidden="true">' + d + '</svg>';
   const IA = {
     code: '<path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/>',
@@ -1325,7 +1325,7 @@
   ui.ta.addEventListener('blur', () => mark(0));
   if ('ResizeObserver' in window) { new ResizeObserver(() => fit()).observe(ui.cv); new ResizeObserver(() => ink()).observe(ui.kinds[0].parentNode); }
   else addEventListener('resize', fit);
-  /* ---- the diagram assistant (step 11h, board 11.5), with a recorded model: no network, same answers every time ----
+  /* ---- the diagram assistant, with a recorded model: no network, same answers every time ----
      An Ask sends the .flow text and offers one tool, propose_diagram_changes. Every proposed change is checked
      against this file before it is shown; the result lands by Review first or Auto-apply, as one undo step. */
   const AI = {

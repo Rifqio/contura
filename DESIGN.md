@@ -1,8 +1,8 @@
-# Contura design system (next)
+# Contura design system
 
-Status: the design source for Contura since the restyle of 2026-10-17 (ADR 0015). The earlier `DESIGN.md` is archived in `docs/archive/DESIGN.md`; section 14 maps it to this file.
+Status: the design source for Contura since the restyle of 2026-10-17 (ADR 0015). The older design is retired; section 14 maps it to this file.
 Look: **Alucard** (light) and **Dracula** (dark), one colour family, with **JetBrains Mono** for code and **Segoe UI** for the interface.
-Reference build: the "Contura Next Screens" artifact, version 8 (Home, Query workspace on a Production Connection, Schema Builder, AI assistant panel, Flow diagram, Publish image), https://claude.ai/artifact/HQaEgpnALncQp9TdU677MM. Everything below is written so the app can be built without opening it.
+Reference screens: Home, Query workspace on a Production Connection, Schema Builder, AI assistant panel, Flow diagram, Publish image. Everything below is written so the app can be built without opening it.
 
 Contents
 1. Principles
@@ -18,7 +18,7 @@ Contents
 11. Production and Read-only treatment
 12. Accessibility
 13. Copy rules
-14. Mapping from DESIGN.md
+14. Mapping from the older design
 15. Implementation notes
 
 ---
@@ -615,12 +615,12 @@ The same rule applies in the tree, the Home cards, the Recent list (by the item'
 
 ### 10.1 Title bar and Group switcher
 - 40 px on `--c-bg-app`. Left to right: app glyph in a 44 px cell, Home, a hairline, Group switcher, tab strip, window buttons.
-- Item 42 (step 12b): every item (glyph cell, Home, Group switcher, tabs, New query and the new tab menu) is 32 px tall and sits on one centre line, 24 px down the bar; the hairline is 18 px on the same line.
+- Item 42: every item (glyph cell, Home, Group switcher, tabs, New query and the new tab menu) is 32 px tall and sits on one centre line, 24 px down the bar; the hairline is 18 px on the same line.
 - Group switcher: 16 px Group square, Group name in UI strong, 14 px chevron in `--c-text-subtle`; 8 px gaps, 4 px radius hover `--c-bg-hover`. Opens a menu of Groups and Home. "No Group" shows the empty square.
 - Window buttons 46 x 40 (hover fills the bar's height), glyphs `--c-text-muted` on the 24 px centre line; hover `--c-bg-hover`; close hover `--win-close` with `--win-close-ink` glyph, as Windows does.
 
 ### 10.2 Tabs
-Item 48 (step 12b), Edge style:
+Item 48, Edge style:
 - 32 px, top corners 8 px, 12 px left and 6 px right padding, no gaps. Every tab has the same width: the strip's one ResizeObserver shares its room evenly, up to 220 px. Under 150 px a share, inactive tabs show their close on hover only; under 84 px they keep only their icon, and the active tab keeps its name and close at 96 px or more. When even icons do not fit, the strip scrolls.
 - A 1 x 14 px divider (`--tab-divider`) between inactive tabs, hidden beside the active and the hovered tab. Hover is a soft fill inside the tab (`--tab-hover-fill`, 3 px inset, 6 px radius).
 - Content: one feature icon (item 16, 16 px; Settings, Saved Queries and lineage keep their line icon), optional `PROD` chip (18 px), title, `*` when unsaved, close (20 px).
@@ -674,7 +674,7 @@ Item 48 (step 12b), Edge style:
 - Canvas `--c-bg-canvas` with the snap grid: dots 1 px every 16 px in `--c-border`, every 80 px in `--c-border-strong` at 50 percent; hidden below 40 percent zoom. Cards no longer snap to it: they snap to 1 px accent alignment guides within 6 screen px of a neighbour's edge or centre (ADR 0019).
 - Table card: 216 px wide (200 to 360 by content), 1 px `--c-node-table-stroke`, 6 px radius, header 32 px on `--c-node-table-fill` with table icon, name UI strong, schema `--c-text-subtle`, column count right; rows 24 px (grid `14px 1fr auto 8px`): key or link icon, column name, type Code small `--c-syn-type`, `?` for nullable in `--c-text-faint`. Highlighted row (linked to text) `--c-accent-subtle`.
 - Edges 1.5 px `--c-text-subtle`, orthogonal with 8 px corners, crow's-foot and bar markers.
-- Selection: 2 px `--c-accent` outline 5 px outside the card (9 px radius), no square handles (board B2, step 12b). A card or node that resizes has invisible pointer zones instead: 8 px across each edge (4 px in, 4 px out) and a 14 px square on each corner, in screen px at any zoom, with the `ns`, `ew`, `nwse` and `nesw` resize pointers; the ports sit above them. A resize is live and shows "W × H" under the box. Selecting on the canvas bands the matching DBML block with `--c-accent-subtle`.
+- Selection: 2 px `--c-accent` outline 5 px outside the card (9 px radius), no square handles. A card or node that resizes has invisible pointer zones instead: 8 px across each edge (4 px in, 4 px out) and a 14 px square on each corner, in screen px at any zoom, with the `ns`, `ew`, `nwse` and `nesw` resize pointers; the ports sit above them. A resize is live and shows "W × H" under the box. Selecting on the canvas bands the matching DBML block with `--c-accent-subtle`.
 - Zoomed-out cards (below 45 percent): 100 x 48 cards with the name (16 / 20 600) and "5 columns"; below 15 percent areas only.
 - Floating controls (level 1): zoom (minus, percent 48 px min width tabular, plus, fit) bottom right; minimap 200 x 140 with nodes as 80 percent stroke-colour blocks and the viewport as a 1 px accent rectangle on a 30 percent accent-subtle fill.
 
@@ -689,7 +689,7 @@ Item 48 (step 12b), Edge style:
 ### 10.8 Flow diagram (`.flow`, Gane-Sarson)
 - Text pane 420 px: strip "Flow", notation chip "Gane-Sarson", "Unsaved", more; editor; Problems block (UI small 600 "Problems" + count chip; each problem in `--c-danger-text` with an alert icon, naming the line, the problem and the fix: "Line 27: refunds is not defined. Add `refunds [store, id: D4]` or send the flow to orders, products or invoices.").
 - `.flow` syntax is line based: header `diagram dfd "Order fulfilment"`; nodes `Customer [entity]`, `Take order [process, id: 1.0]`, `orders [store, id: D1, table: orders]`; groups `Kestrel Foods order system { ... }`; edges `A > B: label`, `A <> B: label`, `A --> B`. Highlighting per 3.6; an undefined name gets the error squiggle, is listed in Problems, and its edge is left off the canvas.
-- Shapes (Classic, frame 6+.2): process 156 px wide, 6 px radius, `--c-node-service-*`, a 24 px id band on top in Code micro (`1.0`), then the name; data store 40 px high, open on the right, 40 px id cell (`D1`) kept even before it has an id; external entity 40 px high, `--c-node-external-*`, heavy top-left edge (3 px top and left border in the stroke colour). Selected: a 2 px `--c-accent` outline 5 px outside, as the schema card, shown at once.
+- Shapes (Classic): process 156 px wide, 6 px radius, `--c-node-service-*`, a 24 px id band on top in Code micro (`1.0`), then the name; data store 40 px high, open on the right, 40 px id cell (`D1`) kept even before it has an id; external entity 40 px high, `--c-node-external-*`, heavy top-left edge (3 px top and left border in the stroke colour). Selected: a 2 px `--c-accent` outline 5 px outside, as the schema card, shown at once.
 - Area (group of nodes): 10 px radius, 1 px dashed `--group` stroke, fill `--group-tint` at 70 percent, label top-left: 16 px Group square and the name in UI small 600.
 - Edges 1.5 px `--c-text-subtle` with 6 px filled arrows; labels on a `--c-bg-canvas` pill, UI small `--c-text-muted`.
 - Toolbar: Select, + Process, Store, Entity, divider, selection summary ("3.0 Bill customer selected"), Publish.
@@ -753,7 +753,7 @@ Four options were drawn (A data-source wash, B hazard where you write, C waterma
 **B. Hazard where you write (only on writes)**
 - Reading looks normal. A statement that writes (INSERT, UPDATE, DELETE, MERGE, DDL, CALL of a non-read-only routine) on a Production Connection gets: band `--c-prod-subtle` behind its lines; a 3 px `--c-prod-solid` gutter bar; a 24 px note row under its last line, indented to the text (48 px), alert icon 14 px and the words "Writes on freight-prod (Production)" in `--c-prod-text` UI small 600.
 - While the current statement writes, Run becomes "Run on PROD" (Production outline button). Grid saves on Production read "Save on PROD" (same style). Both still open the confirm dialog.
-- **Confirm dialog** (420 to 760 px), as built in step 5a (spec `docs/superpowers/specs/2026-10-17-step5a-production-readonly-design.md`): title "Run on **freight-prod** · shop" (or "Save on freight-prod · shop" for Pending Edits), with the database mark, `PROD` chip and Group square beside it; the count line "2 of 3 statements write."; the exact SQL in a read-only editor block with a "writes" or "reads" label per statement; the hint "Enter runs only when Run on freight-prod has focus. Press Tab to reach it, or click it."; buttons Cancel and "Run on freight-prod" (accent primary; danger fill when a statement has an UPDATE or DELETE without WHERE). There is no typed confirmation: the user chose one dialog with the exact SQL. An UPDATE or DELETE without WHERE adds its warning at the top of the same dialog with an "Add WHERE" button, so there is still only one confirmation. Focus starts on the SQL block; Escape cancels.
+- **Confirm dialog** (420 to 760 px), as built: title "Run on **freight-prod** · shop" (or "Save on freight-prod · shop" for Pending Edits), with the database mark, `PROD` chip and Group square beside it; the count line "2 of 3 statements write."; the exact SQL in a read-only editor block with a "writes" or "reads" label per statement; the hint "Enter runs only when Run on freight-prod has focus. Press Tab to reach it, or click it."; buttons Cancel and "Run on freight-prod" (accent primary; danger fill when a statement has an UPDATE or DELETE without WHERE). There is no typed confirmation: the user chose one dialog with the exact SQL. An UPDATE or DELETE without WHERE adds its warning at the top of the same dialog with an "Add WHERE" button, so there is still only one confirmation. Focus starts on the SQL block; Escape cancels.
 - Production orange never appears in Group slots, node kinds, syntax or icons.
 
 ### 11.2 Read-only
@@ -784,9 +784,9 @@ Four options were drawn (A data-source wash, B hazard where you write, C waterma
 - Numbers with units and tabular figures: "200 rows in 48 ms", "1 to 12 of 200", "1,728 x 976 px".
 - Sample data in docs and demos is made up (Kestrel Foods, Orbit Freight, Pinecone Labs) and says so.
 
-## 14. Mapping from DESIGN.md
+## 14. Mapping from the older design
 
-| Area | DESIGN.md (the app before the restyle) | DESIGN-NEXT (this file) |
+| Area | Older design (the app before the restyle) | This file |
 |---|---|---|
 | Palette | Cool neutrals, Harbor Teal `#0E7C86` accent, custom dark | Alucard light, Dracula dark; accent purple `#644AC9` / `#BD93F9` |
 | Focus ring | 2 px teal, offset 2 | 2 px `--c-focus` (accent purple), offset 1, inset in rows |
@@ -799,7 +799,7 @@ Four options were drawn (A data-source wash, B hazard where you write, C waterma
 | Group mark | 22 px initial square, white initial, only in switcher and Home card | 20 px square on Home cards, 16 px in tree, switcher and diagram areas; initial ink per theme (the tab underline in the Group hue went with item 48) |
 | Group colours | Nine (red, orange, amber, ...) | Eight slots, no red, no orange, no purple (3.4) |
 | Production | Amber `#B76E00`, 2 px outline around a grid with Pending Edits | Orange `#D06A14` / `#FFB86C`: wash on panes, `PROD`/`PRODUCTION` labels, hazard only on writes, Run/Save on PROD, confirm dialog |
-| Pending Edits | Highlighter yellow fill, 2 px edge, coloured row number, sweep animation | `--c-warning-subtle` fill and 2 px `--c-warning-solid` edge; keep the row-number colour and the 150 ms sweep from DESIGN.md if wanted (not drawn here) |
+| Pending Edits | Highlighter yellow fill, 2 px edge, coloured row number, sweep animation | `--c-warning-subtle` fill and 2 px `--c-warning-solid` edge; keep the row-number colour and the 150 ms sweep from the older design if wanted (not drawn here) |
 | NULL | Italic faint "NULL", 4.5:1 | "NULL" upright Code 12 in `--c-text-faint` (3.9:1 Alucard); raise to `--c-text-subtle` if NULL must meet 4.5:1 |
 | Database marks | Not specified | Simple Icons dolphin, elephant, feather; colour means open |
 | Status dots | Pending-edit dot allowed | No dots anywhere |

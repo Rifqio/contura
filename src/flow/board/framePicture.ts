@@ -1,8 +1,8 @@
-// Tiny frames as cached pictures (Plan F Decision 7; Figma and Miro draw a far-out board as pictures and load detail
+// Tiny frames as cached pictures (Figma and Miro draw a far-out board as pictures and load detail
 // in progressively). A static frame whose text is far draws as one picture of its SVG, made by B4's writer at the
 // frame's local box from the same layout entry its real children use, in the canvas theme's palette, with soft text and
-// ER cards cut at the canvas's 20 rows. The SVG is then drawn once into a bitmap at a capped scale (Task 9 fix 2), kept
-// as a PNG (fix 3): WebKit draws an <img> of an SVG as vector again at every new zoom, 500 parts a frame, while a bitmap
+// ER cards cut at the canvas's 20 rows. The SVG is then drawn once into a bitmap at a capped scale, kept
+// as a PNG: WebKit draws an <img> of an SVG as vector again at every new zoom, 500 parts a frame, while a bitmap
 // only scales. The store keeps one picture a frame, its PNG (or, until that is in, the SVG's base64 URL) and nothing
 // else: no canvas, no SVG text, no decoded SVG image; a theme switch
 // drops every icon and builds every picture again; builds after the board's open run in time slices.
@@ -65,7 +65,7 @@ export function* pictureSvgSteps(a: PictureInput, palette: ExportPalette, icons:
   const hairline = hairlineId();
   const body = yield* sceneBodySteps(scene, palette, refs, hairline, { softText: a.softText, picture: true });
   yield;
-  // The body's own check first: a scan of the text, where the scene's walks every participant's colours (Plan E Task 9).
+  // The body's own check first: a scan of the text, where the scene's walks every participant's colours.
   const outlined = body.includes(`url(#${hairline})`) && sceneOutlined(scene, palette);
   const defs = svgDefs(palette, { hairline: outlined ? hairline : null, icons: refs.entries() });
   return wrapSvg(defs, body, a.local, palette, { padding: 0, background: "transparent", mark: false }, a.textScale);
@@ -193,7 +193,7 @@ export function* svgPieceSteps(svg: string, most: number = PICTURE_PIECE_CHARS):
 }
 
 /**
- * Most device pixels a picture's bitmap gives one board unit (Task 9 fix 2). The bitmaps count at their real size
+ * Most device pixels a picture's bitmap gives one board unit. The bitmaps count at their real size
  * (width x height x 4) in the store's bytes, under Decision 14's node gates (13 MB on B1's limit board, 15 MB on the ER
  * limit board). The cap the task asked for, the frame's size on screen where it turns real (about 0.46 for body text)
  * times the device pixel ratio, is 4.6 times this a side: about 200 MB for the limit board's 50 frames of about 4,700 by
@@ -205,7 +205,7 @@ export const PICTURE_MAX_SCALE = 0.1;
 export const PICTURE_MAX_SIDE = 2048;
 export const PICTURE_MAX_PIXELS = 1024 * 1024;
 /**
- * Pixels of a bitmap drawn from its SVG and read back in one step at most (Task 9 fix 3): a band of as many whole rows
+ * Pixels of a bitmap drawn from its SVG and read back in one step at most: a band of as many whole rows
  * as fit, never fewer than PICTURE_BAND_MIN_ROWS. A band that took longer than half of PICTURE_SLICE_MS halves the
  * next; one under an eighth of it doubles the next, up to this.
  */
@@ -221,7 +221,7 @@ export function nextBandRows(rows: number, ms: number, w: number): number {
 }
 
 /**
- * A picture drawn into a bitmap (Task 9 fix 2), kept as a PNG's data: URL `w` by `h` pixels (Task 9 fix 3): it is
+ * A picture drawn into a bitmap, kept as a PNG's data: URL `w` by `h` pixels: it is
  * shown by an <img>, which WebKit paints into the canvas's own layer, where a <canvas> on the page is a compositing
  * layer of its own (a backing store and a texture beside its pixels), and every node drawn over one becomes a layer too.
  */
@@ -242,8 +242,8 @@ export type PictureImage = string | PictureRaster;
 export interface Rasteriser {
   draw(url: string, w: number, h: number): Generator<Promise<unknown> | void, PictureRaster | null>;
   /**
-   * The same bitmap from a picture in pieces (`svgPieceSteps`, each a data: URL), drawn one over another in order
-   * (Task 9 fix 4). Without it a picture in pieces is drawn from its whole SVG.
+   * The same bitmap from a picture in pieces (`svgPieceSteps`, each a data: URL), drawn one over another in order.
+   * Without it a picture in pieces is drawn from its whole SVG.
    */
   drawPieces?(urls: readonly string[], w: number, h: number): Generator<Promise<unknown> | void, PictureRaster | null>;
 }
@@ -273,7 +273,7 @@ function scratchContext(): CanvasRenderingContext2D | null {
 }
 
 /**
- * The WebView's rasteriser (Task 9 fix 3). The SVG is decoded by an <img> (the app's CSP allows data: images, not
+ * The WebView's rasteriser. The SVG is decoded by an <img> (the app's CSP allows data: images, not
  * blob:); then, a band a step on the one scratch canvas, its rows are drawn (a source rect of the SVG, so WebKit
  * paints only the parts in it), read back and handed to the platform's deflate stream; the PNG file is written around
  * the deflated pixels and decoded once before it is shown. Every step is timed (`perfStep`) and the bands follow the
@@ -418,7 +418,7 @@ function* pngSteps(deflate: ReturnType<typeof createDeflate>, w: number, h: numb
 }
 
 /**
- * `fn` at most once an animation frame (Task 9 fix 3): a store's `onReady`. Its slices run back to back between two
+ * `fn` at most once an animation frame: a store's `onReady`. Its slices run back to back between two
  * frames, and each that built a picture drew the whole board again; now the board is drawn once, at the next frame.
  */
 export function oncePerFrame(fn: () => void): () => void {
@@ -445,7 +445,7 @@ export interface ImageStore<In, I extends PictureImage = PictureImage> {
   ready(frameId: string): boolean;
   /**
    * The canvas theme: a change drops every icon and every queued build. Each picture stays on screen until its
-   * replacement in the new theme is built (controller ruling, Task 7 fix round 1), so the board never blanks.
+   * replacement in the new theme is built (controller ruling, Task 7), so the board never blanks.
    */
   setTheme(t: ExportTheme): void;
   /** Drops the pictures and queued builds of frames not in `live`. */
@@ -459,7 +459,7 @@ export interface ImageStore<In, I extends PictureImage = PictureImage> {
   bytes(): number;
 }
 
-/** A frame's pictures (Decision 7). */
+/** A frame's pictures. */
 export type PictureStore<I extends PictureImage = PictureImage> = ImageStore<PictureInput, I>;
 
 /** How an image store draws one kind of thing (a frame, a tile of the sketch layer) as SVG and sizes its bitmap. */
@@ -590,13 +590,13 @@ export function createImageStore<In>(kind: ImageKind<In>, o: ImageStoreOptions):
   /**
    * The bitmap of a picture's SVG URL, in steps; the URL itself where nothing draws bitmaps or the drawing fails. A
    * failed drawing leaves the SVG on the page, which WebKit draws as vector again at every zoom: it is logged as
-   * `<name>_fallback` (Task 9 fix 4), so a live run shows it.
+   * `<name>_fallback`, so a live run shows it.
    */
   function* rasterSteps(svg: string, a: In): Generator<Promise<unknown> | void, PictureImage> {
     if (!o.rasterise) return yield* urlSteps(svg);
     const size = kind.size(a, dpr());
     const t0 = now();
-    // A long SVG is decoded and drawn in pieces of bounded size (Task 9 fix 4), one a step.
+    // A long SVG is decoded and drawn in pieces of bounded size, one a step.
     const pieces = o.rasterise.drawPieces ? yield* svgPieceSteps(svg) : [svg];
     const urls: string[] = [];
     for (const p of pieces) {
@@ -663,7 +663,7 @@ export function createImageStore<In>(kind: ImageKind<In>, o: ImageStoreOptions):
   }
 
   /**
-   * The build to run next (Task 9 fix 4): the one under way while it is not waiting, else, with none under way, the
+   * The build to run next: the one under way while it is not waiting, else, with none under way, the
    * best ranked. One build at a time: each holds its SVG decode, its scratch pixels and its PNG while it runs, and the
    * WebView parses an SVG in a task the slices cannot time, so 50 builds started at once (round 3) parsed 50 SVGs back
    * to back between two frames. Undefined when the one under way waits, or nothing is queued.
@@ -769,7 +769,7 @@ export function createImageStore<In>(kind: ImageKind<In>, o: ImageStoreOptions):
       building = true;
       perfMark("pictures_queued");
     }
-    // WebKit has no requestIdleCallback to rely on (Decision 7): a chain of tasks.
+    // WebKit has no requestIdleCallback to rely on: a chain of tasks.
     setTimeout(slice, 0);
   }
 

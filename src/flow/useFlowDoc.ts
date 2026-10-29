@@ -1,7 +1,7 @@
 // One .flow file's document: its text in CodeMirror, the worker's parse of it, the board layout file and the save.
 // The whole file is one CodeMirror document with one history; the canvas sees only the selected frame's doc, layout
-// and ops, as if it were the one diagram it knows (Decisions 8 to 12). Canvas actions become text edits planned by the
-// worker on one exact parse (rulings P5 and P8): the request names the parse's version, a stale answer is planned
+// and ops, as if it were the one diagram it knows. Canvas actions become text edits planned by the
+// worker on one exact parse: the request names the parse's version, a stale answer is planned
 // again on the next parse, and an answer is applied only if the editor still holds the very document it was planned
 // on. Every edit list is one CodeMirror transaction, and a layout change is an entry of its own in the same history,
 // naming its frame, so one undo covers text and canvas in any frame.
@@ -34,24 +34,24 @@ const PLAN_TRIES = 4;
 /** How long an action waits for the next parse before giving up. */
 const NEXT_PARSE_MS = 2000;
 
-/** What the save state says when the layout file would pass the Core's read limit (Decision 21, ruling C12). */
+/** What the save state says when the layout file would pass the Core's read limit (ruling C12). */
 export const LAYOUT_TOO_BIG = "Layout not saved: the layout file would pass 5 MB. Remove some sketches.";
 
 /**
  * The frame a layout change belongs to: its index and its layout key when the change was made. At apply time it
- * resolves by index while `keys[index]` still names that frame, else by key, following hand renames (Decision 8).
+ * resolves by index while `keys[index]` still names that frame, else by key, following hand renames.
  */
 export type FrameRef = { index: number; key: string };
 
 /**
- * Loose sketches changed (Decision 21): each sketch before and after, by id. They go to the layout file only, never
+ * Loose sketches changed: each sketch before and after, by id. They go to the layout file only, never
  * into the text; one op is one transaction and one undo entry in the shared history.
  */
 export const sketchEffect = StateEffect.define<SketchChange[]>();
 
 /**
  * A mark on each history entry that changed the text, numbered: a frame whose text went keeps its entry while the
- * entry that took it (or, undone, brings it back on a redo) is still in the history (Decision 11, memory).
+ * entry that took it (or, undone, brings it back on a redo) is still in the history (memory).
  */
 export const goneMark = StateEffect.define<number>();
 
@@ -94,16 +94,16 @@ export const axisEffect = StateEffect.define<{ frame: FrameRef; before: AxisChan
 
 /** One node's box in the layout: where it is, and its kept size (null: its own size). */
 export type KeptBox = { at?: { x: number; y: number }; size: { w: number; h: number } | null };
-/** A resize or a Fit to content (fix round 1, I7): one undo entry, so Ctrl+Z puts a manual size back. */
+/** A resize or a Fit to content: one undo entry, so Ctrl+Z puts a manual size back. */
 export const sizeEffect = StateEffect.define<{ frame: FrameRef; name: string; before: KeptBox; after: KeptBox }>();
 
 /**
  * A frame's whole entry before and after (null: none): add, delete, duplicate, a frame move, direction, look,
- * notation and text size (Decision 12). `title` is the layout key, resolved through hand renames at apply time.
+ * notation and text size. `title` is the layout key, resolved through hand renames at apply time.
  */
 export const frameEffect = StateEffect.define<{ title: string; before: FrameLayout | null; after: FrameLayout | null }>();
 
-/** The selected frame: its title, and its index as a tiebreak when titles repeat (Decision 9). */
+/** The selected frame: its title, and its index as a tiebreak when titles repeat. */
 export type FrameSelection = { title: string; index: number };
 
 /** The newest parse, focused on the selected frame, and the text it was made from. */
@@ -195,9 +195,9 @@ export interface FlowDocApi {
   layout: FlowLayout;
   /** Every frame's entry by layout key, and the sketches. */
   board: BoardLayout;
-  /** The layout key of each frame index (Decision 8); a frame whose title an earlier frame has gets a key of its own and no entry. */
+  /** The layout key of each frame index; a frame whose title an earlier frame has gets a key of its own and no entry. */
   keys: readonly string[];
-  /** Layouts of the frames whose title an earlier frame has, by frame index: laid out for drawing only, never saved (Decision 9). */
+  /** Layouts of the frames whose title an earlier frame has, by frame index: laid out for drawing only, never saved. */
   clashLayouts: ReadonlyMap<number, ClashLayout>;
   selected: FrameSelection | null;
   /**
@@ -232,7 +232,7 @@ export interface FlowDocApi {
   plan(op: FlowRequestOp): Promise<{ edits: TextEdit[]; text: string } | null>;
   /** The parse of the text the editor holds now, once it has arrived; null when it does not (closed, or a timeout). */
   current(): Promise<Parsed | null>;
-  /** Called when undo or redo moves nodes: where they are and where they go (ruling P8: moves share the history). */
+  /** Called when undo or redo moves nodes: where they are and where they go (moves share the history). */
   onHistoryMove(fn: (move: HistoryMove) => void): () => void;
   /** Applies a fix's edits when the text is still the one its parse was made from. */
   applyFix(edits: TextEdit[], parsedText: string): boolean;
@@ -250,7 +250,7 @@ export interface FlowDocApi {
    * names a frame, or is null, nothing is written. Without it they go to the selected frame.
    */
   place(positions: Positions, override?: boolean, frame?: FrameRef | null): void;
-  /** Positions for nodes of the frame keyed `key` that had none, outside the history (Decision 10). */
+  /** Positions for nodes of the frame keyed `key` that had none, outside the history. */
   placeIn(key: string, positions: Positions): void;
   /**
    * Positions for shapes the assistant's waiting changes draw over the drawing: kept until the changes are decided,
@@ -260,7 +260,7 @@ export interface FlowDocApi {
   /** The waiting changes are decided and `names` is what the text defines now: positions of proposed shapes it lacks go. */
   settleProposed(names: ReadonlySet<string> | ReadonlyMap<string, unknown>): void;
   /**
-   * Plan D Task 8: `placeProposed` for the frame keyed `key` (any frame a board review touches), outside the history:
+   * `placeProposed` for the frame keyed `key` (any frame a board review touches), outside the history:
    * the positions it had none for are kept until `settleProposedIn` for that key.
    */
   placeProposedIn(key: string, positions: Positions): void;
@@ -291,7 +291,7 @@ export interface FlowDocApi {
    */
   addFrames(frames: readonly NewFrame[], centre: Point): Promise<{ titles: string[]; boxes: Rect[] } | { refused: string }>;
   /**
-   * `measureNewFrames` for a landing (Plan D Task 9): each frame laid out and measured and placed in one row on
+   * `measureNewFrames` for a landing: each frame laid out and measured and placed in one row on
    * `centre`, its entry under the title `appendFrames` will write for it (`titles[i]` for `frames[i]`). Writes nothing.
    * A review's `proposedAt` and the entries `landBoard` takes must come from the same call, so a frame lands where it
    * was previewed.
@@ -301,7 +301,7 @@ export interface FlowDocApi {
   moveFrame(key: string, at: { x: number; y: number }): void;
   /**
    * A frame's own settings, as one undo entry. Medium text and crow's feet are the defaults and are not kept, so a
-   * one-frame file set back to them is written as version 1 again (Decision 6).
+   * one-frame file set back to them is written as version 1 again.
    */
   setFrameSetting(key: string, patch: Partial<Pick<FrameLayout, "direction" | "style" | "notation" | "textSize">>): void;
   /** The 1-based line each name is defined on in the current text, or null when the text has changed since. */
@@ -366,7 +366,7 @@ export function frameHeadsOf(doc: Text, text?: string): Head[] {
   return heads;
 }
 
-/** The key of a frame whose title an earlier frame has: drawn faded, never live, and no entry is written (Decision 9). */
+/** The key of a frame whose title an earlier frame has: drawn faded, never live, and no entry is written. */
 const dupKey = (index: number) => `\u0000#${index}`;
 /** A layout key held for a frame whose title another frame has. */
 export const isDup = (key: string) => key.startsWith("\u0000#");
@@ -448,7 +448,7 @@ function cloneEntry(e: FrameLayout): FrameLayout {
 export type NewEntry = { title: string; after: FrameLayout };
 
 /**
- * The add transaction (B2 R2), shared by `frameOp`'s add path and `addFrames`: the text edits, one entry change per
+ * The add transaction, shared by `frameOp`'s add path and `addFrames`: the text edits, one entry change per
  * added frame (its `before` is the entry the title has now, a gone frame's kept one included, so undo gives it back),
  * the shown block kept to its own end, and one undo entry.
  */
@@ -471,7 +471,7 @@ export type Rect = { x: number; y: number; w: number; h: number };
 export interface NewFrame {
   text: string;
   direction?: FlowDirection;
-  /** The Connection From my database drew it from (Task 4b): kept on its entry, never in the text. */
+  /** The Connection From my database drew it from: kept on its entry, never in the text. */
   source?: FrameSource;
 }
 
@@ -580,7 +580,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
 
   const viewRef = useRef<EditorView | null>(null);
   const boardRef = useRef(board);
-  /** Each frame's layout key and header, updated on every document change, before any parse (Decision 8). */
+  /** Each frame's layout key and header, updated on every document change, before any parse. */
   const keysRef = useRef<string[]>([]);
   const headsRef = useRef<Head[]>([]);
   /** The text `headsRef` was read from: a frame's lines tell which frame it was when titles repeat. */
@@ -592,7 +592,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   const lastSaved = useRef<string | null>(null);
   /** The editor's text (LF), for a save after the view is gone. */
   const textRef = useRef<string | null>(null);
-  /** The file's text as it was read or last saved; a save writes the text only after a text edit (P24 I1). */
+  /** The file's text as it was read or last saved; a save writes the text only after a text edit. */
   const diskText = useRef<string | null>(null);
   /** Counts text edits; while it equals the count at the last text save, a save writes only the layout file. */
   const edits = useRef(0);
@@ -607,7 +607,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   const saveSeq = useRef(0);
   const saveRef = useRef<SaveState>(save);
   const alive = useRef(true);
-  /** This tab's entry in the window's list; updates after it closed go nowhere (ruling P17). */
+  /** This tab's entry in the window's list; updates after it closed go nowhere. */
   const handle = useRef<FlowHandle | null>(null);
   /** The user chose Discard: nothing more is written for this tab. */
   const discarded = useRef(false);
@@ -615,15 +615,15 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   /** Writes are held (a delete or rename of the file is on its way); a save that comes due waits for the release. */
   const held = useRef(0);
   const dueWhileHeld = useRef(false);
-  /** What a tab that closed while held still has to write; written on the release (ruling P21). */
+  /** What a tab that closed while held still has to write; written on the release. */
   const deferred = useRef<Payload | null>(null);
   /** The writes on their way; a hold settles once every one has landed. */
   const inflight = useRef(new Set<Promise<boolean>>());
-  /** Read-only while a rename runs (ruling P21). */
+  /** Read-only while a rename runs. */
   const readOnlyRef = useRef(new Compartment());
   /** The open document's flush and hold, made with its registry entry. */
   const control = useRef<{ flush(): Promise<boolean>; hold(opts?: { readOnly?: boolean }): FlowHold } | null>(null);
-  /** Frames being placed (Decision 10); a parse meanwhile places again after. */
+  /** Frames being placed; a parse meanwhile places again after. */
   const placing = useRef(false);
   const placeAgain = useRef(false);
   /** Entries placed by Decision 10 and not changed by hand since: a stand-in a returning title may replace. */
@@ -681,7 +681,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     return key === undefined || isDup(key) ? null : { index: i, key };
   }, []);
 
-  /** The key a change made in `ref` lands in now (Decision 8). */
+  /** The key a change made in `ref` lands in now. */
   const resolveKey = useCallback((ref: FrameRef): string => {
     if (keysRef.current[ref.index] === ref.key) return ref.key;
     let k = ref.key;
@@ -763,7 +763,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     const edited = edits.current;
     const current = viewRef.current?.state.doc.toString() ?? textRef.current;
     // Not edited since it was read or saved: the text is what the file had (Save a copy as copies it), and a save
-    // leaves the .flow alone, so an edit made outside Contura meanwhile survives a move (P24 I1).
+    // leaves the .flow alone, so an edit made outside Contura meanwhile survives a move.
     const textEdited = edited !== savedEdits.current;
     const text = !textEdited ? diskText.current : current !== null && crlf.current ? current.replace(/\n/g, "\r\n") : current;
     if (text === null) return null;
@@ -771,7 +771,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     const ks = keysRef.current;
     const heads = headsRef.current;
     // While a header fails to read, or the board has any error (a bad kind word, a repeated title), every entry is
-    // kept in the file: gone titles are pruned only on a parse of this text with no errors (Decision 11, ruling).
+    // kept in the file: gone titles are pruned only on a parse of this text with no errors.
     const cur = parsedRef.current;
     const aligned = cur !== null && cur.text === current;
     const keepAll = heads.some((h) => h.kind === null) || !aligned || cur.result.problems.some((p) => p.severity === "error");
@@ -905,7 +905,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   );
 
   /**
-   * Decision 10: each frame with no entry is placed beside the others in text order, outside the history; the nodes
+   * Each frame with no entry is placed beside the others in text order, outside the history; the nodes
    * of frames other than the selected one (FlowTab places those) that have no position are laid out first, so the
    * placed box holds them.
    */
@@ -941,7 +941,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
           const key = keysRef.current[i];
           if (key === undefined) continue;
           if (isDup(key)) {
-            // Decision 9: a frame whose title an earlier frame has is drawn faded and has no entry. It is laid out as
+            // A frame whose title an earlier frame has is drawn faded and has no entry. It is laid out as
             // a frame without an entry is, for drawing only: kept in memory by index, never saved.
             const doc = cur.drawns[i];
             const title = headsRef.current[i]?.title;
@@ -1001,7 +1001,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   /**
    * Memory (finding 8): the entry of a frame whose text went is kept for the undo that brings it back, and dropped once
    * the history no longer holds the change that took it (or, undone, its redo). Only on a parse with no errors of the
-   * text the editor holds, as the save drops it from the file then too (Decision 11).
+   * text the editor holds, as the save drops it from the file then too.
    */
   const pruneGone = useCallback(() => {
     const gone = goneAt.current;
@@ -1040,7 +1040,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
           const cur = parsedRef.current;
           // Every call waiting on one parse resolves with it: the newest of those calls holds the parsed text.
           if (cur && (result.version < cur.result.version || (result.version === cur.result.version && call < cur.call))) return;
-          // A frame drawn faded draws only its own last good doc, as the worker keeps it (B4 Task 2b): the canvas, the
+          // A frame drawn faded draws only its own last good doc, as the worker keeps it (B4): the canvas, the
           // board scene and Publish all read the same one.
           const drawns = result.frames.map((f) => f.doc ?? f.lastValid);
           const next = { result, text, drawns, call, keys: keysAt };
@@ -1170,7 +1170,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   );
 
   /**
-   * A hand rename: the entry follows its frame to the new key at once, outside the history (Decision 8). An entry held
+   * A hand rename: the entry follows its frame to the new key at once, outside the history. An entry held
    * at `next` is never overwritten: false, and the frame keeps its old key until that title is free.
    */
   const rekey = useCallback(
@@ -1217,7 +1217,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   );
 
   /**
-   * Decision 8: each frame's key from its header, on every document change, whatever the count. A key goes to one
+   * Each frame's key from its header, on every document change, whatever the count. A key goes to one
    * frame only: (1) a frame whose title is still its key keeps it; (2) a frame whose title is the key another frame had
    * as its title takes it (a block moved); then, with the count unchanged, a frame whose title did not change keeps its
    * key, and a frame held under an old key whose title is the one it had keeps it; (3) with the count unchanged, the
@@ -1366,7 +1366,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
       // Where each frame's key came from, so the selection follows its frame through a re-key.
       const origin = keys.slice();
       // Re-keyed: the frames that took a free key by index, and a frame held under an old key or a key of its own
-      // whose title is unique again (Decision 8: pending until then). Again until nothing changes: a re-key can free the title another
+      // whose title is unique again (pending until then). Again until nothing changes: a re-key can free the title another
       // frame waits for.
       const held = new Set(byIndex);
       keys.forEach((k, i) => {
@@ -1402,7 +1402,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         if (left.length === 0) goneByLines.current.delete(l);
         else goneByLines.current.set(l, left);
       }
-      // The selection follows its frame. A board that comes down to one frame has it selected (Decision 2); a
+      // The selection follows its frame. A board that comes down to one frame has it selected; a
       // one-frame board whose frame was let go (a click outside it, Esc) stays so, as a board of several does.
       const sel = selRef.current;
       let to: number | null = null;
@@ -1516,7 +1516,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         crlf.current = isCrlf(files.text);
         const text = files.text.replace(/\r\n?/g, "\n");
         textRef.current = text;
-        // The layout is read before the first parse, with the frame list read from the headers (Decision 7).
+        // The layout is read before the first parse, with the frame list read from the headers.
         const heads = frameHeaders(text);
         headsRef.current = heads;
         headsText.current = text;
@@ -1524,7 +1524,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         // A sourced frame retitled into a clash keeps holding the diagram Ask (Task 4b review minor 1).
         setBoard(adoptStraySources(parseBoardLayout(files.layout, heads), heads));
         lastSaved.current = files.layout;
-        // A board with one frame opens with it selected; one with more opens with none (Decision 2).
+        // A board with one frame opens with it selected; one with more opens with none.
         select(heads.length === 1 ? { title: heads[0].title, index: 0 } : null);
         setInitialText(files.text);
       },
@@ -1638,7 +1638,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
           scheduleSave();
         }
         if (u.docChanged || u.selectionSet || u.transactions.some((tr) => tr.effects.some((e) => e.is(showFrame)))) {
-          // Counted from the shown frame's header, as the gutter numbers it (Decision 15).
+          // Counted from the shown frame's header, as the gutter numbers it.
           const head = u.state.selection.main.head;
           const line = u.state.doc.lineAt(head);
           const first = shownRange(u.state)?.line ?? 1;
@@ -1717,7 +1717,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
         if (!view || !cur || !alive.current) return null;
         if (opts.version !== undefined && cur.result.version !== opts.version) return null;
         if (started !== frameIdRef.current) return null;
-        // The frame acted on, in this parse (Decision 9); a board op runs on the whole text.
+        // The frame acted on, in this parse; a board op runs on the whole text.
         const index = isBoardOp(op)
           ? 0
           : frameIndexOf(
@@ -1829,7 +1829,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
           const e = key === undefined || isDup(key) ? undefined : b.frames.get(key);
           if (key !== undefined && e) effects.push(frameEffect.of({ title: key, before: e, after: null }));
         }
-        // A rename needs no effect: the entry follows the title when the keys are read (Decision 8).
+        // A rename needs no effect: the entry follows the title when the keys are read.
         const changes = view.state.changes(answer.edits.map((e) => ({ from: e.from, to: e.to, insert: e.insert })));
         view.dispatch({ changes, effects, userEvent: "input.canvas", annotations: [isolateHistory.of("full"), canvasEdit.of(true)] });
         return { at: firstLine(view, answer.edits), ...(answer.name === undefined ? {} : { name: answer.name }) };
@@ -2105,7 +2105,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
     [changeBox],
   );
 
-  /** Fit to content (erd-ux-research 5.5): a resized node lets go of its kept size, as one undo entry (I7). */
+  /** Fit to content (erd-ux-research 5.5): a resized node lets go of its kept size, as one undo entry. */
   const unsize = useCallback(
     (name: string) => {
       const frame = selFrame();
@@ -2233,7 +2233,7 @@ export function useFlowDoc(name: string, client: LangClient): FlowDocApi {
   const selKind = selIndex === null ? null : (headsRef.current[selIndex]?.kind ?? null);
   const layout = useMemo(() => frameLayoutView(board, selKey ?? "\u0000none", selKind), [board, selKey, selKind]);
 
-  // Writes in flight, so a key replayed after a frame switch waits for the one before it (Plan F Decision 12).
+  // Writes in flight, so a key replayed after a frame switch waits for the one before it.
   const inFlight = useRef(0);
   const track = useCallback(<T>(p: Promise<T>): Promise<T> => {
     inFlight.current++;

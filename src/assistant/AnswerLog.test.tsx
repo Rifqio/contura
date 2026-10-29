@@ -571,7 +571,7 @@ test("diagram_with_a_rules_compaction_has_no_second_crossing", async () => {
   expect(screen.getByRole("button", { name: /^Compact, 14 messages/ })).toBeTruthy();
 });
 
-// Step 11f: a sample read. No cell value appears anywhere in these fixtures.
+// a sample read. No cell value appears anywhere in these fixtures.
 const ROWS_RULE =
   "Read live by Contura in a read-only transaction: at most 5 rows per named table, cells cut at 200 characters, binaries as <binary>. Never stored.";
 const ROWS_STEP: ProcessStep = {
@@ -719,7 +719,7 @@ test("log_rows_source_filters", async () => {
   expect(all).toBe(9);
 });
 
-// A diagram Ask's log (board 11.12): Diagram and Tool check rows, no Access row, the one-tool Diagram tab.
+// A diagram Ask's log: Diagram and Tool check rows, no Access row, the one-tool Diagram tab.
 const TOOL_INPUT = '{"file":"checkout","base_hash":"3f9a","changes":[{"op":"add_node","name":"Fraud check"}]}';
 const DIAGRAM_STEPS: ProcessStep[] = [
   { step: "diagram", atMs: 1, value: "checkout.flow, 2,418 B", rule: "Diagrams are not database data: no AI access level applies.", evidence: [], byModel: false },

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Input-to-paint probe (Plan F Task 3, ruling 10; Decision 14): how long the screen takes to change after an input.
+"""Input-to-paint probe: how long the screen takes to change after an input.
 
 It reads one screen region (XGetImage on the root window), sends one input through XTest, then reads the region
 again as fast as it can until it differs, and prints the time from the input to the first changed read, in ms.

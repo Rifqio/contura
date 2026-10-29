@@ -1,5 +1,5 @@
-// B3 Task 11's ERD at the board limit, shared by erBoard.perf.test.ts and scripts/write-limit-boards.mjs (Plan F Task 3,
-// which writes it as a file for the release WebView milestone): 40 flowchart frames of A5's board (200 shapes each) and
+// B3 Task 11's ERD at the board limit, shared by erBoard.perf.test.ts and scripts/write-limit-boards.mjs (which writes it as a file for the release
+// WebView run): 40 flowchart frames of A5's board (200 shapes each) and
 // one ERD of 2,000 tables of 20 columns with 2,000 column relationships, exactly 10,000 shapes.
 import { FRAMES, frame, NODES } from "./bigBoard";
 

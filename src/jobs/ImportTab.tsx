@@ -73,7 +73,7 @@ import { useJobs } from "./useJobs";
 const DELIMITER_CHAR = { comma: ",", semicolon: ";", tab: "\t" } as const;
 
 /**
- * What an Import tab tells the Ask (spec 4.8): the file's base name (never its folder), format, delimiter,
+ * What an Import tab tells the Ask: the file's base name (never its folder), format, delimiter,
  * encoding, header names and mapping, and the target. The file's rows are never read into it. Nothing before a
  * file is read. Lists are cut at twice the Core's caps.
  */
@@ -118,12 +118,12 @@ export interface ImportTabProps {
   /** A .sql file chosen in a table tab turns it into a database import. */
   onTargetChange(t: ImportTarget): void;
   onOpenTable(path: ObjectPath): void;
-  /** D25: Open in Restore shows only once step 9 supplies it. */
+  /** Open in Restore shows only once step 9 supplies it. */
   onOpenInRestore?(): void;
   onRunningChange?(running: boolean): void;
   /**
    * The id of the job a run started, so the App can ask before the tab closes and dismiss the
-   * job after. A SQL file's id comes when start_script returns (until Task 9's client id, Q21).
+   * job after. A SQL file's id comes when start_script returns (until Task 9's client id).
    */
   onJob?(id: JobId): void;
 }
@@ -138,17 +138,17 @@ const NUMERIC = /int|numeric|decimal|real|double|float|serial|money/i;
 type Check = { state: "running" } | { state: "done"; report: CheckReport } | null;
 
 interface Run {
-  /** The client-made id, tracked before the start (Q2, Q21). */
+  /** The client-made id, tracked before the start. */
   id: JobId;
   fileRow: number | null;
-  /** Q27: rows that stay after a stop, from the Failed event. */
+  /** Rows that stay after a stop, from the Failed event. */
   rowsCommitted: number;
   /** Whether a cancel rolls everything back (one transaction). */
   rollsBack: boolean;
 }
 
 /**
- * The Import tab (frame 7.2): File, then Columns (Statements for a SQL file), then Run. Plain
+ * The Import tab: File, then Columns (Statements for a SQL file), then Run. Plain
  * Connections get no SQL dialog; Production asks once for the described job.
  */
 export default function ImportTab({
@@ -410,7 +410,7 @@ export default function ImportTab({
       }
       setRun((r) => r && { ...r, rowsCommitted: e.rowsCommitted ?? 0 });
       // The file changed before anything was kept: confirm the new file. With rows kept
-      // the end stays, with the kept count (Q45).
+      // the end stays, with the kept count.
       if (e.error.kind === "fileChanged" && (e.rowsCommitted ?? 0) === 0) {
         jobs.dismiss(id);
         setRun(null);
@@ -423,7 +423,7 @@ export default function ImportTab({
   async function startTableRun(pass: PassId | null) {
     if (!req || !table) return;
     setError(null);
-    // Q2: the id first, then track, then start, so no event is lost.
+    // the id first, then track, then start, so no event is lost.
     const id = newJobId();
     const onEvent = jobs.track(id, "import", `Importing into ${table.name}`, connection.id);
     onJob?.(id);
@@ -447,7 +447,7 @@ export default function ImportTab({
   async function startScriptRun(pass: PassId | null) {
     if (!scriptReq) return;
     setError(null);
-    // Q21: the id first, then track, then start, so no event is lost and leaving can cancel it.
+    // the id first, then track, then start, so no event is lost and leaving can cancel it.
     const id = newJobId();
     const onEvent = jobs.track(id, "scriptImport", `Importing ${fileName(path)}`, connection.id);
     onJob?.(id);
@@ -515,7 +515,7 @@ export default function ImportTab({
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    // I3: a dialog the tab opened (portalled, so its keys bubble here) keeps its keys to itself.
+    // a dialog the tab opened (portalled, so its keys bubble here) keeps its keys to itself.
     if (confirming || sample !== null || !(e.target instanceof Node) || !root.current?.contains(e.target)) return;
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -542,7 +542,7 @@ export default function ImportTab({
     confirm = {
       connection: v.connection,
       database: v.database,
-      // Q28: every plan warning, the MyISAM one among them, before the run.
+      // every plan warning, the MyISAM one among them, before the run.
       warnings: plan.warnings,
       job: {
         title: confirmSummary(qualifiedName(table), plan.shape, options, oneTransactionOf(plan, options)),

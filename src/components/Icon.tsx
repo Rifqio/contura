@@ -24,7 +24,7 @@ const PATHS = {
     "M9 4H7.5A2.5 2.5 0 0 0 5 6.5v3L3.5 12 5 14.5v3A2.5 2.5 0 0 0 7.5 20H9M15 4h1.5A2.5 2.5 0 0 1 19 6.5v3l1.5 2.5-1.5 2.5v3a2.5 2.5 0 0 1-2.5 2.5H15",
   trigger: "M13 3 5 13.5h6L10 21l8-10.5h-6z",
   key: "M14.5 4a5.5 5.5 0 1 1-5 7.8L4 17.3V20h3v-2h2v-2h2l1.2-1.2A5.5 5.5 0 0 1 14.5 4zM16 8.5h.01",
-  // Lucide ellipsis: three r=1 rings that the stroke fills into clear 2 px dots (H4, Q3).
+  // Lucide ellipsis: three r=1 rings that the stroke fills into clear 2 px dots (H4).
   more: `${circle(12, 5, 1)}${circle(12, 12, 1)}${circle(12, 19, 1)}`,
   moreHorizontal: `${circle(5, 12, 1)}${circle(12, 12, 1)}${circle(19, 12, 1)}`,
   plus: "M12 5v14M5 12h14",
@@ -126,13 +126,13 @@ const PATHS = {
   // Lucide arrow-left-right and grip-vertical (ISC): Swap sides, and a row's drag handle.
   swap: "M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4",
   grip: `${circle(9, 5, 1)}${circle(9, 12, 1)}${circle(9, 19, 1)}${circle(15, 5, 1)}${circle(15, 12, 1)}${circle(15, 19, 1)}`,
-  // Diagram nodes (frame 6+.2): an outside party and the cube for an unknown icon. User and box are Lucide.
+  // Diagram nodes: an outside party and the cube for an unknown icon. User and box are Lucide.
   user: `M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2${circle(12, 7, 4)}`,
   cube: "M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.3 7 12 12l8.7-5M12 22V12",
-  // Lineage (frame 6+.1): ban marks a key that stops a delete; arrow-left is Lucide's (ISC).
+  // Lineage: ban marks a key that stops a delete; arrow-left is Lucide's (ISC).
   ban: `${circle(12, 12, 10)}M4.9 4.9l14.2 14.2`,
   arrowLeft: "M19 12H5M12 19l-7-7 7-7",
-  // The flow tool bar (frames 6+.2, 6+.4, 6+.5).
+  // The flow tool bar (6+.5).
   square: "M5 5h14v14H5z",
   diamond: "M12 3l9 9-9 9-9-9z",
   io: "M7 5h13l-3 14H4z",
@@ -144,13 +144,13 @@ const PATHS = {
   // A light bulb for thinking and a bolt for prompt caching, as drawn on board 11.1.
   think: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.3 1.1 2.2h5c0-.9.5-1.7 1.1-2.2A6 6 0 0 0 12 3z",
   bolt: "M13 3 5 13.5h6L10 21l8-10.5h-6z",
-  // A board frame's kind on its title tab (Plan B Task 6): drawn here in the same 24 px grid and stroke.
+  // A board frame's kind on its title tab: drawn here in the same 24 px grid and stroke.
   cloud: "M7 18.5h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.2 9.6 4.5 4.5 0 0 0 7 18.5z",
   sequence: "M6 4v16M18 4v16M6 9h12M15 6l3 3-3 3M18 15H6M9 12l-3 3 3 3",
   state: `${rect(2.5, 7, 9, 10, 3)}M11.5 12h9M17.5 9l3 3-3 3`,
   mindmap: `${circle(12, 12, 3)}M9.5 10.5 5 7.5M14.5 10.5 19 7.5M9.5 13.5 5 16.5M14.5 13.5 19 16.5`,
   timeline: `M3 12h18${circle(7, 12, 1.5)}${circle(17, 12, 1.5)}M7 10.5V6M17 10.5V6M12 12v6`,
-  // The board toolbar (Plan B Task 7): hand, pencil, type, sparkles, shapes, sticky note and rotate-ccw follow Lucide
+  // The board toolbar: hand, pencil, type, sparkles, shapes, sticky note and rotate-ccw follow Lucide
   // (ISC); the ellipse, line and section tools are drawn on the same grid.
   hand: "M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15",
   circle: circle(12, 12, 8),
@@ -163,7 +163,7 @@ const PATHS = {
   shapes: `M8.3 10a.7.7 0 0 1-.63-1.08L11.4 3a.7.7 0 0 1 1.2-.04L16.3 8.9a.7.7 0 0 1-.57 1.1z${rect(3, 14, 7, 7, 1)}${circle(17.5, 17.5, 3.5)}`,
   stickyNote: "M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8zM15 3v4a2 2 0 0 0 2 2h4",
   rotateCcw: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5",
-  // A sequence frame's kind on its side tab (Plan E Decision 13): repeat, split and git-branch follow Lucide (ISC);
+  // A sequence frame's kind on its side tab: repeat, split and git-branch follow Lucide (ISC);
   // numbering, the Numbering toggle's, is a circle with a 1 on the same grid.
   repeat: "M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3",
   split: "M16 3h5v5M8 3H3v5M12 22v-8.3a4 4 0 0 0-1.17-2.87L3 3M15 9l6-6",

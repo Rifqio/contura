@@ -126,7 +126,7 @@ fn as_text<S: serde::Serializer>(
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// "after you confirmed" only when there was a confirm to speak of: on Production (Q45).
+/// "after you confirmed" only when there was a confirm to speak of: on Production.
 fn file_changed_text(file: &str, confirmed: bool) -> String {
     if confirmed {
         format!("{file} changed after you confirmed. Nothing was imported.")
@@ -540,7 +540,7 @@ mod tests {
             json(changed),
             serde_json::json!({"kind":"fileChanged","message":{"file":"menu-oct.csv","confirmed":true}})
         );
-        // Q45 M5: with no confirm, the text does not speak of one.
+        // with no confirm, the text does not speak of one.
         let changed = Error::FileChanged {
             file: "menu-oct.csv".into(),
             confirmed: false,

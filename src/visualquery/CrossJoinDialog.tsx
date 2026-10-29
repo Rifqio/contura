@@ -1,4 +1,4 @@
-// "Run with a CROSS JOIN?" (frame 6.1): asked before the first run of a set of tables with no Join.
+// "Run with a CROSS JOIN?": asked before the first run of a set of tables with no Join.
 import Dialog from "../components/Dialog";
 import Kbd from "../components/Kbd";
 import { nounFor } from "./nouns";
@@ -7,12 +7,12 @@ import { nounFor } from "./nouns";
 const listText = (items: string[]) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
 
 export interface CrossJoinDialogProps {
-  /** Each table written as a CROSS JOIN, with the tree's row count (D17). */
+  /** Each table written as a CROSS JOIN, with the tree's row count. */
   tables: {
     name: string;
     rows: number | null;
     estimated: boolean;
-    /** V7: the table of a joined group whose count `rows` is (its largest), when it is not `name`. */
+    /** The table of a joined group whose count `rows` is (its largest), when it is not `name`. */
     counted?: string;
   }[];
   /** The FROM table every row of each pairs with. Its count is an estimate unless said otherwise. */

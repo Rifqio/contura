@@ -1,4 +1,4 @@
-//! The import service (Task 8): `plan_import`, `check_import_file`, `confirm_import` and
+//! The import service: `plan_import`, `check_import_file`, `confirm_import` and
 //! `start_import` per Dialect, with a recording sink. Live MySQL and PostgreSQL in
 //! `dbview_test_<8hex>` databases as `dbview_test`; SQLite in temp files.
 
@@ -521,7 +521,7 @@ async fn skip_over_1000_rolls_back(fx: &Fx) {
     assert_eq!(fx.count("t").await, 0);
 }
 
-/// Q27: with Commit every N the committed batches stay, and the failure says how many.
+/// With Commit every N the committed batches stay, and the failure says how many.
 async fn commit_every_n_keeps_earlier_chunks(fx: &Fx) {
     fx.small_table("t").await;
     let file = fx.write("every.csv", &csv_rows(3_000, &[(2_500, "5,dup,1.00")]));
@@ -575,7 +575,7 @@ async fn cancel_mid_way_leaves_target_unchanged(fx: &Fx) {
     assert_eq!(fx.count("t").await, 0);
 }
 
-/// D5, Q29: Production needs the pass; the pass covers one run of the file it was
+/// Production needs the pass; the pass covers one run of the file it was
 /// confirmed for.
 async fn production_without_pass_needs_confirmation(fx: &mut Fx) {
     fx.small_table("t").await;
@@ -617,7 +617,7 @@ async fn production_pass_runs_once(fx: &mut Fx) {
     assert!(fx.svc.jobs().confirmed_file(pass).is_some());
     let (_, rec) = fx.start(req.clone(), Some(pass)).await.expect("start");
     assert_eq!(report(&rec.wait().await)["rowsWritten"], 10);
-    // Q29: start used the pass, so its file is forgotten and the pass is spent.
+    // start used the pass, so its file is forgotten and the pass is spent.
     assert!(fx.svc.jobs().confirmed_file(pass).is_none());
     assert!(matches!(
         fx.start(req.clone(), Some(pass)).await,
@@ -668,7 +668,7 @@ async fn file_changed_after_confirm_refused(fx: &mut Fx) {
     assert_eq!(fx.count("t").await, 0);
 }
 
-/// Q45 M2: the blockers are checked before the Production pass is spent, so a start
+/// The blockers are checked before the Production pass is spent, so a start
 /// refused for them leaves the pass and its file for the next start.
 async fn blocked_start_keeps_the_pass(fx: &mut Fx) {
     fx.small_table("t").await;
@@ -694,7 +694,7 @@ async fn blocked_start_keeps_the_pass(fx: &mut Fx) {
     assert_eq!(report(&rec.wait().await)["rowsWritten"], 10);
 }
 
-/// Q45 I1: the file is held for the whole run, so under Commit every N no other program
+/// The file is held for the whole run, so under Commit every N no other program
 /// can change it between batches, and every batch comes from the bytes that were hashed.
 async fn commit_every_n_holds_the_file(fx: &mut Fx) {
     fx.small_table("t").await;
@@ -830,7 +830,7 @@ async fn duplicate_header_names_map_by_index(fx: &Fx) {
     assert_eq!(rows[1][1], Value::Text("b".into()));
 }
 
-/// Review Focus 5: a missing key is NULL, whatever "An empty cell means" says (D9).
+/// Review Focus 5: a missing key is NULL, whatever "An empty cell means" says.
 async fn json_missing_keys_are_null(fx: &Fx) {
     fx.small_table("t").await;
     let file = fx.write(
@@ -908,8 +908,8 @@ async fn history_entry_per_job(fx: &Fx) {
     assert!(imports.iter().all(|h| h.changed));
 }
 
-/// Q28: the plan says whether the run is one transaction; the sample is the first
-/// statement exactly (Q10), and the preview marks the cells the checks reject.
+/// The plan says whether the run is one transaction; the sample is the first
+/// statement exactly, and the preview marks the cells the checks reject.
 async fn plan_shows_sample_and_one_transaction(fx: &Fx) {
     fx.small_table("t").await;
     let file = fx.write("plan.csv", &csv_rows(1_204, &[(2, "2,x,n/a")]));
@@ -937,7 +937,7 @@ async fn plan_shows_sample_and_one_transaction(fx: &Fx) {
     assert!(!fx.svc.plan_import(every).await.unwrap().one_transaction);
 }
 
-/// Q31: "Read the text NULL as NULL" for CSV, off by default.
+/// "Read the text NULL as NULL" for CSV, off by default.
 async fn null_word_option(fx: &Fx) {
     fx.small_table("t").await;
     let file = fx.write("nulls.csv", "id,name,price\n1,NULL,NULL\n");
@@ -1014,8 +1014,8 @@ async fn export_file(
     out
 }
 
-/// Q42 I1: when the Skip cap is passed after committed batches, the message says what
-/// stayed, never "Nothing was imported." (Q27).
+/// When the Skip cap is passed after committed batches, the message says what
+/// stayed, never "Nothing was imported.".
 async fn skip_cap_after_committed_batches_says_what_stayed(fx: &Fx) {
     fx.small_table("t").await;
     // Rows 1 to 2,100 are good, so the batches up to row 2,000 commit; then 1,001 rows fail.
@@ -1038,7 +1038,7 @@ async fn skip_cap_after_committed_batches_says_what_stayed(fx: &Fx) {
     assert_eq!(fx.count("t").await, 2_000);
 }
 
-/// Q42 I2: a table holding both NULL and the text 'NULL', exported with "NULL is
+/// A table holding both NULL and the text 'NULL', exported with "NULL is
 /// written as The text NULL" and imported with "Read the text NULL as NULL", reads
 /// back exactly.
 async fn null_word_round_trip(fx: &Fx) {
@@ -1071,7 +1071,7 @@ async fn null_word_round_trip(fx: &Fx) {
     assert_eq!(fx.rows("twin").await[1][1], Value::Text("NULL".into()));
 }
 
-/// Q42 minor: Commit every N below 500 commits at N, so a failure keeps every full batch.
+/// Commit every N below 500 commits at N, so a failure keeps every full batch.
 async fn commit_every_n_below_500(fx: &Fx) {
     fx.small_table("t").await;
     let file = fx.write("n.csv", &csv_rows(350, &[(250, "5,dup,1.00")]));
@@ -1083,7 +1083,7 @@ async fn commit_every_n_below_500(fx: &Fx) {
     assert_eq!(fx.count("t").await, 200);
 }
 
-/// Q42 minor: a binary cell that is not `0x` hex goes in as text, with a warning that
+/// A binary cell that is not `0x` hex goes in as text, with a warning that
 /// names its row.
 async fn binary_cells_not_hex_warn(fx: &Fx) {
     let ddl = match fx.kind {
@@ -1118,7 +1118,7 @@ async fn binary_cells_not_hex_warn(fx: &Fx) {
     assert_eq!(fx.rows("b").await[0][1], Value::Bytes(vec![0x0a]));
 }
 
-/// Q42: on Production the streamed hash is checked before COMMIT, so a file changed
+/// On Production the streamed hash is checked before COMMIT, so a file changed
 /// while the import runs is refused and nothing is imported.
 async fn file_changed_mid_run_fails_before_commit(fx: &mut Fx) {
     fx.small_table("t").await;
@@ -1140,7 +1140,7 @@ async fn file_changed_mid_run_fails_before_commit(fx: &mut Fx) {
     }
     // The last row's price 400000.50 becomes 400000.60: one byte, same size.
     let opened = std::fs::OpenOptions::new().write(true).open(&file);
-    // Q45 I1: on Windows the held file refuses the writer, so the confirmed bytes run.
+    // on Windows the held file refuses the writer, so the confirmed bytes run.
     #[cfg(windows)]
     {
         assert!(
@@ -1165,7 +1165,7 @@ async fn file_changed_mid_run_fails_before_commit(fx: &mut Fx) {
     }
 }
 
-/// Q42: a Production import from Excel and from JSON runs with its pass.
+/// A Production import from Excel and from JSON runs with its pass.
 async fn production_excel_and_json(fx: &mut Fx) {
     fx.small_table("t").await;
     fx.small_table("twin").await;
@@ -1195,7 +1195,7 @@ async fn production_excel_and_json(fx: &mut Fx) {
     }
 }
 
-/// Q42: the check pass is refused on a Read-only Connection before any job starts.
+/// The check pass is refused on a Read-only Connection before any job starts.
 async fn read_only_check_pass_refused(fx: &mut Fx) {
     fx.small_table("t").await;
     let ro = fx.other(false, true).await;
@@ -1286,7 +1286,7 @@ per_dialect!(
 
 // ---- Dialect-only checks ----
 
-/// D6: a value for an ALWAYS identity column needs OVERRIDING SYSTEM VALUE; `setval`
+/// A value for an ALWAYS identity column needs OVERRIDING SYSTEM VALUE; `setval`
 /// then leaves the next plain INSERT working.
 #[tokio::test(flavor = "multi_thread")]
 async fn pg_identity_always_gets_overriding_and_setval() {
@@ -1319,7 +1319,7 @@ async fn pg_identity_always_gets_overriding_and_setval() {
     fx.end().await;
 }
 
-/// Q42 minor: imported ids below the sequence's MINVALUE do not fail the `setval`.
+/// Imported ids below the sequence's MINVALUE do not fail the `setval`.
 #[tokio::test(flavor = "multi_thread")]
 async fn pg_setval_below_minvalue() {
     let fx = Fx::new(DialectKind::Postgres).await;
@@ -1336,7 +1336,7 @@ async fn pg_setval_below_minvalue() {
     fx.end().await;
 }
 
-/// Q42: on Production a second import on a busy Connection is JobBusy before the pass
+/// On Production a second import on a busy Connection is JobBusy before the pass
 /// is spent, so the same pass runs once the first import ends.
 #[tokio::test(flavor = "multi_thread")]
 async fn job_busy_keeps_the_pass() {
@@ -1387,7 +1387,7 @@ async fn mysql_auto_increment_continues() {
     fx.end().await;
 }
 
-/// Q27, Q28: a MyISAM table keeps what was written before a failure, and says so.
+/// A MyISAM table keeps what was written before a failure, and says so.
 #[tokio::test(flavor = "multi_thread")]
 async fn mysql_myisam_failure_reports_rows_kept() {
     let fx = Fx::new(DialectKind::MySql).await;

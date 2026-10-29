@@ -1,7 +1,6 @@
 // Small windows (1,024 x 480, and laptops at 125 to 150 percent scaling, about 1,280 x 650 to 1,536 x 760): nothing
 // may end up below the window, under the status bar or past a pane's edge with no way to scroll to it. jsdom does no
-// layout, so these hold the CSS that makes each screen fit; the real-window check at 1,024 x 480, 1,280 x 650 and
-// 1,366 x 700 is in .superpowers/sdd/release-1.0/layout-report.md.
+// layout, so these hold the CSS that makes each screen fit.
 import { expect, test } from "vitest";
 import { askLayout, askWidthRoom } from "../assistant/askWidth";
 import appCss from "./app.css?raw";

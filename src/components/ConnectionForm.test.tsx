@@ -742,7 +742,7 @@ test("saving_asks_before_save_first_and_a_no_keeps_the_form_q43", async () => {
   expect(callsTo("save_connection")).toHaveLength(1);
 });
 
-// ---- AI Context (step 11c) ----
+// ---- AI Context ----
 
 const syncSelect = () => screen.queryByRole("combobox", { name: "Keep context in sync" }) as HTMLButtonElement | null;
 

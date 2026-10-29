@@ -50,7 +50,7 @@ pub async fn preview_export(
     service.preview_export(req).await
 }
 
-/// Starts export `job` (made by the page, Q2). `FileExists` and the path guard's
+/// Starts export `job` (made by the page). `FileExists` and the path guard's
 /// refusals come back here, before the job starts; the rest arrives through `events`.
 #[tauri::command]
 pub async fn start_export(
@@ -85,7 +85,7 @@ pub async fn plan_import(service: Service<'_>, req: ImportRequest) -> Result<Imp
     service.plan_import(req).await
 }
 
-/// Starts the check pass over the whole file. `job` is the page's id (Q21); without one
+/// Starts the check pass over the whole file. `job` is the page's id; without one
 /// the Core makes it. Its report carries the failing rows and the SHA-256.
 #[tauri::command]
 pub async fn check_import_file(
@@ -106,7 +106,7 @@ pub async fn confirm_import(service: Service<'_>, req: ImportRequest) -> Result<
     service.confirm_import(req).await
 }
 
-/// Starts import `job` (made by the page, Q2); `pass` comes from `confirm_import` on
+/// Starts import `job` (made by the page); `pass` comes from `confirm_import` on
 /// Production. Read-only, a changed file, a missing pass and blockers come back here.
 #[tauri::command]
 pub async fn start_import(
@@ -129,7 +129,7 @@ pub async fn plan_script(service: Service<'_>, req: ScriptRequest) -> Result<Scr
 }
 
 /// 100 statements of the file from index `from`, read on demand; `run_as_is` shows the
-/// statements that run as is as Run (Q12).
+/// statements that run as is as Run.
 #[tauri::command]
 pub async fn script_statements(
     service: Service<'_>,
@@ -149,7 +149,7 @@ pub async fn confirm_script(service: Service<'_>, req: ScriptRequest) -> Result<
     service.confirm_script(req).await
 }
 
-/// Starts script `job` (made by the page, Q21; without one the Core makes it); `pass`
+/// Starts script `job` (made by the page; without one the Core makes it); `pass`
 /// comes from `confirm_script` on Production. Read-only, a refused statement, a changed
 /// file and a missing pass come back here.
 #[tauri::command]
@@ -374,7 +374,7 @@ pub fn job_events(
 
 /// Explorer's one `/select,"<path>"` argument. The path comes from the page, so only an
 /// absolute path that exists is taken, and never one with a double quote, which would
-/// end the quoted path and pass the rest to Explorer as switches (Q45 M6).
+/// end the quoted path and pass the rest to Explorer as switches.
 fn select_arg(path: &std::path::Path) -> Result<String, Error> {
     let text = path.display().to_string();
     if text.contains('"') {
@@ -406,7 +406,7 @@ pub fn read_text_file(data: State<'_, DataDir>, path: PathBuf) -> Result<String,
 mod tests {
     use super::*;
 
-    /// Q45 M6: only an absolute path that exists, with no double quote, and Explorer gets
+    /// Only an absolute path that exists, with no double quote, and Explorer gets
     /// it as one `/select,` argument.
     #[test]
     fn reveal_takes_only_an_existing_absolute_path() {

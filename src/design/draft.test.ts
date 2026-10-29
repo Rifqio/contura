@@ -238,7 +238,7 @@ test("a_removed_column_comes_back_and_moves_step_over_it", () => {
   expect(moved.columns.map((c) => c.name)).toEqual(["status", "id", "email", "total", "created_at"]);
 });
 
-// Task 9: indexes and Foreign Keys.
+// Indexes and Foreign Keys.
 
 const ix = (name: string, columns: string[], over: Partial<TableIndex> = {}): TableIndex => ({
   name,
@@ -549,7 +549,7 @@ test("index_and_key_names_must_be_unique_in_the_draft", () => {
   expect(keysProblem(dr)).toBeNull();
 });
 
-// Final review fixes (S13 I3 and the ledger's text match).
+// Final review fixes (the text match).
 
 /** A new PostgreSQL table with the column id int, not named yet. */
 function newPgTable(): Draft {

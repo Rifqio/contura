@@ -210,7 +210,7 @@ test("flow_rows_and_both_sentences", () => {
   expect(flowMatches("kestrel.orders", { database: "kestrel", schema: null, name: "orders" })).toBe(true);
 });
 
-// ---- Fix round 1 (P14) ----
+// ---- Fix round 1 ----
 
 const c = (name: string, nullable: boolean) => ({ name, ty: "bigint", pk: false, fk: true, nullable });
 
@@ -399,7 +399,7 @@ test("a_or_an_by_sound", () => {
   expect(deleteTitle(p("items"))).toBe("Before you delete an item");
 });
 
-// ---- Fix round 2 (P15) ----
+// ---- Fix round 2 ----
 
 test("an_unchecked_default_is_said_not_assumed", () => {
   const l = link("orders", ["store_id"], "stores", ["id"], { onDelete: "SET DEFAULT", onUpdate: "SET DEFAULT" });
@@ -456,7 +456,7 @@ test("a_or_an_for_one_and_uni", () => {
 });
 
 test("a_diagram_row_names_the_process_that_touches_the_table", () => {
-  // The file is the row's second line, so the title names only the process (P18).
+  // The file is the row's second line, so the title names only the process.
   expect(processSentence("Ship order", "reads", ORDERS)).toBe("Ship order reads orders");
   expect(processSentence("Checkout", "writes", ORDERS)).toBe("Checkout writes orders");
   expect(processSentence("Stock", "both", p("order_lines"))).toBe("Stock reads and writes order lines");

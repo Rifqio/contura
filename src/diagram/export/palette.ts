@@ -24,16 +24,16 @@ export interface ExportPalette {
   strongBorder: string;
   /** The tint of a sequence frame and a timeline section. */
   panel: string;
-  /** Quieter words: a board frame's tab title, a Section's title and an icon sketch's title (B4 R4). */
+  /** Quieter words: a board frame's tab title, a Section's title and an icon sketch's title. */
   muted: string;
   /**
    * The faint words token (`--c-text-faint`): a frame picture's soft text bars draw in it at 45 percent, as the canvas's
-   * far text does (flow-board.css, Plan F Decisions 2 and 7).
+   * far text does (flow-board.css).
    */
   faint: string;
   /** A far ER key row's mark (`--c-group-gold`, flow-board.css `--far-key`): a frame picture's far ER card draws it. */
   keyMark: string;
-  /** Step 11: the six palette colours (fill, border, words) a shape, group or line may take; uncoloured without them. */
+  /** The six palette colours (fill, border, words) a shape, group or line may take; uncoloured without them. */
   colours?: Record<keyof typeof PALETTE_TOKENS, { fill: string; stroke: string; text: string }>;
 }
 

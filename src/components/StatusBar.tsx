@@ -19,14 +19,14 @@ interface Props {
   screen: StatusScreen;
   theme: ThemeChoice;
   onTheme(c: ThemeChoice): void;
-  /** The running jobs item (D22), shown before the theme menu. */
+  /** The running jobs item, shown before the theme menu. */
   jobs?: ReactNode;
   /** Opens Settings from the gear beside the theme switch; `settingsKey` is its shortcut for the tooltip. */
   onSettings?: () => void;
   settingsKey?: string;
 }
 
-/** A diagram, as frames 6+.2 and 6+.3: the file, where you are typing, and its errors. */
+/** A diagram: the file, where you are typing, and its errors. */
 function FlowStatus({ name, fileName }: { name: string; fileName: string }) {
   const entry = useFlowEntry(name);
   return (

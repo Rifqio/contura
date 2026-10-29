@@ -1,4 +1,4 @@
-// Diagram step 3 (board DiagramEditInPlace; diagram-ux-research F3, CL1, T1, C1): every kind's label is edited on
+// Diagram step 3 (board DiagramEditInPlace; diagram-ux-research F3, CL1, T1): every kind's label is edited on
 // the shape. Double-click, F2 or Enter open it with the text selected; Enter, a click away and Escape keep it (the
 // user's decision of 25 Oct); Shift+Enter starts a new line where the kind allows it; a refused name stays in the
 // field with its reason. Class members are rows, timeline items take their dates in place, a new group's title
@@ -115,7 +115,7 @@ test("F3 a sequence name stays on one line: Shift+Enter says so", async () => {
 });
 
 test("F3 a taken name and an empty one are refused in place; the first Esc keeps the reason, the second puts it back", async () => {
-  // Step 11: a class takes no label, so a taken name is still refused there (a flowchart shape keeps it as label:).
+  // a class takes no label, so a taken name is still refused there (a flowchart shape keeps it as label:).
   const CLS = lines('diagram class "Orders"', "class Customer", "class Order", "", "Customer --> Order");
   const s = setup(CLS);
   await shown(s, "Class Order");

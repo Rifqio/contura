@@ -1,4 +1,4 @@
-// The board assistant on a three-frame board (Plan D Tasks 10, 11): the request carries the board, its focus and the
+// The board assistant on a three-frame board: the request carries the board, its focus and the
 // chat thread; a follow-up question waits with the text free, and Continue sends the reply; Cancel sends nothing; a tab
 // closed mid-Ask lands nothing; a proposal across frames lands as one undo, behind the remove question and Auto-apply's
 // checks, and a text changed while it waits makes it stale.
@@ -390,7 +390,7 @@ test("closing_the_tab_mid_ask_lands_nothing", async () => {
 // ----- Task 10 fix round 1: a reply is never lost.
 
 const composer = () => screen.getByRole("textbox", { name: "Describe a change" }) as HTMLTextAreaElement;
-/** The follow-up card's reply box (Task 16). */
+/** The follow-up card's reply box. */
 const replyBox = () => screen.getByRole("textbox", { name: "Your reply" }) as HTMLTextAreaElement;
 
 /** Asks, gets the follow-up "Which table?", and Continues with `reply`. */
@@ -998,7 +998,7 @@ test("the_card_works_on_a_one_file_ask_with_an_attached_file", async () => {
   fireEvent.change(replyBox(), { target: { value: "the second" } });
   fireEvent.keyDown(replyBox(), { key: "Enter", ctrlKey: true });
   await waitFor(() => expect(asks()).toHaveLength(2));
-  // The Core keeps the file for the reply (Task 18): the reply carries the question, the reply and the same token.
+  // The Core keeps the file for the reply: the reply carries the question, the reply and the same token.
   expect(asks()[1].question).toBe("Match the attached flow");
   expect(asks()[1].board!.attachment).toBe("tok-1");
   expect(asks()[1].board!.followUp).toEqual({ asked: "Which of the two flows?", reply: "the second" });
@@ -1229,7 +1229,7 @@ test("named_parts_on_screen_ring_when_the_answer_ends", async () => {
   await send("What does the board do?");
   await idle();
   // The shape rings by its frame's layout key, and the column on its own row, never the whole card.
-  // "ringed": the landing's ring, with no ", added by AI" in the name, since nothing was added (Task 19 fix round 1).
+  // "ringed": the landing's ring, with no ", added by AI" in the name, since nothing was added.
   await waitFor(() => expect(stateOf(inFrameId("Checkout", "Cart"))).toBe("ringed"));
   expect(stateOf(inFrameId("Checkout", "Pay"))).toBe("ringed");
   expect(stateOf(inFrameId("Refund", "Ask"))).toBeUndefined();

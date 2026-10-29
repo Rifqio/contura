@@ -518,7 +518,7 @@ test("opening_from_the_result_area_connects_and_a_failure_offers_try_again_and_e
   setup(doc("SELECT 1"), false, { onConnectionOpened, onEditConnection, onOpenStatus });
   await userEvent.click(screen.getByRole("button", { name: /Open KFC Postgres/ }));
   expect(await screen.findByRole("heading", { name: "Could not open KFC Postgres" })).toBeTruthy();
-  // The tree row follows: Connecting..., then Failed with the reason (frames 10b, 10c).
+  // The tree row follows: Connecting..., then Failed with the reason.
   expect(onOpenStatus.mock.calls[0]).toEqual(["c1", { s: "connecting" }]);
   expect(onOpenStatus).toHaveBeenLastCalledWith("c1", { s: "failed", error: expect.stringContaining("timeout connecting") });
   expect(screen.getByText("timeout connecting to 127.0.0.1:5432")).toBeTruthy();
@@ -591,7 +591,7 @@ test("closing_an_open_result_releases_it_on_the_server", async () => {
   expect(screen.queryByRole("tab", { name: "Result 1" })).toBeNull();
 });
 
-// The schema index (step 4b).
+// The schema index.
 
 function withLang() {
   const client = new LangClient(() => fakeWorker());
@@ -871,7 +871,7 @@ test("add_where_does_nothing_when_the_statement_was_edited", async () => {
   expect(callsTo("execute_sql")).toHaveLength(0);
 });
 
-// Production wash and write hazard (restyle Task 10).
+// Production wash and write hazard (restyle).
 const freight: ConnectionConfig = { ...conn, name: "freight-prod", production: true };
 const setupFreight = (text: string) => setup(doc(text), true, { connections: [freight] });
 
@@ -1436,7 +1436,7 @@ test("a_cancelled_open_leaves_the_connection_open_while_another_open_is_in_fligh
   await other;
 });
 
-// The query diagram beside the editor (step 6, B1).
+// The query diagram beside the editor.
 
 const DIAGRAM_SQL = "SELECT o.id, s.name\nFROM sales.orders o\nJOIN stores s ON s.id = o.store_id";
 const ctrlShiftD = (view: EditorView) => key(view, "D", { ctrlKey: true, shiftKey: true, code: "KeyD", keyCode: 68 });
@@ -1579,7 +1579,7 @@ test("a_failed_run_records_a_failed_step", async () => {
   await waitFor(() => expect(stepsOf("ungrouped")).toMatchObject([{ verb: "runQuery", failed: true, count: null }]));
 });
 
-// ---- UX step 9 (A2): a suggestion waiting in the editor turns Run off ----
+// ---- UX step 9: a suggestion waiting in the editor turns Run off ----
 
 test("a2_run_is_off_while_a_suggestion_waits_and_ctrl_enter_only_keeps_it", async () => {
   routes();
@@ -1612,7 +1612,7 @@ test("a2_run_button_does_nothing_while_a_suggestion_waits", async () => {
   expect(editorRef.current!.text()).toBe("SELECT 1;");
 });
 
-// ---- UX step 9 fix round 1 (I1): a comment-only or blank line is outside any statement (DataGrip) ----
+// ---- UX step 9 fix round 1: a comment-only or blank line is outside any statement (DataGrip) ----
 
 const KEPT_COMMENT = "SELECT * FROM orders;\n\n-- DELETE FROM orders WHERE id = 3;\nUPDATE accounts SET flag = 1 WHERE id = 7;";
 

@@ -1,4 +1,4 @@
-// A static frame drawn as one picture of itself (Plan F Decision 7, as Figma and Miro draw a far-out board): an <img>
+// A static frame drawn as one picture of itself (as Figma and Miro draw a far-out board): an <img>
 // of its bitmap's PNG (Task 9 fixes 2 and 3), or of its SVG until that is in, over the frame's box where its shapes
 // would stand. No <canvas>: in WebKit each is a compositing layer of its own. It takes no pointer events; a click there
 // picks the frame as its box does, and a pick of a shape reads the frame's children as built.
@@ -14,7 +14,7 @@ function FramePicture({ data }: NodeProps) {
   return <Picture data={data as FramePictureData} className="board-picture-img" />;
 }
 
-/** A tile of the sketch layer pictured when far (Task 9 fix 2), drawn as a frame's picture is. */
+/** A tile of the sketch layer pictured when far, drawn as a frame's picture is. */
 function SketchPicture({ data }: NodeProps) {
   return <Picture data={data as FramePictureData} className="board-sketch-picture-img" />;
 }

@@ -51,10 +51,10 @@ export type FlowNodeData = {
   /** The size its kind and words lay it out at, before any resize (plain numbers, so equal data stays equal). */
   naturalW?: number;
   naturalH?: number;
-  /** Step 11: the words it shows (its `label:`) when it has one, and its palette colour. */
+  /** The words it shows (its `label:`) when it has one, and its palette colour. */
   shows?: string;
   color?: ShapeColour;
-  /** The frame's text size as a label scale (Decision 22); unset at 1. */
+  /** The frame's text size as a label scale; unset at 1. */
   textScale?: number;
 };
 
@@ -145,13 +145,13 @@ function Resizer({ id, selected, kind, naturalW, naturalH }: { id: string; selec
 
 export type FlowAreaData = {
   name: string;
-  /** 0 for a group in no group; an inner group's edge is solid (frame 6+.5). */
+  /** 0 for a group in no group; an inner group's edge is solid. */
   depth: number;
   /** The group's `icon:` name, drawn small before its label. */
   iconName?: string;
-  /** Step 11: its palette colour: its border and title. */
+  /** Its palette colour: its border and title. */
   color?: ShapeColour;
-  /** Plan D: the assistant renamed it (its area is tinted by class); its name says so. */
+  /** The assistant renamed it (its area is tinted by class); its name says so. */
   state?: "changed";
 };
 
@@ -165,7 +165,7 @@ export type FlowEdgeData = {
   toRow?: number;
   /** Fading out with a deleted node. */
   leaving?: boolean;
-  /** Step 6: the axis a + drew this line on; it keeps that side. */
+  /** The axis a + drew this line on; it keeps that side. */
   axis?: "v" | "h";
   /** The frame's text size as a label scale; unset at 1. */
   textScale?: number;
@@ -265,7 +265,7 @@ const SIDES = [
 
 /**
  * A handle at each round port (`.fnode-port`, data-side r, l, t, b): a flow is drawn from any of them to any other.
- * `one`: only the right one, for a card drawn as far bars (Plan F milestone), whose lines are routed from its box and
+ * `one`: only the right one, for a card drawn as far bars, whose lines are routed from its box and
  * which, as main's fast name box, is not connected from at that size.
  */
 const Handles = memo(function Handles({ one = false }: { one?: boolean }) {
@@ -328,7 +328,7 @@ const ServiceFlowNode = memo(function ServiceFlowNode({ data, selected }: NodePr
 });
 
 /**
- * A group's icon before its label: 16 px, as an image only (ruling P7). An icon the pack does not have, or one
+ * A group's icon before its label: 16 px, as an image only. An icon the pack does not have, or one
  * that could not be read, shows the group-colour square, as the export draws it.
  */
 function AreaIcon({ name }: { name: string }) {
@@ -343,7 +343,7 @@ export const FlowGroupSelContext = createContext<string | null>(null);
 
 /**
  * A group: a tinted area behind its nodes, named at the top left; groups inside groups have a solid edge. Its title
- * takes presses (step 9, F9: a click selects the group, a drag moves it, a double-click renames it); the rest of the
+ * takes presses (F9: a click selects the group, a drag moves it, a double-click renames it); the rest of the
  * area stays canvas, as Miro and Figma frames do.
  */
 const FlowArea = memo(function FlowArea({ id, data }: NodeProps) {
@@ -357,7 +357,7 @@ const FlowArea = memo(function FlowArea({ id, data }: NodeProps) {
       aria-label={`Group ${d.name}${(d.state && STATE_NOTE[d.state]) ?? ""}`}
       style={d.color ? colourVars(d.color) : undefined}
     >
-      {/* Where lines to the group end (fix round 2, L1); the line is routed to the area's edge, so these never show. */}
+      {/* Where lines to the group end (L1); the line is routed to the area's edge, so these never show. */}
       <Handle type="source" position={Position.Left} isConnectable={false} className="edge-anchor flow-area-anchor" />
       <Handle type="target" position={Position.Right} isConnectable={false} className="edge-anchor flow-area-anchor" />
       <span className="flow-area-name nodrag nopan">
@@ -433,8 +433,8 @@ function LineEnds({ id, from, to }: { id: string; from: { x: number; y: number }
 }
 
 /**
- * A relationship between columns, at each end's row as each card's rows are scrolled (ER build C, fix round 1), on the
- * cards' row pitch at the frame's text size `k` (B4 fix round 1).
+ * A relationship between columns, at each end's row as each card's rows are scrolled (ER build C), on the
+ * cards' row pitch at the frame's text size `k`.
  */
 export function rowRoute(a: Rect, b: Rect, fromRow: number, toRow: number, self: boolean, scrollA = 0, scrollB = 0, k = 1) {
   return routeRows(a, erRowY(a.y, a.h, fromRow, scrollA, k), b, erRowY(b.y, b.h, toRow, scrollB, k), self);
@@ -445,7 +445,7 @@ const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
   const a = useInternalNode(p.source);
   const b = useInternalNode(p.target);
   const data = p.data as FlowEdgeData | undefined;
-  // A line at its rows follows each card's scrolled rows (fix round 1); a static frame's line (B3 decision 5: static
+  // A line at its rows follows each card's scrolled rows; a static frame's line (B3 decision 5: static
   // cards do not scroll) and any other line listen to nothing.
   const rowed = data?.fromRow !== undefined && !isStaticId(p.id);
   const sa = useErScroll(rowed ? p.source : null);
@@ -477,7 +477,7 @@ const FlowEdge = memo(function FlowEdge(p: EdgeProps) {
 /** A step 12 shape, with the four ports a line is drawn from. */
 const KindFlowNode = memo(function KindFlowNode({ id, data, selected, draggable }: NodeProps) {
   const d = data as KindNodeData;
-  // An ER card whose text is far draws as bars with one handle (Plan F milestone): its handles are measured again when
+  // An ER card whose text is far draws as bars with one handle: its handles are measured again when
   // that changes, so a line drawn from a side finds it.
   const farEr = useTextFar(textSizeOf(d.textScale)) && (d.kind === "erTable" || d.kind === "erWeak") && (d.sized?.w ?? d.naturalW ?? 0) > 0;
   const update = useUpdateNodeInternals();
@@ -497,7 +497,7 @@ const KindFlowNode = memo(function KindFlowNode({ id, data, selected, draggable 
   );
 });
 
-/** Step 7: a new topic's place, dashed, until its name is kept (its field sits on it). */
+/** A new topic's place, dashed, until its name is kept (its field sits on it). */
 const MindGhost = memo(function MindGhost() {
   return <div className="flow-ghost-topic" aria-hidden="true" />;
 });
@@ -524,7 +524,7 @@ const AREA_TOP = 36;
 
 type Box = { x: number; y: number; w: number; h: number };
 
-/** An empty group's area (diag-910 fix round 1, I5): the board's size, at the place the layout keeps under its name. */
+/** An empty group's area (diag-910): the board's size, at the place the layout keeps under its name. */
 export const EMPTY_AREA = { w: 240, h: 120 };
 
 /** Where an empty group is drawn: its kept place, else under everything placed, so it is never lost off the canvas. */
@@ -547,7 +547,7 @@ export function emptyAreas(positions: Positions, placed: ReadonlyMap<string, Box
 
 /**
  * Each group's area around its placed nodes and inner groups, with its depth (0 outermost). An empty group has the
- * box `kept` gives it (I5), or none.
+ * box `kept` gives it, or none.
  */
 export function groupBoxes(groups: FlowGroup[], placed: Map<string, Box>, kept?: (name: string) => Box | undefined): { name: string; box: Box; depth: number }[] {
   const out: { name: string; box: Box; depth: number }[] = [];
@@ -624,7 +624,7 @@ function dashOf(arrow: FlowArrow, diagram: DiagramKind): string {
   return DASH[arrow] ?? "flow-line";
 }
 
-/** The marker at each end of a line, by its arrow (step 12 adds the class marks); a coloured head or ER end keeps its colour (step 11). */
+/** The marker at each end of a line, by its arrow (step 12 adds the class marks); a coloured head or ER end keeps its colour. */
 function markers(arrow: FlowArrow, diagram: DiagramKind, colour?: ShapeColour, notation: ErNotation = "crow"): { start?: string; end?: string } {
   const m = plainMarkers(arrow, diagram, notation);
   if (!colour) return m;
@@ -634,7 +634,7 @@ function markers(arrow: FlowArrow, diagram: DiagramKind, colour?: ShapeColour, n
 }
 
 function plainMarkers(arrow: FlowArrow, diagram: DiagramKind, notation: ErNotation): { start?: string; end?: string } {
-  // An ER frame drawn in Arrows (Decision 22): a plain line with a head at its second end, whatever its cardinality.
+  // An ER frame drawn in Arrows: a plain line with a head at its second end, whatever its cardinality.
   if (diagram === "er" && notation === "arrow") return { end: ARROW_MARKER };
   // An ER relationship's ends are crow's feet: a bar at a one end, a crow's foot at a many end.
   if (diagram === "er") {
@@ -674,7 +674,7 @@ function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook, textScale = 1): 
   if (textScale !== 1) data.textScale = textScale;
   if (n.attrs.label !== undefined && n.kind !== "note") data.shows = n.attrs.label;
   const colour = n.kind === "note" ? undefined : drawnColour(n.attrs.color);
-  // Plan E (A9): a participant takes no `color`, so no preset fill; only the sequence variables read its colour.
+  // A participant takes no `color`, so no preset fill; only the sequence variables read its colour.
   const seq = kind === "participant" || kind === "actor";
   if (seq) data.seq = true;
   if (colour && seq) data.seqColour = colour;
@@ -693,7 +693,7 @@ function nodeData(n: FlowNode, kind: DrawnKind, look: NodeLook, textScale = 1): 
 
 /** A sequence, mind map or timeline: laid out from the text every time, with its frames, lifelines and axis. */
 function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes: Node[]; edges: Edge[] } | null {
-  // Step 7: a new topic's ghost takes its place in the map's layout before its name is kept (board DiagramMindMap).
+  // a new topic's ghost takes its place in the map's layout before its name is kept (board DiagramMindMap).
   const ghost = given.kind === "mindmap" ? opts.ghost : undefined;
   const doc = ghost ? withGhost(given, ghost) : given;
   const scale = opts.textScale ?? 1;
@@ -702,7 +702,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
   if (!lay) return null;
   const nodes: Node[] = [];
   for (const n of doc.nodes) {
-    // A folded topic's subtopics are not placed, so not drawn (M3).
+    // A folded topic's subtopics are not placed, so not drawn.
     if (doc.kind === "mindmap" && !lay.positions[n.name]) continue;
     const p = lay.positions[n.name] ?? { x: 0, y: 0 };
     const s = lay.sizes.get(n.name) ?? size(n);
@@ -715,7 +715,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
     const state = opts.states?.get(n.name);
     if (state) data.state = state;
     if (data.seq) {
-      // Plan E: the colour variables and the class that reads them on the one element (flow-seq.css).
+      // The colour variables and the class that reads them on the one element (flow-seq.css).
       const vars = seqColourVars(data.seqColour, kind === "actor" ? "actor" : "participant");
       const cls = scale !== 1 ? `${TEXT_SCALED} fkind-seq` : "fkind-seq";
       nodes.push({ id: n.name, type: "kind", position: p, initialWidth: s.w, initialHeight: s.h, style: { width: s.w, height: s.h, ...scaledStyle(scale), ...vars }, data, draggable: false, className: cls });
@@ -742,7 +742,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
   const blockChips: CSSProperties[] = [];
   (lay.seq?.blocks ?? []).forEach((b) => {
     const label = doc.frames?.[b.index]?.label ?? b.kind;
-    // Plan E Decision 13: the class and the block's colour variables on the one element (flow-seq.css).
+    // The class and the block's colour variables on the one element (flow-seq.css).
     const vars = seqColourVars(b.colour, "block");
     blockChips[b.index] = { ...vars, "--seq-chip": "var(--seq-wash)" } as CSSProperties;
     const seqNode = (n: Node): Node => ({ ...n, style: { ...n.style, ...scaledStyle(scale), ...vars }, className: scale !== 1 ? `${TEXT_SCALED} fkind-seq` : "fkind-seq" });
@@ -753,7 +753,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
     extras.push(seqNode(behind(`\u0000frameTab:${b.index}`, "seqFrameTab", tab, { label, caption: b.caption }, 1)));
   });
   if (lay.seq && lay.seq.lanes.length) {
-    // Every lifeline and bar in one node over the blocks and under the messages (Decision 15); it takes no presses.
+    // Every lifeline and bar in one node over the blocks and under the messages; it takes no presses.
     const { lanes, bars, bounds } = lay.seq;
     const node = behind("\u0000lanes", "seqLanes", bounds, { lanes, bars, x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h }, -1);
     extras.push({ ...node, style: { ...node.style, pointerEvents: "none" } });
@@ -776,7 +776,7 @@ function fixedGraph(given: FlowDoc, look: NodeLook, opts: GraphOptions): { nodes
       if (!m) return;
       const reply = l.arrow === "-->";
       const mark = opts.marks?.get(i);
-      // Plan E Decision 7: a label's chip takes the canvas's colour, or the wash of the innermost block holding it.
+      // A label's chip takes the canvas's colour, or the wash of the innermost block holding it.
       const bg = m.label?.bg;
       const chip: CSSProperties = bg === undefined ? NO_CHIP : bg === "canvas" ? CANVAS_CHIP : blockChips[bg];
       const data: SeqEdgeData = { row: i, y: m.y, m, at: lay.positions[l.from], chip };
@@ -826,15 +826,15 @@ export interface GraphOptions {
   marks?: ReadonlyMap<number, "add" | "del" | "changed">;
   /** Rows a card shows beyond its text's, by node: a member being added grows its class by one. */
   grow?: Readonly<Record<string, number>>;
-  /** Step 6: the axes of lines added with a +, by `axisKey`. */
+  /** The axes of lines added with a +, by `axisKey`. */
   axes?: Readonly<Record<string, "v" | "h">>;
-  /** Step 7: the mind map topics folded (their subtopics are not drawn), and a new topic's ghost: under `parent`,
+  /** The mind map topics folded (their subtopics are not drawn), and a new topic's ghost: under `parent`,
    *  after its sibling `after` or last, at `size`. */
   folded?: ReadonlySet<string>;
   ghost?: { parent: string; after?: string; size: { w: number; h: number } };
   /** The frame's text size as a label scale (`TEXT_SCALE`): label font size and the node sizes that hold them. */
   textScale?: number;
-  /** An ER frame's line ends (Decision 22): crow's feet, or a plain line with a head at its second end; "crow" when absent. */
+  /** An ER frame's line ends: crow's feet, or a plain line with a head at its second end; "crow" when absent. */
   notation?: ErNotation;
 }
 
@@ -860,7 +860,7 @@ function withGhost(doc: FlowDoc, ghost: NonNullable<GraphOptions["ghost"]>): Flo
 const scaledStyle = (scale: number): Record<string, number> => (scale !== 1 ? { "--text-scale": scale } : {});
 const scaledClass = (scale: number) => (scale !== 1 ? { className: TEXT_SCALED } : {});
 
-/** A coloured line's stroke, inline so the selected state keeps it (step 11). */
+/** A coloured line's stroke, inline so the selected state keeps it. */
 const lineStyle = (c: ShapeColour) => ({ stroke: colourStroke(c) });
 
 const CANVAS_CHIP = { "--seq-chip": "var(--c-bg-canvas)" } as CSSProperties;
@@ -870,7 +870,7 @@ const NO_CHIP: CSSProperties = {};
 const MARK_NOTE: Record<SeqMark, NodeState> = { add: "suggested", del: "removed", changed: "changed" };
 
 /**
- * A message's accessible name (Plan E Decision 15): "Message <n>, <label>" when numbered, else "Message, <label>",
+ * A message's accessible name: "Message <n>, <label>" when numbered, else "Message, <label>",
  * with "<from> to <to>" for an absent label; a review mark adds its note, and a removed message is not numbered.
  */
 export function seqMessageName(m: SeqMessage, mark?: SeqMark): string {
@@ -879,7 +879,7 @@ export function seqMessageName(m: SeqMessage, mark?: SeqMark): string {
 }
 
 /**
- * A line with a review mark put on after the graph was built (a static frame under review, Plan D): its class, and on
+ * A line with a review mark put on after the graph was built (a static frame under review): its class, and on
  * a sequence message also its data and its name, since its chip is drawn apart from the line.
  */
 export function withLineMark(ed: Edge, mark: SeqMark): Edge {
@@ -922,9 +922,9 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     data.naturalH = natural.h;
     // A step 12 shape fills the box its rows and words size; one resized by hand draws at its own size instead.
     const box = family === "kind" && !own ? { width: s.w, height: s.h } : null;
-    // A card growing by a new row (a class's member, an ER column) eases to its new height (A5); only while the row is
+    // A card growing by a new row (a class's member, an ER column) eases to its new height; only while the row is
     // open. `settle` and EASE_IN are the values of --motion-base and --ease-enter, which the CSS rule this replaces
-    // used, so a class card keeps its timing; the duration is the motion table's, so reduced motion makes it 0 (D8).
+    // used, so a class card keeps its timing; the duration is the motion table's, so reduced motion makes it 0.
     const grows = extra > 0 ? { transition: `height ${motionMs("settle")}ms ${EASE_IN}` } : null;
     const style = box || grows || scale !== 1 ? { style: { ...box, ...grows, ...scaledStyle(scale) } } : {};
     return { id: n.name, type: family, position: { x: p.x, y: p.y }, initialWidth: s.w, initialHeight: s.h, ...style, ...(scale !== 1 ? { className: TEXT_SCALED } : {}), data };
@@ -957,8 +957,8 @@ export function buildFlowGraph(doc: FlowDoc, positions: Positions, look: NodeLoo
     }
     const leaving = opts.states?.get(l.from) === "leaving" || opts.states?.get(l.to) === "leaving";
     if (leaving) data.leaving = true;
-    // A dotted "assumes" line has no head (frame 6+.5): it is a permission, not data going one way.
-    // Step 11: a coloured line keeps its colour and its arrowhead, selected too.
+    // A dotted "assumes" line has no head: it is a permission, not data going one way.
+    // a coloured line keeps its colour and its arrowhead, selected too.
     const colour = drawnColour(l.color);
     const m = markers(l.arrow, doc.kind, colour, opts.notation);
     edges.push({
@@ -990,16 +990,16 @@ export function groupShapes(groups: readonly FlowGroup[], markers = false): Map<
 
 /**
  * The layout request for dagre: every node's size and the links between nodes. A line to or from a group ranks
- * against each shape in it, so the group sits after what points to it and before what it points to (fix round 2, L1).
+ * against each shape in it, so the group sits after what points to it and before what it points to (L1).
  */
 export function layoutInput(doc: FlowDoc, look: NodeLook, scale = 1): { nodes: { id: string; w: number; h: number }[]; edges: { from: string; to: string }[]; parents?: Record<string, string> } {
   const names = new Set(doc.nodes.map((n) => n.name));
-  // Its own start and end too, so a group's whole block ranks after what points to it (fix round 3, L8).
+  // Its own start and end too, so a group's whole block ranks after what points to it (L8).
   const groups = groupShapes(doc.groups, true);
   const ends = (n: string): string[] => (names.has(n) ? [n] : (groups.get(n) ?? []));
   const edges: { from: string; to: string }[] = [];
   for (const l of doc.links) for (const from of ends(l.from)) for (const to of ends(l.to)) if (from !== to) edges.push({ from, to });
-  // Each group is laid out as one block (fix round 3, L8): its shapes and inner groups by the area id they draw as.
+  // Each group is laid out as one block (L8): its shapes and inner groups by the area id they draw as.
   const parents: Record<string, string> = Object.create(null);
   const walk = (g: FlowGroup, outer: string | null) => {
     const id = `\u0000group:${g.name}`;

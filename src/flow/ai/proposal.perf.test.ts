@@ -1,4 +1,4 @@
-// Plan D Task 7 timing and memory: re-planning a 40-change proposal over 5 frames of the limit board (50 frames,
+// Timing and memory: re-planning a 40-change proposal over 5 frames of the limit board (50 frames,
 // 10,000 shapes) when one row is toggled, from the touched frames held while the proposal waits. Run alone through
 // `npm run test:perf`.
 import { expect, test } from "vitest";

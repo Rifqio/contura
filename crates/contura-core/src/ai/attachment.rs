@@ -1,4 +1,4 @@
-//! One text file the user attaches to the next diagram Ask (Plan D, Decision 15). The Core
+//! One text file the user attaches to the next diagram Ask. The Core
 //! opens the dialog itself, so the webview never names a path; the file is read only through
 //! `check_user_path` and `read_user_text`, and only when its extension is a text kind and no
 //! folder on its path is hidden (so `~/.ssh` and its like are never read). The text waits in a
@@ -154,7 +154,7 @@ impl AttachmentSlot {
     }
 
     /// The Ask that sent `token` was answered with a follow-up question: the file stays, for
-    /// that question's reply only (Decision 10), so the reply sends the same text from
+    /// that question's reply only, so the reply sends the same text from
     /// memory and nothing is read from disk again.
     pub fn keep_for_reply(&mut self, token: &str) {
         if let Some(h) = self.entry.as_mut().filter(|h| h.token == token) {

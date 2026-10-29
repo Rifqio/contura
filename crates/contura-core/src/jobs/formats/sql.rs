@@ -1,12 +1,12 @@
-//! SQL: INSERT statements from `InsertBuilder` (Task 4).
+//! SQL: INSERT statements from `InsertBuilder`.
 //!
 //! The file starts with one comment line, `-- Contura export of <table> for <Dialect>`,
 //! then holds statements of `rows_per_statement` rows, each ending `;` and a line feed.
 //! A statement is also cut at 1 MiB, so the file loads back through the import, which
 //! runs one statement at a time. Zero rows give the comment line alone.
 //!
-//! Values are written as the source holds them (Q34 I2): an export never refuses or
-//! coerces one. A MySQL spatial value is `ST_GeomFromText(<wkt>, <srid>)` (Q34 I1).
+//! Values are written as the source holds them: an export never refuses or
+//! coerces one. A MySQL spatial value is `ST_GeomFromText(<wkt>, <srid>)`.
 
 use std::io::Write;
 
@@ -51,10 +51,10 @@ pub struct SqlWriter<W: Write + Send> {
     rows: u64,
     names: Vec<String>,
     conversions: Vec<Conversion>,
-    /// NaN and Infinity written as NULL, by column (Q32b).
+    /// NaN and Infinity written as NULL, by column.
     nulled: Vec<u64>,
     row: Vec<Value>,
-    /// A statement over this many bytes cannot be run by the import (M9).
+    /// A statement over this many bytes cannot be run by the import.
     huge: usize,
     huge_statements: u64,
 }
@@ -126,8 +126,8 @@ impl<W: Write + Send> SqlWriter<W> {
                 self.rows += 1;
                 self.row.clear();
                 for (i, v) in source.iter().enumerate() {
-                    // Only PostgreSQL floats hold NaN and Infinity; elsewhere NULL (Q32b).
-                    // A source number in any spelling counts (Q34 I3: SQLite's `inf`).
+                    // Only PostgreSQL floats hold NaN and Infinity; elsewhere NULL.
+                    // A source number in any spelling counts (SQLite's `inf`).
                     if self.kind != DialectKind::Postgres
                         && matches!(v, Value::Number(_))
                         && is_float_word(v)
@@ -158,9 +158,9 @@ impl<W: Write + Send> SqlWriter<W> {
         self
     }
 
-    /// One warning per column that had NaN or Infinity the Dialect cannot store (Q32b),
-    /// and one for statements over 16 MB, the most the script import reads (Q38),
-    /// counting the one still open (M9).
+    /// One warning per column that had NaN or Infinity the Dialect cannot store,
+    /// and one for statements over 16 MB, the most the script import reads,
+    /// counting the one still open.
     pub fn warnings(&self) -> Vec<String> {
         let open = self
             .builder
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn nan_and_infinity_per_dialect() {
-        // Q32b: PostgreSQL floats can hold NaN and Infinity; MySQL and SQLite cannot.
+        // PostgreSQL floats can hold NaN and Infinity; MySQL and SQLite cannot.
         let columns = vec![SourceColumn {
             name: "score".into(),
             type_name: "double precision".into(),
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn geometry_on_mysql() {
-        // Q34 I1: WKT with the column's SRID, or the value's own `SRID=n;`.
+        // WKT with the column's SRID, or the value's own `SRID=n;`.
         let (out, _) = one_column(
             DialectKind::MySql,
             "at",
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn values_as_stored() {
-        // Q34 I2: an export never refuses or rewrites a value the source holds.
+        // an export never refuses or rewrites a value the source holds.
         let (out, w) = one_column(
             DialectKind::MySql,
             "flag",
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn sqlite_infinity_is_null_with_warning() {
-        // Q34 I3: SQLite spells them inf and -inf.
+        // SQLite spells them inf and -inf.
         let (out, warnings) = one_column(
             DialectKind::Sqlite,
             "score",
@@ -616,7 +616,7 @@ mod tests {
                     .to_string()
             ]
         );
-        // Q38: the warning starts where the script import stops.
+        // the warning starts where the script import stops.
         let w = SqlWriter::new(
             Vec::new(),
             DialectKind::Sqlite,
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn sqlite_load_back() {
-        // M8: the file runs in SQLite and gives back the rows it was made from.
+        // the file runs in SQLite and gives back the rows it was made from.
         let columns = vec![
             SourceColumn {
                 name: "id".into(),

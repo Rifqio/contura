@@ -181,7 +181,7 @@ fn convert_row(row: &Row, cols: &[ColumnMeta]) -> Vec<Cell> {
     cells
 }
 
-/// Step 11f: up to `limit` rows of one base table in a read-only transaction on one
+/// Up to `limit` rows of one base table in a read-only transaction on one
 /// pooled connection, with the server's own 5 s limit as a hint. The grid's select
 /// list and cells; no ORDER BY, no OFFSET, no filter. The transaction is always
 /// rolled back.
@@ -270,7 +270,7 @@ pub(crate) fn mariadb_limit_sql(timeout_ms: u64) -> String {
     )
 }
 
-/// What a timed read asks: a count, or a row's place (M3).
+/// What a timed read asks: a count, or a row's place.
 enum Read<'a> {
     Count(&'a CountRequest),
     Locate(&'a LocateRequest),
@@ -314,7 +314,7 @@ pub(crate) async fn count_rows(
     )
 }
 
-/// M3: the row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
+/// The row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
 /// matching the filter, read as `count_rows` reads.
 pub(crate) async fn locate_row(
     opts: &Opts,

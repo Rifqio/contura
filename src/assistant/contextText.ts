@@ -36,7 +36,7 @@ const isStale = (info: ContextInfo) => info.stale || info.check.kind === "stale"
 /**
  * The Context line, only when it needs attention: the schema changed (stale), the check failed, there is no Context
  * and none could be built, the Connection sends nothing (AI access Never), or the Context re-syncs only by hand, so
- * Re-sync is offered beside it (P11-10, board 11.1). Null otherwise, and with no Connection.
+ * Re-sync is offered beside it. Null otherwise, and with no Connection.
  */
 export function contextLineText(
   info: ContextInfo | null,

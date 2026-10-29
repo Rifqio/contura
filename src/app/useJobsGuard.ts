@@ -10,7 +10,7 @@ import type { JobsValue } from "../jobs/useJobs";
 export type JobsGuardJobs = Pick<JobsValue, "jobs" | "cancel" | "watch">;
 
 export interface JobsGuard {
-  /** Whether any job of this window is still running (the window's close asks then, Q22). */
+  /** Whether any job of this window is still running (the window's close asks then). */
   running(): boolean;
   /**
    * Before the window closes, a Connection closes, or a Connection's settings are saved: asks
@@ -35,7 +35,7 @@ export interface JobsGuard {
 const END_WAIT_MS = 5000;
 
 /**
- * The leave-prompt line of a job (Q17): "Import into menu_items is running on Shop", or
+ * The leave-prompt line of a job: "Import into menu_items is running on Shop", or
  * "Export of orders is running". Built from the job's label ("Importing into x", "Exporting x").
  */
 export function leaveLine(job: JobView, connections: ConnectionConfig[]): string {
@@ -69,7 +69,7 @@ export function useJobsGuard(opts: { jobs: JobsGuardJobs; connections: Connectio
     latest.current.jobs.jobs.filter((j) => j.done === null && (only === undefined || j.connectionId === only));
 
   /**
-   * Cancels the jobs and waits for them to end, END_WAIT_MS at most in all (Q43). Every cancel_job
+   * Cancels the jobs and waits for them to end, END_WAIT_MS at most in all. Every cancel_job
    * is sent at once and none is awaited: the Core sets the cancel flag before its network step, and
    * a server cancel to an unreachable host must not hold the window open.
    */

@@ -23,7 +23,7 @@ export const STEP_LABEL: Record<StepKind, string> = {
 /** The first column of a row's evidence table. */
 const EVIDENCE_HEAD: Partial<Record<StepKind, string>> = { tables: "Table", rows: "Table", cleaning: "Where", outline: "Name", compact: "Call", toolCheck: "Change", boardContext: "Diagram" };
 
-/** The Tool check row's evidence reads change, check and result (board 11.12). */
+/** The Tool check row's evidence reads change, check and result. */
 const heads = (k: StepKind): [string, string, string] => (k === "toolCheck" ? ["Change", "Check", "Result"] : [EVIDENCE_HEAD[k] ?? "Item", "Rule", "Evidence"]);
 
 /** The model's tool input as stored, laid out when it is JSON. */
@@ -75,14 +75,14 @@ export function notSent(record: AnswerRecord): { value: string; more: string } {
 
 interface Props {
   record: AnswerRecord;
-  /** The Ask's Connection, named in "Ran on" (board 11.3). */
+  /** The Ask's Connection, named in "Ran on". */
   connection: string | null;
   /** The Ask's database, in the "Ran on" cell's detail line. */
   database: string | null;
   /** The open row, by its index in `record.steps`: two rows of one kind open separately. */
   open: number | null;
   onToggle(index: number): void;
-  /** A diagram Ask (board 11.12): no database cells or line; the user's outcome closes the rows. */
+  /** A diagram Ask: no database cells or line; the user's outcome closes the rows. */
   variant?: "diagram";
   onCopy?(text: string): void;
   /** The whole answer, for the Answer row's body. */
@@ -91,7 +91,7 @@ interface Props {
   dialect?: DialectKind;
 }
 
-/** The Steps tab (board 11.3): the three cells, then one fixed-wording row per step with its rule and evidence. */
+/** The Steps tab: the three cells, then one fixed-wording row per step with its rule and evidence. */
 export default function StepsView({ record, connection, database, open, onToggle, variant, onCopy, answer = "", dialect = "postgres" }: Props) {
   const diagram = variant === "diagram";
   const out = notSent(record);

@@ -94,13 +94,13 @@ pub struct SentRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<RowsSent>,
     /// The chat title call that followed this answer (`CallKind::Title`), once its request
-    /// left this PC; written by the Core after the turn was stored (Decision 5).
+    /// left this PC; written by the Core after the turn was stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<SummarySent>,
     /// The exact text, only with "Keep the exact text sent" on (R7.2).
     pub exact: Option<String>,
     /// The Connections a diagram Ask's text drew on and that passed its gate: the frames
-    /// From my database drew and the `table:` links that resolved (Task 4b). A later Ask
+    /// From my database drew and the `table:` links that resolved. A later Ask
     /// leaves this turn out of its history once one of them is held. Empty elsewhere.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<crate::model::ConnectionId>,
@@ -659,7 +659,7 @@ mod tests {
         assert!(exact.len() <= OUTLINE_EXACT_CAP && exact.len() > OUTLINE_EXACT_CAP - 4);
     }
 
-    /// P4: the title call's record round-trips, is left out when absent, loses its exact
+    /// The title call's record round-trips, is left out when absent, loses its exact
     /// text in a listing copy and is held to the summary cap.
     #[test]
     fn the_title_call_record_is_trimmed_and_capped() {

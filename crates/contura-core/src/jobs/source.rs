@@ -531,7 +531,7 @@ struct ChannelSource {
 
 /// A source dropped before its end (a preview that has its rows, a job whose writer
 /// failed) stops its server read at once, so the snapshot and its locks go now rather
-/// than when the producer next fills a chunk (Q41).
+/// than when the producer next fills a chunk.
 impl Drop for ChannelSource {
     fn drop(&mut self) {
         if self.ended || self.gone {

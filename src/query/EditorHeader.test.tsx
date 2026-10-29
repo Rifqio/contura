@@ -267,7 +267,7 @@ test("no_diagram_button_without_a_handler", () => {
   expect(screen.queryByRole("button", { name: /^Diagram/ })).toBeNull();
 });
 
-/** P11-14: with the Ask panel open beside a PROD tab even the icon strip is too wide; the right end moves into More. */
+/** With the Ask panel open beside a PROD tab even the icon strip is too wide; the right end moves into More. */
 test("parity_P11_14_a_strip_still_too_wide_moves_its_right_end_into_more", async () => {
   let width = 700;
   const sizes = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {

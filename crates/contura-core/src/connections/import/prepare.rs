@@ -15,15 +15,15 @@ impl ValueRules {
         ValueRules {
             format: req.format,
             empty_as: req.options.empty_as,
-            // Q31: CSV and Excel only. The CSV reader applies it itself, to unquoted
-            // fields only (Q42 I2); Excel has no quoting, so the text rule is all there is.
+            // CSV and Excel only. The CSV reader applies it itself, to unquoted
+            // fields only; Excel has no quoting, so the text rule is all there is.
             null_word: req.options.null_word && req.format == Format::Xlsx,
         }
     }
 
-    /// An empty Excel cell follows "An empty cell means"; with Q31's option, the text
-    /// `NULL` in Excel is NULL. A missing JSON key is NULL whatever it says (D9). The CSV
-    /// reader applies both rules itself, where quoting is known (Q42 I2), so a None from
+    /// An empty Excel cell follows "An empty cell means"; with the text-NULL option, the text
+    /// `NULL` in Excel is NULL. A missing JSON key is NULL whatever it says. The CSV
+    /// reader applies both rules itself, where quoting is known, so a None from
     /// it is NULL.
     pub(super) fn value(&self, raw: Option<&String>) -> Value {
         match raw {
@@ -100,7 +100,7 @@ pub(super) async fn load_target(
         )
     };
     if kind == DialectKind::MySql && columns.iter().any(spatial) {
-        // The SRID a spatial column was declared with (Q34 I1): a value without its own
+        // The SRID a spatial column was declared with: a value without its own
         // `SRID=n;` is written with it, as the column requires.
         let srids = mysql_srids(&d.table_ddl(path).await?);
         for c in columns.iter_mut() {
@@ -216,7 +216,7 @@ impl Prepared {
                 .map(|&(_, t)| cols(t))
                 .filter(|c| matches!(c.increment, Increment::Identity | Increment::Serial))
                 .map(|c| {
-                    // Never below the sequence's MINVALUE (Q42); an empty table leaves the
+                    // Never below the sequence's MINVALUE; an empty table leaves the
                     // next value at MINVALUE (`is_called` false).
                     let seq = format!(
                         "pg_get_serial_sequence({}, {})",
@@ -304,8 +304,8 @@ impl Prepared {
         blockers(&self.target.columns, &self.mapping, has_rows)
     }
 
-    /// What the pass binds (Q29): with the format, and refused when the options cannot
-    /// be written (Q42).
+    /// What the pass binds: with the format, and refused when the options cannot
+    /// be written.
     pub(super) fn job_plan(&self, req: &ImportRequest, file: FileIdentity) -> Result<JobPlan> {
         let options = serde_json::to_value(&req.options)
             .and_then(|o| {
@@ -326,7 +326,7 @@ impl Prepared {
     }
 
     /// The warnings for binary cells of `row` that are not valid `0x` hex and so go in
-    /// as text (Q42).
+    /// as text.
     pub(super) fn binary_warnings(&self, file_row: u64, row: &[Value]) -> Vec<String> {
         row.iter()
             .enumerate()
@@ -339,7 +339,7 @@ impl Prepared {
     }
 }
 
-/// A binary cell that is not `0x` and an even number of hex digits (D10) goes in as
+/// A binary cell that is not `0x` and an even number of hex digits goes in as
 /// text; the warning names its row.
 pub(super) fn binary_warning(file_row: u64, column: &str, text: &str) -> Option<String> {
     let hex = text
@@ -360,7 +360,7 @@ pub(super) fn binary_warning(file_row: u64, column: &str, text: &str) -> Option<
 /// Excel reader takes the SHA-256 as it opens (the run and the check pass); CSV and JSON
 /// always hash as they read.
 /// The run's reader: the held file through its own handle, up to the size it had when it
-/// opened (Q45).
+/// opened.
 pub(super) fn open_held_reader(
     req: &ImportRequest,
     held: &HeldFile,

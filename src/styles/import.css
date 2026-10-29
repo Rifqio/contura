@@ -1,4 +1,4 @@
-/* jobs: import (Lane D, Q18). The Import tab and the Production job body of ConfirmRun. Colours are tokens only. */
+/* jobs: import (Lane D). The Import tab and the Production job body of ConfirmRun. Colours are tokens only. */
 
 .import-tab {
   display: grid;
@@ -327,7 +327,7 @@
   outline: var(--focus-ring-width) solid var(--c-focus);
 }
 
-/* ConfirmRun's job body (Q14): the shape boxes, the fold line and the fingerprint banner. */
+/* ConfirmRun's job body: the shape boxes, the fold line and the fingerprint banner. */
 .confirm-job-title {
   margin: 0;
   font: var(--font-body-strong);

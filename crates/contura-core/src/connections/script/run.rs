@@ -73,14 +73,14 @@ pub(super) struct Counts {
     pub(super) skipped: u64,
     /// Rows the INSERT statements wrote.
     pub(super) rows: u64,
-    /// Rows that are in for good: committed, or written with nothing open (Q27).
+    /// Rows that are in for good: committed, or written with nothing open.
     pub(super) committed: u64,
     /// Rows written in the open transaction.
     pub(super) open: u64,
     pub(super) bytes: u64,
     pub(super) line: u32,
     /// A file run as written has opened a transaction (or an unmodelled control
-    /// statement may have, Q44).
+    /// statement may have).
     pub(super) in_tx: bool,
     /// MySQL `SET autocommit = 0` is in force: every write waits for a COMMIT.
     pub(super) autocommit_off: bool,
@@ -106,7 +106,7 @@ impl Counts {
         self.in_tx || self.autocommit_off
     }
 
-    /// Counts what a statement that ran in a file run as written did (Q27, Q44).
+    /// Counts what a statement that ran in a file run as written did.
     /// `mysql` statements that commit as they run were committed before it ran.
     pub(super) fn ran_as_written(&mut self, s: &ScriptStatement, rows: u64, facts: &Facts) {
         let kind = s.kind;
@@ -181,7 +181,7 @@ pub(super) struct ScriptRun {
     pub(super) expected: [u8; 32],
     /// The bytes the start read; the run reads no more.
     pub(super) file_bytes: u64,
-    /// A Production Connection: a changed file says "after you confirmed" (Q45).
+    /// A Production Connection: a changed file says "after you confirmed".
     pub(super) production: bool,
 }
 
@@ -221,7 +221,7 @@ impl ScriptRun {
     }
 
     /// Commits the open transaction; a COMMIT that succeeded counts its rows, also when
-    /// an `after` statement then failed (`AfterCommit`, Q36).
+    /// an `after` statement then failed (`AfterCommit`).
     async fn commit(w: &mut dyn BulkWriter, c: &mut Counts) -> Result<()> {
         let done = w.commit().await;
         if matches!(done, Ok(()) | Err(Error::AfterCommit { .. })) {
@@ -384,7 +384,7 @@ impl ScriptRun {
         let file = file_name(&self.path);
         let result = match result {
             Err(_) if self.ctx.is_cancelled() => Err(Error::Cancelled),
-            // Q27: "Nothing was imported." only when nothing stayed.
+            // "Nothing was imported." only when nothing stayed.
             Err(Error::FileChanged { .. }) if kept > 0 => Err(Error::JobFailed {
                 at: JobPosition::default(),
                 message: format!("{file} changed while it was imported."),

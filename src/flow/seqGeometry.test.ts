@@ -1,4 +1,4 @@
-// Plan E Task 4: the one sequence drawing, in the sequence's own coordinates. Every font measures 7 px a letter here.
+// The one sequence drawing, in the sequence's own coordinates. Every font measures 7 px a letter here.
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { parseFlow } from "../lang/flow/parse";
 import { PAY } from "./fixtures/paySequence";

@@ -1,6 +1,6 @@
 # Contura
 
-A personal desktop database client for browsing, querying and changing databases, in the spirit of Navicat but lighter on memory.
+An open-source desktop database client for Windows and Linux, for browsing, querying and changing databases, in the spirit of Navicat but lighter on memory.
 
 ## Language
 
@@ -40,7 +40,7 @@ _Avoid_: Log, journal
 SQL kept by name in Contura, shared by every Connection.
 _Avoid_: Snippet, favourite, bookmark
 **Theme**:
-A named set of visual tokens (colours, type, corners, icon style) that Contura can be switched to. Two ship today: Alucard (light) and Dracula (dark, the default), or System to follow Windows. The design source for both is DESIGN-NEXT.md (ADR 0015).
+A named set of visual tokens (colours, type, corners, icon style) that Contura can be switched to. Two ship today: Alucard (light) and Dracula (dark, the default), or System to follow the operating system. The design source for both is DESIGN.md (ADR 0015).
 _Avoid_: Skin, style, appearance
 
 **Home**:

@@ -246,7 +246,7 @@ test("the_outline_of_an_er_frame", () => {
     ["customers", "entity", 9],
     ["audit_log", "weak", 13],
   ]);
-  // Plan D Task 2: a line between columns keeps them for the assistant's checker.
+  // A line between columns keeps them for the assistant's checker.
   expect(o.links).toEqual([{ from: "orders", to: "customers", label: "placed by", line: 15, fromColumn: "customer_id", toColumn: "id" }]);
 });
 

@@ -516,7 +516,7 @@ test("file_changed_card_texts", () => {
   text("Another program changed the file after you asked. These changes were made against the old text, so none of them were applied.");
 });
 
-// ---- Parity with board 11.6 (P11) ----
+// ---- Parity with board 11.6 ----
 
 const kicker = () => card().querySelector(".errc-kick")?.textContent;
 

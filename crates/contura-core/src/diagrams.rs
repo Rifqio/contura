@@ -1,5 +1,5 @@
 //! The diagrams folder: every diagram is `<data>\diagrams\<name>.flow` plus its
-//! `<name>.flow.layout.json` (step 6+, answer 1B, Q35). The Core builds each path from the
+//! `<name>.flow.layout.json` (step 6+, answer 1B). The Core builds each path from the
 //! name; the only ways a diagram leaves the folder are "Save a copy as..." and Publish.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -17,7 +17,7 @@ pub use crate::jobs::paths::DIAGRAM_NAME_REFUSAL as NAME_REFUSAL;
 /// The most `diagram_head` reads of a file: the first line of any real diagram fits.
 const HEAD_MAX: u64 = 4096;
 
-/// The largest diagram file `read_diagram` opens (P24 M4): a mistaken huge file is refused with a
+/// The largest diagram file `read_diagram` opens: a mistaken huge file is refused with a
 /// plain message instead of filling memory. The parser's own tests go up to this size.
 pub const READ_MAX: u64 = 5 * 1024 * 1024;
 
@@ -103,7 +103,7 @@ fn exists(path: &Path) -> Result<bool> {
 }
 
 /// `"..."` with `\\` and `\"` escapes, and `\n` and `\r` for the line breaks the writer
-/// escapes (P5), as `flowModel.ts` writes it; `None` when unclosed.
+/// escapes, as `flowModel.ts` writes it; `None` when unclosed.
 fn unquote(rest: &str) -> Option<String> {
     let mut out = String::new();
     let mut chars = rest.strip_prefix('"')?.chars();
@@ -337,7 +337,7 @@ pub fn write_diagram(
     write_flow_files(name, text, layout, data_dir).map(|_| ())
 }
 
-/// Saves only the layout file of diagram `name` (P24 I1): moves, Classic and the direction never
+/// Saves only the layout file of diagram `name`: moves, Classic and the direction never
 /// touch the `.flow`, so an edit made outside Contura while the tab is open survives them. It goes
 /// through the same `PathUse::Flow` guard as `write_diagram`, and refuses when the `.flow` is not
 /// there, so a diagram deleted outside Contura is never brought back by a layout save.
@@ -370,7 +370,7 @@ pub fn recycle(files: &[PathBuf]) -> Result<()> {
 }
 
 /// `delete_diagram` with the Recycle Bin call passed in, so tests never touch the user's
-/// own Recycle Bin (P3). `recycle` gets the `.flow` path, then the layout path when it
+/// own Recycle Bin. `recycle` gets the `.flow` path, then the layout path when it
 /// exists; it is not called for a bad name or a diagram that is not there.
 pub fn delete_diagram_with(
     data_dir: &Path,

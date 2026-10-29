@@ -1,4 +1,4 @@
-// Drawing loose sketches (Plan B Task 12, Decisions 18, 20 and 21). While a generic tool, Section or the note sketch
+// Drawing loose sketches. While a generic tool, Section or the note sketch
 // is armed and the press is outside every frame (or the frame has no such shape), FlowTab hands the press here:
 // Rectangle, Ellipse and Diamond drag a box (Shift keeps it square, a click places 120 by 80); Line and Arrow drag two
 // points (Shift snaps to 45 degrees); Pen draws while pressed and is simplified on release; Text and the note click a
@@ -84,7 +84,7 @@ export function draftSketch(
     }
     case "line":
     case "arrow": {
-      // A line is two points dragged (Excalidraw): a click draws none. Enter places one in the view (Decision 18).
+      // A line is two points dragged (Excalidraw): a click draws none. Enter places one in the view.
       if (o.click && !o.keyboard) return null;
       const end = o.click ? { x: from.x + LINE_KEY, y: from.y } : o.shift ? snap45(from, to) : to;
       return { kind: tool, ...strokeBox([from, end]) };
@@ -93,7 +93,7 @@ export function draftSketch(
       const raw = o.points && o.points.length > 0 ? o.points : [from];
       const pts = raw.length === 1 ? [raw[0], raw[0]] : raw;
       const rounded = pts.map((p) => [Math.round(p.x), Math.round(p.y)] as [number, number]);
-      // Ramer-Douglas-Peucker at 1 px on release, raised until it fits (Decision 21).
+      // Ramer-Douglas-Peucker at 1 px on release, raised until it fits.
       const kept = o.simplify === false ? rounded : simplifyStroke(rounded, MAX_PEN_POINTS);
       return { kind: "pen", ...strokeBox(kept.map(([x, y]) => ({ x, y }))) };
     }
@@ -265,7 +265,7 @@ interface BarProps {
   onLeave?(): void;
 }
 
-/** With only sketches selected, the bottom bar holds Colour alone (Task 12); the line bar's keys and tokens. */
+/** With only sketches selected, the bottom bar holds Colour alone; the line bar's keys and tokens. */
 /** Why Colour is off while the Assistant holds the board. */
 export const SKETCH_BAR_LOCKED = "The Assistant is editing. Colour is off until it finishes.";
 

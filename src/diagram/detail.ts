@@ -9,7 +9,7 @@ export const BOX_BELOW = 0.45;
 export const BLOCK_BELOW = 0.15;
 /** Over this many nodes, fast mode: name boxes at every zoom, straight edges, no ports, no hover. */
 export const FAST_OVER = 300;
-/** The snap grid is hidden below this zoom (DESIGN-NEXT 10.6). */
+/** The snap grid is hidden below this zoom (DESIGN.md 10.6). */
 export const GRID_FROM = 0.4;
 
 export function detailFor(zoom: number, nodeCount: number): { detail: Detail; fast: boolean } {

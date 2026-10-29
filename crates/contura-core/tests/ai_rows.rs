@@ -1,4 +1,4 @@
-//! Step 11f end to end: a real SQLite Connection gives an Ask's sample rows, read live by
+//! Sample rows end to end: a real SQLite Connection gives an Ask's sample rows, read live by
 //! `ConnectionService` through the read-only path, cut and framed as the preview shows them.
 mod common;
 

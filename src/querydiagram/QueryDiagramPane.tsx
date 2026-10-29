@@ -1,4 +1,4 @@
-// The query diagram (B1): a read-only drawing of the current statement beside a SQL tab or a
+// The query diagram: a read-only drawing of the current statement beside a SQL tab or a
 // Visual Query, rebuilt as you type. It reads table details only and sends nothing to the server.
 import type { Edge, Node, NodeTypes, ReactFlowInstance } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -34,7 +34,7 @@ export interface QueryDiagramPaneProps {
   onClose(): void;
   /**
    * The schema cache, Connection and database the tab reads: with them, every other database the
-   * statement names (MySQL `db.table`, SQLite attached) loads, and its tables say "Loading schema" until it does (V9).
+   * statement names (MySQL `db.table`, SQLite attached) loads, and its tables say "Loading schema" until it does.
    */
   schemas?: { cache: SchemaCache; connectionId: ConnectionId; database: string | null } | null;
   /** The status slot's "3 tables, 2 Joins"; null when nothing is drawn or the pane closes. */
@@ -56,7 +56,7 @@ export function shapeCount(shape: QueryShape): string {
   return joins === 0 ? tables : `${tables}, ${joins} ${joins === 1 ? "Join" : "Joins"}`;
 }
 
-/** The analyzer's sentence after "Line N: ", first letter lowered, with its full stop (V5). */
+/** The analyzer's sentence after "Line N: ", first letter lowered, with its full stop. */
 function lineMessage(p: { line: number; message: string }): string {
   const m = p.message.trim();
   const body = m.charAt(0).toLowerCase() + m.slice(1);
@@ -155,7 +155,7 @@ export default function QueryDiagramPane(props: QueryDiagramPaneProps) {
     [lang.client],
   );
 
-  // ---- V9: every other database the statement names loads through the shared schema cache ----
+  // ---- Every other database the statement names loads through the shared schema cache ----
   const home = schemas ? schemas.database : undefined;
   const hasCache = !!schemas;
   // Keyed on the values, not the props object, which a host may rebuild on every render.
@@ -218,7 +218,7 @@ export default function QueryDiagramPane(props: QueryDiagramPaneProps) {
     [mergedKey, lang.client],
   );
 
-  // Asks for the shape on every change of the text or of where you are typing; the worker debounces (D13).
+  // Asks for the shape on every change of the text or of where you are typing; the worker debounces.
   // With other databases merged in, the pane parses under its own document, so the editor's parse stays as it is.
   useEffect(() => {
     if (!visible) return;
@@ -264,7 +264,7 @@ export default function QueryDiagramPane(props: QueryDiagramPaneProps) {
       if (t.kind !== "unknown" || !t.schema || !cache || !cid) return { table: t, failed: false };
       const db = named.find((d) => lc(d) === lc(t.schema!));
       if (!db || dbs.includes(db)) return { table: t, failed: false };
-      // Try again loads that database again, as a Visual Query card does (V6).
+      // Try again loads that database again, as a Visual Query card does.
       if (cache.state(cid, db) === "failed") return { table: t, failed: true, onRetry: () => void cache.ensure(cid, db) };
       return { table: { ...t, kind: "table", schemaState: "loading" }, failed: false };
     },

@@ -6,7 +6,7 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 
 ## Product
 
-- A personal database client for one user (the author) on Windows. Windows-only APIs are avoided where practical so macOS and Linux remain possible (ADR 0001).
+- An open-source database client for Windows and Linux. Windows-only APIs are avoided where practical so macOS remains possible (ADR 0001).
 - Rust Core, React + TypeScript UI inside Tauri 2 (ADR 0001).
 - Supported Dialects: MySQL 8.0+, Postgres 13+, SQLite (bundled). MariaDB is best effort through the MySQL Dialect and not tested.
 - Each Dialect uses its own crate behind a `Dialect` trait: `mysql_async`, `tokio-postgres`, `rusqlite` (ADR 0002).
@@ -54,7 +54,7 @@ What Contura must let its user do, as settled in the design session on 2026-10-1
 
 ## Look and feel
 
-- The visual system is in [DESIGN-NEXT.md](../DESIGN-NEXT.md) (ADR 0015); the earlier DESIGN.md is archived in `docs/archive/`. The look is **Alucard** (light) and **Dracula** (dark), JetBrains Mono for code and data, Segoe UI for the interface.
+- The visual system is in [DESIGN.md](../DESIGN.md) (ADR 0015). The look is **Alucard** (light) and **Dracula** (dark), JetBrains Mono for code and data, Segoe UI for the interface.
 - Settings, Appearance and the status bar switch between System (follow Windows), Alucard and Dracula; Dracula is the default. The choice is saved in the `data` folder. Density is 28 px for grid rows, tree rows, buttons and inputs.
 - Settings, Appearance lists the licences of what Contura bundles: JetBrains Mono (SIL Open Font License 1.1), Lucide icons (ISC), Simple Icons (CC0 1.0).
 - **Theme selector (later):** in Settings, the user can switch to any other Theme, each one more token block (ADR 0008, ADR 0015): Fluent 2, Material 3, Precision dark, IBM Carbon, macOS, Nord, Gruvbox, Paper notebook, High contrast, Glassmorphism, Neo-brutalism, Skeuomorphism, Claymorphism, Terminal CRT, Editorial, Retro Windows, Frutiger Aero, Cyberpunk. Blueprint, Neumorphism, Raw brutalism and Aurora gradient are excluded.
@@ -204,24 +204,9 @@ Answers come from a real provider that the user sets up. The decisions are in AD
 
 ## Testing
 
-- Integration tests run against real servers on the author's Laragon: MySQL at `127.0.0.1:3306` and Postgres at `127.0.0.1:5432`, read from environment variables. MySQL tests sign in as a scoped `dbview_test` user (password `dbview_test`) that can only touch databases named `dbview_test_%`, never as `root`. Postgres tests sign in as a `dbview_test` role (password `dbview_test`) with `LOGIN CREATEDB`, never as `postgres`. SQLite tests use temporary files. Tests create and drop throwaway `dbview_test_*` databases.
+- Integration tests run against real local servers: MySQL at `127.0.0.1:3306` and Postgres at `127.0.0.1:5432`, read from environment variables. MySQL tests sign in as a scoped `dbview_test` user (password `dbview_test`) that can only touch databases named `dbview_test_%`, never as `root`. Postgres tests sign in as a `dbview_test` role (password `dbview_test`) with `LOGIN CREATEDB`, never as `postgres`. SQLite tests use temporary files. Tests create and drop throwaway `dbview_test_*` databases.
 
 ## Build order
 
-1. Connections + object tree + read-only data grid, on MySQL
-2. Postgres and SQLite Dialects
-3. Schema Builder: DBML ↔ canvas, reverse-engineering, SQL and image export (moved up because designing schemas is one of the user's two main activities)
-4. SQL editor (CodeMirror 6, ADR 0009), Query History, Saved Queries
-5. Pending Edits, Table Designer, Production and Read-only Connections (5a done: Production and Read-only Connections, ADR 0013; 5b done: Pending Edits, ADR 0014; 5c done: Table Designer, ADR 0016)
-   - Restyle to DESIGN-NEXT (done before 5c, ADR 0015): Alucard and Dracula, JetBrains Mono, 28 px density, Home with Recent
-6. Visual Query, plus the shared diagram engine and the query diagram and result shape (done: Visual Query, the shared diagram engine and the query diagram, ADR 0017)
-   - then lineage, the flow language (`.flow`), data flow diagrams and flowcharts, and cloud architecture diagrams (done: Lineage, the flow language, Diagrams with the icon pack, and Publish for every kind, ADR 0019)
-7. Import/export, plus Mermaid flowchart import (done: Import and Export, Mermaid flowchart import, the Job service, ADR 0018)
-8. Data Transfer (done: copies across Dialects with a type mapping reviewed per column, per-target transaction rules, the Job pass on the target, ADR 0020)
-9. Backup/Restore (done: Contura's own script from one snapshot with a not-included header, the optional SQLite file copy, Restore checks, three modes and the Job pass bound to the file's SHA-256, ADR 0021)
-10. Schema Compare, plus applying a Schema Model to a Connection (done: a structural diff of the same Dialect with what is not compared named on both sides, a Sync Script built only in the Core with data-loss items unticked, Apply under the exact-set Sync pass and `PlanChanged`, ADR 0022)
-11. AI answers (done, ADR 0010, ADR 0023 to 0025): real provider calls (Anthropic and OpenAI-compatible, incl. local Ollama), access levels enforced in the Core, rule-based guardrails, schema context with an on-disk index and sync, chat memory. All in the Rust Core, no Python
-   - then sequence diagrams; cloud sharing later
-12. Refinements: UI and UX polish from the user's critique, always the last step after every feature step (list in docs/step12-refinements.md, kept growing until then)
+1.0 covers all of the above.
 
-The diagram work and its memory budget are in `docs/superpowers/specs/2026-10-16-contura-direction-design.md`.

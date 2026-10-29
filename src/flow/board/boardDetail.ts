@@ -2,7 +2,7 @@ import type { CanvasView } from "../../diagram/canvasView";
 import { type TextSize, TEXT_SCALE } from "./boardLayout";
 import { FRAME_TAB_H, type FrameBox } from "./boardScene";
 
-// The board's own detail policy (Plan F Decisions 2, 5, 6, 7), pure: every board threshold lives here.
+// The board's own detail policy, pure: every board threshold lives here.
 
 export type { CanvasView as BoardView } from "../../diagram/canvasView";
 
@@ -24,7 +24,7 @@ export const BOARD_SIMPLIFY_OVER = 3_000;
  * WebView lays out and paints. At 20 a limit frame (198 shapes, 300 lines) is real in 25 frames, its picture under it.
  */
 export const SWAP_BUDGET_SHAPES = 20;
-/** The least the swap budget falls to while frames run long (Task 9 fix 3). */
+/** The least the swap budget falls to while frames run long. */
 export const SWAP_BUDGET_MIN = 5;
 /** A frame longer than this halves the swap budget; one over the 50 ms frame gate also mounts nothing. */
 export const SWAP_FRAME_MS = 33;
@@ -32,7 +32,7 @@ export const SWAP_FRAME_MS = 33;
 const SWAP_QUICK_MS = 20;
 
 /**
- * The swap budget of one animation frame (Task 9 fix 3), from the budget left by the last step and how long the frame
+ * The swap budget of one animation frame, from the budget left by the last step and how long the frame
  * it follows took: what the WebView's own layout and paint cost is not known to the plan, so the step reads it off the
  * frames. On the release WebView a mid zoom on B1's frames (1,000 parts turning real from 52 percent) ran 51 to 94 ms
  * frames at a flat 20 parts. Over 50 ms: nothing is mounted this frame and the budget halves; over SWAP_FRAME_MS it
@@ -176,7 +176,7 @@ export function stepForms(
 }
 
 /**
- * `drawn` with the live frame real (Task 7 fix round 1). The live frame draws its own shapes, so in the drawn forms it
+ * `drawn` with the live frame real. The live frame draws its own shapes, so in the drawn forms it
  * is real: when it stops being live and the plan pictures it, `stepForms` waits for its new picture (`ready`) instead
  * of keeping a picture form left from before it went live, whose image is from before any edit made while live.
  */
@@ -190,7 +190,7 @@ export function withLiveReal(drawn: DrawnForms, live: number | null): DrawnForms
 }
 
 /**
- * How the sketch layer is drawn (Task 9 fix 2): `pictured` while its tile pictures show, with its first `mounted`
+ * How the sketch layer is drawn: `pictured` while its tile pictures show, with its first `mounted`
  * sketches real over them while it turns real; every sketch real once `pictured` is false.
  */
 export interface SketchForm {

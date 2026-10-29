@@ -1,5 +1,5 @@
 {
-  "comment": "Shared by crates/contura-core/src/icons.rs (tests/icons.rs) and scripts/svg-check.mjs (src/flow/svgCheck.test.ts): both must give each refused SVG the same reason and keep each kept SVG (Rulings P9, P10: an allow list).",
+  "comment": "Shared by crates/contura-core/src/icons.rs (tests/icons.rs) and scripts/svg-check.mjs (src/flow/svgCheck.test.ts): both must give each refused SVG the same reason and keep each kept SVG (an allow list).",
   "refused": [
     { "why": "value not allowed", "svg": "<svg color=\"url(https://evil/x#g)\"/>" },
     { "why": "value not allowed", "svg": "<svg color=\"&quot;x&quot;\"/>" },

@@ -1,4 +1,4 @@
-// Plan F Task 6 (Decisions 6 and 8): only frames in view are drawn, and every glide reports where it lands. A pan inside
+// Only frames in view are drawn, and every glide reports where it lands. A pan inside
 // the overscan builds no scene; a frame coming into view (by a pan or by an edit) is drawn; a jitter at the readable line
 // builds once; each glide reports its landing view once, before it moves, and plans for it once.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -408,7 +408,7 @@ test("a_text_size_change_alone_plans_again", async () => {
 });
 
 test("the_wheels_pointer_steers_only_its_own_swap", async () => {
-  // Plan F Decision 7: frames fill nearest the pointer for the swap a wheel zoom started; a later replan (an edit) fills
+  // Frames fill nearest the pointer for the swap a wheel zoom started; a later replan (an edit) fills
   // from the view centre.
   const s = setup();
   await opened(s);

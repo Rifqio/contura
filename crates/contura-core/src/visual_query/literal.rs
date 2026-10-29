@@ -141,7 +141,7 @@ pub(crate) fn literal(
 
 const NUL_IN_VALUE: &str = "A value for {column} has a NUL character. Remove it.";
 
-/// A LIKE or NOT LIKE pattern: always text, on any column (V10).
+/// A LIKE or NOT LIKE pattern: always text, on any column.
 pub(crate) fn pattern(kind: DialectKind, value: &str) -> Result<String, String> {
     if value.contains('\0') {
         return Err(NUL_IN_VALUE.into());

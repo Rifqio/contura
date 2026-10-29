@@ -11,7 +11,7 @@ interface Props {
   view: JobView | null;
   /** The file row being written, from the latest progress event. */
   fileRow: number | null;
-  /** Q27: rows that stay in the database after a failure or a cancel. */
+  /** Rows that stay in the database after a failure or a cancel. */
   rowsCommitted: number;
   /** A cancel rolls everything back (one transaction); MyISAM and Commit every N do not. */
   rollsBack: boolean;
@@ -69,7 +69,7 @@ export default function ImportRunView({ view, fileRow, rowsCommitted, rollsBack,
   if (done) {
     const ok = "report" in done;
     let title: string;
-    // Q27: a stop says what stayed; "Nothing was imported." only when nothing did.
+    // a stop says what stayed; "Nothing was imported." only when nothing did.
     let stayed: string | null = null;
     if ("report" in done) {
       const r = done.report;

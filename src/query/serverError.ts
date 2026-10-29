@@ -4,7 +4,7 @@ import type { DialectKind } from "../api/types";
 export interface ServerError {
   code: string | null;
   text: string;
-  /** Where the error points in the SQL that ran, from 1: PostgreSQL's "(position N)" or MySQL's "at line N" (P12). */
+  /** Where the error points in the SQL that ran, from 1: PostgreSQL's "(position N)" or MySQL's "at line N". */
   position?: { line: number; column?: number };
 }
 

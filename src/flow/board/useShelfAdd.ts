@@ -1,4 +1,4 @@
-// The Shelf's add (B2 decisions 2, 7 and 9), moved out of FlowTab (Plan F Task 11, a pure move): a click or a drop of a
+// The Shelf's add (B2 decisions 2, 7 and 9), moved out of FlowTab: a click or a drop of a
 // Shelf item becomes frames, an icon node or sketch, a shape, or an opened field. It reads the tab's refs and actions
 // through `ShelfAddDeps`, handed over fresh each render as the closures it came from were, so nothing here is stale.
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";

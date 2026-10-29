@@ -21,7 +21,7 @@ export type ShelfItem =
   | { kind: "fromDatabase" }
   | { kind: "fromMermaid" };
 
-/** What a tab body gets from the Shelf (Plan C's Icons tab takes the first five). `at` is a board point. */
+/** What a tab body gets from the Shelf (the full pack's Icons tab takes the first five). `at` is a board point. */
 export interface ShelfTabProps {
   query: string;
   active: boolean;

@@ -1,5 +1,4 @@
-// Task 9 fix 2: below the readable zoom the sketch layer draws as a few pictures, not one node a sketch (Plan F
-// Decision 7 as frames are; WebKit paints every sketch as vector again at each new zoom). A click or a box on a
+// Below the readable zoom the sketch layer draws as a few pictures, not one node a sketch (as frames do; WebKit paints every sketch as vector again at each new zoom). A click or a box on a
 // pictured sketch still picks it, and the layer is real again once it is picked or the zoom is readable.
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

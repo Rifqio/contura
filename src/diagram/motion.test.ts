@@ -1,9 +1,9 @@
 import { afterEach, expect, test, vi } from "vitest";
-import designNext from "../../DESIGN-NEXT.md?raw";
+import designNext from "../../DESIGN.md?raw";
 import tokensCss from "../styles/tokens.css?raw";
 import { EASE_IN, EASE_OUT, MOTION, type MotionKey, motionMs, reducedMotion, setReducedMotionPref } from "./motion";
 
-/** DESIGN-NEXT section 8, up to the next heading. */
+/** DESIGN.md section 8, up to the next heading. */
 const section8 = (() => {
   const at = designNext.indexOf("## 8. Motion");
   return designNext.slice(at, designNext.indexOf("\n## ", at + 1));
@@ -49,10 +49,10 @@ test("motion_matches_design_next", () => {
   });
   const dn = dnDurations();
   expect([...dn.keys()]).toEqual([80, 120, 180, 240]);
-  // Every value is one DESIGN-NEXT allows, and nothing is longer than its longest.
+  // Every value is one DESIGN.md allows, and nothing is longer than its longest.
   for (const v of Object.values(MOTION)) expect(dn.has(v)).toBe(true);
   expect(Math.max(...Object.values(MOTION))).toBe(240);
-  // The named roles land on the duration DESIGN-NEXT gives them.
+  // The named roles land on the duration DESIGN.md gives them.
   expect(dn.get(MOTION.hover)).toMatch(/hover and press/);
   expect(dn.get(MOTION.menu)).toMatch(/menus/);
   expect(dn.get(MOTION.toast)).toMatch(/toasts/);

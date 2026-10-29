@@ -1,4 +1,4 @@
-//! The export service (Task 7): `preview_export` and `start_export` per Dialect, on the
+//! The export service: `preview_export` and `start_export` per Dialect, on the
 //! every-type fixture, with a recording sink. Live MySQL and PostgreSQL in
 //! `dbview_test_<8hex>` databases as `dbview_test`; SQLite in temp files.
 
@@ -1157,7 +1157,7 @@ async fn postgres_utc_note_for_text_formats() {
             preview.notes
         );
     }
-    // Q45 M1: the grid's PostgreSQL session runs in UTC, so "Rows shown" is UTC too.
+    // the grid's PostgreSQL session runs in UTC, so "Rows shown" is UTC too.
     let shown = |format: Format| ExportRequest {
         connection_id: fx.id,
         source: ExportSource::Rows {
@@ -1193,7 +1193,7 @@ async fn postgres_utc_note_for_text_formats() {
     fx.end().await;
 }
 
-// ---- NaN and Infinity are never bare numbers (Q32b) ----
+// ---- NaN and Infinity are never bare numbers ----
 
 #[tokio::test(flavor = "multi_thread")]
 async fn non_finite_never_bare_postgres() {
@@ -1383,7 +1383,7 @@ fn my_opts(db: &TestDb) -> mysql_async::Opts {
 #[tokio::test(flavor = "multi_thread")]
 async fn sql_export_loads_back_mysql() {
     let fx = Fx::plain(DialectKind::MySql).await;
-    // Values outside the declared type's usual form are written as stored (Q34 I2).
+    // Values outside the declared type's usual form are written as stored.
     run_sql(
         fx.dialect().await.as_ref(),
         "UPDATE every SET flag = 2 WHERE id = 6",
@@ -1429,7 +1429,7 @@ async fn sql_export_loads_back_postgres() {
 #[tokio::test(flavor = "multi_thread")]
 async fn sql_export_loads_back_sqlite() {
     let fx = Fx::plain(DialectKind::Sqlite).await;
-    // Values outside the declared type's usual form are written as stored (Q34 I2).
+    // Values outside the declared type's usual form are written as stored.
     run_sql(
         fx.dialect().await.as_ref(),
         "UPDATE every SET int_n = '' WHERE id = 5",
@@ -1473,7 +1473,7 @@ async fn sql_export_loads_back_sqlite() {
     fx.end().await;
 }
 
-/// MySQL geometry keeps its SRID through a SQL export (Q34 I1): a column declared with
+/// MySQL geometry keeps its SRID through a SQL export: a column declared with
 /// an SRID, and a plain GEOMETRY column holding values of several SRIDs.
 #[tokio::test(flavor = "multi_thread")]
 async fn mysql_geometry_srid_loads_back() {
@@ -1538,7 +1538,7 @@ async fn mysql_geometry_srid_loads_back() {
     fx.end().await;
 }
 
-// ---- Fix round 1 (Q41) ----
+// ---- Fix round 1 ----
 
 /// The history entries of `fx`'s Connection, newest first.
 fn history(fx: &Fx) -> Vec<contura_core::query::HistoryEntry> {

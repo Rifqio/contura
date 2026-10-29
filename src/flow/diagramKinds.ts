@@ -4,7 +4,7 @@ import { flowName, quote } from "../lang/flow/model";
 /** A kind a frame can have: every file kind but a board and an unknown file. */
 type FrameKind = Exclude<DiagramKind, "board" | "unknown">;
 
-/** A diagram's kind in words, as Recent lists say it (frame 6+.6). */
+/** A diagram's kind in words, as Recent lists say it. */
 export const DIAGRAM_KIND_WORD: Record<DiagramKind, string> = {
   dfd: "Data flow",
   flow: "Flowchart",

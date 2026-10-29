@@ -149,7 +149,7 @@ function Workspace() {
   const askWidth = useAskWidth();
   const { label: ungroupedLabel } = useUngroupedLabel();
   const toast = useToast();
-  /** The tab an "Asked in" link just showed: it flashes once (A7, M6). */
+  /** The tab an "Asked in" link just showed: it flashes once (A7). */
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashTab = (key: string) => {
@@ -179,7 +179,7 @@ function Workspace() {
     onLost: () => setNotice("That Connection is not open any more. Open it again to continue."),
   });
   const [activeId, setActiveId] = useState<ConnectionId | null>(null);
-  /** The branch of the focused tree row while the tree has focus; the status bar follows it (D16). */
+  /** The branch of the focused tree row while the tree has focus; the status bar follows it. */
   const [treeBranch, setTreeBranch] = useState<ConnectionId | null>(null);
   const {
     tabs,
@@ -254,7 +254,7 @@ function Workspace() {
   });
 
   /**
-   * The tab strip as Recent steps last saw it (spec 7.1). Tabs that come back by themselves (a place's saved tabs, the
+   * The tab strip as Recent steps last saw it. Tabs that come back by themselves (a place's saved tabs, the
    * Home opened at startup) are added to it before they show, so they are no step; a key that was already open
    * changes nothing, and the next tab the user opens is still one.
    */
@@ -301,7 +301,7 @@ function Workspace() {
   });
   const { placeNow, visit, whenDraftsLoaded } = drafts;
 
-  // Recent steps (spec 7.1): a tab added to the strip is opened, an open tab made active is gone to. A place change
+  // Recent steps: a tab added to the strip is opened, an open tab made active is gone to. A place change
   // swaps the place's tabs and a restore brings back saved ones; neither is a step.
   const stepPlace = placeKey(place);
   const stripKeys = allTabs.map(tabKey);
@@ -349,7 +349,7 @@ function Workspace() {
       onError: setNotice,
       // The tab is mounted (hidden or not) and knows its SQL: it saves itself.
       saveVisual: (doc) => visualControl(doc.id).current?.save() ?? Promise.resolve(false),
-      // Q22: quitting while a job runs asks, and a yes cancels the jobs before the window goes.
+      // quitting while a job runs asks, and a yes cancels the jobs before the window goes.
       jobsOnClose: { running: jobsGuard.running, confirmStop: () => jobsGuard.confirmStop() },
     });
   dirtyRef.current = dirtyKeys;
@@ -441,11 +441,11 @@ function Workspace() {
 
   /** Edit Connection from any path: saving the form closes the Connection's session, so its grids' edits are asked about first. */
   async function editConnection(c: ConnectionConfig) {
-    // Its running jobs are asked about when the form saves (Q43), since saving ends them.
+    // Its running jobs are asked about when the form saves, since saving ends them.
     if (await confirmLeave(tableKeys(c.id))) setForm({ kind: "connection", connection: c });
   }
 
-  // ---- Export dialog, Import tabs and New flow from Mermaid (step 7) ----
+  // ---- Export dialog, Import tabs and New flow from Mermaid ----
   /** The open Export dialog: its Connection and origin, or a running job it shows again (`attach`). */
   const [exporting, setExporting] = useState<{
     connectionId: ConnectionId;
@@ -456,7 +456,7 @@ function Workspace() {
   /** The origin each export job was started from, so the status bar can open its dialog again. */
   const exportOrigins = useRef(new Map<JobId, { connectionId: ConnectionId; origin: ExportOrigin }>());
   /**
-   * The Mermaid dialog (step 10): from New diagram with what the sheet was left at, for its Back; from a diagram's
+   * The Mermaid dialog: from New diagram with what the sheet was left at, for its Back; from a diagram's
    * canvas with that diagram to insert into; or on its own.
    */
   const [fromDatabase, setFromDatabase] = useState<DatabaseAdd | null>(null);
@@ -465,7 +465,7 @@ function Workspace() {
   const [mermaidOpen, setMermaidOpen] = useState<false | { back?: { query: string }; insert?: MermaidInsert; add?: MermaidAdd }>(false);
   /** The New diagram catalog's search as it was left, when Back from the Mermaid or database dialog opens it again. */
   const [sheetBack, setSheetBack] = useState<{ query: string } | undefined>(undefined);
-  /** The open Backup or Restore dialog (step 9), from the tree's menus. */
+  /** The open Backup or Restore dialog, from the tree's menus. */
   const [backingUp, setBackingUp] = useState<{ connectionId: ConnectionId; database: string; schema: string | null } | null>(null);
   const [restoring, setRestoring] = useState<{ target: RestoreTarget; attach?: { id: JobId; run: RestoreRun }; seq: number } | null>(null);
   /** Each Restore started, so one in the background still ends right and the status bar can open it again. */
@@ -602,7 +602,7 @@ function Workspace() {
 
   /**
    * Choose Connection... or a SQL file: the tab takes the key of its new Connection and target, so a
-   * later Import... finds it (Q43). When a tab is open there already, that one shows and this one goes.
+   * later Import... finds it. When a tab is open there already, that one shows and this one goes.
    */
   function updateImport(key: string, change: { connectionId?: ConnectionId; target?: ImportTarget }) {
     const tab = tabsRef.current.find((t) => t.kind === "import" && t.key === key);
@@ -650,7 +650,7 @@ function Workspace() {
 
   /**
    * Before the place's tabs go (another Group or place, or a Connection moving away): each running
-   * Import tab asks "Cancel the import and roll back?"; a No keeps everything (Q43).
+   * Import tab asks "Cancel the import and roll back?"; a No keeps everything.
    */
   async function confirmImportsLeave(only?: ConnectionId): Promise<boolean> {
     for (const [key, id] of importJobsRef.current) {
@@ -712,7 +712,7 @@ function Workspace() {
     if (tab.kind === "transfer" && !(await jobsGuard.confirmCloseTransfer(transferJobs.current.get(tab.id) ?? null))) return false;
     // A compare whose Apply runs asks "Cancel Apply?" (R6).
     if (tab.kind === "compare" && !(await jobsGuard.confirmCloseCompare(compareJobs.current.get(tab.id) ?? null))) return false;
-    // A New table created through the ask's Apply is its table's design tab now: that tab closes (M2).
+    // A New table created through the ask's Apply is its table's design tab now: that tab closes.
     const created = createdTabs.current.get(key);
     if (created !== undefined) {
       createdTabs.current.delete(key);
@@ -800,14 +800,14 @@ function Workspace() {
     setActiveKey(key);
   }
 
-  /** Opens a table's lineage tab, or shows the one open already (step 6+). */
+  /** Opens a table's lineage tab, or shows the one open already. */
   function openLineage(connectionId: ConnectionId, path: ObjectPath) {
     const key = lineageKey(connectionId, path);
     setTabs((all) => (all.some((t) => t.kind === "lineage" && t.key === key) ? all : [...all, { kind: "lineage", key, connectionId, path }]));
     setActiveKey(key);
   }
 
-  /** Opens a New table design tab in a database (and schema) and shows it (D7). */
+  /** Opens a New table design tab in a database (and schema) and shows it. */
   function newTable(connectionId: ConnectionId, database: string, schema: string | null) {
     const id = newId();
     const key = newDesignKey(id);
@@ -849,7 +849,7 @@ function Workspace() {
   /**
    * A design tab changed the database: the table's grid, the completion schema and the applied
    * Connection's tree branch load again (whichever branch is focused), and a new table is revealed.
-   * A create (done, or partly run, M4) turns its tab into the new table's design tab in place, so
+   * A create (done, or partly run) turns its tab into the new table's design tab in place, so
    * the next Apply is an ALTER and never a second CREATE.
    */
   function designApplied(key: string, connectionId: ConnectionId, path: ObjectPath, kind: "altered" | "created" | "dropped") {
@@ -878,7 +878,7 @@ function Workspace() {
     setActiveKey((k) => (k === key ? next : k));
   }
 
-  /** After a drop: the table's tabs close without asking (asked before, D11), and what lists it reloads. */
+  /** After a drop: the table's tabs close without asking (asked before), and what lists it reloads. */
   function tableDropped(connectionId: ConnectionId, path: ObjectPath) {
     const keys = new Set([objectKey(connectionId, "table", path), designKey(connectionId, path)]);
     removeTabs((t) => {
@@ -887,7 +887,7 @@ function Workspace() {
     });
     tree.refresh(connectionId);
     lang.schemas.invalidate(connectionId, path.database);
-    // D28: Recent forgets the table, then shows the list without it.
+    // Recent forgets the table, then shows the list without it.
     forgetRecent(connectionId, path).then(
       () => loadRecent(),
       (e) => {
@@ -1051,7 +1051,7 @@ function Workspace() {
   const settingsActive = activeWindow?.kind === "settings";
   const dataFolder = useDataFolder(settingsActive);
 
-  // ---- Diagrams (step 6+): the New diagram sheet, Recent's diagrams and each diagram's file actions ----
+  // ---- Diagrams: the New diagram sheet, Recent's diagrams and each diagram's file actions ----
   const [newDiagramOpen, setNewDiagramOpen] = useState(false);
   const [diagrams, setDiagrams] = useState<DiagramEntry[]>([]);
   const loadDiagrams = () => {
@@ -1299,7 +1299,7 @@ function Workspace() {
     try {
       await openTracked(id);
     } catch {
-      // The row says Failed, with the reason (frame 10c); no notice above the tree.
+      // The row says Failed, with the reason; no notice above the tree.
       return visit.current === here ? "failed" : "stayed";
     }
     // You went elsewhere while it opened: the Connection stays open, but nothing more opens (ruling R23).
@@ -1307,7 +1307,7 @@ function Workspace() {
   }
 
   /**
-   * Resumes a chat picked in the Ask history where it ended (Decision 9): its Connection, database, tab and query.
+   * Resumes a chat picked in the Ask history where it ended: its Connection, database, tab and query.
    * Nothing runs. Returns what to name in the not-available strip, or null when the chat's place came back. A resume
    * overtaken while its Connection opened (`current()` false: another chat, New chat) opens no tab and shows nothing.
    */
@@ -1402,13 +1402,13 @@ function Workspace() {
   /** The active place tab; undefined while a window tab (or none) is active. */
   const current = tabs.find((t) => tabKey(t) === activeKey);
   const selection = current?.kind === "object" ? current.selection : null;
-  /** D10: the active tab's Connection when it is open, else the place's first open one. */
+  /** The active tab's Connection when it is open, else the place's first open one. */
   const activeConnection = current ? tabConnectionId(current) : null;
   const visualTarget =
     activeConnection !== null && openIds.has(activeConnection) && inPlace.some((c) => c.id === activeConnection)
       ? {
           id: activeConnection,
-          // M13: from a table tab, the table's own database.
+          // from a table tab, the table's own database.
           database:
             current?.kind === "query" || current?.kind === "visual"
               ? current.doc.database
@@ -1509,7 +1509,7 @@ function Workspace() {
           onNewGroup={() => setForm({ kind: "newGroup" })}
           onSettings={() => openSettings()}
         />
-        {/* C1: the strip is always there, with its "+", on every tab. */}
+        {/* the strip is always there, with its "+", on every tab. */}
         <TabStrip
           tabs={allTabs}
           connections={connections}

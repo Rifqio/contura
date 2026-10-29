@@ -1,8 +1,8 @@
-//! The import service (Task 8): `plan_import`, `check_import_file`, `confirm_import` and
+//! The import service: `plan_import`, `check_import_file`, `confirm_import` and
 //! `start_import`, for CSV, JSON and Excel files.
 //!
 //! An import is a Write job. Read-only refuses it before any job starts; Production
-//! needs one Job pass bound to the plan's fingerprint and the file's SHA-256 (D5, Q29).
+//! needs one Job pass bound to the plan's fingerprint and the file's SHA-256.
 //! The run streams the file through a reader thread and a channel of 2 chunks into
 //! multi-row INSERTs, each run by its own single-statement call under a savepoint.
 
@@ -43,7 +43,7 @@ use crate::model::{ConnectionConfig, DialectKind, ObjectPath};
 use crate::query::{NewHistory, Outcome};
 use crate::safety::PassId;
 
-/// The sample INSERT holds up to this many rows (Q10).
+/// The sample INSERT holds up to this many rows.
 const SAMPLE_ROWS: usize = 500;
 /// The shape shows the first rows of the first statement.
 const SHAPE_ROWS: usize = 4;
@@ -100,10 +100,10 @@ pub(super) fn file_name(path: &Path) -> String {
 }
 
 /// Where statements are cut: 500 rows or 1 MiB, and below the server's own limit (the
-/// plan uses the same, Q10). Commit every N below 500 cuts at N, so batches commit at N.
+/// plan uses the same). Commit every N below 500 cuts at N, so batches commit at N.
 /// A table that does not roll back (MyISAM), or whose engine could not be read, takes
 /// one row a statement, so a failure leaves exactly the rows before it and the count of
-/// rows kept is exact (Q27, Q42).
+/// rows kept is exact.
 fn insert_limits(
     transactional: Option<bool>,
     commit: CommitMode,
@@ -122,7 +122,7 @@ fn insert_limits(
 }
 
 /// The longest statement the server takes, as the writer reads it (MySQL: half of
-/// `max_allowed_packet`), so the plan's sample is cut as the run cuts (Q10).
+/// `max_allowed_packet`), so the plan's sample is cut as the run cuts.
 async fn statement_limit(d: &dyn Dialect, kind: DialectKind) -> usize {
     if kind != DialectKind::MySql {
         return usize::MAX;
@@ -144,7 +144,7 @@ async fn statement_limit(d: &dyn Dialect, kind: DialectKind) -> usize {
     packet.map_or(usize::MAX, |p| usize::try_from(p / 2).unwrap_or(usize::MAX))
 }
 
-/// The Skip cap's sentence: "Nothing was imported." only when nothing stayed (Q27, Q42).
+/// The Skip cap's sentence: "Nothing was imported." only when nothing stayed.
 fn too_many_text(kept: u64, table: &str) -> String {
     match kept {
         0 => TOO_MANY.into(),
@@ -238,7 +238,7 @@ impl ConnectionService {
         Ok((d, prepared, reader))
     }
 
-    /// Starts check pass `job` (the client's id, Q21): it reads the whole file, applies
+    /// Starts check pass `job` (the client's id): it reads the whole file, applies
     /// the checks and takes the SHA-256. Nothing is written; its report has `check`.
     pub async fn check_import_file(
         &self,
@@ -285,13 +285,13 @@ impl ConnectionService {
         Ok(job)
     }
 
-    /// Starts import `job` (the client's id, Q2). Before anything runs, in order:
+    /// Starts import `job` (the client's id). Before anything runs, in order:
     /// Read-only refuses (`ReadOnly(0)`); the path guard; Production without a pass
-    /// (`NeedsConfirmation`); the file opens with other writers refused (Q45); the job
+    /// (`NeedsConfirmation`); the file opens with other writers refused; the job
     /// registers, which holds `JobBusy` for the Connection from here on; the table and
     /// the file's first record are read through that handle and the blockers refuse the
-    /// start (`InvalidInput`). Only then is the Production pass spent (Q45 M2): the held
-    /// bytes must be the file the pass was confirmed for (`FileChanged`, Q29) and the pass
+    /// start (`InvalidInput`). Only then is the Production pass spent: the held
+    /// bytes must be the file the pass was confirmed for (`FileChanged`) and the pass
     /// must cover this job's fingerprint (`NeedsConfirmation`). A start refused after the
     /// job registered leaves no job and no final event. The run goes on in the background
     /// and adds one history entry.
@@ -344,7 +344,7 @@ impl ConnectionService {
             expected: checked.expected,
             on_error: req.options.on_error,
             commit: req.options.commit,
-            // Unknown is counted as not rolling back: exact counts over speed (Q42).
+            // Unknown is counted as not rolling back: exact counts over speed.
             transactional: checked.transactional,
             path: req.file.clone(),
             file_bytes: held.bytes(),
@@ -358,7 +358,7 @@ impl ConnectionService {
 
     /// The start's checks once the job is registered: the table, the reader through the
     /// held handle and its first record, the blockers, the table's storage, then the
-    /// Production pass (Q45 M2).
+    /// Production pass.
     async fn import_checked(
         &self,
         config: &ConnectionConfig,

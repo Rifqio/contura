@@ -1,6 +1,6 @@
-//! The export service (Task 7): `preview_export` and `start_export`. An export only
+//! The export service: `preview_export` and `start_export`. An export only
 //! reads, so it needs no pass on any Connection, Read-only included; it never runs a
-//! statement the 5a classifier does not call a read (Q26).
+//! statement the 5a classifier does not call a read.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -155,7 +155,7 @@ fn naming(kind: DialectKind, req: &ExportRequest) -> Naming {
     }
 }
 
-/// The 5a classifier's word on a Query source's text, before anything runs (Q26).
+/// The 5a classifier's word on a Query source's text, before anything runs.
 fn is_read(kind: DialectKind, sql: &str) -> bool {
     let sql = sql.trim().trim_end_matches(';').trim_end();
     !sql.is_empty() && statement_count(kind, sql) > 0 && classify(kind, sql) == StatementClass::Read
@@ -362,7 +362,7 @@ fn sql_row_bytes(
 
 impl ConnectionService {
     /// The notes the dialog shows over the preview. The Production banner is the
-    /// dialog's own and is never repeated here (Q20).
+    /// dialog's own and is never repeated here.
     async fn export_notes(
         &self,
         d: &dyn Dialect,
@@ -396,7 +396,7 @@ impl ConnectionService {
 
     /// The first lines (or, for Excel, the first rows of the sheet) exactly as the export
     /// writes them, from its first 20 rows, and a size per row. A query the classifier
-    /// does not call a read is described (`query_read: false`), never run (Q26).
+    /// does not call a read is described (`query_read: false`), never run.
     pub async fn preview_export(&self, req: ExportRequest) -> Result<ExportPreview> {
         let config = self.config(req.connection_id)?;
         let kind = config.dialect;
@@ -474,7 +474,7 @@ impl ConnectionService {
         Ok(preview)
     }
 
-    /// Starts export `job` (the client's id, Q2) and returns it. The path guard and the
+    /// Starts export `job` (the client's id) and returns it. The path guard and the
     /// partial file come first, so an existing target (`FileExists`), the data folder and
     /// a target another export is writing are refused here, before any job starts. The
     /// job reads and writes in the background; it commits the file only after a clean
@@ -490,7 +490,7 @@ impl ConnectionService {
         let kind = config.dialect;
         let d = self.session(req.connection_id).await?;
         let naming = naming(kind, &req);
-        // Q26: refused before any file or connection opens.
+        // refused before any file or connection opens.
         let planned = plan(kind, req.source.clone())?;
         let cut = match &planned {
             Planned::Rows(rows) => cut_warning(rows.cut_values()),

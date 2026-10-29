@@ -1,4 +1,4 @@
-// Plan F Task 9 fix: a line's label finds React Flow's label layer once, not on every store update. React Flow's own
+// A line's label finds React Flow's label layer once, not on every store update. React Flow's own
 // EdgeLabelRenderer runs `domNode.querySelector(".react-flow__edgelabel-renderer")` as a store selector, so every
 // mounted label walked the canvas's DOM on every view change and every measure: with a frame's 300 labelled lines in
 // view that was 300 DOM walks a frame through a zoom (the release WebView's sweep missed its 50 ms frame gate).
@@ -61,7 +61,7 @@ async function lookupsOverTenMoves(edges: Edge[], layer = LAYER, inside?: ReactN
 
 test("flow_and_message_labels_find_their_layer_once", async () => {
   const flow: Edge[] = Array.from({ length: LINES / 2 }, (_, i) => ({ id: `f${i}`, source: "a", target: "b", type: "flow", data: { label: `go ${i}` } }));
-  // A message carries its drawing (Plan E Task 6): its path with the label's gap and the label on its chip.
+  // A message carries its drawing: its path with the label's gap and the label on its chip.
   const msg = (i: number): SeqEdgeData => ({
     row: i,
     y: 20,

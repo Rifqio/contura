@@ -182,7 +182,7 @@ test("compact_density_sets_24", () => {
 
 test("tabs_are_at_most_220px", () => {
   expect(bodyOf(".work-tab")).toMatch(/max-width:\s*220px/);
-  // The title gives way first, so a Production + Read-only tab still shows some of its name (C8).
+  // The title gives way first, so a Production + Read-only tab still shows some of its name.
   expect(bodyOf(".work-tab-name")).toMatch(/min-width:\s*\d/);
   expect(bodyOf(".work-tab-button")).toMatch(/min-width:\s*0/);
 });
@@ -204,7 +204,7 @@ test("connection_form_body_scrolls_inside_the_dialog_only_when_the_window_is_sho
   // F5: overflow visible let a tall body push the footer out of the dialog; it scrolls instead.
   expect(grid).toMatch(/overflow:\s*auto/);
   // The dialog may use the whole window less the scrim padding, so at 1280 x 800 New Connection
-  // still fits without a scrollbar (Task 13), and the header and footer always stay in view.
+  // still fits without a scrollbar, and the header and footer always stay in view.
   const dialog = rules(appCss).find((r) => r.selector === ".dialog.connection-dialog")?.body ?? "";
   expect(dialog).toMatch(/max-height:\s*calc\(100vh - 2 \* var\(--spacing-xl\)\)/);
 });
@@ -373,7 +373,7 @@ test("home_main_uses_the_thin_scrollbar", () => {
   expect(bodyOf("::-webkit-scrollbar-button")).toMatch(/display:\s*none/);
 });
 
-/** Q4: History docks at 360 px, rows follow the density token, and nothing around the menu clips it. */
+/** History docks at 360 px, rows follow the density token, and nothing around the menu clips it. */
 test("history_panel_is_360", () => {
   expect(bodyOf(".body-history")).toMatch(/grid-template-columns:\s*var\(--layout-tree-width\) minmax\(0, 1fr\) 360px/);
   expect(bodyOf(".history-row")).toMatch(/min-height:\s*calc\(var\(--row-h\)/);
@@ -381,7 +381,7 @@ test("history_panel_is_360", () => {
   expect(bodyOf(".history-row-failed")).toMatch(/color:\s*var\(--c-danger-text\)/);
 });
 
-/** D2 Task 6 (P30): the Ask's chat history draws with its own classes, all under `.history-menu`, so it and the query History never style each other. */
+/** D2 Task 6: the Ask's chat history draws with its own classes, all under `.history-menu`, so it and the query History never style each other. */
 test("chat_history_rows_are_their_own_classes", () => {
   const own = [
     "history-find",
@@ -437,14 +437,14 @@ test("chat_history_rows_are_their_own_classes", () => {
   }
 });
 
-/** A5: the Ask header sits on the panel with no rule under it; the composer keeps its own rule above. */
+/** The Ask header sits on the panel with no rule under it; the composer keeps its own rule above. */
 test("ai_header_has_no_rule", () => {
   expect(bodyOf(".ai-panel-head")).not.toMatch(/border-bottom\s*:\s*(?!0|none)/);
   expect(bodyOf(".ai-panel-head")).toMatch(/height:\s*36px/);
   for (const sel of [".ai-panel", ".ai-panel-head"]) expect(bodyOf(sel)).not.toMatch(/overflow:\s*hidden/);
 });
 
-/** C4: the Theme menu opens upward out of the status bar, so neither the bar nor the root clips it. */
+/** The Theme menu opens upward out of the status bar, so neither the bar nor the root clips it. */
 test("status_bar_does_not_clip_its_theme_menu", () => {
   expect(bodyOf(".app-status")).not.toMatch(CLIPS);
   expect(bodyOf(".app-status .menu")).toMatch(/bottom:\s*calc\(100%/);
@@ -509,7 +509,7 @@ test("row_number_gutter_fits_six_digits_with_separators", () => {
   expect(body).toMatch(/font:\s*var\(--font-mono-small\)/);
 });
 
-/** A6: a long answer SQL line scrolls inside its block; the thread's one column never widens and never scrolls sideways. */
+/** A long answer SQL line scrolls inside its block; the thread's one column never widens and never scrolls sideways. */
 test("answer_sql_scrolls_inside_itself_not_the_thread", () => {
   const thread = bodyOf(".thread");
   expect(thread).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
@@ -561,11 +561,11 @@ test("the_feature_bar_cannot_widen_the_window", () => {
   const body = (selector: string) => rules(appCss).find((r) => r.selector === selector)?.body ?? "";
   expect(body(".app")).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   expect(body(".feature-bar")).toMatch(/min-width:\s*0/);
-  // P11-36: the groups clip inside their own box instead of the bar scrolling Ask out of reach.
+  // The groups clip inside their own box instead of the bar scrolling Ask out of reach.
   expect(body(".feature-groups")).toMatch(/overflow-x:\s*clip/);
 });
 
-/** P11-3: the AI access table keeps to the Settings column (512px) instead of widening the page. */
+/** The AI access table keeps to the Settings column (512px) instead of widening the page. */
 test("parity_P11_3_access_table_fits_the_settings_column", () => {
   const fit = bodyOf(".share-table-fit");
   expect(fit).toMatch(/table-layout:\s*fixed/);
@@ -588,7 +588,7 @@ test("parity_P11_3_access_table_fits_the_settings_column", () => {
   expect(widths.reduce((a, b) => a + b, 0)).toBe(100);
 });
 
-/** P11-33: a diagram Sends row keeps the file name and its size on one line each. */
+/** A diagram Sends row keeps the file name and its size on one line each. */
 test("parity_P11_33_sends_row_does_not_wrap_the_name_or_size", () => {
   // A pill keeps one line and may shrink: a long label ends in an ellipsis instead of wrapping or overflowing.
   const pill = bodyOf(".send-pill");
@@ -598,7 +598,7 @@ test("parity_P11_33_sends_row_does_not_wrap_the_name_or_size", () => {
   const label = bodyOf(".send-pill-label");
   expect(label).toMatch(/overflow:\s*hidden/);
   expect(label).toMatch(/text-overflow:\s*ellipsis/);
-  // The outline pill's long label still wraps (board 11.7).
+  // The outline pill's long label still wraps.
   expect(bodyOf(".send-pill-tall .send-pill-label")).toMatch(/white-space:\s*normal/);
   const size = bodyOf(".sends-item .sends-size");
   expect(size).toMatch(/white-space:\s*nowrap/);
@@ -833,7 +833,7 @@ test("a_point_menu_keeps_its_natural_width_at_the_right_edge", () => {
 });
 
 test("soft_lines_use_tokens_and_no_transition", () => {
-  // Plan F Decision 2: far text keeps its layout and draws as soft bars of the faint text token, with no transition.
+  // Far text keeps its layout and draws as soft bars of the faint text token, with no transition.
   for (const size of ["s", "m", "l"]) {
     const soft = rules(flowBoardCss).filter((r) => r.selector.includes(`[data-far~="${size}"] .board-ts-${size}`));
     expect(soft.length, size).toBeGreaterThan(0);

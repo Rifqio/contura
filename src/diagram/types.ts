@@ -67,11 +67,11 @@ export const NODE_TOKENS: Record<NodeKind, { fill: string; stroke: string }> = {
   view: { fill: "--c-node-view-fill", stroke: "--c-node-view-stroke" },
   derived: { fill: "--c-node-view-fill", stroke: "--c-node-view-stroke" },
   result: { fill: "--c-node-view-fill", stroke: "--c-node-view-stroke" },
-  // Data flow, as frame 6+.2 draws it: a process in the service pair, a store in the datastore pair.
+  // Data flow: a process in the service pair, a store in the datastore pair.
   process: { fill: "--c-node-service-fill", stroke: "--c-node-service-stroke" },
   store: { fill: "--c-node-datastore-fill", stroke: "--c-node-datastore-stroke" },
   external: { fill: "--c-node-external-fill", stroke: "--c-node-external-stroke" },
-  // Flowchart (frame 6+.4): neutral start and end pills, the step family, the one amber decision.
+  // Flowchart: neutral start and end pills, the step family, the one amber decision.
   start: { fill: "--c-node-external-fill", stroke: "--c-node-external-stroke" },
   end: { fill: "--c-node-external-fill", stroke: "--c-node-external-stroke" },
   step: { fill: "--c-node-table-fill", stroke: "--c-node-table-stroke" },

@@ -1,4 +1,4 @@
-// The tiered list of Simple Icons logos the pack carries (Plan C Decision 9).
+// The tiered list of Simple Icons logos the pack carries.
 //
 // Simple Icons holds over 3,400 brands, which does not fit the 4 MB pack beside the cloud
 // sets. This list is the brands developers draw in architecture and database diagrams:

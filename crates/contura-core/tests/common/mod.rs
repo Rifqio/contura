@@ -17,7 +17,7 @@ pub struct TestDb {
 }
 
 /// A data folder no test writes into. A service needs one to open a SQLite file, since
-/// the path guard fails closed without it (Q45 M3); each test's files live in a temp
+/// the path guard fails closed without it; each test's files live in a temp
 /// folder of its own, so they are outside it.
 pub fn data_dir() -> std::path::PathBuf {
     let d = std::env::temp_dir().join("contura-test-data");

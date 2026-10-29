@@ -1,6 +1,5 @@
 /*
-  Drawn diagram nodes (step 6+): data flow (Modern and Classic), flowchart and cloud service (frames 6+.2,
-  6+.4, 6+.5). Tokens only (ADR 0008): each node sets --fnode-fill and --fnode-stroke to its kind's pair
+  Drawn diagram nodes: data flow (Modern and Classic), flowchart and cloud service. Tokens only (ADR 0008): each node sets --fnode-fill and --fnode-stroke to its kind's pair
   (NODE_TOKENS). Durations are the motion tokens, which reduced motion turns into 0 ms; nothing loops.
   Selection is never animated: the ring is an ::after border or an outline, which no transition names,
   so it comes and goes at once, and a selected node keeps the full transition list for a delete.
@@ -37,7 +36,7 @@
   content: "";
   pointer-events: none;
 }
-/* Step 11: a coloured shape keeps its colour selected and shows a dashed selection frame (ADR 0019). */
+/* a coloured shape keeps its colour selected and shows a dashed selection frame (ADR 0019). */
 .fnode-col.fnode-selected::after {
   border-style: dashed;
 }
@@ -497,7 +496,7 @@
   font-style: italic;
 }
 /*
-  ER table card (Plan A; ER build A restored in B3 Task 2): the rows scroll inside the card past 20, and each row has
+  ER table card (ER build A restored in B3): the rows scroll inside the card past 20, and each row has
   a key gutter and a not-null mark. On the live frame it is edited in place: the selected column is marked and
   "+ column" shows on hover. Only the rows in view are drawn; spacers stand for the rest.
 */
@@ -537,7 +536,7 @@
 /*
   The column or header the keyboard aims at while "Make a relationship from here" picks, and the row or header a
   Relationship drag would join: a tinted fill and a 2 px accent ring drawn inside it, clear of the card's own
-  selection border (fix round 3). Theme tokens only, so both themes draw it.
+  selection border. Theme tokens only, so both themes draw it.
 */
 .fkind-er-row.is-pick,
 .fkind-head.is-pick {
@@ -1074,7 +1073,7 @@ textarea.inline-edit {
 .fkind-dated-word {
   flex: none;
 }
-/* C1: a new group drawn around its shapes before its name is kept. */
+/* a new group drawn around its shapes before its name is kept. */
 .flow-group-new {
   position: absolute;
   z-index: 7;

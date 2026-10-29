@@ -1,6 +1,6 @@
 // Task 8: an armed tool draws into the frame under the press (Decisions 18 and 19, Review Focus 5). A click places the
 // shape at its default size, a drag sizes it, Enter places it next to the selection; the edit is the frame's own line,
-// written as a minimal text edit. Only Pen stays armed (owner answer 7).
+// written as a minimal text edit. Only Pen stays armed.
 import { redo, undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -539,7 +539,7 @@ test("a_message_press_drag_to_a_lifeline_connects", async () => {
 });
 
 test("a_draw_into_a_clashing_frame_never_fires_later", async () => {
-  // The third frame takes a title the first has: it is drawn faded and never goes live (Decision 9).
+  // The third frame takes a title the first has: it is drawn faded and never goes live.
   const clash = 'diagram flow "Checkout"\nPack\nSend\nPack > Send\n';
   const s = setup([CHECKOUT, REFUND, clash].join("\n"));
   // Two tabs say Checkout here: only this test allows more than one.
@@ -567,7 +567,7 @@ test("a_draw_into_a_clashing_frame_never_fires_later", async () => {
   await new Promise((r) => setTimeout(r, 150));
   expect(screen.queryByRole("textbox", { name: /^Name the new/ })).toBeNull();
   // The first frame is renamed in the code: frame 2 now owns its title and goes live, still selected. The pane shows
-  // frame 2 only (Task 13), so the rename comes as an edit from outside the pane, which hidden frames take.
+  // frame 2 only, so the rename comes as an edit from outside the pane, which hidden frames take.
   const v = s.view();
   act(() => v.dispatch({ changes: { from: 0, to: 'diagram flow "Checkout"'.length, insert: 'diagram flow "Orders"' }, annotations: canvasEdit.of(true) }));
   await waitFor(() => expect(s.nodes().some((n) => n.id === "Pack")).toBe(true));
@@ -592,7 +592,7 @@ test("a_tool_in_an_overlap_draws_into_the_frame_on_top_where_it_was_pressed", as
   await waitFor(() => expect(s.frame(2)).toBe('diagram flow "Shipping"\nPack\nSend\nStep [step]\nPack > Send\n'));
   expect(s.frame(1)).toBe(REFUND);
   // Drawn where it was pressed: the switch moved nothing on screen. Its place on the board is its frame-local position
-  // plus the live anchor's (Plan F Decision 11).
+  // plus the live anchor's.
   await waitFor(() => expect(s.nodeOf("Step")).toBeTruthy());
   const n = boxOfNode(s.nodeOf("Step")!);
   const abs = s.inst().getInternalNode("Step")!.internals.positionAbsolute;

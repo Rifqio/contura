@@ -162,7 +162,7 @@ interface Props {
   pages?: readonly AiPage[];
 }
 
-/** The current model's facts as chips (board 11.4). */
+/** The current model's facts as chips. */
 function ModelFacts({ info }: { info: ModelInfo | null }) {
   if (!info) return null;
   return (
@@ -365,7 +365,7 @@ export default function AiSection({ groupId, groupName, connections, onConnectio
 
   // With a saved key the provider's own list replaces the built-in one; it is fetched again when
   // the Group, provider, preset, base URL or key changes, after the saves on their way. A Custom server
-  // (a local one, often) lists its models without a key, so the Ask picker can offer them (P11-17).
+  // (a local one, often) lists its models without a key, so the Ask picker can offer them.
   const listable = settings?.provider === "custom" || view?.keySaved === true;
   const fetchKey =
     settings?.provider && listable ? [groupId, settings.provider, settings.preset, settings.baseUrl, keySaves].join("\n") : null;

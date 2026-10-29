@@ -354,7 +354,7 @@ struct FakeCatalog {
     context: StoreContext,
     threads: StoreThreads,
     saved: Vec<contura_core::query::SavedQuery>,
-    /// Step 11f: the sample rows each table gives, by table name.
+    /// The sample rows each table gives, by table name.
     samples: std::collections::HashMap<String, Page>,
     /// The sample reads that reached the database (a closed Connection reaches none).
     sample_reads: AtomicUsize,
@@ -6322,7 +6322,7 @@ async fn injected_table_name_in_outline_gives_the_note() {
 
 #[tokio::test]
 async fn pick_tables_follows_the_global_switch() {
-    // Ruling 13: Pick tables is a Privacy switch; a Group's own settings never turn it on.
+    // Pick tables is a Privacy switch; a Group's own settings never turn it on.
     let (_dir, _secrets, svc) = service();
     let mut global = groq();
     global.pick_tables = false;
@@ -6570,7 +6570,7 @@ async fn stop_after_the_outline_left_keeps_its_record() {
     assert!(!statuses(&events).contains(&"Writing"));
 }
 
-// ---- Step 11f: sample rows read live into the Ask ----
+// ---- Sample rows read live into the Ask ----
 
 const ROWS_RULE: &str = "Read live by Contura in a read-only transaction: at most 5 rows per named table, cells cut at 200 characters, binaries as <binary>. Never stored.";
 const NO_NAMED_NOTE: &str =
@@ -7195,7 +7195,7 @@ async fn kept_exact_text_holds_no_row() {
     assert!(exact.contains("[sample rows: not kept]"), "{exact}");
 }
 
-// ---- Step 11f: never stored, counted ----
+// ---- Never stored, counted ----
 
 /// A `orders` table whose seven rows each hold the distinctive cell `zq-cell-7731`.
 fn cell_catalog(access: AiAccess) -> FakeCatalog {

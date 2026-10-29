@@ -1,5 +1,5 @@
 // Diagram steps 7 and 8 (boards DiagramMindMap and DiagramSequence): what the mind map and sequence gestures read
-// from the drawing, kept out of FlowTab (fix round 1, M14): the map's tree, the sequence's lifelines, rows, frames
+// from the drawing, kept out of FlowTab: the map's tree, the sequence's lifelines, rows, frames
 // and slot heights, and a frame's name by its kind.
 import type { Edge, Node } from "@xyflow/react";
 import type { FlowDoc } from "../lang/flow/model";
@@ -54,7 +54,7 @@ export function seqGeometryOf(d: FlowDoc | null, g: { nodes: Node[]; edges: Edge
     const box = byId.get(`\u0000frame:${index}`);
     const tab = byId.get(`\u0000frameTab:${index}`);
     const at = box ? boxOfNode(box) : null;
-    // Plan E Decision 13: the side tab down the block's left edge; `tab` is the caption (or the side tab's top).
+    // The side tab down the block's left edge; `tab` is the caption (or the side tab's top).
     const side = at ? { x: at.x, y: at.y, w: TAB_W, h: at.h } : null;
     return { index, label: f.label, kind: f.kind, from: f.from, to: f.to, box: at, tab: tab ? boxOfNode(tab) : null, side };
   });
@@ -67,9 +67,9 @@ export function seqGeometryOf(d: FlowDoc | null, g: { nodes: Node[]; edges: Edge
 }
 
 /**
- * Where a new loop around messages `from` to `to` will have its caption once written (Plan E Task 6), so its label
+ * Where a new loop around messages `from` to `to` will have its caption once written, so its label
  * field opens there: `addLoop` wraps the blocks that open on its first message and end inside it, and goes inside
- * those that hold the whole range. The layout's own rules (Decisions 13, 14): the box's left edge `FRAME_LEFT` and a
+ * those that hold the whole range. The layout's own rules: the box's left edge `FRAME_LEFT` and a
  * `TAB_STEP` per level of blocks inside it left of the leftmost lifeline, the caption `TAB_W + 4` in; the row's band
  * gains one tab, after the tabs of the blocks around it.
  */
@@ -99,7 +99,7 @@ export function onParticipantBox(box: Box, y: number): boolean {
   return y <= box.y + SEQ_HEAD || y >= box.y + box.h - SEQ_HEAD;
 }
 
-/** A frame by its kind word: a loop is "loop", the others "opt frame", "alt frame" (fix round 1, M9). */
+/** A frame by its kind word: a loop is "loop", the others "opt frame", "alt frame". */
 export const frameWord = (label: string) => {
   const k = label.split(" ")[0];
   return k === "loop" ? "loop" : `${k} frame`;

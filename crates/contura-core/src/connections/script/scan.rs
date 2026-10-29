@@ -1,6 +1,6 @@
 //! One streamed pass over a script: the plan's counts and lists, or only the refusals.
 //! Lists keep cut texts within byte budgets, so a file of 1 MiB statements (Contura's own
-//! SQL export) stays inside the job memory budget (Q44).
+//! SQL export) stays inside the job memory budget.
 
 use super::*;
 

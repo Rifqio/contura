@@ -13,5 +13,3 @@ It is fed by the Core's `schema_snapshot`. Two other approaches were rejected:
 
 - **A Rust parser in the Core:** Rust SQL parsers stop at the first error, which is useless while a statement is half typed.
 - **An external language server:** it means a separate process per Dialect, with uneven quality, and nothing for SQLite or DBML.
-
-See `docs/superpowers/specs/2026-10-16-editor-and-ai-design.md`.

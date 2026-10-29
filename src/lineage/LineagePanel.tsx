@@ -1,4 +1,4 @@
-// Lineage's side panel (frame 6+.1, 344 px): what deleting a row does, then each key in a plain sentence
+// Lineage's side panel (344 px): what deleting a row does, then each key in a plain sentence
 // with its columns and a tag, then the diagrams or views that use the table.
 import type { ReactNode } from "react";
 import type { Lineage, LineageLink } from "../api/types";

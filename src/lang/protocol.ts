@@ -71,7 +71,7 @@ export type ToWorker =
   | ({ type: "sqlRefactor"; id: number; docId?: string; action: SqlRefactorAction } & SqlAt)
   /** Places the diagram nodes the request has no position for (ruling D14). */
   | { type: "layout"; id: number; request: LayoutRequest }
-  /** Converts a Mermaid flowchart to .flow (Task 12); the dialog waits 150 ms after the last keystroke. */
+  /** Converts a Mermaid flowchart to .flow; the dialog waits 150 ms after the last keystroke. */
   | { type: "mermaid"; id: number; text: string; title: string; keepUnread?: boolean }
   /** Parses .flow text, debounced as the DBML path is. */
   | { type: "flowParse"; id: number; docId: string; text: string }
@@ -92,7 +92,7 @@ export type ToWorker =
   | { type: "flowEdit"; id: number; docId: string; version: number; edit: FlowRequestOp; frameIndex?: number }
   /** The outline of frame `frameIndex` of the parse with `version`, for the diagram assistant; refused as stale when the text has changed. */
   | { type: "flowOutline"; id: number; docId: string; version: number; frameIndex?: number }
-  /** Every frame's outline and problems of the parse with `version`, for the board Ask (Plan D); refused as stale when the text has changed. */
+  /** Every frame's outline and problems of the parse with `version`, for the board Ask; refused as stale when the text has changed. */
   | { type: "boardOutline"; id: number; docId: string; version: number }
   /** Completion at `pos` in a .flow text, in the frame holding `pos`. */
   | { type: "flowComplete"; id: number; docId: string; text: string; pos: number }

@@ -1,4 +1,4 @@
-// The release milestone (Plan F Task 3, ruling 11): B3's live 2,000-table ERD at its fit. React Flow draws every node it
+// The release milestone: B3's live 2,000-table ERD at its fit. React Flow draws every node it
 // has not measured, whatever is on screen, so the live ERD mounted all 2,000 cards at open (154,015 elements in jsdom)
 // and kept 800 cards of 76 elements at the fit; the release WebView read 2,577 MB private. Now only the cards in view
 // mount, and a far card is 8 elements with no <svg>. Sizes are given to jsdom as the release build lays them out: each node
@@ -99,7 +99,7 @@ test("a_live_2000_table_erd_mounts_only_the_cards_in_view", async () => {
     peakElements = container.querySelector(".react-flow__nodes")?.querySelectorAll("*").length ?? 0;
   });
   watch.observe(container, { childList: true, subtree: true });
-  // 2,000 cards, the frame's box and the live anchor they hang from (Plan F Decision 11).
+  // 2,000 cards, the frame's box and the live anchor they hang from.
   await waitFor(() => expect(canvas.props?.nodes.length).toBe(2002), { timeout: 4000 });
   await waitFor(() => expect(canvas.instance?.getViewport().zoom).toBeCloseTo(0.1, 5));
   await waitFor(() => expect(container.querySelectorAll(".react-flow__node-kind").length).toBeGreaterThan(0));
@@ -111,7 +111,7 @@ test("a_live_2000_table_erd_mounts_only_the_cards_in_view", async () => {
   // The fit lands at 10 percent, at the ERD's top left: the 640 by 400 view holds 6,400 by 4,000 board units, at most
   // 26 columns of cards 260 apart by 9 rows 520 apart, 234 cards. Never all 2,000.
   expect(peakCards).toBeLessThanOrEqual(234);
-  // A far card is drawn as main's fast name box is, plus its row bars (Decision 3) as the body's backgrounds: React
+  // A far card is drawn as main's fast name box is, plus its row bars as the body's backgrounds: React
   // Flow's node, the shell, the card's inside, its header and name, the body and its bars, and one handle for its
   // lines. 8 elements and no <svg> (WebKit gives each <svg> root its own memory; main's fast box had none), where its
   // rows were 76, then 18, then 10 with one <svg>.

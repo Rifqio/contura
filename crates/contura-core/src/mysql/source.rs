@@ -173,7 +173,7 @@ async fn plan_select(conn: &mut Conn, req: &SourceRequest) -> Result<Plan> {
             carry.push(Carry::Number);
         } else if SPATIAL.contains(&data_type) {
             // The SQL writer reads the SRID from ` SRID n` on the type, or from a value's
-            // own `SRID=n;` (Q34 I1). A column declared with an SRID holds only that one;
+            // own `SRID=n;`. A column declared with an SRID holds only that one;
             // any other spatial column carries each value's SRID unless it is 0.
             match srids.get(&c.info.name) {
                 Some(_) => list.push(format!("ST_AsText({q})")),
@@ -439,7 +439,7 @@ async fn stream(conn: &mut Conn, plan: Plan, kill: Arc<Kill>, p: Producer, read_
     feed.finish().await;
 }
 
-// ---- The Backup's snapshot (step 9) ----
+// ---- The Backup's snapshot ----
 
 /// Engines with transactions, whose tables the snapshot covers.
 fn transactional(engine: &str) -> bool {

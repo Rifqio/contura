@@ -1,5 +1,5 @@
 // The PNG path lets go of its pixels once the file is encoded, so a large export does not stay in memory after
-// the Publish dialog closes (ADR 0003's budget; spec 6+: closing frees what it held).
+// the Publish dialog closes (ADR 0003's budget: closing frees what it held).
 import { afterEach, expect, test, vi } from "vitest";
 import { PNG_TOO_LARGE } from "./limits";
 import { exportPng, svgPreviewUrl } from "./png";

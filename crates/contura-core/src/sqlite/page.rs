@@ -158,7 +158,7 @@ fn read_row(row: &rusqlite::Row<'_>, cols: &[ColumnInfo]) -> Result<Vec<Cell>> {
     Ok(cells)
 }
 
-/// Step 11f: up to `limit` rows of one base table on `conn`, which the caller opened
+/// Up to `limit` rows of one base table on `conn`, which the caller opened
 /// read-only and put in a transaction. The grid's select list and cells; no ORDER BY,
 /// no OFFSET, no filter.
 pub(super) fn sample_rows(conn: &Connection, path: &ObjectPath, limit: u32) -> Result<Page> {
@@ -226,7 +226,7 @@ pub(crate) fn count_rows(conn: &Connection, req: &CountRequest) -> Result<RowCou
     }
 }
 
-/// M3: the row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
+/// The row's 0-based place in the page order (`fetch_page`'s ORDER BY) among the rows
 /// matching the filter. `prepare` refuses a second statement.
 pub(crate) fn locate_row(conn: &Connection, req: &LocateRequest) -> Result<RowPlace> {
     let cols = table_columns(conn, &req.table)?;

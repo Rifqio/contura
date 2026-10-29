@@ -1,10 +1,10 @@
 // A scene as plain SVG: g, rect, text, tspan, path and (for cloud icons) image and use elements only, plus one <defs>, no
 // foreignObject and no web fonts, so other tools open it cleanly. Each kind is drawn as the canvas draws it
 // (flow-canvas.css, kindNodes.tsx). Every colour comes from the palette, read from the tokens. A cloud icon is an <image>
-// of the pack's own bytes as a data: URL, never inline markup (ruling P9); a pale logo on light also takes the one
+// of the pack's own bytes as a data: URL, never inline markup; a pale logo on light also takes the one
 // hairline filter. The <defs> appears at most once and holds only that filter, made of filter primitives only, and
-// each shared icon image once (`<image id href="data:image/...">`, drawn by `<use href="#id">`, B4 Decision 9).
-// The writer comes in parts (B4 Task 1): `sceneBody` draws a scene, `svgDefs` the shared defs and `wrapSvg` the head,
+// each shared icon image once (`<image id href="data:image/...">`, drawn by `<use href="#id">`).
+// The writer comes in parts: `sceneBody` draws a scene, `svgDefs` the shared defs and `wrapSvg` the head,
 // background and mark round them; `sceneToSvg` is the three in a row.
 import { iconPath, type IconName } from "../../components/Icon";
 import { ER_FAR_ROW, SOFT_CHAR_W } from "../canvasView";
@@ -192,7 +192,7 @@ let hairline = HAIRLINE;
 let softPalette: ExportPalette | undefined;
 const textWidth = (s: string) => s.length * 7 * textK;
 
-/** A data flow node in Modern or the Classic Gane-Sarson shapes (frame 6+.2). */
+/** A data flow node in Modern or the Classic Gane-Sarson shapes. */
 function dfdSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
   const { fill, stroke } = palette.nodes[n.kind];
   const { x, y, w, h } = n;
@@ -255,7 +255,7 @@ function dfdSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
   if (n.tag) parts.push(text(x + w - 12, cy + 4, n.tag, ` text-anchor="end"${subtle}`));
 }
 
-/** A flowchart node (frame 6+.4): pills, steps, the slanted io step and the one diamond. */
+/** A flowchart node: pills, steps, the slanted io step and the one diamond. */
 function flowchartSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
   const { fill, stroke } = palette.nodes[n.kind];
   const { x, y, w, h } = n;
@@ -281,7 +281,7 @@ function flowchartSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
   if (n.tag) parts.push(text(cx, ty + 14, n.tag, ` text-anchor="middle" font-size="11" fill="${palette.subtle}"`));
 }
 
-/** A cloud service (frame 6+.5): the 48 px tile with the icon unchanged, the name under it. */
+/** A cloud service: the 48 px tile with the icon unchanged, the name under it. */
 function serviceSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
   const { x, y, w } = n;
   const tx = x + (w - 48) / 2;
@@ -302,7 +302,7 @@ function serviceSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
 }
 
 /**
- * A state diagram's shapes as the canvas draws them (diag-910 fix round 3, P1): the start a filled dot, the end a ring
+ * A state diagram's shapes as the canvas draws them (diag-910): the start a filled dot, the end a ring
  * round a dot, a state a pill, a choice a small diamond with its name under it, and a fork a bar. Markers carry no name.
  */
 function stateSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
@@ -419,7 +419,7 @@ function classSvg(n: SceneNode, palette: ExportPalette, parts: string[]) {
 }
 
 /**
- * Whether a sequence participant's icon draws with the hairline (Plan E Decision 5): when Plan C asks for it, or when
+ * Whether a sequence participant's icon draws with the hairline: when the canvas asks for it, or when
  * its logo's own colour is under 1.5:1 (`FAINT`) on the participant's `fill`.
  */
 function participantOutline(n: SceneNode, fill: string): boolean {
@@ -432,7 +432,7 @@ const SEQ_WHO: ReadonlySet<string> = new Set(["participant", "actor"]);
 const whoOf = (n: SceneNode) => (n.kind === "actor" ? "actor" : "participant");
 
 /**
- * A sequence participant as SeqParticipant and SeqLanes draw it (Plan E Decisions 4, 6, 12): its solid lane in its line
+ * A sequence participant as SeqParticipant and SeqLanes draw it: its solid lane in its line
  * colour, its activation bars, then its head box on top and its foot box at `foot`, each filled with the tint of its
  * colour and outlined in it, with its icon (or the dashed cube tile for one the pack lacks; an actor with no icon a
  * person) and its words in the text colour, the pair centred.
@@ -541,12 +541,12 @@ const TIME_KINDS: ReadonlySet<string> = new Set(["event", "period", "milestone"]
 /** A colour's drawn values; a preset needs the palette to carry the presets, a custom hex never does. */
 const coloured = (palette: ExportPalette, c: SceneColour | undefined) => (c && (c[0] === "#" || palette.colours) ? sceneColour(palette, c) : undefined);
 
-/** A drawn node: data flow, flowchart, cloud (frames 6+.2, 6+.4, 6+.5), state and the step 12 kinds, as the canvas draws them. */
+/** A drawn node: data flow, flowchart, cloud (6+.5), state and the step 12 kinds, as the canvas draws them. */
 function drawnSvg(n: SceneNode, given: ExportPalette): string {
-  // A participant takes the sequence colours (Plan E Decision 4), never a preset's fill.
+  // A participant takes the sequence colours, never a preset's fill.
   if (SEQ_WHO.has(n.kind)) return participantSvg(n, given);
   const parts: string[] = [];
-  // Step 11: a coloured shape draws its palette colour's fill and border in place of its kind's, and its words.
+  // a coloured shape draws its palette colour's fill and border in place of its kind's, and its words.
   const c = coloured(given, n.color);
   const palette = c ? { ...given, nodes: { ...given.nodes, [n.kind]: { fill: c.fill, stroke: c.stroke } } } : given;
   if (n.kind === "process" || n.kind === "store" || n.kind === "external") dfdSvg(n, palette, parts);
@@ -564,7 +564,7 @@ function drawnSvg(n: SceneNode, given: ExportPalette): string {
 /** A group: a tinted area with its name at the top left; groups inside groups have a solid edge. */
 function areaSvg(a: SceneArea, palette: ExportPalette): string {
   const dash = a.depth === 0 ? ` stroke-dasharray="5 4"` : "";
-  // Step 11: a coloured group takes its colour on its border, tint and title, as the canvas draws it.
+  // a coloured group takes its colour on its border, tint and title, as the canvas draws it.
   const c = coloured(palette, a.color);
   const edge = c ? c.stroke : palette.group;
   const tint = c ? `fill="${c.fill}" fill-opacity="0.55"` : `fill="${palette.groupTint}" fill-opacity="0.7"`;
@@ -621,7 +621,7 @@ function markSvg(mark: SceneMark, from: { x: number; y: number }, tip: { x: numb
 /** A drawn diagram's or lineage's line: square with 8 px corners, 6 px heads, the label on a 6 px-radius chip. */
 function flowEdgeSvg(e: SceneEdge, given: ExportPalette): string {
   const pts = e.points;
-  // Step 11: a coloured line keeps its colour and its arrowheads; its label chip stays plain.
+  // a coloured line keeps its colour and its arrowheads; its label chip stays plain.
   const c = coloured(given, e.color);
   const palette = c ? { ...given, subtle: c.stroke } : given;
   const stroke = palette.subtle;
@@ -650,7 +650,7 @@ function flowEdgeSvg(e: SceneEdge, given: ExportPalette): string {
 }
 
 /**
- * A sequence message as SeqEdge draws it (Plan E Decisions 7, 9 to 11): the drawing's path with the gap at its label,
+ * A sequence message as SeqEdge draws it: the drawing's path with the gap at its label,
  * dashed for a reply, its head on the last segment; then its label's chip in the canvas's colour or its block's wash, the
  * label on it at its measured width (`textLength`, so every viewer breaks the line where the canvas does); then its
  * number on the sender's lifeline. Far (a soft picture) the digits go, as the canvas's far numbers do.
@@ -696,7 +696,7 @@ function messageParts(e: SceneEdge, palette: ExportPalette, frames: readonly Sce
 const rectD = (x: number, y: number, w: number, h: number) => `M${num(x)} ${num(y)}h${num(w)}v${num(h)}h${num(-w)}z`;
 
 /**
- * A sequence in a frame picture (Plan E Task 9; Plan F Decision 7). At the sequence limit (2,000 participants, 3,000
+ * A sequence in a frame picture. At the sequence limit (2,000 participants, 3,000
  * messages) one element a part made 3.7 M characters of SVG with soft text (4 M with words): 15 and 16 pieces of
  * PICTURE_PIECE_CHARS, each an SVG document WebKit keeps. In a picture every part of one style is one subpath of one
  * path, as F's far ER rows are: the lifelines of a colour, the bars and the boxes of a colour, the message lines,
@@ -830,11 +830,11 @@ function branchSvg(e: SceneEdge, palette: ExportPalette): string {
   return `<g data-edge="${esc(e.id)}"><path d="M${num(a.x)} ${num(a.y)} C ${num(mx)} ${num(a.y)}, ${num(mx)} ${num(b.y)}, ${num(b.x)} ${num(b.y)}" fill="none" stroke="${palette.subtle}" stroke-width="1.5"/></g>`;
 }
 
-/** Each block kind's glyph on its side tab (Plan E Decision 13, as seqNodes `BLOCK_GLYPH`). */
+/** Each block kind's glyph on its side tab (as seqNodes `BLOCK_GLYPH`). */
 const BLOCK_GLYPH: Record<string, IconName> = { loop: "repeat", alt: "split", opt: "branch", par: "columns", critical: "warning" };
 
 /**
- * A block (a sequence frame) as SeqFrame draws it (Plan E Decision 13): its opaque wash outlined in its line colour, and
+ * A block (a sequence frame) as SeqFrame draws it: its opaque wash outlined in its line colour, and
  * down its left edge the side tab in its tab colour with its kind's glyph and, when there is room, its kind word turned a
  * quarter counter-clockwise, in the tab's ink.
  */
@@ -883,13 +883,13 @@ function axisSvg(a: SceneAxis, palette: ExportPalette): string {
 
 function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   if (n.look) return drawnSvg(n, palette);
-  // Step 11: a coloured ER table draws its colour's border and header in place of its kind's.
+  // a coloured ER table draws its colour's border and header in place of its kind's.
   const c = coloured(palette, n.color);
   const colours = c ? { fill: c.fill, stroke: c.stroke } : palette.nodes[n.kind];
   const r = 6;
   const { x, y, w, h } = n;
   // An ER card (its rows carry not-null marks; only flowScene's ER cards set them) draws the canvas card's geometry at
-  // the scene's text size, where its lines meet its rows (`erMetrics`, `erRowY`; B4 A10 and fix round 1). Other cards
+  // the scene's text size, where its lines meet its rows (`erMetrics`, `erRowY`; B4). Other cards
   // keep the schema card's header and row pitch.
   const er = n.rows.some((row) => row.notNull !== undefined);
   const m = erMetrics(er ? textK : 1);
@@ -906,11 +906,11 @@ function nodeSvg(n: SceneNode, palette: ExportPalette): string {
   if (n.subtitle) parts.push(`<text x="${x + w - 10}" y="${titleY}" text-anchor="end" font-size="12" fill="${palette.subtle}">${esc(n.subtitle)}</text>`);
   const marked = n.rows.some((row) => row.mark);
   const nameX = x + (marked ? 32 : 10);
-  // An ER card's not-null marks, as the canvas draws them: a filled diamond, an outline for a nullable column (M11).
+  // An ER card's not-null marks, as the canvas draws them: a filled diamond, an outline for a nullable column.
   const nulls = er;
   const typeX = x + w - (nulls ? 24 : 10);
-  // A soft-text ER card (a far frame picture, Plan F Decision 7) draws its rows as the canvas's far card does (kindNodes
-  // `ErBars`, Decision 3), from the one `ER_FAR_ROW`: on each row's middle a name bar `from` into the rows body and a
+  // A soft-text ER card (a far frame picture) draws its rows as the canvas's far card does (kindNodes
+  // `ErBars`), from the one `ER_FAR_ROW`: on each row's middle a name bar `from` into the rows body and a
   // type bar ending `to` before its right, `h` times the text size tall, at most 0.55 and 0.3 of the card, in the faint
   // token at 45 percent; a key row's square in the key colour in the gutter; no not-null marks. The rows body sits
   // inside the card's 1 px border. All bars are one path, and the key marks another, in the card's own units: one path
@@ -1049,7 +1049,7 @@ const attrOf = (attrs: string, name: keyof typeof RUN_ATTR) => RUN_ATTR[name].ex
 const ENTITY: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"' };
 
 /**
- * Every run of words in `svg` as one soft bar (Plan F Decision 7, as the canvas draws far text, Decision 2): a
+ * Every run of words in `svg` as one soft bar (as the canvas draws far text): a
  * `<rect rx="2">` on the run's line, `min(len * SOFT_CHAR_W * fontPx / 13, cap)` wide from the run's anchor, in
  * `palette.faint` at 45 percent. `fontPx` is the run's own size at the scene's text size; `cap` is the width of the
  * shape, group or band the run sits in.
@@ -1107,7 +1107,7 @@ const BODY_STEP = 64;
 
 /**
  * `sceneBody` in steps: it yields after every BODY_STEP parts (a shape, a line, a group...), so a frame picture of a
- * big diagram is drawn across time slices (Plan F Decision 7). The draw's text size, icon references and hairline are
+ * big diagram is drawn across time slices. The draw's text size, icon references and hairline are
  * set for each batch and put back before each yield, so another draw may run in between. Drained, it is `sceneBody`.
  */
 export function* sceneBodySteps(
@@ -1122,7 +1122,7 @@ export function* sceneBodySteps(
   // Each part softened inside its own width, before the fonts are scaled (bars carry no font size).
   const soft = softly ? (svg: string, cap: number) => softRuns(svg, cap, palette) : (svg: string) => svg;
   // Messages go over the lifelines and activation bars, and a frame's tab over everything, as on the canvas. A line's
-  // label sits in its own pill, which is wider than the label's bar. A sequence paints in Plan E Decision 15's order:
+  // label sits in its own pill, which is wider than the label's bar. A sequence paints in this order:
   // blocks, each participant (lane, bars, head, foot), messages with their chips and numbers, then captions.
   const draws: (() => string)[] = [];
   for (const sec of scene.sections ?? []) draws.push(() => soft(sectionSvg(sec, palette), sec.w));

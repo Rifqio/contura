@@ -1,5 +1,5 @@
-// Icon credits (spec 6+ section 7): each packed icon set, its licence and its source. The text comes from the
-// pack, so it is shown as plain text only, and only an https source becomes a link (ruling P9).
+// Icon credits: each packed icon set, its licence and its source. The text comes from the
+// pack, so it is shown as plain text only, and only an https source becomes a link.
 import { Fragment, useEffect, useState } from "react";
 import { errorText, iconSets, openUrl } from "../api/client";
 import type { IconEntry, IconSet } from "../api/types";

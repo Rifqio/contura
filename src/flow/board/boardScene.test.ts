@@ -1,5 +1,5 @@
-// Task 5: every frame of a board on one canvas. Static frames are frame nodes with their shapes as prefixed children,
-// in z bands under the live frame (Decisions 1, 2, 4 and 5); each is rebuilt only when its doc or layout changes.
+// Every frame of a board on one canvas. Static frames are frame nodes with their shapes as prefixed children,
+// in z bands under the live frame; each is rebuilt only when its doc or layout changes.
 import type { Edge, Node } from "@xyflow/react";
 import { expect, test, vi } from "vitest";
 import type { FlowProblem } from "../../lang/flow/problems";
@@ -143,7 +143,7 @@ test("the_selected_frame_is_live_on_the_board", () => {
   // The live frame has only its box here (and the anchor its shapes hang from): FlowTab draws its shapes with bare names.
   expect(childrenOf(s.nodes, boardFrameId("Refund"))).toEqual([]);
   expect(s.nodes.some((n) => n.id.startsWith("\u0000in:Refund\u0000"))).toBe(false);
-  // Another frame's box sits at its board place (Plan F Decision 11: one origin for the whole board).
+  // Another frame's box sits at its board place (one origin for the whole board).
   const ship = frameBounds(b.frames.get("Shipping")!, r.frames[2].doc, "modern");
   const shipBox = s.nodes.find((n) => n.id === boardFrameId("Shipping"))!;
   expect(shipBox.position).toEqual({ x: ship.x, y: ship.y });
@@ -230,7 +230,7 @@ test("a_switch_keeps_other_static_frames_ids", () => {
   cAfter.forEach((n, i) => expect(n).toBe(cBefore[i]));
   const ceBefore = edgesOf(onA.edges, "Shipping");
   edgesOf(onB.edges, "Shipping").forEach((e, i) => expect(e).toBe(ceBefore[i]));
-  // C's box keeps its id and its place: the board has one origin (Plan F Decision 11).
+  // C's box keeps its id and its place: the board has one origin.
   expect(onB.nodes.find((n) => n.id === boardFrameId("Shipping"))!.position.x).toBe(onA.nodes.find((n) => n.id === boardFrameId("Shipping"))!.position.x);
   // A became static (its children drawn), B became live (none drawn).
   expect(childrenOf(onA.nodes, boardFrameId("Checkout"))).toEqual([]);
@@ -239,7 +239,7 @@ test("a_switch_keeps_other_static_frames_ids", () => {
   expect(childrenOf(onB.nodes, boardFrameId("Refund"))).toEqual([]);
 });
 
-// ----- Plan F Task 4 (Decision 11): one origin for the whole board.
+// ----- One origin for the whole board.
 
 const SKETCHED = (): BoardLayout => ({ ...THREE_LAYOUT(), sketches: [{ id: "s1", kind: "rect", x: 900, y: 500, w: 120, h: 80 } satisfies Sketch] });
 
@@ -401,7 +401,7 @@ test("gone_frames_leave_the_memo", () => {
 });
 
 test("a_second_frame_with_a_taken_title_draws_faded_by_index", () => {
-  // A flowchart whose title an earlier frame has: no layout entry of its own (Decision 9), yet it draws its shapes.
+  // A flowchart whose title an earlier frame has: no layout entry of its own, yet it draws its shapes.
   const again = 'diagram flow "Checkout"\nOther\nMore\nOther > More\n';
   const r = parse(`${CHECKOUT}\n${again}`);
   const b = layout({ Checkout: entry({ x: 0, y: 0 }, { Cart: { x: 0, y: 0 }, Pay: { x: 0, y: 120 } }) });
@@ -540,7 +540,7 @@ test("kind_edit_knows_static_shapes_as_is_static_id_does", () => {
 });
 
 test("static_children_carry_their_text_size_class", () => {
-  // Plan F Decision 4: each static shape carries its frame's text size, so flow-board.css fades it at that size's zoom.
+  // Each static shape carries its frame's text size, so flow-board.css fades it at that size's zoom.
   const r = parse(THREE);
   const b = layout({
     Checkout: entry({ x: 0, y: 0 }, { Cart: { x: 0, y: 0 }, Pay: { x: 0, y: 120 } }, { textSize: "s" }),
@@ -554,11 +554,11 @@ test("static_children_carry_their_text_size_class", () => {
     expect(kids.length, key).toBeGreaterThan(0);
     for (const n of kids) expect(n.className?.split(" "), `${key} ${n.id}`).toContain(cls);
   }
-  // The frame's own box (its tab) never carries one: frame titles keep their size (Decision 5).
+  // The frame's own box (its tab) never carries one: frame titles keep their size.
   for (const key of KEYS) expect(s.nodes.find((n) => n.id === boardFrameId(key))!.className ?? "").not.toMatch(/board-ts-/);
 });
 
-// ----- Plan F Task 6 (Decision 6): only frames in view are drawn; `children` still lists every static frame's shapes.
+// ----- Only frames in view are drawn; `children` still lists every static frame's shapes.
 
 const forms = (real: number[], mounted: [number, number][] = [], picture: number[] = []): DrawnForms => ({
   form: new Map<number, FrameForm>([...real.map((i) => [i, "real"] as const), ...picture.map((i) => [i, "picture"] as const)]),
@@ -600,7 +600,7 @@ test("a_frame_turning_real_pushes_its_mounted_children_only", () => {
   expect(kids[1]).toBe(refund[0]);
   // A null plan draws every frame real.
   for (const key of KEYS) expect(childrenOf(all.nodes, boardFrameId(key)).length).toBeGreaterThan(0);
-  // Its lines are parts too (Task 9): after its last child, one line a part, never all at once with the last child.
+  // Its lines are parts too: after its last child, one line a part, never all at once with the last child.
   const lines = edgesOf(all.edges, "Refund");
   expect(lines.length).toBeGreaterThan(0);
   expect(all.lines.get(boardFrameId("Refund"))).toBe(lines.length);
@@ -626,7 +626,7 @@ test("a_form_change_keeps_built_children", () => {
   expect(s3.nodes.find((n) => n.id === boardFrameId("Refund"))).toBe(s1.nodes.find((n) => n.id === boardFrameId("Refund")));
 });
 
-// ----- Plan F Task 7 (Decision 7): a far static frame is one picture of itself over its box.
+// ----- A far static frame is one picture of itself over its box.
 
 const LITERAL: ExportPalette = {
   surface: "#010101",
@@ -767,7 +767,7 @@ test("a_pictured_sketch_layer_draws_its_tiles_instead_of_its_sketches", () => {
   expect(back.nodes.some((n) => n.type === SKETCH_PICTURE_TYPE)).toBe(false);
 });
 
-// Plan D Task 8: the assistant's waiting changes drawn on every frame they touch.
+// The assistant's waiting changes drawn on every frame they touch.
 
 /** A frame's review as `boardReview` gives it: the overlay of `before` to `after` (one frame's texts each). */
 function frameReview(before: string, after: string, more: { renames?: ReadonlyMap<string, string>; count?: number; isNew?: boolean } = {}): FrameReview {
@@ -821,7 +821,7 @@ test("a_renamed_group_is_tinted", () => {
   const area = s.nodes.find((n) => n.id === inFrameId("Checkout", "\u0000group:Store"))!;
   expect(area.className).toContain("is-ai-changed");
   expect(area.className).toContain(STATIC_CLASS);
-  // A screen reader hears it too (Task 19): the area names itself with the shapes' note.
+  // A screen reader hears it too: the area names itself with the shapes' note.
   expect((area.data as { state?: string }).state).toBe("changed");
   // Its shapes did not move.
   expect(stateOf(s.nodes.find((n) => n.id === inFrameId("Checkout", "Cart")))).toBeUndefined();
@@ -871,7 +871,7 @@ test("a_new_frame_draws_dashed_at_its_place", () => {
   expect(box).toBeDefined();
   const data = box.data as { box: FrameBox; isNew?: boolean; pending?: number };
   expect([data.isNew, data.pending]).toEqual([true, 4]);
-  // At its place on the board as an entry's `at` places a frame: in board units (Plan F Decision 11; Refund is live
+  // At its place on the board as an entry's `at` places a frame: in board units (Refund is live
   // at 600, 0 and moves nothing), its box FRAME_PAD around its shapes; it follows its place.
   expect(box.position.x).toBe(1800 - FRAME_PAD);
   const moved = createBoardScene("modern").build(r.frames, b, KEYS, sel, lv, [], undefined, null, undefined, null, review, new Map([["Returns", { x: 1900, y: 50 }]]));
@@ -896,10 +896,10 @@ test("an_overview_frame_under_review_draws_as_nodes", () => {
   const b = THREE_LAYOUT();
   const review = new Map([["Refund", REFUND_REVIEW()]]);
   const scene = createBoardScene("modern");
-  // Plan F replaced the overview's preview with pictures (Decision 7): every static frame is a picture at open.
+  // The overview draws pictures, not a preview: every static frame is a picture at open.
   const pictures = pictureStore();
   const s = scene.build(r.frames, b, KEYS, null, null, [], undefined, null, pictures, null, review);
-  // Refund draws its shapes and lines with their marks; the others stay one picture node each (Decision 19).
+  // Refund draws its shapes and lines with their marks; the others stay one picture node each.
   const kinds = (key: string) => childrenOf(s.nodes, boardFrameId(key)).map((n) => n.type);
   expect(kinds("Checkout")).toEqual([FRAME_PICTURE_TYPE]);
   expect(kinds("Shipping")).toEqual([FRAME_PICTURE_TYPE]);

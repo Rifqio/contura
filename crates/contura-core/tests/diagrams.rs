@@ -1,4 +1,4 @@
-//! The diagrams folder: `<data>\diagrams\<name>.flow` plus its layout file (step 6+, Q35).
+//! The diagrams folder: `<data>\diagrams\<name>.flow` plus its layout file.
 
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -87,7 +87,7 @@ fn list_reads_heads_line_by_line() {
     assert!(reader.taken <= 4096, "read {} bytes", reader.taken);
 }
 
-/// The writer escapes a line break in a title as `\n` or `\r` (P5); the head reads it back.
+/// The writer escapes a line break in a title as `\n` or `\r`; the head reads it back.
 #[test]
 fn a_title_with_line_breaks_reads_back() {
     let (kind, title) = diagram_head(&b"diagram flow \"Two\\nlines\\r\\\\n\"\n"[..]);
@@ -296,7 +296,7 @@ fn delete_of_a_missing_diagram_calls_nothing() {
 }
 
 /// The real Recycle Bin. It adds two files to the user's own Recycle Bin, so it runs only
-/// by hand, in the end-of-roadmap deferred pass (Ruling P3).
+/// by hand, in the end-of-roadmap deferred pass.
 #[cfg(windows)]
 #[test]
 #[ignore = "touches the user's Recycle Bin; run by hand in the end-of-roadmap deferred pass"]
@@ -347,7 +347,7 @@ fn copy_goes_through_export_guard() {
     );
 }
 
-/// A move, Classic or the direction writes only the layout file (P24 I1): a `.flow` changed outside
+/// A move, Classic or the direction writes only the layout file: a `.flow` changed outside
 /// Contura keeps the outside text, and a `.flow` deleted outside is never recreated.
 #[test]
 fn layout_only_write_keeps_the_outside_text() {
@@ -392,7 +392,7 @@ fn layout_only_write_refuses_a_missing_flow_and_a_bad_name() {
     ));
 }
 
-/// A mistaken huge file is refused with a plain message instead of filling memory (P24 M4).
+/// A mistaken huge file is refused with a plain message instead of filling memory.
 #[test]
 fn read_refuses_a_file_over_the_cap() {
     let data = tempfile::tempdir().unwrap();

@@ -54,7 +54,7 @@ interface Props {
 
 /** The last folder an export went to. */
 export const FOLDER_KEY = "contura.exportFolder";
-/** D24: an export that ends within this keeps the form and closes with the toast. */
+/** An export that ends within this keeps the form and closes with the toast. */
 const SHORT_MS = 2000;
 const PREVIEW_DELAY_MS = 200;
 const PREVIEW_LINES = 6;
@@ -137,7 +137,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
   const baseName = table ? table.path.name : "query-result";
 
   const [scope, setScope] = useState<Scope>("all");
-  // D16 and Q26: a result's statement counts as not read until a preview says it reads.
+  // A result's statement counts as not read until a preview says it reads.
   const [readState, setReadState] = useState<"unknown" | "read" | "notRead">("unknown");
   // The grid's order when it moved columns (view only), so the export writes them as shown.
   const [order, setOrder] = useState<string[]>(() => {
@@ -200,7 +200,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
       ? { kind: "query", database: origin.database, sql: origin.sql, columns: shownColumns(origin) }
       : source;
 
-  // D8: only All rows (the tree's estimate), Selected rows and the rows shown have a count.
+  // only All rows (the tree's estimate), Selected rows and the rows shown have a count.
   const rows: number | null =
     origin.kind === "table"
       ? scope === "all"
@@ -279,7 +279,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
   async function start(overwrite: boolean) {
     if (!req || jobId !== null || folder === null) return;
     const id = newJobId();
-    // Q2: track before the start, so no event is lost.
+    // track before the start, so no event is lost.
     const onEvent = jobs.track(id, "export", label, connection.id);
     jobPaths.set(id, req.path);
     setJobId(id);
@@ -339,7 +339,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
   }
 
   /**
-   * Every way of closing (Esc, the close button, a click outside). Q25: while an export runs,
+   * Every way of closing (Esc, the close button, a click outside). While an export runs,
    * in the running frame or in the first 2s, it goes to the background; only Cancel cancels.
    */
   function closeDialog() {
@@ -348,7 +348,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
     else onClose();
   }
 
-  // One Dialog for every view, so focus goes back to the opener at the end (I3). A new view
+  // One Dialog for every view, so focus goes back to the opener at the end. A new view
   // moves focus to its own first control, since the old one is gone.
   const view = asking && path !== null ? "ask" : running && jobId ? "running" : "form";
   // J2: a form with changes ignores a click outside and asks before Escape discards it.
@@ -381,7 +381,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
 
   const sheetName = table ? table.path.name : "result";
   const resultHint = readState === "read" ? RERUN_HINT : ROWS_SHOWN_HINT;
-  // Q20 and the result hint: a note the form already shows is not repeated.
+  // A note the form already shows is not repeated.
   const notes = (preview?.notes ?? []).filter((note) => note !== PRODUCTION_BANNER && (table !== null || note !== resultHint));
   const columnsText = sameColumns
     ? `All ${allColumns.length} columns`
@@ -586,7 +586,7 @@ export default function ExportDialog({ connection, group, origin, attach, onClos
             <span className="export-hint">Writes a file only. The database is not changed.</span>
           )}
           <span className="spacer" />
-          {/* In the first 2s Cancel cancels the export; Esc sends it to the background (Q25). */}
+          {/* In the first 2s Cancel cancels the export; Esc sends it to the background. */}
           <button type="button" className="button" onClick={busy ? cancelJob : onClose}>
             Cancel
             {!busy && <Kbd keys="Esc" />}
@@ -855,7 +855,7 @@ function ColumnChooser({ anchor, order, off, onOrder, onToggle, onClose }: Choos
       onBlur={(e) => {
         // Tab past the last control leaves the popover; it is outside the Dialog's Tab trap.
         const to = e.relatedTarget as Node | null;
-        // Focus going to Choose... itself is left to its click, which toggles the chooser (M8).
+        // Focus going to Choose... itself is left to its click, which toggles the chooser.
         if (to && !box.current?.contains(to) && !anchor?.contains(to)) close.current();
       }}
     >

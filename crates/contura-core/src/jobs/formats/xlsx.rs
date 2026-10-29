@@ -1,13 +1,13 @@
-//! Excel: constant-memory writer and a capped reader (Task 4).
+//! Excel: constant-memory writer and a capped reader.
 //!
 //! Writing uses `rust_xlsxwriter`'s `Workbook::add_worksheet_with_constant_memory`: each
 //! row is flushed to a temporary file once the next row starts, so memory holds one row.
-//! The workbook is assembled into the export's `PartialWriter` at `finish` (Q4); the
+//! The workbook is assembled into the export's `PartialWriter` at `finish`; the
 //! writer never touches the target path.
 //!
 //! Reading uses `calamine`'s `Xlsx::worksheet_cells_reader`, which walks the sheet XML
 //! cell by cell. The shared strings table is loaded whole, which is why Excel import is
-//! capped at 500,000 rows and 100 MB (D17), the one exception to streaming.
+//! capped at 500,000 rows and 100 MB, the one exception to streaming.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -30,7 +30,7 @@ use crate::jobs::source::{Chunk, SourceColumn, Value, ValueKind};
 use crate::jobs::types::ExportOptions;
 
 /// Data rows per sheet; with the header row that is Excel's 1,048,576. Without a header
-/// a sheet holds the same count, one row fewer than Excel allows (M12).
+/// a sheet holds the same count, one row fewer than Excel allows.
 pub const SHEET_ROWS: u32 = 1_048_575;
 /// Excel's limit on the characters in one cell.
 pub const CELL_CHARS: usize = 32_767;
@@ -38,9 +38,9 @@ pub const CELL_CHARS: usize = 32_767;
 pub const MAX_COLUMNS: usize = 16_384;
 /// The sheet name of a query result's export.
 pub const RESULT_SHEET: &str = "result";
-/// Excel import takes up to this many data rows (D17).
+/// Excel import takes up to this many data rows.
 pub const IMPORT_ROWS: u64 = 500_000;
-/// Excel import takes workbooks up to this size (D17).
+/// Excel import takes workbooks up to this size.
 pub const IMPORT_BYTES: u64 = 100 * MIB;
 
 const MIB: u64 = 1024 * 1024;
@@ -57,8 +57,8 @@ pub enum XlsxCell {
     Blank,
 }
 
-/// Whether a column of `type_name` is written as text in Excel whatever its values
-/// (Q5): bigint, int8, unsigned bigint, and numeric or decimal with no scale.
+/// Whether a column of `type_name` is written as text in Excel whatever its values:
+/// bigint, int8, unsigned bigint, and numeric or decimal with no scale.
 pub fn text_number_type(type_name: &str) -> bool {
     let lower = type_name.trim().to_ascii_lowercase();
     if lower.contains("bigint") || lower.contains("big int") {
@@ -94,7 +94,7 @@ pub fn sheet_kind(column: &SourceColumn) -> ValueKind {
 }
 
 /// A value as a cell: integers within 2^53 and floats are numbers; larger integers,
-/// decimals, NaN and Infinity (Q32b), dates and times are text exactly as given (spec
+/// decimals, NaN and Infinity, dates and times are text exactly as given (spec
 /// open question 8). Text is never a formula.
 pub fn xlsx_cell(v: &Value, kind: ValueKind, opts: &ExportOptions) -> XlsxCell {
     let s = match v {
@@ -198,7 +198,7 @@ impl XlsxWriter {
     /// Writes into `out`, the export's partial file; `sheet` names the first sheet.
     pub fn new(out: PartialWriter, sheet: &str, opts: &ExportOptions) -> Result<XlsxWriter> {
         // Constant-memory sheets spill to temporary files: keep them beside the export,
-        // not on the system drive (M7). The default stays when that folder will not do.
+        // not on the system drive. The default stays when that folder will not do.
         let mut book = Workbook::new();
         if let Some(dir) = out.target().parent()
             && !dir.as_os_str().is_empty()
@@ -220,7 +220,7 @@ impl XlsxWriter {
         })
     }
 
-    /// Writes to `path` through its guarded partial file (Q33); an existing `path` is
+    /// Writes to `path` through its guarded partial file; an existing `path` is
     /// refused unless `overwrite`. Commits through `finish` like every other writer.
     pub fn create(
         path: &Path,
@@ -376,9 +376,9 @@ pub fn bytes_cap_text(bytes: u64, cap: u64) -> String {
     )
 }
 
-/// The unpacked size of the shared strings part, and of each sheet (Q34 I4).
+/// The unpacked size of the shared strings part, and of each sheet.
 pub const ENTRY_UNPACKED: u64 = 256 * MIB;
-/// The unpacked size of the whole workbook (Q34 I4).
+/// The unpacked size of the whole workbook.
 pub const TOTAL_UNPACKED: u64 = 1024 * MIB;
 
 /// Which unpacked-size limit a workbook passed.
@@ -444,7 +444,7 @@ fn entry_kind(name: &str) -> Option<Unpacked> {
     }
 }
 
-/// The unpacked sizes, checked before calamine loads the shared strings whole (Q34 I4):
+/// The unpacked sizes, checked before calamine loads the shared strings whole:
 /// the shared strings part and each sheet up to `caps.entry`, everything up to
 /// `caps.total`. The sizes the zip directory declares are checked first, for an exact
 /// figure in the refusal; then every entry is unpacked and counted, stopping past the
@@ -590,7 +590,7 @@ fn cell_text(v: &DataRef<'_>) -> Option<String> {
     })
 }
 
-/// The bytes of a workbook: the file by its path, or a held import file (Q45).
+/// The bytes of a workbook: the file by its path, or a held import file.
 trait ReadSeek: Read + Seek + Send {}
 
 impl<T: Read + Seek + Send> ReadSeek for T {}
@@ -717,7 +717,7 @@ impl XlsxReader {
         Self::open_capped(path, sheet, header, Caps::import())
     }
 
-    /// As `open_with`, without the SHA-256 pass, for `inspect` (M10); `sha256` stays None.
+    /// As `open_with`, without the SHA-256 pass, for `inspect`; `sha256` stays None.
     pub fn open_unhashed(path: &Path, sheet: Option<&str>, header: bool) -> Result<XlsxReader> {
         Self::open_capped(
             path,
@@ -731,7 +731,7 @@ impl XlsxReader {
     }
 
     /// As `open_with`, reading the held import file through its own handle, up to the
-    /// size it had when it opened (Q45).
+    /// size it had when it opened.
     pub fn open_held(held: &HeldFile, sheet: Option<&str>, header: bool) -> Result<XlsxReader> {
         let open = || -> Result<Source> { Ok(Box::new(held.reader())) };
         Self::from_source(
@@ -744,10 +744,10 @@ impl XlsxReader {
         )
     }
 
-    /// The size cap first, then one streamed pass for the SHA-256 (Q3) that enforces the
-    /// cap on the bytes it reads (M11), then the unpacked sizes from the zip directory
-    /// (Q34 I4), then calamine on its thread, which checks the row cap before reading
-    /// cells (D17).
+    /// The size cap first, then one streamed pass for the SHA-256 that enforces the
+    /// cap on the bytes it reads, then the unpacked sizes from the zip directory,
+    /// then calamine on its thread, which checks the row cap before reading
+    /// cells.
     fn open_capped(
         path: &Path,
         sheet: Option<&str>,
@@ -1136,7 +1136,7 @@ mod tests {
 
     #[test]
     fn unpacked_sizes_capped_before_calamine() {
-        // Q34 I4: the zip directory's sizes are checked before calamine loads anything.
+        // the zip directory's sizes are checked before calamine loads anything.
         assert_eq!(
             unpacked_text(Unpacked::SharedStrings, 300 * MIB, ENTRY_UNPACKED),
             "This workbook's shared text unpacks to 300 MB. Excel import takes up to 256 MB; save it as CSV."

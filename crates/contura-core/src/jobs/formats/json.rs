@@ -1,4 +1,4 @@
-//! JSON: NDJSON and array writer, and a streaming reader (Task 3).
+//! JSON: NDJSON and array writer, and a streaming reader.
 //!
 //! Values stay raw (`RawValue`) between the file and the record, so numbers keep their
 //! exact digits without serde_json's `arbitrary_precision`.
@@ -629,7 +629,7 @@ impl JsonReader {
         Self::from_reader(file)
     }
 
-    /// A first byte `[` means an array; anything else is read as NDJSON (Q8).
+    /// A first byte `[` means an array; anything else is read as NDJSON.
     pub fn from_reader(r: impl Read + Send + 'static) -> Result<JsonReader> {
         let inner: Box<dyn Read + Send> = Box::new(r);
         let mut src: Source = BufReader::with_capacity(BUF_BYTES, HashingReader::new(inner));

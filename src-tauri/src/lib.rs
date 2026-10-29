@@ -259,7 +259,7 @@ pub fn run() {
     app.run(|handle, event| {
         // Closing the app drops the query connections, but a server only notices
         // when it next writes: stop running queries and jobs first so they do not
-        // commit (Q22). Quitting never waits on a server longer than EXIT_WAIT.
+        // commit. Quitting never waits on a server longer than EXIT_WAIT.
         if let RunEvent::ExitRequested { .. } = event
             && let Some(service) = handle.try_state::<ConnectionService>()
         {

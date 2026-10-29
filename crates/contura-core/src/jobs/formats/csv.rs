@@ -1,4 +1,4 @@
-//! CSV: RFC 4180 writer and a sniffing, streaming reader (Task 3).
+//! CSV: RFC 4180 writer and a sniffing, streaming reader.
 //!
 //! The reader is a small RFC 4180 parser of its own rather than the `csv` crate, because
 //! D11 needs to know whether an empty field was quoted (`""` is empty text, an empty
@@ -30,7 +30,7 @@ pub fn delimiter_byte(d: Delimiter) -> u8 {
 }
 
 /// RFC 4180 with CRLF line ends and an optional BOM. Empty text is written `""`, so it
-/// stays apart from NULL (D11); with "The text NULL", text that reads `NULL` is quoted.
+/// stays apart from NULL; with "The text NULL", text that reads `NULL` is quoted.
 pub struct CsvWriter<W: Write + Send> {
     out: Counting<W>,
     opts: ExportOptions,
@@ -218,7 +218,7 @@ fn counts_per_line(body: &[u8], delim: u8) -> Vec<usize> {
 struct RawRecord {
     line: u64,
     fields: Vec<Option<Vec<u8>>>,
-    /// The fields that were an unquoted `NULL` under the null word (Q31).
+    /// The fields that were an unquoted `NULL` under the null word.
     nulls: Vec<usize>,
 }
 
@@ -294,7 +294,7 @@ struct Parser {
     prev_cr: bool,
     /// A record ended on CR: a LF right after it belongs to that line end.
     skip_lf: bool,
-    /// "Read the text NULL as NULL" (Q31), for data rows only.
+    /// "Read the text NULL as NULL", for data rows only.
     null_word: bool,
 }
 
@@ -407,9 +407,9 @@ impl Parser {
     }
 }
 
-/// Ends a field: an empty unquoted one is None (D11). With `null_word` (Q31) an unquoted
+/// Ends a field: an empty unquoted one is None. With `null_word` an unquoted
 /// `NULL` is noted in `nulls`, and becomes None in `into_values`; a quoted `"NULL"` stays
-/// text (Q42 I2). A line holding only NULL is still a row, not a blank line.
+/// text. A line holding only NULL is still a row, not a blank line.
 fn end_field(
     fields: &mut Vec<Option<Vec<u8>>>,
     nulls: &mut Vec<usize>,
@@ -454,8 +454,8 @@ impl CsvReader {
     }
 
     /// As `open`, with the import's NULL rules for data rows (the header is read as it
-    /// is). `null_word`: an unquoted `NULL` is None (Q31); a quoted `"NULL"` stays text (Q42
-    /// I2). `empty_text`: an unquoted empty field is empty text, so None means NULL alone and
+    /// is). `null_word`: an unquoted `NULL` is None; a quoted `"NULL"` stays text.
+    /// `empty_text`: an unquoted empty field is empty text, so None means NULL alone and
     /// "An empty cell means" never turns a NULL word into text.
     pub fn open_with(
         path: &Path,
@@ -480,7 +480,7 @@ impl CsvReader {
     }
 
     /// As `open_with`, reading the held import file through its own handle, up to the
-    /// size it had when it opened (Q45).
+    /// size it had when it opened.
     pub fn open_held(
         held: &HeldFile,
         delimiter: Option<Delimiter>,
@@ -592,7 +592,7 @@ impl RecordReader for CsvReader {
             {
                 self.blanks = (count > 1).then_some((line + 1, count - 1));
                 self.row += 1;
-                // A blank line is one empty cell: it follows "An empty cell means" (D11).
+                // A blank line is one empty cell: it follows "An empty cell means".
                 let empty = self.empty_text.then(String::new);
                 return Ok(Some(FileRecord {
                     row: self.row,
@@ -796,7 +796,7 @@ mod tests {
         assert_eq!(values(&recs), vec![vec![None, s("x"), s("NULL")]]);
     }
 
-    /// Q31, Q42 I2: with "Read the text NULL as NULL", only an unquoted NULL is NULL; a
+    /// With "Read the text NULL as NULL", only an unquoted NULL is NULL; a
     /// quoted "NULL" stays text, so the NULL-word export reads back as it was written.
     #[test]
     fn null_word_is_unquoted_only() {
@@ -905,7 +905,7 @@ mod tests {
                 String::from_utf8_lossy(body)
             );
         }
-        // A line break inside quotes moves the next row's line on (D12).
+        // A line break inside quotes moves the next row's line on.
         let (_, recs) = read_all(b"a,b\r\n\"x\r\ny\",1\r\n2,3\r\n", None, true).unwrap();
         assert_eq!(recs[0].values[0], s("x\r\ny"));
         assert_eq!((recs[1].row, recs[1].line), (2, 4));
@@ -1013,7 +1013,7 @@ mod tests {
         assert_eq!(lines, vec![(1, 2), (2, 3), (3, 4)]);
     }
 
-    /// D11 (Q45): a blank line in a one-column file is an empty cell, so it follows "An
+    /// A blank line in a one-column file is an empty cell, so it follows "An
     /// empty cell means": NULL by default, empty text when the import says so.
     #[test]
     fn one_column_blank_line_follows_empty_cell_means() {

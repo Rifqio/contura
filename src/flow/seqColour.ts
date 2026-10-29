@@ -1,4 +1,4 @@
-// Plan E Decision 5: the colours a sequence draws, readable in both themes. A participant's line colour draws its
+// The colours a sequence draws, readable in both themes. A participant's line colour draws its
 // head and foot outline, its lifeline and its activation bars, over a tint of that colour; a block (a sequence
 // frame) draws an opaque wash, an outline and a side tab. Presets and kind tokens are pinned by tests; a custom
 // colour is stepped per theme until each check holds, the same way on the canvas (CSS variables) and in Publish (hex).
@@ -74,7 +74,7 @@ export function seqFillAmount(line: string, surface: string, text: string): 0.34
 }
 
 /**
- * A block's side tab (Decision 5): from the line colour, stepped toward `text` until the better of `surface` and
+ * A block's side tab: from the line colour, stepped toward `text` until the better of `surface` and
  * `text` reaches 4.5:1 on it and it reaches 3:1 on the block's wash; that better one is the tab's ink.
  */
 export function seqTab(line: string, surface: string, canvas: string, text: string): { fill: string; ink: string } {
@@ -112,7 +112,7 @@ export const seqColourVarsCacheSize = (): number => varsMade.size;
 /**
  * The custom properties `.fkind-seq` (flow-seq.css) reads. A preset or no colour: `--seq-col` as its stroke token.
  * A custom colour: the adjusted line and fill amount per theme, and for a block its tab and the tab's ink. Made once a
- * colour and kind and shared, frozen (Plan E Task 9): every lane, bar and number circle of a colour takes the same one.
+ * colour and kind and shared, frozen: every lane, bar and number circle of a colour takes the same one.
  */
 export function seqColourVars(c: DrawnColour | undefined, who: SeqWho | "block"): CSSProperties {
   const key = `${who}\u0000${c ?? ""}`;
@@ -158,7 +158,7 @@ export function seqColours(
 }
 
 /**
- * Whether participant icon `name` draws with Plan C's hairline: when Plan C asks for it on the canvas, or when the
+ * Whether participant icon `name` draws with the icon hairline: when the canvas asks for it, or when the
  * logo's own colour is under 1.5:1 on the participant's `fill`.
  */
 export function participantIconOutline(name: string, fill: string, t: IconTheme): boolean {

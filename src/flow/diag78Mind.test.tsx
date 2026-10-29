@@ -1,7 +1,7 @@
 // Diagram step 7 (board DiagramMindMap, rulings of 25 Oct): the mind map on the canvas. Tab adds a subtopic and
-// Shift+Tab the next topic, each a ghost with its name ready (M1); Enter, F2 and a double-click edit. Ctrl or Alt+Up
-// and Down move a topic among its siblings, a drag re-parents it with a drop target (M4); the branch dot and Ctrl+/
-// fold (M3); Ctrl+Shift+L draws a relationship with no label prompt and a branch takes no label (M2); Delete takes
+// Shift+Tab the next topic, each a ghost with its name ready; Enter, F2 and a double-click edit. Ctrl or Alt+Up
+// and Down move a topic among its siblings, a drag re-parents it with a drop target; the branch dot and Ctrl+/
+// fold; Ctrl+Shift+L draws a relationship with no label prompt and a branch takes no label; Delete takes
 // a topic with its subtopics. Each write is one undo step and its exact text is checked.
 import { redo, undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";

@@ -246,7 +246,7 @@ impl Splitter {
             return true;
         }
         if self.at_line_start {
-            // A `\` line is a client command only where a statement starts (Q37).
+            // A `\` line is a client command only where a statement starts.
             if c == '\\' && self.start.is_none() {
                 self.end_statement(out, self.pos);
                 self.start_command(Mode::MetaLine);
@@ -330,7 +330,7 @@ impl Splitter {
         let sqlite = self.dialect == DialectKind::Sqlite;
         if c == '$' && postgres {
             // A `$` opens a token either way; opening the statement first keeps a long
-            // undecided run under the statement limit (Q37).
+            // undecided run under the statement limit.
             self.begin();
             let (found, seen) =
                 dollar_tag_from(&self.buf[self.pos..], eof, self.dollar_seen.max(1));

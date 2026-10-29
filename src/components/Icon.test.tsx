@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import { expect, test } from "vitest";
 import Icon from "./Icon";
 
-/** H4, Q3: the "..." icons draw three r=1 rings (Lucide ellipsis), not zero-length segments that render as 1 px specks. */
+/** The "..." icons draw three r=1 rings (Lucide ellipsis), not zero-length segments that render as 1 px specks. */
 test.each([
   ["moreHorizontal", [["4", "12"], ["11", "12"], ["18", "12"]]],
   ["more", [["11", "5"], ["11", "12"], ["11", "19"]]],
@@ -14,7 +14,7 @@ test.each([
   expect(moves).toEqual(starts);
 });
 
-/** Plan E Task 6: a sequence frame's kind glyphs and the Numbering toggle's, drawn on the same 24 px grid. */
+/** A sequence frame's kind glyphs and the Numbering toggle's, drawn on the same 24 px grid. */
 test.each(["repeat", "split", "branch", "numbering"] as const)("%s_is_drawn_on_the_grid", (name) => {
   const { container } = render(<Icon name={name} />);
   const svg = container.querySelector("svg")!;

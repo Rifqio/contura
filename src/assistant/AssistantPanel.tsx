@@ -113,10 +113,10 @@ interface Props {
   onOpenInNewTab?(sql: string, connection: AskContext["connection"]): OpenedTab | null | void;
   /** The open Connections: Re-sync reads a closed one's catalog only once it is open. All are taken as open when absent. */
   openIds?: ReadonlySet<string>;
-  /** Shows the tab with this key (A7); false when it is closed. */
+  /** Shows the tab with this key; false when it is closed. */
   onShowTab?(key: string): boolean;
   /**
-   * Brings back where a chat picked in the history ended (Decision 9): its Connection, database, tab and query, never
+   * Brings back where a chat picked in the history ended: its Connection, database, tab and query, never
    * running it. Resolves to the database or Connection name that is not available, or null. `current` turns false once
    * another chat opens, New chat is pressed or the place changes: an overtaken resume then opens nothing.
    */
@@ -148,7 +148,7 @@ const TITLE_TRIES = 2;
 const RECORDED: ReadonlySet<ItemKind> = new Set(["names", "cards", "dbml", "sql", "error", "savedQueries", "tab", "steps"]);
 
 /**
- * "Asked in <label>" above a question asked in another tab than the question before it (spec 6.2); none on the
+ * "Asked in <label>" above a question asked in another tab than the question before it; none on the
  * first question, nor for a stamp with no tab.
  */
 export function askedInCaption(messages: readonly AiMessage[], i: number): string | null {
@@ -170,7 +170,7 @@ function hostOf(url: string): string {
   }
 }
 
-/** The words of a Sends item in the composer line; the schema counts the tables the Core sends (P11-11). */
+/** The words of a Sends item in the composer line; the schema counts the tables the Core sends. */
 function sendsLabel(item: PreviewItem, ctx: AskContext, preview: Preview | null): string {
   const fit = preview?.tables;
   // Full cards and names only go; a fit with no table at all was not worked out, so the focus tables count.
@@ -231,7 +231,7 @@ interface Failure {
 /** Whose record Show log shows: a saved answer by its time, or the Ask being (or last) streamed. */
 type LogOf = { kind: "saved"; at: number } | { kind: "live"; q: string };
 
-/** A folded Topic's preview: its own last answer that has text, as plain text (P11-20). */
+/** A folded Topic's preview: its own last answer that has text, as plain text. */
 function lastAnswerOf(messages: AiMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -318,7 +318,7 @@ export default function AssistantPanel({
   onShowTab,
   onResume,
 }: Props) {
-  /** The questions whose "Asked in" tab was found closed: the caption says so until it shows again (A7). */
+  /** The questions whose "Asked in" tab was found closed: the caption says so until it shows again. */
   const [closedAsked, setClosedAsked] = useState<ReadonlySet<number>>(() => new Set());
   // Only the active tab is listened to, and its getter is read once per change it publishes, never per draw.
   const published = useTabAsk(seed ? null : tabKey);
@@ -372,7 +372,7 @@ export default function AssistantPanel({
   /** The steps as they go: typed fields only, without the store's count. */
   const steps = useMemo(() => recent.map(({ seq: _seq, ...s }) => s), [recent]);
   const [failure, setFailure] = useState<Failure | null>(null);
-  /** Stopped before anything arrived (P11-29): nothing is saved, the question is back in the composer, the card says so. */
+  /** Stopped before anything arrived: nothing is saved, the question is back in the composer, the card says so. */
   const [stoppedEarly, setStoppedEarly] = useState<{ q: string; millis: number; action?: string } | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   /** Show log is open, in place of the thread. */
@@ -434,7 +434,7 @@ export default function AssistantPanel({
   placeRef.current = place;
   const input = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLElement>(null);
-  /** The thread, and whether it follows the newest turn: from each Send until the user scrolls up (P11-15). */
+  /** The thread, and whether it follows the newest turn: from each Send until the user scrolls up. */
   const threadRef = useRef<HTMLDivElement>(null);
   const follow = useRef(false);
   /** Counts opens, so only the last one's thread lands. */
@@ -489,7 +489,7 @@ export default function AssistantPanel({
   }
 
   /**
-   * A row picked in the history (the open chat's row too, P13): the chat opens, then, when it worked on a Connection,
+   * A row picked in the history (the open chat's row too): the chat opens, then, when it worked on a Connection,
    * the place it ended in comes back. A place load never comes here, so it never resumes.
    */
   function pickThread(id: string) {
@@ -591,7 +591,7 @@ export default function AssistantPanel({
   /** Counts picks, so only the last one's re-read lands. */
   const pickSeq = useRef(0);
   /**
-   * Shows the pick at once, then has the Core remember it and make the model current (ruling 10). When the Core
+   * Shows the pick at once, then has the Core remember it and make the model current. When the Core
    * could not save it, the re-read puts the pill back and the line under the composer says why.
    */
   const pickModel = (id: string, picks: ModelPicks) => {
@@ -713,7 +713,7 @@ export default function AssistantPanel({
   };
   const modelNameOf = (id: string) => models?.models.find((m) => m.id === id)?.name ?? id;
   // While an Ask runs its compaction shows the figure after it; then the provider's count takes over.
-  // The next Ask's estimate counts its summary step too, as the Sends list does (P11-39).
+  // The next Ask's estimate counts its summary step too, as the Sends list does.
   const nextSend = preview ? preview.tokens + (preview.summary?.on ? preview.summary.tokens : 0) : 0;
   const meterUsed = stream.running && liveCompaction ? liveCompaction.after : (answered ?? nextSend);
 
@@ -805,7 +805,7 @@ export default function AssistantPanel({
     const end = await stream.start(request);
     if (placeRef.current === forPlace) setPending(null);
     const usage = end.done?.usage;
-    // What the answer measured: what went in, what was read from the cache, and the answer itself (P11-39).
+    // What the answer measured: what went in, what was read from the cache, and the answer itself.
     if (usage && placeRef.current === forPlace) setAnswered(usage.input + usage.cacheRead + usage.output);
 
     let saved = again?.saved ?? false;
@@ -816,7 +816,7 @@ export default function AssistantPanel({
       setQuestion((now) => now || q);
     }
     if (!keep && end.stopped && end.error === null && placeRef.current === forPlace) {
-      // Stopped before anything arrived: the board's "Stopped." card, with nothing saved (P11-29).
+      // Stopped before anything arrived: the board's "Stopped." card, with nothing saved.
       setStoppedEarly({ q, millis: end.at - askedAt, action });
     }
     if (keep) {
@@ -840,11 +840,11 @@ export default function AssistantPanel({
   }
 
   /**
-   * Asks the Core for the chat's AI title (Decision 5): one call per chat at a time, registered as `title:<place>`
+   * Asks the Core for the chat's AI title: one call per chat at a time, registered as `title:<place>`
    * so the next question is never refused. The title lands on the row and the open chat; a place change cancels it.
    */
   function nameChat(threadId: string, forPlace: string, off: ItemKind[], model: string | null) {
-    // A board's chats are named by the board's own assistant only (Plan D A20), never from here.
+    // A board's chats are named by the board's own assistant only, never from here.
     if (isBoardPlace(forPlace)) return;
     if (settings?.settings.nameChats === false || naming.current.has(threadId)) return;
     const requestId = newId();
@@ -895,7 +895,7 @@ export default function AssistantPanel({
             tables: stamp.tables,
             action: stamp.action,
             // Where it was asked goes on the question only.
-            // With the key of the tab it was asked in, so the caption can show that tab again (A7).
+            // With the key of the tab it was asked in, so the caption can show that tab again.
             ...(m.role === "user" && stamp.askedIn && { askedIn: askedTab ? { ...stamp.askedIn, tabKey: askedTab } : stamp.askedIn }),
           }
         : m;
@@ -937,7 +937,7 @@ export default function AssistantPanel({
     if (returned) unsaved.current.delete(next.id);
     else unsaved.current.add(next.id);
     if (placeRef.current === forPlace) {
-      // Where the chat last worked, as the Core keeps it (Decision 4a): an answer with SQL moves it to the turn's place
+      // Where the chat last worked, as the Core keeps it: an answer with SQL moves it to the turn's place
       // and tab, any other answer leaves it where it was.
       const moved: WorkTag | null =
         stamp && record.sqlBlocks.length > 0
@@ -970,7 +970,7 @@ export default function AssistantPanel({
   /** Compact now from the full-thread card: the older messages become a summary, then the same Ask goes again. */
   async function compactNow(f: Failure) {
     const threadId = currentId;
-    // A board's chats are never compacted from here (Plan D: they stay out of this panel's compaction and titles).
+    // A board's chats are never compacted from here (they stay out of this panel's compaction and titles).
     if (!threadId || working !== null || isBoardPlace(place)) return;
     const forPlace = place;
     setChatError(null);
@@ -1058,7 +1058,7 @@ export default function AssistantPanel({
   /**
    * Keeps what the user did with a saved answer's SQL in its record, here and in the Core (the Diagram's "You:" box).
    * The tab it went into (the Insert target, or the new tab Open in new tab returned) and the SQL become where the chat
-   * last worked; with no tab key (an inline target, a test fixture, no tab opened) none is sent (P22).
+   * last worked; with no tab key (an inline target, a test fixture, no tab opened) none is sent.
    */
   function recordAction(threadId: string, at: number, kind: AnswerActionKind, sql: string, opened?: OpenedTab | null) {
     let work: WorkInput | undefined;
@@ -1446,7 +1446,7 @@ export default function AssistantPanel({
       }
     }
     if (e.key === "Escape" && stream.running) {
-      // "Stop Esc" (board 11.6): Esc where you type stops the answer being written.
+      // "Stop Esc": Esc where you type stops the answer being written.
       e.preventDefault();
       e.stopPropagation();
       setConfirmStop(false);
@@ -1462,10 +1462,10 @@ export default function AssistantPanel({
   const liveNotice = contextNotice(stream.context);
   const copySql = (sql: string) => void navigator.clipboard?.writeText(sql).catch(() => {});
   const openInNewTab = onOpenInNewTab && ((sql: string) => onOpenInNewTab(sql, conn));
-  // A tab with no editor (Home, a grid, New table, ...): answers open in a new query tab instead (spec 8).
+  // A tab with no editor (Home, a grid, New table, ...): answers open in a new query tab instead.
   const noEditor = !insertTarget && !!ctx.tabKind && ctx.tabKind !== "query";
 
-  // Show log replaces the thread and the composer (board 11.3): a saved answer's record, or the Ask being streamed.
+  // Show log replaces the thread and the composer: a saved answer's record, or the Ask being streamed.
   let logView: ReactNode = null;
   if (logOf) {
     const msgs = current?.messages ?? [];

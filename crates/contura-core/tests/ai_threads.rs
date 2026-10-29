@@ -442,7 +442,7 @@ fn search_finds_by_title_question_database_and_table() {
     }
 }
 
-/// P17: a title the AI wrote is found though no question holds its words.
+/// A title the AI wrote is found though no question holds its words.
 #[test]
 fn search_finds_an_ai_title() {
     let f = fx();
@@ -691,7 +691,7 @@ fn append_for_an_ask_writes_its_context_and_caps_the_record() {
     assert!(r.thinking.unwrap().len() < 200 * 1024);
 }
 
-/// Task 5b: an AI service and a Connection service on one store file, with A and C
+/// An AI service and a Connection service on one store file, with A and C
 /// ungrouped and B in a Group.
 struct Purge {
     dir: tempfile::TempDir,
@@ -902,7 +902,7 @@ async fn deleting_a_connection_forgets_its_steps() {
     f.assert_b_forgotten(ids);
 }
 
-/// Task 5b: clearing B's history (its Query History, "Clear history") does the same, and
+/// Clearing B's history (its Query History, "Clear history") does the same, and
 /// clearing every Connection's history forgets every stored step on another Connection.
 #[tokio::test]
 async fn clearing_a_connection_history_forgets_its_steps() {
@@ -1527,9 +1527,9 @@ async fn overlapping_deletes_lose_no_pending_purge() {
     );
 }
 
-// Task 3: the chat record and the list from columns.
+// The chat record and the list from columns.
 
-/// P1: the list reads columns only, so a row whose JSON no longer reads still lists.
+/// The list reads columns only, so a row whose JSON no longer reads still lists.
 #[test]
 fn list_reads_no_thread_json() {
     let f = fx();
@@ -1762,7 +1762,7 @@ fn a_user_title_survives_a_stale_save() {
     );
 }
 
-/// P3: a save of a copy holding the rule title keeps the AI title and its source.
+/// A save of a copy holding the rule title keeps the AI title and its source.
 #[test]
 fn an_ai_title_survives_a_stale_save() {
     let f = fx();
@@ -1788,7 +1788,7 @@ fn an_ai_title_survives_a_stale_save() {
     assert_eq!((s.title.as_str(), s.title_by), ("Paid late", TitleBy::Ai));
 }
 
-/// P3: a rename or an AI title keeps `updated_at`, so the list never reorders.
+/// A rename or an AI title keeps `updated_at`, so the list never reorders.
 #[test]
 fn rename_keeps_the_order() {
     let f = fx();
@@ -1827,7 +1827,7 @@ fn rename_refuses_empty_and_long() {
     assert!(f.svc.rename_thread(Uuid::new_v4(), "x").is_err());
 }
 
-/// Decision 12: a 500-thread place lists from columns in under 50 ms (best of 5), with
+/// A 500-thread place lists from columns in under 50 ms (best of 5), with
 /// each thread's JSON at 1 MB. The list reads the covering index alone: the columns sit
 /// after `json` in the row, so a read from the table would walk every thread's JSON pages.
 #[test]
@@ -1909,7 +1909,7 @@ fn five_hundred_threads_list_under_50ms() {
     assert!(best.as_millis() < 50, "best of 5: {best:?}");
 }
 
-// ---- Task 4: where a chat last worked ----
+// ---- Where a chat last worked ----
 
 /// A turn on `database` whose answer holds `sql` in its only fence, checked, with
 /// `tables`; the question was asked in the query tab `key`, labelled `label`.
@@ -2130,7 +2130,7 @@ fn inserted_sql_wins_over_a_newer_ai_sql() {
     );
 }
 
-/// P12: an insert belongs to the place it went into.
+/// An insert belongs to the place it went into.
 #[test]
 fn an_answer_on_another_database_drops_the_older_insert() {
     let f = fx();
@@ -2265,7 +2265,7 @@ fn record_action_without_work_changes_no_work() {
     assert_eq!(f.svc.thread_work(t.id).unwrap(), before);
 }
 
-/// P5: SQL crosses IPC only through `ai_thread_work`.
+/// SQL crosses IPC only through `ai_thread_work`.
 #[test]
 fn the_thread_view_carries_no_last_work() {
     let f = fx();
@@ -2304,7 +2304,7 @@ fn the_thread_view_carries_no_last_work() {
     assert_eq!(w.ai_sql.as_deref(), Some("select 1 from orders"));
 }
 
-/// P35: a thread saved before D2 resumes from its newest answer with SQL.
+/// A thread saved before D2 resumes from its newest answer with SQL.
 #[test]
 fn thread_work_derives_for_a_thread_from_before() {
     let f = fx();
@@ -2609,7 +2609,7 @@ fn append_turn_ends_on_a_long_thread() {
     assert_eq!(got, Some(1991));
 }
 
-/// I1: an answer that only fell off the front of a long chat (`MESSAGE_LIMIT`) keeps its
+/// An answer that only fell off the front of a long chat (`MESSAGE_LIMIT`) keeps its
 /// SQL in `last_work`; a Retry that removes the answer the work came from drops it.
 #[test]
 fn the_cap_keeps_the_last_work_and_a_retry_drops_it() {
@@ -2727,7 +2727,7 @@ fn the_cap_keeps_the_last_work_and_a_retry_drops_it() {
     }
 }
 
-// Task 5: a board's chats follow its rename.
+// A board's chats follow its rename.
 
 /// A board chat of `place` with one proposal turn, stamped as a board turn (no Connection).
 fn board_chat(place: &str, title: &str, file: &str, updated_at: i64) -> AiThread {
@@ -3151,7 +3151,7 @@ fn a_delete_that_cannot_clear_the_chats_still_succeeds() {
     );
 }
 
-/// Plan D Task 15 fix round 1: Settings' "Clear AI history" also clears every board's chats
+/// Settings' "Clear AI history" also clears every board's chats
 /// (its hint says so), and only those: the Ask threads of other places stay.
 #[test]
 fn clearing_diagram_chats_removes_every_board_chat_and_nothing_else() {

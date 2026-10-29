@@ -43,7 +43,7 @@ const px = (n: number) => `${n}px`;
 /**
  * Drawn inside the canvas (DiagramCanvas `overlay`). `children` (the label box, the fields, the ghosts) and the store's
  * own drawing are the live frame's, in its own units: they hang from `at`, the live frame's place on the board, as its
- * shapes hang from the live anchor (Plan F Decision 11). `board` is drawn in board units (the sketch preview and field).
+ * shapes hang from the live anchor. `board` is drawn in board units (the sketch preview and field).
  */
 export function CanvasOverlay({ store, at, board, children }: { store: OverlayStore; at?: { x: number; y: number }; board?: ReactNode; children?: ReactNode }) {
   const s = useSyncExternalStore(store.subscribe, store.get);

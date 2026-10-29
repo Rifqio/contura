@@ -1,4 +1,4 @@
-// Plan F Task 7 timing and memory (Decision 7, Decision 14's node gates): the pictures of B1's limit board (50 frames,
+// Timing and memory (Decision 14's node gates): the pictures of B1's limit board (50 frames,
 // 10,000 shapes, 15,000 links), in a literal palette with a fake icon loader. Run alone through `npm run test:perf`.
 import { afterEach, expect, test, vi } from "vitest";
 import type { ExportPalette } from "../../diagram/export/palette";
@@ -91,7 +91,7 @@ async function allBuilt(store: ReturnType<typeof createPictureStore>, keys: read
 }
 
 /**
- * B3's ER limit board (Decision 14): A5's first 40 flowchart frames and one ERD of 2,000 tables of 20 columns with
+ * B3's ER limit board: A5's first 40 flowchart frames and one ERD of 2,000 tables of 20 columns with
  * 2,000 column relationships, every frame a picture.
  */
 function erLimitBoard(rasterise: Rasteriser = fakeRaster) {
@@ -178,7 +178,7 @@ test("pictures_at_the_limit_hold_under_13MB", async () => {
 });
 
 test("dropped_pictures_are_collected", async () => {
-  // A WeakRef on the store's entry object (a string cannot be held weakly, P32): once pruned it is collected.
+  // A WeakRef on the store's entry object (a string cannot be held weakly): once pruned it is collected.
   const refs = new Map<string, Weak<object>>();
   pictureHooks.onEntry = (id, entry) => refs.set(id, new WeakRefOf(entry));
   const { store, build } = limitBoard();
@@ -224,7 +224,7 @@ test("a_theme_switch_lets_every_picture_go", async () => {
   await allBuilt(store);
   pictureHooks.onEntry = undefined;
   store.setTheme("dark");
-  // Each Light picture stays until its Dark one replaces it (fix round 1); then the Light ones are collected.
+  // Each Light picture stays until its Dark one replaces it; then the Light ones are collected.
   build("picture");
   await allBuilt(store);
   await task();

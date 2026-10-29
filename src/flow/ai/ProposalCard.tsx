@@ -1,7 +1,7 @@
-// The diagram assistant's changes as a card (board 11.5, review): one row per change with its mark and .flow
+// The diagram assistant's changes as a card (review): one row per change with its mark and .flow
 // line, Accept and Reject on each, and the footer that lands the accepted ones as one undo step. On a board of
 // several diagrams the rows are grouped by frame in text order, new frames last, each group headed with its title, its
-// count, Accept frame and Reject frame (Plan D Decision 12, GitHub's review grouped by file). Without the handlers it
+// count, Accept frame and Reject frame (GitHub's review grouped by file). Without the handlers it
 // only shows the rows (a proposal from a reloaded thread). With a dropped change it says which, why and, on a board,
 // in which diagram; the cards for the other error states of board 11.5 (changed on disk, unclear target, would break
 // the text) are here too. No hover text: aria-labels only.
@@ -30,7 +30,7 @@ interface Props {
   outcome?: string | null;
   /** The board's titles in text order: with more than one the rows group by frame. */
   frames?: readonly string[];
-  /** Accept frame: every change in that frame, with what they need (Decision 12). */
+  /** Accept frame: every change in that frame, with what they need. */
   onAcceptFrame?(title: string): void;
   /** Reject frame: every change in that frame, with what depends on them. */
   onRejectFrame?(title: string): void;
@@ -89,7 +89,7 @@ interface Group {
 }
 
 /**
- * The changes by frame (Decision 12): the board's frames in text order, then new frames in the order they are added,
+ * The changes by frame: the board's frames in text order, then new frames in the order they are added,
  * then any change that names no diagram on the board. One group with no title on a board of one diagram.
  */
 export function groupByFrame(changes: ProposedChange[], titles: readonly string[]): Group[] {
@@ -206,7 +206,7 @@ export default function ProposalCard({ changes, kind, rejected, onReject, onAcce
 
 /**
  * Changed on disk while the model worked, or (`inEditor`) the editor's text moved in the app before the changes landed
- * (board 11.5, e-stale); the second names the editor instead of another program and the disk.
+ * (e-stale); the second names the editor instead of another program and the disk.
  */
 export function StaleCard({ file, line, nowReads, inEditor = false, onDiscard, onAskAgain }: { file: string; line: number | null; nowReads: string | null; inEditor?: boolean; onDiscard?(): void; onAskAgain?(): void }) {
   const b = inEditor ? { before: "The text changed in the editor after the assistant answered, so none of these changes were applied.", reads: null, after: "" } : changedBody({ line, nowReads });
@@ -251,7 +251,7 @@ const WORDS = ["", "", "Two", "Three"];
 
 /**
  * "Two shapes could be "<word>": which one should come after the new step?" and a button per candidate (board 11.5,
- * e-unclear). On a board `frame` names the diagram the word is in: the candidates are its own shapes (Decision 12).
+ * e-unclear). On a board `frame` names the diagram the word is in: the candidates are its own shapes.
  */
 export function PickCard({ change, onPick, onCancel, problem, frame }: { change: ProposedChange; onPick(candidate: Candidate): void; onCancel(): void; problem?: string | null; frame?: string | null }) {
   if (change.status.kind !== "ambiguous") return null;
@@ -290,8 +290,8 @@ export function PickCard({ change, onPick, onCancel, problem, frame }: { change:
 }
 
 /**
- * Auto-apply refused a set that would leave the text a problem (board 11.5, e-broken). On a board `frame` names the
- * diagram, and the line is counted from its start (Decision 13a).
+ * Auto-apply refused a set that would leave the text a problem (e-broken). On a board `frame` names the
+ * diagram, and the line is counted from its start.
  */
 export function BrokenCard({
   file,

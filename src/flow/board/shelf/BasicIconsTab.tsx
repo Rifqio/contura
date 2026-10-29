@@ -1,6 +1,6 @@
-// The Shelf's Icons tab before Plan C (decision 5): today's pack in an 8-column grid, A to Z with nothing typed, at
+// The Shelf's Icons tab before the full icon pack: today's pack in an 8-column grid, A to Z with nothing typed, at
 // most `SHELF_ICON_LIMIT` tiles, then how many more there are. Only the tiles shown mount, and each loads its image
-// through `useIcon` (cached by name and theme), so the full pack never draws at once. Plan C replaces this tab.
+// through `useIcon` (cached by name and theme), so the full pack never draws at once. The full icon pack replaces this tab.
 import { useContext, useEffect, useMemo, useState } from "react";
 import { useIcon } from "../../icons";
 import { type ShelfIconHit, SHELF_ICON_LIMIT, ShelfIconContext } from "./iconSource";
@@ -9,7 +9,7 @@ import type { ShelfItem, ShelfTabProps } from "./types";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
-/** One icon's image, from a data: URL (ruling P7). */
+/** One icon's image, from a data: URL. */
 export function IconTile({ name }: { name: string }) {
   const { url, missing, failed, outline } = useIcon(name);
   return (

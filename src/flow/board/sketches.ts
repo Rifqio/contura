@@ -1,4 +1,4 @@
-// Loose sketches on a board (Decisions 20 and 21): shapes, pen strokes, text, notes and Sections drawn outside every
+// Loose sketches on a board: shapes, pen strokes, text, notes and Sections drawn outside every
 // diagram frame. They live in the board layout file only, never in the .flow text. Every op here is pure: it returns
 // the changes, and `useFlowDoc.sketch` applies them as one undo entry. A change holds the sketch before and after
 // (its own small object; a move shares the points array), never a copy of the board's sketches.
@@ -12,7 +12,7 @@ export type { Sketch, SketchKind };
  */
 export type SketchChange = { id: string; before: Sketch | null; after: Sketch | null; at?: number };
 
-/** The layer node every sketch node is a child of, at the board's (0, 0) for good (Decision 21; Plan F Decision 11). */
+/** The layer node every sketch node is a child of, at the board's (0, 0) for good. */
 export const SKETCH_LAYER_ID = "\u0000sketches";
 const SKETCH_PREFIX = "\u0000sketch:";
 /** A sketch's node id on the canvas. */
@@ -93,7 +93,7 @@ export function finiteSketch(s: NewSketch): boolean {
 /**
  * Adds a sketch with the next id, made by the parse's own normaliser (`normalizeSketch`): what it holds is what the
  * file reopens as. A pen stroke past MAX_PEN_POINTS is simplified to fit first. Refused with its note when the board
- * would pass a cap (Decision 21), or with no note when it cannot be a sketch at all (a kind or number the file has no
+ * would pass a cap, or with no note when it cannot be a sketch at all (a kind or number the file has no
  * place for).
  */
 export function addSketch(all: readonly Sketch[], s: NewSketch): { change: SketchChange } | { refused: string } {
@@ -238,7 +238,7 @@ function rdp(points: readonly [number, number][], eps: number): [number, number]
 }
 
 /**
- * A pen stroke simplified on release (Decision 21): Ramer-Douglas-Peucker at 1 px, the tolerance doubled until at
+ * A pen stroke simplified on release: Ramer-Douglas-Peucker at 1 px, the tolerance doubled until at
  * most `max` points are left. The first and last points always stay.
  */
 export function simplifyStroke(points: readonly [number, number][], max: number): [number, number][] {
@@ -252,7 +252,7 @@ export function simplifyStroke(points: readonly [number, number][], max: number)
   return out;
 }
 
-/** The ids of the sketches wholly inside `section`'s box, the Section itself left out (Decision 20). */
+/** The ids of the sketches wholly inside `section`'s box, the Section itself left out. */
 export function sketchesInside(all: readonly Sketch[], section: Sketch): string[] {
   const x1 = section.x + section.w;
   const y1 = section.y + section.h;

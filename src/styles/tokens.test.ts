@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import tokensCss from "./tokens.css?raw";
-import designNext from "../../DESIGN-NEXT.md?raw";
+import designNext from "../../DESIGN.md?raw";
 
 /** The DN token families that the theme blocks must carry exactly. */
 const DN_NAME = /^--(c-|db-|syn-|on-accent|win-)/;

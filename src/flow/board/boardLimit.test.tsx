@@ -51,7 +51,7 @@ vi.mock("./boardScene", async (load) => {
   };
 });
 
-// The shared per-node ResizeObserver (Task 18b): with static frames drawn as pictures at the fit, measuring one node
+// The shared per-node ResizeObserver: with static frames drawn as pictures at the fit, measuring one node
 // at a time is quick again (34 s here, 681 MB peak for the whole run).
 beforeAll(() => {
   mockReactFlowDom();
@@ -94,7 +94,7 @@ test("a_full_board_opens_and_types_without_growth", async () => {
   const typedFrame = boardFrameId(`Area ${TYPED_FRAME}`);
 
   // Open: every frame drawn static (none selected on a board of many). At the fit body text is far, so the 1,000
-  // sketches draw as a few pictures, with no node of their own (Task 9 fix 2).
+  // sketches draw as a few pictures, with no node of their own.
   await waitFor(() => expect(nodes().filter((n) => n.type === "boardFrame")).toHaveLength(FRAMES), WAIT);
   const tiles = () => nodes().filter((n) => n.type === SKETCH_PICTURE_TYPE);
   await waitFor(() => expect(tiles().length).toBeGreaterThan(0), WAIT);
@@ -102,7 +102,7 @@ test("a_full_board_opens_and_types_without_growth", async () => {
   expect(nodes().filter((n) => n.id === SKETCH_LAYER_ID || n.parentId === SKETCH_LAYER_ID)).toHaveLength(0);
   // At the fit (text far) each static frame in view is one picture of its 200 shapes, and no static line is drawn (Plan
   // F Decision 7). The board is too wide for the least zoom, so it opens at its start (`fitFromStart`), and only the
-  // frames in view are drawn (Plan F Decision 6): the rest push their box node alone.
+  // frames in view are drawn: the rest push their box node alone.
   const previewsNow = () => nodes().filter((n) => n.type === FRAME_PICTURE_TYPE);
   await waitFor(() => expect(previewsNow().length).toBeLessThan(FRAMES), WAIT);
   const previews = previewsNow();
@@ -163,7 +163,7 @@ test("a_full_board_opens_and_types_without_growth", async () => {
   for (const e of canvas.props?.edges ?? []) expect(e.id.startsWith("\u0000in:") && !e.id.startsWith(typedIn), e.id).toBe(false);
   for (const e of edgesBefore.values()) expect(e.id.startsWith("\u0000in:"), e.id).toBe(false);
 
-  // One scene, one entry per frame in each memo (Decision 27); the client holds at most a doc per frame (Decision 13).
+  // One scene, one entry per frame in each memo; the client holds at most a doc per frame.
   expect(scenes).toHaveLength(1);
   expect(scenes[0].memoSize()).toBe(FRAMES);
   expect(scenes[0].boxMemoSize()).toBe(FRAMES);
@@ -171,7 +171,7 @@ test("a_full_board_opens_and_types_without_growth", async () => {
   expect([...client.heldFlow.keys()]).toEqual(["flow:board"]);
   expect(client.heldFlow.get("flow:board")!.size).toBeLessThanOrEqual(FRAMES);
 
-  // The save: the typed text, and the layout with every frame and sketch under the budget (Decision 21).
+  // The save: the typed text, and the layout with every frame and sketch under the budget.
   await waitFor(() => expect(saved.text).toBe(board(TYPED)), WAIT);
   const layout = saved.layout!;
   expect(utf8Length(layout)).toBeLessThan(LAYOUT_SAVE_MAX);

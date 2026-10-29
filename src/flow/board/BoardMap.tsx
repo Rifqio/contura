@@ -12,7 +12,7 @@ const DRAG_PX = 3;
 type World = { x: number; y: number; w: number; h: number };
 
 /**
- * The frame-box overview (Plan F Decision 13; Miro's map beside the zoom control): one outline per frame box, the live
+ * The frame-box overview (Miro's map beside the zoom control): one outline per frame box, the live
  * frame filled with the accent tokens, and the view as a rect. A click glides there through `glide`; a drag pans the
  * view with no duration. It draws boxes only, so its cost does not grow with the shapes on the board. The view comes
  * from React Flow's store; the map keeps no state of its own that outlives it (the toggle's is the zoom panel's).

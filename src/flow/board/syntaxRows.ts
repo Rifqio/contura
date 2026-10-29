@@ -1,4 +1,4 @@
-// Syntax Help's rows (Decision 25): what each kind's syntax does and an example of it, 8 to 12 rows a kind. Every
+// Syntax Help's rows: what each kind's syntax does and an example of it, 8 to 12 rows a kind. Every
 // example is the language's own: syntaxRows.test.ts reads each one with the parser in its kind, and checks that the
 // rows together use every kind word and arrow the kind has. Kind names live in `CARDS`, never here.
 import type { DiagramKind } from "../../lang/flow/model";

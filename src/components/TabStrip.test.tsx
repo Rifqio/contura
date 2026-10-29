@@ -484,7 +484,7 @@ test("a_visual_draft_round_trips_and_an_old_draft_has_none", () => {
   const newer = { ...doc, id: "v2", model: { ...doc.model, version: 2 } };
   expect(parseVisualDrafts(JSON.stringify({ version: 1, tabs: [], visual: [doc, newer, { id: 3 }] }))).toEqual([doc]);
   expect(parseVisualDrafts("not json")).toEqual([]);
-  // A removed Connection is null and still restores (P10).
+  // A removed Connection is null and still restores.
   const removed = { ...doc, id: "v3", connectionId: null };
   expect(parseVisualDrafts(serializeDrafts([], [removed]))).toEqual([removed]);
 });

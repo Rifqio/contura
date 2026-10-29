@@ -21,7 +21,7 @@ interface Props {
   connectionName?: string;
   /** Opens the Export dialog; with it, the menu offers Export... in place of Save as CSV.... */
   onExport?(): void;
-  /** Opens an Import tab into the grid's table (never given on a query result, Q16). */
+  /** Opens an Import tab into the grid's table (never given on a query result). */
   onImport?(): void;
 }
 

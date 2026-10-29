@@ -108,7 +108,7 @@ impl PostgresDialect {
     }
 }
 
-/// Step 11f: a read-only transaction with the sample timeout, for the kind check and
+/// A read-only transaction with the sample timeout, for the kind check and
 /// the SELECT alike.
 async fn sample_transaction(client: &mut Client) -> Result<tokio_postgres::Transaction<'_>> {
     let tx = client
@@ -928,7 +928,7 @@ mod tests {
                 s.base.get_channel_binding(),
             )
         };
-        // M2: Preferred tries TLS (any certificate) and takes plain text only when the
+        // Preferred tries TLS (any certificate) and takes plain text only when the
         // server says it has no TLS. Channel binding stays at tokio-postgres' prefer, so
         // servers without SCRAM-PLUS still sign in.
         assert_eq!(

@@ -83,7 +83,7 @@ pub(super) struct Tally {
 }
 
 /// Commits the open batch. A COMMIT that succeeded counts its rows as committed, also
-/// when an `after` statement then failed (`AfterCommit`, Q36): those rows are in.
+/// when an `after` statement then failed (`AfterCommit`): those rows are in.
 pub(super) async fn commit_batch(w: &mut dyn BulkWriter, t: &mut Tally) -> Result<()> {
     let done = w.commit().await;
     if matches!(done, Ok(()) | Err(Error::AfterCommit { .. })) {
@@ -92,9 +92,9 @@ pub(super) async fn commit_batch(w: &mut dyn BulkWriter, t: &mut Tally) -> Resul
     done
 }
 
-/// A failed run's end as it reads with `kept` rows staying in `table` (Q27):
-/// "Nothing was imported." only when nothing stayed. The Skip cap says what stayed
-/// (Q42 I1), and so does a file that changed after rows were kept (Q45 I1).
+/// A failed run's end as it reads with `kept` rows staying in `table`:
+/// "Nothing was imported." only when nothing stayed. The Skip cap says what stayed,
+/// and so does a file that changed after rows were kept.
 pub(super) fn kept_end(result: Result<()>, kept: u64, file: &str, table: &str) -> Result<()> {
     let at = || JobPosition {
         table: Some(table.to_string()),
@@ -135,10 +135,10 @@ pub(super) struct Run {
     pub(super) path: PathBuf,
     /// The bytes the start's handle saw; the readers read no more.
     pub(super) file_bytes: u64,
-    /// The file, held with other writers refused until the job ends (Q45); dropped
+    /// The file, held with other writers refused until the job ends; dropped
     /// before the final event.
     pub(super) held: Option<HeldFile>,
-    /// A Production Connection: a changed file says "after you confirmed" (Q45 M5).
+    /// A Production Connection: a changed file says "after you confirmed".
     pub(super) production: bool,
     pub(super) warnings: Vec<String>,
 }
@@ -189,7 +189,7 @@ impl Run {
         });
     }
 
-    /// Warns of the row's binary cells that are not `0x` hex (Q42): the first 20 by row,
+    /// Warns of the row's binary cells that are not `0x` hex: the first 20 by row,
     /// the rest counted for one warning at the end.
     pub(super) fn binary_cells(&self, t: &mut Tally, file_row: u64, values: &[Value]) {
         for text in self.prepared.binary_warnings(file_row, values) {
@@ -345,7 +345,7 @@ impl Run {
                     records,
                     bytes_read,
                     warnings,
-                    // The chunk's bytes stay counted until its rows are written (Q45).
+                    // The chunk's bytes stay counted until its rows are written.
                     held: _held,
                 } => {
                     for w_text in warnings {
@@ -505,7 +505,7 @@ impl Run {
             other => other,
         };
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        // Q27: what stayed in the table. A table that does not roll back keeps every
+        // what stayed in the table. A table that does not roll back keeps every
         // row written; otherwise the committed batches stay.
         let kept = if self.transactional == Some(true) {
             t.committed

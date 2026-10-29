@@ -55,7 +55,7 @@ interface Props {
   onBeforeDeleteGroup?: (id: GroupId) => Promise<boolean>;
   /** A Group was deleted from Home. */
   onGroupDeleted?: (id: GroupId) => void;
-  /** Opens the New diagram sheet (frame 6+.6); without it the button is hidden. */
+  /** Opens the New diagram sheet; without it the button is hidden. */
   onNewDiagram?: () => void;
   /** The diagrams folder, newest first, for the Recent column. */
   diagrams?: DiagramEntry[];

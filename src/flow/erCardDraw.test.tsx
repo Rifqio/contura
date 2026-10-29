@@ -1,4 +1,4 @@
-// The ER table card, draw-only (Plan A; the window, B3 decision 7): the header, then one row per column with its key gutter, name, type and
+// The ER table card, draw-only (the window, B3 decision 7): the header, then one row per column with its key gutter, name, type and
 // not-null mark; a weak table's border is dashed; past 20 columns the card stops growing and its rows scroll.
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
@@ -72,7 +72,7 @@ test("past_twenty_columns_the_card_scrolls", () => {
 });
 
 test("rows_under_review_are_marked", () => {
-  // Plan D Task 8: the waiting proposal's marks on the rows, in the class and the row's hint; an unmarked row has none.
+  // The waiting proposal's marks on the rows, in the class and the row's hint; an unmarked row has none.
   render(<KindNode d={{ ...ORDERS, rowStates: ["changed", undefined, "removed"] }} selected={false} />);
   expect(rows().map((r) => ["is-ai-changed", "is-ai-removed", "is-ai-suggested"].filter((c) => r.classList.contains(c)))).toEqual([["is-ai-changed"], [], ["is-ai-removed"]]);
   expect(rows().map((r) => r.title)).toEqual(["id int (primary key, not null), changed by AI", "customer_id int (not null)", "total numeric (nullable), removal suggested by AI"]);

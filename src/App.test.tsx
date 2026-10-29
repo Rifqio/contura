@@ -419,7 +419,7 @@ test("status_bar_shows_the_opened_connections_server_version", async () => {
   expect(bar.textContent).toContain("KFC Postgres");
 });
 
-// ---- Pending Edits: ask before leaving (step 5b) ----
+// ---- Pending Edits: ask before leaving ----
 
 const shopMy = { ...pg, id: "c2", name: "KFC Shop", dialect: "mysql", port: 3306, database: "shop" };
 const ordersPage = {
@@ -1595,7 +1595,7 @@ test("ctrl_shift_f_on_the_home_tab_focuses_the_home_filter", async () => {
   expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Filter Connections" }));
 });
 
-// ---- Table Designer tab (step 5c) ----
+// ---- Table Designer tab ----
 
 const ordersDesign = {
   path: { database: "shop", schema: null, name: "orders" },
@@ -1686,7 +1686,7 @@ test("group_switch_with_an_unapplied_design_asks_by_click_and_by_ctrl_number", a
   expect(screen.getByRole("tab", { name: "orders design, unsaved changes" })).toBeTruthy();
 });
 
-// ---- New table and Drop table (step 5c, Task 10) ----
+// ---- New table and Drop table ----
 
 const DROP = "DROP TABLE `orders`";
 const dropPlan = (verdict: Record<string, unknown> = { kind: "ok" }) => ({
@@ -1823,7 +1823,7 @@ test("read_only_shows_neither_new_table_nor_drop_table", async () => {
   expect(within(menu).queryByRole("menuitem", { name: "Drop table..." })).toBeNull();
 });
 
-// ---- Refresh after Apply and the leave asks (step 5c, Task 11) ----
+// ---- Refresh after Apply and the leave asks ----
 
 const ordersPageWide = {
   ...ordersPage,
@@ -2148,7 +2148,7 @@ test("open_in_editor_makes_a_plain_query_tab_with_the_generated_sql_and_leaves_t
   expect(screen.getByRole("tab", { name: "Late deliveries" })).toBeTruthy();
 }, LOAD_TIMEOUT);
 
-// ---------- Saved Visual Queries (Task 10) ----------
+// ---------- Saved Visual Queries ----------
 
 const vqModel = (database = "kfc_shop", version = 1) => ({
   version,
@@ -2272,7 +2272,7 @@ test("a_recent_saved_visual_query_opens_as_a_visual_query_tab", async () => {
   expect(screen.queryByRole("toolbar", { name: "Query" })).toBeNull();
 }, LOAD_TIMEOUT);
 
-// ---- Import, export and Mermaid (step 7, Task 13) ----
+// ---- Import, export and Mermaid ----
 
 const exportPreview = { header: "", lines: ["id,status", "1,paid"], sheet: null, bytesPerRow: 9, notes: [], queryRead: true };
 const jobRoutes = {
@@ -2323,7 +2323,7 @@ test("export_in_the_background_shows_the_status_item_and_a_click_reopens_the_dia
   await waitFor(() => expect(callsTo("preview_export").length).toBeGreaterThan(0));
   await userEvent.click(within(dialog).getByRole("button", { name: /^Export/ }));
   await waitFor(() => expect(callsTo("start_export")).toHaveLength(1));
-  // Escape while it runs sends it to the background (Q25).
+  // Escape while it runs sends it to the background.
   await userEvent.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog", { name: /Export orders/ })).toBeNull());
   const item = await screen.findByRole("button", { name: "Exporting orders" });
@@ -2455,7 +2455,7 @@ test("a_restart_drops_import_tabs", async () => {
   expect(screen.queryByRole("tab", { name: "Import into orders" })).toBeNull();
 });
 
-// ---- Fix round 1 (Q43): leaving with a running import ----
+// ---- Fix round 1: leaving with a running import ----
 
 const importSummary = {
   format: "csv",
@@ -2585,7 +2585,7 @@ test("item_8_a_new_query_opens_on_the_database_used_last", async () => {
   });
 });
 
-// ---- AI Context (step 11c) ----
+// ---- AI Context ----
 
 test("refresh_marks_ai_context_changed", async () => {
   await openOrders({ ai_context_changed: () => null });
@@ -2693,7 +2693,7 @@ test("first_start_guide_keeps_the_title_bar_out_of_reach_and_owns_esc", async ()
   expect(callsTo("first_start_guide_seen")).toEqual([{}]);
 });
 
-// ---- Ask on every tab (spec 9) ----
+// ---- Ask on every tab ----
 
 const askPanel = () => screen.queryByRole("complementary", { name: "Ask" });
 const toggleAsk = () => userEvent.keyboard("{Control>}{Alt>}i{/Alt}{/Control}");
@@ -2761,7 +2761,7 @@ test("the Ask panel shows on New table and Schema Compare", async () => {
   expect(document.querySelector(".body")!.className).toBe("body body-home body-ai");
 });
 
-// ---- Ask everywhere, end to end (spec 11): a Visual Query, then New table ----
+// ---- Ask everywhere, end to end: a Visual Query, then New table ----
 
 test("visual query to new table", async () => {
   // The trail is a module store: earlier tests of this file recorded steps in this place.

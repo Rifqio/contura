@@ -32,7 +32,7 @@ test("missing_kind_tells_tables_from_columns", () => {
   expect(missingKind("division by zero")).toBeNull();
 });
 
-/** P12: where the error points, as a line (and column when known) of the SQL that ran. */
+/** Where the error points, as a line (and column when known) of the SQL that ran. */
 test("a_postgres_position_becomes_a_line_and_column_of_the_sql", () => {
   const sql = "SELECT o.id\nFROM orders AS o\nINNER JOIN stores AS s ON s.idd = o.store_id";
   const at = sql.indexOf("s.idd") + 1;

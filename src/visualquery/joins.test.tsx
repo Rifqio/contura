@@ -340,7 +340,7 @@ test("two_keys_give_a_pick_that_opens_once_by_itself_and_2_picks_the_second", as
   expect(within(pop).getByText("Pick the Foreign Key this Join uses. stores stays out of the SQL until you pick.")).toBeTruthy();
   const choices = within(pop).getAllByRole("button");
   expect(choices.map((c) => c.querySelector(".kbd")?.textContent)).toEqual(["1", "2", "3"]);
-  // Each key by its columns, its name and its comment (P9).
+  // Each key by its columns, its name and its comment.
   expect(within(choices[0]).getByText("store_id").className).toContain("vq-pick-columns");
   expect(within(choices[0]).getByText("fk_orders_store")).toBeTruthy();
   expect(within(choices[0]).getByText("Where the order was placed")).toBeTruthy();

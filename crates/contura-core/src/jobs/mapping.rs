@@ -1,7 +1,7 @@
-//! File columns to table columns, and match by name (Task 8).
+//! File columns to table columns, and match by name.
 //!
-//! The Core and the Import tab share one matching rule (D19), pinned by the case file
-//! `src/jobs/match_cases.json` that both test suites read (Q11).
+//! The Core and the Import tab share one matching rule, pinned by the case file
+//! `src/jobs/match_cases.json` that both test suites read.
 
 use serde::Serialize;
 
@@ -22,7 +22,7 @@ pub struct TargetColumn {
     pub increment: Increment,
     /// A computed column: never offered as an Into column.
     pub generated: bool,
-    /// PostgreSQL `GENERATED ALWAYS AS IDENTITY` (D6).
+    /// PostgreSQL `GENERATED ALWAYS AS IDENTITY`.
     pub identity_always: bool,
 }
 
@@ -205,7 +205,7 @@ mod tests {
         expected: Vec<Option<String>>,
     }
 
-    /// The case file the Import tab's tests read too (D19, Q11).
+    /// The case file the Import tab's tests read too.
     #[test]
     fn match_cases_json() {
         let cases: Vec<Case> =

@@ -105,7 +105,7 @@ struct Catalog {
     configs: Vec<ConnectionConfig>,
     context: StoreContext,
     threads: StoreThreads,
-    /// Step 11f: the sample reads that reached the database.
+    /// The sample reads that reached the database.
     sample_reads: std::sync::atomic::AtomicUsize,
 }
 
@@ -577,7 +577,7 @@ async fn compacts_at_85_keeps_last_2() {
     assert_eq!(summary.model, "llama-3.3-70b-versatile");
     assert_eq!(summary.usage.unwrap().output, 40);
     assert!(summary.bytes > 0 && summary.hash.len() == 16);
-    // The Request row counts the summary call's bytes beside the main request's (P11-22).
+    // The Request row counts the summary call's bytes beside the main request's.
     let request = events
         .iter()
         .find_map(|e| match e {
@@ -679,7 +679,7 @@ async fn auto_compact_off_gives_context_full() {
 
 /// Task 2 rule (b): a compaction over a turn the gate refuses is written by rules from
 /// every folded turn, the refused one too, so nothing is lost; it is held while any message
-/// it covers is refused (Decision 2), and Sends counts it.
+/// it covers is refused, and Sends counts it.
 #[tokio::test]
 async fn compaction_under_the_gate_keeps_held_turns_by_rules() {
     let e = env(AiAccess::Schema);
@@ -752,7 +752,7 @@ fn one_call() -> ScriptedProvider {
     ScriptedProvider::new(answer_script())
 }
 
-/// Decision 2: a compaction that folded turns on A and B goes only while both still allow
+/// A compaction that folded turns on A and B goes only while both still allow
 /// what they carried. B lowered to Never: the summary is held, and Sends does not blame A.
 #[tokio::test]
 async fn a_compaction_over_two_connections_goes_only_while_both_allow() {
@@ -785,7 +785,7 @@ async fn a_compaction_over_two_connections_goes_only_while_both_allow() {
     assert!(!main.contains("Invoices on B"), "{main}");
     assert!(!main.contains(&question(0)), "{main}");
     // Held by B, not by A's own access: Sends does not count it as lower access here
-    // (fix round 1, review Minor 2).
+    // (review Minor 2).
     let m = show(&e.cat, &req).await.memory.unwrap();
     assert_eq!((m.summaries, m.blocked), (0, 0));
 }
@@ -815,7 +815,7 @@ async fn a_rules_compaction_over_a_refused_connection_keeps_its_turns() {
         "{main}"
     );
     assert!(main.contains(&question(3)), "{main}");
-    // Held by B's turn: not counted as lower access on A (fix round 1, review Minor 2).
+    // Held by B's turn: not counted as lower access on A (review Minor 2).
     let m = show(&e.cat, &req).await.memory.unwrap();
     assert_eq!((m.summaries, m.blocked), (0, 0));
 
@@ -832,7 +832,7 @@ async fn a_rules_compaction_over_a_refused_connection_keeps_its_turns() {
     assert_eq!((m.summaries, m.blocked), (1, 0));
 }
 
-/// P11: a Home thread at 85% still compacts by rules only: one provider call, the main
+/// A Home thread at 85% still compacts by rules only: one provider call, the main
 /// one, and the summary keeps the Home turns and goes with the Home Ask.
 #[tokio::test]
 async fn a_home_thread_still_compacts_by_rules() {

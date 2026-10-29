@@ -1,4 +1,4 @@
-// The Shelf's tab registry (decision 6): each tab's name, icon, count and body. Plan C swaps the Icons row for its
+// The Shelf's tab registry (decision 6): each tab's name, icon, count and body. the full icon pack swaps the Icons row for its
 // own tab; nothing else in the Shelf names a tab.
 import type { ComponentType } from "react";
 import type { IconName } from "../../../components/Icon";

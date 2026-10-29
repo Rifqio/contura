@@ -1,4 +1,4 @@
-// A board frame on the canvas (Decisions 3, 4, 5 and 28): its box, and the title tab strip above its top-left corner.
+// A board frame on the canvas: its box, and the title tab strip above its top-left corner.
 // The strip is the frame's drag handle; its title button selects the frame and a double-click zooms to it. The
 // selected frame's strip also opens the pane on its AI Chat or Code Editor; any frame's problem count opens the Code
 // Editor on it. The box itself takes no clicks: FlowTab works out which frame and shape a click on the canvas is for,
@@ -26,11 +26,11 @@ export interface FrameNodeData extends Record<string, unknown> {
   pending: number;
   /** The frames whose tabs start to the right of this one's, nearest first: the strip's room ends at the first in its row. */
   neighbours: readonly TabNeighbour[];
-  /** A frame the waiting proposal adds (Plan D Task 8): drawn dashed, its tab marked "New". */
+  /** A frame the waiting proposal adds: drawn dashed, its tab marked "New". */
   isNew?: boolean;
   onSelect(): void;
   onPane(tab: FramePane): void;
-  /** Its problem count: the Code Editor opens on this frame (Decision 17). */
+  /** Its problem count: the Code Editor opens on this frame. */
   onProblems(): void;
   onZoom(): void;
 }
@@ -50,7 +50,7 @@ function FrameNode({ data }: NodeProps<FrameNodeType>) {
   // frame and neighbours): a pan or zoom tick selects which interval the zoom is in, one number and no allocation, and
   // a frame re-renders only when it crosses one.
   const { neighbours } = data;
-  // A frame with changes waiting shows its AI Chat selected or not (Plan D); Code Editor only when it is selected, so a
+  // A frame with changes waiting shows its AI Chat selected or not; Code Editor only when it is selected, so a
   // frame that is not takes no room for it.
   const panes = selected || pending > 0;
   const parts = useMemo(() => {
@@ -62,7 +62,7 @@ function FrameNode({ data }: NodeProps<FrameNodeType>) {
   const { room, fit } = useMemo(() => stripAt(box.w, neighbours, parts, panes, breaks, level), [box.w, neighbours, parts, panes, breaks, level]);
   const style = room === Infinity ? undefined : ({ "--board-tab-room": room } as CSSProperties);
   // The strip keeps its screen size by the zoom, given to it alone and only up to 100 percent, past which it is drawn
-  // as it is (Task 9 fix 2).
+  // as it is.
   const zoomVar = useZoomVar<HTMLDivElement>(1);
   return (
     <div className={cls} style={style}>

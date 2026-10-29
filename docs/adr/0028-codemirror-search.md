@@ -1,6 +1,6 @@
 # Find and Replace and the typing basics come from @codemirror/search and CodeMirror's own bracket tools
 
-The SQL editor had no Find, no Replace, no bracket matching or closing, no Ctrl+D and no Alt+Click for another place to type. "Types like VS Code" is a stated requirement, and these are the habits it means (`docs/requirements.md`, UX audit Q1 to Q3). The rule is to copy VS Code's keys and CodeMirror's defaults, not to invent.
+The SQL editor had no Find, no Replace, no bracket matching or closing, no Ctrl+D and no Alt+Click for another place to type. "Types like VS Code" is a stated requirement, and these are the habits it means (`docs/requirements.md`). The rule is to copy VS Code's keys and CodeMirror's defaults, not to invent.
 
 **The package.** `@codemirror/search` 6.7.2, pinned exactly (released 2026-08-31, so past the two week wait), the official CodeMirror package from the same author as the other `@codemirror/*` packages already in use. It needs `@codemirror/state` ^6 and `@codemirror/view` ^6.37, which 6.7.6 and 6.43.14 meet, and adds one small dependency, `crelt`, already in the tree through `@codemirror/view`. It supplies the search panel (find, replace, replace all, case, whole word, regular expression), `highlightSelectionMatches` and `selectNextOccurrence`. Brackets come from `bracketMatching` (`@codemirror/language`) and `closeBrackets` (`@codemirror/autocomplete`), both already installed.
 

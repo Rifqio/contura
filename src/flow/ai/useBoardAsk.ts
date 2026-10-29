@@ -1,6 +1,6 @@
-// The board's assistant (board 11.5, Plan D): its thread under `diagram:<name>`, the Ask that runs with the text held
-// read-only and sends the whole board with the chat's id (Decisions 1, 9), the follow-up question that waits for the
-// user's reply with the text free (Decision 10), and the proposal that waits for review or lands at once. A landing is
+// The board's assistant: its thread under `diagram:<name>`, the Ask that runs with the text held
+// read-only and sends the whole board with the chat's id, the follow-up question that waits for the
+// user's reply with the text free, and the proposal that waits for review or lands at once. A landing is
 // planned here on the text the Ask was made against and goes into the editor as one transaction on that parse's
 // version, so one undo takes it back. Closing the tab, or opening another diagram in it, stops a running Ask.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -80,13 +80,13 @@ function within<T>(p: Promise<T>, ms: number, why: string): Promise<T> {
 /** The place a diagram's thread and Ask live in. */
 export const diagramPlace = (name: string) => `diagram:${name}`;
 
-/** The most chats a board keeps (Decision 16). Mirrors the Core's `store::THREAD_LIMIT`. */
+/** The most chats a board keeps. Mirrors the Core's `store::THREAD_LIMIT`. */
 export const THREAD_LIMIT = 50;
 
 /** The AI title calls a chat gets: the first, and one retry on the next answer. Mirrors `title::TITLE_TRIES`. */
 const TITLE_TRIES = 2;
 
-/** A chat's title by the rule (Decision 16): its first question, cut to 40 characters. */
+/** A chat's title by the rule: its first question, cut to 40 characters. */
 const ruleTitle = (q: string) => (q.length > 40 ? `${q.slice(0, 40)}…` : q);
 
 /** `row` first in `list`, in place of the row of the same chat, at most THREAD_LIMIT rows. */
@@ -125,7 +125,7 @@ export interface Waiting {
    */
   keys: readonly string[];
   text: string;
-  /** The frame selected when the Ask was sent (Decision 24): the run holds it, and "Show in the text" shows it first. */
+  /** The frame selected when the Ask was sent: the run holds it, and "Show in the text" shows it first. */
   frameIndex: number;
   /** That frame's identity (`frameId`) when the Ask started: the run holds it, and only it, against a switch. */
   frameId: number;
@@ -182,13 +182,13 @@ export interface AskOptions {
   focus: string[];
   /** The kind of a new diagram asked for from the start screen. */
   create: DiagramKind | null;
-  /** The token of an attachment the Core holds (Decision 15); used up by the Ask that sends it. */
+  /** The token of an attachment the Core holds; used up by the Ask that sends it. */
   attachment: string | null;
   /** False once the selection chip was removed: the request leaves the selected shapes and sketches out (the frame stays). */
   withSelection?: boolean;
 }
 
-/** What the board Ask reads from the canvas, and how it shows the frames a change is in (Tasks 10, 12, 17). */
+/** What the board Ask reads from the canvas, and how it shows the frames a change is in. */
 export interface BoardCanvasApi {
   /** The board as the canvas holds it now: every frame, its box, the chips, the selection and the sketch notes. */
   input(): Promise<Omit<BoardInput, "followUp" | "attachment" | "create">>;
@@ -217,7 +217,7 @@ export interface Asking {
 }
 
 /**
- * The marker on a saved reply the user left blank (Decision 10): its text is what the model was told, and this pill in
+ * The marker on a saved reply the user left blank: its text is what the model was told, and this pill in
  * its `context` says the user did not type it (Task 16's card shows it as left to the assistant). A pill, since the
  * Core keeps a message's `context` as saved and has no field for it.
  */
@@ -226,7 +226,7 @@ export const LEFT_TO_AI = "Left to the assistant";
 /** A saved user turn is a blank follow-up reply, not typed. */
 export const isLeftToAi = (m: Pick<AiMessage, "role" | "context">) => m.role === "user" && m.context.includes(LEFT_TO_AI);
 
-/** Lets the Core forget an attached file (Task 18); a failure leaves it to the next pick or question, which end it. */
+/** Lets the Core forget an attached file; a failure leaves it to the next pick or question, which end it. */
 const forgetFile = (token: string) => void aiClearAttachment(token).catch(() => {});
 
 /** Why an Ask was not sent when the board could not be read. */
@@ -389,7 +389,7 @@ const indexesIn = (w: Waiting, title: string) => {
   return w.proposal.changes.filter((c) => changeFrame(c, titles) === title).map((c) => c.index);
 };
 
-/** The first unclear change with only the candidates its frame defines (Decision 12), and that frame's title. */
+/** The first unclear change with only the candidates its frame defines, and that frame's title. */
 function pickOf(w: Waiting): { change: ProposedChange; frame: string | null } | null {
   const c = firstAmbiguous(w.proposal.changes);
   if (!c || c.status.kind !== "ambiguous") return null;
@@ -415,14 +415,14 @@ const titlesOf = (w: Pick<Waiting, "frames">) => w.frames.map((f) => f.title);
 /** The board's shape count, from the outlines the Ask read: its shapes and groups, as a parse defines them. */
 const shapesOf = (frames: readonly { outline: FlowOutline }[]) => frames.reduce((n, f) => n + f.outline.nodes.length + f.outline.groups.length, 0);
 
-/** The board as the landing checks see it: one title per frame, the frame count and the shape count (Decision 13a). */
+/** The board as the landing checks see it: one title per frame, the frame count and the shape count. */
 const boardOf = (w: Pick<Waiting, "frames">) => ({ titles: titlesOf(w), frames: w.frames.length, shapes: shapesOf(w.frames) });
 
 /** `changes` with an unclear word counted as Ok, so the frame it waits in is parsed with the rest. */
 const withTargets = (changes: ProposedChange[]): ProposedChange[] => changes.map((c) => (c.status.kind === "ambiguous" ? { ...c, status: { kind: "ok" } as const } : c));
 
 /**
- * The landing of `accepted` on the text the proposal was made against, or why it does not apply (Decision 13): only
+ * The landing of `accepted` on the text the proposal was made against, or why it does not apply: only
  * the touched frames, parsed once on arrival, are planned; the rest of the board is left as it is.
  */
 function planOf(w: Waiting, accepted: ReadonlySet<number>): BoardPlan | BoardRefusal {
@@ -436,12 +436,12 @@ function landing(w: Waiting, accepted: ReadonlySet<number>): BoardPlan | null {
   return isRefusal(plan) ? null : plan;
 }
 
-/** What `accepted` removes across the board's frames: shapes plus ER columns (Decision 13b). */
+/** What `accepted` removes across the board's frames: shapes plus ER columns. */
 function removalOf(w: Waiting, accepted: ReadonlySet<number>) {
   return boardRemovalCount(w.proposal.changes, accepted, w.frames);
 }
 
-/** More than 3 shapes and columns removed asks first, in either mode (Decision 13b). */
+/** More than 3 shapes and columns removed asks first, in either mode. */
 const asksFirst = (r: { shapes: string[]; columns: string[] }) => r.shapes.length + r.columns.length > 3;
 
 /** The shapes that just landed, by the layout key of the frame they landed in. */
@@ -476,7 +476,7 @@ export function trimmedOf(record: { steps?: readonly { step: string; value: stri
   return names + left > 0 ? { names, left } : null;
 }
 
-/** The line under an answer that was given on a trimmed board (Decision 8). */
+/** The line under an answer that was given on a trimmed board. */
 export function trimmedNote(t: { names: number; left: number }): string {
   const some = (n: number, what: string) => `${n} ${n === 1 ? "diagram was" : "diagrams were"} ${what}`;
   const text = t.names > 0 && t.left > 0 ? `${some(t.names, "sent as names only")} and ${t.left} ${t.left === 1 ? "was" : "were"} left out` : t.names > 0 ? some(t.names, "sent as names only") : some(t.left, "left out");
@@ -503,7 +503,7 @@ async function newFramesOf(doc: FlowDocApi, canvas: BoardCanvasApi, w: Waiting):
 }
 
 /**
- * The text the tab holds now and the board the canvas reads of that same text (Decision 1), with the outline of the
+ * The text the tab holds now and the board the canvas reads of that same text, with the outline of the
  * selected frame (frame 0 with none) out of that one read; null when the text keeps changing under it or the canvas
  * cannot read it.
  */
@@ -530,8 +530,8 @@ const NO_OUTLINE: FlowOutline = { kind: null, kinds: [], nodes: [], groups: [], 
 export { MAX_TABLE_LINKS };
 
 /**
- * The board Ask's request on `read` (Decision 1): the whole board with the chips, the selected frame's outline with
- * `scope` whole, the chat's id (Decision 9), and what the Core gates the Ask on (Task 4b: every frame's source and
+ * The board Ask's request on `read`: the whole board with the chips, the selected frame's outline with
+ * `scope` whole, the chat's id, and what the Core gates the Ask on (Task 4b: every frame's source and
  * table links).
  */
 function boardRequest(
@@ -555,7 +555,7 @@ function boardRequest(
   };
 }
 
-/** What a blank reply to a follow-up says, as the Core words it in the turn (Decision 10). */
+/** What a blank reply to a follow-up says, as the Core words it in the turn. */
 export const BLANK_REPLY = "Choose something sensible.";
 
 export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode, canvas: BoardCanvasApi) {
@@ -578,11 +578,11 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
     setAskingState(a);
   }, []);
 
-  /** The file the Ask in flight sent (Task 18): the Core holds it while it runs, and for a follow-up's reply after. */
+  /** The file the Ask in flight sent: the Core holds it while it runs, and for a follow-up's reply after. */
   const flightFile = useRef<string | null>(null);
   /**
    * The follow-up is left unanswered (Cancel, another chat, another diagram): the file the Core kept for its reply
-   * goes from its memory now (Task 18), not with the next Ask. With `inFlight` (the tab closes, or another diagram
+   * goes from its memory now, not with the next Ask. With `inFlight` (the tab closes, or another diagram
    * opens in it) the file of an Ask still running goes too, so a follow-up the Core ends it with has no file waiting.
    */
   const forgetReplyFile = useCallback((inFlight = false) => {
@@ -809,7 +809,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
   );
 
   /**
-   * The touched frames' proposed places are let go, outside the history (Decision 14): each frame of the board keeps
+   * The touched frames' proposed places are let go, outside the history: each frame of the board keeps
    * only the shapes `plan` leaves in it (all it had, with no plan).
    */
   const settle = useCallback((w: Waiting, plan: BoardPlan | null) => {
@@ -821,7 +821,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
   }, []);
 
   /**
-   * Lands `accepted` as one transaction on the proposal's version (Decision 14): `land` when no frame is added, else
+   * Lands `accepted` as one transaction on the proposal's version: `land` when no frame is added, else
    * `landBoard` with the new frames' entries measured when it arrived, so one undo takes back the edits and the frames.
    * False, with nothing changed, when it does not apply.
    */
@@ -874,18 +874,18 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
   const onItsFrame = useCallback((w: Waiting) => docRef.current.frameIdNow() === w.frameId, []);
 
   /**
-   * Auto-apply's landing of `ok` (Decision 13): the whole set at once unless it would leave a touched frame or the
+   * Auto-apply's landing of `ok`: the whole set at once unless it would leave a touched frame or the
    * board with a new problem; then the broken card names the frame, and nothing lands. After the remove question too.
    */
   const autoLand = useCallback(
     (w: Waiting, ok: ReadonlySet<number>) => {
       const plan = planOf(w, ok);
       if (isRefusal(plan)) {
-        // The set does not land whole (Decision 13c): it waits for review, saying why.
+        // The set does not land whole: it waits for review, saying why.
         setWaiting({ ...w, step: "review", problem: plan.message });
         return;
       }
-      // The frame named, and the line counted from its start, as the pane numbers them (Decision 15).
+      // The frame named, and the line counted from its start, as the pane numbers them.
       const broke = boardWouldBreak(w.touched, plan, boardOf(w));
       if (broke === null) {
         // A landing that did not apply has already put the proposal up for review with why.
@@ -909,7 +909,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
       }
       holdText();
       const ok = new Set(okIndexes(w.proposal));
-      // More than 3 shapes and columns removed, summed across frames, asks first in either mode (Decision 13b).
+      // More than 3 shapes and columns removed, summed across frames, asks first in either mode.
       if (ok.size > 0 && asksFirst(removalOf(w, ok))) {
         setWaiting({ ...w, step: "remove" });
         return;
@@ -933,7 +933,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
 
   /**
    * Asks `q` on the board. With `followUp` it is the reply to the model's follow-up question: `q` goes again with it,
-   * and only the reply is saved as the user's turn (Decision 10).
+   * and only the reply is saved as the user's turn.
    */
   const ask = useCallback(
     async (q: string, opts: AskOptions, followUp: FollowUpReply | null): Promise<boolean> => {
@@ -963,7 +963,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
       let text = "";
       let proposal = null as DiagramProposal | null;
       let input = "";
-      /** The model's follow-up question: it shows no proposal (Decision 10). */
+      /** The model's follow-up question: it shows no proposal. */
       let askedBack: string | null = null;
       let ended = false;
       let finish: (e: StreamEnd) => void = () => {};
@@ -1027,7 +1027,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
       const sentText = cur.text;
       const askedIndex = read?.frameIndex ?? r.frameIndex;
       const version = cur.result.version;
-      // The chat goes with it: the Core reads its last turns as history (Decision 9).
+      // The chat goes with it: the Core reads its last turns as history.
       const request = boardRequest(read, { requestId, file: name, question: q, opts, threadId: threadRef.current?.id ?? null, followUp, layout: docRef.current.board });
       const asking = aiDiagramAsk(request, (e) => {
         if (ended) return;
@@ -1132,7 +1132,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
         placed();
         if (!current() || latest.current !== mine) return gotAnswer;
         setWorking(null);
-        // The Core keeps the attached file for the reply (Task 18): the reply sends the same token, and the file
+        // The Core keeps the attached file for the reply: the reply sends the same token, and the file
         // goes once the chain ends, answered or left.
         setAsking({ q, question: back, opts });
         return gotAnswer;
@@ -1158,7 +1158,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
         placed();
         setWorking(null);
         release();
-        // The parts the answer names that are on screen ring once (Decision 17); an answer never edits.
+        // The parts the answer names that are on screen ring once; an answer never edits.
         // A failed or stopped answer is not one: nothing rings.
         if (end.error === null) {
           const board = read.board.frames;
@@ -1173,7 +1173,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
         messageAt: saved.at,
         proposal: got,
         frames,
-        // Only the frames the changes name are parsed, once, here (Decision 13); later toggles plan on these.
+        // Only the frames the changes name are parsed, once, here; later toggles plan on these.
         touched: touchedFrames(sentText, splitFrames(sentText), frames.map((f) => f.title), withTargets(got.changes)),
         newFrames: null,
         keys: cur.keys,
@@ -1258,7 +1258,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
     [setWaiting],
   );
 
-  /** Reject frame (Decision 12): every change in frame `title`, with the changes in other frames that need them. */
+  /** Reject frame: every change in frame `title`, with the changes in other frames that need them. */
   const rejectFrame = useCallback(
     (title: string) => {
       const w = waitingRef.current;
@@ -1270,7 +1270,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
     [setWaiting],
   );
 
-  /** Accept frame (Decision 12): every change in frame `title` back, with the changes in other frames they need. */
+  /** Accept frame: every change in frame `title` back, with the changes in other frames they need. */
   const acceptFrame = useCallback(
     (title: string) => {
       const w = waitingRef.current;
@@ -1347,7 +1347,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
       settle(w, null);
       release();
       record(w, 0);
-      // A board's question asks for changes that fit the board (Decision 12).
+      // A board's question asks for changes that fit the board.
       void send(fixQuestion(messages, w.frames.length > 1), w.opts);
     },
     [record, release, send, setWaiting, settle],
@@ -1375,7 +1375,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
     [record, release, send, setWaiting, settle],
   );
 
-  /** "Remove and redraw": the whole set, as asked; with Auto-apply, behind the same break check as any landing (Decision 13a). */
+  /** "Remove and redraw": the whole set, as asked; with Auto-apply, behind the same break check as any landing. */
   const removeAll = useCallback(() => {
     const w = waitingRef.current;
     if (!w) return;
@@ -1385,7 +1385,7 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
   }, [land, autoLand]);
 
   // What the waiting changes would make of the board: the ghost marks in the editor and each touched frame's review.
-  // Only the touched frames, parsed when the proposal arrived, are planned again on a toggle (Decision 13).
+  // Only the touched frames, parsed when the proposal arrived, are planned again on a toggle.
   const planned = useMemo(() => {
     // An unclear word, a refused landing and a stale text have nothing to show yet.
     if (!waiting || (waiting.step !== "review" && waiting.step !== "remove")) return null;
@@ -1618,15 +1618,15 @@ export function useBoardAsk(name: string, doc: FlowDocApi, mode: FlowAssistMode,
     lines: planned?.lines ?? [],
     /** The selected frame's review, drawn over its live nodes; null when it has none. */
     overlay,
-    /** Each touched or new frame's review, by title (Decision 11); null when nothing would land. */
+    /** Each touched or new frame's review, by title; null when nothing would land. */
     review: planned?.review ?? null,
     /** Each new frame's place on the board, by title: where the landing writes it. */
     proposedAt: planned?.proposedAt ?? NO_PLACES,
     /** Each touched frame's waiting count, by layout key, for its AI Chat tab. */
     pendingByKey,
-    /** What would be removed across frames, while the remove question is open (Decision 13b). */
+    /** What would be removed across frames, while the remove question is open. */
     removal: planned?.removal ?? null,
-    /** The pick step's change with its own frame's candidates only (Decision 12). */
+    /** The pick step's change with its own frame's candidates only. */
     picking,
     send,
     stop,

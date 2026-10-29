@@ -149,7 +149,7 @@ interface Props {
   onNewVisual?(): void;
   /** False while no Connection is open: New Visual Query is off and says why. */
   newVisualReady?: boolean;
-  /** The chevron menu's New diagram (frame 6+.6). */
+  /** The chevron menu's New diagram. */
   onNewDiagram?(): void;
   /** A diagram tab's right-click menu: Rename, Save a copy as, Delete. */
   diagramActions?: DiagramMenuActions;

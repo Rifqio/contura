@@ -95,7 +95,7 @@ export default function EditorHeader({
   const diagramKey = hintFor(map, "diagram.toggle");
   const strip = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
-  /** P11-14: even the icon strip does not fit (the Ask panel beside a PROD tab): the right end is under More. */
+  /** Even the icon strip does not fit (the Ask panel beside a PROD tab): the right end is under More. */
   const [crowded, setCrowded] = useState(false);
   const icons = compact || narrow;
   /** What sits in the strip besides the right end: when it changes while More is shown, the strip is measured again. */

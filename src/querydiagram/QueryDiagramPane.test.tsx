@@ -356,7 +356,7 @@ test("show_diagram_in_a_visual_query_draws_the_generated_sql_and_a_card_click_se
   client.dispose();
 });
 
-// ---- V9: every database a statement names loads, and its tables never read "Not in the schema" ----
+// ---- Every database a statement names loads, and its tables never read "Not in the schema" ----
 
 const ARCHIVE: SqlSchema = {
   searchPath: [],

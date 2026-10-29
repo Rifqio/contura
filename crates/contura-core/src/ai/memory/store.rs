@@ -576,7 +576,7 @@ pub fn last_ai_sql(answer: &AiMessage) -> Option<String> {
 }
 
 impl LastWork {
-    /// Where the thread last worked by its newest answer with SQL (Decision 4a): that SQL,
+    /// Where the thread last worked by its newest answer with SQL: that SQL,
     /// the turn's stamp (Connection, database, its first table) and the tab its question
     /// was asked in. `None` when no answer holds SQL. For threads saved before D2.
     pub fn derive(thread: &AiThread) -> Option<LastWork> {
@@ -587,7 +587,7 @@ impl LastWork {
         Self::of_answer(&thread.messages, at)
     }
 
-    /// Where the answer at `at` of `messages` worked (Decision 4a); `None` when it holds no
+    /// Where the answer at `at` of `messages` worked; `None` when it holds no
     /// SQL.
     fn of_answer(messages: &[AiMessage], at: usize) -> Option<LastWork> {
         let answer = messages.get(at).filter(|m| m.role == AiRole::Assistant)?;
@@ -616,9 +616,9 @@ impl LastWork {
     }
 
     /// `prev` after the answer at `at` of `messages` arrived: an answer with SQL sets the
-    /// AI SQL, the place and the tab (Decision 4a); the SQL the user inserted stays while
+    /// AI SQL, the place and the tab; the SQL the user inserted stays while
     /// the answer is on the same Connection and database, and goes with the old place
-    /// otherwise (4c, P12). An answer without SQL changes nothing.
+    /// otherwise (4c). An answer without SQL changes nothing.
     pub fn after_answer(
         prev: Option<LastWork>,
         messages: &[AiMessage],
@@ -643,7 +643,7 @@ impl LastWork {
     /// itself. A removed AI SQL falls back to the newest kept answer with SQL on the same
     /// place as a kept insert, or, with no insert, to the newest kept answer with SQL. A
     /// removed insert falls back to the newest kept answer the user inserted or opened (its
-    /// SQL), with the newest kept AI SQL beside it when on the same place (P12); else none.
+    /// SQL), with the newest kept AI SQL beside it when on the same place; else none.
     pub fn after_cut(
         prev: Option<LastWork>,
         messages: &[AiMessage],

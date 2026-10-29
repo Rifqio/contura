@@ -9,7 +9,7 @@ import { colourStyle, type DrawnColour, presetOf } from "../palette";
 /** A colour a shape takes: a preset (`color: danger`) or a custom one (`color: teal`). */
 export type ShapeColour = DrawnColour;
 
-/** Modern is the pastel card (frame 6+.2); Classic draws the textbook Gane-Sarson shapes. Kept per diagram. */
+/** Modern is the pastel card; Classic draws the textbook Gane-Sarson shapes. Kept per diagram. */
 export type NodeLook = "modern" | "classic";
 
 export interface NodeBaseProps {
@@ -22,14 +22,14 @@ export interface NodeBaseProps {
   state?: NodeState;
   /** Item 21: the size it was resized to on the canvas. */
   sized?: { w: number; h: number };
-  /** Step 11: its `color:`, in place of its kind's colours. */
+  /** Its `color:`, in place of its kind's colours. */
   color?: ShapeColour;
 }
 
 /**
- * A node fading in from 96 percent after an add, or fading out before a delete. The diagram assistant's marks
- * (board 11.5): `suggested` is new in its review (green, dashed, a "New" badge), `removed` is what it would remove
- * (red), `changed` is renamed, moved, retyped or relabelled by it (a soft tint, no motion; Plan D Decision 11),
+ * A node fading in from 96 percent after an add, or fading out before a delete. The diagram assistant's marks:
+ * `suggested` is new in its review (green, dashed, a "New" badge), `removed` is what it would remove
+ * (red), `changed` is renamed, moved, retyped or relabelled by it (a soft tint, no motion),
  * `airing` was just added by it (an accent ring that fades); `ringed` is the same ring on a part an answer only named,
  * which changed nothing, so its name gets no note.
  */
@@ -102,7 +102,7 @@ interface ShellProps {
   state?: NodeState;
   /** Resized on the canvas: drawn at this size (item 21). */
   sized?: { w: number; h: number };
-  /** Step 11: its palette colour. */
+  /** Its palette colour. */
   color?: ShapeColour;
   /** The full node; a function places the ports itself (a service puts them on its 48 px tile). */
   children: ReactNode | ((ports: ReactNode) => ReactNode);

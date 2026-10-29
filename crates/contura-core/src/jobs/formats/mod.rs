@@ -20,7 +20,7 @@ pub const BUF_BYTES: usize = 64 * 1024;
 pub const SAMPLE_BYTES: usize = 64 * 1024;
 /// One CSV row, JSON object or Excel row larger than this stops the read: 16 MB, the
 /// largest value Contura itself reads (`FULL_VALUE_LIMIT`), so the few copies an import
-/// holds of a record stay inside the memory budget (ADR 0003, Q45).
+/// holds of a record stay inside the memory budget (ADR 0003).
 pub const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
 /// `inspect` shows this many rows.
 pub const PREVIEW_ROWS: usize = 20;
@@ -30,13 +30,13 @@ pub const EXACT_COUNT_BYTES: u64 = 4 * 1024 * 1024;
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// Writes an export chunk by chunk; nothing holds more than the chunk it is given.
-/// Writers write into a `paths::PartialWriter`, never the target path itself (Q4).
+/// Writers write into a `paths::PartialWriter`, never the target path itself.
 pub trait FormatWriter: Send {
     fn begin(&mut self, columns: &[SourceColumn]) -> Result<()>;
     fn write_chunk(&mut self, chunk: &Chunk) -> Result<()>;
     /// The bytes written so far and the warnings gathered.
     fn summary(&self) -> WriteSummary;
-    /// Writes the format's tail, flushes, and hands back the partial file (Q23). The
+    /// Writes the format's tail, flushes, and hands back the partial file. The
     /// caller commits it; a writer never commits itself.
     fn finish(self: Box<Self>) -> Result<PartialWriter>;
 }
@@ -56,12 +56,12 @@ pub trait RecordReader: Send {
     /// The warnings gathered since the last call.
     fn warnings(&mut self) -> Vec<String>;
     /// The SHA-256 of every byte read, once the reader has reached the end of the file
-    /// (None before that). Readers hash through `paths::HashingReader` (Q3).
+    /// (None before that). Readers hash through `paths::HashingReader`.
     fn sha256(&self) -> Option<[u8; 32]>;
 }
 
 /// One data row: `row` counts data rows from 1 (header excluded), `line` is the physical
-/// line it starts on (D12). An empty unquoted CSV field is None (D11).
+/// line it starts on. An empty unquoted CSV field is None.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct FileRecord {
     pub row: u64,
@@ -70,7 +70,7 @@ pub struct FileRecord {
 }
 
 /// A value as text files write it: `None` is NULL, bytes are `0x` and lowercase hex or
-/// base64 (D10), booleans are `true` and `false`.
+/// base64, booleans are `true` and `false`.
 pub fn value_text(v: &Value, opts: &ExportOptions) -> Option<String> {
     match v {
         Value::Null => None,
@@ -186,7 +186,7 @@ pub fn format_from_content(head: &[u8]) -> Format {
 
 /// What the file step shows: format, delimiter, encoding, size, header, the first 20
 /// rows, and a row count (exact under 4 MB, else estimated from bytes per row).
-/// Excel files also list their sheets (Task 4); Task 5 fills in SQL files.
+/// Excel files also list their sheets; Task 5 fills in SQL files.
 pub fn inspect(path: &Path, format: Option<Format>) -> Result<FileSummary> {
     let head = read_head(path)?;
     let bytes = std::fs::metadata(path)

@@ -178,7 +178,7 @@ async fn check_failing_after_is_after_commit(
     assert_eq!(ids(d, path).await, ["1", "2"]);
 }
 
-/// `run` is one single-statement call (Task 8): two statements joined by `;` are refused
+/// `run` is one single-statement call: two statements joined by `;` are refused
 /// and neither runs, so no value can smuggle in a second statement.
 async fn check_run_takes_one_statement(
     d: &dyn Dialect,
@@ -300,7 +300,7 @@ mod mysql {
         d.disconnect().await.ok();
     }
 
-    /// Q42 I3: a routine, trigger or event body (BEGIN ... END holding `;`) cannot be
+    /// A routine, trigger or event body (BEGIN ... END holding `;`) cannot be
     /// prepared and runs as text: the server parsed it as one statement.
     #[tokio::test]
     async fn routine_bodies_run() {
@@ -325,7 +325,7 @@ mod mysql {
         d.disconnect().await.ok();
     }
 
-    /// Q42 I3: two statements are still refused, and the second never runs.
+    /// Two statements are still refused, and the second never runs.
     #[tokio::test]
     async fn select_then_drop_refused_table_intact() {
         let (db, d, path) = setup().await;

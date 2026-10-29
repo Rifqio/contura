@@ -43,7 +43,7 @@ afterEach(() => {
   canvas.props = null;
 });
 
-/** Frame 6+.2's diagram. */
+/** The data flow diagram. */
 const DFD = [
   'diagram dfd "Checkout"',
   "",
@@ -64,7 +64,7 @@ const DFD = [
   "",
 ].join("\n");
 
-/** Frame 6+.3: line 14 sends a flow to a name that has no node. */
+/** Line 14 sends a flow to a name that has no node. */
 const BROKEN = DFD.replace("Checkout > Charge card: amount", "Checkout > Refunds: reversal");
 
 const FLOWCHART = ['diagram flow "Refund request"', "", "Request in [start]", "Within 30 days? [decision]", "Done [end]", "", "Request in > Within 30 days?", "Within 30 days? > Done: yes", ""].join("\n");
@@ -124,7 +124,7 @@ function select(s: Setup, label: string) {
 
 const banded = (c: HTMLElement) => [...c.querySelectorAll(".cm-line.cm-flow-band")].map((e) => e.textContent);
 
-/** The selected frame's shapes in the Shelf that More shapes opens on Shapes (B2 Task 8); a Shelf still open is used as it is. */
+/** The selected frame's shapes in the Shelf that More shapes opens on Shapes; a Shelf still open is used as it is. */
 async function moreShapes() {
   if (!screen.queryByRole("dialog", { name: "Add to the board" })) await userEvent.click(screen.getByRole("button", { name: "More shapes" }));
   const shelf = await screen.findByRole("dialog", { name: "Add to the board" });
@@ -136,13 +136,13 @@ async function moreShape(label: string) {
   await userEvent.click(within(await moreShapes()).getByRole("option", { name: label }));
 }
 
-/** Keeps a new shape's name as it opened: a key or a tool opens the name, written once kept (diagram step 6). */
+/** Keeps a new shape's name as it opened: a key or a tool opens the name, written once kept (diagram). */
 async function keepNew() {
   fireEvent.keyDown(await screen.findByRole("textbox", { name: /^(Name the new|Note text)/ }), { key: "Enter" });
 }
 
 
-/** The frame bar's Look list (Task 9): what it shows, and a pick in it. */
+/** The frame bar's Look list: what it shows, and a pick in it. */
 const lookShown = () => (document.querySelector(".frame-bar [role=combobox][aria-label='Look'] .select-value") as HTMLElement | null)?.textContent;
 async function chooseLook(look: "Modern" | "Classic") {
   fireEvent.click(document.querySelector(".frame-bar [role=combobox][aria-label='Look']") as HTMLElement, { detail: 1 });
@@ -171,7 +171,7 @@ test("opening_renders_text_and_canvas", async () => {
   expect(s.container.querySelector('[aria-label="Group Payments"]')).not.toBeNull();
   const text = s.container.querySelector(".flow-pane-text") as HTMLElement;
   // The pane title, in the Editor's panel: the Assistant's panel beside it is hidden, and its start screen has a
-  // "Data flow" card of its own (Plan D Task 18).
+  // "Data flow" card of its own.
   expect(within(within(text).getByRole("tabpanel")).getByText("Data flow")).toBeTruthy();
   expect(within(text).getByText("Saved")).toBeTruthy();
   expect(within(text).getByText("No problems")).toBeTruthy();
@@ -212,7 +212,7 @@ test("a_move_writes_only_the_layout", async () => {
   act(() => canvas.props!.onMove!("Checkout", 400, 208));
   await waitFor(() => expect(s.saves()).toHaveLength(1));
   const saved = s.lastSave();
-  // Only the layout file: the .flow is not written, so an outside edit to it survives (P24 I1).
+  // Only the layout file: the .flow is not written, so an outside edit to it survives.
   expect(saved).toMatchObject({ cmd: "write_diagram_layout", name: "checkout" });
   expect(saved.text).toBeUndefined();
   expect(callsTo("write_diagram")).toHaveLength(0);
@@ -335,7 +335,7 @@ test("an_error_shows_the_faded_last_drawing_and_the_banner_text", async () => {
   const problems = s.container.querySelector(".flow-problems") as HTMLElement;
   expect(within(problems).getByText("Refunds is not defined.")).toBeTruthy();
   expect(within(problems).getByText("Line 14")).toBeTruthy();
-  // Frame 6+.3: the plain sentence, and the fix's line shown in grey while it is hovered.
+  // The plain sentence, and the fix's line shown in grey while it is hovered.
   expect(within(problems).getByText("Checkout sends a flow to a name that has no node, so that flow is left off the drawing.")).toBeTruthy();
   const fix = within(problems).getByRole("button", { name: "Add Refunds as a store" });
   fireEvent.mouseEnter(fix);
@@ -352,7 +352,7 @@ test("an_error_shows_the_faded_last_drawing_and_the_banner_text", async () => {
 });
 
 test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
-  // The board's toolbar (Task 7) and the frame bar (Task 9).
+  // The board's toolbar and the frame bar.
   const row = (b: HTMLElement) => [b.getAttribute("aria-label"), b.getAttribute("aria-keyshortcuts") ?? "", b.querySelector(".flow-hint")?.textContent ?? ""];
   const tools = (c: HTMLElement) => within(within(c).getByRole("toolbar", { name: "Board tools" })).getAllByRole("button").map(row);
   const settings = (c: HTMLElement) => {
@@ -424,7 +424,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
     ["Colour", "", ""],
     ["More", "", "More"],
   ]);
-  // In the Editor's panel: the hidden Assistant panel's start screen has a "Flowchart" card too (Plan D Task 18).
+  // In the Editor's panel: the hidden Assistant panel's start screen has a "Flowchart" card too.
   expect(within(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByRole("tabpanel")).getByText("Flowchart")).toBeTruthy();
   expect(within(flow.container.querySelector(".flow-pane-text") as HTMLElement).getByText("3 shapes, 2 lines")).toBeTruthy();
   cleanup();
@@ -464,7 +464,7 @@ test("the_strip_tool_bar_tools_and_hints_match_the_artifact", async () => {
 test("classic_toggles_and_is_kept_in_the_layout", async () => {
   const s = setup();
   await drawn(s);
-  // The frame bar's Look (Task 9).
+  // The frame bar's Look.
   expect(lookShown()).toBe("Modern");
   await chooseLook("Classic");
   await waitFor(() => expect(s.node("Process Checkout")!.querySelector(".fnode-classic")).not.toBeNull());
@@ -485,7 +485,7 @@ test("classic_toggles_and_is_kept_in_the_layout", async () => {
 test("a_flowchart_is_top_to_bottom_by_default_and_the_left_to_right_switch_is_kept_in_the_layout", async () => {
   const s = setup({ text: FLOWCHART, layout: null }, "refund-policy");
   await drawn(s, "Start Request in");
-  // Direction lives in the frame bar only (Task 9); the strip has none.
+  // Direction lives in the frame bar only; the strip has none.
   const strip = s.container.querySelector(".flow-pane-draw .flow-strip") as HTMLElement;
   expect(within(strip).queryByRole("button", { name: "Left to right" })).toBeNull();
   expect(within(strip).queryByRole("group", { name: "Direction" })).toBeNull();
@@ -498,7 +498,7 @@ test("a_flowchart_is_top_to_bottom_by_default_and_the_left_to_right_switch_is_ke
   expect(s.lastSave()).toMatchObject({ cmd: "write_diagram_layout" });
   expect(callsTo("write_diagram")).toHaveLength(0);
   expect(s.text()).toBe(FLOWCHART);
-  // A data flow has its Direction in the bar too (Decision 22: every kind laid out by hand).
+  // A data flow has its Direction in the bar too (every kind laid out by hand).
   cleanup();
   const dfd = setup();
   await drawn(dfd);
@@ -518,7 +518,7 @@ test("closing_the_tab_frees_its_worker_state_and_saves_what_is_waiting", async (
   expect(close).toHaveBeenCalledWith("flow:checkout");
 });
 
-// ---- Fix round 1 (ruling P16)
+// ---- Fix round 1
 
 const crlf = (s: string) => s.replace(/\n/g, "\r\n");
 const settle = () => new Promise((r) => setTimeout(r, 60));
@@ -728,7 +728,7 @@ test("the_status_bar_and_tab_read_the_diagram_state", async () => {
   await waitFor(() => expect(flowEntry("checkout")?.errors).toBe(1));
 });
 
-// ---- Fix round 2 (ruling P17)
+// ---- Fix round 2
 
 const guard = vi.hoisted(() => ({ g: null as null | { confirmCloseFlow(name: string): Promise<boolean> } }));
 
@@ -813,7 +813,7 @@ test("a_node_that_is_not_drawn_keeps_no_selection", async () => {
   expect(s.text()).toContain("Process [process, id: 3.0]\n");
 });
 
-// ---- Fix wave (ruling P24 I1)
+// ---- Fix wave
 
 /** A diagrams folder of one diagram, kept the way the Core keeps it. */
 function folder(text: string) {
@@ -1072,7 +1072,7 @@ test("item_51_a_node_laid_out_past_the_caps_keeps_its_size_on_a_1px_drag", async
   }
 });
 
-/** The name and details panel, from the shape's menu (a double-click edits the name on the shape, diagram step 3). */
+/** The name and details panel, from the shape's menu (a double-click edits the name on the shape, diagram). */
 async function details(node: HTMLElement) {
   fireEvent.contextMenu(node, { clientX: 300, clientY: 200 });
   const menu = await screen.findByRole("menu");
@@ -1285,7 +1285,7 @@ test("er_shapes_write_what_their_samples_show", async () => {
   expect(described).toBeTruthy();
   expect(document.getElementById(described!)?.textContent).toBe("table_1");
   expect(table.querySelector("kbd.kbd")?.textContent).toBe("R");
-  // Column says what it does: its hint is its tip and its description (R22, A8).
+  // Column says what it does: its hint is its tip and its description (R22).
   const column = within(list).getByRole("option", { name: "Column" });
   expect(column.getAttribute("title")).toBe("Opens a new column row on the table");
   expect(column.getAttribute("aria-description")).toBe("Opens a new column row on the table");
@@ -1316,7 +1316,7 @@ test("add_table_and_column_on_an_old_er_file_say_to_rewrite_first_and_write_noth
   await waitFor(() => expect(strip().textContent).toContain(note));
   expect(screen.queryByLabelText("Table name")).toBeNull();
   act(() => s.press("Escape"));
-  // The Shelf shows every ER shape disabled with the note (A13); a press still says it in the strip.
+  // The Shelf shows every ER shape disabled with the note; a press still says it in the strip.
   const list = await moreShapes();
   for (const label of ["Table", "Weak table", "Column"]) {
     const o = within(list).getByRole("option", { name: label });

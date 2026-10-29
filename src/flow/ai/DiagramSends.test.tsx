@@ -1,4 +1,4 @@
-// The diagram assistant's Sends line (board 11.12, controller ruling 2): the Core's preview, 300 ms after the last
+// The diagram assistant's Sends line (controller): the Core's preview, 300 ms after the last
 // change, never while an Ask runs, and no rows that belong to another text.
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -74,7 +74,7 @@ function fakeAi(over: Partial<BoardAsk> = {}): BoardAsk {
     removal: null,
     notSaved: null,
     clearFailure: () => {},
-    // Past chats (Task 15): none here.
+    // Past chats: none here.
     threads: [],
     newChat: () => {},
     openThread: async () => {},
@@ -220,7 +220,7 @@ test("a_board_sends_one_row_per_frame_with_its_fit", async () => {
 });
 
 test("a_held_source_shows_its_sentence_in_sends", async () => {
-  // Task 4b: the Core refuses the preview of a board with a frame drawn from a Never Connection. Sends says why, and
+  // The Core refuses the preview of a board with a frame drawn from a Never Connection. Sends says why, and
   // shows no rows, so nothing of the held frame's schema is listed.
   const message = 'The frame "Orders ERD" was drawn from prod, whose AI access is Never, so this Ask was not sent. Remove the frame or change that Connection\'s AI access.';
   show(fakeAi());

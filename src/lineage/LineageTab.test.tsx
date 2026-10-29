@@ -342,7 +342,7 @@ test("the_stylesheet_uses_tokens_only", () => {
   expect(text).not.toMatch(/\b\d+(?:\.\d+)?m?s\b|transition|animation/);
 });
 
-// ---- Fix round 1 (P14) ----
+// ---- Fix round 1 ----
 
 const isEffects = (a: Record<string, unknown>) => a.depth === 0 && a.direction === "usedBy";
 
@@ -502,7 +502,7 @@ test("hovering_a_row_redraws_only_the_card_it_marks", async () => {
   expect(frameRenders.get("Table shipments") ?? 0).toBe(0);
 });
 
-// ---- Fix round 2 (P15) ----
+// ---- Fix round 2 ----
 
 const SET_DEFAULT: Lineage = { ...FULL, links: FULL.links.map((l, i) => (i === 3 ? { ...l, onDelete: "SET DEFAULT" } : l)) };
 
@@ -762,7 +762,7 @@ test("publish_opens_the_publish_image_dialog_with_the_lineage", async () => {
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Publish image" })).toBeNull());
 });
 
-// ---- Fix wave (P24 I2) ----
+// ---- Fix wave ----
 
 test("the_warning_says_it_is_checking_while_its_own_read_runs", async () => {
   setup({ lineage: (a) => (isEffects(a) ? new Promise(() => {}) : FULL) });

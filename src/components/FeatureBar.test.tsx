@@ -138,7 +138,7 @@ test("a_tip_without_a_key_is_just_the_words", () => {
   expect(featureTip({ id: "model", label: "Model", tip: "New Schema Model" })).toBe("New Schema Model");
 });
 
-/** P11-36: at the minimum window width the groups clip inside their own box; Ask stays and the rest is under More. */
+/** At the minimum window width the groups clip inside their own box; Ask stays and the rest is under More. */
 test("parity_P11_36_ask_stays_reachable_and_the_overflow_moves_into_more", async () => {
   const user = userEvent.setup();
   const groupsOf = () => Array.from(document.querySelectorAll<HTMLElement>(".feature-groups .feature-button"));

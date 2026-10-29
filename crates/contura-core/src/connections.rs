@@ -102,7 +102,7 @@ fn next_order_stamp() -> i64 {
     }
 }
 
-/// The server version a Visual Query is written for, without a round trip (D3): only
+/// The server version a Visual Query is written for, without a round trip: only
 /// SQLite's matters (RIGHT and FULL JOIN), and that is the bundled library's.
 fn server_version(kind: DialectKind) -> &'static str {
     match kind {
@@ -207,7 +207,7 @@ fn remove_if_present(path: &std::path::Path) -> Result<()> {
 pub struct ConnectionService {
     store: Arc<Mutex<AppStore>>,
     secrets: Arc<dyn SecretStore>,
-    /// The import and export jobs (D3); it shares the store for history entries.
+    /// The import and export jobs; it shares the store for history entries.
     jobs: Arc<JobService>,
     sessions: RwLock<HashMap<ConnectionId, Arc<dyn Dialect>>>,
     /// Bumped whenever a Connection is saved, deleted or closed, so an `open`
@@ -296,11 +296,11 @@ pub enum PassScope {
     Edits(ConnectionId, ObjectPath),
     /// A design of one table: the table changed, created or dropped.
     Design(ConnectionId, ObjectPath),
-    /// One import or script job on a Connection, bound to its fingerprint (D5): the
+    /// One import or script job on a Connection, bound to its fingerprint: the
     /// request, the mapping, the template and the file, exactly as confirmed.
     Job(ConnectionId, [u8; 32]),
     /// One Sync Script on the target database (and schema; `name` is empty): it
-    /// covers exactly the script's statements, once (step 10).
+    /// covers exactly the script's statements, once.
     Sync(ConnectionId, ObjectPath),
 }
 
@@ -340,7 +340,7 @@ struct DesignHistory {
 }
 
 /// What a design's run puts in Query History: the whole plan when it ran to the
-/// end; on MySQL only the statements already committed before one failed (D12);
+/// end; on MySQL only the statements already committed before one failed;
 /// the whole plan when the change was applied but a closing statement failed;
 /// nothing when nothing was changed, and nothing for a plan with no statements.
 fn design_history(statements: &[String], result: &Result<DesignOutcome>) -> Option<DesignHistory> {
@@ -367,7 +367,7 @@ fn design_history(statements: &[String], result: &Result<DesignOutcome>) -> Opti
     }
 }
 
-/// Where a Drop's row count stops (D5).
+/// Where a Drop's row count stops.
 const DROP_COUNT_LIMIT: u64 = 10_000;
 
 /// The table a design request changes, creates or drops.
@@ -466,7 +466,7 @@ impl ConnectionService {
     }
 
     /// Connects through the data-folder guard: a SQLite Connection can never open
-    /// app.sqlite or any other file in Contura's data folder (Q33). Every connection the
+    /// app.sqlite or any other file in Contura's data folder. Every connection the
     /// service makes from a config goes through here.
     async fn connect_checked(
         &self,
@@ -586,7 +586,7 @@ impl ConnectionService {
         Ok(id)
     }
 
-    /// A Production pass for one job (D5): it covers exactly the job whose fingerprint is
+    /// A Production pass for one job: it covers exactly the job whose fingerprint is
     /// `fingerprint`, once, for a limited time, and replaces the job's earlier pass. The
     /// file it was confirmed for is kept with the Job service, so start can tell a file
     /// that changed since.
@@ -618,7 +618,7 @@ impl ConnectionService {
         Ok(pass)
     }
 
-    /// Applies Read-only and Production to a job before anything opens (D5). A plain
+    /// Applies Read-only and Production to a job before anything opens. A plain
     /// Connection needs nothing. A Read-only one is refused as `ReadOnly(0)`, whatever
     /// the job holds and even when it is also Production. A Production one needs an
     /// unexpired pass issued for exactly `Job(config.id, fingerprint)`, and uses it up;
@@ -926,7 +926,7 @@ impl ConnectionService {
 
     /// The tables around `path`, `depth` steps each way (0 is All, up to 300 tables, at
     /// most 10s), from catalog details only: one key read and one light column read per
-    /// database or schema reached, and no row is read (B2, P6).
+    /// database or schema reached, and no row is read.
     pub async fn lineage(
         &self,
         id: ConnectionId,
@@ -979,7 +979,7 @@ impl ConnectionService {
         })
     }
 
-    /// The table's CREATE statements for copying, as the server holds the table (D14).
+    /// The table's CREATE statements for copying, as the server holds the table.
     pub async fn table_ddl(&self, id: ConnectionId, path: ObjectPath) -> Result<String> {
         self.session(id).await?.table_ddl(&path).await
     }
@@ -1023,7 +1023,7 @@ impl ConnectionService {
     }
 
     /// The DDL a design runs, its warnings, and whether it may run, needs a
-    /// confirmation or is blocked. A Drop's warning carries a bounded row count (D5).
+    /// confirmation or is blocked. A Drop's warning carries a bounded row count.
     pub async fn plan_design(&self, id: ConnectionId, req: DesignRequest) -> Result<DesignVerdict> {
         let config = self.config(id)?;
         let mut plan = design::plan_design(config.dialect, &req)?;
@@ -1057,7 +1057,7 @@ impl ConnectionService {
 
     /// Runs a design after the Read-only and Production checks. A plan that ran to the
     /// end is one Query History entry; so are the statements MySQL already committed
-    /// before one failed (D12). A failure that rolled back records nothing.
+    /// before one failed. A failure that rolled back records nothing.
     pub async fn apply_design(
         &self,
         id: ConnectionId,
@@ -1757,7 +1757,7 @@ impl ConnectionService {
     }
 
     /// Drops the Recent items of a dropped table: any object kind with that path on
-    /// that Connection (D28).
+    /// that Connection.
     pub fn forget_recent(&self, connection_id: ConnectionId, path: &ObjectPath) -> Result<()> {
         let store = self.store()?;
         let mut list: Vec<RecentItem> = store
@@ -1810,7 +1810,7 @@ impl ConnectionService {
     }
 
     /// The SQL a Visual Query writes on this Connection, or its problems. Reads only the
-    /// Connection's Dialect, so it works while the Connection is closed (D3): only SQLite's
+    /// Connection's Dialect, so it works while the Connection is closed: only SQLite's
     /// version matters, and that is the bundled library's.
     pub fn visual_query_sql(
         &self,
@@ -1828,7 +1828,7 @@ impl ConnectionService {
     }
 
     /// Writes a Visual Query for the session's Connection and runs it exactly as the editor
-    /// runs a statement (D12): the same Read-only and Production check, Query History and
+    /// runs a statement: the same Read-only and Production check, Query History and
     /// paged result. A query with problems is refused before anything reaches the server.
     pub async fn run_visual_query(
         &self,
@@ -2016,7 +2016,7 @@ impl ConnectionService {
         self.query_session(s)?.1.close_result().await
     }
 
-    /// Stops every running query and job, such as when the app quits (Q22), waiting at
+    /// Stops every running query and job, such as when the app quits, waiting at
     /// most `wait` for the servers. Every job's cancel flag is set before anything waits.
     pub async fn stop_everything(&self, wait: Duration) {
         let _ = tokio::time::timeout(wait, async {
@@ -2362,7 +2362,7 @@ mod design_history_tests {
         assert_eq!(entry.error, None);
     }
 
-    /// D12: only the statements MySQL already committed.
+    /// Only the statements MySQL already committed.
     #[test]
     fn partial_failure_records_the_applied_statements() {
         let failed = Ok(DesignOutcome::Failed {

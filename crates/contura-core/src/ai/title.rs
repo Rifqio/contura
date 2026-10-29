@@ -1,4 +1,4 @@
-//! The chat title written by the AI (Decision 5): one short call after a chat's first
+//! The chat title written by the AI: one short call after a chat's first
 //! answer, to the Ask's own endpoint and model, that sends only the first question (cut to
 //! 300 characters) and the first 1,000 characters of the first answer, both cleaned as the
 //! thread's history is. No schema, no rows, no tools, thinking off, 24 tokens. A failed call
@@ -6,7 +6,7 @@
 //! replaced, and Contura never retitles a chat on its own after its first AI title.
 //!
 //! The constants here are always named with their path (`title::TITLE_CHARS`): the rule's
-//! title has its own `memory::TITLE_CHARS` (P24).
+//! title has its own `memory::TITLE_CHARS`.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ pub const TITLE_TRIES: u8 = 2;
 const TITLE_ANSWERS: usize = 2;
 
 /// What the webview asks for once a turn is stored: a title for `thread_id`, from the
-/// Ask's own settings and model. `place` registers the call as `title:<place>` (P2), so it
+/// Ask's own settings and model. `place` registers the call as `title:<place>`, so it
 /// never makes the next question in that place `Busy`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -59,7 +59,7 @@ pub struct NameChatRequest {
 }
 
 /// The key a title call is registered under: never the place itself, so an Ask there is
-/// never refused while the title is being written (P2).
+/// never refused while the title is being written.
 pub fn title_place(place: &str) -> String {
     format!("title:{place}")
 }
@@ -159,7 +159,7 @@ pub fn clean_title(raw: &str) -> Option<String> {
     Some(first.to_uppercase().chain(chars).collect())
 }
 
-/// The title call as Sends shows it (Decision 5): an estimate (`exact` false) of the
+/// The title call as Sends shows it: an estimate (`exact` false) of the
 /// request with the first question and a 1,000-character answer; no call is made.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -173,7 +173,7 @@ pub struct TitlePreview {
 }
 
 /// Whether a stored thread may still get its AI title: the rule's title, a try left, and
-/// at most `answers` answers (P10).
+/// at most `answers` answers.
 fn may_name(thread: &AiThread, answers: usize) -> bool {
     thread.title_by == TitleBy::Rule
         && thread.title_tries < TITLE_TRIES
@@ -224,7 +224,7 @@ pub(crate) fn title_preview(
         Some(t) if !may_name(t, 1) => return None,
         _ => match first {
             Some((q, a)) if sent_values(&q.kinds) || sent_values(&a.kinds) => return None,
-            // The call's own gate (P9), on the access the recall read (final review M2).
+            // The call's own gate, on the access the recall read (final review M2).
             Some((q, a)) if !first_turn_passes(q, a, others) => return None,
             Some((q, _)) => q.text.clone(),
             None if sent_values(kinds) => return None,
@@ -255,7 +255,7 @@ fn first_turn(thread: &AiThread) -> Option<(&AiMessage, &AiMessage)> {
     (answer.role == AiRole::Assistant).then_some((&thread.messages[at], answer))
 }
 
-/// Whether the first turn may go to the AI for its title (Decision 5, P9): the question and
+/// Whether the first turn may go to the AI for its title: the question and
 /// the answer each pass the gate on history at their own Connection's current access, and
 /// no Connection the question was asked on or across is at Never or deleted. A Home turn
 /// (no Connection) goes when it carried the conversation only.
@@ -308,7 +308,7 @@ pub fn title_wanted(name_chats: bool, thread: Option<&AiThread>, req: &NameChatR
     })
 }
 
-/// Names the chat `req.thread_id` once its first answer is stored (Decision 5). Refuses
+/// Names the chat `req.thread_id` once its first answer is stored. Refuses
 /// quietly (`None`, no call, no try counted) when the setting is off, the Ask's `off` holds
 /// `ItemKind::Title`, the title is not the rule's, no try is left, the thread holds more
 /// than 2 answers, or the first turn may not go (`first_turn_allowed`). The call goes

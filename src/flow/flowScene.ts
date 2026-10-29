@@ -1,7 +1,7 @@
-// A drawn diagram as an export scene, for Publish (spec 6+ section 8): every placed node at its canvas place and
+// A drawn diagram as an export scene, for Publish: every placed node at its canvas place and
 // size, the group areas, and the lines routed as the canvas routes them. A sequence, mind map or timeline is placed
 // from its text as the canvas places it, with its frames, activations, sections and axis (publish-parity).
-// Cloud icons come from the pack as images and go into the scene as data: image URLs, unchanged (ruling P9).
+// Cloud icons come from the pack as images and go into the scene as data: image URLs, unchanged.
 import type { Scene, SceneArea, SceneEdge, SceneFrame, SceneNode, SceneRow } from "../diagram/export/scene";
 import type { Positions } from "../diagram/layout";
 import { routeOrthogonal, routeRows } from "../diagram/route";
@@ -33,7 +33,7 @@ const WORDS: Partial<Record<DrawnKind, string>> = {
 };
 
 const LINE: Partial<Record<FlowArrow, SceneEdge["line"]>> = { "-->": "dashed", "..>": "dotted" };
-/** `>` and `-->` one way, `<>` both ways; `-` and the cloud's dotted "assumes" line have no head (frame 6+.5). */
+/** `>` and `-->` one way, `<>` both ways; `-` and the cloud's dotted "assumes" line have no head. */
 const HEADS: Record<FlowArrow, NonNullable<SceneEdge["heads"]>> = {
   ">": "end",
   // An ER relationship's ends are its cardinality marks, not heads.
@@ -42,7 +42,7 @@ const HEADS: Record<FlowArrow, NonNullable<SceneEdge["heads"]>> = {
   "<>": "both",
   "-": "none",
   "..>": "none",
-  // Step 12: a message has its head; the class marks are left out of the export's lines.
+  // a message has its head; the class marks are left out of the export's lines.
   "->": "end",
   "--": "none",
   "<|--": "start",
@@ -60,7 +60,7 @@ const ER_MARKS: Partial<Record<FlowArrow, SceneEdge["marks"]>> = {
 /** The ER cards export as table cards with their rows. */
 const CARD_KINDS: ReadonlySet<DrawnKind> = new Set(["erTable", "erWeak"]);
 
-/** An ER card's rows in the export: each column's name with its type on the right, its key marked and its null said (A5). */
+/** An ER card's rows in the export: each column's name with its type on the right, its key marked and its null said. */
 function cardRows(n: FlowNode): SceneRow[] {
   return (n.rows ?? []).map((r, i) => {
     const at = r.search(/\s/);
@@ -187,7 +187,7 @@ const SCENE_STEP = 64;
 
 /**
  * `flowScene` in steps: it yields after every SCENE_STEP shapes and lines, so a frame picture of a big diagram can be
- * built across time slices (Plan F Decision 7). Drained, it is `flowScene`.
+ * built across time slices. Drained, it is `flowScene`.
  */
 export function* flowSceneSteps(
   doc: FlowDoc,
@@ -198,7 +198,7 @@ export function* flowSceneSteps(
   folded?: ReadonlySet<string>,
   /**
    * The frame's text size as a label scale (`TEXT_SCALE`), as the canvas sizes its nodes and labels; an ER frame's
-   * notation, as the canvas ends its lines (flowNodes `markers`). With `rowCap` (a frame picture, Plan F Decision 7) an
+   * notation, as the canvas ends its lines (flowNodes `markers`). With `rowCap` (a frame picture) an
    * ER card is cut at that many rows as the canvas cuts it: as tall as its first `rowCap` rows, a line to a later row
    * ending on the card's edge; without it every row is drawn (Publish). With `sizes` (a frame picture) a shape resized
    * on the canvas takes its kept size, an ER card at most its `rowCap` rows tall, as `buildFlowGraph` sizes it.
@@ -211,12 +211,12 @@ export function* flowSceneSteps(
   const types = new Map<string, string>();
   const nodes: SceneNode[] = [];
   // A sequence, mind map or timeline is placed from its text, as the canvas places it.
-  // A folded topic's subtopics are left out, as the canvas leaves them out (M3).
-  // A big sequence is laid out in steps too (Plan E Task 9: about 5 ms in all at the sequence limit).
+  // A folded topic's subtopics are left out, as the canvas leaves them out.
+  // A big sequence is laid out in steps too (about 5 ms in all at the sequence limit).
   const fixed = yield* fixedLayoutSteps(doc, (n) => nodeSize(drawnKind(n.kind, doc.kind, n.name), look, shownName(n), n.attrs.id, n, scale), { ...(folded?.size ? { folded } : {}), textScale: scale });
   const positions = fixed ? fixed.positions : given;
   if (fixed) yield;
-  // A sequence is drawn from the one drawing the canvas draws (Plan E Decision 15): each participant's lane and bars,
+  // A sequence is drawn from the one drawing the canvas draws: each participant's lane and bars,
   // each message's path, chip and number, each block's box, tab and caption.
   const seq = fixed?.seq;
   const lanes = new Map(seq?.lanes.map((l) => [l.name, l]));
@@ -233,7 +233,7 @@ export function* flowSceneSteps(
     // A shape resized on the canvas (not in a fixed kind, which places itself); an ER card never past its row cap.
     const kept = !fixed && opts?.sizes && own(opts.sizes, n.name) ? opts.sizes[n.name] : null;
     const sized = kept ?? fixed?.sizes.get(n.name) ?? nodeSize(kind, look, shownName(n), n.attrs.id, n, scale);
-    // An ER card publishes every row (B4 A10): as tall as all its rows at the frame's text size (`erCardH`, the card's
+    // An ER card publishes every row: as tall as all its rows at the frame's text size (`erCardH`, the card's
     // own geometry), never the canvas's 20-row window or its scroll. A picture cuts it at `rowCap`, and a resized one
     // shows the rows its height holds.
     const rowsShown = (n.rows ?? []).length;
@@ -254,7 +254,7 @@ export function* flowSceneSteps(
       nodes.push(card);
       continue;
     }
-    // A labelled shape publishes the words it shows (step 11).
+    // A labelled shape publishes the words it shows.
     const node: SceneNode = { id: n.name, kind, x: p.x, y: p.y, w: size.w, h: size.h, title: n.kind === "note" ? (n.text ?? n.name) : shownName(n), rows: (n.rows ?? []).map((r) => ({ left: r })), look };
     const colour = n.kind === "note" ? undefined : drawnColour(n.attrs.color);
     if (colour) node.color = colour;
@@ -315,7 +315,7 @@ export function* flowSceneSteps(
   // A line meets a cloud service at its 48 px tile.
   const edges: SceneEdge[] = [];
   const rowsOf = new Map(doc.nodes.map((n) => [n.name, n.rows ?? []]));
-  // A line to or from a group ends on its area, as on the canvas (fix round 2, L1).
+  // A line to or from a group ends on its area, as on the canvas (L1).
   const areaBox = new Map(areas.map((a) => [a.name, { x: a.x, y: a.y, w: a.w, h: a.h }] as const));
   const centre = (b: { x: number; w: number }) => b.x + b.w / 2;
   for (let i = 0; i < doc.links.length; i++) {
@@ -364,7 +364,7 @@ export function* flowSceneSteps(
       l.fromColumn !== undefined || l.toColumn !== undefined
         ? routeRows(ab, erRowY(ab.y, ab.h, erColumnRow(rowsOf.get(l.from) ?? [], l.fromColumn), 0, scale), bb, erRowY(bb.y, bb.h, erColumnRow(rowsOf.get(l.to) ?? [], l.toColumn), 0, scale), l.from === l.to)
         : routeOrthogonal(ab, bb, axes?.[axisKey(l.from, l.to)] ? { axis: axes[axisKey(l.from, l.to)] } : {});
-    // An ER frame in Arrows: a plain line with a head at its second end, no crow's feet (Decision 22).
+    // An ER frame in Arrows: a plain line with a head at its second end, no crow's feet.
     const arrows = doc.kind === "er" && opts?.notation === "arrow";
     const edge: SceneEdge = { id: `edge:${i}`, kind: "flow", points: route.points, heads: arrows ? "end" : doc.kind === "er" ? "none" : HEADS[l.arrow] };
     // A line between topics of a mind map is dashed on the canvas (fixedGraph).

@@ -11,7 +11,7 @@ export interface FlowLayout {
   /** Node positions by name; a plain-key map (no prototype), so any name is a key. */
   nodes: Positions;
   viewport?: Viewport;
-  /** Modern cards or the textbook Gane-Sarson shapes (frame 6+.2); kept per diagram. */
+  /** Modern cards or the textbook Gane-Sarson shapes; kept per diagram. */
   style: NodeLook;
   /** Used by Tidy and by the placement of new nodes; the text does not change. */
   direction: FlowDirection;

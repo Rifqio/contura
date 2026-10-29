@@ -161,7 +161,7 @@ pub struct AiSettings {
     #[serde(default = "yes")]
     pub diagram_tool: bool,
     /// "Name chats with the AI": after a chat's first answer, one short call writes its
-    /// title (Decision 5). Stored settings without it read on. Global like auto-compact: a
+    /// title. Stored settings without it read on. Global like auto-compact: a
     /// Group override never changes it.
     #[serde(default = "yes")]
     pub name_chats: bool,
@@ -356,7 +356,7 @@ pub enum AiError {
     AttachmentGone,
     /// A frame of the diagram was drawn from a Connection the AI may not see (AI access
     /// Never, deleted, or another Group's provider), or a node links to a table of one:
-    /// nothing is built or sent, and the text is never cut to get around it (Task 4b).
+    /// nothing is built or sent, and the text is never cut to get around it.
     /// `message` names the frame or node and the Connection, never the schema.
     #[error("{message}")]
     DiagramHeld { message: String },
@@ -1022,7 +1022,7 @@ impl AiService {
 
     /// Keeps what the user did with the SQL of the answer at `message_at` in `thread`, and
     /// with `work`, where it went: the tab, the place and the SQL become where the chat
-    /// last worked (Decision 4b), also for an answer with no record. `None` for an answer
+    /// last worked, also for an answer with no record. `None` for an answer
     /// saved before records were kept.
     pub fn record_action(
         &self,
@@ -1063,7 +1063,7 @@ impl AiService {
     }
 
     /// Where the chat last worked, with its SQL, for a resume: the stored record, or for a
-    /// chat saved before D2, the one its newest answer with SQL gives (P35). `None` for a
+    /// chat saved before D2, the one its newest answer with SQL gives. `None` for a
     /// chat that is gone or never worked anywhere. Read only on a resume: the thread's
     /// JSON is read whole.
     pub fn thread_work(&self, id: ThreadId) -> Result<Option<memory::LastWork>> {
@@ -1306,7 +1306,7 @@ impl AiService {
                         input: String::new(),
                         ..tu
                     }),
-                    // The history gate reads the Connections the answer drew on (Task 4b).
+                    // The history gate reads the Connections the answer drew on.
                     sent: r.sent.map(|s| sent::SentRecord {
                         sources: s.sources,
                         ..sent::SentRecord::default()
@@ -1818,14 +1818,14 @@ impl AiService {
     ) -> AiThread {
         let mut thread = thread.clone();
         // A save never changes the title, its source or its tries: only a rename, an AI
-        // title and a failed title call do (P3). A new thread's title is the rule's. Where
+        // title and a failed title call do. A new thread's title is the rule's. Where
         // it last worked is the Core's: a copy that lacks it keeps the stored one.
         match before {
             Some(b) => {
                 thread.title = b.title.clone();
                 thread.title_by = b.title_by;
                 thread.title_tries = b.title_tries;
-                // The webview never holds it (P5); a copy that does wins only when it is
+                // The webview never holds it; a copy that does wins only when it is
                 // newer than the stored one, so a stale copy never puts older work back.
                 let copy_newer = match (&thread.last_work, &b.last_work) {
                     (Some(c), Some(s)) => c.at > s.at,
@@ -1909,7 +1909,7 @@ impl AiService {
                     r.trimmed = false;
                 } else if let Some(o) = old {
                     // A whole copy keeps the title call's lines the Core wrote after the
-                    // turn was stored (P4).
+                    // turn was stored.
                     for line in o.log.iter().filter(|l| l.source == "title") {
                         if !r.log.contains(line) {
                             r.log.push(line.clone());
@@ -1917,7 +1917,7 @@ impl AiService {
                     }
                 }
                 // The title call lands after the turn is stored: a copy that lacks its
-                // record keeps the stored one (P4).
+                // record keeps the stored one.
                 if let Some(stored) = old
                     .and_then(|o| o.sent.as_ref())
                     .filter(|s| s.title.is_some())

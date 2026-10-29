@@ -311,7 +311,7 @@ test("a_connection_opening_is_busy_until_its_open_settles", async () => {
   render(<Harness connections={[conn("a", "Shop")]} onOpenConnection={onOpenConnection} />);
   await userEvent.dblClick(item("Shop, closed"));
   expect((screen.getByRole("button", { name: "Open Shop" }) as HTMLButtonElement).disabled).toBe(true);
-  // The row says so while it opens (frame 10b).
+  // The row says so while it opens.
   expect(item("Shop, connecting").textContent).toContain("Connecting...");
   await userEvent.dblClick(item("Shop, connecting"));
   expect(onOpenConnection).toHaveBeenCalledTimes(1);
@@ -1157,7 +1157,7 @@ test("postgres_database_with_only_system_schemas_offers_to_show_them", async () 
   expect(screen.queryByText("shop has no user schemas.")).toBeNull();
 });
 
-// ---------- New table and Drop table (D7) ----------
+// ---------- New table and Drop table ----------
 
 const menuLabels = (name: string) =>
   within(screen.getByRole("menu", { name }))
@@ -1288,7 +1288,7 @@ test("read_only_table_row_still_offers_import_q15", async () => {
   render(<Harness connections={[conn("a", "Shop", { readOnly: true })]} open={["a"]} {...h} />);
   await findItem("orders");
   fireEvent.contextMenu(item("orders"));
-  // Q15: the Import tab itself shows the Read-only state; Drop stays hidden.
+  // the Import tab itself shows the Read-only state; Drop stays hidden.
   expect(menuLabels("orders")).toEqual(["Open", "Edit structure", "Export...", "Import..."]);
 });
 

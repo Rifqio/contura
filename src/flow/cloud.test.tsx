@@ -1,4 +1,4 @@
-// Cloud diagrams in the flow tab (spec 6+ section 3 "Cloud", section 7, frame 6+.5): service tiles with the packed
+// Cloud diagrams in the flow tab: service tiles with the packed
 // icons, nested group areas, the dotted line, the unknown-icon problem, the icon picker, Group and Icon credits.
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -24,7 +24,7 @@ beforeAll(() => {
 beforeEach(() => resetIcons());
 afterEach(cleanup);
 
-/** Frame 6+.5's diagram. */
+/** The cloud diagram. */
 const PLATFORM = [
   'diagram cloud "Order API"',
   "Users [icon: users]",
@@ -131,7 +131,7 @@ test("nested_groups_draw_as_tinted_areas_with_labels", async () => {
     expect(area(g)).not.toBeNull();
     expect(area(g).querySelector(".flow-area-name")?.textContent).toBe(g);
   }
-  // The outer group is dashed; the groups inside it have a solid edge (frame 6+.5).
+  // The outer group is dashed; the groups inside it have a solid edge.
   expect(area("Production").classList.contains("is-inner")).toBe(false);
   expect(area("Functions").classList.contains("is-inner")).toBe(true);
   expect(area("Data").classList.contains("is-inner")).toBe(true);
@@ -161,7 +161,7 @@ test("the_dotted_line_draws_dotted_with_its_label", async () => {
   await waitFor(() => expect(s.container.querySelectorAll(".react-flow__edge")).toHaveLength(3));
   const dotted = s.container.querySelectorAll(".react-flow__edge.flow-line-dotted");
   expect(dotted).toHaveLength(1);
-  // An "assumes" line is a permission, not data: dotted, with no arrowhead (frame 6+.5).
+  // An "assumes" line is a permission, not data: dotted, with no arrowhead.
   expect(dotted[0].querySelector("path.react-flow__edge-path")?.getAttribute("marker-end")).toBeNull();
   const solid = [...s.container.querySelectorAll(".react-flow__edge")].filter((e) => !e.classList.contains("flow-line-dotted"));
   for (const e of solid) expect(e.querySelector("path.react-flow__edge-path")?.getAttribute("marker-end")).toBeTruthy();

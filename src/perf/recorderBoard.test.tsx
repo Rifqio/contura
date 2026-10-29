@@ -1,4 +1,4 @@
-// Plan F Task 9: the recorder's measures on a real board (FlowTab), as the release WebView's run reads them. The live run
+// The recorder's measures on a real board (FlowTab), as the release WebView's run reads them. The live run
 // logged an empty `measures` list on every line: its sweep picked no frame (`select_pick` is marked by a pick) and built
 // no picture (every picture is built at open, and a zoom changes none). These pin that each hook does fire on the
 // FlowTab code path it names, and that a sweep alone builds no picture (zoomSweep.perf.test.ts).

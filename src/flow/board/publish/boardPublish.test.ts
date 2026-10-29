@@ -1,4 +1,4 @@
-// Plan B4 Task 2: what each part of a board publishes (Decisions 1, 2, 4 and 7), as pure data.
+// Plan B4 Task 2: what each part of a board publishes, as pure data.
 import { expect, test, vi } from "vitest";
 import type { Box, Scene } from "../../../diagram/export/scene";
 import type { FlowDoc } from "../../../lang/flow/model";
@@ -65,7 +65,7 @@ function board(sketches: Sketch[] = []): BoardLayout {
 
 const parse = (text: string) => createFlowService().parse("board", text).frames;
 
-/** Each frame's box in board units, as `createBoardScene` gives them (Plan F Decision 11). */
+/** Each frame's box in board units, as `createBoardScene` gives them. */
 function boxes(frames: readonly FrameResult[], keys: readonly string[], b: BoardLayout): FrameBox[] {
   return frames.map((f, i) => {
     const key: string | undefined = keys[i];
@@ -235,7 +235,7 @@ test("frames_are_placed_in_board_units", () => {
   b.frames.set("Checkout", { ...b.frames.get("Checkout")!, at: { x: -400, y: 120 } });
   const frames = parse(TEXT);
   const bx = boxes(frames, KEYS, b);
-  // The canvas's boxes are board units already (Plan F Decision 11): taken as they are.
+  // The canvas's boxes are board units already: taken as they are.
   const i = input({ frames, board: b, boxes: bx });
   const f = i.frames.find((x) => x.title === "Checkout")!;
   expect(f.at).toEqual({ x: -400, y: 120 });

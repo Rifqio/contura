@@ -16,7 +16,7 @@ const ROW = defineRows({
 });
 export const APPEARANCE_ROWS = Object.values(ROW);
 
-/** P11-38: the board's "Follow Windows" on Windows, "Follow the system" elsewhere. */
+/** The board's "Follow Windows" on Windows, "Follow the system" elsewhere. */
 const followName = () => (platform() === "windows" ? "Follow Windows" : "Follow the system");
 const systemName = () => (platform() === "windows" ? "Windows" : "the system");
 

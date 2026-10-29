@@ -1,6 +1,6 @@
 # Pending Edits are written and run by the Core, in one transaction
 
-Edits in a table's data grid stay Pending Edits until Save. The UI only keeps a model of them (`src/edits/pending.ts`) and sends an `EditSet` to the Core. The Core writes the SQL (`edits::plan_edits`), and Save runs exactly that text, so the SQL shown in Preview and in the Production confirmation is the SQL that runs, and the step 5a pass (ADR 0013) covers it unchanged.
+Edits in a table's data grid stay Pending Edits until Save. The UI only keeps a model of them (`src/edits/pending.ts`) and sends an `EditSet` to the Core. The Core writes the SQL (`edits::plan_edits`), and Save runs exactly that text, so the SQL shown in Preview and in the Production confirmation is the SQL that runs, and the Production pass (ADR 0013) covers it unchanged.
 
 ## How a save runs
 

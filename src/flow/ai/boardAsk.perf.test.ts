@@ -1,4 +1,4 @@
-// Plan D Task 19 memory: twenty board Asks on the limit board (50 frames, 10,000 shapes, 1,000 sketches), each the
+// Memory: twenty board Asks on the limit board (50 frames, 10,000 shapes, 1,000 sketches), each the
 // whole pure chain a proposal walks: the request, the 40-change proposal as check_board returns it, the touched
 // frames, the landing plan, the review, the scene built with the review, and the landing applied to an editor with
 // history and undone. No React or DOM. Run alone through `npm run test:perf`.

@@ -58,7 +58,7 @@ interface Props {
   errorAction?: ReactNode;
   /** The session's database, for a result export. */
   database?: string | null;
-  /** Opens the Export dialog on the shown result (the menu's Export..., and Ctrl+E here). No Import here (Q16). */
+  /** Opens the Export dialog on the shown result (the menu's Export..., and Ctrl+E here). No Import here. */
   onExport?(origin: ExportOrigin): void;
   /** Item 40: one statement, one result (the Visual Query): no result tabs, only the summary and the tools. */
   single?: boolean;

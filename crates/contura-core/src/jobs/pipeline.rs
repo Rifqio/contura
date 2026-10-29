@@ -1,5 +1,5 @@
-//! The reader and writer of an export job, joined by a channel of 2 chunks (Task 7),
-//! and the read side of an import job (Task 8).
+//! The reader and writer of an export job, joined by a channel of 2 chunks,
+//! and the read side of an import job.
 //!
 //! The source runs in the job's async task; the format writer runs on a blocking thread
 //! and drops each chunk once written, so neither side holds more than its chunk. Only a
@@ -27,7 +27,7 @@ fn stopped(e: tokio::task::JoinError) -> Error {
 /// `written` the rows the writer has written so far, so a failed or cancelled job can
 /// still say how far it came. On a read error, a write error or a cancel the file is not
 /// committed and the partial is removed; the error is returned as it came (`ReadStopped`
-/// keeps its own sentence), except that any end after a cancel is `Cancelled` (Q41).
+/// keeps its own sentence), except that any end after a cancel is `Cancelled`.
 pub(crate) async fn export_pipeline_counted(
     mut source: Box<dyn RowSource>,
     writer: Box<dyn FormatWriter>,
@@ -85,7 +85,7 @@ pub(crate) async fn export_pipeline_counted(
         }
     };
     drop(tx);
-    // Dropping the source stops its server read at once (Q41) and closes its connection.
+    // Dropping the source stops its server read at once and closes its connection.
     drop(source);
     let joined = write.await.map_err(stopped);
     written.store(rows_done.load(Ordering::SeqCst), Ordering::SeqCst);
@@ -133,7 +133,7 @@ const IMPORT_CHUNK_ROWS: usize = 1_000;
 /// ...or about this many bytes of values.
 const IMPORT_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 /// At most this many bytes of chunks are out at once, the chunk being written included,
-/// besides the channel's count of 2 (Q45): a record may be 16 MB, so a count alone would
+/// besides the channel's count of 2: a record may be 16 MB, so a count alone would
 /// let a few large ones pass the memory budget (ADR 0003).
 const IMPORT_IN_FLIGHT_BYTES: usize = 32 * 1024 * 1024;
 
@@ -193,7 +193,7 @@ pub(crate) enum FileMsg {
         warnings: Vec<String>,
         held: Held,
     },
-    /// The whole file was read: its SHA-256 (Q3) and size.
+    /// The whole file was read: its SHA-256 and size.
     End {
         sha256: Option<[u8; 32]>,
         bytes_read: u64,
@@ -209,9 +209,9 @@ fn record_bytes(r: &FileRecord) -> usize {
         .sum()
 }
 
-/// The import's read side (Task 8): a thread that reads `reader` record by record and
+/// The import's read side: a thread that reads `reader` record by record and
 /// sends chunks of up to 1,000 records or 8 MB through a channel of 2, with at most 32 MB
-/// of chunks out at once (Q45), starting with `first` when the caller already took it.
+/// of chunks out at once, starting with `first` when the caller already took it.
 /// The thread stops at the next record once `cancel` is set or the receiver is gone, and
 /// drops the reader as it ends; joining the handle waits until the reader has let go of
 /// its file.
@@ -766,7 +766,7 @@ mod tests {
         }
     }
 
-    /// Q45 I3: at most 32 MB of chunks are in flight, the one being written included, so
+    /// At most 32 MB of chunks are in flight, the one being written included, so
     /// with 12 MB records only two chunks are out while the first is still held.
     #[tokio::test]
     async fn import_reader_keeps_32mb_in_flight() {

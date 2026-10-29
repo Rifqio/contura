@@ -1,4 +1,4 @@
-// The sketch layer pictured when far (Task 9 fix 2; Plan F Decision 7 as frames are, Figma and Miro draw a far board
+// The sketch layer pictured when far (as frames are; Figma and Miro draw a far board
 // as pictures). Below the readable zoom the board's sketches draw as a few bitmaps instead of one node each: WebKit
 // paints a thousand sketches (pens of 1,000 points, notes of 2,000 characters) as vector again at every new zoom. The
 // sketches are grouped into tiles by where they start on a SKETCH_TILE grid, Sections and box sketches (under every

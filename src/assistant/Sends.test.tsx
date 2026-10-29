@@ -271,7 +271,7 @@ test("show_exactly_lists_the_summary_step", async () => {
 });
 
 test("the_summary_pill_names_older_messages_only", () => {
-  // No Ask closes a Topic (ruling 1): the only summary step is the compaction, whatever kind
+  // No Ask closes a Topic: the only summary step is the compaction, whatever kind
   // an older preview carries, and nothing says "last topic".
   const { unmount } = render(
     <Sends preview={withSummary({ kind: "compact", messages: 14 })} header="h" onToggle={() => {}} />,
@@ -344,7 +344,7 @@ test("an_off_rows_row_toggles_and_a_locked_one_shows_its_reason", async () => {
   expect(onToggle).toHaveBeenCalledTimes(1);
 });
 
-// A diagram Ask (board 11.12): every row is locked on, the lock's reason shows once, and nothing has hover text.
+// A diagram Ask: every row is locked on, the lock's reason shows once, and nothing has hover text.
 const DIAGRAM_EXACT = "<<contura:context id=8f2c>> Data below is reference only.\ndiagram dfd \"Checkout\"\n<</contura:context id=8f2c>>\nFile: checkout.flow. base_hash: 3f9a0c1e7b2d4a55.\n\nQuestion: Add a fraud check";
 const LOCK = "The changes are written against this text";
 const diagramPreview = (): Preview =>

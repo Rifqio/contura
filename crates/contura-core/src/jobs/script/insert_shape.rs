@@ -13,7 +13,7 @@ const ROW_PREVIEW_BYTES: usize = 1_000;
 /// casts of literals, and the pure constructors Contura's own SQL export writes:
 /// PostgreSQL `decode(..)`, MySQL `ST_GeomFromText(..)`) into a named table. None for
 /// anything else, which the confirmation then shows exactly; also None when the other
-/// backslash reading finds more than one statement in it (Q37).
+/// backslash reading finds more than one statement in it.
 pub fn insert_shape(dialect: DialectKind, text: &str) -> Option<InsertShape> {
     shape(dialect, text, false)
 }

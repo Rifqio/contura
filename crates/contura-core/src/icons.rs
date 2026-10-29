@@ -1,4 +1,4 @@
-//! The packed icon sets (step 6+, C1b; pack v2, Plan C). `scripts/pack-icons.mjs` writes
+//! The packed icon sets (C1b; pack v2). `scripts/pack-icons.mjs` writes
 //! `src-tauri/icons-pack/icons.bin`, built into the exe here; the index is read once and
 //! each icon is inflated only when asked for. Each icon's root tag was fitted to a 24 by 24
 //! frame at pack time and its drawing is byte for byte the official file; an outline or mono
@@ -19,11 +19,11 @@ static PACK: &[u8] = include_bytes!(concat!(
 ));
 
 const MAGIC: &[u8; 8] = b"CTRICON1";
-/// The index format this Core reads (Plan C Decision 4: styles, aliases, ink offsets).
+/// The index format this Core reads (styles, aliases, ink offsets).
 const VERSION: u64 = 2;
-/// An icon of this size or more is left out of the pack and not served (Rulings P7, P9).
+/// An icon of this size or more is left out of the pack and not served.
 const MAX_SVG_BYTES: usize = 256 * 1024;
-/// The unpacked index may not reach this (P9); the v2 index is about 320 KB.
+/// The unpacked index may not reach this; the v2 index is about 320 KB.
 const MAX_INDEX_BYTES: usize = 1024 * 1024;
 /// One name in the pack. Aliases (`aws-s3`) are entries of their own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ pub struct IconSet {
     /// version 1 index reads far enough to be refused for its version.
     #[serde(default)]
     pub style: String,
-    /// What the pack changed in the set's icons (Decision 11).
+    /// What the pack changed in the set's icons.
     #[serde(default)]
     pub changes: String,
 }
@@ -87,7 +87,7 @@ fn damaged(what: &str) -> Error {
     Error::File(format!("the icon pack is damaged: {what}"))
 }
 
-/// Inflates `bytes`, refusing output that reaches `cap` bytes (P9).
+/// Inflates `bytes`, refusing output that reaches `cap` bytes.
 fn inflate(bytes: &[u8], cap: usize, what: &str) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     DeflateDecoder::new(bytes)
@@ -176,7 +176,7 @@ fn pack() -> Result<&'static Pack> {
         .map_err(|e| Error::File(e.clone()))
 }
 
-/// `#` and six lower-case hex digits, the only ink the Core inserts (Decision 4).
+/// `#` and six lower-case hex digits, the only ink the Core inserts.
 fn ink_ok(ink: &str) -> bool {
     ink.len() == 7
         && ink.starts_with('#')
@@ -187,7 +187,7 @@ fn ink_ok(ink: &str) -> bool {
 
 /// Icon `name` from `pack`, whose bytes are `bytes`, in `ink` when it is an outline or mono
 /// icon. An icon that fails the safety check, ink included, is answered as not there, and
-/// logged (P9).
+/// logged.
 fn icon_in(pack: &Pack, bytes: &[u8], name: &str, ink: Option<&str>) -> Result<String> {
     if ink.is_some_and(|ink| !ink_ok(ink)) {
         return Err(Error::InvalidInput("an icon ink is #rrggbb".into()));
@@ -233,7 +233,7 @@ pub fn pack_size() -> usize {
     PACK.len()
 }
 
-/// Element names, prefix included (P10). The Inkscape/RDF ones are what the Kubernetes set
+/// Element names, prefix included. The Inkscape/RDF ones are what the Kubernetes set
 /// uses.
 const ELEMENTS: &[&str] = &[
     "svg",
@@ -663,7 +663,7 @@ fn declaration_ok(body: &str) -> bool {
     true
 }
 
-/// Why an SVG may not go into the pack or be served (Rulings P7, P9, P10), or `None` when
+/// Why an SVG may not go into the pack or be served, or `None` when
 /// it may. This is an allow list: every byte, element, attribute, value and style must be
 /// on a list above, so a name nobody thought of is refused. `scripts/svg-check.mjs` is the
 /// same rule step for step, and both are tested against `tests/fixtures/svg-check.json`.
@@ -707,7 +707,7 @@ pub fn unsafe_reason(bytes: &[u8]) -> Option<&'static str> {
                 return Some("bad markup");
             };
             // An HTML parser ends a comment at `<!-->`, `<!--->` or `--!>`, so a body that
-            // could end early or hold markup is refused (P13).
+            // could end early or hold markup is refused.
             let body = &text[pos + 4..end];
             if body.contains(['<', '>'])
                 || body.contains("--")

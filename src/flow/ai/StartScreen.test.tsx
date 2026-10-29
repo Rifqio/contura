@@ -1,4 +1,4 @@
-// The board assistant's start screen (Plan D Task 18, Decision 15): an empty chat offers the nine kind cards (B2's
+// The board assistant's start screen: an empty chat offers the nine kind cards (B2's
 // Diagrams-tab cards and roles), Template (the board Shelf on its templates side) and File (one text file the Core
 // reads from its own dialog). A kind card adds the "create" chip; the file chip carries a token; both are sent once.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";

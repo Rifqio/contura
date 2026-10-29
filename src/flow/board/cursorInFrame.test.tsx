@@ -213,7 +213,7 @@ test("a_frame_switch_puts_the_cursor_inside_the_new_frame", async () => {
   expectTypingStaysInside(s);
 });
 
-// ---- Plan F Task 11: the clamp
+// ---- The clamp
 
 /** Every transaction the view applies from now on, as the editor's update listeners see them. */
 function watchTransactions(s: Setup) {

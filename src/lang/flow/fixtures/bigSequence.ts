@@ -1,4 +1,4 @@
-// Plan E Decision 16: a sequence at its limit, for sequence.perf.test.ts and scripts/write-limit-boards.mjs (which
+// A sequence at its limit, for sequence.perf.test.ts and scripts/write-limit-boards.mjs (which
 // writes it into a limit board for the release WebView run; write-limit-boards.test.mjs keeps the two equal).
 // 2,000 participants with an icon and a colour each (eight icon names; the six presets and two custom hexes), 3,000
 // messages with labels of 4 to 40 characters (every 50th a self-message, every 40th across at least four
@@ -88,7 +88,7 @@ export function bigSequence(title = "Limit"): string {
 }
 
 /**
- * The sequence's limit board (Task 9, for Task 10's release WebView run), shaped as Plan F's ER limit board: A5's
+ * The sequence's limit board (for the release WebView run), shaped as the ER limit board: A5's
  * first 40 flowchart frames (200 shapes each) and the sequence (2,000 participants), exactly 10,000 shapes in 41
  * frames. A 50-frame board with one frame swapped for the sequence would hold 11,800 shapes, over MAX_BOARD_SHAPES.
  */

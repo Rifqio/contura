@@ -239,7 +239,7 @@ test("a_failed_schema_load_says_so_with_try_again_and_never_loads_forever", asyn
 test("a_closed_connection_says_so_on_the_cards_not_loading", async () => {
   render(<Harness initial={docWith({ tables: [card("t1", "orders", "o")] })} open={false} />);
   const orders = await cardEl("Table orders o");
-  // V8: the canvas banner says it once; the card carries no line of its own.
+  // the canvas banner says it once; the card carries no line of its own.
   expect(screen.getByText("kestrel-main is not open", { selector: ".vq-banner p" })).toBeTruthy();
   expect(within(orders).queryByText("kestrel-main is not open")).toBeNull();
   expect(within(orders).queryByText("Loading schema")).toBeNull();
@@ -1042,7 +1042,7 @@ test("release_a_card_resize_follows_3px_steps_in_both_axes_and_ends_mid_row", as
   expect(changes[changes.length - 1].widths).toEqual({ t1: 231 });
 });
 
-// ---- What the tab tells the Ask (spec 4.3) ----
+// ---- What the tab tells the Ask ----
 
 function AskReader({ onEntry }: { onEntry(e: TabAskEntry | null): void }) {
   onEntry(useTabAsk("visual:v1"));
@@ -1105,7 +1105,7 @@ test("a_tick_is_a_recent_step_on_the_tab", async () => {
   clearAllSteps();
 });
 
-// ---- UX step 7: V1 undo and redo, V4 Delete the selection, V2 canvas navigation ----
+// ---- undo and redo, Delete the selection, canvas navigation ----
 const cardGone = (label: string) => waitFor(() => expect(screen.queryByRole("group", { name: label })).toBeNull());
 const ctrl = (key: string, extra: { shiftKey?: boolean } = {}) => fireEvent.keyDown(canvas(), { key, ctrlKey: true, ...extra });
 const twoCards = () => render(<Harness initial={docWith({ tables: [card("t1", "orders", "o"), card("t2", "stores", "s", 300)] })} />);

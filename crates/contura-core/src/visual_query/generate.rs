@@ -19,7 +19,7 @@ use std::collections::HashSet;
 pub struct GeneratedQuery {
     pub sql: String,
     pub parts: Vec<SqlPart>,
-    /// Each output column's final name, in SELECT order (D7). Empty when nothing is
+    /// Each output column's final name, in SELECT order. Empty when nothing is
     /// ticked and the query selects every column (item 37).
     pub outputs: Vec<String>,
     pub warnings: Vec<VqWarning>,
@@ -57,7 +57,7 @@ pub enum PartKind {
     Limit,
 }
 
-/// `table` is a table id. `rows` is always `None` from the Core (D17).
+/// `table` is a table id. `rows` is always `None` from the Core.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(
     tag = "kind",
@@ -77,7 +77,7 @@ pub struct VqPreview {
     pub problems: Vec<VqProblem>,
 }
 
-/// The SQL text of `vq`. Refuses with the first problem `check` finds (D4), and
+/// The SQL text of `vq`. Refuses with the first problem `check` finds, and
 /// refuses its own text unless `classify` reads it as a read.
 pub fn generate(
     kind: DialectKind,
@@ -247,7 +247,7 @@ impl<'a> Writer<'a> {
         )
     }
 
-    /// The table as FROM names it (D6, P1): PostgreSQL `schema.table`, or the
+    /// The table as FROM names it: PostgreSQL `schema.table`, or the
     /// bare table, left to `search_path`, for a card with no schema;
     /// MySQL `db.table` outside the tab's database; SQLite `scope.table` for an
     /// attached database.
@@ -467,7 +467,7 @@ impl<'a> Writer<'a> {
                     let Some(p) = written.iter().position(|(i, _)| i == index) else {
                         continue;
                     };
-                    // Ruling V2: an output the user named sorts by that name, but
+                    // an output the user named sorts by that name, but
                     // only when the SELECT item carries AS; any other sorts by its
                     // expression. SQLite reads a name with no AS as an input
                     // column, ambiguous when two tables have it.
@@ -528,7 +528,7 @@ impl<'a> Writer<'a> {
             .and_then(|c| c.get(&f.column))
             .map(String::as_str);
         let like = matches!(f.op, FilterOp::Like | FilterOp::NotLike);
-        // V10: a pattern is text on any column; PostgreSQL has no LIKE on a
+        // a pattern is text on any column; PostgreSQL has no LIKE on a
         // number, so the column is cast to text there.
         let column =
             if like && self.kind == DialectKind::Postgres && is_number_column(self.kind, type_text)
@@ -580,7 +580,7 @@ impl<'a> Writer<'a> {
     }
 }
 
-/// Each written output's final name (D7). A user's name is kept; a plain
+/// Each written output's final name. A user's name is kept; a plain
 /// column keeps its own name unless another output has it, then
 /// `<alias>_<column>`; an aggregate is `<aggregate>_<column>`; a name already
 /// taken gets `_2`, `_3`, ... Names compare without case.
@@ -659,9 +659,9 @@ fn aggregate_word(a: Aggregate) -> &'static str {
 #[cfg(test)]
 mod tests {
     //! Golden cases live in `golden/`: `<case>.json` (`{ query, types, outputs,
-    //! warnings? }`), overridden per Dialect by `<case>.<dialect>.json` (P3), the
+    //! warnings? }`), overridden per Dialect by `<case>.<dialect>.json`, the
     //! expected text in `<case>.<dialect>.sql`, and the hand-written PostgreSQL
-    //! shape in `<case>.shape.json` (P5, read by the query diagram's tests).
+    //! shape in `<case>.shape.json` (read by the query diagram's tests).
     //! On PostgreSQL a table whose `schema` is null in the golden model is read
     //! as `public`, so most cases need no PostgreSQL override.
     //! `CONTURA_BLESS=1` rewrites the `.sql` files from the generator.
@@ -926,7 +926,7 @@ LIMIT 50";
         });
     }
 
-    /// The hand-written shapes (P5) agree with the PostgreSQL text: the same
+    /// The hand-written shapes agree with the PostgreSQL text: the same
     /// aliases in FROM order, the same Join kinds and ON pair counts, the same
     /// outputs.
     #[test]

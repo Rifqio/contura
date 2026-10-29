@@ -249,7 +249,7 @@ describe("useCommandKeys", () => {
   });
 
   test("with_focus_in_neither_a_preferred_owner_on_screen_wins_whatever_the_order", () => {
-    // Plan D Task 19: Ctrl+Shift+N with focus on the board canvas, the Ask panel and the board pane both on screen:
+    // Ctrl+Shift+N with focus on the board canvas, the Ask panel and the board pane both on screen:
     // the focused region wins, else the board pane (it says so with `preferWhenShown`), not the latest registered.
     for (const boardFirst of [true, false]) {
       const board = vi.fn();

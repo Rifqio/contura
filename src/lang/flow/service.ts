@@ -1,4 +1,4 @@
-// The language worker's .flow state (ruling P5). Source ranges stay here: a parse sends only the docs, their problems
+// The language worker's .flow state. Source ranges stay here: a parse sends only the docs, their problems
 // and the last good docs, which keeps the posted result small. A .flow file is a board of frames (one diagram each);
 // span, edit and outline requests name a frame and are answered against the cached parse of one text version, in
 // whole-file positions, and a request planned on an older version is refused.
@@ -27,7 +27,7 @@ export type FrameResult = {
   doc: FlowDoc | null;
   /** The frame's most recent good doc (kept by its title), sent only while `doc` is null. */
   lastValid: FlowDoc | null;
-  /** The doc's wire id (Decision 13); null while `doc` is null. */
+  /** The doc's wire id; null while `doc` is null. */
   docId: number | null;
   /** `lastValid`'s wire id; null when there is none. */
   lastValidId: number | null;
@@ -144,7 +144,7 @@ export type FlowOutlineAnswer = { stale: true } | { stale: false; outline: FlowO
 export type BoardFrameProblem = { line: number; message: string };
 
 /**
- * One frame of the board for the board Ask (Plan D Decision 1): its place in the text, its outline in file lines and
+ * One frame of the board for the board Ask: its place in the text, its outline in file lines and
  * its problems in frame lines (errors first, at most `BOARD_PROBLEMS_MAX`, each cut to `BOARD_PROBLEM_CHARS`).
  */
 export type BoardOutlineFrame = {

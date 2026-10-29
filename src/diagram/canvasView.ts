@@ -1,4 +1,4 @@
-// What the canvas and the board's detail policy share about the view (Plan F). `src/diagram/` imports nothing from
+// What the canvas and the board's detail policy share about the view. `src/diagram/` imports nothing from
 // `src/flow/`; the board reads these from here.
 import { getViewportForBounds } from "@xyflow/react";
 
@@ -7,7 +7,7 @@ export const MIN_ZOOM = 0.1;
 /** Zoom goes to 400 percent (Figma and draw.io go further than React Flow's 200). */
 export const MAX_ZOOM = 4;
 /**
- * A board's live anchor (Plan F Decision 11): the zero-size node the live frame's shapes hang from, at the live frame's
+ * A board's live anchor: the zero-size node the live frame's shapes hang from, at the live frame's
  * place on the board. Mirrors `LIVE_ANCHOR_ID` in src/flow/board/boardScene.ts (diagram/ does not import flow/);
  * DiagramCanvas.test.tsx checks the two are equal.
  */
@@ -15,7 +15,7 @@ export const LIVE_ANCHOR = "\u0000live";
 /** The 13 px per-character width estimate the board's tab text and the soft bars use. */
 export const SOFT_CHAR_W = 7;
 /**
- * A far ER card's rows as bars (Plan F Decision 3), in px inside the card's rows body; drawn by the canvas (kindNodes
+ * A far ER card's rows as bars, in px inside the card's rows body; drawn by the canvas (kindNodes
  * `ErBars`) and a frame picture (svg.ts) alike, so a row does not jump when a frame turns from picture to real. `h` is
  * a bar's height (times the text size); the name bar starts `from` in (10 px padding, the 18 px gutter, 6 px gap) and
  * the type bar ends `to` before the right (the 8 px not-null mark and its 6 px gap); a key row's mark is a `key` px
@@ -93,7 +93,7 @@ export function wheelDy(e: { deltaY: number; deltaMode: number }, viewH: number)
 }
 
 /**
- * The view after one Ctrl+wheel or pinch event (Plan F Decision 9): the zoom times `exp(-dy * 0.002)`, the event's
+ * The view after one Ctrl+wheel or pinch event: the zoom times `exp(-dy * 0.002)`, the event's
  * factor held to [0.5, 2] and the zoom to [MIN_ZOOM, MAX_ZOOM]; the point `at` (pane pixels) stays where it is.
  */
 export function wheelZoom(

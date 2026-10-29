@@ -21,7 +21,7 @@ use crate::schema_model::SchemaModel;
 use crate::sql_schema::SqlSchema;
 use crate::sqlite::SqliteDialect;
 
-/// Step 11f: how long a sample read may run, in every Dialect.
+/// How long a sample read may run, in every Dialect.
 pub const SAMPLE_TIMEOUT_MS: u64 = 5_000;
 
 /// UX step 8: how long a row count may run on the server before it stops itself.
@@ -46,7 +46,7 @@ pub trait Dialect: Send + Sync {
             "row counts are not available here".into(),
         ))
     }
-    /// M3: where the row with `req.key` is under the page's sort and filter: the same order a
+    /// Where the row with `req.key` is under the page's sort and filter: the same order a
     /// page is fetched in, counted by the server (a window over the filtered rows). Runs as
     /// `count_rows` does: its own read-only connection, stopped after `timeout_ms`.
     async fn locate_row(&self, req: &LocateRequest, timeout_ms: u64) -> Result<RowPlace> {
@@ -55,7 +55,7 @@ pub trait Dialect: Send + Sync {
             "finding a row is not available here".into(),
         ))
     }
-    /// Step 11f: up to `limit` live rows of one base table for an AI Ask, as the grid
+    /// Up to `limit` live rows of one base table for an AI Ask, as the grid
     /// reads them (same select list and cells). No ORDER BY, no OFFSET, no filter,
     /// `has_more` false. Runs in a read-only transaction on a connection that is not
     /// the browse one, with a 5 s limit. `InvalidInput("not a table")` for a view or
@@ -75,7 +75,7 @@ pub trait Dialect: Send + Sync {
     /// Reads one table for the Table Designer, with the real names of its indexes and
     /// keys. Read only. `NotFound` with the table's name when there is no such table.
     async fn table_design(&self, path: &ObjectPath) -> Result<TableDesign>;
-    /// Lineage (B2, P6): every Foreign Key held by a table of one database (MySQL, SQLite)
+    /// Lineage: every Foreign Key held by a table of one database (MySQL, SQLite)
     /// or schema (PostgreSQL) or pointing into it, in one catalog read. No row data.
     async fn key_edges(&self, database: &str, schema: Option<&str>) -> Result<Vec<KeyEdge>>;
     /// Lineage: the columns, types, nullability and primary key parts of `tables` in one
@@ -97,7 +97,7 @@ pub trait Dialect: Send + Sync {
         let _ = (table, limit);
         Ok(None)
     }
-    /// The table's CREATE statements for copying, as the server holds the table (D14).
+    /// The table's CREATE statements for copying, as the server holds the table.
     /// MySQL and SQLite keep the text; PostgreSQL writes it from its catalog.
     async fn table_ddl(&self, path: &ObjectPath) -> Result<String> {
         self.object_definition(ObjectKind::Table, path).await
@@ -165,7 +165,7 @@ pub trait Dialect: Send + Sync {
         database: Option<&str>,
         setup: &WriterSetup,
     ) -> Result<Box<dyn BulkWriter>>;
-    /// Step 9: one read snapshot for a Backup of `database` (PostgreSQL: of `schema` in
+    /// One read snapshot for a Backup of `database` (PostgreSQL: of `schema` in
     /// it) on a connection of its own, its session in UTC, read only whatever the
     /// Connection is. It reads the structure inside the snapshot, then serves each
     /// table's rows from the same snapshot in primary key order, generated columns left

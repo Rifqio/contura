@@ -426,7 +426,7 @@ async fn context_reads_comments_live_postgres() {
     db.drop_db().await;
 }
 
-// ---- Step 11f: the red-team table, live ----
+// ---- The red-team table, live ----
 
 use contura_core::ai::rails::INJECTION_NOTE;
 use contura_core::query::ExecOutcome;

@@ -14,7 +14,7 @@ interface Props {
   place: string;
   /** What the place is called in the confirmation; the key when absent. */
   placeName?: string;
-  /** The place's chats, from the place load: opening the popover makes no call (P31). */
+  /** The place's chats, from the place load: opening the popover makes no call. */
   threads: ThreadSummary[];
   currentId: string | null;
   /** An answer is being written: nothing here may change the open chat. */
@@ -83,7 +83,7 @@ function AskDelete({ title, onDelete, onCancel }: { title: string; onDelete(): v
   );
 }
 
-/** Rename in place: Enter or blur keeps, Esc cancels (R5); the field keeps its own keys (P28). */
+/** Rename in place: Enter or blur keeps, Esc cancels (R5); the field keeps its own keys. */
 function RenameField({
   text,
   note,
@@ -236,7 +236,7 @@ export default function ThreadHistory({
   const searching = text.trim() !== "";
   const now = Date.now();
 
-  // The flat list the window walks: day headers and rows, or the search hits in relevance order (P38).
+  // The flat list the window walks: day headers and rows, or the search hits in relevance order.
   const items = useMemo<ListItem[]>(() => {
     if (searching) return (hits ?? []).map((row) => ({ kind: "row", row }));
     const out: ListItem[] = [];
@@ -361,7 +361,7 @@ export default function ThreadHistory({
     setScrollTop(next);
   }
 
-  /** Moves the keyboard focus to a row, drawing it first when the window does not hold it (P18). */
+  /** Moves the keyboard focus to a row, drawing it first when the window does not hold it. */
   function moveTo(id: string) {
     reveal(id);
     setFocusId(id);
@@ -535,7 +535,7 @@ export default function ThreadHistory({
       >
         <button
           type="button"
-          // Its own class under .history-menu: never the query History's .history-row (P11-40, P30).
+          // Its own class under .history-menu: never the query History's .history-row.
           className="history-chat"
           data-row-id={id}
           // The full title and the age: on hover the row actions take the time's place.
@@ -601,7 +601,7 @@ export default function ThreadHistory({
         ref={button}
         className="icon-button"
         aria-label="Show history"
-        // P11-40: no hover text while the popover is open, so it never covers the search field.
+        // No hover text while the popover is open, so it never covers the search field.
         title={open ? undefined : tip("Show history")}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -625,7 +625,7 @@ export default function ThreadHistory({
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              // Only Down leaves the field; Delete and the rest edit the text (P28).
+              // Only Down leaves the field; Delete and the rest edit the text.
               if (e.key === "ArrowDown" && rowIds.length > 0) {
                 e.preventDefault();
                 moveTo(rowIds[0]);

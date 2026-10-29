@@ -7,7 +7,7 @@ import { Popover } from "./JoinPopover";
 
 export const PICK_POPOVER_WIDTH = 320;
 
-/** A choice with the Foreign Key's constraint name when the schema has it (P9). */
+/** A choice with the Foreign Key's constraint name when the schema has it. */
 export type PickChoice = FkChoice & { keyName?: string | null };
 
 export interface PickPopoverProps {

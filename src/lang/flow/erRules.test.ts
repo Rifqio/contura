@@ -1,4 +1,4 @@
-// The ER rules the Core's diagram tool checks against (Plan D Decision 3): one fixture, read here and by
+// The ER rules the Core's diagram tool checks against: one fixture, read here and by
 // `rust_rules_match_the_fixture`, so the two sides cannot drift.
 import { expect, test } from "vitest";
 import kinds from "../../../crates/contura-core/tests/fixtures/flow/kinds.json";

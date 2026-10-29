@@ -1,7 +1,7 @@
 //! The skip and refuse lists, transaction checks and statement kinds. One statement can
 //! hold several that the server runs (a DELIMITER body, a `/*! */` block, a routine
 //! body, or another backslash reading), so every `;`-separated piece is checked, under
-//! both backslash readings, and the strictest answer wins (Q37). One pass per reading,
+//! both backslash readings, and the strictest answer wins. One pass per reading,
 //! with no copy of the text. A dollar-quoted body (`DO $$ .. $$`) is one string here and
 //! is not looked into; 5a calls DO a write, so Read-only refuses it and Production asks.
 
@@ -42,7 +42,7 @@ pub(crate) struct Facts {
     /// keeps all its tokens.
     pub may_read: bool,
     /// It may read and holds more than `MAX_CHECKED_TOKENS` tokens: refused without
-    /// being classified, which would cost too much memory (Q40).
+    /// being classified, which would cost too much memory.
     pub too_large: bool,
 }
 
@@ -517,9 +517,9 @@ impl<'a> Piece<'a> {
         }
         // A BEGIN or END piece after a CREATE opens or closes the body being created
         // (a trigger, a BEGIN ATOMIC routine, a MySQL BEGIN ... END block), not a
-        // transaction (Q39).
+        // transaction.
         // A BEGIN that is a whole statement (`BEGIN`, `BEGIN WORK`) opens a transaction
-        // even there (Q40): a block's BEGIN always has a statement after it.
+        // even there: a block's BEGIN always has a statement after it.
         let bare_begin = self.w(0, "BEGIN")
             && self.tokens == self.words
             && (self.words == 1

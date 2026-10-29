@@ -550,7 +550,7 @@ test("a_failed_export_stays_open_with_the_error", async () => {
 test("a_read_result_offers_the_result_of_this_query", async () => {
   const origin: ExportOrigin = { ...resultOrigin, sql: "select * from t" } as ExportOrigin;
   const { dialog } = setup(origin);
-  // Q26: Rows shown until the preview says the statement reads.
+  // Rows shown until the preview says the statement reads.
   expect(within(dialog).getByRole("radio", { name: /Rows shown/ })).toBeTruthy();
   expect(await within(dialog).findByRole("radio", { name: "The result of this query" })).toBeTruthy();
   expect(within(dialog).getByText("Runs the query again on its own connection.")).toBeTruthy();

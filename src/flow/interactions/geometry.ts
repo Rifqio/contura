@@ -1,4 +1,4 @@
-// The canvas's editing geometry (spec 6+ section 4, the motion design; the alignment guides are the canvas's own,
+// The canvas's editing geometry (the motion design; the alignment guides are the canvas's own,
 // diagram/guides.ts): the 24 px magnet that locks a drawn flow onto a node's nearest port, and which group a
 // dragged node is over. Pure functions, in flow coordinates.
 

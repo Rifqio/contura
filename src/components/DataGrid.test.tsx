@@ -733,7 +733,7 @@ test("item_5_the_table_menu_holds_lineage_on_a_table_only", async () => {
   expect(screen.queryByRole("menuitem", { name: "Show lineage" })).toBeNull();
 });
 
-// ---- After a design apply (step 5c, Task 11) ----
+// ---- After a design apply ----
 
 test("a_new_version_reloads_columns_and_page_0_with_no_pending_edits", async () => {
   let wide = false;

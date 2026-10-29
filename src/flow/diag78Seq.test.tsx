@@ -228,7 +228,7 @@ test("S2 a participant's head dragged sideways shows where it goes and moves its
 test("S2 a participant's foot dragged sideways moves its line as the head does", async () => {
   const s = setup();
   await shown(s, "Participant Payments");
-  // The foot box repeats the head at the bottom of the same node (Plan E Decision 6).
+  // The foot box repeats the head at the bottom of the same node.
   const foot = s.box("Payments").y + s.box("Payments").h - 20;
   fireEvent.pointerDown(s.node("Participant Payments")!, { button: 0, pointerId: 1, ...s.screenAt(s.mid("Payments"), foot) });
   fireEvent.pointerMove(window, { buttons: 1, pointerId: 1, ...s.screenAt(s.mid("Payments") - 20, foot) });
@@ -333,7 +333,7 @@ test("S4 a double press on a loop's tab edits its label on the tab; Esc keeps wh
   await waitFor(() => expect(s.doc()).toBe(LOOPED.replace("loop every item {", "loop per line {")));
 });
 
-// ----- Plan E Task 6: the block's side tab and its caption.
+// ----- The block's side tab and its caption.
 
 test("S4 a press on a block's side tab selects it", async () => {
   const s = setup(LOOPED);

@@ -1,4 +1,4 @@
-// An answer's backticked names found on the board (Plan D Task 17, Decision 17): each match is a range in the text
+// An answer's backticked names found on the board: each match is a range in the text
 // and the frame, shape and column it names; a name that is not one thing on the board stays code.
 import { describe, expect, test } from "vitest";
 import type { FlowOutline } from "../../api/types";

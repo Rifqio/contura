@@ -1,8 +1,8 @@
 // The packed cloud icons on the front end (step 6+, C1b): each icon is fetched from the Core
 // only when a diagram shows it, and at most ICON_CACHE_SIZE stay in memory.
 //
-// Icons are third-party files, so they are only ever shown as an image from a data: URL
-// (Ruling P7), never put into the page as markup: whatever an icon holds cannot run.
+// Icons are third-party files, so they are only ever shown as an image from a data: URL,
+// never put into the page as markup: whatever an icon holds cannot run.
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { icon, iconIndex, isCommandError } from "../api/client";

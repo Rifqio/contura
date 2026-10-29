@@ -35,7 +35,7 @@ pub(super) fn sample_file(
     let mut count = 0u64;
     let start = reader.bytes_read();
     let mut eof = false;
-    // The first statement as the run builds it (Q10): refused rows are left out, as the
+    // The first statement as the run builds it: refused rows are left out, as the
     // run leaves them out, up to the Skip cap's worth of them.
     while count < (SAMPLE_ROWS as u64 + SKIP_CAP + 1) && sample.is_none() {
         let Some(rec) = reader.next_record()? else {
@@ -206,7 +206,7 @@ impl ConnectionService {
 
     /// The Columns step: the table's columns with the mapping and their notes, the first
     /// 20 rows as they will be written with each cell's problem, the first statement
-    /// exactly as it will run (Q10), any `setval`, the warnings and the verdict. On
+    /// exactly as it will run, any `setval`, the warnings and the verdict. On
     /// Production the file is hashed for the fingerprint.
     pub async fn plan_import(&self, req: ImportRequest) -> Result<ImportPlan> {
         let config = self.config(req.connection_id)?;
@@ -214,7 +214,7 @@ impl ConnectionService {
     }
 
     /// Builds the plan again and issues the Job pass for its fingerprint, bound to the
-    /// file's identity (D5, Q29).
+    /// file's identity.
     pub async fn confirm_import(&self, req: ImportRequest) -> Result<PassId> {
         let config = self.config(req.connection_id)?;
         if config.read_only {

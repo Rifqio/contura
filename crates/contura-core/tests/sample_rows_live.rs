@@ -1,4 +1,4 @@
-//! Step 11f: the read-only sample path, per Dialect. Rows are read in a read-only
+//! The read-only sample path, per Dialect. Rows are read in a read-only
 //! transaction, base tables only, and a write through the same setup is refused.
 
 mod common;

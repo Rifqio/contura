@@ -1,4 +1,4 @@
-// The diagram engine's canvas: React Flow with the fixed config every diagram shares (A1).
+// The diagram engine's canvas: React Flow with the fixed config every diagram shares.
 import "@xyflow/react/dist/style.css";
 import {
   Background,
@@ -95,7 +95,7 @@ export interface DiagramCanvasProps {
   onDropObject?(data: DataTransfer, at: { x: number; y: number }): void;
   /**
    * With it set, only a drag whose `dataTransfer.types` holds this type is taken: other drags get no dragover
-   * `preventDefault`, no drop ring and no `onDropObject` (B2 R11). Without it every drag from outside is taken.
+   * `preventDefault`, no drop ring and no `onDropObject`. Without it every drag from outside is taken.
    */
   dropType?: string;
   onInit?(instance: ReactFlowInstance): void;
@@ -105,7 +105,7 @@ export interface DiagramCanvasProps {
   onMoveCancel?(): void;
   /**
    * Which level of detail the canvas provides. "legacy" (the default, every canvas but a board) is detail.ts's
-   * `detailFor`: name boxes and blocks by zoom, fast over FAST_OVER nodes. "board" (Plan F Decision 1) is full at
+   * `detailFor`: name boxes and blocks by zoom, fast over FAST_OVER nodes. "board" is full at
    * every zoom and node count: a board keeps its real shapes, icons, ports and lines.
    */
   detailPolicy?: "legacy" | "board";
@@ -127,7 +127,7 @@ export interface DiagramCanvasProps {
   overlay?: ReactNode;
   onEdgeDoubleClick?(id: string): void;
   /** Item 22: a node double-clicked (its editor opens). */
-  /** The part double-clicked (`target`) lets a card tell its rows and title apart (diagram step 3). */
+  /** The part double-clicked (`target`) lets a card tell its rows and title apart (diagram). */
   onNodeDoubleClick?(id: string, target?: EventTarget | null): void;
   /** Item 23: the empty canvas double-clicked, at a flow position (a shape is added there); the view does not zoom. */
   onPaneDoubleClick?(at: { screen: { x: number; y: number }; flow: { x: number; y: number } }): void;
@@ -144,7 +144,7 @@ export interface DiagramCanvasProps {
    */
   livePositions?: LivePositions | null;
   /**
-   * A node to bring into view once it is drawn, such as the shape the assistant just added (P11-34): the view
+   * A node to bring into view once it is drawn, such as the shape the assistant just added: the view
    * moves to it, at the zoom it has, only when the node is not wholly on screen. Asked again only for another id.
    */
   reveal?: string | null;
@@ -156,11 +156,11 @@ export interface DiagramCanvasProps {
   /** How React Flow orders nodes and lines; its own default ("basic") when absent. Only the board sets "manual". */
   zIndexMode?: ZIndexMode;
   /**
-   * The board's Hand tool (Plan B Task 7): the left button pans as the middle one does, and draws no selection box
+   * The board's Hand tool: the left button pans as the middle one does, and draws no selection box
    * (Figma, Excalidraw).
    */
   hand?: boolean;
-  /** React Flow's hold-to-pan key ("Space" on a board, Decision 26); unset keeps React Flow's own. */
+  /** React Flow's hold-to-pan key ("Space" on a board); unset keeps React Flow's own. */
   panKey?: string | null;
   /** The overview in the corner; shown unless this is false. */
   showMiniMap?: boolean;
@@ -171,12 +171,12 @@ export interface DiagramCanvasProps {
    */
   onFrameDrag?(id: string, at: { x: number; y: number } | null, done: boolean): void;
   /**
-   * The view moved (Plan F Decision 8): at most once per animation frame for a pan or a wheel zoom (`landing` false),
+   * The view moved: at most once per animation frame for a pan or a wheel zoom (`landing` false),
    * and once with the landing view as a glide starts (`landing` true), then nothing until it has landed.
    */
   onViewChange?(v: CanvasView, landing: boolean, pointer?: { x: number; y: number }): void;
   /**
-   * Plan F Decision 9: a capturing wheel listener takes every Ctrl or Meta wheel (a trackpad pinch too) and zooms around
+   * A capturing wheel listener takes every Ctrl or Meta wheel (a trackpad pinch too) and zooms around
    * the pointer by one clamped step, over cards that scroll and open fields alike; a plain wheel pans as before. The
    * view then reports with the pointer's flow point. Boards only; other canvases keep React Flow's wheel.
    */
@@ -184,7 +184,7 @@ export interface DiagramCanvasProps {
   /** The canvas's handle once it has its React Flow instance: `glideView`, the one way a view move glides. */
   onCanvasReady?(h: CanvasHandle): void;
   /**
-   * Plan F Decision 13: an overview option drawn where the MiniMap sits. Given, the zoom panel gains an "Overview"
+   * An overview option drawn where the MiniMap sits. Given, the zoom panel gains an "Overview"
    * toggle (off by default, not saved) and the slot shows only while it is on; the React Flow MiniMap is `showMiniMap`'s.
    */
   mapSlot?: ReactNode;
@@ -211,7 +211,7 @@ export interface CanvasMenuAt {
 }
 
 const MULTI_SELECT_KEYS = ["Shift", "Control", "Meta"];
-/** The minor and major snap grid (DESIGN-NEXT 10.6). */
+/** The minor and major snap grid (DESIGN.md 10.6). */
 const GRID = 16;
 const GRID_MAJOR = 80;
 
@@ -233,7 +233,7 @@ export function columnOfHandle(handleId: string | null | undefined): string {
 /**
  * The canvas zoom as `--rz-zoom` on the elements that read it (`useZoomVar`: the resize zones, app.css `.rz-*`, and a
  * board's frame tabs), so they keep their size on screen at any zoom. Never on the flow itself: an inherited custom
- * property changed there restyled every node on each zoom frame (Task 9 fix 2). It renders nothing; only it draws
+ * property changed there restyled every node on each zoom frame. It renders nothing; only it draws
  * again on a zoom.
  */
 function ZoomVar({ targets }: { targets: ZoomTargets }) {
@@ -277,8 +277,7 @@ function ViewControls({
   const fit = useCallback(() => {
     const { width: w, height: h, maxZoom, panZoom } = store.getState();
     // Frame boxes alone are not a drawing yet (their shapes are still being placed): the first fit waits for one. After
-    // it, frame boxes alone are the board: a board whose frames are all out of view draws only their boxes (Plan F
-    // Decision 6), and a fit from there still fits them.
+    // it, frame boxes alone are the board: a board whose frames are all out of view draws only their boxes, and a fit from there still fits them.
     if (!panZoom || !w || !h || (!fitted.current && !nodes.some((n) => !isFrameNode(n.id) && n.id !== SKETCH_LAYER && n.id !== LIVE_ANCHOR && n.parentId !== SKETCH_LAYER))) return false;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     // Sketches are part of the drawing: each at the layer's place plus its own; the zero-size layer is not.
@@ -286,7 +285,7 @@ function ViewControls({
     for (const n of nodes) {
       // A child is drawn inside its parent (a board frame's shapes): its position is the parent's, not the flow's. The
       // live frame is measured by its box node, as every frame is; its zero-size anchor and the shapes hanging from it
-      // are skipped (Plan F Decision 11).
+      // are skipped.
       if (n.id === SKETCH_LAYER || n.id === LIVE_ANCHOR || (n.parentId && !(layer && n.parentId === SKETCH_LAYER))) continue;
       const px = n.parentId && layer ? layer.x + n.position.x : n.position.x;
       const py = n.parentId && layer ? layer.y + n.position.y : n.position.y;
@@ -298,7 +297,7 @@ function ViewControls({
     if (x0 === Infinity) return false;
     const bounds = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
     // Too big to fit even at the least zoom, it opens at its start rather than on empty space between its parts.
-    // The fit never zooms past 100 percent; `glideView` reports where it lands before it glides (Plan F Decision 8).
+    // The fit never zooms past 100 percent; `glideView` reports where it lands before it glides.
     void glideView({ bounds, padding: 0.1, maxZoom: Math.min(1, maxZoom) });
     return true;
   }, [nodes, store, glideView]);
@@ -418,7 +417,7 @@ function createGuideStore() {
   return {
     get: () => lines,
     set(next: GuideLine[]) {
-      // The same guides as the last frame: nothing to draw again (M2).
+      // The same guides as the last frame: nothing to draw again.
       if (next.length === lines.length && next.every((g, i) => g.axis === lines[i].axis && g.at === lines[i].at && g.from === lines[i].from && g.to === lines[i].to)) return;
       lines = next;
       for (const f of subs) f();
@@ -504,7 +503,7 @@ function Flow(props: DiagramCanvasProps) {
 
   const store = useStoreApi();
 
-  // ----- the view (Plan F Decision 8): pans and wheel zooms reported once per animation frame; glides once, as they start.
+  // ----- the view: pans and wheel zooms reported once per animation frame; glides once, as they start.
   /** The instance React Flow hands `onInit`: glides go through it, so a spy on the owner's instance sees them. */
   const instRef = useRef<ReactFlowInstance | null>(null);
   const viewRef = useRef(props.onViewChange);
@@ -629,7 +628,7 @@ function Flow(props: DiagramCanvasProps) {
         run = () => f.setCenter(to.center.x, to.center.y, { zoom, ...options });
       }
       const glide = ++gliding.current;
-      // The opt-in recorder (Plan F Task 9): a glide from its start to the paint after it lands, with its worst frame.
+      // The opt-in recorder: a glide from its start to the paint after it lands, with its worst frame.
       perfMark("glide");
       report(viewOf(land, w, h), true);
       return new Promise<void>((done) => {
@@ -664,7 +663,7 @@ function Flow(props: DiagramCanvasProps) {
   const readyRef = useRef(props.onCanvasReady);
   readyRef.current = props.onCanvasReady;
   const [hasInstance, setHasInstance] = useState(false);
-  // The overview option: off at every open, never saved (Decision 13).
+  // The overview option: off at every open, never saved.
   const [mapOn, setMapOn] = useState(false);
   useEffect(() => {
     if (hasInstance) readyRef.current?.(handle);
@@ -730,7 +729,7 @@ function Flow(props: DiagramCanvasProps) {
           const p = before.get(n.id);
           const selected = picked.has(n.id) || undefined;
           // A node made from this very object last time, still where it put it, as selected and not being resized, is
-          // that node (its measured size kept): React Flow skips it (Task 18b: a board's switch hands over 1,000
+          // that node (its measured size kept): React Flow skips it (a board's switch hands over 1,000
           // unchanged sketches and 49 unchanged frames).
           const live = resizing.get(n.id);
           if (p && !live && from.get(n.id) === n && p.position === n.position && p.selected === selected) {
@@ -934,7 +933,7 @@ function Flow(props: DiagramCanvasProps) {
       window.dispatchEvent(up);
     };
     // React Flow skips the drag's end when it aborts one (the node went away mid-drag): the release still ends it here,
-    // so no Esc trap is left behind (M1).
+    // so no Esc trap is left behind.
     const onUp = () =>
       setTimeout(() => {
         if (moving.current === drag) {
@@ -1024,7 +1023,7 @@ function Flow(props: DiagramCanvasProps) {
     const m = moving.current;
     if (!m) return;
     const placed = m.cancelled ? null : placeDragged(e, dragged);
-    // Kept places are whole pixels on every canvas (M3).
+    // Kept places are whole pixels on every canvas.
     const at = placed && new Map([...placed].map(([id, p]) => [id, { x: Math.round(p.x), y: Math.round(p.y) }] as const));
     moving.current = null;
     m.off();
@@ -1107,7 +1106,7 @@ function Flow(props: DiagramCanvasProps) {
     void glideView({ bounds: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, padding: 0.1 });
   };
 
-  // ----- the arrow keys (F7, I6): 1 px, Shift 16 px; a held key's repeats are one move, reported when it goes up.
+  // ----- the arrow keys (F7): 1 px, Shift 16 px; a held key's repeats are one move, reported when it goes up.
   const nudging = useRef<Map<string, { x: number; y: number }> | null>(null);
   const endNudge = () => {
     const at = nudging.current;

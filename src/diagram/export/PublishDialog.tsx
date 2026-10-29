@@ -1,4 +1,4 @@
-// The Publish image dialog (DESIGN-NEXT 10.9): pick a part of a diagram or a board, crop it, and save or copy it as PNG
+// The Publish image dialog (DESIGN.md 10.9): pick a part of a diagram or a board, crop it, and save or copy it as PNG
 // or SVG in the Light or Dark colours. A client passes a source (B4 Task 5, `source.ts`), or one diagram's scene,
 // which becomes `sceneSource`. A part is drawn once per theme and Frame titles; crop, padding, background, mark and
 // scale write only the head (Decision 12). Past the size limits the dialog refuses with a note (Decision 10).

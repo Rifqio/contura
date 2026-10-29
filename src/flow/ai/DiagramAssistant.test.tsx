@@ -1,5 +1,5 @@
 // The diagram assistant inside the diagram tab: Send, the read-only hold, Review first, Auto-apply, the remove
-// confirm, the landing as one undo step, the tool result and the thread (board 11.5).
+// confirm, the landing as one undo step, the tool result and the thread.
 import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -442,7 +442,7 @@ test("review_lists_changes_and_lands_one_step", async () => {
   // The count waits on the Assistant tab; the text stays read-only and shows the changes as ghost marks.
   expect(assistantTab().querySelector(".pcount")?.textContent).toBe("4");
   expect(s.view().state.readOnly).toBe(true);
-  // The review bar on the canvas counts them (Plan D Task 13); the strip over the text is gone.
+  // The review bar on the canvas counts them; the strip over the text is gone.
   expect((await screen.findByRole("toolbar", { name: "Assistant changes" })).textContent).toMatch(/^4 changes in /);
   expect(s.container.querySelector(".flow-ebar")).toBeNull();
   expect(s.container.querySelector(".cm-flow-ghost")?.textContent).toContain("Fraud check [process, id: 1.1]");
@@ -687,7 +687,7 @@ test("thread_reloads_with_the_card", async () => {
   expect(within(shown).getByText("Accepted 4 of 4.")).toBeTruthy();
   expect(assistantTab().querySelector(".pcount")).toBeNull();
   expect(s.view().state.readOnly).toBe(false);
-  // A new Ask names the thread, so the Core sends its history (Plan D Decision 9), and adds to the same thread.
+  // A new Ask names the thread, so the Core sends its history, and adds to the same thread.
   replies = [answer(null)];
   await send("And a refund step");
   expect(asks()[0].threadId).toBe("t1");
@@ -776,7 +776,7 @@ test("nothing_in_the_side_panel_has_hover_text", async () => {
   await reviewing();
   expect(panel.querySelector(".answer-code")).not.toBeNull();
   expect(titles()).toEqual([]);
-  // Hidden, the pane leaves no rail on a board (Decision 16), so nothing with hover text either.
+  // Hidden, the pane leaves no rail on a board, so nothing with hover text either.
   fireEvent.click(screen.getByRole("button", { name: "Hide the side panel" }));
   expect(s.container.querySelector('nav[aria-label="Side panel, hidden"]')).toBeNull();
   expect(panel.hidden).toBe(true);
@@ -900,7 +900,7 @@ test("working_shows_the_core_steps_and_the_canvas_outline", async () => {
   await waitFor(() => expect(s.container.querySelector(".flow-canvas.is-ai-working")).toBeNull());
 });
 
-// ----- the five error states (board 11.5)
+// ----- the five error states
 
 const panelTitles = (s: Setup) => [...(s.container.querySelector('section[aria-label="Side panel"]') as HTMLElement).querySelectorAll("[title]")].map((e) => e.outerHTML.slice(0, 80));
 const Q = "Add a fraud check after Checkout";
@@ -1305,7 +1305,7 @@ test("the_selection_is_a_chip_not_a_lock", async () => {
   expect(r.board?.frames.map((f) => f.title)).toEqual(["Checkout"]);
 });
 
-// ----- Sends, Show log and the tool-off note (board 11.12)
+// ----- Sends, Show log and the tool-off note
 
 const previews = () => callsTo("ai_diagram_preview").map((c) => c.request as DiagramAskRequest);
 const sendsBox = () => screen.getByRole("group", { name: "Sends" });
@@ -1391,7 +1391,7 @@ test("sent_line_and_show_log_for_a_diagram_answer", async () => {
   const log = screen.getByRole("region", { name: "Answer log" });
   expect(within(log).getByRole("tab", { name: "Steps" }).getAttribute("aria-selected")).toBe("true");
   expect(within(log).getByText("Tool check")).toBeTruthy();
-  // The Tool check row opens expanded (board 11.12).
+  // The Tool check row opens expanded.
   expect(within(log).getByText("Tool check").closest(".prow")!.getAttribute("aria-expanded")).toBe("true");
   expect([...log.querySelectorAll(".prow")].filter((r) => r.getAttribute("aria-expanded") === "true").map((r) => r.querySelector(".lb")!.textContent)).toEqual(["Tool check"]);
   expect(screen.queryByRole("textbox", { name: "Describe a change" })).toBeNull();
@@ -1473,7 +1473,7 @@ test("a_refused_preview_shows_why_in_the_sends_line", async () => {
   expect(within(sendsBox()).queryAllByRole("listitem")).toHaveLength(0);
 });
 
-// ---- Parity with the step 11 boards (P11) ----
+// ---- Parity with the step 11 boards ----
 
 test("parity_P11_18_the_model_picker_follows_a_model_change_in_settings", async () => {
   known = modelList([modelInfo({ id: "fx-stall", name: "fx-stall" })], null, "fx-stall");
@@ -1624,7 +1624,7 @@ test("diag-910 fix round 1, I2: Mermaid pasted on the canvas while the assistant
   expect(s.text()).toBe(DFD);
 });
 
-// ----- Plan D Task 15: past chats per board (Decision 16, A19, A20)
+// ----- Past chats per board
 
 /** A stored board chat of one turn: its question is its title. */
 const storedChat = (id: string, q: string, updatedAt: number, a = `Answer to ${q}`): AiThread => ({
@@ -1670,7 +1670,7 @@ test("plus_and_ctrl_shift_n_start_a_new_chat", async () => {
   // Ctrl+Shift+N, the existing assistant.newChat command, does the same from the pane.
   fireEvent.keyDown(box(), { key: "N", code: "KeyN", ctrlKey: true, shiftKey: true });
   await waitFor(() => expect(screen.queryByText("A refund step it is.")).toBeNull());
-  // So does Ctrl+N with focus in the pane (A19: shared by region with New Connection).
+  // So does Ctrl+N with focus in the pane (shared by region with New Connection).
   replies = [answer(null, "Done again.")];
   await sendMore("Add a wait");
   await screen.findByText("Done again.");
@@ -1781,7 +1781,7 @@ test("a_board_chat_gets_an_ai_title_once", async () => {
   replies = [answer(null, "First.")];
   await sendMore("Add a fraud check");
   await screen.findByText("First.");
-  // A20: once the turn is stored under the rule's title, D2's title call, with no Group and no Connection.
+  // Once the turn is stored under the rule's title, D2's title call, with no Group and no Connection.
   await waitFor(() => expect(callsTo("ai_name_chat")).toHaveLength(1));
   const r = callsTo("ai_name_chat")[0].request as Record<string, unknown>;
   expect(r).toMatchObject({ place: "diagram:checkout", groupId: null, threadId: last(saved)!.id, off: [] });
@@ -1809,7 +1809,7 @@ test("switching_frames_keeps_the_chat", async () => {
   await screen.findByText("Checked.");
   await waitFor(() => expect(last(saved)?.messages).toHaveLength(2));
   const id = last(saved)!.id;
-  // Another frame selected: the same chat, and the next Ask goes on in it (Decision 16, A2).
+  // Another frame selected: the same chat, and the next Ask goes on in it.
   act(() => hooked.doc!.select({ title: "Refund", index: 1 }));
   await waitFor(() => expect(hooked.doc!.selected).toEqual({ title: "Refund", index: 1 }));
   expect(asked("What does Checkout do?")).not.toBeNull();

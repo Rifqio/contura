@@ -19,7 +19,7 @@ fn service() -> (tempfile::TempDir, Arc<MemorySecretStore>, ConnectionService) {
     (dir, secrets, svc)
 }
 
-/// `service()` with a data folder, so it can open a SQLite file (Q45 M3).
+/// `service()` with a data folder, so it can open a SQLite file.
 fn lite_service() -> (tempfile::TempDir, Arc<MemorySecretStore>, ConnectionService) {
     let (dir, secrets, svc) = service();
     (dir, secrets, svc.with_data_dir(common::data_dir()))
@@ -628,7 +628,7 @@ async fn sqlite_connection_into_the_data_folder_is_refused() {
     assert!(!svc.is_open(saved.id));
 }
 
-/// Q45 M3: without a data folder the guard cannot check the file, so it fails closed.
+/// Without a data folder the guard cannot check the file, so it fails closed.
 #[tokio::test]
 async fn sqlite_connection_without_a_data_folder_is_refused() {
     let dir = tempfile::tempdir().unwrap();

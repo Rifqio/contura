@@ -1,4 +1,4 @@
-// Canvas interactions and motion (spec 6+ section 4, the motion design's playground): snap and guides, drawing a
+// Canvas interactions and motion (the motion design's playground): snap and guides, drawing a
 // flow, the label box, "Add and connect", the pull-back, groups, Tidy, zoom to fit, undo and delete.
 import { invoke } from "@tauri-apps/api/core";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";

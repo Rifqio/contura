@@ -27,7 +27,7 @@ interface Props {
   /** An Ask was sent: each new value folds the list, as Copilot Chat folds "Used n references" per answer. */
   foldSignal?: number;
   /**
-   * A diagram Ask (board 11.12): every row is locked on with its reason, shown once, and the file row keeps its size;
+   * A diagram Ask: every row is locked on with its reason, shown once, and the file row keeps its size;
    * no hover text, as in the diagram tab's side panel.
    */
   variant?: "diagram";

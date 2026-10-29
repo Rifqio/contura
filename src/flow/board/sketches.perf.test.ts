@@ -62,7 +62,7 @@ test("a_switch_rebuilds_no_sketch_node", () => {
     same++;
   }
   expect(same).toBe(MAX_SKETCHES);
-  // Nor the layer: it stays at the board's (0, 0) (Plan F Decision 11).
+  // Nor the layer: it stays at the board's (0, 0).
   expect(c.nodes.find((n) => n.id === SKETCH_LAYER_ID)).toBe(a.nodes.find((n) => n.id === SKETCH_LAYER_ID));
   expect(c.nodes.find((n) => n.id === SKETCH_LAYER_ID)?.position).toEqual({ x: 0, y: 0 });
 });

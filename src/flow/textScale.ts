@@ -1,4 +1,4 @@
-// The label font hook (Decision 22): a shape or label drawn at another text size carries its scale as `--text-scale`
+// The label font hook: a shape or label drawn at another text size carries its scale as `--text-scale`
 // with this class, and flow-board.css sizes the type tokens inside it from that. One module, so flowNodes and kindNodes
 // (which flowNodes imports) share it without a cycle.
 
@@ -10,7 +10,7 @@ export function labelScale(scale: number | undefined): { cls: string; style: Rec
 }
 
 /**
- * A frame's text size from its label scale (Plan F Decision 4): the board's TEXT_SCALE (s 0.88, m 1, l 1.15) read
+ * A frame's text size from its label scale: the board's TEXT_SCALE (s 0.88, m 1, l 1.15) read
  * back. Mirrored here, as the cards import this leaf and not the board's layout; textFar.test checks the two agree.
  */
 export function textSizeOf(scale: number | undefined): "s" | "m" | "l" {

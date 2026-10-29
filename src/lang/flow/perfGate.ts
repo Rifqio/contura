@@ -1,4 +1,4 @@
-// The flow perf gate (ruling P8): the best of three 20-run medians. Noise from other processes only ever adds
+// The flow perf gate: the best of three 20-run medians. Noise from other processes only ever adds
 // time, so the best batch shows what the code costs; a slow parser is still slow in all three.
 export function bestMedian(work: (run: number) => void, batches = 3, runs = 20): number {
   let best = Number.POSITIVE_INFINITY;

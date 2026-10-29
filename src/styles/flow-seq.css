@@ -1,5 +1,5 @@
 /*
-  Plan E: the sequence look. Colours come from seqColour.ts's seqColourVars on each node: a preset (or no colour)
+  The sequence look. Colours come from seqColour.ts's seqColourVars on each node: a preset (or no colour)
   sets --seq-col to its stroke token; a custom colour sets its adjusted values per theme (--seq-col-light,
   --seq-amt-light, --seq-tab-light, --seq-ink-light and the -dark ones), picked here under the theme selectors
   tokens.css uses. The fill is --seq-amt of --seq-col over --c-bg-surface; a block's tab is --seq-tab in --seq-ink.
@@ -39,7 +39,7 @@
 }
 
 /*
-  Task 5: a participant's head and foot boxes (Decisions 4 and 6), 40 px tall with a 7 px corner, filled with
+  Task 5: a participant's head and foot boxes, 40 px tall with a 7 px corner, filled with
   --seq-amt of its colour over the surface and outlined in it; the icon (18 px) and its words in the text colour,
   centred. The foot sits at the bottom of the same node, under its lane.
 */
@@ -82,7 +82,7 @@
   color: var(--c-text-subtle);
 }
 
-/* The lanes node (Decision 15): every lifeline, solid at 1.5 px, and every activation bar, under the messages. */
+/* The lanes node: every lifeline, solid at 1.5 px, and every activation bar, under the messages. */
 .react-flow__node-seqLanes,
 .fkind-lanes {
   pointer-events: none;
@@ -103,7 +103,7 @@
 }
 
 /*
-  Task 6: messages and blocks (Decisions 7, 10, 13). A block's wash is 7 percent of its line colour over the canvas
+  Task 6: messages and blocks. A block's wash is 7 percent of its line colour over the canvas
   (seqColour.ts WASH), opaque, so a label chip inside a block takes it and still hides the lifelines under its words.
 */
 .fkind-seq {
@@ -194,7 +194,7 @@
 }
 
 /*
-  Far text (Plan F Decisions 2 and 4), the same selectors as flow-board.css's for the sequence's own words: the kind
+  Far text, the same selectors as flow-board.css's for the sequence's own words: the kind
   word and the caption become bars, the digits go. A chip keeps its own colour under its bar, so a lifeline still never
   shows through a message's label.
 */
@@ -217,7 +217,7 @@
 }
 
 /*
-  Plan D's review marks (flow-tab.css, flow-board.css) on what a message draws apart from its line: new dashed in
+  The assistant's review marks (flow-tab.css, flow-board.css) on what a message draws apart from its line: new dashed in
   success, removed dashed in danger and faded, changed in accent with a ring. A participant under review marks its
   boxes; its node, as tall as its lane, keeps no border and no fill of its own, so the lanes and lines stay in view.
 */

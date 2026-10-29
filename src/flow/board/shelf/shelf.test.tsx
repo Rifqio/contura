@@ -530,7 +530,7 @@ test("a_press_on_a_draggable_tile_lets_the_drag_start_and_focus_comes_back_to_th
 });
 
 test("initial_side_right_opens_on_the_templates", () => {
-  // Plan D A11: the assistant's Template opens the board Shelf on its templates side.
+  // The assistant's Template opens the board Shelf on its templates side.
   const s = setup({ initialSide: "right" });
   const dialog = screen.getByRole("dialog", { name: "Add to the board" });
   expect(dialog.getAttribute("data-side")).toBe("right");

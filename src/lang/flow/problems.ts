@@ -1,4 +1,4 @@
-// What the .flow parser says when the text is wrong, in plain words (spec section 2, frame 6+.3).
+// What the .flow parser says when the text is wrong, in plain words.
 import type { QuickFix } from "../protocol";
 import { ATTR_KEYS, DIAGRAM_KINDS, type DiagramKind, type FlowNodeKind, KINDS, quote } from "./model";
 import { article } from "../../format/article";
@@ -77,7 +77,7 @@ export const MESSAGES = {
   cloudKind: "A cloud node takes an icon, not a kind, for example [icon: aws-s3].",
   participantAttrs: "A participant takes an icon, a label and a colour, for example [icon: aws-lambda, color: info].",
   groupAttrs: "A group takes only an icon and a colour, for example [icon: aws-vpc, color: muted].",
-  // Step 11: the colour palette and label:.
+  // the colour palette and label:.
   notAColour: (value: string, near: string | null) =>
     near
       ? `${value} is not a colour. Did you mean ${near}?`

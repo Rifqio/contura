@@ -40,7 +40,7 @@ const OUTLINE_BYTES: usize = 4 * 1024;
 const NEIGHBOURS: usize = 30;
 const CARD_TABLES: usize = 30;
 const NOTES: usize = 50;
-/// The summary the turn stamp keeps (spec 6.1).
+/// The summary the turn stamp keeps.
 const SUMMARY_BYTES: usize = crate::ai::memory::ASKED_IN_SUMMARY_BYTES;
 /// The draft columns a design summary names.
 const SUMMARY_COLUMNS: usize = 40;

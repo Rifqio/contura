@@ -89,7 +89,7 @@ export type FlowAttrKey = "id" | "icon" | "label" | "color" | "table";
 export const ATTR_KEYS: readonly FlowAttrKey[] = ["id", "icon", "label", "color", "table"];
 
 /**
- * Step 11 (PRODUCT.md principle 5): `color` is one of six theme colours named by what they mean (a CSS colour name or
+ * `color` is one of six theme colours named by what they mean (a CSS colour name or
  * a hex is also read, see colours.ts). Each preset draws from theme tokens (ADR 0008), so dark, light and Publish draw it their own way.
  */
 export const PALETTE = ["accent", "info", "success", "warning", "danger", "muted"] as const;

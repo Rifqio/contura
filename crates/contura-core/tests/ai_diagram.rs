@@ -1,4 +1,4 @@
-//! Step 11h: the execution rail on a database Ask, and the diagram preview.
+//! The execution rail on a database Ask, and the diagram preview.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -2267,7 +2267,7 @@ async fn a_limit_board_at_budget_passes_the_window_check() {
     assert!(seen[0].system[0].text.contains("one .flow board file"));
 }
 
-// ---- follow-ups, history and attachments (Task 4) -------------------------------------
+// ---- follow-ups, history and attachments -------------------------------------
 
 fn logged_drops(events: &[AiEvent]) -> Vec<(String, String)> {
     logs(events)

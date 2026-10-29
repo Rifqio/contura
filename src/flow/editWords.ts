@@ -52,7 +52,7 @@ export const said = (name: string) => name.replace(/\r?\n/g, " ");
 
 export const takenName = (name: string) => `${said(name)} is already used.`;
 
-/** The kinds whose names may hold a line break (written `\n` in quotes, ADR 0019 P5); a note's text always may. */
+/** The kinds whose names may hold a line break (written `\n` in quotes, ADR 0019); a note's text always may. */
 export const MULTI_LINE: ReadonlySet<DiagramKind> = new Set(["flow", "dfd", "state", "cloud", "mindmap"]);
 
 const KIND_NAME: Record<DiagramKind, string> = {
@@ -92,7 +92,7 @@ export const EDIT_MESSAGES = {
   changed: "The text changed meanwhile. Try again.",
   stale: "Fix the text first: the drawing is from the last text that worked.",
   locked: "The Assistant is working on the text. Your edit is kept until it finishes.",
-  /** A frame switch while the Assistant holds the text (Task 13): its changes are for the frame shown. */
+  /** A frame switch while the Assistant holds the text: its changes are for the frame shown. */
   lockedSwitch: "The Assistant is working on this diagram. Switch to another once it finishes.",
 };
 

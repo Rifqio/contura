@@ -13,7 +13,7 @@ type Ask = Extract<RunVerdict, { kind: "needsConfirmation" }>;
 /** One item of a job confirmation: a statement shown exactly, or an INSERT shown as its shape. */
 export type ConfirmShape = ConfirmItem;
 
-/** The job mode (Q14): a bulk import or SQL file described once, instead of every statement. */
+/** The job mode: a bulk import or SQL file described once, instead of every statement. */
 export interface ConfirmJob {
   /** The first line, such as "Inserts 1,204 rows into billing.products in 3 statements, in one transaction." */
   title: string;
@@ -23,7 +23,7 @@ export interface ConfirmJob {
   counts?: string;
   /** "212 KB, SHA-256 4be0 91c2 ... 7d1f": the fingerprint banner names it. */
   fingerprint?: string | null;
-  /** The banner's whole sentence instead, such as a Restore's "Checked file: ..." (step 9). */
+  /** The banner's whole sentence instead, such as a Restore's "Checked file: ...". */
   fingerprintText?: string;
   /** A body of its own in place of the items (a Restore's structure, shape and cleanup sections). */
   body?: ReactNode;

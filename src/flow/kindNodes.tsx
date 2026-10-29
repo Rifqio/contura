@@ -40,22 +40,22 @@ export type KindNodeData = {
   until?: string;
   /** Item 21: resized on the canvas. */
   sized?: { w: number; h: number };
-  /** The frame's text size (Decision 22); unset at 1. An ER card's rows and header scale with it (B4 fix round 1). */
+  /** The frame's text size; unset at 1. An ER card's rows and header scale with it. */
   textScale?: number;
   state?: NodeState;
   /**
-   * Plan D Task 8: an ER table's rows under review, one per row in `rows` (missing or undefined: unmarked). A static
-   * card's are its first ER_MAX_ROWS only (A9); the live card scrolls its first marked row into view.
+   * An ER table's rows under review, one per row in `rows` (missing or undefined: unmarked). A static
+   * card's are its first ER_MAX_ROWS only; the live card scrolls its first marked row into view.
    */
   rowStates?: readonly (RowState | undefined)[];
-  /** Step 11: the words it shows (its `label:`) when they are not its name, and its palette colour. */
+  /** The words it shows (its `label:`) when they are not its name, and its palette colour. */
   shows?: string;
   color?: ShapeColour;
-  /** Plan E: a participant's or actor's icon, as a service's (`FlowNodeData.iconName`). */
+  /** A participant's or actor's icon, as a service's (`FlowNodeData.iconName`). */
   iconName?: string;
-  /** Plan E: a sequence participant or actor, drawn by `SeqParticipant`. */
+  /** A sequence participant or actor, drawn by `SeqParticipant`. */
   seq?: true;
-  /** Plan E: a participant's own colour, which only the sequence variables read (never `color`, so no preset fill). */
+  /** A participant's own colour, which only the sequence variables read (never `color`, so no preset fill). */
   seqColour?: ShapeColour;
 };
 
@@ -110,7 +110,7 @@ const ColumnPorts = memo(function ColumnPorts({ column }: { column: string }) {
 
 /**
  * Tells the canvas the card's ports came or went, so a drag can start from them and end on them; and, while they
- * show, measures them again once a frame when the rows scroll under them, so no drag uses a port's old place (I6).
+ * show, measures them again once a frame when the rows scroll under them, so no drag uses a port's old place.
  * Mounted only while the ports show, so its one scroll listener and frame go with them.
  */
 function PortsSync({ table }: { table: string }) {
@@ -140,12 +140,12 @@ function PortsSync({ table }: { table: string }) {
 export const PORTS_LINGER_MS = 150;
 
 /**
- * An ER table card (ER build A, board ER interactions; B3 Task 2): the header, then one row per column with its key
+ * An ER table card (ER build A, board ER interactions; B3): the header, then one row per column with its key
  * gutter, name, type and not-null mark. On the live frame with the canvas's editing context each part is edited in
- * place; without it (a static frame, a preview, Publish) the card only draws, as Plan A's did. Either way it draws
+ * place; without it (a static frame, a preview, Publish) the card only draws, as it always has. Either way it draws
  * only the rows in view (decision 7), with spacers for the rest, so a 300-column table costs 22 rows. The header,
  * name and type carry `data-er-field` and each row `data-er-row`, so the canvas finds the field a double-click on a
- * static card meant by its rect (decision 5). `selected` is for the ports (Task 7): a table selected alone shows them.
+ * static card meant by its rect (decision 5). `selected` is for the ports: a table selected alone shows them.
  */
 function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const ctx = useContext(ErCanvasContext);
@@ -184,14 +184,14 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     ev.stopPropagation();
     if (editable || why) fn();
   };
-  // A header name has a tip, the app's hover hint, only when it is cut off (M13).
+  // A header name has a tip, the app's hover hint, only when it is cut off.
   const nameRef = useRef<HTMLSpanElement>(null);
   const [cut, setCut] = useState(false);
   useLayoutEffect(() => {
     const el = nameRef.current;
     setCut(!!el && el.scrollWidth > el.clientWidth);
   }, [words, d.sized?.w, d.naturalW, edit?.kind]);
-  // The ports show while the pointer is over the card or the table is selected alone (draw.io; fix round 2, I5), on the
+  // The ports show while the pointer is over the card or the table is selected alone (draw.io), on the
   // live frame only (decision 5): a static card hears no pointer and reads no selection. A table whose name needs quotes
   // can end no column relationship, so it shows none (decision 3).
   const connectable = useContext(ConnectableContext);
@@ -218,17 +218,17 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const sole = useErSole(er ? d.name : null);
   const ports = editable && connectable && !needsQuotes(d.name) && (hot || (selected && sole));
   // The rows in view (decision 7), as far as the body is scrolled. On the live frame that is the tab's scroll store, which
-  // the lines to its rows read too (Task 5); a static card does not scroll (owner answer 1); a card with no store (a
+  // the lines to its rows read too; a static card does not scroll; a card with no store (a
   // preview) keeps its own.
   const scrolls = useContext(ErScrollContext);
   const shared = live && !!scrolls;
   const stored = useErScroll(shared ? d.name : null);
   const [own, setOwn] = useState(0);
   const scroll = !live ? 0 : shared ? stored : own;
-  // The card's geometry at its frame's text size: header, padding and row pitch scale with the card (B4 fix round 1).
+  // The card's geometry at its frame's text size: header, padding and row pitch scale with the card.
   const textK = d.textScale ?? 1;
   const m = erMetrics(textK);
-  // Far text (Plan F Decision 3): the rows draw as bars, unless a field is open on the card (what is typed stays).
+  // Far text: the rows draw as bars, unless a field is open on the card (what is typed stays).
   const far = useTextFar(textSizeOf(d.textScale));
   const fits = erFits(d.sized?.h, textK);
   const viewH = erViewH(d.sized?.h, textK);
@@ -260,7 +260,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
   const shownK = (i: number | null | undefined) => (i === null || i === undefined || i < 0 ? -1 : at >= 0 && i >= at ? i + 1 : i);
   const selK = shownK(view?.selected);
   const aimK = shownK(view?.aim);
-  // Plan D Task 8: the first row the waiting proposal marks, scrolled into view as a selected row is (A9).
+  // The first row the waiting proposal marks, scrolled into view as a selected row is.
   const markK = shownK(d.rowStates?.findIndex((st) => st !== undefined));
   useLayoutEffect(() => {
     if (!scrolling || !bodyRef.current) return;
@@ -309,8 +309,8 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     const flags = d.rowFlags?.[i] ?? [];
     const pk = flags.includes("pk");
     const nn = pk || flags.includes("not null");
-    // The row's hover hint, which is also its one accessible description (M13).
-    // Its review mark (Plan D Task 8), on the class and in the hint: ", changed by AI".
+    // The row's hover hint, which is also its one accessible description.
+    // Its review mark, on the class and in the hint: ", changed by AI".
     const mark = d.rowStates?.[i];
     const markCls = mark ? ` is-ai-${stateClass(mark)}` : "";
     const tip = `${name}${type ? ` ${type}` : ""} (${[pk ? "primary key" : "", flags.includes("unique") && !pk ? "unique" : "", nn ? "not null" : "nullable"].filter(Boolean).join(", ")})${(mark && ROW_NOTE[mark]) ?? ""}`;
@@ -333,7 +333,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     }
     const editing = edit?.kind === "col" && edit.index === i ? edit : null;
     const picked = view?.selected === i;
-    // The column the keyboard is on while "Make a relationship from here" picks (fix round 2, I1).
+    // The column the keyboard is on while "Make a relationship from here" picks.
     const aimed = view?.aim === i;
     const gutTip = why ?? (pk ? "Primary key. Click to remove" : "Click to make it the primary key");
     drawn.push(
@@ -389,7 +389,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
     <>
       {ports && <PortsSync table={d.name} />}
       <span
-        // A header aimed by "Make a relationship from here" stands for its table's key (fix round 3).
+        // A header aimed by "Make a relationship from here" stands for its table's key.
         className={`fkind-head${headAimed ? " is-pick" : ""}${bars ? " is-far" : ""}`}
         style={textK !== 1 ? { height: m.head } : undefined}
         aria-current={headAimed ? true : undefined}
@@ -405,7 +405,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
             : undefined
         }
       >
-        {/* A far card's icon is the header's ::before (flow-board.css), with no <svg> root (Plan F milestone fix 3). */}
+        {/* A far card's icon is the header's ::before (flow-board.css), with no <svg> root. */}
         {!bars && <Icon name="table" size={14} />}
         {edit?.kind === "table" ? (
           field(edit, edit.typed ?? d.name, "Table name", "fkind-ed fkind-ed-head")
@@ -415,7 +415,7 @@ function ErCard({ d, selected }: { d: KindNodeData; selected: boolean }) {
           </span>
         )}
       </span>
-      {/* Rows that scroll take the wheel (I3); a card that fits lets the canvas pan, as draw.io and Figma do. */}
+      {/* Rows that scroll take the wheel; a card that fits lets the canvas pan, as draw.io and Figma do. */}
       <div
         className={`fkind-er-body${scrolling ? " nowheel is-scroll" : ""}${bars ? " is-far" : ""}`}
         ref={bodyRef}
@@ -467,9 +467,9 @@ const BAR = "linear-gradient(var(--far-bar), var(--far-bar))";
 const KEY = "linear-gradient(var(--far-key), var(--far-key))";
 
 /**
- * An ER card's rows when its text is far (Plan F Decision 3, Figma and Miro draw far text as grey bars): one block the
+ * An ER card's rows when its text is far (Figma and Miro draw far text as grey bars): one block the
  * height of every row whose backgrounds are the bars, a name bar then a type bar for each row in the window, and a
- * key row's mark in the gutter; no row element and no `<svg>` (milestone fix 3: WebKit gives each `<svg>` root its own
+ * key row's mark in the gutter; no row element and no `<svg>` (WebKit gives each `<svg>` root its own
  * memory, and 705 cards at the fit had one each where main's fast box had none). The ports stay on each row in the
  * window while they show, so a line can still be drawn from a column.
  */
@@ -688,7 +688,7 @@ export const TimeSection = memo(function TimeSection({ data }: NodeProps) {
   );
 });
 
-// Plan E Task 6 (A3): the sequence's message, block and caption live in seqNodes.tsx; flowNodes imports them from here.
+// The sequence's message, block and caption live in seqNodes.tsx; flowNodes imports them from here.
 export { SeqEdge, type SeqEdgeData, SeqFrame, SeqFrameTab } from "./seqNodes";
 
 /** A mind map branch: a curve from the side of the parent that faces the child, with no arrow. */

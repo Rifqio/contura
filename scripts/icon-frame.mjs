@@ -1,4 +1,4 @@
-// Fits an icon into the 24 by 24 frame (Plan C, Decision 3). Only the root <svg> start tag is
+// Fits an icon into the 24 by 24 frame. Only the root <svg> start tag is
 // rewritten; every byte before it (XML declaration, comments) and after it (the drawing) is
 // copied unchanged. The SVG is untrusted: a root this file cannot read with certainty is
 // refused with a reason, never guessed at.

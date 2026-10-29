@@ -1,4 +1,4 @@
-// Plan F Task 9 fix (Decision 7, ruling 7): a frame turning real mounts its shapes and then its lines within the swap
+// A frame turning real mounts its shapes and then its lines within the swap
 // budget, a chunk an animation frame. Lines came all at once with the last shape: on the B1 limit board that was a
 // frame's 300 labelled lines in one animation frame at the crossing (the release WebView's crossing frame missed 50 ms).
 // The budget is cut to one part here, so every canvas render may add one static shape or line at most.

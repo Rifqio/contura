@@ -1,4 +1,4 @@
-//! Restore's check pass, classification and plan (Task 4). Pure tests on Backup files in
+//! Restore's check pass, classification and plan. Pure tests on Backup files in
 //! temp folders, plus one live SQLite target for the empty-database rule.
 
 use std::path::{Path, PathBuf};
@@ -374,7 +374,7 @@ fn markers_never_hide_and_shape_rule() {
     );
 }
 
-/// One statement over 16 MB stops the check with its line (step 7 Q38).
+/// One statement over 16 MB stops the check with its line.
 #[test]
 fn a_16_mb_statement_stops_with_its_line() {
     let dir = tempfile::tempdir().unwrap();

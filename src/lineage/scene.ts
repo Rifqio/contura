@@ -1,11 +1,11 @@
-// Where lineage draws each card (spec 6+ section 5): the table in the middle, the tables it uses on the
+// Where lineage draws each card: the table in the middle, the tables it uses on the
 // left, the tables using it on the right, one column per Foreign Key step, and diagrams or views below.
 import type { FlowTableAccess, Lineage, LineageTable, ObjectPath } from "../api/types";
 import type { Scene, SceneEdge, SceneNode } from "../diagram/export/scene";
 import { CARD_FOOTER, CARD_HEADER, CARD_ROW } from "../diagram/metrics";
 import { routeOrthogonal } from "../diagram/route";
 
-/** Lineage cards are 214 px (frame 6+.1). */
+/** Lineage cards are 214 px. */
 export const LINEAGE_CARD_WIDTH = 214;
 /** A diagram or view card below the table. */
 export const REF_HEIGHT = 56;

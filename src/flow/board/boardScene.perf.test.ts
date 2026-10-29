@@ -1,4 +1,4 @@
-// Task 5 timing and memory: the board scene at the limit (A5's board: 50 frames, 10,000 shapes, 15,000 links).
+// Timing and memory: the board scene at the limit (A5's board: 50 frames, 10,000 shapes, 15,000 links).
 // Run alone through `npm run test:perf`.
 import { expect, test } from "vitest";
 import { board, frame, FRAMES, TYPED_FRAME } from "../../lang/flow/fixtures/bigBoard";
@@ -122,7 +122,7 @@ test("placing_frame_50_on_a_full_board_under_16ms", () => {
 });
 
 test("a_band_shift_of_49_static_frames_builds_no_graph_under_10ms", () => {
-  // Frame 0 deleted: every other static frame is drawn one place earlier, so its z band moves (Decision 5). Its shapes
+  // Frame 0 deleted: every other static frame is drawn one place earlier, so its z band moves. Its shapes
   // and lines are the same; only their z changes, so no frame's graph is built again (18.6 ms when it was).
   const svc = createFlowService();
   const r = svc.parse("board", board());
@@ -149,7 +149,7 @@ test("a_band_shift_of_49_static_frames_builds_no_graph_under_10ms", () => {
 });
 
 test("a_switch_rebuilds_two_frames_under_2ms", () => {
-  // Plan F Task 4 (Decision 11; threshold set in Task 9): the limit board with its 1,000 sketches. A switch moves only
+  // The limit board with its 1,000 sketches. A switch moves only
   // the live anchor and the two frames' boxes; the sketch layer, every sketch and the other 48 frames are the very same.
   const r = createFlowService().parse("board", board());
   const b = bigBoardLayout(fullSketches());
@@ -174,11 +174,11 @@ test("a_switch_rebuilds_two_frames_under_2ms", () => {
   expect(back.nodes.find((n) => n.id === SKETCH_LAYER_ID)).toBe(first.nodes.find((n) => n.id === SKETCH_LAYER_ID));
   expect(out.boxes).toHaveLength(FRAMES);
   console.log(`a switch on the limit board: median ${median.toFixed(2)} ms`);
-  // Task 9: 0.27 to 0.32 ms measured; lowered from the provisional 5 ms.
+  // 0.27 to 0.32 ms measured; lowered from the provisional 5 ms.
   expect(median).toBeLessThan(2);
 });
 
-// ----- Plan F Task 6 (Decisions 6 and 7): frames outside the view are not drawn. Thresholds set in Task 9.
+// ----- Frames outside the view are not drawn. Thresholds set in Task 9.
 
 const VIEW_W = 1600;
 const VIEW_H = 1000;
@@ -216,7 +216,7 @@ test("a_view_crossing_step_builds_under_1ms", () => {
   // Only the frames in view are drawn: far fewer than the board's 10,000 shapes.
   expect(out.nodes.length).toBeLessThan(FRAMES + (before.form.size + 1) * 200);
   console.log(`a view crossing step on the limit board: median ${median.toFixed(2)} ms`);
-  // Task 9: 0.05 to 0.06 ms measured; lowered from the provisional 10 ms.
+  // 0.05 to 0.06 ms measured; lowered from the provisional 10 ms.
   expect(median).toBeLessThan(1);
 });
 
@@ -247,7 +247,7 @@ test("hidden_frames_make_no_new_objects", () => {
 });
 
 test("a_review_across_ten_frames_rebuilds_only_those", () => {
-  // Plan D Task 8: ten frames under review, each with two new shapes, a new line and a relabelled one. Every build
+  // Ten frames under review, each with two new shapes, a new line and a relabelled one. Every build
   // takes new review objects (as each accept or reject makes), so the ten are drawn again each time; the other 40
   // frames hand back the very node and line objects.
   const svc = createFlowService();

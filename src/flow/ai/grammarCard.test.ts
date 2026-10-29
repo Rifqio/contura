@@ -1,5 +1,5 @@
 // @vitest-environment node
-// Plan D Decision 6 (A18, amended 28 Oct): the grammar card the board prompt carries is Syntax Help's own rows. Each card
+// The grammar card the board prompt carries is Syntax Help's own rows. Each card
 // row equals a one-line SYNTAX_HELP row of its kind and parses clean there (after its context); every kind has its rows.
 import { expect, test } from "vitest";
 import card from "../../../crates/contura-core/src/ai/grammar_card.json";

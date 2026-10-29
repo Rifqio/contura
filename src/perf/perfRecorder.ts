@@ -1,5 +1,5 @@
 /**
- * An opt-in frame recorder for the release WebView's gates (Plan F Task 9). Off unless the app was started with
+ * An opt-in frame recorder for the release WebView's gates. Off unless the app was started with
  * `CONTURA_PERF_LOG`: `startPerfRecorder` asks once, and while off `perfMark`, `perfMeasure` and `perfOn` do nothing
  * and allocate nothing. On, a requestAnimationFrame loop keeps frame deltas in a fixed ring, and once a second one JSON
  * line goes to the log: `t` (ms since start), `frames`, `worst`, `p95`, `over16`, `over50` and `measures` of that second.

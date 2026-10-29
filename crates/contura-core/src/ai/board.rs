@@ -1,4 +1,4 @@
-//! The board a diagram Ask is made on (Plan D, Decision 1): each frame's slice, outline,
+//! The board a diagram Ask is made on: each frame's slice, outline,
 //! problems and box from the webview, the sketch notes, the selection and the focus chips;
 //! the checker in `diagram_tool` reads `frames`. Decision 4 and 5: the board goes to the model
 //! as Ask items (a header, one item per frame, the sketch notes, the selection), trimmed
@@ -130,7 +130,7 @@ pub struct FollowUpReply {
     pub reply: String,
 }
 
-/// The most tokens the board takes, whatever the window (Decision 5).
+/// The most tokens the board takes, whatever the window.
 pub const BOARD_CONTEXT_CAP: u32 = 24_000;
 /// Frames whose boxes are this close to a focus frame's (board units) go next.
 pub const NEIGHBOUR_GAP: i64 = 400;
@@ -140,7 +140,7 @@ pub const SKETCH_NOTES_MAX: usize = 100;
 pub const SKETCH_NOTE_CHARS: usize = 200;
 /// The sketch notes item stays within this many tokens.
 pub const SKETCH_NOTES_TOKENS: u32 = 1_500;
-/// An attachment takes at most this share of the budget (Task 4).
+/// An attachment takes at most this share of the budget.
 pub const ATTACH_SHARE_DIV: u32 = 3;
 /// What the turn's framing around the items may take (Decision 5's 1,024).
 const FRAMING_TOKENS: u32 = 1_024;
@@ -242,7 +242,7 @@ fn focus_frames(board: &BoardInput) -> Vec<usize> {
     out
 }
 
-/// The order frames are offered to the budget (Decision 5): (a) the focus frames in chip
+/// The order frames are offered to the budget: (a) the focus frames in chip
 /// order, then the selected frame; (b) frames within `NEIGHBOUR_GAP` of an (a) frame,
 /// nearest first; (c) the rest by size (shapes, then text length) ascending. Ties go by
 /// text order.
@@ -271,7 +271,7 @@ pub fn frame_order(board: &BoardInput) -> Vec<usize> {
         .collect()
 }
 
-/// The order sketch notes are offered (Decision 5): by distance from the note to the nearest
+/// The order sketch notes are offered: by distance from the note to the nearest
 /// focus frame, then `y`, `x` and id; with no focus frame, by `y`, `x` and id.
 pub fn note_order(board: &BoardInput) -> Vec<usize> {
     let first = focus_frames(board);
@@ -543,14 +543,14 @@ fn diagram_item(label: String, text: String) -> Item {
 /// `board_items`' items, and each frame's fit by its position in text order.
 pub type BoardItems = (Vec<Item>, Vec<(usize, FrameFit)>);
 
-/// The board as Ask items (Decision 4), in order: the header, one item per frame in text
+/// The board as Ask items, in order: the header, one item per frame in text
 /// order (its text in full, its names, or empty when left out), the sketch notes and the
 /// selection (each only when it has any). The header, sketch notes and selection are
 /// reserved first; the rest of `budget` (tokens) takes frames in `frame_order`, each in full
 /// when it fits what is left, else as names when they fit, else left out. A frame is never
 /// cut inside. Returns the items and each frame's fit, in text order.
 ///
-/// Refused `InvalidInput` when a frame's range is not in `text` (Decision 1), and `TooBig`
+/// Refused `InvalidInput` when a frame's range is not in `text`, and `TooBig`
 /// (with `needed` the reserve and `window` the budget) when the reserve does not fit.
 pub fn board_items(file: &str, text: &str, board: &BoardInput, budget: u32) -> Result<BoardItems> {
     let slices = frame_slices(text, board)?;
@@ -606,7 +606,7 @@ pub fn board_items(file: &str, text: &str, board: &BoardInput, budget: u32) -> R
     Ok((items, fits.into_iter().enumerate().collect()))
 }
 
-/// The most earlier turns of the board's chat a board Ask sends (Decision 9).
+/// The most earlier turns of the board's chat a board Ask sends.
 pub const BOARD_HISTORY_TURNS: usize = 4;
 /// The history item stays within this many tokens; the oldest turns go first.
 pub const HISTORY_TOKENS: u32 = 2_000;
@@ -666,7 +666,7 @@ fn is_diagram_message(m: &AiMessage) -> bool {
         && m.kinds.iter().all(|k| DIAGRAM_TURN_KINDS.contains(k))
 }
 
-/// The board chat's history item (Decision 9): only for a thread whose place is
+/// The board chat's history item: only for a thread whose place is
 /// `diagram:<file>`, its last `BOARD_HISTORY_TURNS` turns, each question on one line cut to
 /// 500 characters, each answer to 800, a proposal as its folded outcome line; the oldest turns
 /// dropped until it fits `HISTORY_TOKENS`. No earlier board text, tool input or change is sent.
@@ -677,7 +677,7 @@ pub fn board_history(thread: &AiThread, file: &str) -> Option<String> {
 }
 
 /// `board_history`, leaving out every turn whose answer drew on a Connection `held` says is
-/// held now (its Sent record's `sources`, Task 4b): an answer may repeat the table names of
+/// held now (its Sent record's `sources`): an answer may repeat the table names of
 /// a frame From my database drew, and a Connection set to Never since, deleted, or moved to
 /// another Group's provider must not reach the model that way.
 pub fn board_history_gated(
@@ -753,7 +753,7 @@ fn card() -> &'static BTreeMap<String, Vec<CardRow>> {
     })
 }
 
-/// The grammar card for `kinds` (Decision 6): each kind on the board, in `DIAGRAM_KINDS`
+/// The grammar card for `kinds`: each kind on the board, in `DIAGRAM_KINDS`
 /// order, with the shape kinds it takes (from `SHAPE_KINDS`, when it has any) and its rows;
 /// empty when no kind is known.
 pub fn grammar_card(kinds: &[&str]) -> String {
@@ -1602,7 +1602,7 @@ mod tests {
         }
     }
 
-    // ---- history (Decision 9) --------------------------------------------------------
+    // ---- history --------------------------------------------------------
 
     use crate::ai::sent::{AnswerRecord, ToolOutcome, ToolUse};
     use crate::ai::{AiMessage, AiRole, AiThread};
@@ -1817,7 +1817,7 @@ mod tests {
 
     #[test]
     fn a_turn_that_drew_on_a_held_connection_is_left_out() {
-        // Task 4b: an answer may repeat a frame's table names; once the Connection the frame
+        // An answer may repeat a frame's table names; once the Connection the frame
         // was drawn from is held (Never, deleted, another Group's provider) that turn stays
         // home, whatever the board holds now.
         use crate::ai::sent::SentRecord;

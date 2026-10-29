@@ -62,7 +62,7 @@ const STRUCTURE_BUDGET: usize = 8 * 1024 * 1024;
 /// The pass sends progress this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
-/// The refusal kind of a statement too large to classify (Q40).
+/// The refusal kind of a statement too large to classify.
 const TOO_LARGE: &str = "A statement too large to check";
 
 /// Where a Restore goes: the Connection, the database (MySQL, PostgreSQL) the dialog was

@@ -57,7 +57,7 @@ function FeatureButton({ f, labels, overflow = false }: { f: Feature; labels: bo
       type="button"
       className="feature-button"
       data-feature-id={f.id}
-      // P11-36: past the end of the groups' box it is listed under More instead.
+      // Past the end of the groups' box it is listed under More instead.
       data-overflow={overflow || undefined}
       aria-hidden={overflow || undefined}
       tabIndex={overflow ? -1 : undefined}

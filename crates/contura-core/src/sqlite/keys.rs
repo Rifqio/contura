@@ -1,4 +1,4 @@
-//! Lineage's catalog reads (B2, P6): every Foreign Key of one database, with
+//! Lineage's catalog reads: every Foreign Key of one database, with
 //! `pragma_foreign_key_list` read once per table, and the light column read of the tables
 //! lineage reached. Table names resolve without regard to case, as SQLite resolves them.
 

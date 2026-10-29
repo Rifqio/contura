@@ -27,7 +27,7 @@ export interface PendingEditsGuard {
   /**
    * Asks Save, Discard or Cancel for each listed grid that has Pending Edits; false when one is
    * cancelled. With `then`, a Discard waits: `then` runs once every grid is answered (the jobs ask),
-   * and the discards apply only when it says yes, so a later No keeps the edits (Q43).
+   * and the discards apply only when it says yes, so a later No keeps the edits.
    */
   confirmLeave(keys: string[], opts?: LeaveOpts): Promise<boolean>;
   leaveAll(opts?: LeaveOpts): Promise<boolean>;
@@ -46,7 +46,7 @@ export interface PendingEditsGuard {
   dialog: ReactNode;
 }
 
-/** Why a diagram cannot be saved yet while a rename or delete of its file runs (P24 M8). */
+/** Why a diagram cannot be saved yet while a rename or delete of its file runs. */
 const FLOW_HELD = "Contura is still moving or deleting this file. Try again in a moment.";
 
 export function usePendingEditsGuard(opts: {
@@ -63,7 +63,7 @@ export function usePendingEditsGuard(opts: {
   saveVisual?(doc: VisualTabDoc): Promise<boolean>;
   /**
    * Running jobs (useJobsGuard): quitting while one runs asks after the Pending Edits, and a yes
-   * cancels them before the window goes (Q22).
+   * cancels them before the window goes.
    */
   jobsOnClose?: { running(): boolean; confirmStop(): Promise<boolean> };
 }): PendingEditsGuard {
@@ -299,7 +299,7 @@ export function usePendingEditsGuard(opts: {
           event.preventDefault();
           // Diagrams save on their own: a save still to come is written (and waited for) before the window goes.
           for (const name of flows) if (!(await confirmCloseFlowRef.current(name))) return;
-          // Q43: with Pending Edits, the jobs ask comes before any Discard is applied.
+          // with Pending Edits, the jobs ask comes before any Discard is applied.
           const jobsAsk = running && jobs ? { then: () => jobs.confirmStop() } : undefined;
           if (dirty) {
             if (!(await confirmLeaveRef.current(keys, jobsAsk))) return;

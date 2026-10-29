@@ -20,7 +20,7 @@ export interface ConnectionActionsEnv {
   toast(t: ToastSpec): void;
   /** Jobs running on the Connection: asks to cancel them (useJobsGuard); false keeps it. */
   confirmJobs?(id: ConnectionId): Promise<boolean>;
-  /** A move takes its running Import tabs out of the place: asks about each (Q43); false keeps it. */
+  /** A move takes its running Import tabs out of the place: asks about each; false keeps it. */
   confirmImports?(id: ConnectionId): Promise<boolean>;
 }
 

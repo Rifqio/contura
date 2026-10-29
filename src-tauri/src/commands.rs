@@ -262,7 +262,7 @@ pub async fn count_rows(
         .await
 }
 
-/// M3: where a row is under a page's sort and filter, for Back after a followed key, on a
+/// Where a row is under a page's sort and filter, for Back after a followed key, on a
 /// read of its own that the server stops after a few seconds.
 #[tauri::command]
 pub async fn locate_row(
@@ -289,7 +289,7 @@ pub async fn fetch_full_value(
 /// Contura's own data folder; Schema Models and exports are never written inside it.
 pub struct DataDir(pub PathBuf);
 
-/// The one file attached for the next diagram Ask (Decision 15).
+/// The one file attached for the next diagram Ask.
 #[derive(Default)]
 pub struct Attachments(pub std::sync::Mutex<AttachmentSlot>);
 
@@ -401,7 +401,7 @@ pub fn write_text_file(data: State<'_, DataDir>, path: PathBuf, text: String) ->
     contura_core::model_files::write_text_file(&path, &text, &data.0)
 }
 
-/// Every diagram in `<data>\diagrams`, newest first (step 6+).
+/// Every diagram in `<data>\diagrams`, newest first.
 #[tauri::command]
 pub fn list_diagrams(
     data: State<'_, DataDir>,
@@ -409,8 +409,8 @@ pub fn list_diagrams(
     contura_core::diagrams::list_diagrams(&data.0)
 }
 
-/// Every node with a `table:` in the diagrams folder, and whether it reads or writes (B2),
-/// off the main thread: it reads every `.flow` file (P6).
+/// Every node with a `table:` in the diagrams folder, and whether it reads or writes,
+/// off the main thread: it reads every `.flow` file.
 #[tauri::command]
 pub async fn list_flow_table_links(
     data: State<'_, DataDir>,
@@ -421,8 +421,8 @@ pub async fn list_flow_table_links(
         .map_err(|e| Error::File(format!("cannot read the diagrams folder: {e}")))?
 }
 
-/// Every packed icon name with its set and title (C1b). Async, off the main thread; a
-/// damaged pack is an error, never a panic (P9).
+/// Every packed icon name with its set and title. Async, off the main thread; a
+/// damaged pack is an error, never a panic.
 #[tauri::command]
 pub async fn icon_index() -> Result<Vec<contura_core::icons::IconEntry>, Error> {
     contura_core::icons::icon_index()
@@ -435,13 +435,13 @@ pub async fn icon_sets() -> Result<Vec<contura_core::icons::IconSet>, Error> {
 }
 
 /// Icon `name`'s SVG text, framed and checked again as it is served, an outline or mono icon
-/// drawn in `ink` (`#rrggbb`); the UI shows it only as an image (P7, P9).
+/// drawn in `ink` (`#rrggbb`); the UI shows it only as an image.
 #[tauri::command]
 pub async fn icon(name: String, ink: Option<String>) -> Result<String, Error> {
     contura_core::icons::icon(&name, ink.as_deref())
 }
 
-/// Both files of diagram `name`, off the main thread; a file over 5 MB is refused (P24 M4).
+/// Both files of diagram `name`, off the main thread; a file over 5 MB is refused.
 #[tauri::command]
 pub async fn read_diagram(
     data: State<'_, DataDir>,
@@ -470,7 +470,7 @@ pub fn write_diagram(
 }
 
 /// Saves only the layout file of diagram `name` (moves, Classic, the direction); the `.flow` is
-/// left as it is, and a missing `.flow` is refused (P24 I1). Sync, as `write_diagram` is.
+/// left as it is, and a missing `.flow` is refused. Sync, as `write_diagram` is.
 #[tauri::command]
 pub fn write_diagram_layout(
     data: State<'_, DataDir>,
@@ -481,7 +481,7 @@ pub fn write_diagram_layout(
 }
 
 /// Moves both files of diagram `name` to the Recycle Bin, then clears its chats, off the main
-/// thread: the shell call blocks and starts COM, which stays out of the webview's thread (P4).
+/// thread: the shell call blocks and starts COM, which stays out of the webview's thread.
 /// Chats that cannot be cleared are logged; the delete still reports success.
 #[tauri::command]
 pub async fn delete_diagram(
@@ -682,7 +682,7 @@ pub fn save_keymap(service: Service<'_>, overrides: KeymapOverrides) -> Result<(
 
 #[tauri::command]
 pub fn create_sqlite_database(data: State<'_, DataDir>, path: PathBuf) -> Result<(), Error> {
-    // A new database never goes into Contura's data folder, beside app.sqlite (Q33).
+    // A new database never goes into Contura's data folder, beside app.sqlite.
     contura_core::jobs::paths::check_user_path(
         &path,
         &data.0,
@@ -812,7 +812,7 @@ pub async fn table_design(
     service.table_design(id, path).await
 }
 
-/// The tables around `path` from catalog details; a `depth` of 0 is All (B2).
+/// The tables around `path` from catalog details; a `depth` of 0 is All.
 #[tauri::command]
 pub async fn lineage(
     service: Service<'_>,
@@ -1285,7 +1285,7 @@ pub async fn ai_ask_stream(
     Ok(())
 }
 
-/// What the diagram Ask's gate knows of the Connections (Task 4b): each one's name and
+/// What the diagram Ask's gate knows of the Connections: each one's name and
 /// stored AI access, those on the ungrouped provider the diagram Ask uses, and the
 /// Connections owning each `table:` value (`values`), from the same Connection list.
 fn diagram_standing(
@@ -1311,7 +1311,7 @@ fn diagram_standing(
 
 /// What a diagram Ask would send, built in the Core: the Sends list and "Show exactly".
 /// The diagram is not database data, so only the global settings apply; a frame drawn from
-/// a Connection, or a `table:` link to one, is gated at that Connection (Task 4b).
+/// a Connection, or a `table:` link to one, is gated at that Connection.
 #[tauri::command]
 pub async fn ai_diagram_preview(
     app: tauri::AppHandle,
@@ -1518,10 +1518,10 @@ pub async fn ai_compact(
         .map(|c| c.trimmed_copy())
 }
 
-/// Names the chat once its first answer is stored (Decision 5): one short call to the
+/// Names the chat once its first answer is stored: one short call to the
 /// Ask's own endpoint and model with the first question and answer only. Registered as
 /// `title:<place>`, so it never makes the place `Busy` for the next Ask, and stopped by
-/// `ai_cancel(request_id)` (P2). `None` when no call goes or no title came back.
+/// `ai_cancel(request_id)`. `None` when no call goes or no title came back.
 #[tauri::command]
 pub async fn ai_name_chat(
     app: AppHandle,
@@ -1743,7 +1743,7 @@ pub async fn ai_preview(
 }
 
 /// Opens an https link (an icon set's source in Icon credits) in the system browser. The
-/// address is checked again here: https only, no user name or password (P9).
+/// address is checked again here: https only, no user name or password.
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), Error> {
     let url = contura_core::links::safe_https_url(&url)?;
@@ -1953,7 +1953,7 @@ mod source_rules {
         }
     }
 
-    /// P2: the title call is registered under `title:<place>`, never the place itself, so the
+    /// The title call is registered under `title:<place>`, never the place itself, so the
     /// next Ask in the place is never refused while a chat is being named.
     #[test]
     fn the_title_call_never_holds_the_place() {

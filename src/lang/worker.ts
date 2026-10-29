@@ -114,7 +114,7 @@ export function createHandler(post: (m: FromWorker) => void, debounceMs = 120, s
         return;
       }
       case "flowSpans":
-        // A newer text still waiting out its debounce makes any version stale (ruling P8). Parsing it now means
+        // A newer text still waiting out its debounce makes any version stale. Parsing it now means
         // the caller's next try is current.
         if (flushFlow(m.docId)) return post({ type: "flowSpans", ids: [m.id], result: { stale: true } });
         try {
