@@ -6,6 +6,7 @@ on:
     paths-ignore: ["site/**", ".github/workflows/pages.yml"]
   pull_request:
     paths-ignore: ["site/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
